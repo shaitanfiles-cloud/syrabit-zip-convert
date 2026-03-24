@@ -1,0 +1,45 @@
+kind = "web"
+previewPath = "/"
+title = "Syrabit.ai"
+version = "1.0.0"
+id = "artifacts/syrabit"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 25144
+
+[services.development]
+run = "pnpm --filter @workspace/syrabit run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/syrabit", "run", "build" ]
+publicDir = "artifacts/syrabit/dist"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25144"
+BASE_PATH = "/"
+
+[[services]]
+name = "api"
+paths = [ "/api" ]
+localPort = 8000
+
+[services.development]
+run = "python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --reload --app-dir /home/runner/workspace/artifacts/syrabit-backend"
+
+[services.production]
+run = "python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --workers 2 --app-dir /home/runner/workspace/artifacts/syrabit-backend"
+
+[services.env]
+PORT = "8000"

@@ -1,0 +1,4 @@
+/* Syrabit.ai — App global overrides */
+.App {
+  min-height: 100vh;
+}

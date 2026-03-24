@@ -1,0 +1,400 @@
+import { useState, useEffect, useCallback } from 'react';
+import { Save, Trash2, Plus, Loader2, CheckCircle, BookOpen, GitBranch, Info } from 'lucide-react';
+import { toast } from 'sonner';
+import axios from 'axios';
+
+const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+
+function authHeaders(token) {
+  const isRealJwt = token && token.split('.').length === 3;
+  return { headers: isRealJwt ? { Authorization: `Bearer ${token}` } : {}, withCredentials: true };
+}
+
+const EMPTY_FORM = { content: '', chapters: [], topics: [], guidelines: '' };
+
+export default function AdminSyllabusManager({ adminToken, boards = [], classes = [], streams = [] }) {
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [selectedBoardId, setSelectedBoardId] = useState('');
+  const [selectedClassId, setSelectedClassId] = useState('');
+  const [selectedStreamId, setSelectedStreamId] = useState('');
+
+  const [editingSyllabus, setEditingSyllabus] = useState(null);
+  const [isFallback, setIsFallback] = useState(false);
+  const [formData, setFormData] = useState(EMPTY_FORM);
+  const [newChapter, setNewChapter] = useState('');
+  const [newTopic, setNewTopic] = useState('');
+
+  const filteredClasses = classes.filter(c => c.board_id === selectedBoardId);
+  const filteredStreams = streams.filter(s => s.class_id === selectedClassId);
+
+  const selectedBoard = boards.find(b => b.id === selectedBoardId);
+  const selectedClass = classes.find(c => c.id === selectedClassId);
+  const selectedStream = streams.find(s => s.id === selectedStreamId);
+
+  const canLoad = selectedBoardId && selectedClassId;
+
+  const syllabusEndpoint = useCallback(() => {
+    if (selectedStreamId) {
+      return `${API}/syllabi/${selectedBoardId}/${selectedClassId}/${selectedStreamId}`;
+    }
+    return `${API}/syllabi/${selectedBoardId}/${selectedClassId}`;
+  }, [selectedBoardId, selectedClassId, selectedStreamId]);
+
+  const adminSyllabusEndpoint = useCallback(() => {
+    if (selectedStreamId) {
+      return `${API}/admin/syllabi/${selectedBoardId}/${selectedClassId}/${selectedStreamId}`;
+    }
+    return `${API}/admin/syllabi/${selectedBoardId}/${selectedClassId}`;
+  }, [selectedBoardId, selectedClassId, selectedStreamId]);
+
+  const fetchSyllabus = useCallback(async () => {
+    if (!canLoad) return;
+    try {
+      setLoading(true);
+      setIsFallback(false);
+      const res = await axios.get(syllabusEndpoint(), { withCredentials: true });
+      const data = res.data;
+      if (data && data.content) {
+        setEditingSyllabus(data);
+        setIsFallback(!!data.is_fallback);
+        setFormData({
+          content: data.content || '',
+          chapters: data.chapters || [],
+          topics: data.topics || [],
+          guidelines: data.guidelines || '',
+        });
+      } else {
+        setEditingSyllabus(null);
+        setFormData(EMPTY_FORM);
+      }
+    } catch (err) {
+      console.error('Fetch syllabus error:', err);
+      setEditingSyllabus(null);
+      setFormData(EMPTY_FORM);
+    } finally {
+      setLoading(false);
+    }
+  }, [canLoad, syllabusEndpoint]);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (canLoad) {
+      fetchSyllabus();
+    } else {
+      setEditingSyllabus(null);
+      setFormData(EMPTY_FORM);
+      setIsFallback(false);
+    }
+  }, [selectedBoardId, selectedClassId, selectedStreamId]);
+
+  const saveSyllabus = async () => {
+    if (!canLoad) {
+      toast.error('Please select Board and Class');
+      return;
+    }
+    if (!formData.content.trim()) {
+      toast.error('Syllabus content is required');
+      return;
+    }
+    try {
+      setSaving(true);
+      await axios.post(adminSyllabusEndpoint(), formData, authHeaders(adminToken));
+      toast.success('Syllabus saved successfully!');
+      fetchSyllabus();
+    } catch (err) {
+      console.error('Save error:', err);
+      toast.error(err.response?.data?.detail || 'Failed to save syllabus');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const deleteSyllabus = async () => {
+    if (!window.confirm('Delete this syllabus? This cannot be undone.')) return;
+    try {
+      setSaving(true);
+      await axios.delete(adminSyllabusEndpoint(), authHeaders(adminToken));
+      toast.success('Syllabus deleted');
+      setEditingSyllabus(null);
+      setFormData(EMPTY_FORM);
+      setIsFallback(false);
+    } catch (err) {
+      console.error('Delete error:', err);
+      toast.error(err.response?.data?.detail || 'Failed to delete syllabus');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const addChapter = () => {
+    if (newChapter.trim()) {
+      setFormData({ ...formData, chapters: [...formData.chapters, newChapter.trim()] });
+      setNewChapter('');
+    }
+  };
+
+  const removeChapter = (i) => setFormData({ ...formData, chapters: formData.chapters.filter((_, idx) => idx !== i) });
+
+  const addTopic = () => {
+    if (newTopic.trim()) {
+      setFormData({ ...formData, topics: [...formData.topics, newTopic.trim()] });
+      setNewTopic('');
+    }
+  };
+
+  const removeTopic = (i) => setFormData({ ...formData, topics: formData.topics.filter((_, idx) => idx !== i) });
+
+  const scopeLabel = selectedStream
+    ? `${selectedBoard?.name || ''} · ${selectedClass?.name || ''} · ${selectedStream.name}`
+    : selectedClass
+    ? `${selectedBoard?.name || ''} · ${selectedClass?.name || ''}`
+    : '';
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <BookOpen size={22} className="text-indigo-400" />
+        <div>
+          <h2 className="text-lg font-bold text-white">Universal Syllabus Manager</h2>
+          <p className="text-xs text-white/40 mt-0.5">Create syllabi that auto-inject into every AI answer for a board, class, or specific stream</p>
+        </div>
+      </div>
+
+      {/* Selectors */}
+      <div className="grid grid-cols-3 gap-3">
+        {/* Board */}
+        <div>
+          <label className="text-[10px] font-semibold text-white/50 uppercase tracking-wide mb-1.5 block">Board</label>
+          <select
+            value={selectedBoardId}
+            onChange={(e) => {
+              setSelectedBoardId(e.target.value);
+              setSelectedClassId('');
+              setSelectedStreamId('');
+            }}
+            className="w-full px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-white text-sm focus:border-indigo-500 outline-none transition-colors"
+          >
+            <option value="">Select Board</option>
+            {boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+          </select>
+        </div>
+
+        {/* Class */}
+        <div>
+          <label className="text-[10px] font-semibold text-white/50 uppercase tracking-wide mb-1.5 block">Class</label>
+          <select
+            value={selectedClassId}
+            onChange={(e) => {
+              setSelectedClassId(e.target.value);
+              setSelectedStreamId('');
+            }}
+            disabled={!selectedBoardId}
+            className="w-full px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-white text-sm focus:border-indigo-500 outline-none transition-colors disabled:opacity-40"
+          >
+            <option value="">Select Class</option>
+            {filteredClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+
+        {/* Stream (optional) */}
+        <div>
+          <label className="text-[10px] font-semibold text-white/50 uppercase tracking-wide mb-1.5 flex items-center gap-1">
+            <GitBranch size={10} />
+            Stream
+            <span className="text-white/25 font-normal normal-case tracking-normal ml-1">(optional)</span>
+          </label>
+          <select
+            value={selectedStreamId}
+            onChange={(e) => setSelectedStreamId(e.target.value)}
+            disabled={!selectedClassId}
+            className="w-full px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-white text-sm focus:border-indigo-500 outline-none transition-colors disabled:opacity-40"
+          >
+            <option value="">All Streams (General)</option>
+            {filteredStreams.map(s => <option key={s.id} value={s.id}>{s.icon ? `${s.icon} ` : ''}{s.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Scope explanation */}
+      {selectedClassId && (
+        <div className="flex items-start gap-2 p-3 rounded-xl border border-white/10 bg-white/[0.02]">
+          <Info size={14} className="text-indigo-400 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-white/50 leading-relaxed">
+            {selectedStreamId
+              ? <>This syllabus applies only to <span className="text-indigo-300 font-medium">{scopeLabel}</span>. The AI will use it when a student from this exact stream asks a question.</>
+              : <>This is a <span className="text-indigo-300 font-medium">general syllabus</span> for <span className="text-white/70">{scopeLabel}</span>. The AI uses it as a fallback when no stream-specific syllabus exists.</>
+            }
+          </p>
+        </div>
+      )}
+
+      {/* Loading indicator */}
+      {loading && (
+        <div className="flex items-center gap-2 text-sm text-white/40">
+          <Loader2 size={14} className="animate-spin" />
+          Loading syllabus...
+        </div>
+      )}
+
+      {/* Fallback notice */}
+      {!loading && isFallback && editingSyllabus && (
+        <div className="flex items-center gap-2 p-3 rounded-xl border border-amber-500/20 bg-amber-500/5 text-amber-200 text-xs">
+          <Info size={14} className="flex-shrink-0" />
+          Showing the general board+class syllabus as a preview — no stream-specific syllabus exists yet for {selectedStream?.name}. Save below to create one.
+        </div>
+      )}
+
+      {canLoad && !loading && (
+        <>
+          {/* Syllabus Content */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-white/60 uppercase tracking-wide">Syllabus Description *</label>
+            <textarea
+              value={formData.content}
+              onChange={(e) => setFormData({ ...formData, content: e.target.value })}
+              placeholder={
+                selectedStreamId
+                  ? `e.g., AHSEC Class 11 ${selectedStream?.name || 'Science'} covers Physics, Chemistry, and ${selectedStream?.name?.includes('PCM') ? 'Mathematics' : 'Biology'}. Focus on conceptual understanding and AHSEC board exam patterns...`
+                  : 'e.g., AHSEC Class 11 covers Science, Arts, and Commerce streams. This syllabus serves as the general curriculum guide for all AI responses...'
+              }
+              className="w-full px-4 py-3 rounded-xl border border-white/10 bg-white/5 text-white placeholder-white/20 text-sm focus:border-indigo-500 outline-none transition-colors resize-none"
+              rows={6}
+            />
+            <p className="text-[11px] text-white/30 text-right">{formData.content.length} chars</p>
+          </div>
+
+          {/* Guidelines */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-white/60 uppercase tracking-wide">Learning Guidelines <span className="text-white/30 font-normal normal-case">(optional)</span></label>
+            <textarea
+              value={formData.guidelines}
+              onChange={(e) => setFormData({ ...formData, guidelines: e.target.value })}
+              placeholder="e.g., Students should focus on deriving formulas, solving numeric problems, and understanding real-world applications. Emphasise AHSEC board exam patterns..."
+              className="w-full px-4 py-3 rounded-xl border border-white/10 bg-white/5 text-white placeholder-white/20 text-sm focus:border-indigo-500 outline-none transition-colors resize-none"
+              rows={3}
+            />
+          </div>
+
+          {/* Key Topics */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-white/60 uppercase tracking-wide">Key Topics</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newTopic}
+                onChange={(e) => setNewTopic(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addTopic()}
+                placeholder="Type a topic and press Enter..."
+                className="flex-1 px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white placeholder-white/25 text-sm focus:border-indigo-500 outline-none"
+              />
+              <button
+                onClick={addTopic}
+                className="px-3 py-2 rounded-lg bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 transition-colors"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            {formData.topics.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {formData.topics.map((topic, i) => (
+                  <div key={i} className="px-3 py-1.5 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-200 text-xs flex items-center gap-2">
+                    {topic}
+                    <button onClick={() => removeTopic(i)} className="hover:text-white transition-colors">
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Chapters */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-white/60 uppercase tracking-wide">
+              Chapters <span className="text-white/30 font-normal normal-case">(optional)</span>
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newChapter}
+                onChange={(e) => setNewChapter(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addChapter()}
+                placeholder="Chapter name and press Enter..."
+                className="flex-1 px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white placeholder-white/25 text-sm focus:border-indigo-500 outline-none"
+              />
+              <button
+                onClick={addChapter}
+                className="px-3 py-2 rounded-lg bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 transition-colors"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            {formData.chapters.length > 0 && (
+              <div className="space-y-1.5 pt-1">
+                {formData.chapters.map((ch, i) => (
+                  <div key={i} className="px-3 py-2 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-200 text-sm flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <span className="text-violet-400/50 text-xs font-mono">{String(i + 1).padStart(2, '0')}.</span>
+                      {ch}
+                    </span>
+                    <button onClick={() => removeChapter(i)} className="hover:text-violet-100 transition-colors ml-4 flex-shrink-0">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Existing syllabus indicator */}
+          {editingSyllabus && !isFallback && (
+            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-2 text-emerald-200 text-sm">
+              <CheckCircle size={15} className="flex-shrink-0" />
+              <span>
+                Syllabus saved for <strong>{scopeLabel}</strong>
+                {editingSyllabus.updated_at && (
+                  <span className="text-emerald-300/50 text-xs ml-2">
+                    · Updated {new Date(editingSyllabus.updated_at).toLocaleDateString()}
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={saveSyllabus}
+              disabled={saving || loading || !formData.content.trim()}
+              className="flex-1 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/40 text-white font-medium text-sm transition-colors flex items-center justify-center gap-2"
+            >
+              {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
+              {saving ? 'Saving...' : isFallback ? `Create Stream Syllabus for ${selectedStream?.name || ''}` : 'Save Syllabus'}
+            </button>
+            {editingSyllabus && !isFallback && (
+              <button
+                onClick={deleteSyllabus}
+                disabled={saving || loading}
+                className="px-4 py-2.5 rounded-xl bg-red-600/15 hover:bg-red-600/25 disabled:opacity-40 text-red-300 font-medium text-sm transition-colors flex items-center gap-2"
+              >
+                <Trash2 size={15} />
+                Delete
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
+      {!canLoad && (
+        <div className="p-5 rounded-xl bg-white/[0.02] border border-white/10 text-center">
+          <BookOpen size={28} className="mx-auto text-white/15 mb-2" />
+          <p className="text-white/50 text-sm">Select a Board and Class to manage their syllabus</p>
+          <p className="text-white/25 text-xs mt-1">Stream is optional — use it for stream-specific AI guidance</p>
+        </div>
+      )}
+    </div>
+  );
+}

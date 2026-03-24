@@ -1,0 +1,11 @@
+# Syrabit.ai — robots.txt
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /api/
+
+# Priority pages for AHSEC students
+Sitemap: https://syrabit.ai/sitemap.xml
+
+# Crawl-delay for polite crawling
+Crawl-delay: 1

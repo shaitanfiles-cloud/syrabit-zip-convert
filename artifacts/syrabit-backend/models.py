@@ -1,0 +1,154 @@
+"""
+Syrabit.ai — Pydantic request/response models.
+Imported by server.py and any future router modules.
+"""
+from pydantic import BaseModel, Field, EmailStr
+from typing import List, Optional
+
+
+class UserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserOut(BaseModel):
+    id: str
+    name: str
+    email: str
+    plan: str = "free"
+    credits_used: int = 0
+    credits_limit: int = 0
+    onboarding_done: bool = False
+    is_admin: bool = False
+    created_at: str
+    avatar_url: Optional[str] = ""
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+class OnboardingData(BaseModel):
+    board_id: str
+    board_name: str
+    class_id: str
+    class_name: str
+    stream_id: str
+    stream_name: str
+
+
+class ChatMessage(BaseModel):
+    message: str
+    conversation_id: Optional[str] = None
+    subject_id: Optional[str] = None
+    subject_name: Optional[str] = None
+    chapter_id: Optional[str] = None
+    chapter_name: Optional[str] = None
+    board_id: Optional[str] = None
+    board_name: Optional[str] = None
+    class_id: Optional[str] = None
+    class_name: Optional[str] = None
+    stream_name: Optional[str] = None
+    model: Optional[str] = None
+    document_id: Optional[str] = None
+
+
+class ConversationCreate(BaseModel):
+    title: Optional[str] = "New Conversation"
+    subject_id: Optional[str] = None
+    subject_name: Optional[str] = None
+
+
+class AdminLoginReq(BaseModel):
+    email: str
+    password: str
+
+
+class SubjectCreate(BaseModel):
+    name: str
+    stream_id: str = ""
+    stream_name: Optional[str] = ""
+    description: Optional[str] = ""
+    tags: Optional[str] = ""
+    thumbnail_url: Optional[str] = ""
+    status: Optional[str] = "published"
+
+
+class ChapterCreate(BaseModel):
+    subject_id: str
+    title: str
+    description: Optional[str] = ""
+    content: Optional[str] = ""
+    chapter_number: Optional[int] = 1
+    order_index: Optional[int] = 0
+    order: Optional[int] = 1
+    status: Optional[str] = "published"
+
+
+class ChunkCreate(BaseModel):
+    chapter_id: str
+    content: str
+    content_type: Optional[str] = "notes"
+    tags: Optional[List[str]] = []
+
+
+class DocumentUpload(BaseModel):
+    subject_id: str
+    document_name: str
+    document_text: str
+    document_type: Optional[str] = "text"
+
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    bio: Optional[str] = None
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+class PasswordResetReq(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str
+    new_password: str
+
+
+class UserStatusUpdate(BaseModel):
+    status: str
+
+
+class UserPlanUpdate(BaseModel):
+    plan: str
+    credits_used: Optional[int] = None
+
+
+class UserCreditsUpdate(BaseModel):
+    credits_delta: int
+
+
+class SettingsUpdate(BaseModel):
+    registrations_open: Optional[bool] = None
+    maintenance_mode: Optional[bool] = None
+    app_name: Optional[str] = None
+    tagline: Optional[str] = None
+
+
+class RoadmapItemCreate(BaseModel):
+    title: str
+    description: Optional[str] = ""
+    status: Optional[str] = "planned"
+    priority: Optional[str] = "medium"
+    category: Optional[str] = "feature"
+    phase: Optional[str] = ""
+    effort: Optional[str] = "medium"
+    impact: Optional[str] = "medium"
