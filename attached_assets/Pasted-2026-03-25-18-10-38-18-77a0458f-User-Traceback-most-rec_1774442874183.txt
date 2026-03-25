@@ -1,0 +1,88 @@
+2026-03-25 18:10:38.18
+77a0458f
+User
+Traceback (most recent call last):
+2026-03-25 18:10:38.18
+77a0458f
+User
+return self.sslsocket_class._create(
+2026-03-25 18:10:38.18
+77a0458f
+User
+conn = self.connect()
+2026-03-25 18:10:38.18
+77a0458f
+User
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pymongo/topology.py", line 537, in update_pool
+2026-03-25 18:10:38.18
+77a0458f
+User
+File "/nix/store/6334pjf6w2q623rgvwi499qaiym1p6yv-python3-3.11.14/lib/python3.11/ssl.py", line 1382, in do_handshake
+2026-03-25 18:10:38.18
+77a0458f
+User
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-03-25 18:10:38.18
+77a0458f
+User
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pymongo/pool.py", line 1245, in _configured_socket
+2026-03-25 18:10:38.18
+77a0458f
+User
+TimeoutError: _ssl.c:999: The handshake operation timed out
+2026-03-25 18:10:38.18
+77a0458f
+User
+self._topology.update_pool()
+2026-03-25 18:10:38.18
+77a0458f
+User
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-03-25 18:10:38.18
+77a0458f
+User
+self._sslobj.do_handshake()
+2026-03-25 18:10:38.18
+77a0458f
+User
+The above exception was the direct cause of the following exception:
+2026-03-25 18:10:38.18
+77a0458f
+User
+Traceback (most recent call last):
+2026-03-25 18:10:38.18
+77a0458f
+User
+server.pool.remove_stale_sockets(generation)
+2026-03-25 18:10:38.18
+77a0458f
+User
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pymongo/pool.py", line 1510, in remove_stale_sockets
+2026-03-25 18:10:38.18
+77a0458f
+User
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pymongo/pool.py", line 1547, in connect
+2026-03-25 18:10:38.18
+77a0458f
+User
+^^^^^^^^^^^^^^
+2026-03-25 18:10:38.18
+77a0458f
+User
+File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pymongo/mongo_client.py", line 1801, in _process_periodic_tasks
+2026-03-25 18:10:58.82
+77a0458f
+System
+sending SIGTERM to artifact process artifact=artifacts/syrabit
+2026-03-25 18:10:58.82
+77a0458f
+System
+sending SIGTERM to artifact process artifact=artifacts/api-server
+2026-03-25 18:10:58.82
+77a0458f
+System
+received signal, shutting down artifact processes signal=terminated
+2026-03-25 18:10:58.83
+77a0458f
+System
+artifact process exited with error error=signal: terminated ar

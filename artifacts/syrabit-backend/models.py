@@ -112,6 +112,9 @@ class ProfileUpdate(BaseModel):
     bio: Optional[str] = None
     phone: Optional[str] = None
     avatar_url: Optional[str] = None
+    board_name: Optional[str] = None
+    class_name: Optional[str] = None
+    stream_name: Optional[str] = None
 
 
 class PasswordResetReq(BaseModel):

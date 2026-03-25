@@ -4124,6 +4124,9 @@ async def update_profile(data: ProfileUpdate, user: dict = Depends(get_current_u
     if data.name:        update["name"]  = data.name
     if data.bio is not None: update["bio"] = data.bio
     if data.phone is not None: update["phone"] = data.phone
+    if data.board_name is not None: update["board_name"] = data.board_name
+    if data.class_name is not None: update["class_name"] = data.class_name
+    if data.stream_name is not None: update["stream_name"] = data.stream_name
     if data.avatar_url is not None:
         if data.avatar_url and not data.avatar_url.startswith("data:image/"):
             raise HTTPException(status_code=400, detail="Invalid avatar URL format")
@@ -4172,11 +4175,24 @@ async def get_credits(user: dict = Depends(get_current_user)):
 @api.get("/user/stats")
 async def get_user_stats(user: dict = Depends(get_current_user)):
     """Returns aggregated usage stats for the profile page."""
-    # Get conversations from Supabase
-    convs = await supa_get_conversations(user["id"])
-    conv_count = len(convs) if convs else 0
+    conv_count = 0
+    # Fast path: single COUNT query — much faster than fetching all conversations
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT COUNT(*) AS cnt FROM conversations WHERE user_id = $1", user["id"]
+                )
+                if row:
+                    conv_count = int(row["cnt"])
+        except Exception as e:
+            logger.warning(f"pg conv count failed: {e}")
+            convs = await supa_get_conversations(user["id"])
+            conv_count = len(convs) if convs else 0
+    else:
+        convs = await supa_get_conversations(user["id"])
+        conv_count = len(convs) if convs else 0
     saved_count = len(user.get("saved_subjects", []))
-    # Estimate tokens from credits_used (rough: 1 credit ≈ 300 tokens)
     total_tokens = user.get("credits_used", 0) * 300
     return {
         "conversations": conv_count,
