@@ -46,7 +46,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-MONGO_URL    = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+MONGO_URL    = os.environ.get('MONGO_URL', 'mongodb://localhost:27017').strip().strip('"').strip("'")
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
 JWT_SECRET   = os.environ.get('JWT_SECRET') or os.urandom(48).hex()  # Must be set in .env for production
 JWT_ALGORITHM    = 'HS256'
@@ -191,7 +191,7 @@ else:
 # Admin accounts loaded from environment (no credentials in source code)
 def _load_admin_accounts():
     emails    = [e.strip() for e in os.environ.get('ADMIN_EMAILS', '').split(',') if e.strip()]
-    passwords = [p.strip() for p in os.environ.get('ADMIN_PASSWORDS', '').split(',') if p.strip()]
+    passwords = [p.strip().strip('"').strip("'") for p in os.environ.get('ADMIN_PASSWORDS', '').split(',') if p.strip()]
     names     = [n.strip() for n in os.environ.get('ADMIN_NAMES', '').split(',') if n.strip()]
     max_len = max(len(emails), len(passwords), len(names)) if emails else 0
     return [{"email": emails[i], "password": passwords[i], "name": names[i]}
@@ -205,18 +205,27 @@ ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
 # ─────────────────────────────────────────────
 # SETUP — MongoDB (content) + Supabase (users/convos)
 # ─────────────────────────────────────────────
-# MongoDB with fast timeout
-mongo_client = AsyncIOMotorClient(
-    MONGO_URL,
-    serverSelectionTimeoutMS=5000,
-    connectTimeoutMS=5000,
-    socketTimeoutMS=30000,
-    maxPoolSize=50,
-    minPoolSize=5,
-    maxIdleTimeMS=60000,
-    waitQueueTimeoutMS=5000,
-)
-db = mongo_client[DB_NAME]
+# MongoDB with fast timeout — wrapped so bad URLs don't crash startup
+try:
+    _raw_mongo_url = MONGO_URL.strip()
+    if not (_raw_mongo_url.startswith("mongodb://") or _raw_mongo_url.startswith("mongodb+srv://")):
+        raise ValueError(f"MONGO_URL has invalid scheme — must begin with mongodb:// or mongodb+srv://. Got: {_raw_mongo_url[:30]!r}...")
+    mongo_client = AsyncIOMotorClient(
+        _raw_mongo_url,
+        serverSelectionTimeoutMS=5000,
+        connectTimeoutMS=5000,
+        socketTimeoutMS=30000,
+        maxPoolSize=50,
+        minPoolSize=5,
+        maxIdleTimeMS=60000,
+        waitQueueTimeoutMS=5000,
+    )
+    db = mongo_client[DB_NAME]
+    logging.info("MongoDB client initialised (connection not yet verified)")
+except Exception as _mongo_init_err:
+    logging.warning(f"MongoDB client could not be initialised — content/RAG features disabled: {_mongo_init_err}")
+    mongo_client = None  # type: ignore[assignment]
+    db = None            # type: ignore[assignment]
 
 _mongo_available = None
 _mongo_last_check = 0.0
@@ -224,6 +233,8 @@ _MONGO_CHECK_COOLDOWN = 60
 
 async def is_mongo_available():
     global _mongo_available, _mongo_last_check
+    if db is None:
+        return False
     now = _time_mod.time()
     if _mongo_available is not None and (now - _mongo_last_check) < _MONGO_CHECK_COOLDOWN:
         return _mongo_available
