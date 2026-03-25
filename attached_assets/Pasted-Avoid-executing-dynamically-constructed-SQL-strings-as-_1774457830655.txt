@@ -1,0 +1,14 @@
+Avoid executing dynamically constructed SQL strings as this bypasses SQLAlchemy's SQL injection protections. Dynamic string construction makes the query vulnerable when user input is involved. Use `execute(text("... :param_name"), param_name=value)` with named parameters instead of f-strings/concatenation to ensure proper escaping.
+Avoid executing dynamically constructed SQL strings as this bypasses SQLAlchemy's SQL injection protections. Dynamic string construction makes the query vulnerable when user input is involved. Use `execute(text("... :param_name"), param_name=value)` with named parameters instead of f-strings/concatenation to ensure proper escaping.
+artifacts/syrabit-backend/server.py
+                await conn.execute(sql, *vals)
+Security
+Avoid executing dynamically constructed SQL strings as this bypasses SQLAlchemy's SQL injection protections. Dynamic string construction makes the query vulnerable when user input is involved. Use `execute(text("... :param_name"), param_name=value)` with named parameters instead of f-strings/concatenation to ensure proper escaping.
+Avoid executing dynamically constructed SQL strings as this bypasses SQLAlchemy's SQL injection protections. Dynamic string construction makes the query vulnerable when user input is involved. Use `execute(text("... :param_name"), param_name=value)` with named parameters instead of f-strings/concatenation to ensure proper escaping.
+artifacts/syrabit-backend/server.py
+                    await conn.execute(sql, *vals)
+Security
+Avoid executing dynamically constructed SQL strings as this bypasses SQLAlchemy's SQL injection protections. Dynamic string construction makes the query vulnerable when user input is involved. Use `execute(text("... :param_name"), param_name=value)` with named parameters instead of f-strings/concatenation to ensure proper escaping.
+Avoid executing dynamically constructed SQL strings as this bypasses SQLAlchemy's SQL injection protections. Dynamic string construction makes the query vulnerable when user input is involved. Use `execute(text("... :param_name"), param_name=value)` with named parameters instead of f-strings/concatenation to ensure proper escaping.
+artifacts/syrabit-backend/server.py
+                await conn.execute(sql, *vals)

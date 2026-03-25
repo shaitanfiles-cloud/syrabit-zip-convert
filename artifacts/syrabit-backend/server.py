@@ -2501,6 +2501,15 @@ _ALLOWED_USER_COLUMNS = frozenset({
     "stream_id", "stream_name",
 })
 
+_ALLOWED_CONV_COLUMNS = frozenset({
+    "title", "preview", "subject_id", "subject_name",
+    "starred", "archived", "messages", "tokens", "updated_at",
+})
+
+_ALLOWED_SETTINGS_COLUMNS = frozenset({
+    "registrations_open", "maintenance_mode", "app_name", "tagline",
+})
+
 async def supa_update_user(uid: str, updates: dict):
     _invalidate_user_cache(uid)  # always bust cache before touching DB
     if pg_pool and updates:
@@ -2773,8 +2782,10 @@ async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
     _redis_invalidate_conversation(conv_id, uid)
     if pg_pool and updates:
         try:
-            allowed = {"title","preview","subject_id","subject_name","starred","archived","messages","tokens","updated_at"}
-            u = {k: v for k, v in updates.items() if k in allowed}
+            u = {k: v for k, v in updates.items() if k in _ALLOWED_CONV_COLUMNS}
+            unknown = set(updates) - _ALLOWED_CONV_COLUMNS
+            if unknown:
+                raise ValueError(f"supa_update_conversation: disallowed column(s): {unknown}")
             if isinstance(u.get("messages"), list): u["messages"] = json.dumps(u["messages"])
             if u:
                 cols = [f"{k} = ${i}" for i, k in enumerate(u.keys(), start=1)]
@@ -2881,6 +2892,9 @@ async def supa_get_settings():
 async def supa_update_settings(updates: dict):
     if pg_pool and updates:
         try:
+            unknown = set(updates) - _ALLOWED_SETTINGS_COLUMNS
+            if unknown:
+                raise ValueError(f"supa_update_settings: disallowed column(s): {unknown}")
             cols = [f"{k} = ${i}" for i, k in enumerate(updates.keys(), start=1)]
             vals = list(updates.values())
             sql = f"UPDATE app_settings SET {', '.join(cols)} WHERE id = 1"
