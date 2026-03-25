@@ -2105,15 +2105,46 @@ def _stream_filter_think(token_iter):
     """Async generator that strips <think>...</think> blocks from a token stream."""
     return token_iter  # caller handles filtering inline
 
+_THINK_BUDGET_HINT = (
+    "/think briefly — 1-3 sentences max. "
+    "Go straight to the answer after reasoning. "
+    "Do not repeat the question.\n"
+)
+
+def _inject_think_budget(messages: list) -> list:
+    """Prepend a concise reasoning directive to the system message so sarvam-m
+    spends fewer tokens in its <think> block, reducing TTFT significantly."""
+    out = []
+    injected = False
+    for m in messages:
+        if m.get("role") == "system" and not injected:
+            out.append({**m, "content": _THINK_BUDGET_HINT + m["content"]})
+            injected = True
+        else:
+            out.append(m)
+    if not injected:
+        out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
+    return out
+
 async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int):
     """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
-    Adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the user's answer budget."""
-    api_max = max_tokens + SARVAM_THINK_BUFFER  # thinking tokens don't count toward user quota
+    Adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the user's answer budget.
+
+    Speed knobs applied:
+      • temperature=0.0  — greedy decoding, no sampling overhead
+      • top_p/freq/pres penalties all zeroed for minimal compute
+      • _inject_think_budget — caps reasoning tokens at the prompt level
+    """
+    api_max = max_tokens + SARVAM_THINK_BUFFER
+    patched = _inject_think_budget(messages)
     payload = {
         "model": model,
-        "messages": messages,
+        "messages": patched,
         "max_tokens": api_max,
-        "temperature": 0.3,
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "frequency_penalty": 0,
+        "presence_penalty": 0,
         "stream": True,
     }
     client = sarvam_llm_client
@@ -2129,9 +2160,7 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
                 break
             try:
                 chunk = json.loads(raw)
-                choice = chunk.get("choices", [{}])[0]
-                delta = choice.get("delta", {})
-                # Only yield content — sarvam-m embeds <think> in content (filtered in call_llm_api_stream)
+                delta = chunk["choices"][0]["delta"]
                 token = delta.get("content") or ""
                 if token:
                     yield token
@@ -2163,22 +2192,42 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     in_think = False
     buf = ""
 
+    # Batch small tokens before serialising — reduces JSON ops from ~150 → ~15 per response
+    _SSE_BATCH = 25   # flush when accumulated content reaches this many chars
+
     async def _emit_tokens(token_source):
         nonlocal in_think, buf
-        # max chars to keep at end of buffer so a split </think> tag is not lost
-        _CLOSE_KEEP = len('</think>') - 1  # 7
+        _CLOSE_KEEP = len('</think>') - 1   # 7
+        think_done  = False  # once True: no more think-blocks possible → fast path
+        batch       = ""     # accumulator for batched SSE content
+
         async for token in token_source:
+            # ── Fast path: think block already finished, just batch & yield ──
+            if think_done:
+                batch += token
+                if len(batch) >= _SSE_BATCH:
+                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                    batch = ""
+                continue
+
+            # ── Slow path: still scanning for <think>...</think> ─────────────
             buf += token
             while buf:
                 if in_think:
                     close_idx = buf.find('</think>')
                     if close_idx != -1:
                         buf = buf[close_idx + 8:]
-                        in_think = False
-                        # continue while-loop: process any content after </think>
+                        in_think   = False
+                        think_done = True   # no more think blocks after this
+                        # flush any content that immediately follows </think>
+                        if buf:
+                            batch += buf
+                            buf = ""
+                            if len(batch) >= _SSE_BATCH:
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        break
                     else:
-                        # Keep the last 7 chars: they might be a partial </think>
-                        # that will complete when the next token arrives.
                         buf = buf[-_CLOSE_KEEP:] if len(buf) > _CLOSE_KEEP else buf
                         break
                 else:
@@ -2186,25 +2235,41 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     if open_idx != -1:
                         before = buf[:open_idx]
                         if before:
-                            yield f"data: {json.dumps({'content': before})}\n\n"
-                        buf = buf[open_idx + 7:]
+                            batch += before
+                            if len(batch) >= _SSE_BATCH:
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
+                        buf      = buf[open_idx + 7:]
                         in_think = True
                     elif buf.endswith(('<', '<t', '<th', '<thi', '<thin', '<think')):
                         partial_start = buf.rfind('<')
-                        candidate = buf[partial_start:]
+                        candidate     = buf[partial_start:]
                         if '<think>'[:len(candidate)] == candidate:
                             before = buf[:partial_start]
                             if before:
-                                yield f"data: {json.dumps({'content': before})}\n\n"
+                                batch += before
+                                if len(batch) >= _SSE_BATCH:
+                                    yield f"data: {json.dumps({'content': batch})}\n\n"
+                                    batch = ""
                             buf = candidate
                             break
                         else:
-                            yield f"data: {json.dumps({'content': buf})}\n\n"
-                            buf = ""
+                            batch += buf
+                            buf    = ""
+                            if len(batch) >= _SSE_BATCH:
+                                yield f"data: {json.dumps({'content': batch})}\n\n"
+                                batch = ""
                     else:
-                        yield f"data: {json.dumps({'content': buf})}\n\n"
-                        buf = ""
+                        batch += buf
+                        buf    = ""
+                        if len(batch) >= _SSE_BATCH:
+                            yield f"data: {json.dumps({'content': batch})}\n\n"
+                            batch = ""
                         break
+
+        # Flush any remaining content
+        if batch and not in_think:
+            yield f"data: {json.dumps({'content': batch})}\n\n"
         if buf and not in_think:
             yield f"data: {json.dumps({'content': buf})}\n\n"
 
