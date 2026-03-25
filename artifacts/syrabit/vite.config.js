@@ -45,9 +45,18 @@ export default defineConfig({
     'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
   },
 
+  esbuild: {
+    target: 'esnext',
+    logOverride: { 'this-is-undefined-in-esm': 'silent' },
+  },
+
   build: {
     outDir: 'build',
     sourcemap: false,
+    target: 'esnext',
+    minify: 'esbuild',
+    cssMinify: true,
+    chunkSizeWarningLimit: 1500,
     rollupOptions: {
       output: {
         manualChunks: {
@@ -56,6 +65,7 @@ export default defineConfig({
           query: ['@tanstack/react-query'],
           motion: ['framer-motion'],
           charts: ['recharts'],
+          markdown: ['react-markdown', 'remark-gfm'],
         },
       },
     },
@@ -68,6 +78,10 @@ export default defineConfig({
       'react/jsx-dev-runtime',
       'react/jsx-runtime',
       'react-router-dom',
+      '@tanstack/react-query',
+      'framer-motion',
+      'react-markdown',
+      'remark-gfm',
     ],
     needsInterop: [
       'react',

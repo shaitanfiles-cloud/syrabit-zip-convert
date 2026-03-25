@@ -124,6 +124,25 @@ _user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=30)
 def _invalidate_user_cache(uid: str):
     _user_cache.pop(uid, None)
 
+# ── Conversation Object Cache ──────────────────────────────────────────────────
+# Keyed by "conv_id:uid", 15-second TTL — avoids PG on every chat turn
+_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4000, ttl=15)
+
+def _conv_cache_key(conv_id: str, uid: str) -> str:
+    return f"{conv_id}:{uid}"
+
+def _invalidate_conv_cache(conv_id: str, uid: str):
+    _conv_cache.pop(_conv_cache_key(conv_id, uid), None)
+
+# ── RAG Result Cache ───────────────────────────────────────────────────────────
+# Keyed by (query_hash, subject_id), 60-second TTL — skips 3 MongoDB queries on repeat
+import hashlib as _hashlib
+_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=60)
+
+def _rag_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str]) -> str:
+    raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}"
+    return _hashlib.md5(raw.encode()).hexdigest()
+
 REDIS_AI_CACHE_TTL = 3600
 REDIS_CHAT_CACHE_TTL = 600
 REDIS_RATE_WINDOW = 60
@@ -320,6 +339,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     updated_at TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS conversations_user_id_idx ON conversations(user_id);
+CREATE INDEX IF NOT EXISTS conversations_id_user_idx ON conversations(id, user_id);
+CREATE INDEX IF NOT EXISTS conversations_updated_idx ON conversations(updated_at DESC);
+CREATE INDEX IF NOT EXISTS users_email_idx ON users(email);
 CREATE TABLE IF NOT EXISTS app_settings (
     id INTEGER PRIMARY KEY DEFAULT 1,
     registrations_open BOOLEAN NOT NULL DEFAULT TRUE,
@@ -468,6 +490,11 @@ async def lifespan(app):
         await db.streams.create_index("class_id")
         await db.classes.create_index("board_id")
         await db.chunks.create_index("chapter_id")
+        # Text index for RAG keyword search — replaces slow $regex full-scan
+        try:
+            await db.chunks.create_index([("content", "text")], name="chunks_content_text")
+        except Exception:
+            pass  # index may already exist with different name
         # Analytics indexes
         await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
         await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
@@ -1336,6 +1363,10 @@ async def rag_search(
       "medium" — no chunks, but matching subjects/chapters found (metadata only)
       "none"   — nothing found in DB at all
     """
+    # Fast path: 60-second in-memory cache — skips all MongoDB queries on repeat
+    _rk = _rag_cache_key(query, subject_id, subject_name)
+    if _rk in _rag_cache:
+        return _rag_cache[_rk]
     try:
         keywords = _extract_keywords(query)
         if not keywords:
@@ -1394,13 +1425,15 @@ async def rag_search(
             source  = "none"
             logger.info(f"RAG [NONE]: nothing found | query: {query[:50]}")
 
-        return {
+        result = {
             "chunks":   chunks,
             "chapters": chapters_found,
             "subjects": subjects_found,
             "source":   source,
             "quality":  quality,
         }
+        _rag_cache[_rk] = result
+        return result
 
     except Exception as e:
         logger.error(f"RAG search error: {e}")
@@ -2543,8 +2576,14 @@ async def supa_get_conversations(uid: str):
         return []
 
 async def supa_get_conversation(conv_id: str, uid: str):
+    # L1: in-memory cache (microseconds)
+    _ck = _conv_cache_key(conv_id, uid)
+    if _ck in _conv_cache:
+        return _conv_cache[_ck]
+    # L2: Redis (if configured)
     cached = _redis_get_conversation(conv_id, uid)
     if cached:
+        _conv_cache[_ck] = cached
         return cached
     result = None
     if pg_pool:
@@ -2571,10 +2610,12 @@ async def supa_get_conversation(conv_id: str, uid: str):
             result = await db.conversations.find_one({"id": conv_id, "user_id": uid}, {"_id": 0})
         except Exception: pass
     if result:
+        _conv_cache[_conv_cache_key(conv_id, uid)] = result
         _redis_cache_conversation(conv_id, uid, result)
     return result
 
 async def supa_upsert_conversation(conv: dict):
+    _invalidate_conv_cache(conv.get("id",""), conv.get("user_id",""))
     _redis_invalidate_conversation(conv.get("id",""), conv.get("user_id",""))
     if pg_pool:
         try:
@@ -2615,6 +2656,7 @@ async def supa_upsert_conversation(conv: dict):
         logger.warning(f"All stores failed for upsert_conversation: {e}")
 
 async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
+    _invalidate_conv_cache(conv_id, uid)
     _redis_invalidate_conversation(conv_id, uid)
     if pg_pool and updates:
         try:
@@ -3695,6 +3737,37 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         "rag_chunks_used": len(rag_ctx.get("chunks", [])),
     }
 
+async def _persist_chat_turn(
+    conv_id: str, user_id: str,
+    user_msg: str, answer: str,
+    rag_source: str, rag_chunks: int,
+    credits_used_before: int,
+):
+    """Background: save conversation messages + deduct 1 credit. Non-blocking."""
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        new_msgs = [
+            {"role": "user", "content": user_msg, "timestamp": now},
+            {"role": "assistant", "content": answer, "timestamp": now,
+             "rag_source": rag_source, "rag_chunks": rag_chunks},
+        ]
+        conv = await supa_get_conversation(conv_id, user_id)
+        if conv:
+            existing = conv.get("messages", [])
+            if isinstance(existing, str):
+                try: existing = json.loads(existing)
+                except: existing = []
+            updated = existing + new_msgs
+            await supa_update_conversation(conv_id, user_id, {
+                "messages": json.dumps(updated) if supa else updated,
+                "updated_at": now,
+                "preview": answer[:100],
+                "tokens": len(answer.split()),
+            })
+        await supa_update_user(user_id, {"credits_used": credits_used_before + 1})
+    except Exception as e:
+        logger.warning(f"_persist_chat_turn failed: {e}")
+
 @api.post("/ai/chat/stream")
 async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     await ensure_seeded()
@@ -3831,47 +3904,32 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                     _ai_response_cache[cache_key] = answer_str
                     logger.info(f"Cache MISS → stored (STREAM): {cache_key}")
 
-        # Persist conversation after stream ends
+        # Yield DONE immediately — DB writes happen in background
         answer = "".join(full_response)
-        new_used = credits_info["used"]
-        if answer:
-            now = datetime.now(timezone.utc).isoformat()
-            new_msgs = [
-                {"role": "user", "content": user_msg_saved, "timestamp": now},
-                {"role": "assistant", "content": answer, "timestamp": now,
-                 "rag_source": rag_source_saved, "rag_chunks": rag_chunks_count},
-            ]
-            # Update conversation in Supabase
-            conv = await supa_get_conversation(conv_id, user["id"])
-            if conv:
-                existing = conv.get("messages", [])
-                if isinstance(existing, str):
-                    try: existing = json.loads(existing)
-                    except: existing = []
-                updated = existing + new_msgs
-                await supa_update_conversation(conv_id, user["id"], {
-                    "messages": json.dumps(updated) if supa else updated,
-                    "updated_at": now,
-                    "preview": answer[:100],
-                    "tokens": len(answer.split()),
-                })
-            # Deduct credit (lifetime)
-            new_used = credits_info["used"] + 1
-            await supa_update_user(user["id"], {"credits_used": new_used})
+        new_used_optimistic = credits_info["used"] + 1 if answer else credits_info["used"]
 
         # ── syrabit_done event with credits metadata ─────────────────────
         done_payload = {
             "event": "syrabit_done",
             "conversation_id": conv_id,
             "credits_used": 1,
-            "credits_used_total": new_used,
+            "credits_used_total": new_used_optimistic,
             "remaining_credits": max(0, credits_info["remaining"] - 1),
             "rag_source": rag_source_saved,
             "rag_chunks": rag_chunks_count,
-            "words": len(answer.split()),
+            "words": len(answer.split()) if answer else 0,
         }
         yield f"data: {json.dumps(done_payload)}\n\n"
         yield "data: [DONE]\n\n"
+
+        # Fire background: save messages + deduct credit (non-blocking)
+        if answer:
+            asyncio.create_task(_persist_chat_turn(
+                conv_id, user["id"],
+                user_msg_saved, answer,
+                rag_source_saved, rag_chunks_count,
+                credits_info["used"],
+            ))
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
