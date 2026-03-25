@@ -2386,10 +2386,19 @@ async def supa_insert_user(user: dict):
     except Exception as e:
         logger.warning(f"All stores failed for insert_user: {e}")
 
+_ALLOWED_USER_COLUMNS = frozenset({
+    "name", "bio", "phone", "avatar_url", "plan", "status",
+    "credits_used", "saved_subjects", "deletion_requested_at",
+    "deletion_hard_at", "last_seen",
+})
+
 async def supa_update_user(uid: str, updates: dict):
     _invalidate_user_cache(uid)  # always bust cache before touching DB
     if pg_pool and updates:
         try:
+            unknown = set(updates) - _ALLOWED_USER_COLUMNS
+            if unknown:
+                raise ValueError(f"supa_update_user: disallowed column(s): {unknown}")
             cols = []
             vals = []
             for i, (k, v) in enumerate(updates.items(), start=1):
