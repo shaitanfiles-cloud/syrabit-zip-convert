@@ -1416,14 +1416,19 @@ async def rag_search(
                 {"$and": [{"chapter_id": {"$in": chapter_ids}}, {"$or": regex_parts}]}
                 if chapter_ids else {"$or": regex_parts}
             )
-            subj_kw_filter = {"$and": [{"id": subject_id}, {"status": "published"}]}
-            ch_filter = {"$and": [{"subject_id": subject_id}, ch_title_filter]}
+            subj_kw_filter = {"id": subject_id}
+            # Fetch keyword-matching chapters AND all chapters for this subject
+            ch_kw_filter = {"$and": [{"subject_id": subject_id}, ch_title_filter]}
+            ch_all_filter = {"subject_id": subject_id}
 
-            chunks, subjects_found, chapters_found = await asyncio.gather(
+            chunks, subjects_found, chapters_kw, chapters_all = await asyncio.gather(
                 db.chunks.find(chunk_filter, {"_id": 0}).limit(5).to_list(5),
-                db.subjects.find(subj_kw_filter, {"_id": 0}).limit(3).to_list(3),
-                db.chapters.find(ch_filter, {"_id": 0}).limit(5).to_list(5),
+                db.subjects.find(subj_kw_filter, {"_id": 0}).limit(1).to_list(1),
+                db.chapters.find(ch_kw_filter, {"_id": 0, "title": 1, "description": 1, "order_index": 1}).sort("order_index", 1).limit(5).to_list(5),
+                db.chapters.find(ch_all_filter, {"_id": 0, "title": 1, "description": 1, "order_index": 1}).sort("order_index", 1).limit(15).to_list(15),
             )
+            # Use keyword-matching chapters when available; otherwise use the full chapter list
+            chapters_found = chapters_kw if chapters_kw else chapters_all
         else:
             # ── No subject: run chunks + subjects in parallel, then chapters ──
             subj_kw_filter = {"$or": [
@@ -1882,9 +1887,14 @@ def build_rag_system_prompt(
                     grounding += "\n"
 
             if chapters:
-                grounding += "\n**Relevant chapters in this subject:**\n"
+                grounding += "\n**Chapters covered in this subject:**\n"
                 for ch in chapters:
-                    grounding += f"- {ch.get('title', '')}\n"
+                    title = ch.get('title', '')
+                    desc = (ch.get('description') or '').strip()
+                    grounding += f"- **{title}**"
+                    if desc:
+                        grounding += f": {desc[:300]}"
+                    grounding += "\n"
 
             grounding += (
                 "\n---\n"
