@@ -6137,10 +6137,6 @@ async def metrics_history(minutes: int = 60, admin: dict = Depends(get_admin_use
         "window_minutes": minutes,
     }
 
-@api.get("/")
-async def root():
-    return {"message": "Syrabit.ai API", "version": "1.0.0"}
-
 # ─────────────────────────────────────────────
 # APP SETUP
 # ─────────────────────────────────────────────
