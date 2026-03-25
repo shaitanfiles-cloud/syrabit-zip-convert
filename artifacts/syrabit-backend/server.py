@@ -18,7 +18,6 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
 import os, uuid, logging, hashlib, json, re, asyncio, httpx, warnings
-import time as _time_mod2
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
 try:
@@ -2152,46 +2151,273 @@ async def _supa(fn):
     """Await a sync supabase-py operation non-blockingly."""
     return await asyncio.get_event_loop().run_in_executor(_THREAD_POOL, fn)
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA ACCESS LAYER
+# Architecture:
+#   Supabase layer (users, auth, credits, plans, conversations_meta)
+#     └─ Primary:   Replit PostgreSQL via asyncpg  (always available)
+#     └─ Mirror:    Supabase REST client           (when SUPABASE_URL configured)
+#   MongoDB layer  (RAG, syllabus, chapters, topics, full conversations)
+#     └─ Primary:   MongoDB Atlas                  (when MONGO_URL configured)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _pg_row(row) -> dict:
+    """Convert asyncpg Record to plain dict, parsing JSON fields."""
+    if row is None:
+        return None
+    d = dict(row)
+    for field in ("saved_subjects", "messages"):
+        if field in d and isinstance(d[field], str):
+            try: d[field] = json.loads(d[field])
+            except: d[field] = [] if field == "messages" else []
+    return d
+
+def _pg_rows(rows) -> list:
+    return [_pg_row(r) for r in rows] if rows else []
+
+def _pg_user_cols():
+    return """id, name, email, password_hash, plan, credits_used, credits_limit,
+              document_access, onboarding_done, is_admin, status, bio, phone,
+              avatar_url, saved_subjects::text, has_free_credits_issued,
+              board_id, board_name, class_id, class_name, stream_id, stream_name, created_at"""
+
+# ── Supabase mirror helper ────────────────────────────────────────────────────
+def _supa_mirror(fn):
+    """Fire-and-forget Supabase write (non-blocking, best-effort)."""
+    if supa:
+        async def _run():
+            try:
+                await asyncio.get_event_loop().run_in_executor(_THREAD_POOL, fn)
+            except Exception as e:
+                logger.debug(f"Supabase mirror failed (non-critical): {e}")
+        asyncio.ensure_future(_run())
+
+# ─────────────────────────────────────────────
+# USER OPERATIONS  (Supabase / Replit PG layer)
+# ─────────────────────────────────────────────
+
 async def supa_get_user(email: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT {_pg_user_cols()} FROM users WHERE email = $1 LIMIT 1",
+                    email.lower()
+                )
+                return _pg_row(row)
+        except Exception as e:
+            logger.warning(f"pg supa_get_user failed: {e}")
     if supa:
         try:
             r = await _supa(lambda: supa.table("users").select("*").eq("email", email.lower()).limit(1).execute())
             if r.data: return r.data[0]
         except Exception: pass
-    return await db.users.find_one({"email": email.lower()}, {"_id": 0})
+    try:
+        return await db.users.find_one({"email": email.lower()}, {"_id": 0})
+    except Exception:
+        return None
 
 async def supa_get_user_by_id(uid: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    f"SELECT {_pg_user_cols()} FROM users WHERE id = $1 LIMIT 1", uid
+                )
+                return _pg_row(row)
+        except Exception as e:
+            logger.warning(f"pg supa_get_user_by_id failed: {e}")
     if supa:
         try:
             r = await _supa(lambda: supa.table("users").select("*").eq("id", uid).limit(1).execute())
             if r.data: return r.data[0]
         except Exception: pass
-    return await db.users.find_one({"id": uid}, {"_id": 0})
+    try:
+        return await db.users.find_one({"id": uid}, {"_id": 0})
+    except Exception:
+        return None
 
 async def supa_insert_user(user: dict):
+    if pg_pool:
+        try:
+            saved = json.dumps(user.get("saved_subjects", []))
+            async with pg_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO users (id, name, email, password_hash, plan, credits_used,
+                       credits_limit, document_access, onboarding_done, is_admin, status,
+                       bio, phone, avatar_url, saved_subjects, has_free_credits_issued,
+                       board_id, board_name, class_id, class_name, stream_id, stream_name, created_at)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,
+                               $17,$18,$19,$20,$21,$22,$23)
+                       ON CONFLICT (id) DO NOTHING""",
+                    user.get("id",""), user.get("name",""), user.get("email",""),
+                    user.get("password_hash",""), user.get("plan","free"),
+                    user.get("credits_used",0), user.get("credits_limit",30),
+                    user.get("document_access","zero"), user.get("onboarding_done",False),
+                    user.get("is_admin",False), user.get("status","active"),
+                    user.get("bio",""), user.get("phone",""), user.get("avatar_url",""),
+                    saved, user.get("has_free_credits_issued",True),
+                    user.get("board_id"), user.get("board_name"),
+                    user.get("class_id"), user.get("class_name"),
+                    user.get("stream_id"), user.get("stream_name"),
+                    user.get("created_at","")
+                )
+            _supa_mirror(lambda: supa.table("users").upsert(user).execute())
+            return
+        except Exception as e:
+            logger.warning(f"pg supa_insert_user failed: {e}")
     if supa:
         try: await _supa(lambda: supa.table("users").insert(user).execute()); return
         except Exception: pass
-    await db.users.insert_one(user)
+    try:
+        await db.users.insert_one(user)
+    except Exception as e:
+        logger.warning(f"All stores failed for insert_user: {e}")
 
 async def supa_update_user(uid: str, updates: dict):
+    if pg_pool and updates:
+        try:
+            cols = []
+            vals = []
+            for i, (k, v) in enumerate(updates.items(), start=1):
+                if k == "saved_subjects":
+                    cols.append(f"{k} = ${i}::jsonb")
+                    vals.append(json.dumps(v))
+                else:
+                    cols.append(f"{k} = ${i}")
+                    vals.append(v)
+            vals.append(uid)
+            sql = f"UPDATE users SET {', '.join(cols)} WHERE id = ${len(vals)}"
+            async with pg_pool.acquire() as conn:
+                await conn.execute(sql, *vals)
+            _supa_mirror(lambda: supa.table("users").update(updates).eq("id", uid).execute())
+            return
+        except Exception as e:
+            logger.warning(f"pg supa_update_user failed: {e}")
     if supa:
         try: await _supa(lambda: supa.table("users").update(updates).eq("id", uid).execute()); return
         except Exception: pass
-    result = await db.users.update_one({"id": uid}, {"$set": updates})
-    if result.matched_count == 0:
-        logger.warning(f"User {uid} not found during update")
-    return result
+    try:
+        await db.users.update_one({"id": uid}, {"$set": updates})
+    except Exception as e:
+        logger.warning(f"All stores failed for update_user: {e}")
 
 async def supa_list_users():
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"SELECT {_pg_user_cols()} FROM users WHERE is_admin = FALSE ORDER BY created_at DESC LIMIT 1000"
+                )
+                return _pg_rows(rows)
+        except Exception as e:
+            logger.warning(f"pg supa_list_users failed: {e}")
     if supa:
         try:
             r = await _supa(lambda: supa.table("users").select("*").neq("is_admin", True).order("created_at", desc=True).limit(1000).execute())
             return r.data
         except Exception: pass
-    return await db.users.find({"is_admin": {"$ne": True}}, {"_id": 0}).to_list(1000)
+    try:
+        return await db.users.find({"is_admin": {"$ne": True}}, {"_id": 0}).to_list(1000)
+    except Exception:
+        return []
+
+async def supa_get_user_for_reset(email: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT id, email FROM users WHERE email = $1 LIMIT 1", email.lower())
+                return _pg_row(row)
+        except Exception: pass
+    if supa:
+        try:
+            r = await _supa(lambda: supa.table("users").select("id,email").eq("email", email.lower()).limit(1).execute())
+            if r.data: return r.data[0]
+        except Exception: pass
+    try:
+        return await db.users.find_one({"email": email.lower()}, {"_id": 0, "id": 1, "email": 1})
+    except Exception:
+        return None
+
+async def supa_update_user_password(email: str, password_hash: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                await conn.execute("UPDATE users SET password_hash = $1 WHERE email = $2", password_hash, email.lower())
+            _supa_mirror(lambda: supa.table("users").update({"password_hash": password_hash}).eq("email", email.lower()).execute())
+            return
+        except Exception as e:
+            logger.warning(f"pg supa_update_user_password failed: {e}")
+    if supa:
+        try:
+            await _supa(lambda: supa.table("users").update({"password_hash": password_hash}).eq("email", email.lower()).execute())
+            return
+        except Exception: pass
+    try:
+        await db.users.update_one({"email": email.lower()}, {"$set": {"password_hash": password_hash}})
+    except Exception: pass
+
+async def supa_count_users():
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                return await conn.fetchval("SELECT COUNT(*) FROM users WHERE is_admin = FALSE")
+        except Exception: pass
+    if supa:
+        try:
+            r = await _supa(lambda: supa.table("users").select("id", count="exact").neq("is_admin", True).execute())
+            return r.count if r.count is not None else len(r.data)
+        except Exception: pass
+    try:
+        return await db.users.count_documents({"is_admin": {"$ne": True}})
+    except Exception:
+        return 0
+
+async def supa_get_users_by_ids(user_ids: list):
+    if not user_ids:
+        return []
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT id, name, email, plan, avatar_url, board_name, class_name, stream_name FROM users WHERE id = ANY($1::text[])",
+                    user_ids
+                )
+                return _pg_rows(rows)
+        except Exception: pass
+    if supa:
+        try:
+            r = await _supa(lambda: supa.table("users").select(
+                "id,name,email,plan,avatar_url,board_name,class_name,stream_name"
+            ).in_("id", user_ids).execute())
+            return r.data
+        except Exception: pass
+    try:
+        return await db.users.find(
+            {"id": {"$in": user_ids}},
+            {"_id": 0, "id": 1, "name": 1, "email": 1, "plan": 1, "avatar_url": 1,
+             "board_name": 1, "class_name": 1, "stream_name": 1}
+        ).to_list(len(user_ids))
+    except Exception:
+        return []
+
+# ─────────────────────────────────────────────
+# CONVERSATION OPERATIONS  (Supabase = metadata, MongoDB = full content)
+# ─────────────────────────────────────────────
 
 async def supa_get_conversations(uid: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """SELECT id, title, preview, subject_id, subject_name, starred, archived,
+                              tokens, created_at, updated_at
+                       FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 200""",
+                    uid
+                )
+                return _pg_rows(rows)
+        except Exception as e:
+            logger.warning(f"pg supa_get_conversations failed: {e}")
     if supa:
         try:
             r = await _supa(lambda: supa.table("conversations").select(
@@ -2199,47 +2425,102 @@ async def supa_get_conversations(uid: str):
             ).eq("user_id", uid).order("updated_at", desc=True).limit(200).execute())
             return r.data
         except Exception: pass
-    return await db.conversations.find({"user_id": uid}, {"_id": 0, "messages": 0}).sort("updated_at", -1).to_list(200)
+    try:
+        return await db.conversations.find({"user_id": uid}, {"_id": 0, "messages": 0}).sort("updated_at", -1).to_list(200)
+    except Exception:
+        return []
 
 async def supa_get_conversation(conv_id: str, uid: str):
     cached = _redis_get_conversation(conv_id, uid)
     if cached:
         return cached
-    if supa:
+    result = None
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT * FROM conversations WHERE id = $1 AND user_id = $2 LIMIT 1",
+                    conv_id, uid
+                )
+                result = _pg_row(row)
+        except Exception as e:
+            logger.warning(f"pg supa_get_conversation failed: {e}")
+    if result is None and supa:
         try:
             r = await _supa(lambda: supa.table("conversations").select("*").eq("id", conv_id).eq("user_id", uid).limit(1).execute())
             if r.data:
-                row = r.data[0]
-                if isinstance(row.get("messages"), str):
-                    try: row["messages"] = json.loads(row["messages"])
-                    except: row["messages"] = []
-                _redis_cache_conversation(conv_id, uid, row)
-                return row
+                result = r.data[0]
+                if isinstance(result.get("messages"), str):
+                    try: result["messages"] = json.loads(result["messages"])
+                    except: result["messages"] = []
         except Exception: pass
-    result = await db.conversations.find_one({"id": conv_id, "user_id": uid}, {"_id": 0})
+    if result is None:
+        try:
+            result = await db.conversations.find_one({"id": conv_id, "user_id": uid}, {"_id": 0})
+        except Exception: pass
     if result:
         _redis_cache_conversation(conv_id, uid, result)
     return result
 
 async def supa_upsert_conversation(conv: dict):
+    _redis_invalidate_conversation(conv.get("id",""), conv.get("user_id",""))
+    if pg_pool:
+        try:
+            msgs = json.dumps(conv.get("messages", [])) if isinstance(conv.get("messages"), list) else (conv.get("messages") or "[]")
+            async with pg_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO conversations (id, user_id, title, preview, subject_id, subject_name,
+                       starred, archived, messages, tokens, created_at, updated_at)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                       ON CONFLICT (id) DO UPDATE SET
+                         title=EXCLUDED.title, preview=EXCLUDED.preview,
+                         subject_id=EXCLUDED.subject_id, subject_name=EXCLUDED.subject_name,
+                         starred=EXCLUDED.starred, archived=EXCLUDED.archived,
+                         messages=EXCLUDED.messages, tokens=EXCLUDED.tokens,
+                         updated_at=EXCLUDED.updated_at""",
+                    conv.get("id",""), conv.get("user_id",""),
+                    conv.get("title","New Chat"), conv.get("preview",""),
+                    conv.get("subject_id"), conv.get("subject_name"),
+                    conv.get("starred",False), conv.get("archived",False),
+                    msgs, conv.get("tokens",0),
+                    conv.get("created_at",""), conv.get("updated_at","")
+                )
+            _supa_mirror(lambda: supa.table("conversations").upsert({k: v for k, v in conv.items() if k in {"id","user_id","title","preview","subject_id","subject_name","starred","archived","tokens","created_at","updated_at"}}).execute())
+            return
+        except Exception as e:
+            logger.warning(f"pg supa_upsert_conversation failed: {e}")
     if supa:
         try:
-            # Only include columns that exist in Supabase schema
-            allowed = {"id","user_id","title","preview","subject_id","subject_name",
-                       "starred","archived","messages","tokens","created_at","updated_at"}
+            allowed = {"id","user_id","title","preview","subject_id","subject_name","starred","archived","messages","tokens","created_at","updated_at"}
             c = {k: v for k, v in conv.items() if k in allowed}
             if isinstance(c.get("messages"), list): c["messages"] = json.dumps(c["messages"])
             await _supa(lambda: supa.table("conversations").upsert(c).execute()); return
         except Exception as e:
             logger.warning(f"supa_upsert_conversation failed: {e}")
-    await db.conversations.replace_one({"id": conv["id"]}, conv, upsert=True)
+    try:
+        await db.conversations.replace_one({"id": conv["id"]}, conv, upsert=True)
+    except Exception as e:
+        logger.warning(f"All stores failed for upsert_conversation: {e}")
 
 async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
     _redis_invalidate_conversation(conv_id, uid)
+    if pg_pool and updates:
+        try:
+            allowed = {"title","preview","subject_id","subject_name","starred","archived","messages","tokens","updated_at"}
+            u = {k: v for k, v in updates.items() if k in allowed}
+            if isinstance(u.get("messages"), list): u["messages"] = json.dumps(u["messages"])
+            if u:
+                cols = [f"{k} = ${i}" for i, k in enumerate(u.keys(), start=1)]
+                vals = list(u.values()) + [conv_id, uid]
+                sql = f"UPDATE conversations SET {', '.join(cols)} WHERE id = ${len(vals)-1} AND user_id = ${len(vals)}"
+                async with pg_pool.acquire() as conn:
+                    await conn.execute(sql, *vals)
+            return
+        except Exception as e:
+            logger.warning(f"pg supa_update_conversation failed: {e}")
     if supa:
         try:
-            allowed = {"title","preview","subject_id","subject_name","starred","archived",
-                       "messages","tokens","updated_at"}
+            allowed = {"title","preview","subject_id","subject_name","starred","archived","messages","tokens","updated_at"}
             u = {k: v for k, v in updates.items() if k in allowed}
             if isinstance(u.get("messages"), list): u["messages"] = json.dumps(u["messages"])
             if u:
@@ -2247,130 +2528,51 @@ async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
             return
         except Exception as e:
             logger.warning(f"supa_update_conversation failed: {e}")
-    await db.conversations.update_one({"id": conv_id, "user_id": uid}, {"$set": updates})
+    try:
+        await db.conversations.update_one({"id": conv_id, "user_id": uid}, {"$set": updates})
+    except Exception: pass
 
 async def supa_delete_conversation(conv_id: str, uid: str):
     _redis_invalidate_conversation(conv_id, uid)
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                await conn.execute("DELETE FROM conversations WHERE id = $1 AND user_id = $2", conv_id, uid)
+            _supa_mirror(lambda: supa.table("conversations").delete().eq("id", conv_id).eq("user_id", uid).execute())
+            return
+        except Exception: pass
     if supa:
         try: await _supa(lambda: supa.table("conversations").delete().eq("id", conv_id).eq("user_id", uid).execute()); return
         except Exception: pass
-    await db.conversations.delete_one({"id": conv_id, "user_id": uid})
-
-async def supa_get_settings():
-    defaults = {"registrations_open": True, "maintenance_mode": False, "app_name": "Syrabit.ai", "tagline": "AI-Powered Exam Prep"}
-    if supa:
-        try:
-            r = await _supa(lambda: supa.table("app_settings").select("*").eq("id", 1).limit(1).execute())
-            if r.data: return {**defaults, **r.data[0]}
-        except Exception: pass
-    s = await db.settings.find_one({}, {"_id": 0})
-    return {**defaults, **(s or {})}
-
-async def supa_update_settings(updates: dict):
-    if supa:
-        try: await _supa(lambda: supa.table("app_settings").update(updates).eq("id", 1).execute()); return
-        except Exception: pass
-    await db.settings.update_one({}, {"$set": updates}, upsert=True)
-
-async def supa_create_password_reset(token: str, email: str, expires: str):
-    if supa:
-        try:
-            await _supa(lambda: supa.table("password_resets").upsert(
-                {"token": token, "email": email.lower(), "expires": expires},
-                on_conflict="email"
-            ).execute())
-            return
-        except Exception as e:
-            logger.warning(f"supa_create_password_reset failed: {e}")
-    await db.password_resets.replace_one(
-        {"email": email.lower()},
-        {"email": email.lower(), "token": token, "expires": expires},
-        upsert=True
-    )
-
-async def supa_get_password_reset(token: str):
-    if supa:
-        try:
-            r = await _supa(lambda: supa.table("password_resets").select("*").eq("token", token).limit(1).execute())
-            if r.data: return r.data[0]
-        except Exception: pass
-    return await db.password_resets.find_one({"token": token}, {"_id": 0})
-
-async def supa_delete_password_reset(token: str):
-    if supa:
-        try: await _supa(lambda: supa.table("password_resets").delete().eq("token", token).execute()); return
-        except Exception: pass
-    await db.password_resets.delete_one({"token": token})
-
-async def supa_get_activity_logs(limit: int = 200):
-    if supa:
-        try:
-            r = await _supa(lambda: supa.table("activity_log").select("*").order("created_at", desc=True).limit(limit).execute())
-            return r.data
-        except Exception: pass
-    return await db.activity_log.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
-
-async def supa_insert_activity_log(entry: dict):
-    if supa:
-        try:
-            allowed = {"id", "action", "details", "level", "admin_name", "admin_email", "created_at"}
-            row = {k: v for k, v in entry.items() if k in allowed}
-            await _supa(lambda: supa.table("activity_log").insert(row).execute())
-            return
-        except Exception as e:
-            logger.warning(f"supa_insert_activity_log failed: {e}")
-    await db.activity_log.insert_one(entry)
-
-async def supa_clear_activity_log():
-    if supa:
-        try:
-            await _supa(lambda: supa.table("activity_log").delete().neq("id", "").execute())
-            return
-        except Exception: pass
-    await db.activity_log.delete_many({})
-
-async def supa_get_notifications(limit: int = 100):
-    if supa:
-        try:
-            r = await _supa(lambda: supa.table("notifications").select("*").order("created_at", desc=True).limit(limit).execute())
-            return r.data
-        except Exception: pass
-    return await db.notifications.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
-
-async def supa_insert_notification(notif: dict):
-    if supa:
-        try:
-            allowed = {"id", "title", "message", "type", "audience", "status", "sent_at", "created_at"}
-            row = {k: v for k, v in notif.items() if k in allowed}
-            await _supa(lambda: supa.table("notifications").insert(row).execute())
-            return
-        except Exception as e:
-            logger.warning(f"supa_insert_notification failed: {e}")
-    await db.notifications.insert_one(notif)
-
-async def supa_delete_notification(notif_id: str):
-    if supa:
-        try: await _supa(lambda: supa.table("notifications").delete().eq("id", notif_id).execute()); return
-        except Exception: pass
-    await db.notifications.delete_one({"id": notif_id})
-
-async def supa_count_users():
-    if supa:
-        try:
-            r = await _supa(lambda: supa.table("users").select("id", count="exact").neq("is_admin", True).execute())
-            return r.count if r.count is not None else len(r.data)
-        except Exception: pass
-    return await db.users.count_documents({"is_admin": {"$ne": True}})
+    try:
+        await db.conversations.delete_one({"id": conv_id, "user_id": uid})
+    except Exception: pass
 
 async def supa_count_conversations():
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                return await conn.fetchval("SELECT COUNT(*) FROM conversations")
+        except Exception: pass
     if supa:
         try:
             r = await _supa(lambda: supa.table("conversations").select("id", count="exact").execute())
             return r.count if r.count is not None else len(r.data)
         except Exception: pass
-    return await db.conversations.count_documents({})
+    try:
+        return await db.conversations.count_documents({})
+    except Exception:
+        return 0
 
 async def supa_get_all_conversations(limit: int = 200):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM conversations ORDER BY updated_at DESC LIMIT $1", limit)
+                result = _pg_rows(rows)
+                return result
+        except Exception as e:
+            logger.warning(f"pg supa_get_all_conversations failed: {e}")
     if supa:
         try:
             r = await _supa(lambda: supa.table("conversations").select("*").order("updated_at", desc=True).limit(limit).execute())
@@ -2381,39 +2583,224 @@ async def supa_get_all_conversations(limit: int = 200):
             return r.data
         except Exception as e:
             logger.warning(f"supa_get_all_conversations failed: {e}")
-    return await db.conversations.find({}, {"_id": 0}).sort("updated_at", -1).to_list(limit)
+    try:
+        return await db.conversations.find({}, {"_id": 0}).sort("updated_at", -1).to_list(limit)
+    except Exception:
+        return []
 
-async def supa_get_users_by_ids(user_ids: list):
-    if supa and user_ids:
+# ─────────────────────────────────────────────
+# APP SETTINGS  (Supabase layer)
+# ─────────────────────────────────────────────
+
+async def supa_get_settings():
+    defaults = {"registrations_open": True, "maintenance_mode": False, "app_name": "Syrabit.ai", "tagline": "AI-Powered Exam Prep"}
+    if pg_pool:
         try:
-            r = await _supa(lambda: supa.table("users").select(
-                "id,name,email,plan,avatar_url,board_name,class_name,stream_name"
-            ).in_("id", user_ids).execute())
-            return r.data
+            async with pg_pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM app_settings WHERE id = 1 LIMIT 1")
+                if row: return {**defaults, **dict(row)}
         except Exception: pass
-    if user_ids:
-        return await db.users.find(
-            {"id": {"$in": user_ids}},
-            {"_id": 0, "id": 1, "name": 1, "email": 1, "plan": 1, "avatar_url": 1,
-             "board_name": 1, "class_name": 1, "stream_name": 1}
-        ).to_list(len(user_ids))
-    return []
-
-async def supa_get_user_for_reset(email: str):
     if supa:
         try:
-            r = await _supa(lambda: supa.table("users").select("id,email").eq("email", email.lower()).limit(1).execute())
-            if r.data: return r.data[0]
+            r = await _supa(lambda: supa.table("app_settings").select("*").eq("id", 1).limit(1).execute())
+            if r.data: return {**defaults, **r.data[0]}
         except Exception: pass
-    return await db.users.find_one({"email": email.lower()}, {"_id": 0, "id": 1, "email": 1})
+    try:
+        s = await db.settings.find_one({}, {"_id": 0})
+        return {**defaults, **(s or {})}
+    except Exception:
+        return defaults
 
-async def supa_update_user_password(email: str, password_hash: str):
-    if supa:
+async def supa_update_settings(updates: dict):
+    if pg_pool and updates:
         try:
-            await _supa(lambda: supa.table("users").update({"password_hash": password_hash}).eq("email", email.lower()).execute())
+            cols = [f"{k} = ${i}" for i, k in enumerate(updates.keys(), start=1)]
+            vals = list(updates.values())
+            sql = f"UPDATE app_settings SET {', '.join(cols)} WHERE id = 1"
+            async with pg_pool.acquire() as conn:
+                await conn.execute(sql, *vals)
             return
         except Exception: pass
-    await db.users.update_one({"email": email.lower()}, {"$set": {"password_hash": password_hash}})
+    if supa:
+        try: await _supa(lambda: supa.table("app_settings").update(updates).eq("id", 1).execute()); return
+        except Exception: pass
+    try:
+        await db.settings.update_one({}, {"$set": updates}, upsert=True)
+    except Exception: pass
+
+# ─────────────────────────────────────────────
+# PASSWORD RESETS  (Supabase layer)
+# ─────────────────────────────────────────────
+
+async def supa_create_password_reset(token: str, email: str, expires: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO password_resets (token, email, expires) VALUES ($1, $2, $3) ON CONFLICT (token) DO UPDATE SET email=EXCLUDED.email, expires=EXCLUDED.expires",
+                    token, email.lower(), expires
+                )
+            return
+        except Exception as e:
+            logger.warning(f"pg supa_create_password_reset failed: {e}")
+    if supa:
+        try:
+            await _supa(lambda: supa.table("password_resets").upsert(
+                {"token": token, "email": email.lower(), "expires": expires}, on_conflict="email"
+            ).execute()); return
+        except Exception as e:
+            logger.warning(f"supa_create_password_reset failed: {e}")
+    try:
+        await db.password_resets.replace_one({"email": email.lower()}, {"email": email.lower(), "token": token, "expires": expires}, upsert=True)
+    except Exception: pass
+
+async def supa_get_password_reset(token: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT * FROM password_resets WHERE token = $1 LIMIT 1", token)
+                return _pg_row(row)
+        except Exception: pass
+    if supa:
+        try:
+            r = await _supa(lambda: supa.table("password_resets").select("*").eq("token", token).limit(1).execute())
+            if r.data: return r.data[0]
+        except Exception: pass
+    try:
+        return await db.password_resets.find_one({"token": token}, {"_id": 0})
+    except Exception:
+        return None
+
+async def supa_delete_password_reset(token: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                await conn.execute("DELETE FROM password_resets WHERE token = $1", token)
+            return
+        except Exception: pass
+    if supa:
+        try: await _supa(lambda: supa.table("password_resets").delete().eq("token", token).execute()); return
+        except Exception: pass
+    try:
+        await db.password_resets.delete_one({"token": token})
+    except Exception: pass
+
+# ─────────────────────────────────────────────
+# ACTIVITY LOG + NOTIFICATIONS  (Supabase / Admin layer)
+# ─────────────────────────────────────────────
+
+async def supa_get_activity_logs(limit: int = 200):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM activity_log ORDER BY created_at DESC LIMIT $1", limit)
+                return _pg_rows(rows)
+        except Exception: pass
+    if supa:
+        try:
+            r = await _supa(lambda: supa.table("activity_log").select("*").order("created_at", desc=True).limit(limit).execute())
+            return r.data
+        except Exception: pass
+    try:
+        return await db.activity_log.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    except Exception:
+        return []
+
+async def supa_insert_activity_log(entry: dict):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO activity_log (id, action, details, level, admin_name, admin_email, created_at)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO NOTHING""",
+                    entry.get("id", str(uuid.uuid4())), entry.get("action",""),
+                    entry.get("details",""), entry.get("level","info"),
+                    entry.get("admin_name",""), entry.get("admin_email",""),
+                    entry.get("created_at", datetime.now(timezone.utc).isoformat())
+                )
+            return
+        except Exception as e:
+            logger.warning(f"pg supa_insert_activity_log failed: {e}")
+    if supa:
+        try:
+            allowed = {"id", "action", "details", "level", "admin_name", "admin_email", "created_at"}
+            await _supa(lambda: supa.table("activity_log").insert({k: v for k, v in entry.items() if k in allowed}).execute()); return
+        except Exception as e:
+            logger.warning(f"supa_insert_activity_log failed: {e}")
+    try:
+        await db.activity_log.insert_one(entry)
+    except Exception: pass
+
+async def supa_clear_activity_log():
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                await conn.execute("DELETE FROM activity_log")
+            return
+        except Exception: pass
+    if supa:
+        try:
+            await _supa(lambda: supa.table("activity_log").delete().neq("id", "").execute()); return
+        except Exception: pass
+    try:
+        await db.activity_log.delete_many({})
+    except Exception: pass
+
+async def supa_get_notifications(limit: int = 100):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                rows = await conn.fetch("SELECT * FROM notifications ORDER BY created_at DESC LIMIT $1", limit)
+                return _pg_rows(rows)
+        except Exception: pass
+    if supa:
+        try:
+            r = await _supa(lambda: supa.table("notifications").select("*").order("created_at", desc=True).limit(limit).execute())
+            return r.data
+        except Exception: pass
+    try:
+        return await db.notifications.find({}, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    except Exception:
+        return []
+
+async def supa_insert_notification(notif: dict):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO notifications (id, title, message, type, audience, status, sent_at, created_at)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO NOTHING""",
+                    notif.get("id", str(uuid.uuid4())), notif.get("title",""),
+                    notif.get("message",""), notif.get("type","info"),
+                    notif.get("audience","all"), notif.get("status","sent"),
+                    notif.get("sent_at"), notif.get("created_at", datetime.now(timezone.utc).isoformat())
+                )
+            return
+        except Exception as e:
+            logger.warning(f"pg supa_insert_notification failed: {e}")
+    if supa:
+        try:
+            allowed = {"id", "title", "message", "type", "audience", "status", "sent_at", "created_at"}
+            await _supa(lambda: supa.table("notifications").insert({k: v for k, v in notif.items() if k in allowed}).execute()); return
+        except Exception as e:
+            logger.warning(f"supa_insert_notification failed: {e}")
+    try:
+        await db.notifications.insert_one(notif)
+    except Exception: pass
+
+async def supa_delete_notification(notif_id: str):
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                await conn.execute("DELETE FROM notifications WHERE id = $1", notif_id)
+            return
+        except Exception: pass
+    if supa:
+        try: await _supa(lambda: supa.table("notifications").delete().eq("id", notif_id).execute()); return
+        except Exception: pass
+    try:
+        await db.notifications.delete_one({"id": notif_id})
+    except Exception: pass
 
 # ─────────────────────────────────────────────
 # AUTH ROUTES
