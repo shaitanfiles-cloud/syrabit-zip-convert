@@ -291,9 +291,9 @@ export default function LandingPage() {
               lineHeight: 1.1,
             }}
           >
-            <span className="shimmer-text">Ace your AHSEC</span>
+            <span className="shimmer-text">Ace your Assamboard</span>
             <br />
-            <span className="text-white">exams with AI</span>
+            <span className="text-white">Exams With Syrabit.ai</span>
           </h1>
 
           {/* Subheadline */}
