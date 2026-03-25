@@ -223,6 +223,11 @@ if _cors_raw == '*':
     _CORS_ALLOW_CREDENTIALS = False
 else:
     CORS_ORIGINS = [o.strip() for o in _cors_raw.split(',') if o.strip()]
+    # Auto-include Replit production/dev domains so deployed app is never CORS-blocked
+    for _rd in os.environ.get('REPLIT_DOMAINS', '').split(','):
+        _rd = _rd.strip()
+        if _rd and f"https://{_rd}" not in CORS_ORIGINS:
+            CORS_ORIGINS.append(f"https://{_rd}")
     _CORS_ALLOW_CREDENTIALS = True
 
 # ── Admin accounts ────────────────────────────────────────────────────────────
