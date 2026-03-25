@@ -412,6 +412,44 @@ logger = logging.getLogger(__name__)
 
 _rate_cleanup_task = None
 
+async def _migrate_supabase_users_to_pg():
+    """One-time background task: copy all Supabase users into PG (upsert, safe to re-run)."""
+    if not pg_pool or not supa:
+        return
+    await asyncio.sleep(5)  # let pool fully stabilise
+    try:
+        r = await _supa(lambda: supa.table("users").select("*").order("created_at", desc=False).limit(2000).execute())
+        users = r.data or []
+        imported = 0
+        for u in users:
+            try:
+                saved = json.dumps(u.get("saved_subjects") or [])
+                async with pg_pool.acquire() as conn:
+                    await conn.execute(
+                        """INSERT INTO users (id, name, email, password_hash, plan, credits_used,
+                           credits_limit, document_access, onboarding_done, is_admin, status,
+                           bio, phone, avatar_url, saved_subjects, has_free_credits_issued,
+                           board_id, board_name, class_id, class_name, stream_id, stream_name,
+                           created_at)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+                           ON CONFLICT (id) DO NOTHING""",
+                        u.get("id"), u.get("name",""), u.get("email","").lower(), u.get("password_hash",""),
+                        u.get("plan","free"), u.get("credits_used",0) or 0, u.get("credits_limit",30) or 30,
+                        u.get("document_access","zero"), bool(u.get("onboarding_done",False)),
+                        bool(u.get("is_admin",False)), u.get("status","active") or "active",
+                        u.get("bio","") or "", u.get("phone","") or "", u.get("avatar_url","") or "",
+                        saved, bool(u.get("has_free_credits_issued",True)),
+                        u.get("board_id"), u.get("board_name"), u.get("class_id"),
+                        u.get("class_name"), u.get("stream_id"), u.get("stream_name"),
+                        u.get("created_at")
+                    )
+                imported += 1
+            except Exception:
+                pass
+        logger.info(f"[migration] Supabase→PG: processed {len(users)} users, inserted {imported} new rows")
+    except Exception as e:
+        logger.warning(f"[migration] Supabase→PG migration failed: {e}")
+
 @asynccontextmanager
 async def lifespan(app):
     global _rate_cleanup_task
@@ -430,6 +468,7 @@ async def lifespan(app):
     except Exception as e:
         logger.warning(f"Seeding/indexing skipped (MongoDB may not be ready): {e}")
     _rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
+    asyncio.create_task(_migrate_supabase_users_to_pg())
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
@@ -2335,24 +2374,45 @@ async def supa_update_user(uid: str, updates: dict):
         logger.warning(f"All stores failed for update_user: {e}")
 
 async def supa_list_users():
+    """Return all non-admin users, merging PG + Supabase so no one is lost."""
+    pg_users = []
+    supa_users = []
+
     if pg_pool:
         try:
             async with pg_pool.acquire() as conn:
                 rows = await conn.fetch(
-                    f"SELECT {_pg_user_cols()} FROM users WHERE is_admin = FALSE ORDER BY created_at DESC LIMIT 1000"
+                    f"SELECT {_pg_user_cols()} FROM users WHERE is_admin = FALSE ORDER BY created_at DESC LIMIT 2000"
                 )
-                return _pg_rows(rows)
+                pg_users = _pg_rows(rows)
         except Exception as e:
             logger.warning(f"pg supa_list_users failed: {e}")
+
     if supa:
         try:
-            r = await _supa(lambda: supa.table("users").select("*").neq("is_admin", True).order("created_at", desc=True).limit(1000).execute())
-            return r.data
-        except Exception: pass
+            r = await _supa(lambda: supa.table("users").select("*").neq("is_admin", True).order("created_at", desc=True).limit(2000).execute())
+            supa_users = r.data or []
+        except Exception:
+            pass
+
+    if pg_users or supa_users:
+        # Merge: PG is authoritative for users it has; fill in Supabase-only users
+        seen = {u["id"] for u in pg_users if u.get("id")}
+        for u in supa_users:
+            if u.get("id") and u["id"] not in seen:
+                seen.add(u["id"])
+                pg_users.append(u)
+        # Sort by created_at descending
+        pg_users.sort(key=lambda u: u.get("created_at") or "", reverse=True)
+        return pg_users
+
+    # Fallback to MongoDB
     try:
-        return await db.users.find({"is_admin": {"$ne": True}}, {"_id": 0}).to_list(1000)
+        if db is not None:
+            return await db.users.find({"is_admin": {"$ne": True}}, {"_id": 0}).to_list(2000)
     except Exception:
-        return []
+        pass
+    return []
 
 async def supa_get_user_for_reset(email: str):
     if pg_pool:
@@ -2390,20 +2450,26 @@ async def supa_update_user_password(email: str, password_hash: str):
     except Exception: pass
 
 async def supa_count_users():
+    """Count users from both PG and Supabase, returning the larger (most complete) count."""
+    pg_count = 0
+    supa_count = 0
     if pg_pool:
         try:
             async with pg_pool.acquire() as conn:
-                return await conn.fetchval("SELECT COUNT(*) FROM users WHERE is_admin = FALSE")
+                pg_count = await conn.fetchval("SELECT COUNT(*) FROM users WHERE is_admin = FALSE") or 0
         except Exception: pass
     if supa:
         try:
             r = await _supa(lambda: supa.table("users").select("id", count="exact").neq("is_admin", True).execute())
-            return r.count if r.count is not None else len(r.data)
+            supa_count = r.count if r.count is not None else len(r.data or [])
         except Exception: pass
+    if pg_count or supa_count:
+        return max(pg_count, supa_count)
     try:
-        return await db.users.count_documents({"is_admin": {"$ne": True}})
-    except Exception:
-        return 0
+        if db is not None:
+            return await db.users.count_documents({"is_admin": {"$ne": True}})
+    except Exception: pass
+    return 0
 
 async def supa_get_users_by_ids(user_ids: list):
     if not user_ids:
