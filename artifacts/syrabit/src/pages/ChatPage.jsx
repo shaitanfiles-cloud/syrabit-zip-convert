@@ -629,7 +629,7 @@ export default function ChatPage() {
     }>
       <Toaster richColors position="top-right" />
 
-      <div className="flex flex-col h-[calc(100vh-56px)]">
+      <div className="flex flex-col h-[calc(100vh-120px)] md:h-[calc(100vh-56px)]">
 
         {/* ── Out-of-credits / upgrade banner ────────────────────────────── */}
         {isOutOfCredits && (
@@ -758,9 +758,9 @@ export default function ChatPage() {
           </div>
         </div>
 
-        {/* ── Input area — always visible at bottom ───────────────────── */}
+        {/* ── Input area — fixed at bottom ─────────────────────────────── */}
         <div
-          className="flex-shrink-0 border-t border-border/50 px-4 md:px-6 py-3"
+          className="sticky bottom-0 z-20 flex-shrink-0 border-t border-border/50 px-4 md:px-6 py-3"
           style={{ background: 'var(--card)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
           data-testid="chat-input"
         >
