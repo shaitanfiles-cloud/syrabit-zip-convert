@@ -90,10 +90,7 @@ def _profile_block(user_info: dict, context: dict) -> str:
     return "\n".join(lines)
 
 
-_THINK_BRIEF = (
-    "REASONING INSTRUCTION: Your <think> block must be UNDER 80 words — "
-    "identify only the 2-3 most relevant facts, then go straight to your answer.\n\n"
-)
+_THINK_BRIEF = "REASONING: Think in ≤20 words, then answer.\n\n"
 
 
 def _prompt_casual(user_info: dict, context: dict) -> str:

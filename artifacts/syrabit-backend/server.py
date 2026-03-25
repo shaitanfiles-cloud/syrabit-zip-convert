@@ -413,7 +413,7 @@ async def _init_pg_pool():
 # The think block averages 800-1500 tokens on complex exam Q&A.
 # We add this buffer on top of the user's plan max_tokens so the real answer
 # is never crowded out. The buffer tokens are stripped before crediting.
-SARVAM_THINK_BUFFER = 400    # safety headroom for the <think> block (prompt caps it at ~80 words)
+SARVAM_THINK_BUFFER = 80     # tight think budget — answer starts sooner
 
 # ── Sarvam AI — two persistent pooled HTTP/2 clients ─────────────────────────
 # Client A: translation / TTS / transliterate (short read timeout, 30s)
@@ -1715,16 +1715,17 @@ async def resolve_rag_context(
 
         if selected_indices:
             relevant = "\n".join(lines[i] for i in sorted(selected_indices))
+            relevant = relevant[:1500]
         else:
-            # No keyword match → use first 3000 chars of document
-            relevant = document_text[:3000]
+            # No keyword match → use first 1500 chars of document
+            relevant = document_text[:1500]
 
         return {
             "chunks": [],
             "chapters": [],
             "subjects": [],
             "document_text": relevant,
-            "document_full": document_text[:3000],
+            "document_full": document_text[:1500],
             "source":  "document",
             "quality": "tier0",
         }
@@ -2145,11 +2146,7 @@ def _stream_filter_think(token_iter):
     """Async generator that strips <think>...</think> blocks from a token stream."""
     return token_iter  # caller handles filtering inline
 
-_THINK_BUDGET_HINT = (
-    "/think briefly — 1-3 sentences max. "
-    "Go straight to the answer after reasoning. "
-    "Do not repeat the question.\n"
-)
+_THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
 
 def _inject_think_budget(messages: list) -> list:
     """Prepend a concise reasoning directive to the system message so sarvam-m
@@ -2233,7 +2230,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     buf = ""
 
     # Batch small tokens before serialising — reduces JSON ops from ~150 → ~8 per response
-    _SSE_BATCH = 60   # flush when accumulated content reaches this many chars
+    _SSE_BATCH = 8    # flush frequently — words appear one-by-one, not in large chunks
 
     async def _emit_tokens(token_source):
         nonlocal in_think, buf
@@ -3818,7 +3815,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     if conv_id:
         conv = await supa_get_conversation(conv_id, user["id"])
         if conv:
-            for m in conv.get("messages", [])[-4:]:
+            for m in conv.get("messages", [])[-3:]:
                 history_messages.append({"role": m["role"], "content": m["content"]})
     else:
         conv_id = str(uuid.uuid4())
@@ -4010,7 +4007,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     history_messages = []
 
     if conv_id and raw_conv:
-        for m in raw_conv.get("messages", [])[-4:]:
+        for m in raw_conv.get("messages", [])[-3:]:
             history_messages.append({"role": m["role"], "content": m["content"]})
     elif not conv_id:
         conv_id = str(uuid.uuid4())

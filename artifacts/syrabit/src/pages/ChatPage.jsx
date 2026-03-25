@@ -395,11 +395,11 @@ export default function ChatPage() {
           const num = ch.chapter_number ?? ch.order_index ?? i + 1;
           let entry = `Chapter ${num} — ${ch.title}`;
           if (ch.description) entry += `: ${ch.description}`;
-          if (ch.content) entry += `\n${ch.content.slice(0, 600)}`;
+          if (ch.content) entry += `\n${ch.content.slice(0, 200)}`;
           lines.push(entry);
         });
     }
-    return lines.join('\n');
+    return lines.join('\n').slice(0, 2500);
   }, [subjectId, subject, scopedChapters, user]);
 
   // ── Derived state ─────────────────────────────────────────────────────────
