@@ -18,8 +18,13 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
 import os, uuid, logging, hashlib, json, re, asyncio, httpx, warnings
+import time as _time_mod2
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
+try:
+    import asyncpg as _asyncpg
+except ImportError:
+    _asyncpg = None
 # upstash redis – installed via pip
 try:
     from upstash_redis import Redis as _UpstashRedis
@@ -253,6 +258,99 @@ except Exception as _supa_err:
     else:
         logging.getLogger(__name__).warning(f"Supabase unavailable (using MongoDB only): {_supa_err}")
 
+# ── Replit PostgreSQL (asyncpg pool) — primary relational store ──────────────
+_PG_DSN = os.environ.get("DATABASE_URL", "")
+pg_pool: Optional[Any] = None   # filled in lifespan startup
+
+_PG_INIT_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL DEFAULT '',
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL DEFAULT '',
+    plan TEXT NOT NULL DEFAULT 'free',
+    credits_used INTEGER NOT NULL DEFAULT 0,
+    credits_limit INTEGER NOT NULL DEFAULT 30,
+    document_access TEXT NOT NULL DEFAULT 'zero',
+    onboarding_done BOOLEAN NOT NULL DEFAULT FALSE,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    status TEXT NOT NULL DEFAULT 'active',
+    bio TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    avatar_url TEXT NOT NULL DEFAULT '',
+    saved_subjects JSONB NOT NULL DEFAULT '[]',
+    has_free_credits_issued BOOLEAN NOT NULL DEFAULT TRUE,
+    board_id TEXT,
+    board_name TEXT,
+    class_id TEXT,
+    class_name TEXT,
+    stream_id TEXT,
+    stream_name TEXT,
+    created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT 'New Chat',
+    preview TEXT NOT NULL DEFAULT '',
+    subject_id TEXT,
+    subject_name TEXT,
+    starred BOOLEAN NOT NULL DEFAULT FALSE,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
+    messages TEXT NOT NULL DEFAULT '[]',
+    tokens INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS conversations_user_id_idx ON conversations(user_id);
+CREATE TABLE IF NOT EXISTS app_settings (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    registrations_open BOOLEAN NOT NULL DEFAULT TRUE,
+    maintenance_mode BOOLEAN NOT NULL DEFAULT FALSE,
+    app_name TEXT NOT NULL DEFAULT 'Syrabit.ai',
+    tagline TEXT NOT NULL DEFAULT 'AI-Powered Exam Prep'
+);
+INSERT INTO app_settings(id) VALUES(1) ON CONFLICT(id) DO NOTHING;
+CREATE TABLE IF NOT EXISTS password_resets (
+    token TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    expires TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS activity_log (
+    id TEXT PRIMARY KEY,
+    action TEXT NOT NULL DEFAULT '',
+    details TEXT NOT NULL DEFAULT '',
+    level TEXT NOT NULL DEFAULT 'info',
+    admin_name TEXT NOT NULL DEFAULT '',
+    admin_email TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS notifications (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    type TEXT NOT NULL DEFAULT 'info',
+    audience TEXT NOT NULL DEFAULT 'all',
+    status TEXT NOT NULL DEFAULT 'sent',
+    sent_at TEXT,
+    created_at TEXT NOT NULL DEFAULT ''
+);
+"""
+
+async def _init_pg_pool():
+    global pg_pool
+    if not _asyncpg or not _PG_DSN:
+        logging.getLogger(__name__).warning("[WARN] Replit PostgreSQL not configured — asyncpg disabled")
+        return
+    try:
+        pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=2, max_size=10)
+        async with pg_pool.acquire() as conn:
+            await conn.execute(_PG_INIT_SQL)
+        logging.getLogger(__name__).info("Replit PostgreSQL pool ready — tables created/verified")
+    except Exception as _pg_err:
+        pg_pool = None
+        logging.getLogger(__name__).warning(f"Replit PostgreSQL unavailable: {_pg_err}")
+
 # sarvam-m embeds <think>…</think> in content before the real answer.
 # The think block averages 800-1500 tokens on complex exam Q&A.
 # We add this buffer on top of the user's plan max_tokens so the real answer
@@ -307,6 +405,7 @@ _rate_cleanup_task = None
 @asynccontextmanager
 async def lifespan(app):
     global _rate_cleanup_task
+    await _init_pg_pool()
     try:
         await ensure_seeded()
         await db.chapters.create_index("subject_id")
