@@ -3197,7 +3197,7 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         cached = _get_content_cache("library-bundle")
         if cached:
             if response:
-                response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+                response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
             return cached
     await ensure_seeded()
     try:
@@ -3213,32 +3213,37 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data}
         _set_content_cache("library-bundle", bundle)
         if response:
-            response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+            response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
         return bundle
     except Exception:
         return {"boards": [], "classes": [], "streams": [], "subjects": []}
 
 @api.get("/content/boards")
-async def get_boards(nocache: Optional[str] = None):
+async def get_boards(nocache: Optional[str] = None, response: Response = None):
     if not nocache:
         cached = _get_content_cache("boards")
-        if cached: return cached
+        if cached:
+            if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
+            return cached
     await ensure_seeded()
     try:
         if not await is_mongo_available():
             return []
         boards = await db.boards.find({}, {"_id": 0}).to_list(100)
         _set_content_cache("boards", boards)
+        if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
         return boards
     except Exception:
         return []
 
 @api.get("/content/classes")
-async def get_classes(board_id: Optional[str] = None, nocache: Optional[str] = None):
+async def get_classes(board_id: Optional[str] = None, nocache: Optional[str] = None, response: Response = None):
     ck = f"classes:{board_id or 'all'}"
     if not nocache:
         cached = _get_content_cache(ck)
-        if cached: return cached
+        if cached:
+            if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
+            return cached
     await ensure_seeded()
     try:
         if not await is_mongo_available():
@@ -3246,16 +3251,19 @@ async def get_classes(board_id: Optional[str] = None, nocache: Optional[str] = N
         query = {"board_id": board_id} if board_id else {}
         classes = await db.classes.find(query, {"_id": 0}).to_list(100)
         _set_content_cache(ck, classes)
+        if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
         return classes
     except Exception:
         return []
 
 @api.get("/content/streams")
-async def get_streams(class_id: Optional[str] = None, nocache: Optional[str] = None):
+async def get_streams(class_id: Optional[str] = None, nocache: Optional[str] = None, response: Response = None):
     ck = f"streams:{class_id or 'all'}"
     if not nocache:
         cached = _get_content_cache(ck)
-        if cached: return cached
+        if cached:
+            if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
+            return cached
     await ensure_seeded()
     try:
         if not await is_mongo_available():
@@ -3263,16 +3271,19 @@ async def get_streams(class_id: Optional[str] = None, nocache: Optional[str] = N
         query = {"class_id": class_id} if class_id else {}
         streams = await db.streams.find(query, {"_id": 0}).to_list(100)
         _set_content_cache(ck, streams)
+        if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
         return streams
     except Exception:
         return []
 
 @api.get("/content/subjects")
-async def get_subjects(stream_id: Optional[str] = None, class_id: Optional[str] = None, nocache: Optional[str] = None):
+async def get_subjects(stream_id: Optional[str] = None, class_id: Optional[str] = None, nocache: Optional[str] = None, response: Response = None):
     ck = f"subjects:{stream_id or ''}:{class_id or ''}"
     if not nocache:
         cached = _get_content_cache(ck)
-        if cached: return cached
+        if cached:
+            if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+            return cached
     await ensure_seeded()
     try:
         if not await is_mongo_available():
@@ -3289,15 +3300,18 @@ async def get_subjects(stream_id: Optional[str] = None, class_id: Optional[str] 
             if "thumbnail_url" in s and "thumbnailUrl" not in s:
                 s["thumbnailUrl"] = s.pop("thumbnail_url")
         _set_content_cache(ck, subjects)
+        if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
         return subjects
     except Exception:
         return []
 
 @api.get("/content/resolve-subject/{board_slug}/{class_slug}/{stream_slug}/{subject_slug}")
-async def resolve_subject(board_slug: str, class_slug: str, stream_slug: str, subject_slug: str):
+async def resolve_subject(board_slug: str, class_slug: str, stream_slug: str, subject_slug: str, response: Response = None):
     ck = f"resolve:{board_slug}:{class_slug}:{stream_slug}:{subject_slug}"
     cached = _get_content_cache(ck)
-    if cached: return cached
+    if cached:
+        if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return cached
     await ensure_seeded()
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
@@ -3311,13 +3325,16 @@ async def resolve_subject(board_slug: str, class_slug: str, stream_slug: str, su
     if not subj: raise HTTPException(404, "Subject not found")
     result = {"id": subj["id"], "name": subj["name"]}
     _set_content_cache(ck, result)
+    if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
     return result
 
 @api.get("/content/subjects/{subject_id}")
-async def get_subject(subject_id: str):
+async def get_subject(subject_id: str, response: Response = None):
     ck = f"subject:{subject_id}"
     cached = _get_content_cache(ck)
-    if cached: return cached
+    if cached:
+        if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return cached
     await ensure_seeded()
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
@@ -3327,6 +3344,7 @@ async def get_subject(subject_id: str):
     if "thumbnail_url" in subj and "thumbnailUrl" not in subj:
         subj["thumbnailUrl"] = subj.pop("thumbnail_url")
     _set_content_cache(ck, subj)
+    if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
     return subj
 
 # ── Document endpoints (upload / read / delete) ─────────────────────────────
@@ -3440,16 +3458,19 @@ async def delete_subject_document(subject_id: str, admin: dict = Depends(get_adm
     return {"message": "Document removed"}
 
 @api.get("/content/chapters/{subject_id}")
-async def get_chapters(subject_id: str):
+async def get_chapters(subject_id: str, response: Response = None):
     ck = f"chapters:{subject_id}"
     cached = _get_content_cache(ck)
-    if cached: return cached
+    if cached:
+        if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
+        return cached
     await ensure_seeded()
     try:
         if not await is_mongo_available():
             return []
         chapters = await db.chapters.find({"subject_id": subject_id}, {"_id": 0}).sort("order_index", 1).to_list(100)
         _set_content_cache(ck, chapters)
+        if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
         return chapters
     except Exception:
         return []

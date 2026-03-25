@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isProd = process.env.NODE_ENV === 'production';
 
 export default defineConfig({
   oxc: {
@@ -47,6 +48,7 @@ export default defineConfig({
 
   esbuild: {
     target: 'esnext',
+    drop: isProd ? ['console', 'debugger'] : [],
     logOverride: { 'this-is-undefined-in-esm': 'silent' },
   },
 
@@ -56,16 +58,27 @@ export default defineConfig({
     target: 'esnext',
     minify: 'esbuild',
     cssMinify: true,
-    chunkSizeWarningLimit: 1500,
+    reportCompressedSize: false,
+    chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom'],
-          router: ['react-router-dom'],
-          query: ['@tanstack/react-query'],
-          motion: ['framer-motion'],
-          charts: ['recharts'],
-          markdown: ['react-markdown', 'remark-gfm'],
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return;
+          if (id.includes('@radix-ui')) return 'radix-ui';
+          if (id.includes('lucide-react')) return 'icons';
+          if (id.includes('framer-motion') || id.includes('motion-dom') || id.includes('motion-utils')) return 'motion';
+          if (id.includes('recharts') || id.includes('d3-') || id.includes('d3/') || id.includes('victory')) return 'charts';
+          if (
+            id.includes('react-markdown') ||
+            id.includes('remark') ||
+            id.includes('micromark') ||
+            id.includes('mdast') ||
+            id.includes('unist') ||
+            id.includes('hast')
+          ) return 'markdown';
+          if (id.includes('@tanstack')) return 'query';
+          if (id.includes('react-router') || id.includes('@remix-run')) return 'router';
+          if (id.includes('react-dom') || id.includes('/react/') || id.includes('/react-is/')) return 'vendor';
         },
       },
     },
