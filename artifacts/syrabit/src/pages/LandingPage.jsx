@@ -281,23 +281,6 @@ export default function LandingPage() {
 
         {/* Content */}
         <div className="relative z-10 max-w-5xl mx-auto px-5 text-center py-24" style={{ animation: 'fadeIn 0.8s ease-out both' }}>
-          {/* Badge pill */}
-          <div
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-full mb-8"
-            style={{
-              background: 'rgba(124,58,237,0.10)',
-              border: '1px solid rgba(139,92,246,0.25)',
-              animation: 'slideUp 0.6s cubic-bezier(0.16,1,0.3,1) both 0.1s',
-            }}
-          >
-            <span
-              className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"
-              aria-hidden="true"
-            />
-            <span className="text-sm font-semibold" style={{ color: 'hsl(var(--primary))' }}>
-              AHSEC (Class 11–12) &amp; Degree (B.Com · B.A · B.Sc) — Assam
-            </span>
-          </div>
 
           {/* Headline */}
           <h1
