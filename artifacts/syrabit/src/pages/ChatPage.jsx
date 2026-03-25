@@ -7,6 +7,8 @@
 import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   Send, Loader2, BookOpen, Zap, RefreshCw, Copy, Check,
   AlertTriangle, Globe, Database, WifiOff, FileText, Sparkles, ChevronDown,
@@ -138,6 +140,91 @@ function RagBadge({ source, chunks }) {
   return null;
 }
 
+// ── Markdown renderer for AI answers ─────────────────────────────────────────
+const mdComponents = {
+  h1: ({ children }) => (
+    <h1 style={{ fontSize: '1.2rem', fontWeight: 800, margin: '1rem 0 0.5rem', color: 'hsl(var(--foreground))', borderBottom: '1px solid hsl(var(--border))', paddingBottom: '0.3rem' }}>{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 style={{ fontSize: '1.05rem', fontWeight: 700, margin: '0.9rem 0 0.4rem', color: 'hsl(var(--foreground))' }}>{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 style={{ fontSize: '0.97rem', fontWeight: 700, margin: '0.7rem 0 0.3rem', color: 'hsl(var(--foreground))' }}>{children}</h3>
+  ),
+  p: ({ children }) => (
+    <p style={{ margin: '0.3rem 0 0.65rem', lineHeight: 1.75, color: 'hsl(var(--foreground) / 0.88)' }}>{children}</p>
+  ),
+  ul: ({ children }) => (
+    <ul style={{ paddingLeft: '1.4rem', margin: '0.25rem 0 0.65rem', listStyle: 'disc' }}>{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol style={{ paddingLeft: '1.4rem', margin: '0.25rem 0 0.65rem', listStyle: 'decimal' }}>{children}</ol>
+  ),
+  li: ({ children }) => (
+    <li style={{ margin: '0.2rem 0', lineHeight: 1.7, color: 'hsl(var(--foreground) / 0.85)' }}>{children}</li>
+  ),
+  strong: ({ children }) => (
+    <strong style={{ fontWeight: 700, color: 'hsl(var(--foreground))' }}>{children}</strong>
+  ),
+  em: ({ children }) => (
+    <em style={{ fontStyle: 'italic', color: 'hsl(var(--foreground) / 0.80)' }}>{children}</em>
+  ),
+  code: ({ inline, children }) =>
+    inline ? (
+      <code style={{ fontSize: '0.82em', background: 'hsl(var(--muted))', padding: '0.1em 0.4em', borderRadius: 4, fontFamily: "'JetBrains Mono','Fira Code',monospace", color: 'hsl(var(--primary))' }}>
+        {children}
+      </code>
+    ) : (
+      <code style={{ display: 'block', fontSize: '0.82em', fontFamily: "'JetBrains Mono','Fira Code',monospace", color: 'hsl(var(--foreground) / 0.85)' }}>
+        {children}
+      </code>
+    ),
+  pre: ({ children }) => (
+    <pre style={{ background: 'hsl(var(--muted))', border: '1px solid hsl(var(--border))', borderRadius: 8, padding: '0.75rem 1rem', margin: '0.5rem 0 0.8rem', overflowX: 'auto' }}>
+      {children}
+    </pre>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote style={{ borderLeft: '3px solid hsl(var(--primary))', paddingLeft: '0.9rem', margin: '0.6rem 0', color: 'hsl(var(--muted-foreground))', fontStyle: 'italic', background: 'hsl(var(--muted))', borderRadius: '0 6px 6px 0', padding: '0.4rem 0.9rem' }}>
+      {children}
+    </blockquote>
+  ),
+  table: ({ children }) => (
+    <div style={{ overflowX: 'auto', margin: '0.6rem 0 0.8rem' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.9rem' }}>{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th style={{ background: 'hsl(var(--muted))', fontWeight: 700, padding: '0.4rem 0.7rem', textAlign: 'left', border: '1px solid hsl(var(--border))' }}>{children}</th>
+  ),
+  td: ({ children }) => (
+    <td style={{ padding: '0.35rem 0.7rem', border: '1px solid hsl(var(--border))', color: 'hsl(var(--foreground) / 0.78)' }}>{children}</td>
+  ),
+  hr: () => (
+    <hr style={{ border: 'none', borderTop: '1px solid hsl(var(--border))', margin: '0.8rem 0' }} />
+  ),
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'hsl(var(--primary))', textDecoration: 'underline', textUnderlineOffset: 2 }}>{children}</a>
+  ),
+};
+
+function MarkdownContent({ content, streaming }) {
+  return (
+    <div style={{ fontSize: '0.9375rem', lineHeight: 1.75, fontFamily: "Inter,ui-sans-serif,system-ui,sans-serif" }}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        {content}
+      </ReactMarkdown>
+      {streaming && (
+        <motion.span
+          style={{ display: 'inline-block', width: 2, height: '1em', marginLeft: 2, borderRadius: 9999, verticalAlign: 'middle', background: 'hsl(var(--primary))' }}
+          animate={{ opacity: [1, 0, 1] }}
+          transition={{ duration: 0.65, repeat: Infinity }}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Message bubble ────────────────────────────────────────────────────────────
 const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast }) {
   const [copied, setCopied] = useState(false);
@@ -225,20 +312,11 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
             {msg.streaming && !msg.content && <ThinkingIndicator />}
 
             {msg.streaming && msg.content && (
-              <div className="text-foreground/90 leading-relaxed whitespace-pre-wrap text-[15px]">
-                {msg.content}
-                <motion.span
-                  className="inline-block w-0.5 h-[1em] ml-0.5 rounded-full align-middle bg-violet-400"
-                  animate={{ opacity: [1, 0, 1] }}
-                  transition={{ duration: 0.65, repeat: Infinity }}
-                />
-              </div>
+              <MarkdownContent content={msg.content} streaming={true} />
             )}
 
             {!msg.streaming && msg.content && (
-              <div className="text-foreground/90 leading-relaxed whitespace-pre-wrap text-[15px]">
-                {msg.content}
-              </div>
+              <MarkdownContent content={msg.content} streaming={false} />
             )}
 
             {!msg.streaming && msg.content && (
@@ -439,6 +517,21 @@ export default function ChatPage() {
       let ragSource = 'none';
       let ragChunks = 0;
 
+      // RAF-based batching: accumulate chunks between animation frames
+      // so React re-renders at most 60×/sec instead of on every token
+      let pendingChunk = '';
+      let rafId = null;
+      const flushPending = () => {
+        if (!pendingChunk) return;
+        fullContent += pendingChunk;
+        pendingChunk = '';
+        rafId = null;
+        const snapshot = fullContent;
+        setMessages((prev) => prev.map((m) =>
+          m.id === aiMsgId ? { ...m, content: snapshot } : m
+        ));
+      };
+
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -461,10 +554,8 @@ export default function ChatPage() {
               ));
             }
             if (parsed.content) {
-              fullContent += parsed.content;
-              setMessages((prev) => prev.map((m) =>
-                m.id === aiMsgId ? { ...m, content: fullContent } : m
-              ));
+              pendingChunk += parsed.content;
+              if (!rafId) rafId = requestAnimationFrame(flushPending);
             }
             // ── syrabit_done: credits metadata ─────────────────────────
             if (parsed.event === 'syrabit_done') {
@@ -483,11 +574,15 @@ export default function ChatPage() {
         }
       }
 
+      // Flush any remaining buffered content before finalizing
+      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (pendingChunk) { fullContent += pendingChunk; pendingChunk = ''; }
+
       setConversationId(newConvId);
       // Finalize: remove streaming flag, attach RAG metadata
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
-          ? { ...m, streaming: false, rag_source: ragSource, rag_chunks: ragChunks }
+          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks }
           : m
       ));
       setCredits((c) => ({ ...c, used: c.used + 1 }));
