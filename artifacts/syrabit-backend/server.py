@@ -4508,6 +4508,12 @@ async def admin_list_streams(admin: dict = Depends(get_admin_user)):
 async def admin_list_subjects(admin: dict = Depends(get_admin_user)):
     return await get_subjects()
 
+@api.get("/admin/content/chapters/{subject_id}")
+async def admin_list_chapters(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """Admin chapter list — always reads live from DB, no caching, includes all statuses."""
+    chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(None)
+    return [{k: v for k, v in c.items() if k != "_id"} for c in chapters]
+
 @api.post("/admin/content/boards")
 async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
     try:

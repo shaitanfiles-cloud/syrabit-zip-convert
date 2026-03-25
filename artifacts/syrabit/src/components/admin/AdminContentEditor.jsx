@@ -156,9 +156,9 @@ export default function AdminContentEditor({ adminToken }) {
   useEffect(() => { load(); }, [load]);
 
   const refreshChapters = (subjectId) => {
-    axios.get(`${API}/content/chapters/${subjectId}?t=${Date.now()}`)
+    axios.get(`${API}/admin/content/chapters/${subjectId}`, authHeaders(adminToken))
       .then(r => setChapters(r.data || []))
-      .catch(() => setChapters([]));
+      .catch(() => toast.error('Could not reload chapter list'));
   };
 
   useEffect(() => {
