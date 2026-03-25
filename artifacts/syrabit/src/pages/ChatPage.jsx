@@ -28,10 +28,11 @@ const MODELS = [
 
 // ── Thinking indicator — rotating messages while sarvam-m reasons ─────────────
 const THINKING_STEPS = [
-  'Reading your question carefully…',
-  'Searching Assamboard Syllabus…',
+  'Searching in Assam Board Syllabus…',
+  'Reading relevant chapters…',
+  'Searching in Assam Board Syllabus…',
   'Cross-referencing chapter content…',
-  'Structuring the best explanation…',
+  'Searching in Assam Board Syllabus…',
   'Verifying accuracy for board exams…',
   'Composing your answer…',
 ];
