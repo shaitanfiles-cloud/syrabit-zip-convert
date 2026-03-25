@@ -30,9 +30,7 @@ const MODELS = [
 const THINKING_STEPS = [
   'Searching in Assam Board Syllabus…',
   'Reading relevant chapters…',
-  'Searching in Assam Board Syllabus…',
   'Cross-referencing chapter content…',
-  'Searching in Assam Board Syllabus…',
   'Verifying accuracy for board exams…',
   'Composing your answer…',
 ];
