@@ -301,9 +301,7 @@ export default function LandingPage() {
             className="text-white/50 max-w-2xl mx-auto mb-10 leading-relaxed"
             style={{ fontSize: 'clamp(1rem, 2vw, 1.2rem)', animation: 'slideUp 0.7s cubic-bezier(0.16,1,0.3,1) both 0.35s' }}
           >
-            Syrabit.ai is an AI-powered exam prep platform for AHSEC (Class 11–12) and
-            Degree students (B.Com, B.A, B.Sc — 2nd &amp; 4th Sem). Get instant,
-            syllabus-aligned answers, PYQ insights, and a credit system tailored for Assam students.
+            Syrabit is an Educational Chatbot for Assam board Students Providing Syllabus aligned answers, PYQs Insights.
           </p>
 
           {/* CTA buttons */}
