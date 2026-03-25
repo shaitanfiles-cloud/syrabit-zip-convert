@@ -5051,6 +5051,7 @@ async def create_content_manual(data: dict, admin: dict = Depends(get_admin_user
     }
     
     await db.content_uploads.insert_one(content_data)
+    content_data.pop("_id", None)
     return content_data
 
 @api.get("/admin/content/uploads")
@@ -5605,6 +5606,7 @@ async def create_cms_document(doc: CMSDocument, admin: dict = Depends(get_admin_
     }
     
     await db.cms_documents.insert_one(doc_data)
+    doc_data.pop("_id", None)
     return doc_data
 
 @api.patch("/admin/content/cms-documents/{doc_id}")
