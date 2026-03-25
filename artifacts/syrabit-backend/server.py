@@ -124,15 +124,15 @@ except Exception as _redis_err:
 _ai_response_cache = cachetools.TTLCache(maxsize=512, ttl=3600)
 
 # ── User Object Cache ─────────────────────────────────────────────────────────
-# Keyed by user_id, 30-second TTL — eliminates DB round-trip on every auth'd request
-_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=30)
+# Keyed by user_id, 120-second TTL — eliminates DB round-trip on every auth'd request
+_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=120)
 
 def _invalidate_user_cache(uid: str):
     _user_cache.pop(uid, None)
 
 # ── Conversation Object Cache ──────────────────────────────────────────────────
-# Keyed by "conv_id:uid", 15-second TTL — avoids PG on every chat turn
-_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4000, ttl=15)
+# Keyed by "conv_id:uid", 60-second TTL — avoids PG on every chat turn
+_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4000, ttl=60)
 
 def _conv_cache_key(conv_id: str, uid: str) -> str:
     return f"{conv_id}:{uid}"
@@ -141,9 +141,9 @@ def _invalidate_conv_cache(conv_id: str, uid: str):
     _conv_cache.pop(_conv_cache_key(conv_id, uid), None)
 
 # ── RAG Result Cache ───────────────────────────────────────────────────────────
-# Keyed by (query_hash, subject_id), 60-second TTL — skips 3 MongoDB queries on repeat
+# Keyed by (query_hash, subject_id), 600-second TTL — skips 3 MongoDB queries on repeat
 import hashlib as _hashlib
-_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=60)
+_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=600)
 
 # Syllabus cache — 30-minute TTL; syllabi almost never change between requests
 _syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=1800)
@@ -1313,44 +1313,50 @@ async def rag_search(
         if not keywords:
             return {"chunks": [], "chapters": [], "subjects": [], "source": "none", "quality": "none"}
 
-        # ── 1. Search content chunks ──────────────────────────────────────────
+        kw_join = "|".join(keywords)
         regex_parts = [{"content": {"$regex": kw, "$options": "i"}} for kw in keywords]
-        chunk_filter: dict = {"$or": regex_parts}
+        ch_title_filter = {"$or": [{"title": {"$regex": kw, "$options": "i"}} for kw in keywords]}
 
         if subject_id:
+            # ── Fast path: subject is known — pre-fetch chapter IDs then run all 3 queries in parallel ──
             sub_chapters = await db.chapters.find(
                 {"subject_id": subject_id}, {"_id": 0, "id": 1}
             ).to_list(200)
             chapter_ids = [c["id"] for c in sub_chapters]
-            if chapter_ids:
-                chunk_filter = {"$and": [{"chapter_id": {"$in": chapter_ids}}, {"$or": regex_parts}]}
-
-        chunks = await db.chunks.find(chunk_filter, {"_id": 0}).limit(5).to_list(5)
-
-        # ── 2. Search subjects by name / description / tags ───────────────────
-        subj_kw_filter = {"$or": [
-            {"name":        {"$regex": "|".join(keywords), "$options": "i"}},
-            {"description": {"$regex": "|".join(keywords), "$options": "i"}},
-            {"tags":        {"$elemMatch": {"$regex": "|".join(keywords), "$options": "i"}}},
-        ], "status": "published"}
-        if subject_id:
+            chunk_filter: dict = (
+                {"$and": [{"chapter_id": {"$in": chapter_ids}}, {"$or": regex_parts}]}
+                if chapter_ids else {"$or": regex_parts}
+            )
             subj_kw_filter = {"$and": [{"id": subject_id}, {"status": "published"}]}
-        elif subject_name:
-            subj_kw_filter = {"$and": [
-                {"name": {"$regex": subject_name, "$options": "i"}, "status": "published"},
-            ]}
+            ch_filter = {"$and": [{"subject_id": subject_id}, ch_title_filter]}
 
-        subjects_found = await db.subjects.find(subj_kw_filter, {"_id": 0}).limit(3).to_list(3)
+            chunks, subjects_found, chapters_found = await asyncio.gather(
+                db.chunks.find(chunk_filter, {"_id": 0}).limit(5).to_list(5),
+                db.subjects.find(subj_kw_filter, {"_id": 0}).limit(3).to_list(3),
+                db.chapters.find(ch_filter, {"_id": 0}).limit(5).to_list(5),
+            )
+        else:
+            # ── No subject: run chunks + subjects in parallel, then chapters ──
+            subj_kw_filter = {"$or": [
+                {"name":        {"$regex": kw_join, "$options": "i"}},
+                {"description": {"$regex": kw_join, "$options": "i"}},
+                {"tags":        {"$elemMatch": {"$regex": kw_join, "$options": "i"}}},
+            ], "status": "published"}
+            if subject_name:
+                subj_kw_filter = {"$and": [
+                    {"name": {"$regex": subject_name, "$options": "i"}, "status": "published"},
+                ]}
 
-        # ── 3. Search chapters by title ───────────────────────────────────────
-        ch_filter = {"$or": [{"title": {"$regex": kw, "$options": "i"}} for kw in keywords]}
-        if subject_id:
-            ch_filter = {"$and": [{"subject_id": subject_id}, ch_filter]}
-        elif subjects_found:
-            subject_ids = [s["id"] for s in subjects_found]
-            ch_filter = {"$and": [{"subject_id": {"$in": subject_ids}}, ch_filter]}
+            chunks, subjects_found = await asyncio.gather(
+                db.chunks.find({"$or": regex_parts}, {"_id": 0}).limit(5).to_list(5),
+                db.subjects.find(subj_kw_filter, {"_id": 0}).limit(3).to_list(3),
+            )
 
-        chapters_found = await db.chapters.find(ch_filter, {"_id": 0}).limit(5).to_list(5)
+            ch_filter = ch_title_filter
+            if subjects_found:
+                subject_ids = [s["id"] for s in subjects_found]
+                ch_filter = {"$and": [{"subject_id": {"$in": subject_ids}}, ch_title_filter]}
+            chapters_found = await db.chapters.find(ch_filter, {"_id": 0}).limit(5).to_list(5)
 
         # ── Determine quality ─────────────────────────────────────────────────
         if chunks:
@@ -1861,7 +1867,7 @@ def build_rag_system_prompt(
 
 
 _LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 20)))
-_LLM_BATCH_WINDOW_MS = int(os.environ.get("LLM_BATCH_WINDOW_MS", 50))
+_LLM_BATCH_WINDOW_MS = int(os.environ.get("LLM_BATCH_WINDOW_MS", 15))
 
 class _LlmBatcher:
     """
@@ -2127,8 +2133,8 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     in_think = False
     buf = ""
 
-    # Batch small tokens before serialising — reduces JSON ops from ~150 → ~15 per response
-    _SSE_BATCH = 25   # flush when accumulated content reaches this many chars
+    # Batch small tokens before serialising — reduces JSON ops from ~150 → ~8 per response
+    _SSE_BATCH = 60   # flush when accumulated content reaches this many chars
 
     async def _emit_tokens(token_source):
         nonlocal in_think, buf
