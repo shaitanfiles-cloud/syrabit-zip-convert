@@ -2215,18 +2215,29 @@ async def supa_get_user(email: str):
                     f"SELECT {_pg_user_cols()} FROM users WHERE email = $1 LIMIT 1",
                     email.lower()
                 )
-                return _pg_row(row)
+                if row:
+                    return _pg_row(row)
+                # not found in PG — fall through to Supabase
         except Exception as e:
             logger.warning(f"pg supa_get_user failed: {e}")
     if supa:
         try:
             r = await _supa(lambda: supa.table("users").select("*").eq("email", email.lower()).limit(1).execute())
-            if r.data: return r.data[0]
+            if r.data:
+                user = r.data[0]
+                # Back-fill PG so future logins are fast
+                try:
+                    await supa_insert_user(user)
+                except Exception:
+                    pass
+                return user
         except Exception: pass
     try:
-        return await db.users.find_one({"email": email.lower()}, {"_id": 0})
+        if db is not None:
+            return await db.users.find_one({"email": email.lower()}, {"_id": 0})
     except Exception:
-        return None
+        pass
+    return None
 
 async def supa_get_user_by_id(uid: str):
     if pg_pool:
@@ -2235,18 +2246,28 @@ async def supa_get_user_by_id(uid: str):
                 row = await conn.fetchrow(
                     f"SELECT {_pg_user_cols()} FROM users WHERE id = $1 LIMIT 1", uid
                 )
-                return _pg_row(row)
+                if row:
+                    return _pg_row(row)
+                # not found in PG — fall through to Supabase
         except Exception as e:
             logger.warning(f"pg supa_get_user_by_id failed: {e}")
     if supa:
         try:
             r = await _supa(lambda: supa.table("users").select("*").eq("id", uid).limit(1).execute())
-            if r.data: return r.data[0]
+            if r.data:
+                user = r.data[0]
+                try:
+                    await supa_insert_user(user)
+                except Exception:
+                    pass
+                return user
         except Exception: pass
     try:
-        return await db.users.find_one({"id": uid}, {"_id": 0})
+        if db is not None:
+            return await db.users.find_one({"id": uid}, {"_id": 0})
     except Exception:
-        return None
+        pass
+    return None
 
 async def supa_insert_user(user: dict):
     if pg_pool:
@@ -4143,6 +4164,24 @@ async def track_event(
 # ─────────────────────────────────────────────
 # ADMIN CONTENT MANAGEMENT — Boards / Classes / Streams
 # ─────────────────────────────────────────────
+
+# GET aliases — admin UI reads from these (proxy to public handlers)
+@api.get("/admin/content/boards")
+async def admin_list_boards(admin: dict = Depends(get_admin_user)):
+    return await get_boards()
+
+@api.get("/admin/content/classes")
+async def admin_list_classes(admin: dict = Depends(get_admin_user)):
+    return await get_classes()
+
+@api.get("/admin/content/streams")
+async def admin_list_streams(admin: dict = Depends(get_admin_user)):
+    return await get_streams()
+
+@api.get("/admin/content/subjects")
+async def admin_list_subjects(admin: dict = Depends(get_admin_user)):
+    return await get_subjects()
+
 @api.post("/admin/content/boards")
 async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
     try:
@@ -4983,7 +5022,7 @@ async def admin_get_settings(admin: dict = Depends(get_admin_user)):
 
 @api.patch("/admin/settings")
 async def admin_update_settings(data: SettingsUpdate, admin: dict = Depends(get_admin_user)):
-    update = {k: v for k, v in data.dict().items() if v is not None}
+    update = {k: v for k, v in data.model_dump().items() if v is not None}
     if update:
         await supa_update_settings(update)
     return {"message": "Settings updated"}
