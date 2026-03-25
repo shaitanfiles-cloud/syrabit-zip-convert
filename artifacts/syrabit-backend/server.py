@@ -3754,9 +3754,12 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     plan = user.get("plan", "free")
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    # ── Tier 0: fetch uploaded document if document_id is provided ────────────
+    # ── Tier 0: card_context (library scrape) → document_id (PDF upload) ──────
     document_text: Optional[str] = None
-    if msg.document_id:
+    if msg.card_context and msg.card_context.strip():
+        document_text = msg.card_context
+        logger.info(f"Chat [NON-STREAM]: Tier 0 card_context ({len(document_text)} chars) used as grounding")
+    elif msg.document_id:
         subj = await db.subjects.find_one({"id": msg.document_id}, {"_id": 0, "document_text": 1})
         if subj and subj.get("document_text"):
             document_text = subj["document_text"]
@@ -3938,6 +3941,10 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     # ── Phase 1: document + syllabus in parallel ──────────────────────────────
     async def _fetch_doc():
+        # card_context (library card scrape) takes highest priority — same as PDF Tier 0
+        if msg.card_context and msg.card_context.strip():
+            logger.info(f"Chat [STREAM]: Tier 0 card_context ({len(msg.card_context)} chars) used as grounding")
+            return msg.card_context
         if not msg.document_id:
             return None
         subj = await db.subjects.find_one({"id": msg.document_id}, {"_id": 0, "document_text": 1})

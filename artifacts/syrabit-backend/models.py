@@ -59,6 +59,7 @@ class ChatMessage(BaseModel):
     stream_name: Optional[str] = None
     model: Optional[str] = None
     document_id: Optional[str] = None
+    card_context: Optional[str] = None   # Tier 0 — card content scraped from library page
 
 
 class ConversationCreate(BaseModel):

@@ -4,7 +4,7 @@
  * actions bar (copy / regenerate / timestamp / credit badge),
  * credit progress bar, sync indicator, RAG source badge.
  */
-import { useState, useEffect, useRef, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
@@ -374,6 +374,34 @@ export default function ChatPage() {
 
   useEffect(() => { adjustTextarea(); }, [input, adjustTextarea]);
 
+  // ── Build card context (scraped from library card) ────────────────────────
+  // Mirrors the PDF chat Tier 0 — sent as grounding context with every message
+  const cardContext = useMemo(() => {
+    if (!subjectId || !subject) return null;
+    const lines = [];
+    lines.push(`Subject: ${subject.name}`);
+    if (subject.description) lines.push(`Description: ${subject.description}`);
+    if (Array.isArray(subject.tags) && subject.tags.length)
+      lines.push(`Topics covered: ${subject.tags.join(', ')}`);
+    const parts = [user?.board_name, user?.class_name, user?.stream_name].filter(Boolean);
+    if (parts.length) lines.push(`Board/Class: ${parts.join(' | ')}`);
+    if (scopedChapters.length) {
+      lines.push('');
+      lines.push('Syllabus chapters:');
+      scopedChapters
+        .slice()
+        .sort((a, b) => (a.order_index ?? a.order ?? 0) - (b.order_index ?? b.order ?? 0))
+        .forEach((ch, i) => {
+          const num = ch.chapter_number ?? ch.order_index ?? i + 1;
+          let entry = `Chapter ${num} — ${ch.title}`;
+          if (ch.description) entry += `: ${ch.description}`;
+          if (ch.content) entry += `\n${ch.content.slice(0, 600)}`;
+          lines.push(entry);
+        });
+    }
+    return lines.join('\n');
+  }, [subjectId, subject, scopedChapters, user]);
+
   // ── Derived state ─────────────────────────────────────────────────────────
   const remaining    = Math.max(0, credits.limit - credits.used);
   // NaN guard: free user has limit=0, so creditPercent would be NaN
@@ -419,8 +447,9 @@ export default function ChatPage() {
       class_name:      user?.class_name || null,
       stream_name:     user?.stream_name || null,
       model,
-      // Tier 0 RAG: when user came from "Ask AI 📄" button on a card with document
-      document_id: documentId || null,
+      // Tier 0 RAG: card_context (library card scrape) takes priority over document_id
+      card_context: cardContext || null,
+      document_id:  documentId || null,
     };
 
     try {
