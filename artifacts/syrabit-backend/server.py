@@ -1028,7 +1028,7 @@ async def ensure_seeded():
         ahsec_exists  = await db.boards.find_one({"id": "b1"})
         ch_count = await db.chapters.count_documents({})
         expected_ch = len(SEED_DATA["chapters"])
-        if existing > 0 and degree_exists and ahsec_exists and ch_count == expected_ch:
+        if existing > 0 and degree_exists and ahsec_exists and ch_count >= expected_ch:
             _seeded = True
             return
     except Exception as e:
@@ -1048,9 +1048,9 @@ async def ensure_seeded():
     if SEED_DATA["subjects"]:
         ops = [ReplaceOne({"id": s["id"]}, s, upsert=True) for s in SEED_DATA["subjects"]]
         await db.subjects.bulk_write(ops, ordered=False)
-    await db.chapters.delete_many({})
     if SEED_DATA["chapters"]:
-        await db.chapters.insert_many(SEED_DATA["chapters"], ordered=False)
+        ops = [ReplaceOne({"id": c["id"]}, c, upsert=True) for c in SEED_DATA["chapters"]]
+        await db.chapters.bulk_write(ops, ordered=False)
     # Ensure admin user exists for each admin account in ADMIN_ACCOUNTS
     for admin_acc in ADMIN_ACCOUNTS:
         existing = await supa_get_user(admin_acc["email"])
@@ -4736,6 +4736,7 @@ async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_
 @api.post("/admin/content/chapters")
 async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_admin_user)):
     chapter_id = str(uuid.uuid4())
+    _order = data.order or data.order_index or 1
     chap = {
         "id": chapter_id,
         "subject_id": data.subject_id,
@@ -4743,7 +4744,8 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
         "description": data.description,
         "content": data.content,
         "chapter_number": data.chapter_number,
-        "order": data.order or data.order_index or 1,
+        "order": _order,
+        "order_index": _order,
         "status": data.status,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
