@@ -103,7 +103,9 @@ SARVAM_API_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
 
 # ── Redis (Upstash) ──────────────────────────────────────────────────────────
-REDIS_URL   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip().strip('"').strip("'")
+_upstash_url   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip().strip('"').strip("'")
+_fallback_url  = os.environ.get('REDIS_URL', '').strip().strip('"').strip("'")
+REDIS_URL   = _upstash_url if _upstash_url.startswith('http') else _fallback_url
 REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip().strip('"').strip("'")
 redis_client: Optional[Any] = None
 try:
