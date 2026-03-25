@@ -91,6 +91,20 @@ Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used b
 
 Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
 
+### `artifacts/syrabit` (`@workspace/syrabit`) + `artifacts/syrabit-backend`
+
+**Syrabit.ai** — AI-powered educational chatbot for Degree-level students (Assam).
+
+- **Scope**: DEGREE board only — 2nd Sem and 4th Sem (B.Com, B.A, B.Sc streams)
+- **Content scoped**: 6 streams, 24 subjects, 206 chapters — NO AHSEC content
+- **Frontend**: React + Vite (JSX files, `.jsx` extension required)
+- **Backend**: FastAPI (`server.py`) at port 8000; `emergentintegrations/` is a local module
+- **Databases**: PostgreSQL (users/auth), Supabase (mirror), MongoDB `test_database` (content/RAG)
+- **Seeder**: `SEED_DATA` + `_generate_chapters()` in `server.py` — DEGREE data only; seeder skips if `ch_count == expected_ch` (206)
+- **Caches**: `_user_cache` (30s), `_conv_cache` (15s), `_rag_cache` (60s), `_ai_response_cache` (1h), `_syllabus_cache` (30min), `_content_cache`
+- **LLM**: Sarvam AI via SSE streaming; `temperature=0.0`, `_SSE_BATCH=25` chars
+- **Admin**: `ADMIN_EMAILS=admin@syrabit.ai`; admin user ID `9cb057b2-2fc5-4b8a-91f2-2b37b8152924`
+
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
