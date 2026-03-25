@@ -255,13 +255,15 @@ try:
         raise ValueError(f"MONGO_URL has invalid scheme — must begin with mongodb:// or mongodb+srv://. Got: {_raw_mongo_url[:30]!r}...")
     mongo_client = AsyncIOMotorClient(
         _raw_mongo_url,
-        serverSelectionTimeoutMS=5000,
-        connectTimeoutMS=5000,
-        socketTimeoutMS=30000,
-        maxPoolSize=50,
-        minPoolSize=5,
-        maxIdleTimeMS=60000,
-        waitQueueTimeoutMS=5000,
+        serverSelectionTimeoutMS=20000,   # was 5000 — prod SSL handshakes need more time
+        connectTimeoutMS=20000,           # was 5000 — give TLS negotiation room
+        socketTimeoutMS=45000,            # was 30000 — safer for slow Atlas nodes
+        maxPoolSize=10,                   # was 50 — fewer concurrent SSL connections
+        minPoolSize=0,                    # was 5 — no pre-warming, avoids burst SSL at startup
+        maxIdleTimeMS=120000,             # was 60000 — keep connections longer
+        waitQueueTimeoutMS=10000,         # was 5000 — more time to get a connection from pool
+        retryReads=True,
+        retryWrites=True,
     )
     db = mongo_client[DB_NAME]
     logging.info("MongoDB client initialised (connection not yet verified)")
@@ -2492,8 +2494,11 @@ async def supa_insert_user(user: dict):
 
 _ALLOWED_USER_COLUMNS = frozenset({
     "name", "bio", "phone", "avatar_url", "plan", "status",
-    "credits_used", "saved_subjects", "deletion_requested_at",
-    "deletion_hard_at", "last_seen",
+    "credits_used", "credits_limit", "document_access",
+    "saved_subjects", "deletion_requested_at", "deletion_hard_at",
+    "last_seen", "onboarding_done",
+    "board_id", "board_name", "class_id", "class_name",
+    "stream_id", "stream_name",
 })
 
 async def supa_update_user(uid: str, updates: dict):
