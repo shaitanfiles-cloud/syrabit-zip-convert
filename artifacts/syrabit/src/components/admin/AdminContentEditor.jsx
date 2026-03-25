@@ -155,12 +155,14 @@ export default function AdminContentEditor({ adminToken }) {
 
   useEffect(() => { load(); }, [load]);
 
+  const refreshChapters = (subjectId) => {
+    axios.get(`${API}/content/chapters/${subjectId}?t=${Date.now()}`)
+      .then(r => setChapters(r.data || []))
+      .catch(() => setChapters([]));
+  };
+
   useEffect(() => {
-    if (selSubject) {
-      axios.get(`${API}/content/chapters/${selSubject}`)
-        .then(r => setChapters(r.data || []))
-        .catch(() => setChapters([]));
-    }
+    if (selSubject) refreshChapters(selSubject);
   }, [selSubject]);
 
   const filteredClasses = selBoard ? classes.filter(c => c.board_id === selBoard) : [];
@@ -226,7 +228,7 @@ export default function AdminContentEditor({ adminToken }) {
       toast.success('Chapter created');
       setEditView(null);
       setContentForm({ title: '', description: '', content: '', order: 1 });
-      axios.get(`${API}/content/chapters/${selSubject}`).then(r => setChapters(r.data || []));
+      refreshChapters(selSubject);
     } catch { toast.error('Failed to create chapter'); }
     finally { setSaving(false); }
   };
@@ -239,7 +241,7 @@ export default function AdminContentEditor({ adminToken }) {
       toast.success('Chapter updated');
       setEditView(null); setEditTarget(null);
       setContentForm({ title: '', description: '', content: '', order: 1 });
-      axios.get(`${API}/content/chapters/${selSubject}`).then(r => setChapters(r.data || []));
+      refreshChapters(selSubject);
     } catch { toast.error('Failed to update'); }
     finally { setSaving(false); }
   };
