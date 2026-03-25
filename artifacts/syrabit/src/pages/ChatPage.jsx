@@ -489,7 +489,12 @@ export default function ChatPage() {
             }
             if (parsed.content) {
               pendingChunk += parsed.content;
-              if (!rafId) rafId = requestAnimationFrame(flushPending);
+              if (!fullContent && !rafId) {
+                // First token: flush immediately so TTFT is instant
+                flushPending();
+              } else if (!rafId) {
+                rafId = requestAnimationFrame(flushPending);
+              }
             }
             // ── syrabit_done: credits metadata ─────────────────────────
             if (parsed.event === 'syrabit_done') {

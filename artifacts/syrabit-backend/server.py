@@ -139,6 +139,12 @@ def _invalidate_conv_cache(conv_id: str, uid: str):
 import hashlib as _hashlib
 _rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=60)
 
+# Syllabus cache — 30-minute TTL; syllabi almost never change between requests
+_syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=1800)
+
+def _syllabus_cache_key(board_id: str, class_id: str, stream_id: Optional[str]) -> str:
+    return f"{board_id}|{class_id}|{stream_id or ''}"
+
 def _rag_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str]) -> str:
     raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}"
     return _hashlib.md5(raw.encode()).hexdigest()
@@ -394,7 +400,7 @@ async def _init_pg_pool():
 # The think block averages 800-1500 tokens on complex exam Q&A.
 # We add this buffer on top of the user's plan max_tokens so the real answer
 # is never crowded out. The buffer tokens are stripped before crediting.
-SARVAM_THINK_BUFFER = 800    # safety headroom for the <think> block (prompt caps it at ~80 words)
+SARVAM_THINK_BUFFER = 400    # safety headroom for the <think> block (prompt caps it at ~80 words)
 
 # ── Sarvam AI — two persistent pooled HTTP/2 clients ─────────────────────────
 # Client A: translation / TTS / transliterate (short read timeout, 30s)
@@ -3657,7 +3663,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     if conv_id:
         conv = await supa_get_conversation(conv_id, user["id"])
         if conv:
-            for m in conv.get("messages", [])[-6:]:
+            for m in conv.get("messages", [])[-4:]:
                 history_messages.append({"role": m["role"], "content": m["content"]})
     else:
         conv_id = str(uuid.uuid4())
@@ -3788,15 +3794,20 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     async def _fetch_syllabus():
         if not (msg.board_id and msg.class_id):
             return None
+        sid = getattr(msg, 'stream_id', None)
+        _sck = _syllabus_cache_key(msg.board_id, msg.class_id, sid)
+        if _sck in _syllabus_cache:
+            return _syllabus_cache[_sck]
         try:
-            sid = getattr(msg, 'stream_id', None)
+            s = None
             if sid:
                 s = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id, "stream_id": sid}, {"_id": 0})
-                if s:
-                    return s
-            s = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id, "stream_id": {"$exists": False}}, {"_id": 0})
+            if not s:
+                s = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id, "stream_id": {"$exists": False}}, {"_id": 0})
             if not s:
                 s = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id}, {"_id": 0})
+            if s:
+                _syllabus_cache[_sck] = s
             return s
         except Exception:
             return None
@@ -3840,7 +3851,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     history_messages = []
 
     if conv_id and raw_conv:
-        for m in raw_conv.get("messages", [])[-6:]:
+        for m in raw_conv.get("messages", [])[-4:]:
             history_messages.append({"role": m["role"], "content": m["content"]})
     elif not conv_id:
         conv_id = str(uuid.uuid4())
@@ -3855,7 +3866,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        await supa_upsert_conversation(conv_doc)
+        asyncio.create_task(supa_upsert_conversation(conv_doc))
 
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 
