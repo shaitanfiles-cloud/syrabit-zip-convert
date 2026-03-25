@@ -46,7 +46,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-MONGO_URL    = os.environ.get('MONGO_URL', 'mongodb://localhost:27017').strip().strip('"').strip("'")
+MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017').strip().strip('"').strip("'")
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
 JWT_SECRET   = os.environ.get('JWT_SECRET') or os.urandom(48).hex()  # Must be set in .env for production
 JWT_ALGORITHM    = 'HS256'
