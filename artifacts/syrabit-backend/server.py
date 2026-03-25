@@ -104,9 +104,13 @@ SARVAM_BASE_URL = 'https://api.sarvam.ai'
 
 # ── Redis (Upstash) ──────────────────────────────────────────────────────────
 _upstash_url   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip().strip('"').strip("'")
+_upstash_token = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip().strip('"').strip("'")
 _fallback_url  = os.environ.get('REDIS_URL', '').strip().strip('"').strip("'")
+# Auto-detect swap: if URL doesn't start with http but TOKEN does, swap them
+if not _upstash_url.startswith('http') and _upstash_token.startswith('http'):
+    _upstash_url, _upstash_token = _upstash_token, _upstash_url
 REDIS_URL   = _upstash_url if _upstash_url.startswith('http') else _fallback_url
-REDIS_TOKEN = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip().strip('"').strip("'")
+REDIS_TOKEN = _upstash_token
 redis_client: Optional[Any] = None
 try:
     if _UpstashRedis and REDIS_URL and REDIS_TOKEN:
