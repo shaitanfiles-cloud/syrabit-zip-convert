@@ -117,6 +117,13 @@ except Exception as _redis_err:
 # ── AI Response Cache ────────────────────────────────────────────────────────
 _ai_response_cache = cachetools.TTLCache(maxsize=512, ttl=3600)
 
+# ── User Object Cache ─────────────────────────────────────────────────────────
+# Keyed by user_id, 30-second TTL — eliminates DB round-trip on every auth'd request
+_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=30)
+
+def _invalidate_user_cache(uid: str):
+    _user_cache.pop(uid, None)
+
 REDIS_AI_CACHE_TTL = 3600
 REDIS_CHAT_CACHE_TTL = 600
 REDIS_RATE_WINDOW = 60
@@ -353,7 +360,7 @@ async def _init_pg_pool():
         logging.getLogger(__name__).warning("[WARN] Replit PostgreSQL not configured — asyncpg disabled")
         return
     try:
-        pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=2, max_size=10)
+        pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=6, max_size=20)
         async with pg_pool.acquire() as conn:
             await conn.execute(_PG_INIT_SQL)
         logging.getLogger(__name__).info("Replit PostgreSQL pool ready — tables created/verified")
@@ -2279,6 +2286,10 @@ async def supa_get_user(email: str):
     return None
 
 async def supa_get_user_by_id(uid: str):
+    # Fast path: in-memory 30-second cache — skips DB on every auth'd request
+    if uid in _user_cache:
+        return _user_cache[uid]
+    result = None
     if pg_pool:
         try:
             async with pg_pool.acquire() as conn:
@@ -2286,27 +2297,29 @@ async def supa_get_user_by_id(uid: str):
                     f"SELECT {_pg_user_cols()} FROM users WHERE id = $1 LIMIT 1", uid
                 )
                 if row:
-                    return _pg_row(row)
-                # not found in PG — fall through to Supabase
+                    result = _pg_row(row)
         except Exception as e:
             logger.warning(f"pg supa_get_user_by_id failed: {e}")
-    if supa:
+    if result is None and supa:
         try:
             r = await _supa(lambda: supa.table("users").select("*").eq("id", uid).limit(1).execute())
             if r.data:
-                user = r.data[0]
+                result = r.data[0]
                 try:
-                    await supa_insert_user(user)
+                    await supa_insert_user(result)
                 except Exception:
                     pass
-                return user
-        except Exception: pass
-    try:
-        if db is not None:
-            return await db.users.find_one({"id": uid}, {"_id": 0})
-    except Exception:
-        pass
-    return None
+        except Exception:
+            pass
+    if result is None:
+        try:
+            if db is not None:
+                result = await db.users.find_one({"id": uid}, {"_id": 0})
+        except Exception:
+            pass
+    if result:
+        _user_cache[uid] = result
+    return result
 
 async def supa_insert_user(user: dict):
     if pg_pool:
@@ -2346,6 +2359,7 @@ async def supa_insert_user(user: dict):
         logger.warning(f"All stores failed for insert_user: {e}")
 
 async def supa_update_user(uid: str, updates: dict):
+    _invalidate_user_cache(uid)  # always bust cache before touching DB
     if pg_pool and updates:
         try:
             cols = []
@@ -3023,10 +3037,13 @@ async def get_me(user: dict = Depends(get_current_user)):
 # CONTENT ROUTES
 # ─────────────────────────────────────────────
 @api.get("/content/library-bundle")
-async def get_library_bundle(nocache: Optional[str] = None):
+async def get_library_bundle(nocache: Optional[str] = None, response: Response = None):
     if not nocache:
         cached = _get_content_cache("library-bundle")
-        if cached: return cached
+        if cached:
+            if response:
+                response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+            return cached
     await ensure_seeded()
     try:
         if not await is_mongo_available():
@@ -3040,6 +3057,8 @@ async def get_library_bundle(nocache: Optional[str] = None):
                 s["thumbnailUrl"] = s.pop("thumbnail_url")
         bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data}
         _set_content_cache("library-bundle", bundle)
+        if response:
+            response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
         return bundle
     except Exception:
         return {"boards": [], "classes": [], "streams": [], "subjects": []}
