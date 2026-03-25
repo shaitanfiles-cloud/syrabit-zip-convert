@@ -14,16 +14,18 @@ const STEPS = ['Board', 'Class', 'Stream'];
 const STREAM_ICONS = {
   'Science (PCM)': FlaskConical,
   'Science (PCB)': Leaf,
-  'Arts': Feather,
-  'B.Com': Feather,
-  'B.A': BookOpen,
-  'B.Sc': FlaskConical,
+  'Arts':          Feather,
+  'Commerce':      GraduationCap,
+  'B.Com':         Feather,
+  'B.A':           BookOpen,
+  'B.Sc':          FlaskConical,
 };
 
 const STREAM_COLORS = {
   'Science (PCM)': 'from-cyan-500/20 to-blue-500/20 border-cyan-500/30',
   'Science (PCB)': 'from-emerald-500/20 to-green-500/20 border-emerald-500/30',
   'Arts':          'from-amber-500/20 to-orange-500/20 border-amber-500/30',
+  'Commerce':      'from-yellow-500/20 to-amber-500/20 border-yellow-500/30',
   'B.Com':         'from-amber-500/20 to-yellow-500/20 border-amber-500/30',
   'B.A':           'from-rose-500/20 to-pink-500/20 border-rose-500/30',
   'B.Sc':          'from-cyan-500/20 to-teal-500/20 border-cyan-500/30',
