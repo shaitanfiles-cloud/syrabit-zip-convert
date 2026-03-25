@@ -980,12 +980,21 @@ def _generate_chapters():
         "sub41": ["Abstract Algebra — Groups","Abstract Algebra — Rings","Real Analysis","Complex Analysis","Topology Basics","Numerical Methods","Linear Programming","Statistics","Probability Theory"],
         "sub42": ["Java Programming Fundamentals","Object-Oriented Programming","Web Technology — HTML/CSS/JS","Database Management Systems","Computer Networks","Software Engineering","Operating Systems","Data Structures and Algorithms"],
     }
+    # AHSEC subjects use 'ach_' prefix (5000+) to avoid collisions with DEGREE 'ch_' IDs
+    _AHSEC_SUBS = {"sub1","sub2","sub3","sub4","sub5","sub6","sub7","sub8","sub9","sub10",
+                   "sub11","sub12","sub13","sub43","sub44","sub45","sub46","sub47","sub48",
+                   "sub49","sub50","sub51","sub52","sub53","sub54","sub55"}
     chapters = []
-    ch_id = 1
+    ch_id  = 1     # DEGREE counter
+    ach_id = 5000  # AHSEC counter
     for subj_id, titles in _CH.items():
+        is_ahsec = subj_id in _AHSEC_SUBS
         for idx, title in enumerate(titles, 1):
-            chapters.append({"id": f"ch_{ch_id}", "subject_id": subj_id, "title": title, "chapter_number": idx, "order_index": idx, "status": "published", "created_at": "2024-01-01T00:00:00Z"})
-            ch_id += 1
+            if is_ahsec:
+                cid = f"ach_{ach_id}"; ach_id += 1
+            else:
+                cid = f"ch_{ch_id}";  ch_id  += 1
+            chapters.append({"id": cid, "subject_id": subj_id, "title": title, "chapter_number": idx, "order_index": idx, "status": "published", "created_at": "2024-01-01T00:00:00Z"})
     return chapters
 
 SEED_DATA["chapters"] = _generate_chapters()

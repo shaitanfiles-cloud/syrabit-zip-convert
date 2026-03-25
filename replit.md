@@ -95,14 +95,17 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 
 **Syrabit.ai** — AI-powered educational chatbot for Degree-level students (Assam).
 
-- **Scope**: DEGREE board only — 2nd Sem and 4th Sem (B.Com, B.A, B.Sc streams)
-- **Content scoped**: 6 streams, 24 subjects, 206 chapters — NO AHSEC content
+- **Scope**: 2 boards — AHSEC (HS 1st & 2nd Year) + DEGREE (2nd & 4th Sem)
+- **Content**: 14 streams, 50 subjects, 498 chapters total (DEGREE: 206 ch_, AHSEC: 292 ach_)
+- **AHSEC streams**: Science (PCM), Science (PCB), Arts, Commerce — for both HS 1st and 2nd Year
+- **DEGREE streams**: B.Com, B.A, B.Sc — for 2nd Sem and 4th Sem
+- **Chapter ID scheme**: DEGREE uses `ch_1..ch_N`, AHSEC uses `ach_5000..ach_5291` (avoids collision)
 - **Frontend**: React + Vite (JSX files, `.jsx` extension required)
 - **Backend**: FastAPI (`server.py`) at port 8000; `emergentintegrations/` is a local module
 - **Databases**: PostgreSQL (users/auth), Supabase (mirror), MongoDB `test_database` (content/RAG)
-- **Seeder**: `SEED_DATA` + `_generate_chapters()` in `server.py` — DEGREE data only; seeder skips if `ch_count == expected_ch` (206)
-- **Caches**: `_user_cache` (30s), `_conv_cache` (15s), `_rag_cache` (60s), `_ai_response_cache` (1h), `_syllabus_cache` (30min), `_content_cache`
-- **LLM**: Sarvam AI via SSE streaming; `temperature=0.0`, `_SSE_BATCH=25` chars
+- **Seeder**: `SEED_DATA` + `_generate_chapters()` in `server.py`; checks `ahsec_exists && degree_exists && ch_count == expected_ch`
+- **Caches**: `_user_cache` (120s), `_conv_cache` (60s), `_rag_cache` (600s), `_ai_response_cache` (1h), `_syllabus_cache` (30min), `_content_cache`
+- **LLM**: Sarvam AI via SSE streaming; `temperature=0.0`, `_SSE_BATCH=60` chars, `LLM_BATCH_WINDOW=15ms`
 - **Admin**: `ADMIN_EMAILS=admin@syrabit.ai`; admin user ID `9cb057b2-2fc5-4b8a-91f2-2b37b8152924`
 
 ### `scripts` (`@workspace/scripts`)
