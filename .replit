@@ -28,3 +28,14 @@ timeoutMs = 20000
 [nix]
 channel = "stable-25_05"
 packages = ["cargo", "libiconv", "libxcrypt", "rustc"]
+
+[userenv]
+
+[userenv.shared]
+DB_NAME = "test_database"
+CORS_ORIGINS = "http://localhost:5000,http://localhost:3000,http://0.0.0.0:5000,https://90464407-7954-469a-ae00-d16f60f666ea-00-19ag09bq0sa15.pike.replit.dev"
+ADMIN_EMAILS = "admin@syrabit.ai"
+ADMIN_NAMES = "Administrator"
+LLM_PROVIDER = "sarvam"
+LLM_MODEL = "sarvam-m"
+SECURE_COOKIES = "false"
