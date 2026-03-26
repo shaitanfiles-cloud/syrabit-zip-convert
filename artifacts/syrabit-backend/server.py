@@ -4148,6 +4148,39 @@ async def delete_syllabus_stream(
 # ─────────────────────────────────────────────
 # AI CHAT ROUTES
 # ─────────────────────────────────────────────
+
+async def _resolve_subject_context(subject_id: str) -> dict:
+    """
+    Given a subject_id, walk subject → stream → class → board and return
+    the resolved board/class/stream IDs and names.  Returns an empty dict
+    if subject_id is absent or any lookup fails.
+    """
+    if not subject_id:
+        return {}
+    try:
+        subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "stream_id": 1})
+        if not subj or not subj.get("stream_id"):
+            return {}
+        stream = await db.streams.find_one({"id": subj["stream_id"]}, {"_id": 0, "id": 1, "name": 1, "class_id": 1})
+        if not stream:
+            return {}
+        cls = await db.classes.find_one({"id": stream["class_id"]}, {"_id": 0, "id": 1, "name": 1, "board_id": 1})
+        if not cls:
+            return {}
+        board = await db.boards.find_one({"id": cls["board_id"]}, {"_id": 0, "id": 1, "name": 1})
+        if not board:
+            return {}
+        return {
+            "board_id":   board["id"],
+            "board_name": board["name"],
+            "class_id":   cls["id"],
+            "class_name": cls["name"],
+            "stream_id":  stream["id"],
+            "stream_name": stream["name"],
+        }
+    except Exception as e:
+        logger.warning(f"_resolve_subject_context({subject_id}) failed: {e}")
+        return {}
 @api.post("/ai/chat")
 async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     await ensure_seeded()
@@ -4169,21 +4202,31 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             document_text = subj["document_text"]
             logger.info(f"Chat [NON-STREAM]: Tier 0 doc loaded from subject {msg.document_id}")
 
+    # ── Resolve subject's own board/class/stream (overrides user profile) ────
+    subj_ctx = await _resolve_subject_context(msg.subject_id)
+    ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
+    ctx_class_id   = subj_ctx.get("class_id")   or msg.class_id
+    ctx_stream_id  = subj_ctx.get("stream_id")  or getattr(msg, 'stream_id', None)
+    ctx_board_name = subj_ctx.get("board_name") or msg.board_name or user.get("board_name", "")
+    ctx_class_name = subj_ctx.get("class_name") or msg.class_name or user.get("class_name", "")
+    ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or user.get("stream_name", "")
+    if subj_ctx:
+        logger.info(f"Chat [NON-STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
+
     # ── Fetch syllabus (stream-specific → board+class fallback) ─────────────
     syllabus = None
-    if msg.board_id and msg.class_id:
+    if ctx_board_id and ctx_class_id:
         try:
-            stream_id = getattr(msg, 'stream_id', None)
-            if stream_id:
-                syllabus = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id, "stream_id": stream_id}, {"_id": 0})
+            if ctx_stream_id:
+                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id}, {"_id": 0})
                 if syllabus:
-                    logger.info(f"Chat [NON-STREAM]: Stream syllabus loaded for {msg.board_id}/{msg.class_id}/{stream_id}")
+                    logger.info(f"Chat [NON-STREAM]: Stream syllabus loaded for {ctx_board_id}/{ctx_class_id}/{ctx_stream_id}")
             if not syllabus:
-                syllabus = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id, "stream_id": {"$exists": False}}, {"_id": 0})
+                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": {"$exists": False}}, {"_id": 0})
                 if not syllabus:
-                    syllabus = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id}, {"_id": 0})
+                    syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id}, {"_id": 0})
                 if syllabus:
-                    logger.info(f"Chat [NON-STREAM]: Board+class syllabus loaded for {msg.board_id}/{msg.class_id}")
+                    logger.info(f"Chat [NON-STREAM]: Board+class syllabus loaded for {ctx_board_id}/{ctx_class_id}")
         except Exception as e:
             logger.error(f"Failed to fetch syllabus: {e}")
 
@@ -4198,18 +4241,18 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
         {
-            "board_name": msg.board_name,
-            "class_name": msg.class_name,
-            "stream_name": getattr(msg, 'stream_name', ''),
+            "board_name":  ctx_board_name,
+            "class_name":  ctx_class_name,
+            "stream_name": ctx_stream_name,
             "subject_name": msg.subject_name,
             "chapter_name": msg.chapter_name,
         },
         rag_ctx,
         user_info={
             "name":        user.get("name", ""),
-            "board_name":  user.get("board_name",  msg.board_name  or ""),
-            "class_name":  user.get("class_name",  msg.class_name  or ""),
-            "stream_name": user.get("stream_name", getattr(msg, 'stream_name', '') or ""),
+            "board_name":  ctx_board_name,
+            "class_name":  ctx_class_name,
+            "stream_name": ctx_stream_name,
             "plan":        user.get("plan", "free"),
         },
         query=msg.message,
@@ -4346,6 +4389,17 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     plan = user.get("plan", "free")
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
+    # ── Resolve subject's own board/class/stream (overrides user profile) ────
+    subj_ctx = await _resolve_subject_context(msg.subject_id)
+    ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
+    ctx_class_id   = subj_ctx.get("class_id")   or msg.class_id
+    ctx_stream_id  = subj_ctx.get("stream_id")  or getattr(msg, 'stream_id', None)
+    ctx_board_name = subj_ctx.get("board_name") or msg.board_name or user.get("board_name", "")
+    ctx_class_name = subj_ctx.get("class_name") or msg.class_name or user.get("class_name", "")
+    ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or user.get("stream_name", "")
+    if subj_ctx:
+        logger.info(f"Chat [STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
+
     # ── Phase 1: document + syllabus in parallel ──────────────────────────────
     async def _fetch_doc():
         # card_context (library card scrape) takes highest priority — same as PDF Tier 0
@@ -4358,20 +4412,19 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         return (subj or {}).get("document_text")
 
     async def _fetch_syllabus():
-        if not (msg.board_id and msg.class_id):
+        if not (ctx_board_id and ctx_class_id):
             return None
-        sid = getattr(msg, 'stream_id', None)
-        _sck = _syllabus_cache_key(msg.board_id, msg.class_id, sid)
+        _sck = _syllabus_cache_key(ctx_board_id, ctx_class_id, ctx_stream_id)
         if _sck in _syllabus_cache:
             return _syllabus_cache[_sck]
         try:
             s = None
-            if sid:
-                s = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id, "stream_id": sid}, {"_id": 0})
+            if ctx_stream_id:
+                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id}, {"_id": 0})
             if not s:
-                s = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id, "stream_id": {"$exists": False}}, {"_id": 0})
+                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": {"$exists": False}}, {"_id": 0})
             if not s:
-                s = await db.syllabi.find_one({"board_id": msg.board_id, "class_id": msg.class_id}, {"_id": 0})
+                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id}, {"_id": 0})
             if s:
                 _syllabus_cache[_sck] = s
             return s
@@ -4395,18 +4448,18 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
         {
-            "board_name": msg.board_name,
-            "class_name": msg.class_name,
-            "stream_name": getattr(msg, 'stream_name', ''),
+            "board_name":  ctx_board_name,
+            "class_name":  ctx_class_name,
+            "stream_name": ctx_stream_name,
             "subject_name": msg.subject_name,
             "chapter_name": msg.chapter_name,
         },
         rag_ctx,
         user_info={
             "name":        user.get("name", ""),
-            "board_name":  user.get("board_name",  msg.board_name  or ""),
-            "class_name":  user.get("class_name",  msg.class_name  or ""),
-            "stream_name": user.get("stream_name", getattr(msg, 'stream_name', '') or ""),
+            "board_name":  ctx_board_name,
+            "class_name":  ctx_class_name,
+            "stream_name": ctx_stream_name,
             "plan":        user.get("plan", "free"),
         },
         query=msg.message,
