@@ -17,7 +17,7 @@ from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
-import os, uuid, logging, hashlib, json, re, asyncio, httpx, warnings
+import os, uuid, logging, hashlib, json, re, asyncio, httpx, warnings, time
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
 try:
@@ -2062,49 +2062,72 @@ _MODEL_ALIAS_MAP = {
     "openai/gpt-oss-120b": "accounts/fireworks/models/gpt-oss-120b", # Fireworks
 }
 
-# ── Smart Key Pool for Syrabit SLM ───────────────────────────────────────────
-# Ordered preference for SLM slots: (provider, model_id)
-# The pool round-robins across available slots and cools down any that rate-limit.
+# ── SLM slot table ────────────────────────────────────────────────────────────
+# Each entry: (provider, model, max_concurrent)
+# Models chosen for HIGHEST RPS on their respective providers.
+# Multiple slots per provider = parallel streams up to max_concurrent each.
+#
+#  Groq        llama-3.1-8b-instant  — sub-second TTFT, 500K TPD, best Groq throughput
+#              llama-3.3-70b-versatile — quality slot, 30 RPM
+#  Gemini      gemini-2.0-flash-lite  — 30 RPM free, lowest latency Gemini
+#              gemini-2.0-flash       — 15 RPM free, higher quality
+#  xAI         grok-3-fast            — xAI's fastest model, generous limits
+#  Fireworks   deepseek-v3p2          — high-quality, pay-per-token (no hard RPM cap)
+#              qwen2p5-72b-instruct   — second fast Fireworks slot
+#  Sarvam      sarvam-m               — Indian-language aware, backup
 _SLM_SLOT_CANDIDATES = [
-    ("groq",        "llama-3.3-70b-versatile"),
-    ("gemini",      "gemini-2.0-flash"),
-    ("xai",         "grok-3-fast"),
-    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2"),
-    ("sarvam",      "sarvam-m"),
+    ("groq",        "llama-3.1-8b-instant",                              8),
+    ("groq",        "llama-3.3-70b-versatile",                           4),
+    ("gemini",      "gemini-2.0-flash-lite",                            10),
+    ("gemini",      "gemini-2.0-flash",                                  5),
+    ("xai",         "grok-3-fast",                                       8),
+    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
+    ("fireworksai", "accounts/fireworks/models/qwen2p5-72b-instruct",    6),
+    ("sarvam",      "sarvam-m",                                          2),
 ]
 
 class _SmartKeyPool:
-    """Round-robin key pool with automatic cooldown on rate-limits and errors.
+    """Concurrent smart pool — maximises RPS across all providers.
 
-    Each slot: {provider, key, model, last_used, cooldown_until, errors}
-    pick()         → slot with oldest last_used that is not in cooldown
-    mark_ok(s)     → reset errors, record last_used = now
-    mark_429(s)    → 60 s cooldown (rate-limited)
-    mark_err(s)    → 15 s cooldown + increment error counter
+    Each slot has:
+      sem            asyncio.Semaphore(max_concurrent) — caps parallel in-flight requests
+      last_used      float timestamp — drives LRU round-robin between equal-capacity slots
+      cooldown_until float timestamp — set after 429 / errors
+      errors         int            — error count for exponential back-off
+
+    pick() prefers slots with spare semaphore capacity first (lowest in-flight),
+    then falls back to LRU among all non-cooled slots.
     """
-    _RL_COOLDOWN  = 60.0   # seconds after a 429
-    _ERR_COOLDOWN = 15.0   # seconds after any other failure
+    _RL_COOLDOWN  = 60.0   # 429 rate-limit → skip slot for 60 s
+    _ERR_COOLDOWN = 15.0   # any other error → skip for 15 s
 
     def __init__(self, candidates: list):
         pmap = {p["provider"]: p["key"] for p in _LLM_PROVIDERS}
         self._slots = []
-        for pname, model_id in candidates:
+        for pname, model_id, max_con in candidates:
             key = pmap.get(pname, "")
             if key or pname == "sarvam":
                 self._slots.append({
                     "provider": pname, "key": key, "model": model_id,
+                    "sem": asyncio.Semaphore(max_con), "max_con": max_con,
                     "last_used": 0.0, "cooldown_until": 0.0, "errors": 0,
                 })
-        logger.info(f"SLM SmartKeyPool: {[s['provider'] for s in self._slots]}")
+        logger.info(
+            f"SLM SmartKeyPool active slots: "
+            f"{[(s['provider'], s['model'], s['max_con']) for s in self._slots]}"
+        )
 
     def pick(self):
-        """Return the best available slot (not cooling down, least recently used).
-        Returns None if all slots are in cooldown."""
+        """Return best slot: not cooling down, prefer spare capacity, then LRU."""
         now = time.time()
         available = [s for s in self._slots if now >= s["cooldown_until"]]
         if not available:
             return None
-        return min(available, key=lambda s: s["last_used"])
+        # Primary: slots that still have semaphore capacity → lowest in-flight first
+        with_capacity = [s for s in available if s["sem"]._value > 0]
+        pool = with_capacity if with_capacity else available
+        # Among equal-capacity slots, pick least-recently-used to spread load
+        return min(pool, key=lambda s: (s["max_con"] - s["sem"]._value, s["last_used"]))
 
     def mark_ok(self, slot):
         slot["last_used"] = time.time()
@@ -2112,12 +2135,19 @@ class _SmartKeyPool:
 
     def mark_429(self, slot):
         slot["cooldown_until"] = time.time() + self._RL_COOLDOWN
-        logger.warning(f"SLM pool: {slot['provider']} rate-limited → cooldown {self._RL_COOLDOWN}s")
+        logger.warning(
+            f"SLM pool: {slot['provider']}/{slot['model']} → 429 rate-limit, "
+            f"cooling {self._RL_COOLDOWN}s"
+        )
 
     def mark_err(self, slot):
         slot["errors"] += 1
-        slot["cooldown_until"] = time.time() + self._ERR_COOLDOWN
-        logger.warning(f"SLM pool: {slot['provider']} error #{slot['errors']} → cooldown {self._ERR_COOLDOWN}s")
+        cd = min(self._ERR_COOLDOWN * slot["errors"], 120.0)   # cap at 2 min
+        slot["cooldown_until"] = time.time() + cd
+        logger.warning(
+            f"SLM pool: {slot['provider']}/{slot['model']} → error #{slot['errors']}, "
+            f"cooling {cd:.0f}s"
+        )
 
     @property
     def all_slots(self):
@@ -2446,27 +2476,45 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             async for token in chat.stream_messages(messages, max_tokens=max_tokens):
                 yield token
 
-    # ── Syrabit SLM: smart pool (Groq → Gemini → Fireworks → Sarvam) ───────────
-    # Picks least-recently-used slot; backs off 429 for 60 s, other errors for 15 s.
+    # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
+    # pick() returns highest-capacity, least-recently-used slot not in cooldown.
+    # async with slot["sem"] lets up to max_concurrent requests run in parallel.
+    # asyncio.wait_for enforces a per-slot timeout so a slow provider never
+    # blocks the pool — the next slot is tried immediately on timeout.
+    _SLM_SLOT_TIMEOUT = 25.0   # max seconds to wait for first token from any slot
+
+    async def _collect_stream(p_name, p_key, p_model):
+        """Buffer entire token stream into a list and return it (for timeout wrapper)."""
+        tokens = []
+        async for chunk in _emit_tokens(_stream_from_provider(p_name, p_key, p_model)):
+            tokens.append(chunk)
+        return tokens
+
     if use_model_raw == "openai/gpt-oss-20b":
         _tried = 0
         while _tried < len(_slm_pool.all_slots):
             slot = _slm_pool.pick()
             if slot is None:
-                break                # all slots cooling down
+                break
             _tried += 1
             p_name, p_key, p_model = slot["provider"], slot["key"], slot["model"]
             try:
-                got_tokens = False
-                async for chunk in _emit_tokens(_stream_from_provider(p_name, p_key, p_model)):
-                    got_tokens = True
-                    yield chunk
-                if got_tokens:
+                async with slot["sem"]:          # acquire capacity; released after stream
+                    chunks = await asyncio.wait_for(
+                        _collect_stream(p_name, p_key, p_model),
+                        timeout=_SLM_SLOT_TIMEOUT,
+                    )
+                if chunks:
                     _slm_pool.mark_ok(slot)
+                    for chunk in chunks:
+                        yield chunk
                     return
-                # Provider returned OK status but no tokens — treat as soft error
                 _slm_pool.mark_err(slot)
                 logger.warning(f"SLM pool: {p_name}/{p_model} yielded no tokens")
+            except asyncio.TimeoutError:
+                _slm_pool.mark_err(slot)
+                logger.warning(f"SLM pool: {p_name}/{p_model} timed out after {_SLM_SLOT_TIMEOUT}s → trying next")
+                continue
             except Exception as e:
                 err_str = str(e)
                 is_429 = "429" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower()
