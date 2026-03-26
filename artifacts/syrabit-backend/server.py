@@ -2052,9 +2052,27 @@ _MODEL_PROVIDER_MAP = {
 
 # Map display-alias model names to the actual API model ID to send to the provider
 _MODEL_ALIAS_MAP = {
-    "openai/gpt-oss-20b":  "llama-3.3-70b-versatile",              # Groq
+    "openai/gpt-oss-20b":  "llama-3.3-70b-versatile",              # Groq (primary)
     "openai/gpt-oss-120b": "accounts/fireworks/models/gpt-oss-120b", # Fireworks
 }
+
+# Fallback chain for Syrabit SLM — tried in order until one succeeds
+# Each entry: (provider_name, model_id) — key resolved at runtime from _LLM_PROVIDERS
+_SLM_FALLBACK_CANDIDATES = [
+    ("groq",        "llama-3.3-70b-versatile"),
+    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2"),
+    ("sarvam",      "sarvam-m"),
+]
+
+def _get_slm_chain() -> list:
+    """Return ordered list of (provider, key, model) for SLM fallback — only includes providers with keys."""
+    chain = []
+    provider_key_map = {p["provider"]: p["key"] for p in _LLM_PROVIDERS}
+    for pname, model_id in _SLM_FALLBACK_CANDIDATES:
+        key = provider_key_map.get(pname, "")
+        if key or pname == "sarvam":   # sarvam uses shared client, key optional here
+            chain.append((pname, key, model_id))
+    return chain
 
 def _resolve_provider_for_model(model: str):
     preferred = _MODEL_PROVIDER_MAP.get(model)
@@ -2328,22 +2346,42 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         if buf and not in_think:
             yield f"data: {json.dumps({'content': buf})}\n\n"
 
-    try:
-        if provider == "sarvam":
-            async for chunk in _emit_tokens(_stream_sarvam(messages, key, use_model, max_tokens)):
-                yield chunk
+    async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
+        """Yield raw tokens from a provider. Raises on failure."""
+        if p_name == "sarvam":
+            async for token in _stream_sarvam(messages, p_key, p_model, max_tokens):
+                yield token
         else:
-            logger.info(f"LLM stream: provider={provider}, model={use_model}")
-            chat = LlmChat(
-                api_key=key or OPENAI_API_KEY,
-                session_id=str(uuid.uuid4()),
-            ).with_model(provider, use_model)
-            async def _legacy_tokens():
-                async for token in chat.stream_messages(messages, max_tokens=max_tokens):
-                    yield token
-            async for chunk in _emit_tokens(_legacy_tokens()):
-                yield chunk
+            logger.info(f"LLM stream: provider={p_name}, model={p_model}")
+            chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
+            async for token in chat.stream_messages(messages, max_tokens=max_tokens):
+                yield token
 
+    # ── Syrabit SLM: try Groq → Fireworks → Sarvam until one succeeds ──────────
+    if use_model_raw == "openai/gpt-oss-20b":
+        slm_chain = _get_slm_chain()
+        for p_name, p_key, p_model in slm_chain:
+            try:
+                got_tokens = False
+                async for chunk in _emit_tokens(_stream_from_provider(p_name, p_key, p_model)):
+                    got_tokens = True
+                    yield chunk
+                if got_tokens:
+                    return
+                logger.warning(f"SLM fallback: {p_name}/{p_model} yielded no tokens, trying next…")
+            except HTTPException as http_err:
+                yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
+                return
+            except Exception as e:
+                logger.warning(f"SLM fallback: {p_name}/{p_model} failed ({type(e).__name__}: {str(e)[:80]}), trying next…")
+                continue
+        yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
+        return
+
+    # ── All other models: single provider ───────────────────────────────────────
+    try:
+        async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            yield chunk
     except HTTPException as http_err:
         yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
     except Exception as e:
