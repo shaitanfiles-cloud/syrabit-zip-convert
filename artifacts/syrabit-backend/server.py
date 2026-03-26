@@ -2027,7 +2027,7 @@ _LLM_PROVIDERS = []
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _FIREWORKS_KEY:
-    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/qwen2p5-72b-instruct"})
+    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.1-8b-instant"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
@@ -2041,17 +2041,19 @@ _MODEL_PROVIDER_MAP = {
     "sarvam-105b-32k": "sarvam",
     "accounts/fireworks/models/qwen2p5-72b-instruct": "fireworksai",
     "accounts/fireworks/models/qwen3-235b-a22b": "fireworksai",
+    "accounts/fireworks/models/deepseek-v3p2": "fireworksai",
+    "accounts/fireworks/models/gpt-oss-120b": "fireworksai",
     "llama-3.3-70b-versatile": "groq",
     "llama-3.1-8b-instant": "groq",
-    # UI display aliases → real Groq models
-    "openai/gpt-oss-20b": "groq",
-    "openai/gpt-oss-120b": "groq",
+    # UI display aliases
+    "openai/gpt-oss-20b": "groq",        # SLM: fast Groq model
+    "openai/gpt-oss-120b": "fireworksai", # MLM: full Fireworks gpt-oss-120b
 }
 
 # Map display-alias model names to the actual API model ID to send to the provider
 _MODEL_ALIAS_MAP = {
-    "openai/gpt-oss-20b": "llama-3.3-70b-versatile",
-    "openai/gpt-oss-120b": "llama-3.3-70b-versatile",
+    "openai/gpt-oss-20b":  "llama-3.3-70b-versatile",              # Groq
+    "openai/gpt-oss-120b": "accounts/fireworks/models/gpt-oss-120b", # Fireworks
 }
 
 def _resolve_provider_for_model(model: str):
