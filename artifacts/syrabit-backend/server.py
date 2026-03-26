@@ -55,6 +55,7 @@ ADMIN_JWT_SECRET = os.environ.get('ADMIN_JWT_SECRET') or os.urandom(48).hex()  #
 
 # ── LLM Configuration ─────────────────────────────────────────────────────────
 _GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
+_GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 _FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '')
 _SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
@@ -2025,13 +2026,15 @@ _llm_batcher = _LlmBatcher()
 
 _LLM_PROVIDERS = []
 if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _FIREWORKS_KEY:
-    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
+    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
-    _LLM_PROVIDERS.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.1-8b-instant"})
+    _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.0-flash"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
-    _LLM_PROVIDERS.append({"provider": "openai", "key": _OPENAI_KEY, "default_model": "gpt-4o-mini"})
+    _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -2056,23 +2059,67 @@ _MODEL_ALIAS_MAP = {
     "openai/gpt-oss-120b": "accounts/fireworks/models/gpt-oss-120b", # Fireworks
 }
 
-# Fallback chain for Syrabit SLM — tried in order until one succeeds
-# Each entry: (provider_name, model_id) — key resolved at runtime from _LLM_PROVIDERS
-_SLM_FALLBACK_CANDIDATES = [
+# ── Smart Key Pool for Syrabit SLM ───────────────────────────────────────────
+# Ordered preference for SLM slots: (provider, model_id)
+# The pool round-robins across available slots and cools down any that rate-limit.
+_SLM_SLOT_CANDIDATES = [
     ("groq",        "llama-3.3-70b-versatile"),
+    ("gemini",      "gemini-2.0-flash"),
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2"),
     ("sarvam",      "sarvam-m"),
 ]
 
-def _get_slm_chain() -> list:
-    """Return ordered list of (provider, key, model) for SLM fallback — only includes providers with keys."""
-    chain = []
-    provider_key_map = {p["provider"]: p["key"] for p in _LLM_PROVIDERS}
-    for pname, model_id in _SLM_FALLBACK_CANDIDATES:
-        key = provider_key_map.get(pname, "")
-        if key or pname == "sarvam":   # sarvam uses shared client, key optional here
-            chain.append((pname, key, model_id))
-    return chain
+class _SmartKeyPool:
+    """Round-robin key pool with automatic cooldown on rate-limits and errors.
+
+    Each slot: {provider, key, model, last_used, cooldown_until, errors}
+    pick()         → slot with oldest last_used that is not in cooldown
+    mark_ok(s)     → reset errors, record last_used = now
+    mark_429(s)    → 60 s cooldown (rate-limited)
+    mark_err(s)    → 15 s cooldown + increment error counter
+    """
+    _RL_COOLDOWN  = 60.0   # seconds after a 429
+    _ERR_COOLDOWN = 15.0   # seconds after any other failure
+
+    def __init__(self, candidates: list):
+        pmap = {p["provider"]: p["key"] for p in _LLM_PROVIDERS}
+        self._slots = []
+        for pname, model_id in candidates:
+            key = pmap.get(pname, "")
+            if key or pname == "sarvam":
+                self._slots.append({
+                    "provider": pname, "key": key, "model": model_id,
+                    "last_used": 0.0, "cooldown_until": 0.0, "errors": 0,
+                })
+        logger.info(f"SLM SmartKeyPool: {[s['provider'] for s in self._slots]}")
+
+    def pick(self):
+        """Return the best available slot (not cooling down, least recently used).
+        Returns None if all slots are in cooldown."""
+        now = time.time()
+        available = [s for s in self._slots if now >= s["cooldown_until"]]
+        if not available:
+            return None
+        return min(available, key=lambda s: s["last_used"])
+
+    def mark_ok(self, slot):
+        slot["last_used"] = time.time()
+        slot["errors"] = 0
+
+    def mark_429(self, slot):
+        slot["cooldown_until"] = time.time() + self._RL_COOLDOWN
+        logger.warning(f"SLM pool: {slot['provider']} rate-limited → cooldown {self._RL_COOLDOWN}s")
+
+    def mark_err(self, slot):
+        slot["errors"] += 1
+        slot["cooldown_until"] = time.time() + self._ERR_COOLDOWN
+        logger.warning(f"SLM pool: {slot['provider']} error #{slot['errors']} → cooldown {self._ERR_COOLDOWN}s")
+
+    @property
+    def all_slots(self):
+        return self._slots
+
+_slm_pool = _SmartKeyPool(_SLM_SLOT_CANDIDATES)
 
 def _resolve_provider_for_model(model: str):
     preferred = _MODEL_PROVIDER_MAP.get(model)
@@ -2236,6 +2283,25 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
             except Exception:
                 continue
 
+async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
+    import openai as _oai
+    client = _oai.AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        max_tokens=max_tokens,
+        stream=True,
+        temperature=0.7,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
 async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048):
     """
     Real token-by-token streaming from the LLM provider.
@@ -2351,29 +2417,45 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         if p_name == "sarvam":
             async for token in _stream_sarvam(messages, p_key, p_model, max_tokens):
                 yield token
+        elif p_name == "gemini":
+            logger.info(f"LLM stream: provider=gemini, model={p_model}")
+            async for token in _stream_gemini(messages, p_key, p_model, max_tokens):
+                yield token
         else:
             logger.info(f"LLM stream: provider={p_name}, model={p_model}")
             chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
             async for token in chat.stream_messages(messages, max_tokens=max_tokens):
                 yield token
 
-    # ── Syrabit SLM: try Groq → Fireworks → Sarvam until one succeeds ──────────
+    # ── Syrabit SLM: smart pool (Groq → Gemini → Fireworks → Sarvam) ───────────
+    # Picks least-recently-used slot; backs off 429 for 60 s, other errors for 15 s.
     if use_model_raw == "openai/gpt-oss-20b":
-        slm_chain = _get_slm_chain()
-        for p_name, p_key, p_model in slm_chain:
+        _tried = 0
+        while _tried < len(_slm_pool.all_slots):
+            slot = _slm_pool.pick()
+            if slot is None:
+                break                # all slots cooling down
+            _tried += 1
+            p_name, p_key, p_model = slot["provider"], slot["key"], slot["model"]
             try:
                 got_tokens = False
                 async for chunk in _emit_tokens(_stream_from_provider(p_name, p_key, p_model)):
                     got_tokens = True
                     yield chunk
                 if got_tokens:
+                    _slm_pool.mark_ok(slot)
                     return
-                logger.warning(f"SLM fallback: {p_name}/{p_model} yielded no tokens, trying next…")
-            except HTTPException as http_err:
-                yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
-                return
+                # Provider returned OK status but no tokens — treat as soft error
+                _slm_pool.mark_err(slot)
+                logger.warning(f"SLM pool: {p_name}/{p_model} yielded no tokens")
             except Exception as e:
-                logger.warning(f"SLM fallback: {p_name}/{p_model} failed ({type(e).__name__}: {str(e)[:80]}), trying next…")
+                err_str = str(e)
+                is_429 = "429" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower()
+                if is_429:
+                    _slm_pool.mark_429(slot)
+                else:
+                    _slm_pool.mark_err(slot)
+                logger.warning(f"SLM pool: {p_name}/{p_model} failed ({type(e).__name__}: {err_str[:80]})")
                 continue
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
