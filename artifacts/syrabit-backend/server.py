@@ -1462,8 +1462,23 @@ async def rag_search(
 
             chunks, subjects_found = await asyncio.gather(
                 db.chunks.find({"$or": regex_parts}, {"_id": 0}).limit(5).to_list(5),
-                db.subjects.find(subj_kw_filter, {"_id": 0}).limit(3).to_list(3),
+                db.subjects.find(subj_kw_filter, {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1, "chapters": 1}).limit(55).to_list(55),
             )
+
+            # Re-rank subjects by how many query keywords appear in the subject NAME
+            # This ensures "Indian Financial System" (3 name-kw hits) beats
+            # "Financial Accounting" (1 name-kw hit) for a query that mentions the full name
+            query_lower = query.lower()
+            if len(subjects_found) > 1:
+                def _name_score(s: dict) -> int:
+                    name_lower = s.get("name", "").lower()
+                    # Bonus: subject name is a substring of the query (highest confidence)
+                    exact_bonus = 10 if name_lower and name_lower in query_lower else 0
+                    # Count individual keywords that appear in the subject name
+                    kw_hits = sum(1 for kw in keywords if kw in name_lower)
+                    return exact_bonus + kw_hits
+                subjects_found = sorted(subjects_found, key=_name_score, reverse=True)
+            subjects_found = subjects_found[:3]
 
             ch_filter = ch_title_filter
             if subjects_found:
