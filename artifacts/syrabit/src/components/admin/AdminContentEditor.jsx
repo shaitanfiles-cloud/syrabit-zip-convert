@@ -4,7 +4,7 @@ import {
   FolderPlus, FilePlus, Edit2, FileText, Book,
   CheckCircle, Layers, Eye,
   ChevronRight, ChevronDown, GraduationCap, Building2, GitBranch, ArrowLeft,
-  Scroll
+  Scroll, Bold, Italic, List, ListOrdered, Heading1, Heading2, Heading3, Minus
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -136,7 +136,51 @@ export default function AdminContentEditor({ adminToken }) {
   const [contentForm, setContentForm] = useState({ title: '', description: '', content: '', order: 1 });
   const [editTarget, setEditTarget] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [contentMode, setContentMode] = useState('write');
+  const [contentMode, setContentMode] = useState('preview');
+  const contentTextareaRef = useRef(null);
+
+  const formatText = useCallback((type) => {
+    const ta = contentTextareaRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart;
+    const end   = ta.selectionEnd;
+    const selected = contentForm.content.slice(start, end);
+    const before   = contentForm.content.slice(0, start);
+    const after    = contentForm.content.slice(end);
+
+    const lineStart = before.lastIndexOf('\n') + 1;
+    const linePrefix = before.slice(lineStart);
+
+    let newContent = contentForm.content;
+    let newCursor  = end;
+
+    if (type === 'h1' || type === 'h2' || type === 'h3') {
+      const prefix = type === 'h1' ? '# ' : type === 'h2' ? '## ' : '### ';
+      const cleanLine = linePrefix.replace(/^#+\s/, '');
+      newContent = before.slice(0, lineStart) + prefix + cleanLine + after;
+      newCursor  = lineStart + prefix.length + cleanLine.length;
+    } else if (type === 'bold') {
+      newContent = before + `**${selected || 'bold text'}**` + after;
+      newCursor  = start + 2 + (selected || 'bold text').length + 2;
+    } else if (type === 'italic') {
+      newContent = before + `*${selected || 'italic text'}*` + after;
+      newCursor  = start + 1 + (selected || 'italic text').length + 1;
+    } else if (type === 'ul') {
+      const lines = (selected || 'List item').split('\n').map(l => `- ${l}`).join('\n');
+      newContent = before + '\n' + lines + '\n' + after;
+      newCursor  = start + 1 + lines.length;
+    } else if (type === 'ol') {
+      const lines = (selected || 'List item').split('\n').map((l, i) => `${i + 1}. ${l}`).join('\n');
+      newContent = before + '\n' + lines + '\n' + after;
+      newCursor  = start + 1 + lines.length;
+    } else if (type === 'hr') {
+      newContent = before + '\n\n---\n\n' + after;
+      newCursor  = start + 6;
+    }
+
+    setContentForm(f => ({ ...f, content: newContent }));
+    setTimeout(() => { ta.focus(); ta.setSelectionRange(newCursor, newCursor); }, 0);
+  }, [contentForm.content]);
 
   const load = useCallback(async (bustCache = false) => {
     try {
@@ -353,8 +397,9 @@ export default function AdminContentEditor({ adminToken }) {
                   <textarea value={contentForm.description} onChange={(e) => setContentForm({ ...contentForm, description: e.target.value })} rows={2} placeholder="Brief description..." className="w-full px-4 py-3 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 resize-none" />
                 </div>
                 <div className="flex-1 flex flex-col min-h-0">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-sm text-white/60">Content (Markdown)</label>
+                  {/* Header row: label + char count + Write/Preview toggle */}
+                  <div className="flex items-center justify-between mb-1.5 flex-shrink-0">
+                    <label className="text-sm text-white/60">Content</label>
                     <div className="flex items-center gap-3">
                       <span className="text-xs text-white/25">{contentForm.content.length} chars</span>
                       <div className="flex rounded-lg overflow-hidden border border-white/10">
@@ -362,7 +407,7 @@ export default function AdminContentEditor({ adminToken }) {
                           onClick={() => setContentMode('write')}
                           className={`px-3 py-1 text-xs font-medium transition-colors ${contentMode === 'write' ? 'bg-violet-600 text-white' : 'bg-white/5 text-white/50 hover:text-white'}`}
                         >
-                          Write
+                          Edit
                         </button>
                         <button
                           onClick={() => setContentMode('preview')}
@@ -373,11 +418,43 @@ export default function AdminContentEditor({ adminToken }) {
                       </div>
                     </div>
                   </div>
+
+                  {/* Formatting toolbar — only shown in Edit mode */}
+                  {contentMode === 'write' && (
+                    <div className="flex items-center gap-1 mb-2 p-1.5 rounded-lg bg-white/[0.04] border border-white/10 flex-wrap flex-shrink-0">
+                      {[
+                        { type: 'h1', icon: <Heading1 size={14} />, title: 'Heading 1' },
+                        { type: 'h2', icon: <Heading2 size={14} />, title: 'Heading 2' },
+                        { type: 'h3', icon: <Heading3 size={14} />, title: 'Heading 3' },
+                      ].map(btn => (
+                        <button key={btn.type} onMouseDown={(e) => { e.preventDefault(); formatText(btn.type); }} title={btn.title}
+                          className="px-2 py-1 rounded text-white/60 hover:text-white hover:bg-white/10 text-xs font-bold transition-colors flex items-center gap-1">
+                          {btn.icon}
+                        </button>
+                      ))}
+                      <div className="w-px h-5 bg-white/10 mx-1" />
+                      <button onMouseDown={(e) => { e.preventDefault(); formatText('bold'); }} title="Bold"
+                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><Bold size={13} /></button>
+                      <button onMouseDown={(e) => { e.preventDefault(); formatText('italic'); }} title="Italic"
+                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><Italic size={13} /></button>
+                      <div className="w-px h-5 bg-white/10 mx-1" />
+                      <button onMouseDown={(e) => { e.preventDefault(); formatText('ul'); }} title="Bullet list"
+                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><List size={13} /></button>
+                      <button onMouseDown={(e) => { e.preventDefault(); formatText('ol'); }} title="Numbered list"
+                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><ListOrdered size={13} /></button>
+                      <div className="w-px h-5 bg-white/10 mx-1" />
+                      <button onMouseDown={(e) => { e.preventDefault(); formatText('hr'); }} title="Divider"
+                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><Minus size={13} /></button>
+                    </div>
+                  )}
+
+                  {/* Write or Preview area */}
                   {contentMode === 'write' ? (
                     <textarea
+                      ref={contentTextareaRef}
                       value={contentForm.content}
                       onChange={(e) => setContentForm({ ...contentForm, content: e.target.value })}
-                      placeholder="Write chapter content in Markdown..."
+                      placeholder="Start typing your content here, or use the toolbar above to add headings, bold text, and lists..."
                       className="flex-1 w-full px-4 py-3 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 resize-none font-mono text-sm leading-relaxed"
                       style={{ minHeight: '200px' }}
                     />
@@ -391,7 +468,7 @@ export default function AdminContentEditor({ adminToken }) {
                           {contentForm.content}
                         </ReactMarkdown>
                       ) : (
-                        <p className="text-white/25 italic">Nothing to preview yet.</p>
+                        <p className="text-white/25 italic">Switch to Edit to start writing. Your formatted content will appear here.</p>
                       )}
                     </div>
                   )}
