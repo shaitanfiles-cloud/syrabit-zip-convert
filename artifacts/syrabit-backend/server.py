@@ -1494,16 +1494,21 @@ async def rag_search(
                 ).to_list(20)
 
             # ── Score & re-rank ALL candidate subjects ────────────────────────────
-            # Score breakdown (higher = more relevant):
-            #   +10  subject name is a substring of the query (exact card name mention)
-            #   +3   per keyword that appears in the subject name
-            #   +2   per keyword that appears in any matching chapter TITLE
-            #         (chapter title match is more specific than random chunk content)
-            #   +1   subject reached via chunk content match (can be coincidental)
+            # Priority order (user-specified):
+            #   1. Chunk content matches  → +5 per matching chunk   (actual study material)
+            #   2. Chapter title matches  → +3 per keyword in title (topical chapter signal)
+            #   3. Subject name matches   → +1 per keyword in name  (broad category signal)
+            #   Bonus: +8 when exact subject name is a substring of the query
             query_lower = query.lower()
-            chunk_subject_ids = {c["subject_id"] for c in chunk_parent_chapters if c.get("subject_id")}
 
-            # Build a per-subject chapter-title keyword-hit count
+            # Per-subject chunk count (how many matching chunks came from each subject)
+            chunk_subject_count: dict[str, int] = {}
+            for c in chunk_parent_chapters:
+                sid = c.get("subject_id", "")
+                if sid:
+                    chunk_subject_count[sid] = chunk_subject_count.get(sid, 0) + 1
+
+            # Per-subject chapter-title keyword-hit count
             chapter_title_score: dict[str, int] = {}
             for ch in chapters_by_title:
                 sid = ch.get("subject_id", "")
@@ -1516,10 +1521,14 @@ async def rag_search(
             def _subject_score(s: dict) -> int:
                 name_lower = s.get("name", "").lower()
                 sid = s.get("id", "")
-                score  = 10 if (name_lower and name_lower in query_lower) else 0
-                score += sum(3 for kw in keywords if kw in name_lower)
-                score += chapter_title_score.get(sid, 0) * 2
-                score += 1 if sid in chunk_subject_ids else 0
+                # Priority 1 — chunk content (highest)
+                score  = chunk_subject_count.get(sid, 0) * 5
+                # Priority 2 — chapter title keyword density
+                score += chapter_title_score.get(sid, 0) * 3
+                # Priority 3 — subject name keyword match (lowest)
+                score += sum(1 for kw in keywords if kw in name_lower)
+                # Exact subject name mentioned in query (strong explicit intent)
+                score += 8 if (name_lower and name_lower in query_lower) else 0
                 return score
 
             all_candidates = subjects_by_name + extra_subjects
