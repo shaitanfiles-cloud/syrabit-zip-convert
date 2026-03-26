@@ -119,3 +119,9 @@ export const getSeoPageTypes = (board, classSlug, subjectSlug, chapterSlug, topi
 
 export const getSeoRelated = (topicSlug) =>
   axios.get(`${API_BASE}/seo/related/${topicSlug}`);
+
+export const createPaymentOrder = (plan) =>
+  axios.post(`${API_BASE}/payments/create-order`, { plan }, authConfig());
+
+export const verifyPayment = (data) =>
+  axios.post(`${API_BASE}/payments/verify`, data, authConfig());
