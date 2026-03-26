@@ -1,6 +1,7 @@
 import "./App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
+import { PageTracker } from "@/utils/usePageTracking";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/context/AuthContext";
 import { AuthGuard } from "@/components/AuthGuard";
@@ -151,6 +152,7 @@ function App() {
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <BrowserRouter>
+              <PageTracker />
               <Toaster richColors position="top-right" closeButton />
               <Suspense fallback={<PageFallback />}>
                 <Routes>

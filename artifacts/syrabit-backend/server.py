@@ -1240,6 +1240,138 @@ async def get_library_analytics(days: int = 30):
         return {"period_days": days, "top_searches": [], "most_viewed_subjects": [], "most_ask_ai_subjects": [], "document_opens": 0, "events_by_type": {}}
 
 
+async def track_page_view(path: str, visitor_id: str, user_id: str = None, referrer: str = None):
+    """Track a single page view for visitor analytics."""
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        event = {
+            "id": str(uuid.uuid4()),
+            "path": path,
+            "visitor_id": visitor_id,
+            "user_id": user_id,
+            "referrer": referrer or "",
+            "date": today,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.page_views.insert_one(event)
+    except Exception as e:
+        logger.debug(f"page_view tracking failed: {e}")
+
+
+async def get_visitor_stats() -> dict:
+    """Return aggregated visitor stats for the admin dashboard."""
+    if not await is_mongo_available():
+        return {"total_visitors": 0, "visitors_today": 0, "page_views_today": 0, "daily_visitors": []}
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+        total_visitors = await db.page_views.distinct("visitor_id")
+        total_visitors_count = len(total_visitors)
+
+        visitors_today = await db.page_views.distinct("visitor_id", {"date": today})
+        visitors_today_count = len(visitors_today)
+
+        page_views_today = await db.page_views.count_documents({"date": today})
+
+        # Daily visitors last 7 days
+        daily_visitors = []
+        for i in range(7):
+            day = (datetime.now(timezone.utc) - timedelta(days=6 - i)).strftime("%Y-%m-%d")
+            unique = await db.page_views.distinct("visitor_id", {"date": day})
+            pv = await db.page_views.count_documents({"date": day})
+            daily_visitors.append({"date": day, "visitors": len(unique), "page_views": pv})
+
+        return {
+            "total_visitors": total_visitors_count,
+            "visitors_today": visitors_today_count,
+            "page_views_today": page_views_today,
+            "daily_visitors": daily_visitors,
+        }
+    except Exception as e:
+        logger.error(f"get_visitor_stats error: {e}")
+        return {"total_visitors": 0, "visitors_today": 0, "page_views_today": 0, "daily_visitors": []}
+
+
+async def get_recent_user_events(limit: int = 10) -> list:
+    """Return recent user-facing events: signups, conversations started, AI chats."""
+    events = []
+    try:
+        users = await supa_list_users()
+        users_sorted = sorted(users, key=lambda u: u.get("created_at", ""), reverse=True)
+        for u in users_sorted[:5]:
+            events.append({
+                "type": "signup",
+                "icon": "👤",
+                "message": f"New user signed up: {u.get('name') or u.get('email', 'Unknown')}",
+                "details": u.get("board_name", ""),
+                "timestamp": u.get("created_at", ""),
+                "level": "info",
+            })
+    except Exception:
+        pass
+
+    try:
+        convs = await supa_get_all_conversations(20)
+        convs_sorted = sorted(convs, key=lambda c: c.get("updated_at") or c.get("created_at", ""), reverse=True)
+        for c in convs_sorted[:5]:
+            events.append({
+                "type": "conversation",
+                "icon": "💬",
+                "message": f"AI chat: {c.get('title') or 'Untitled conversation'}",
+                "details": c.get("subject_name", ""),
+                "timestamp": c.get("updated_at") or c.get("created_at", ""),
+                "level": "info",
+            })
+    except Exception:
+        pass
+
+    try:
+        if await is_mongo_available():
+            recent_analytics = await db.analytics.find(
+                {}, {"_id": 0, "event_type": 1, "timestamp": 1, "search_query": 1, "user_id": 1}
+            ).sort("timestamp", -1).limit(10).to_list(10)
+            for ev in recent_analytics:
+                etype = ev.get("event_type", "")
+                if etype == "search" and ev.get("search_query"):
+                    events.append({
+                        "type": "search",
+                        "icon": "🔍",
+                        "message": f"Library search: \"{ev.get('search_query')}\"",
+                        "details": "",
+                        "timestamp": ev.get("timestamp", ""),
+                        "level": "info",
+                    })
+                elif etype == "subject_view":
+                    events.append({
+                        "type": "subject_view",
+                        "icon": "📖",
+                        "message": "Subject opened in Library",
+                        "details": "",
+                        "timestamp": ev.get("timestamp", ""),
+                        "level": "info",
+                    })
+                elif etype == "ask_ai_click":
+                    events.append({
+                        "type": "ai_click",
+                        "icon": "🤖",
+                        "message": "Ask AI clicked on a subject",
+                        "details": "",
+                        "timestamp": ev.get("timestamp", ""),
+                        "level": "info",
+                    })
+    except Exception:
+        pass
+
+    # Sort all events by timestamp descending
+    events_sorted = sorted(
+        [e for e in events if e.get("timestamp")],
+        key=lambda x: x.get("timestamp", ""),
+        reverse=True,
+    )
+    return events_sorted[:limit]
+
+
 # ─────────────────────────────────────────────
 # AUTO-CHUNKING FOR RAG
 # ─────────────────────────────────────────────
@@ -4826,12 +4958,21 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
     for u in users:
         p = u.get("plan", "free")
         plan_dist[p] = plan_dist.get(p, 0) + 1
+
+    # Visitor analytics + recent user events
+    visitor_stats, recent_events = await asyncio.gather(
+        get_visitor_stats(),
+        get_recent_user_events(limit=10),
+    )
+
     return {
         "total_users": total_users,
         "total_conversations": total_convs,
         "total_messages": total_messages,
         "total_subjects": total_subjects,
         "plan_distribution": plan_dist,
+        "visitor_stats": visitor_stats,
+        "recent_events": recent_events,
     }
 
 @api.get("/admin/users")
@@ -4919,13 +5060,32 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
     # Library analytics
     library_stats = await get_library_analytics(days=days)
     
+    visitor_stats = await get_visitor_stats()
+
     return {
         "daily_signups": daily_signups,
         "plan_usage": plan_usage,
         "library": library_stats,
         "total_users": len(users),
         "active_users": sum(1 for u in users if u.get("credits_used", 0) > 0),
+        "visitor_stats": visitor_stats,
     }
+
+
+@api.post("/analytics/page-view")
+async def track_page_view_endpoint(
+    path: str = Body(...),
+    visitor_id: str = Body(...),
+    referrer: str = Body(None),
+    user: dict = Depends(get_current_user_optional)
+):
+    """
+    Public endpoint to track a page view.
+    Called from frontend on every route change.
+    """
+    user_id = user.get("id") if user else None
+    await track_page_view(path=path, visitor_id=visitor_id, user_id=user_id, referrer=referrer)
+    return {"status": "ok"}
 
 
 @api.post("/analytics/track")
