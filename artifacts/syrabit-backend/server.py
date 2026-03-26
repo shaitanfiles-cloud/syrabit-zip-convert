@@ -63,6 +63,9 @@ _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 _FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '')
 _SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
 _EXPLICIT_PROVIDER = os.environ.get('LLM_PROVIDER', '').strip().lower()
+_AWS_ACCESS_KEY = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
+_AWS_SECRET_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
+_AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1').strip()
 
 if _EXPLICIT_PROVIDER == 'sarvam' and _SARVAM_LLM_KEY:
     LLM_PROVIDER = 'sarvam'
@@ -2086,12 +2089,14 @@ _MODEL_ALIAS_MAP = {
 #  Gemini      gemini-2.0-flash-lite   — 30 RPM free, lowest latency Gemini
 #              gemini-2.0-flash        — 15 RPM free, higher quality
 #  Fireworks   deepseek-v3p2           — high-quality, pay-per-token (no hard RPM cap)
+#  Bedrock     amazon.nova-micro-v1:0  — 66.7 RPS / 33K TPS (highest on Bedrock), pay-per-token
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "llama-3.3-70b-versatile",                           8),
     ("groq",        "llama-3.1-8b-instant",                              4),
     ("gemini",      "gemini-2.0-flash-lite",                            10),
     ("gemini",      "gemini-2.0-flash",                                  5),
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
+    ("bedrock",     "amazon.nova-micro-v1:0",                           20),
 ]
 
 class _SmartKeyPool:
@@ -2114,7 +2119,13 @@ class _SmartKeyPool:
         self._slots = []
         for pname, model_id, max_con in candidates:
             key = pmap.get(pname, "")
-            if key or pname == "sarvam":
+            # bedrock uses AWS env-var credentials, not a provider API key
+            # sarvam also has no key in pmap
+            if key or pname in ("sarvam", "bedrock"):
+                # for bedrock: only add slot if AWS credentials are present
+                if pname == "bedrock" and not (_AWS_ACCESS_KEY and _AWS_SECRET_KEY):
+                    logger.info("SLM pool: skipping bedrock slot (AWS credentials not set)")
+                    continue
                 self._slots.append({
                     "provider": pname, "key": key, "model": model_id,
                     "sem": asyncio.Semaphore(max_con), "max_con": max_con,
@@ -2355,11 +2366,70 @@ async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int)
         if delta and delta.content:
             yield delta.content
 
+async def _stream_bedrock(messages: list, model: str, max_tokens: int):
+    """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
+    boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
+    Supports Amazon Nova family (nova-micro, nova-lite, nova-pro) and any Converse-compatible model.
+    """
+    if not _AWS_ACCESS_KEY or not _AWS_SECRET_KEY:
+        raise ValueError("AWS credentials not configured (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY)")
+
+    # Convert OpenAI-format messages to Bedrock Converse format
+    system_parts = []
+    converse_messages = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        if role == "system":
+            system_parts.append({"text": content})
+        else:
+            converse_messages.append({"role": role, "content": [{"text": content}]})
+
+    loop = asyncio.get_event_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def _sync_stream():
+        try:
+            import boto3 as _boto3
+            client = _boto3.client(
+                "bedrock-runtime",
+                region_name=_AWS_REGION,
+                aws_access_key_id=_AWS_ACCESS_KEY,
+                aws_secret_access_key=_AWS_SECRET_KEY,
+            )
+            kwargs = dict(
+                modelId=model,
+                messages=converse_messages,
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.7},
+            )
+            if system_parts:
+                kwargs["system"] = system_parts
+            resp = client.converse_stream(**kwargs)
+            for event in resp["stream"]:
+                if "contentBlockDelta" in event:
+                    text = event["contentBlockDelta"].get("delta", {}).get("text", "")
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+            loop.call_soon_threadsafe(queue.put_nowait, None)   # sentinel → done
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, exc)
+
+    loop.run_in_executor(None, _sync_stream)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        if isinstance(item, Exception):
+            raise item
+        yield item
+
+
 async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048):
     """
     Real token-by-token streaming from the LLM provider.
     Uses native streaming APIs for instant first-token delivery.
-    Supports: Sarvam, Groq, Fireworks, OpenAI.
+    Supports: Sarvam, Groq, Fireworks, Gemini, xAI, Bedrock.
     If the requested model name is not in _MODEL_PROVIDER_MAP (e.g. a display-only alias
     like 'openai/gpt-oss-20b'), the resolved provider's default model is used instead.
     """
@@ -2478,6 +2548,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             logger.info(f"LLM stream: provider=xai, model={p_model}")
             async for token in _stream_xai(messages, p_key, p_model, max_tokens):
                 yield token
+        elif p_name == "bedrock":
+            logger.info(f"LLM stream: provider=bedrock, model={p_model}")
+            async for token in _stream_bedrock(messages, p_model, max_tokens):
+                yield token
         else:
             logger.info(f"LLM stream: provider={p_name}, model={p_model}")
             chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
@@ -2525,7 +2599,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 continue
             except Exception as e:
                 err_str = str(e)
-                is_429 = "429" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower()
+                is_429 = "429" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower() or "throttl" in err_str.lower()
                 if is_429:
                     _slm_pool.mark_429(slot)
                 else:
