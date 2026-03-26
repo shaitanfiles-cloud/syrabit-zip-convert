@@ -6,6 +6,11 @@ import axios from 'axios';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
+const adminHeaders = (token) => {
+  const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
+  return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const SERVICES = [
   { id: 'groq',    icon: Zap,        label: 'Groq AI',          accent: 'violet', desc: 'Llama 3.1 — AI brain' },
   { id: 'supabase',icon: Database,   label: 'Supabase',         accent: 'cyan',   desc: 'Users & conversations DB' },
@@ -82,7 +87,7 @@ export default function AdminApiConfig({ adminToken }) {
     google_auth: { client_id: creds.googleClientId, client_secret: creds.googleClientSecret },
   });
 
-  const adminAxios = (method, url, data) => axios({ method, url: `${API_BASE}${url}`, data, headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true });
+  const adminAxios = (method, url, data) => axios({ method, url: `${API_BASE}${url}`, data, headers: adminHeaders(adminToken), withCredentials: true });
 
   const handleSave = async () => {
     setSaving(true);

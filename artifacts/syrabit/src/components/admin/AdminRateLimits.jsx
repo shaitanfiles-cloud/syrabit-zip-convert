@@ -5,6 +5,11 @@ import axios from 'axios';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
+const adminHeaders = (token) => {
+  const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
+  return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const TIERS = [
   { id: 'free',       label: 'Free',       color: 'text-slate-300',  bg: 'bg-slate-500/10', border: 'border-slate-500/20' },
   { id: 'starter',    label: 'Starter',    color: 'text-violet-300', bg: 'bg-violet-500/10',border: 'border-violet-500/20' },
@@ -60,7 +65,7 @@ export default function AdminRateLimits({ adminToken }) {
   const [loading, setLoading]   = useState(true);
 
   useEffect(() => {
-    const h = adminToken ? { Authorization: `Bearer ${adminToken}` } : {};
+    const h = adminHeaders(adminToken);
     Promise.all([
       axios.get(`${API_BASE}/admin/rate-policies`, { headers: h, withCredentials: true }),
       axios.get(`${API_BASE}/admin/rate-stats`,    { headers: h, withCredentials: true }),
@@ -73,7 +78,7 @@ export default function AdminRateLimits({ adminToken }) {
   const handleSave = async (tier, draft) => {
     const updated = { ...policies, [tier]: draft };
     try {
-      await axios.put(`${API_BASE}/admin/rate-policies`, updated, { headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true });
+      await axios.put(`${API_BASE}/admin/rate-policies`, updated, { headers: adminHeaders(adminToken), withCredentials: true });
       setPolicies(updated);
       toast.success(`${tier} policy saved`);
     } catch { toast.error('Failed to save'); }

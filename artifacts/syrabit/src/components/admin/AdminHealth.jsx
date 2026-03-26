@@ -5,6 +5,11 @@ import axios from 'axios';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
+const adminHeaders = (token) => {
+  const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
+  return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
+};
+
 function LatencyBadge({ ms }) {
   if (!ms && ms !== 0) return <span className="text-xs text-white/30">—</span>;
   const color = ms < 200 ? 'text-emerald-400' : ms < 600 ? 'text-amber-400' : 'text-red-400';
@@ -63,7 +68,8 @@ export default function AdminHealth({ adminToken }) {
   const loadMetrics = useCallback(() => {
     setMetricsLoading(true);
     axios.get(`${API_BASE}/metrics/history?minutes=${timeRange}`, {
-      headers: { Authorization: `Bearer ${adminToken}` }
+      headers: adminHeaders(adminToken),
+      withCredentials: true,
     })
       .then((r) => setMetricsData(r.data))
       .catch(() => setMetricsData(null))

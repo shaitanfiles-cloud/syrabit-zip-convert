@@ -5,6 +5,11 @@ import axios from 'axios';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
+const adminHeaders = (token) => {
+  const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
+  return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
+};
+
 const NOTIF_TYPES = [
   { id: 'info',    icon: Info,          color: 'text-blue-400',    bg: 'bg-blue-500/10',    border: 'border-blue-500/25'    },
   { id: 'success', icon: CheckCircle2,  color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/25' },
@@ -31,7 +36,7 @@ export default function AdminNotifications({ adminToken }) {
 
   useEffect(() => {
     axios.get(`${API_BASE}/admin/notifications`, {
-      headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {},
+      headers: adminHeaders(adminToken),
       withCredentials: true
     })
       .then((r) => {
@@ -53,7 +58,7 @@ export default function AdminNotifications({ adminToken }) {
       const res = await axios.post(
         `${API_BASE}/admin/notifications`,
         { title, message, type, audience, status },
-        { headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true }
+        { headers: adminHeaders(adminToken), withCredentials: true }
       );
       setNotifs((n) => [res.data, ...n]);
       setTitle(''); setMessage('');
@@ -65,7 +70,7 @@ export default function AdminNotifications({ adminToken }) {
   const handleDelete = async (id) => {
     try {
       await axios.delete(`${API_BASE}/admin/notifications/${id}`, {
-        headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {},
+        headers: adminHeaders(adminToken),
         withCredentials: true
       });
       setNotifs((n) => n.filter((x) => x.id !== id));

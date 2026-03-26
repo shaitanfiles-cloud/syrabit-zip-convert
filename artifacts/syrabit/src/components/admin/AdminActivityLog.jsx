@@ -1,9 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Activity, Trash2, RefreshCw, Download, Search, Info, AlertTriangle, AlertOctagon } from 'lucide-react';
 import { toast } from 'sonner';
+import { adminGetActivityLog } from '@/utils/api';
 import axios from 'axios';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+
+const adminHeaders = (token) => {
+  const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
+  return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
+};
 
 const LEVEL_CONFIG = {
   info:    { icon: Info,         color: 'text-blue-400',    dot: 'bg-blue-400',    border: 'border-blue-500/15'   },
@@ -34,10 +40,7 @@ export default function AdminActivityLog({ adminToken }) {
   const load = useCallback(() => {
     setLoading(true);
     setError(null);
-    axios.get(`${API_BASE}/admin/activity-log`, {
-      headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {},
-      withCredentials: true
-    })
+    adminGetActivityLog(adminToken)
       .then((r) => {
         const data = r.data;
         const logsArray = Array.isArray(data) ? data : (data?.logs || []);
@@ -56,8 +59,8 @@ export default function AdminActivityLog({ adminToken }) {
     if (!window.confirm('Clear activity log?')) return;
     try {
       await axios.delete(`${API_BASE}/admin/activity-log`, {
-        headers: adminToken ? { Authorization: `Bearer ${adminToken}` } : {},
-        withCredentials: true
+        headers: adminHeaders(adminToken),
+        withCredentials: true,
       });
       setLogs([]);
       toast.success('Activity log cleared');
