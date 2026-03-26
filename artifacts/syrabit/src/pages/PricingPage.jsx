@@ -1,9 +1,10 @@
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { PublicLayout } from '@/components/layout/PublicLayout';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Check, X, Zap, Trophy, Sparkles } from 'lucide-react';
 import { DOC_ACCESS_CONFIG } from '@/utils/plans';
+import { useAuth } from '@/context/AuthContext';
 
 const PLANS = [
   {
@@ -24,8 +25,9 @@ const PLANS = [
       { label: 'Advanced AI models',          included: false },
     ],
     cta: 'Get Started Free',
-    ctaLink: '/signup',
+    ctaPath: '/signup',
     highlighted: false,
+    isPaid: false,
   },
   {
     id: 'starter',
@@ -46,8 +48,9 @@ const PLANS = [
       { label: 'Advanced AI models',         included: true  },
     ],
     cta: 'Buy Starter — ₹99',
-    ctaLink: '/signup',
+    ctaPath: '/signup',
     highlighted: true,
+    isPaid: true,
   },
   {
     id: 'pro',
@@ -68,12 +71,31 @@ const PLANS = [
       { label: 'Early access to features',   included: true  },
     ],
     cta: 'Go Pro — ₹999',
-    ctaLink: '/signup',
+    ctaPath: '/signup',
     highlighted: false,
+    isPaid: true,
   },
 ];
 
 export default function PricingPage() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+
+  const handleCtaClick = (plan) => {
+    if (!plan.isPaid) {
+      // Free plan — go to signup or chat
+      navigate(user ? '/chat' : '/signup');
+      return;
+    }
+    if (user) {
+      // Logged-in user — go to profile with upgrade param to open payment modal
+      navigate(`/profile?upgrade=${plan.id}`);
+    } else {
+      // Guest — go to signup, after which they can upgrade from profile
+      navigate('/signup');
+    }
+  };
+
   return (
     <PublicLayout>
       <div className="min-h-screen bg-[#06060e] py-24 px-4">
@@ -157,22 +179,28 @@ export default function PricingPage() {
                   ))}
                 </ul>
 
-                <Link to={plan.ctaLink}>
-                  <Button
-                    className={`w-full ${
-                      plan.highlighted
-                        ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/25'
-                        : 'bg-white/8 hover:bg-white/12 text-white border border-white/15'
-                    }`}
-                    data-testid={`pricing-${plan.id}-cta-button`}
-                  >
-                    {plan.cta}
-                  </Button>
-                </Link>
+                <Button
+                  onClick={() => handleCtaClick(plan)}
+                  className={`w-full ${
+                    plan.highlighted
+                      ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/25'
+                      : 'bg-white/8 hover:bg-white/12 text-white border border-white/15'
+                  }`}
+                  data-testid={`pricing-${plan.id}-cta-button`}
+                >
+                  {plan.isPaid && user ? `Upgrade to ${plan.name} →` : plan.cta}
+                </Button>
               </div>
             );
           })}
         </div>
+
+        {/* Logged-in note */}
+        {user && (
+          <p className="text-center text-white/30 text-sm mt-8">
+            Signed in as <span className="text-violet-400">{user.email}</span> — upgrading will activate immediately.
+          </p>
+        )}
 
         {/* FAQ */}
         <div className="max-w-2xl mx-auto mt-20">

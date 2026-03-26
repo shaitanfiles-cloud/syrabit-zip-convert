@@ -267,13 +267,13 @@ try:
         raise ValueError(f"MONGO_URL has invalid scheme — must begin with mongodb:// or mongodb+srv://. Got: {_raw_mongo_url[:30]!r}...")
     mongo_client = AsyncIOMotorClient(
         _raw_mongo_url,
-        serverSelectionTimeoutMS=20000,   # was 5000 — prod SSL handshakes need more time
-        connectTimeoutMS=20000,           # was 5000 — give TLS negotiation room
-        socketTimeoutMS=45000,            # was 30000 — safer for slow Atlas nodes
-        maxPoolSize=10,                   # was 50 — fewer concurrent SSL connections
-        minPoolSize=0,                    # was 5 — no pre-warming, avoids burst SSL at startup
-        maxIdleTimeMS=120000,             # was 60000 — keep connections longer
-        waitQueueTimeoutMS=10000,         # was 5000 — more time to get a connection from pool
+        serverSelectionTimeoutMS=20000,
+        connectTimeoutMS=20000,
+        socketTimeoutMS=45000,
+        maxPoolSize=100,                  # up from 10 — support many concurrent requests
+        minPoolSize=5,                    # pre-warm 5 connections at startup
+        maxIdleTimeMS=120000,
+        waitQueueTimeoutMS=10000,
         retryReads=True,
         retryWrites=True,
     )
@@ -413,7 +413,7 @@ async def _init_pg_pool():
         logging.getLogger(__name__).warning("[WARN] Replit PostgreSQL not configured — asyncpg disabled")
         return
     try:
-        pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=6, max_size=20)
+        pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=10, max_size=50)
         async with pg_pool.acquire() as conn:
             await conn.execute(_PG_INIT_SQL)
         logging.getLogger(__name__).info("Replit PostgreSQL pool ready — tables created/verified")
@@ -431,9 +431,9 @@ SARVAM_THINK_BUFFER = 80     # tight think budget — answer starts sooner
 # Client A: translation / TTS / transliterate (short read timeout, 30s)
 # Client B: LLM chat (sarvam-m: ~124ms TTFT, full stream < 30s for 4096 tokens)
 _sarvam_pool_limits = httpx.Limits(
-    max_keepalive_connections=50,
-    max_connections=100,
-    keepalive_expiry=60,
+    max_keepalive_connections=100,        # up from 50
+    max_connections=200,                  # up from 100
+    keepalive_expiry=120,                 # up from 60 — reuse connections longer
 )
 _sarvam_timeout       = httpx.Timeout(connect=3.0, read=30.0, write=10.0, pool=5.0)
 _sarvam_llm_timeout   = httpx.Timeout(connect=3.0, read=60.0, write=10.0, pool=5.0)
@@ -530,6 +530,10 @@ async def lifespan(app):
         await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
         await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
         await db.analytics.create_index("user_id")
+        # Page-view indexes for visitor analytics
+        await db.page_views.create_index([("date", 1), ("visitor_id", 1)])
+        await db.page_views.create_index([("timestamp", -1)])
+        await db.page_views.create_index("visitor_id")
     except Exception as e:
         logger.warning(f"Seeding/indexing skipped (MongoDB may not be ready): {e}")
     _rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
@@ -552,7 +556,7 @@ api = APIRouter(prefix="/api")
 
 _content_cache: Dict[str, Any] = {}
 _content_cache_ttl: Dict[str, float] = {}
-CONTENT_CACHE_SECONDS = 300
+CONTENT_CACHE_SECONDS = 600
 REDIS_CONTENT_PREFIX = "content:"
 
 def _get_content_cache(key: str):
@@ -766,7 +770,7 @@ def check_rate_limit(key: str, max_requests: int = 100, window_seconds: int = 60
 async def rate_limit_user(user: dict = Depends(get_current_user)):
     """Dependency: 100 req/min per user. Returns 429 if exceeded."""
     user_id = user.get("id", "anonymous")
-    if not check_rate_limit(f"user:{user_id}", max_requests=100, window_seconds=60):
+    if not check_rate_limit(f"user:{user_id}", max_requests=300, window_seconds=60):
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded — 100 requests/minute. Please wait.",
@@ -777,7 +781,7 @@ async def rate_limit_user(user: dict = Depends(get_current_user)):
 async def rate_limit_chat(user: dict = Depends(get_current_user)):
     """Dependency: 30 chat req/min per user (stricter for AI)."""
     user_id = user.get("id", "anonymous")
-    if not check_rate_limit(f"chat:{user_id}", max_requests=30, window_seconds=60):
+    if not check_rate_limit(f"chat:{user_id}", max_requests=60, window_seconds=60):
         raise HTTPException(
             status_code=429,
             detail="Chat rate limit exceeded — 30 messages/minute. Upgrade for higher limits.",
@@ -814,7 +818,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if path.startswith("/api/"):
             client_ip = request.client.host if request.client else "unknown"
-            if not check_rate_limit(f"ip:{client_ip}", max_requests=200, window_seconds=60):
+            if not check_rate_limit(f"ip:{client_ip}", max_requests=600, window_seconds=60):
                 from fastapi.responses import JSONResponse
                 _metrics.record_request(path, 429)
                 return JSONResponse(
@@ -2845,7 +2849,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 # ─────────────────────────────────────────────
 
 import concurrent.futures as _cf
-_THREAD_POOL = _cf.ThreadPoolExecutor(max_workers=30)
+_THREAD_POOL = _cf.ThreadPoolExecutor(max_workers=50)
 
 def _run_sync(fn):
     """Execute a sync supabase-py call in a background thread."""

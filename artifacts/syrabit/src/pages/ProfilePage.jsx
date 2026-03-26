@@ -5,7 +5,7 @@
  * 17 useState + parallel data loading + edit/delete dialogs.
  */
 import { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   User, Mail, BookOpen, Zap, Crown, TrendingUp,
@@ -13,14 +13,26 @@ import {
   Star, MessageSquare, Database, Clock, Phone,
   AlertTriangle, ChevronRight, Check, Copy,
   GraduationCap, BookMarked, Layers,
-  Sparkles, Globe, CheckCircle,
+  Sparkles, Globe, CheckCircle, CreditCard,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/context/AuthContext';
 import { PageTitle } from '@/components/PageTitle';
 import { LogoMark } from '@/components/Logo';
-import { apiClient } from '@/utils/api';
+import { apiClient, createPaymentOrder, verifyPayment } from '@/utils/api';
 import { toast } from 'sonner';
+
+// ── Load Razorpay checkout.js script once ─────────────────────────────────────
+function loadRazorpay() {
+  return new Promise((resolve) => {
+    if (window.Razorpay) { resolve(true); return; }
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.onload  = () => resolve(true);
+    script.onerror = () => resolve(false);
+    document.body.appendChild(script);
+  });
+}
 
 // ── Plan config ───────────────────────────────────────────────────────────────
 import { DOC_ACCESS_CONFIG } from '@/utils/plans';
@@ -71,6 +83,7 @@ function UsageDots({ value = 3, max = 4, color = 'bg-primary' }) {
 export default function ProfilePage() {
   const { user, logout, refreshUser } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // ── 17 useState ──────────────────────────────────────────────────────────
   const [profile, setProfile]               = useState(null);
@@ -112,6 +125,16 @@ export default function ProfilePage() {
       .catch(() => toast.error('Failed to load profile'))
       .finally(() => setLoading(false));
   }, [user]);
+
+  // ── Auto-open payment modal from ?upgrade= query param ───────────────────
+  useEffect(() => {
+    const upgradePlan = searchParams.get('upgrade');
+    if (upgradePlan && ['starter', 'pro'].includes(upgradePlan)) {
+      setPaymentPlan(upgradePlan);
+      setShowPaymentModal(true);
+      setSearchParams({}, { replace: true }); // clean up URL
+    }
+  }, [searchParams]);
 
   // ── Auto-focus edit dialog input ─────────────────────────────────────────
   useEffect(() => {
@@ -201,6 +224,88 @@ export default function ProfilePage() {
     navigator.clipboard.writeText(profile?.id || '');
     setCopiedId(true);
     setTimeout(() => setCopiedId(false), 2000);
+  };
+
+  // ── Razorpay checkout ─────────────────────────────────────────────────────
+  const handleRazorpayCheckout = async () => {
+    if (!paymentPlan) return;
+    setPaymentLoading(true);
+
+    try {
+      // 1. Load Razorpay script
+      const loaded = await loadRazorpay();
+      if (!loaded) {
+        toast.error('Failed to load payment gateway. Check your internet connection.');
+        setPaymentLoading(false);
+        return;
+      }
+
+      // 2. Create order on backend
+      let orderData;
+      try {
+        const res = await createPaymentOrder(paymentPlan);
+        orderData = res.data;
+      } catch (err) {
+        const msg = err?.response?.data?.detail || 'Payment gateway not configured. Contact admin@syrabit.ai.';
+        toast.error(msg);
+        setPaymentLoading(false);
+        return;
+      }
+
+      // 3. Open Razorpay checkout
+      const options = {
+        key:          orderData.key_id,
+        amount:       orderData.amount,
+        currency:     orderData.currency,
+        name:         'Syrabit.ai',
+        description:  `${orderData.plan_label} Plan — ${PLANS[paymentPlan]?.credits.toLocaleString()} AI credits`,
+        order_id:     orderData.order_id,
+        prefill: {
+          name:  profile?.name  || '',
+          email: profile?.email || user?.email || '',
+          contact: profile?.phone || '',
+        },
+        theme: { color: '#7c3aed' },
+        modal: {
+          ondismiss: () => setPaymentLoading(false),
+        },
+        handler: async (response) => {
+          // 4. Verify payment on backend
+          try {
+            await verifyPayment({
+              razorpay_order_id:   response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature:  response.razorpay_signature,
+              plan:                paymentPlan,
+            });
+            toast.success(`🎉 ${PLANS[paymentPlan]?.label} plan activated!`, {
+              description: `${PLANS[paymentPlan]?.credits.toLocaleString()} AI credits added to your account.`,
+            });
+            setShowPaymentModal(false);
+            // Refresh profile to show new plan/credits
+            await Promise.all([
+              apiClient().get('/user/profile').then(r => setProfile(r.data)),
+              apiClient().get('/user/stats').then(r => setStats(r.data)),
+            ]);
+            if (refreshUser) refreshUser();
+          } catch (err) {
+            toast.error('Payment received but verification failed. Please contact admin@syrabit.ai.');
+          } finally {
+            setPaymentLoading(false);
+          }
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', (response) => {
+        toast.error(`Payment failed: ${response.error?.description || 'Unknown error'}`);
+        setPaymentLoading(false);
+      });
+      rzp.open();
+    } catch (err) {
+      toast.error('Something went wrong. Please try again.');
+      setPaymentLoading(false);
+    }
   };
 
   // ── Open edit field dialog ────────────────────────────────────────────────
@@ -892,13 +997,9 @@ export default function ProfilePage() {
               </ul>
 
               <button
-                onClick={() => {
-                  setShowPaymentModal(false);
-                  toast.info('Payment coming soon!', {
-                    description: 'Contact admin@syrabit.ai to upgrade your plan.',
-                  });
-                }}
-                className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98]"
+                onClick={handleRazorpayCheckout}
+                disabled={paymentLoading}
+                className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                 style={{
                   background: paymentPlan === 'pro'
                     ? 'linear-gradient(135deg,#d97706,#f59e0b)'
@@ -909,12 +1010,16 @@ export default function ProfilePage() {
                 }}
                 data-testid="payment-confirm-button"
               >
-                <Sparkles size={16} />
-                Coming Soon
+                {paymentLoading ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <CreditCard size={16} />
+                )}
+                {paymentLoading ? 'Processing…' : `Pay ${PLANS[paymentPlan]?.price} with Razorpay`}
               </button>
 
               <p className="text-center text-xs text-muted-foreground/40">
-                Contact admin@syrabit.ai to activate your plan
+                Secured by Razorpay · UPI, Cards, Net Banking accepted
               </p>
             </motion.div>
           </motion.div>
