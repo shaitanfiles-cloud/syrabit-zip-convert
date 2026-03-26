@@ -66,6 +66,7 @@ export default function AdminLoginPage() {
                 <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
                 <input
                   type="email"
+                  autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="admin@syrabit.ai"
@@ -87,6 +88,7 @@ export default function AdminLoginPage() {
                 <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
                 <input
                   type={showPass ? 'text' : 'password'}
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"

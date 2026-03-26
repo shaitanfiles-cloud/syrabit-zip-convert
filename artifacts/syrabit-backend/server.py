@@ -55,6 +55,11 @@ JWT_ALGORITHM    = 'HS256'
 JWT_EXPIRE_MINUTES = 60 * 24 * 30
 ADMIN_JWT_SECRET = os.environ.get('ADMIN_JWT_SECRET') or os.urandom(48).hex()  # Must be set in .env for production
 
+# ── Email Configuration ───────────────────────────────────────────────────────
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
+EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@syrabit.ai').strip()
+FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rstrip('/')
+
 # ── LLM Configuration ─────────────────────────────────────────────────────────
 _GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
 _GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
@@ -3543,6 +3548,38 @@ async def login(data: UserLogin, response: Response):
     )
     return TokenOut(access_token=token, user=user_out)
 
+async def _send_password_reset_email(email: str, token: str):
+    """Send password reset email via Resend API. Falls back to log-only if key is not set."""
+    reset_url = f"{FRONTEND_URL}/reset-password"
+    if not RESEND_API_KEY:
+        logger.info(f"[Email not configured] Password reset token for {email}: {token} | URL: {reset_url}")
+        return
+    try:
+        html = f"""
+        <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#0d0d1a;color:#e2e8f0;border-radius:12px;">
+          <h2 style="color:#8b5cf6;margin-bottom:8px;">Reset your Syrabit.ai password</h2>
+          <p style="color:#94a3b8;margin-bottom:24px;">We received a request to reset your password. Use the token below on the reset page.</p>
+          <div style="background:#1e1b4b;border:1px solid #4c1d95;border-radius:8px;padding:20px;text-align:center;margin-bottom:24px;">
+            <p style="color:#94a3b8;font-size:12px;margin:0 0 8px;">Your reset token (valid for 1 hour)</p>
+            <code style="font-size:14px;color:#a78bfa;word-break:break-all;letter-spacing:0.5px;">{token}</code>
+          </div>
+          <a href="{reset_url}" style="display:inline-block;background:#7c3aed;color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;font-size:14px;">Go to Reset Page</a>
+          <p style="color:#475569;font-size:12px;margin-top:24px;">If you didn't request this, ignore this email. Your password won't change.</p>
+        </div>
+        """
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
+                json={"from": f"Syrabit.ai <{EMAIL_FROM}>", "to": [email], "subject": "Reset your Syrabit.ai password", "html": html},
+            )
+            if resp.status_code not in (200, 201):
+                logger.warning(f"Resend email failed ({resp.status_code}): {resp.text[:200]}")
+            else:
+                logger.info(f"Password reset email sent to {email}")
+    except Exception as e:
+        logger.warning(f"Email send error: {e}")
+
 @api.post("/auth/reset-request")
 async def reset_request(data: PasswordResetReq):
     user = await supa_get_user_for_reset(data.email.lower())
@@ -3550,7 +3587,7 @@ async def reset_request(data: PasswordResetReq):
         token = str(uuid.uuid4())
         expires = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
         await supa_create_password_reset(token, data.email.lower(), expires)
-        logger.info(f"Password reset token for {data.email}: {token}")
+        await _send_password_reset_email(data.email.lower(), token)
     return {"message": "If the email exists, a reset link has been sent"}
 
 @api.post("/auth/reset-confirm")
@@ -4588,6 +4625,10 @@ async def upload_avatar(
     data_url = f"data:{file.content_type};base64,{b64}"
     await supa_update_user(user["id"], {"avatar_url": data_url})
     return {"avatar_url": data_url}
+
+@api.get("/user/saved-subjects")
+async def get_saved_subjects(user: dict = Depends(get_current_user)):
+    return {"saved_subjects": user.get("saved_subjects", [])}
 
 @api.post("/user/saved-subjects/{subject_id}")
 async def toggle_saved_subject(subject_id: str, user: dict = Depends(get_current_user)):

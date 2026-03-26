@@ -914,7 +914,7 @@ export default function ProfilePage() {
               </button>
 
               <p className="text-center text-xs text-muted-foreground/40">
-                Secured by Razorpay · Instant activation
+                Contact admin@syrabit.ai to activate your plan
               </p>
             </motion.div>
           </motion.div>

@@ -432,7 +432,7 @@ export default function LibraryPage() {
   // ── Listen for content uploads to refresh subjects ───────────────────────────
   useEffect(() => {
     const handleContentUploaded = () => {
-      console.log('Content uploaded - refreshing subjects');
+      
       refetchBundle();
     };
     

@@ -93,20 +93,26 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 
 ### `artifacts/syrabit` (`@workspace/syrabit`) + `artifacts/syrabit-backend`
 
-**Syrabit.ai** — AI-powered educational chatbot for Degree-level students (Assam).
+**Syrabit.ai** — AI-powered educational platform for AHSEC Class 11/12 and Degree students in Assam, India.
 
 - **Scope**: 2 boards — AHSEC (HS 1st & 2nd Year) + DEGREE (2nd & 4th Sem)
-- **Content**: 14 streams, 50 subjects, 498 chapters total (DEGREE: 206 ch_, AHSEC: 292 ach_)
+- **Content**: 14 streams, **55 subjects** with chapter-level RAG chunks
 - **AHSEC streams**: Science (PCM), Science (PCB), Arts, Commerce — for both HS 1st and 2nd Year
 - **DEGREE streams**: B.Com, B.A, B.Sc — for 2nd Sem and 4th Sem
-- **Chapter ID scheme**: DEGREE uses `ch_1..ch_N`, AHSEC uses `ach_5000..ach_5291` (avoids collision)
-- **Frontend**: React + Vite (JSX files, `.jsx` extension required)
+- **Chapter ID scheme**: DEGREE uses `ch_1..ch_N`, AHSEC uses `ach_5000..ach_N` (avoids collision)
+- **Frontend**: React + Vite (JSX files, `.jsx` extension required), React Router, Tailwind CSS
 - **Backend**: FastAPI (`server.py`) at port 8000; `emergentintegrations/` is a local module
 - **Databases**: PostgreSQL (users/auth), Supabase (mirror), MongoDB `test_database` (content/RAG)
-- **Seeder**: `SEED_DATA` + `_generate_chapters()` in `server.py`; checks `ahsec_exists && degree_exists && ch_count == expected_ch`
-- **Caches**: `_user_cache` (120s), `_conv_cache` (60s), `_rag_cache` (600s), `_ai_response_cache` (1h), `_syllabus_cache` (30min), `_content_cache`
-- **LLM**: Sarvam AI via SSE streaming; `temperature=0.0`, `_SSE_BATCH=60` chars, `LLM_BATCH_WINDOW=15ms`
-- **Admin**: `ADMIN_EMAILS=admin@syrabit.ai`; admin user ID `9cb057b2-2fc5-4b8a-91f2-2b37b8152924`
+- **Auth**: `syrabit_session` httpOnly cookie OR Bearer token; admin uses `syrabit_admin_session`; admin credentials in `ADMIN_EMAILS`/`ADMIN_PASSWORDS`/`ADMIN_NAMES` env vars
+- **Caches**: `_user_cache` (120s), `_conv_cache` (60s), `_rag_cache` (600s), `_ai_response_cache` (1h), `_syllabus_cache` (30min)
+- **LLM SLM Pool (6 slots)**: Groq llama-3.3-70b (c8, PRIMARY), Groq llama-3.1-8b (c4), Gemini flash-lite (c10), Gemini flash (c5), Fireworks deepseek-v3p2 (c8), Bedrock nova-micro (c2)
+- **RAG**: 3-way parallel search; scoring: chunks +5/match, chapter keyword +3, subject keyword +1, exact name +8
+- **Monetization**: Free (30 credits), Starter ₹99 (500 credits), Pro ₹999 (unlimited) — Razorpay "Coming Soon", contact admin@syrabit.ai
+- **Email**: Resend API for password reset; set `RESEND_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL` in env; falls back to log-only when key missing
+- **Security**: ASGI-native `SecurityHeadersMiddleware` (not BaseHTTPMiddleware); HSTS, CSP, X-Frame-Options headers
+- **Admin**: `ADMIN_EMAILS=admin@syrabit.ai`; watchfiles watches `/artifacts/syrabit` — server.py edits require workflow restart
+- **Form accessibility**: All inputs have proper `autocomplete` attributes (email, current-password, new-password, name)
+- **SEO**: `seo_engine.py` handles SEO routes; 404s are expected until content is generated
 
 ### `scripts` (`@workspace/scripts`)
 

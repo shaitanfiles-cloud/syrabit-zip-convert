@@ -73,7 +73,7 @@ export default function SignupPage() {
           <p className="text-white/60 mb-10">Start your AI-powered exam prep journey today.</p>
           <div className="space-y-3">
             {[
-              'Browse all 42 subjects — free forever',
+              'Browse all 55 subjects — free forever',
               'Starter: 300 credits for just ₹99',
               'AI tutor for AHSEC & Degree programs',
               'Upgrade anytime — no lock-in',
@@ -114,6 +114,7 @@ export default function SignupPage() {
                   <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
                   <Input
                     id="name"
+                    autoComplete="name"
                     placeholder="Your name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -130,6 +131,7 @@ export default function SignupPage() {
                   <Input
                     id="email"
                     type="email"
+                    autoComplete="email"
                     placeholder="your@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
@@ -147,6 +149,7 @@ export default function SignupPage() {
                   <Input
                     id="password"
                     type={showPass ? 'text' : 'password'}
+                    autoComplete="new-password"
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -186,6 +189,7 @@ export default function SignupPage() {
                   <Input
                     id="confirm"
                     type={showConfirm ? 'text' : 'password'}
+                    autoComplete="new-password"
                     placeholder="••••••••"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}

@@ -60,7 +60,7 @@ export default function ResetPasswordPage() {
             <>
               <div className="mb-6">
                 <h1 className="text-xl font-semibold text-white">Reset Password</h1>
-                <p className="text-white/50 text-sm mt-1">Enter your email to receive a reset token</p>
+                <p className="text-white/50 text-sm mt-1">Enter your email — we'll send you a reset token</p>
               </div>
               <form onSubmit={handleRequest} className="space-y-4">
                 <div className="space-y-1.5">
@@ -69,6 +69,7 @@ export default function ResetPasswordPage() {
                     <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
                     <Input
                       type="email"
+                      autoComplete="email"
                       placeholder="your@email.com"
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -89,7 +90,8 @@ export default function ResetPasswordPage() {
             <>
               <div className="mb-6">
                 <h1 className="text-xl font-semibold text-white">Enter Reset Token</h1>
-                <p className="text-white/50 text-sm mt-1">Enter the token from your email and your new password</p>
+                <p className="text-white/50 text-sm mt-1">Enter the token sent to your email and choose a new password</p>
+                <p className="text-white/35 text-xs mt-2">Didn't receive an email? Contact admin@syrabit.ai with your email address.</p>
               </div>
               <form onSubmit={handleConfirm} className="space-y-4">
                 <div className="space-y-1.5">
@@ -108,6 +110,7 @@ export default function ResetPasswordPage() {
                     <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
                     <Input
                       type={showPass ? 'text' : 'password'}
+                      autoComplete="new-password"
                       placeholder="••••••••"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
