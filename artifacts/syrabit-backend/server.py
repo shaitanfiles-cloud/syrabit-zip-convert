@@ -1580,9 +1580,9 @@ async def web_search_fallback(query: str) -> dict:
     def _run_ddgs_search() -> list:
         try:
             try:
-                from ddgs import DDGS
-            except ImportError:
                 from duckduckgo_search import DDGS
+            except ImportError:
+                from ddgs import DDGS
             with DDGS() as ddgs:
                 return list(ddgs.text(augmented_query, max_results=10))
         except Exception as ddgs_err:
@@ -2188,7 +2188,10 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
     if client is None:
         raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
     async with client.stream("POST", "/v1/chat/completions", json=payload) as resp:
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            body = await resp.aread()
+            logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+            resp.raise_for_status()
         async for line in resp.aiter_lines():
             if not line.startswith("data:"):
                 continue
@@ -3816,7 +3819,10 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         conv = await supa_get_conversation(conv_id, user["id"])
         if conv:
             for m in conv.get("messages", [])[-3:]:
-                history_messages.append({"role": m["role"], "content": m["content"]})
+                role = m.get("role", "")
+                content = m.get("content") or ""
+                if role in ("user", "assistant") and content.strip():
+                    history_messages.append({"role": role, "content": content})
     else:
         conv_id = str(uuid.uuid4())
         title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
@@ -4008,7 +4014,10 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     if conv_id and raw_conv:
         for m in raw_conv.get("messages", [])[-3:]:
-            history_messages.append({"role": m["role"], "content": m["content"]})
+            role = m.get("role", "")
+            content = m.get("content") or ""
+            if role in ("user", "assistant") and content.strip():
+                history_messages.append({"role": role, "content": content})
     elif not conv_id:
         conv_id = str(uuid.uuid4())
         title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")

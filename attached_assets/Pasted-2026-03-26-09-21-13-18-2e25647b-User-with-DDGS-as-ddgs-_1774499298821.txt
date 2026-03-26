@@ -1,0 +1,99 @@
+2026-03-26 09:21:13.18
+2e25647b
+User
+with DDGS() as ddgs:
+2026-03-26 09:21:13.18
+2e25647b
+User
+/home/runner/workspace/artifacts/syrabit-backend/server.py:1586: RuntimeWarning: This package (`duckduckgo_search`) has been renamed to `ddgs`! Use `pip install ddgs` instead.
+2026-03-26 09:21:44.31
+2e25647b
+User
+/home/runner/workspace/artifacts/syrabit-backend/server.py:1586: RuntimeWarning: This package (`duckduckgo_search`) has been renamed to `ddgs`! Use `pip install ddgs` instead.
+2026-03-26 09:21:44.31
+2e25647b
+User
+with DDGS() as ddgs:
+2026-03-26 09:22:08.22
+2e25647b
+User
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2026-03-26 09:22:08.22
+2e25647b
+User
+ERROR:server:LLM streaming error: HTTPStatusError: Client error '400 Bad Request' for url 'https://api.sarvam.ai/v1/chat/completions'
+2026-03-26 09:22:29.08
+2e25647b
+User
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2026-03-26 09:22:29.08
+2e25647b
+User
+ERROR:server:LLM streaming error: HTTPStatusError: Client error '400 Bad Request' for url 'https://api.sarvam.ai/v1/chat/completions'
+2026-03-26 09:23:18.26
+2e25647b
+User
+with DDGS() as ddgs:
+2026-03-26 09:23:18.26
+2e25647b
+User
+/home/runner/workspace/artifacts/syrabit-backend/server.py:1586: RuntimeWarning: This package (`duckduckgo_search`) has been renamed to `ddgs`! Use `pip install ddgs` instead.
+2026-03-26 09:27:06.07
+2e25647b
+User
+/home/runner/workspace/artifacts/syrabit-backend/server.py:1586: RuntimeWarning: This package (`duckduckgo_search`) has been renamed to `ddgs`! Use `pip install ddgs` instead.
+2026-03-26 09:27:06.07
+2e25647b
+User
+with DDGS() as ddgs:
+2026-03-26 09:27:07.77
+2e25647b
+User
+ERROR:server:LLM streaming error: HTTPStatusError: Client error '400 Bad Request' for url 'https://api.sarvam.ai/v1/chat/completions'
+2026-03-26 09:27:07.77
+2e25647b
+User
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2026-03-26 09:28:02.53
+2e25647b
+User
+with DDGS() as ddgs:
+2026-03-26 09:28:02.53
+2e25647b
+User
+/home/runner/workspace/artifacts/syrabit-backend/server.py:1586: RuntimeWarning: This package (`duckduckgo_search`) has been renamed to `ddgs`! Use `pip install ddgs` instead.
+2026-03-26 09:28:04.20
+2e25647b
+User
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2026-03-26 09:28:04.20
+2e25647b
+User
+ERROR:server:LLM streaming error: HTTPStatusError: Client error '400 Bad Request' for url 'https://api.sarvam.ai/v1/chat/completions'
+2026-03-26 09:28:35.45
+2e25647b
+User
+ERROR:server:LLM streaming error: HTTPStatusError: Client error '400 Bad Request' for url 'https://api.sarvam.ai/v1/chat/completions'
+2026-03-26 09:28:35.45
+2e25647b
+User
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2026-03-26 09:32:21.41
+2e25647b
+System
+sending SIGTERM to artifact process artifact=artifacts/syrabit
+2026-03-26 09:32:21.41
+2e25647b
+System
+sending SIGTERM to artifact process artifact=artifacts/api-server
+2026-03-26 09:32:21.41
+2e25647b
+System
+received signal, shutting down artifact processes signal=terminated
+2026-03-26 09:32:21.42
+2e25647b
+System
+artifact process exited with error artifact=artifacts/api-server error=signal: terminated
+Wrap
+Colors
+Published
