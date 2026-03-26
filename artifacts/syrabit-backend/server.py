@@ -1596,9 +1596,9 @@ async def web_search_fallback(query: str) -> dict:
     def _run_ddgs_search() -> list:
         try:
             try:
-                from duckduckgo_search import DDGS
-            except ImportError:
                 from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
             with DDGS() as ddgs:
                 return list(ddgs.text(augmented_query, max_results=10))
         except Exception as ddgs_err:
