@@ -2043,6 +2043,15 @@ _MODEL_PROVIDER_MAP = {
     "accounts/fireworks/models/qwen3-235b-a22b": "fireworksai",
     "llama-3.3-70b-versatile": "groq",
     "llama-3.1-8b-instant": "groq",
+    # UI display aliases → real Groq models
+    "openai/gpt-oss-20b": "groq",
+    "openai/gpt-oss-120b": "groq",
+}
+
+# Map display-alias model names to the actual API model ID to send to the provider
+_MODEL_ALIAS_MAP = {
+    "openai/gpt-oss-20b": "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b": "llama-3.3-70b-versatile",
 }
 
 def _resolve_provider_for_model(model: str):
@@ -2216,14 +2225,18 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     like 'openai/gpt-oss-20b'), the resolved provider's default model is used instead.
     """
     use_model_raw = model or LLM_MODEL
-    provider, key = _resolve_provider_for_model(use_model_raw)
-    # If the requested model is not a known API model, use the provider's own default
-    if use_model_raw not in _MODEL_PROVIDER_MAP:
+    # Resolve display-alias → real API model name (e.g. openai/gpt-oss-20b → llama-3.3-70b-versatile)
+    use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
+    provider, key = _resolve_provider_for_model(use_model_resolved)
+    if use_model_raw != use_model_resolved:
+        logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
+    # If still not a known API model, fall back to provider default
+    if use_model_resolved not in _MODEL_PROVIDER_MAP:
         matched = next((p for p in _LLM_PROVIDERS if p["provider"] == provider), None)
         use_model = matched["default_model"] if matched else LLM_MODEL
-        logger.info(f"Model alias '{use_model_raw}' → using provider default '{use_model}' ({provider})")
+        logger.info(f"Unknown model '{use_model_resolved}' → provider default '{use_model}' ({provider})")
     else:
-        use_model = use_model_raw
+        use_model = use_model_resolved
 
     if not key and provider != "sarvam":
         yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
