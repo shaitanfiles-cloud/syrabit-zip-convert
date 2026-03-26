@@ -56,6 +56,7 @@ ADMIN_JWT_SECRET = os.environ.get('ADMIN_JWT_SECRET') or os.urandom(48).hex()  #
 # ── LLM Configuration ─────────────────────────────────────────────────────────
 _GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
 _GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+_XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
 _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 _FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '')
 _SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
@@ -2033,6 +2034,8 @@ if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.0-flash"})
+if _XAI_KEY:
+    _LLM_PROVIDERS.append({"provider": "xai",         "key": _XAI_KEY,        "default_model": "grok-3-fast"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
@@ -2065,6 +2068,7 @@ _MODEL_ALIAS_MAP = {
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "llama-3.3-70b-versatile"),
     ("gemini",      "gemini-2.0-flash"),
+    ("xai",         "grok-3-fast"),
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2"),
     ("sarvam",      "sarvam-m"),
 ]
@@ -2291,11 +2295,22 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     )
     stream = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        stream=True,
-        temperature=0.7,
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.7,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
+    import openai as _oai
+    client = _oai.AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://api.x.ai/v1",
+    )
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.7,
     )
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
@@ -2420,6 +2435,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         elif p_name == "gemini":
             logger.info(f"LLM stream: provider=gemini, model={p_model}")
             async for token in _stream_gemini(messages, p_key, p_model, max_tokens):
+                yield token
+        elif p_name == "xai":
+            logger.info(f"LLM stream: provider=xai, model={p_model}")
+            async for token in _stream_xai(messages, p_key, p_model, max_tokens):
                 yield token
         else:
             logger.info(f"LLM stream: provider={p_name}, model={p_model}")
