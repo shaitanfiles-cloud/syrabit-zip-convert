@@ -1449,7 +1449,7 @@ async def rag_search(
             # Use keyword-matching chapters when available; otherwise use the full chapter list
             chapters_found = chapters_kw if chapters_kw else chapters_all
         else:
-            # ── No subject: run chunks + subjects in parallel, then chapters ──
+            # ── No subject: 3-way parallel search across name, chapters, and chunks ──
             subj_kw_filter = {"$or": [
                 {"name":        {"$regex": kw_join, "$options": "i"}},
                 {"description": {"$regex": kw_join, "$options": "i"}},
@@ -1460,31 +1460,89 @@ async def rag_search(
                     {"name": {"$regex": subject_name, "$options": "i"}, "status": "published"},
                 ]}
 
-            chunks, subjects_found = await asyncio.gather(
-                db.chunks.find({"$or": regex_parts}, {"_id": 0}).limit(5).to_list(5),
-                db.subjects.find(subj_kw_filter, {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1, "chapters": 1}).limit(55).to_list(55),
+            # Run 3 searches in parallel:
+            #   (1) subjects by name/desc/tags
+            #   (2) ALL chapters whose title matches keywords → backtrack to subject
+            #   (3) chunks whose content matches keywords → backtrack to subject via chapter_id
+            _subj_proj = {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1}
+            _ch_proj   = {"_id": 0, "id": 1, "subject_id": 1, "title": 1, "description": 1, "order_index": 1}
+            chunks, subjects_by_name, chapters_by_title = await asyncio.gather(
+                db.chunks.find({"$or": regex_parts}, {"_id": 0}).limit(8).to_list(8),
+                db.subjects.find(subj_kw_filter, _subj_proj).limit(55).to_list(55),
+                db.chapters.find(ch_title_filter, _ch_proj).sort("order_index", 1).limit(15).to_list(15),
             )
 
-            # Re-rank subjects by how many query keywords appear in the subject NAME
-            # This ensures "Indian Financial System" (3 name-kw hits) beats
-            # "Financial Accounting" (1 name-kw hit) for a query that mentions the full name
-            query_lower = query.lower()
-            if len(subjects_found) > 1:
-                def _name_score(s: dict) -> int:
-                    name_lower = s.get("name", "").lower()
-                    # Bonus: subject name is a substring of the query (highest confidence)
-                    exact_bonus = 10 if name_lower and name_lower in query_lower else 0
-                    # Count individual keywords that appear in the subject name
-                    kw_hits = sum(1 for kw in keywords if kw in name_lower)
-                    return exact_bonus + kw_hits
-                subjects_found = sorted(subjects_found, key=_name_score, reverse=True)
-            subjects_found = subjects_found[:3]
+            # ── Resolve chunks → parent subjects (via chapter_id) ─────────────────
+            chunk_chapter_ids = list({c["chapter_id"] for c in chunks if c.get("chapter_id")})
+            chunk_parent_chapters: list = []
+            if chunk_chapter_ids:
+                chunk_parent_chapters = await db.chapters.find(
+                    {"id": {"$in": chunk_chapter_ids}}, {"_id": 0, "id": 1, "subject_id": 1}
+                ).to_list(10)
 
-            ch_filter = ch_title_filter
-            if subjects_found:
-                subject_ids = [s["id"] for s in subjects_found]
-                ch_filter = {"$and": [{"subject_id": {"$in": subject_ids}}, ch_title_filter]}
-            chapters_found = await db.chapters.find(ch_filter, {"_id": 0}).limit(5).to_list(5)
+            # Collect all subject IDs reached via chapters and chunks
+            existing_ids = {s["id"] for s in subjects_by_name}
+            via_chapter_ids = {c["subject_id"] for c in chapters_by_title if c.get("subject_id")} - existing_ids
+            via_chunk_ids   = {c["subject_id"] for c in chunk_parent_chapters if c.get("subject_id")} - existing_ids - via_chapter_ids
+
+            # Fetch the extra subjects (those reached only through chapter/chunk paths)
+            extra_ids = list(via_chapter_ids | via_chunk_ids)
+            extra_subjects: list = []
+            if extra_ids:
+                extra_subjects = await db.subjects.find(
+                    {"id": {"$in": extra_ids}, "status": "published"}, _subj_proj
+                ).to_list(20)
+
+            # ── Score & re-rank ALL candidate subjects ────────────────────────────
+            # Score breakdown (higher = more relevant):
+            #   +10  subject name is a substring of the query (exact card name mention)
+            #   +3   per keyword that appears in the subject name
+            #   +2   per keyword that appears in any matching chapter TITLE
+            #         (chapter title match is more specific than random chunk content)
+            #   +1   subject reached via chunk content match (can be coincidental)
+            query_lower = query.lower()
+            chunk_subject_ids = {c["subject_id"] for c in chunk_parent_chapters if c.get("subject_id")}
+
+            # Build a per-subject chapter-title keyword-hit count
+            chapter_title_score: dict[str, int] = {}
+            for ch in chapters_by_title:
+                sid = ch.get("subject_id", "")
+                if not sid:
+                    continue
+                title_lower = ch.get("title", "").lower()
+                hits = sum(1 for kw in keywords if kw in title_lower)
+                chapter_title_score[sid] = chapter_title_score.get(sid, 0) + hits
+
+            def _subject_score(s: dict) -> int:
+                name_lower = s.get("name", "").lower()
+                sid = s.get("id", "")
+                score  = 10 if (name_lower and name_lower in query_lower) else 0
+                score += sum(3 for kw in keywords if kw in name_lower)
+                score += chapter_title_score.get(sid, 0) * 2
+                score += 1 if sid in chunk_subject_ids else 0
+                return score
+
+            all_candidates = subjects_by_name + extra_subjects
+            if len(all_candidates) > 1:
+                all_candidates = sorted(all_candidates, key=_subject_score, reverse=True)
+            # Deduplicate by name (keep the highest-scored version of each subject name)
+            seen_names: set = set()
+            deduped: list = []
+            for s in all_candidates:
+                n = s.get("name", "").lower()
+                if n not in seen_names:
+                    seen_names.add(n)
+                    deduped.append(s)
+            subjects_found = deduped[:3]
+
+            # ── chapters_found: keyword-matching chapters scoped to top subjects ──
+            top_subject_ids = [s["id"] for s in subjects_found]
+            if top_subject_ids:
+                chapters_found = [c for c in chapters_by_title if c.get("subject_id") in top_subject_ids][:5]
+                if not chapters_found:
+                    chapters_found = chapters_by_title[:5]
+            else:
+                chapters_found = chapters_by_title[:5]
 
         # ── Determine quality ─────────────────────────────────────────────────
         if chunks:
