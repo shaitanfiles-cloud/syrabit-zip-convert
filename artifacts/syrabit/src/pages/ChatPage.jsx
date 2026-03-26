@@ -102,8 +102,15 @@ const bubbleVariants = {
 };
 
 // ── RAG source badge ──────────────────────────────────────────────────────────
-function RagBadge({ source, chunks }) {
+function RagBadge({ source, chunks, subjectId, subjectName }) {
+  const navigate = useNavigate();
   if (!source || source === 'none') return null;
+
+  const handleSubjectClick = (e) => {
+    e.stopPropagation();
+    if (subjectId) navigate(`/subject/${subjectId}`);
+  };
+
   if (source === 'document') {
     return (
       <span
@@ -111,18 +118,39 @@ function RagBadge({ source, chunks }) {
         style={{ background: 'rgba(16,185,129,0.12)', color: '#34d399', border: '1px solid rgba(16,185,129,0.25)' }}
         title="Answer grounded in the uploaded subject document (Tier 0 — highest priority)"
       >
-        <FileText size={9} aria-hidden="true" /> Document
+        <FileText size={9} aria-hidden="true" />
+        {subjectName && subjectId ? (
+          <button
+            onClick={handleSubjectClick}
+            className="hover:underline cursor-pointer bg-transparent border-none p-0 text-[10px] font-medium"
+            style={{ color: 'inherit' }}
+            title={`View content card: ${subjectName}`}
+          >
+            {subjectName}
+          </button>
+        ) : 'Document'}
       </span>
     );
   }
   if (source === 'rag' || source === 'rag+web') {
+    const label = subjectName || `Syllabus · ${chunks} blocks`;
     return (
       <span
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium"
         style={{ background: 'rgba(16,185,129,0.10)', color: '#34d399', border: '1px solid rgba(16,185,129,0.20)' }}
-        title={`Answer grounded in ${chunks} syllabus content blocks`}
+        title={subjectName ? `Source: ${subjectName} — ${chunks} content blocks used` : `Answer grounded in ${chunks} syllabus content blocks`}
       >
-        <Database size={9} aria-hidden="true" /> Syllabus · {chunks} blocks
+        <Database size={9} aria-hidden="true" />
+        {subjectId ? (
+          <button
+            onClick={handleSubjectClick}
+            className="hover:underline cursor-pointer bg-transparent border-none p-0 text-[10px] font-medium"
+            style={{ color: 'inherit' }}
+            title={`View content card: ${label}`}
+          >
+            {label}
+          </button>
+        ) : label}
       </span>
     );
   }
@@ -258,7 +286,7 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
                 {timeStr && (
                   <span className="text-[11px] text-muted-foreground">{timeStr}</span>
                 )}
-                <RagBadge source={msg.rag_source} chunks={msg.rag_chunks} />
+                <RagBadge source={msg.rag_source} chunks={msg.rag_chunks} subjectId={msg.rag_subject_id} subjectName={msg.rag_subject_name} />
                 <button
                   onClick={handleCopy}
                   className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
@@ -479,6 +507,8 @@ export default function ChatPage() {
       let newConvId = conversationId;
       let ragSource = 'none';
       let ragChunks = 0;
+      let ragSubjectId = null;
+      let ragSubjectName = null;
 
       // RAF-based batching: accumulate chunks between animation frames
       // so React re-renders at most 60×/sec instead of on every token
@@ -508,6 +538,8 @@ export default function ChatPage() {
             if (parsed.conversation_id) newConvId = parsed.conversation_id;
             if (parsed.rag_source) ragSource = parsed.rag_source;
             if (parsed.rag_chunks !== undefined) ragChunks = parsed.rag_chunks;
+            if (parsed.rag_subject_id) ragSubjectId = parsed.rag_subject_id;
+            if (parsed.rag_subject_name) ragSubjectName = parsed.rag_subject_name;
             if (parsed.error) {
               toast.error(parsed.error || 'AI service error — please try again.');
               setMessages((prev) => prev.map((m) =>
@@ -547,10 +579,10 @@ export default function ChatPage() {
       if (pendingChunk) { fullContent += pendingChunk; pendingChunk = ''; }
 
       setConversationId(newConvId);
-      // Finalize: remove streaming flag, attach RAG metadata
+      // Finalize: remove streaming flag, attach RAG metadata + subject link
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
-          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks }
+          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName }
           : m
       ));
       setCredits((c) => ({ ...c, used: c.used + 1 }));

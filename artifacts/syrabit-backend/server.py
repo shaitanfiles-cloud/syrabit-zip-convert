@@ -4325,12 +4325,16 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     rag_quality_saved = rag_ctx.get("quality", "none")
     rag_chunks_count = len(rag_ctx.get("chunks",   []))
     rag_subjects_count = len(rag_ctx.get("subjects", []))
+    # Resolve the primary subject this answer came from (for frontend badge link)
+    _rag_subjs = rag_ctx.get("subjects", [])
+    rag_subject_id   = (_rag_subjs[0].get("id")   if _rag_subjs else None) or msg.subject_id   or None
+    rag_subject_name = (_rag_subjs[0].get("name") if _rag_subjs else None) or msg.subject_name or None
     full_response = []
 
     async def event_stream():
         nonlocal full_response
-        # Send RAG metadata with full quality info
-        yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count})}\n\n"
+        # Send RAG metadata with full quality info + subject link data
+        yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name})}\n\n"
 
         # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
         cache_key = _cache_key(msg.message)
