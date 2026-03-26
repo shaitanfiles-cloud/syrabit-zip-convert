@@ -11,13 +11,15 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request as StarletteRequest
+from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.datastructures import MutableHeaders
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
-import os, uuid, logging, hashlib, json, re, asyncio, httpx, warnings, time
+import os, uuid, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
 try:
@@ -776,15 +778,27 @@ async def rate_limit_chat(user: dict = Depends(get_current_user)):
     return user
 
 # ── Security headers middleware ─────────────────────────────────────────────────
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "SAMEORIGIN"
-        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        return response
+# Uses pure ASGI (not BaseHTTPMiddleware) so it works correctly with StreamingResponse.
+class SecurityHeadersMiddleware:
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_security_headers(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers.append("X-Content-Type-Options", "nosniff")
+                headers.append("X-Frame-Options", "SAMEORIGIN")
+                headers.append("Referrer-Policy", "strict-origin-when-cross-origin")
+                headers.append("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+                headers.append("X-XSS-Protection", "1; mode=block")
+            await send(message)
+
+        await self.app(scope, receive, send_with_security_headers)
 
 class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
     """200 req/min per IP for all /api routes + request tracking."""
@@ -2068,22 +2082,16 @@ _MODEL_ALIAS_MAP = {
 # Multiple slots per provider = parallel streams up to max_concurrent each.
 #
 #  Groq        llama-3.3-70b-versatile — PRIMARY: quality + fast, 30 RPM
-#              llama-3.1-8b-instant  — fallback: sub-second TTFT, highest TPD
-#  Gemini      gemini-2.0-flash-lite  — 30 RPM free, lowest latency Gemini
-#              gemini-2.0-flash       — 15 RPM free, higher quality
-#  xAI         grok-3-fast            — xAI's fastest model, generous limits
-#  Fireworks   deepseek-v3p2          — high-quality, pay-per-token (no hard RPM cap)
-#              qwen2p5-72b-instruct   — second fast Fireworks slot
-#  Sarvam      sarvam-m               — Indian-language aware, backup
+#              llama-3.1-8b-instant    — fallback: sub-second TTFT, highest TPD
+#  Gemini      gemini-2.0-flash-lite   — 30 RPM free, lowest latency Gemini
+#              gemini-2.0-flash        — 15 RPM free, higher quality
+#  Fireworks   deepseek-v3p2           — high-quality, pay-per-token (no hard RPM cap)
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "llama-3.3-70b-versatile",                           8),
     ("groq",        "llama-3.1-8b-instant",                              4),
     ("gemini",      "gemini-2.0-flash-lite",                            10),
     ("gemini",      "gemini-2.0-flash",                                  5),
-    ("xai",         "grok-3-fast",                                       8),
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
-    ("fireworksai", "accounts/fireworks/models/qwen2p5-72b-instruct",    6),
-    ("sarvam",      "sarvam-m",                                          2),
 ]
 
 class _SmartKeyPool:
@@ -5763,6 +5771,138 @@ async def admin_update_api_config(data: dict, admin: dict = Depends(get_admin_us
         await db.api_config.replace_one({}, merged, upsert=True)
     return {"message": "API config updated"}
 
+# ─────────────────────────────────────────────
+# RAZORPAY PAYMENT INTEGRATION
+# ─────────────────────────────────────────────
+async def _get_razorpay_keys() -> tuple[str, str]:
+    """Read Razorpay keys from admin api-config stored in MongoDB."""
+    cfg = await db.api_config.find_one({}, {"_id": 0})
+    if cfg:
+        payment = cfg.get("payment", {})
+        key_id = payment.get("razorpay_key_id", "").strip()
+        key_secret = payment.get("razorpay_key_secret", "").strip()
+        if key_id and key_secret:
+            return key_id, key_secret
+    # Fall back to environment variables
+    key_id = os.environ.get("RAZORPAY_KEY_ID", "").strip()
+    key_secret = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
+    return key_id, key_secret
+
+PLAN_PRICES_INR = {"starter": 9900, "pro": 99900}  # amount in paise (₹99 = 9900 paise)
+PLAN_CREDITS    = {"starter": 300, "pro": 4000}
+PLAN_DOC_ACCESS = {"starter": "limited", "pro": "full"}
+
+class PaymentOrderRequest(BaseModel):
+    plan: str  # "starter" or "pro"
+
+class PaymentVerifyRequest(BaseModel):
+    razorpay_order_id:   str
+    razorpay_payment_id: str
+    razorpay_signature:  str
+    plan: str
+
+@api.post("/payments/create-order")
+async def create_payment_order(body: PaymentOrderRequest, user: dict = Depends(get_current_user)):
+    """Create a Razorpay order for the given plan."""
+    plan = body.plan.lower()
+    if plan not in PLAN_PRICES_INR:
+        raise HTTPException(400, f"Invalid plan '{plan}'. Choose 'starter' or 'pro'.")
+
+    key_id, key_secret = await _get_razorpay_keys()
+    if not key_id or not key_secret:
+        raise HTTPException(503, "Payment gateway not configured. Please contact admin@syrabit.ai.")
+
+    try:
+        import razorpay
+        client = razorpay.Client(auth=(key_id, key_secret))
+        order = client.order.create({
+            "amount":   PLAN_PRICES_INR[plan],
+            "currency": "INR",
+            "receipt":  f"syrabit_{user['id']}_{plan}_{int(time.time())}",
+            "notes": {
+                "user_id": str(user["id"]),
+                "plan":    plan,
+            },
+        })
+        return {
+            "order_id":   order["id"],
+            "amount":     order["amount"],
+            "currency":   order["currency"],
+            "key_id":     key_id,
+            "plan":       plan,
+            "plan_label": plan.capitalize(),
+        }
+    except Exception as e:
+        logger.error(f"Razorpay create-order error: {e}")
+        raise HTTPException(502, "Failed to create payment order. Please try again.")
+
+@api.post("/payments/verify")
+async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_current_user)):
+    """Verify Razorpay payment signature and activate the plan."""
+    plan = body.plan.lower()
+    if plan not in PLAN_PRICES_INR:
+        raise HTTPException(400, f"Invalid plan '{plan}'.")
+
+    _, key_secret = await _get_razorpay_keys()
+    if not key_secret:
+        raise HTTPException(503, "Payment gateway not configured.")
+
+    # Verify HMAC-SHA256 signature
+    expected = hmac.new(
+        key_secret.encode(),
+        f"{body.razorpay_order_id}|{body.razorpay_payment_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, body.razorpay_signature):
+        logger.warning(f"Payment signature mismatch for user {user['id']}")
+        raise HTTPException(400, "Payment verification failed — invalid signature.")
+
+    # Activate plan — add credits + upgrade plan + doc access
+    user_id  = user["id"]
+    credits  = PLAN_CREDITS[plan]
+    doc_acc  = PLAN_DOC_ACCESS[plan]
+    now_iso  = datetime.now(timezone.utc).isoformat()
+
+    payment_record = {
+        "user_id":            str(user_id),
+        "plan":               plan,
+        "amount_paise":       PLAN_PRICES_INR[plan],
+        "razorpay_order_id":  body.razorpay_order_id,
+        "razorpay_payment_id":body.razorpay_payment_id,
+        "verified_at":        now_iso,
+    }
+
+    try:
+        # Record payment
+        await db.payments.insert_one(payment_record)
+
+        # Upgrade user in PostgreSQL
+        if _pg_pool:
+            async with _pg_pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE users
+                          SET plan=$1, credits=credits+$2, document_access=$3,
+                              updated_at=$4
+                        WHERE id=$5""",
+                    plan, credits, doc_acc, now_iso, user_id,
+                )
+        # Also update in MongoDB users collection if present
+        await db.users.update_one(
+            {"id": str(user_id)},
+            {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
+             "$inc": {"credits": credits}},
+        )
+        logger.info(f"Plan activated: user={user_id} plan={plan} credits+={credits}")
+        return {
+            "success": True,
+            "plan":    plan,
+            "credits_added": credits,
+            "message": f"Welcome to {plan.capitalize()}! {credits} credits added.",
+        }
+    except Exception as e:
+        logger.error(f"Plan activation error for user {user_id}: {e}")
+        raise HTTPException(500, "Payment verified but plan activation failed. Contact admin@syrabit.ai.")
+
 @api.post("/admin/supabase/test")
 async def admin_test_supabase(data: dict, admin: dict = Depends(get_admin_user)):
     url = data.get("url", "").strip()
@@ -5964,15 +6104,34 @@ async def process_cms_rag(doc_id: str, admin: dict = Depends(get_admin_user)):
     return {"message": f"Processed {len(chunks)} chunks", "chunks": len(chunks)}
 
 @api.post("/admin/upload/image")
-async def upload_image(file: bytes = File(...), admin: dict = Depends(get_admin_user)):
-    """Upload image to Supabase Storage"""
-    # For now, return a placeholder. Full Supabase Storage implementation can be added later.
-    # This is a stub that returns a data URL or external URL
-    import base64
-    image_id = str(uuid.uuid4())[:8]
-    # In production, upload to Supabase Storage bucket
-    # For MVP, we'll use a placeholder
-    return {"url": f"https://via.placeholder.com/400x300?text={image_id}"}
+async def upload_image(file: UploadFile = File(...), admin: dict = Depends(get_admin_user)):
+    """Upload image — returns a base64 data URL for immediate use."""
+    import base64 as _b64
+    allowed_types = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/svg+xml"}
+    content_type = (file.content_type or "").lower()
+    if content_type not in allowed_types:
+        raise HTTPException(400, f"Unsupported file type '{content_type}'. Use JPEG, PNG, GIF, WebP, or SVG.")
+    max_size = 5 * 1024 * 1024  # 5 MB
+    raw = await file.read()
+    if len(raw) > max_size:
+        raise HTTPException(413, "Image too large — maximum size is 5 MB.")
+    b64 = _b64.b64encode(raw).decode()
+    data_url = f"data:{content_type};base64,{b64}"
+    # Also store in MongoDB for future retrieval
+    image_id = str(uuid.uuid4())[:12]
+    try:
+        await db.uploaded_images.insert_one({
+            "id": image_id,
+            "filename": file.filename,
+            "content_type": content_type,
+            "size": len(raw),
+            "data_url": data_url,
+            "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "uploaded_by": admin.get("email", "admin"),
+        })
+    except Exception:
+        pass  # data_url still returned even if MongoDB insert fails
+    return {"url": data_url, "id": image_id, "filename": file.filename}
 
 # Public CMS endpoints (no auth required)
 @api.get("/content/cms-library")

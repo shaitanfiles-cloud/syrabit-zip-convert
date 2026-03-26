@@ -5,7 +5,7 @@
  * 17 useState + parallel data loading + edit/delete dialogs.
  */
 import { useState, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   User, Mail, BookOpen, Zap, Crown, TrendingUp,
@@ -71,6 +71,7 @@ function UsageDots({ value = 3, max = 4, color = 'bg-primary' }) {
 export default function ProfilePage() {
   const { user, logout, refreshUser } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // ── 17 useState ──────────────────────────────────────────────────────────
   const [profile, setProfile]               = useState(null);
@@ -112,6 +113,16 @@ export default function ProfilePage() {
       .catch(() => toast.error('Failed to load profile'))
       .finally(() => setLoading(false));
   }, [user]);
+
+  // ── Auto-open payment modal when ?upgrade=plan is in URL ─────────────────
+  useEffect(() => {
+    const upgradePlan = searchParams.get('upgrade');
+    if (upgradePlan && ['starter', 'pro'].includes(upgradePlan) && !loading) {
+      setPaymentPlan(upgradePlan);
+      setShowPaymentModal(true);
+      setSearchParams({}, { replace: true }); // clean up the URL
+    }
+  }, [searchParams, loading]);
 
   // ── Auto-focus edit dialog input ─────────────────────────────────────────
   useEffect(() => {
@@ -892,13 +903,69 @@ export default function ProfilePage() {
               </ul>
 
               <button
-                onClick={() => {
-                  setShowPaymentModal(false);
-                  toast.info('Payment integration coming soon!', {
-                    description: 'Contact admin@syrabit.ai to upgrade your plan.',
-                  });
+                disabled={paymentLoading}
+                onClick={async () => {
+                  if (!paymentPlan) return;
+                  setPaymentLoading(true);
+                  try {
+                    const res = await apiClient().post('/payments/create-order', { plan: paymentPlan });
+                    const { order_id, amount, currency, key_id } = res.data;
+
+                    // Dynamically load Razorpay checkout script
+                    await new Promise((resolve, reject) => {
+                      if (window.Razorpay) { resolve(); return; }
+                      const script = document.createElement('script');
+                      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+                      script.onload = resolve;
+                      script.onerror = () => reject(new Error('Failed to load Razorpay'));
+                      document.head.appendChild(script);
+                    });
+
+                    const rzp = new window.Razorpay({
+                      key:         key_id,
+                      amount,
+                      currency,
+                      order_id,
+                      name:        'Syrabit.ai',
+                      description: `${paymentPlan.charAt(0).toUpperCase() + paymentPlan.slice(1)} Plan`,
+                      image:       '/logo.png',
+                      prefill:     { email: user?.email || '' },
+                      theme:       { color: paymentPlan === 'pro' ? '#f59e0b' : '#7c3aed' },
+                      handler: async (response) => {
+                        try {
+                          const verifyRes = await apiClient().post('/payments/verify', {
+                            razorpay_order_id:   response.razorpay_order_id,
+                            razorpay_payment_id: response.razorpay_payment_id,
+                            razorpay_signature:  response.razorpay_signature,
+                            plan:                paymentPlan,
+                          });
+                          setShowPaymentModal(false);
+                          toast.success(verifyRes.data.message || 'Plan activated!', {
+                            description: `Your ${paymentPlan} plan is now active.`,
+                          });
+                          // Refresh profile to show updated plan + credits
+                          const [profileRes] = await Promise.all([
+                            apiClient().get('/user/profile'),
+                          ]);
+                          setProfile(profileRes.data);
+                        } catch {
+                          toast.error('Payment received but activation failed.', {
+                            description: 'Email admin@syrabit.ai with your payment ID: ' + response.razorpay_payment_id,
+                          });
+                        }
+                      },
+                      modal: {
+                        ondismiss: () => setPaymentLoading(false),
+                      },
+                    });
+                    rzp.open();
+                  } catch (err) {
+                    const msg = err?.response?.data?.detail || err?.message || 'Payment failed';
+                    toast.error(msg);
+                    setPaymentLoading(false);
+                  }
                 }}
-                className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98]"
+                className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                 style={{
                   background: paymentPlan === 'pro'
                     ? 'linear-gradient(135deg,#d97706,#f59e0b)'
@@ -909,8 +976,10 @@ export default function ProfilePage() {
                 }}
                 data-testid="payment-confirm-button"
               >
-                <Sparkles size={16} />
-                Proceed to Payment
+                {paymentLoading
+                  ? <><Loader2 size={16} className="animate-spin" /> Processing...</>
+                  : <><Sparkles size={16} /> Proceed to Payment</>
+                }
               </button>
 
               <p className="text-center text-xs text-muted-foreground/40">

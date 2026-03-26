@@ -1,9 +1,10 @@
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { PublicLayout } from '@/components/layout/PublicLayout';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Check, X, Zap, Trophy, Sparkles } from 'lucide-react';
 import { DOC_ACCESS_CONFIG } from '@/utils/plans';
+import { useAuth } from '@/context/AuthContext';
 
 const PLANS = [
   {
@@ -74,6 +75,18 @@ const PLANS = [
 ];
 
 export default function PricingPage() {
+  const { user } = useAuth();
+  const navigate = useNavigate();
+
+  const handlePlanCta = (plan) => {
+    if (plan.id === 'free') {
+      navigate(user ? '/chat' : '/signup');
+    } else {
+      // Logged-in users go to profile to pay; guests sign up first
+      navigate(user ? `/profile?upgrade=${plan.id}` : '/signup');
+    }
+  };
+
   return (
     <PublicLayout>
       <div className="min-h-screen bg-[#06060e] py-24 px-4">
@@ -157,18 +170,17 @@ export default function PricingPage() {
                   ))}
                 </ul>
 
-                <Link to={plan.ctaLink}>
-                  <Button
-                    className={`w-full ${
-                      plan.highlighted
-                        ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/25'
-                        : 'bg-white/8 hover:bg-white/12 text-white border border-white/15'
-                    }`}
-                    data-testid={`pricing-${plan.id}-cta-button`}
-                  >
-                    {plan.cta}
-                  </Button>
-                </Link>
+                <Button
+                  onClick={() => handlePlanCta(plan)}
+                  className={`w-full ${
+                    plan.highlighted
+                      ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/25'
+                      : 'bg-white/8 hover:bg-white/12 text-white border border-white/15'
+                  }`}
+                  data-testid={`pricing-${plan.id}-cta-button`}
+                >
+                  {plan.id !== 'free' && user ? `Upgrade — ${plan.price}` : plan.cta}
+                </Button>
               </div>
             );
           })}
