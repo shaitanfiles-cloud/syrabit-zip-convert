@@ -136,6 +136,7 @@ export default function AdminContentEditor({ adminToken }) {
   const [contentForm, setContentForm] = useState({ title: '', description: '', content: '', order: 1 });
   const [editTarget, setEditTarget] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [contentMode, setContentMode] = useState('write');
 
   const load = useCallback(async (bustCache = false) => {
     try {
@@ -354,15 +355,46 @@ export default function AdminContentEditor({ adminToken }) {
                 <div className="flex-1 flex flex-col min-h-0">
                   <div className="flex items-center justify-between mb-1.5">
                     <label className="text-sm text-white/60">Content (Markdown)</label>
-                    <span className="text-xs text-white/25">{contentForm.content.length} chars</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-xs text-white/25">{contentForm.content.length} chars</span>
+                      <div className="flex rounded-lg overflow-hidden border border-white/10">
+                        <button
+                          onClick={() => setContentMode('write')}
+                          className={`px-3 py-1 text-xs font-medium transition-colors ${contentMode === 'write' ? 'bg-violet-600 text-white' : 'bg-white/5 text-white/50 hover:text-white'}`}
+                        >
+                          Write
+                        </button>
+                        <button
+                          onClick={() => setContentMode('preview')}
+                          className={`px-3 py-1 text-xs font-medium transition-colors ${contentMode === 'preview' ? 'bg-violet-600 text-white' : 'bg-white/5 text-white/50 hover:text-white'}`}
+                        >
+                          Preview
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <textarea
-                    value={contentForm.content}
-                    onChange={(e) => setContentForm({ ...contentForm, content: e.target.value })}
-                    placeholder="Write chapter content in Markdown..."
-                    className="flex-1 w-full px-4 py-3 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 resize-none font-mono text-sm leading-relaxed"
-                    style={{ minHeight: '200px' }}
-                  />
+                  {contentMode === 'write' ? (
+                    <textarea
+                      value={contentForm.content}
+                      onChange={(e) => setContentForm({ ...contentForm, content: e.target.value })}
+                      placeholder="Write chapter content in Markdown..."
+                      className="flex-1 w-full px-4 py-3 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 resize-none font-mono text-sm leading-relaxed"
+                      style={{ minHeight: '200px' }}
+                    />
+                  ) : (
+                    <div
+                      className="flex-1 w-full px-6 py-4 rounded-xl bg-white/5 border border-white/10 overflow-y-auto md-content text-sm"
+                      style={{ minHeight: '200px' }}
+                    >
+                      {contentForm.content.trim() ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {contentForm.content}
+                        </ReactMarkdown>
+                      ) : (
+                        <p className="text-white/25 italic">Nothing to preview yet.</p>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-3 flex-shrink-0">
                   <button onClick={() => { setEditView(null); setEditTarget(null); }} className="flex-1 h-12 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium">Cancel</button>
