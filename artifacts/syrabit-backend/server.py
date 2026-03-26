@@ -2089,14 +2089,15 @@ _MODEL_ALIAS_MAP = {
 #  Gemini      gemini-2.0-flash-lite   — 30 RPM free, lowest latency Gemini
 #              gemini-2.0-flash        — 15 RPM free, higher quality
 #  Fireworks   deepseek-v3p2           — high-quality, pay-per-token (no hard RPM cap)
-#  Bedrock     amazon.nova-micro-v1:0  — 66.7 RPS / 33K TPS (highest on Bedrock), pay-per-token
+#  Bedrock     amazon.nova-micro-v1:0  — free tier: 30 RPM cap, lowest latency on Bedrock
+#                                        paid tier: 66.7 RPS / 33K TPS (no cap)
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "llama-3.3-70b-versatile",                           8),
     ("groq",        "llama-3.1-8b-instant",                              4),
     ("gemini",      "gemini-2.0-flash-lite",                            10),
     ("gemini",      "gemini-2.0-flash",                                  5),
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
-    ("bedrock",     "amazon.nova-micro-v1:0",                           20),
+    ("bedrock",     "amazon.nova-micro-v1:0",                            2),
 ]
 
 class _SmartKeyPool:
