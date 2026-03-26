@@ -2067,8 +2067,8 @@ _MODEL_ALIAS_MAP = {
 # Models chosen for HIGHEST RPS on their respective providers.
 # Multiple slots per provider = parallel streams up to max_concurrent each.
 #
-#  Groq        llama-3.1-8b-instant  — sub-second TTFT, 500K TPD, best Groq throughput
-#              llama-3.3-70b-versatile — quality slot, 30 RPM
+#  Groq        llama-3.3-70b-versatile — PRIMARY: quality + fast, 30 RPM
+#              llama-3.1-8b-instant  — fallback: sub-second TTFT, highest TPD
 #  Gemini      gemini-2.0-flash-lite  — 30 RPM free, lowest latency Gemini
 #              gemini-2.0-flash       — 15 RPM free, higher quality
 #  xAI         grok-3-fast            — xAI's fastest model, generous limits
@@ -2076,8 +2076,8 @@ _MODEL_ALIAS_MAP = {
 #              qwen2p5-72b-instruct   — second fast Fireworks slot
 #  Sarvam      sarvam-m               — Indian-language aware, backup
 _SLM_SLOT_CANDIDATES = [
-    ("groq",        "llama-3.1-8b-instant",                              8),
-    ("groq",        "llama-3.3-70b-versatile",                           4),
+    ("groq",        "llama-3.3-70b-versatile",                           8),
+    ("groq",        "llama-3.1-8b-instant",                              4),
     ("gemini",      "gemini-2.0-flash-lite",                            10),
     ("gemini",      "gemini-2.0-flash",                                  5),
     ("xai",         "grok-3-fast",                                       8),
