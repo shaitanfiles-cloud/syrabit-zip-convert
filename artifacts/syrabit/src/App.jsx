@@ -2,6 +2,7 @@ import "./App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
+import { initGA4 } from "@/utils/analytics";
 import { Toaster } from "@/components/ui/sonner";
 import { AuthProvider } from "@/context/AuthContext";
 import { AuthGuard } from "@/components/AuthGuard";
@@ -89,6 +90,9 @@ const PageFallback = () => (
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
+  // Initialise Google Analytics 4 once on mount (no-op if env var not set)
+  useEffect(() => { initGA4(); }, []);
+
   // Nuke Emergent badge completely — fast interval + all hiding properties
   useEffect(() => {
     const HIDE = [

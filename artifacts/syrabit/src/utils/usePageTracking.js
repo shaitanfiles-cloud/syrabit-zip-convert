@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useLocation } from 'react-router-dom';
 import axios from 'axios';
+import { Analytics } from './analytics';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -29,11 +30,15 @@ export function usePageTracking() {
     const visitorId = getOrCreateVisitorId();
     const referrer = document.referrer || null;
 
+    // 1. Internal analytics (MongoDB)
     axios.post(
       `${API_BASE}/analytics/page-view`,
       { path, visitor_id: visitorId, referrer },
       { withCredentials: true }
     ).catch(() => {});
+
+    // 2. PostHog + GA4 page view (via unified Analytics util)
+    Analytics.pageView(path, document.title);
   }, [location.pathname]);
 }
 

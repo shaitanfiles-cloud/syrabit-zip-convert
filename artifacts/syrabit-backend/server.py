@@ -5066,6 +5066,40 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
     
     visitor_stats = await get_visitor_stats()
 
+    # Top visited pages (last 7 days)
+    top_pages = []
+    try:
+        pipeline = [
+            {"$group": {"_id": "$path", "views": {"$sum": 1}, "unique": {"$addToSet": "$visitor_id"}}},
+            {"$project": {"path": "$_id", "views": 1, "unique_visitors": {"$size": "$unique"}, "_id": 0}},
+            {"$sort": {"views": -1}},
+            {"$limit": 15},
+        ]
+        top_pages = await db.page_views.aggregate(pipeline).to_list(15)
+    except Exception:
+        pass
+
+    # Referrer breakdown (last 7 days)
+    top_referrers = []
+    try:
+        ref_pipeline = [
+            {"$match": {"referrer": {"$ne": None, "$ne": ""}}},
+            {"$group": {"_id": "$referrer", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10},
+        ]
+        raw_refs = await db.page_views.aggregate(ref_pipeline).to_list(10)
+        for r in raw_refs:
+            if r.get("_id"):
+                from urllib.parse import urlparse
+                try:
+                    domain = urlparse(r["_id"]).netloc or r["_id"]
+                except Exception:
+                    domain = r["_id"]
+                top_referrers.append({"source": domain, "count": r["count"]})
+    except Exception:
+        pass
+
     return {
         "daily_signups": daily_signups,
         "plan_usage": plan_usage,
@@ -5073,6 +5107,8 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
         "total_users": len(users),
         "active_users": sum(1 for u in users if u.get("credits_used", 0) > 0),
         "visitor_stats": visitor_stats,
+        "top_pages": top_pages,
+        "top_referrers": top_referrers,
     }
 
 

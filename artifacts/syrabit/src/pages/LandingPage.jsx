@@ -315,7 +315,12 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen text-white overflow-x-hidden" style={{ background: '#06060e' }}>
-      <PageMeta />
+      <PageMeta
+        title="Syrabit.ai — AI-Powered AHSEC & Degree Exam Preparation for Assam Students"
+        description="Ace AHSEC Class 11-12 and Degree (B.Com, B.A, B.Sc) exams with Syrabit.ai. Instant AI tutor, syllabus-aligned notes, PYQs, MCQs — free to start. Trusted by 500+ Assam board students."
+        canonical="https://syrabit.ai/"
+        keywords="AHSEC exam preparation, Assam board Class 11 12 AI tutor, SEBA exam notes, Degree college study material, B.Com B.A B.Sc notes Assam, AHSEC 2025 preparation, AI study tool India, free exam prep app"
+      />
       <PublicNavbar />
 
       {/* ══════════════════════════════════════════
