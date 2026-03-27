@@ -1,10 +1,14 @@
 # Syrabit.ai — robots.txt
 User-agent: *
 Allow: /
+Allow: /api/seo/sitemap.xml
 Disallow: /admin/
 Disallow: /api/
 
-# Priority pages for AHSEC students
+# Dynamic sitemap (auto-generated from database — always fresh)
+Sitemap: https://syrabit.ai/api/seo/sitemap.xml
+
+# Static sitemap (core pages)
 Sitemap: https://syrabit.ai/sitemap.xml
 
 # Crawl-delay for polite crawling

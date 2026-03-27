@@ -52,6 +52,51 @@
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
+      "@type": "WebSite",
+      "@id": "https://syrabit.ai/#website",
+      "name": "Syrabit.ai",
+      "url": "https://syrabit.ai",
+      "description": "AI-powered exam preparation platform for AHSEC Class 11-12 and Degree students in Assam, India.",
+      "inLanguage": "en-IN",
+      "potentialAction": {
+        "@type": "SearchAction",
+        "target": {
+          "@type": "EntryPoint",
+          "urlTemplate": "https://syrabit.ai/library?q={search_term_string}"
+        },
+        "query-input": "required name=search_term_string"
+      }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "EducationalOrganization",
+      "@id": "https://syrabit.ai/#organization",
+      "name": "Syrabit.ai",
+      "url": "https://syrabit.ai",
+      "logo": {
+        "@type": "ImageObject",
+        "url": "https://syrabit.ai/icons/icon-192x192.png",
+        "width": 192,
+        "height": 192
+      },
+      "description": "AI-powered exam preparation for AHSEC (Class 11-12) and Degree students in Assam, India.",
+      "areaServed": { "@type": "State", "name": "Assam", "containedInPlace": { "@type": "Country", "name": "India" } },
+      "hasOfferCatalog": {
+        "@type": "OfferCatalog",
+        "name": "Study Plans",
+        "itemListElement": [
+          { "@type": "Offer", "name": "Free Plan", "price": "0", "priceCurrency": "INR" },
+          { "@type": "Offer", "name": "Starter Plan", "price": "99", "priceCurrency": "INR" },
+          { "@type": "Offer", "name": "Pro Plan", "price": "999", "priceCurrency": "INR" }
+        ]
+      }
+    }
+    </script>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
       "@type": "WebApplication",
       "name": "Syrabit.ai",
       "url": "https://syrabit.ai",
@@ -63,12 +108,7 @@
         { "@type": "Offer", "name": "Starter Plan", "price": "99", "priceCurrency": "INR" },
         { "@type": "Offer", "name": "Pro Plan", "price": "999", "priceCurrency": "INR" }
       ],
-      "provider": {
-        "@type": "Organization",
-        "name": "Syrabit.ai",
-        "url": "https://syrabit.ai",
-        "sameAs": ["https://syrabit.ai"]
-      },
+      "provider": { "@id": "https://syrabit.ai/#organization" },
       "aggregateRating": {
         "@type": "AggregateRating",
         "ratingValue": "4.8",

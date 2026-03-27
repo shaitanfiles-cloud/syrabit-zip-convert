@@ -4,9 +4,16 @@ export default function PageMeta({
   title,
   description,
   url,
-  image = "/og-default.png"
+  image = "https://syrabit.ai/opengraph.jpg",
+  keywords,
+  type = "website",
+  section,
+  tags,
+  publishedTime,
+  modifiedTime,
 }) {
   const siteName = "Syrabit.ai";
+  const absImage = image.startsWith("http") ? image : `https://syrabit.ai${image}`;
 
   return (
     <Helmet
@@ -15,21 +22,33 @@ export default function PageMeta({
       defaultTitle={siteName}
     >
       <meta name="description" content={description} />
+      {keywords && <meta name="keywords" content={keywords} />}
 
       <link rel="canonical" href={url} />
 
       {/* OpenGraph */}
+      <meta property="og:site_name" content={siteName} />
+      <meta property="og:locale" content="en_IN" />
       <meta property="og:title" content={title} />
       <meta property="og:description" content={description} />
-      <meta property="og:type" content="website" />
+      <meta property="og:type" content={type} />
       <meta property="og:url" content={url} />
-      <meta property="og:image" content={image} />
+      <meta property="og:image" content={absImage} />
+      <meta property="og:image:width" content="1200" />
+      <meta property="og:image:height" content="630" />
+      {type === "article" && section && <meta property="article:section" content={section} />}
+      {type === "article" && tags && tags.map((tag) => (
+        <meta key={tag} property="article:tag" content={tag} />
+      ))}
+      {type === "article" && publishedTime && <meta property="article:published_time" content={publishedTime} />}
+      {type === "article" && modifiedTime && <meta property="article:modified_time" content={modifiedTime} />}
 
       {/* Twitter */}
       <meta name="twitter:card" content="summary_large_image" />
+      <meta name="twitter:site" content="@SyrabitAI" />
       <meta name="twitter:title" content={title} />
       <meta name="twitter:description" content={description} />
-      <meta name="twitter:image" content={image} />
+      <meta name="twitter:image" content={absImage} />
     </Helmet>
   );
 }

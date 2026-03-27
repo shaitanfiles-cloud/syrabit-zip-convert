@@ -85,29 +85,83 @@ export default function SeoTopicPage() {
 
   useEffect(() => {
     if (!page) return;
-    const script = document.createElement('script');
-    script.type = 'application/ld+json';
-    script.id = 'seo-topic-jsonld';
-    script.text = JSON.stringify({
+    const pageUrl = `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}${currentType !== 'notes' ? `/${currentType}` : ''}`;
+
+    const articleSchema = {
       '@context': 'https://schema.org',
       '@type': 'Article',
       headline: page.title,
       description: page.meta_description,
       author: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
-      publisher: { '@type': 'Organization', name: 'Syrabit.ai' },
-      datePublished: page.generated_at,
-      dateModified: page.updated_at,
-      mainEntityOfPage: {
-        '@type': 'WebPage',
-        '@id': `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}${currentType !== 'notes' ? `/${currentType}` : ''}`,
+      publisher: {
+        '@type': 'Organization',
+        name: 'Syrabit.ai',
+        url: 'https://syrabit.ai',
+        logo: { '@type': 'ImageObject', url: 'https://syrabit.ai/icons/icon-192x192.png' },
       },
+      datePublished: page.generated_at,
+      dateModified: page.updated_at || page.generated_at,
+      image: 'https://syrabit.ai/opengraph.jpg',
+      mainEntityOfPage: { '@type': 'WebPage', '@id': pageUrl },
       educationalLevel: `${page.class_name || ''} ${page.board_name || ''}`.trim(),
       about: { '@type': 'Thing', name: page.topic_title },
+      isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
+      inLanguage: 'en-IN',
+    };
+
+    const breadcrumbSchema = {
+      '@context': 'https://schema.org',
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
+        { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
+        { '@type': 'ListItem', position: 3, name: page.subject_name || subjectSlug, item: `https://syrabit.ai/library` },
+        { '@type': 'ListItem', position: 4, name: page.chapter_title || chapterSlug },
+        { '@type': 'ListItem', position: 5, name: page.topic_title || topicSlug, item: pageUrl },
+      ],
+    };
+
+    const schemas = [articleSchema, breadcrumbSchema];
+
+    if (['important-questions', 'mcqs'].includes(currentType) && page.content) {
+      const lines = page.content.split('\n').filter(Boolean);
+      const questions = [];
+      let currentQ = null;
+      for (const line of lines) {
+        const stripped = line.replace(/^#+\s*/, '').replace(/^\*\*/, '').replace(/\*\*$/, '').trim();
+        if (line.match(/^[#*]/) && stripped.endsWith('?')) {
+          currentQ = stripped;
+        } else if (currentQ && stripped.length > 10) {
+          questions.push({ '@type': 'Question', name: currentQ, acceptedAnswer: { '@type': 'Answer', text: stripped } });
+          currentQ = null;
+          if (questions.length >= 10) break;
+        }
+      }
+      if (questions.length >= 3) {
+        schemas.push({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: questions });
+      }
+    }
+
+    ['seo-topic-jsonld', 'seo-topic-breadcrumb', 'seo-topic-faq'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.remove();
     });
-    const existing = document.getElementById('seo-topic-jsonld');
-    if (existing) existing.remove();
-    document.head.appendChild(script);
-    return () => { const el = document.getElementById('seo-topic-jsonld'); if (el) el.remove(); };
+
+    const ids = ['seo-topic-jsonld', 'seo-topic-breadcrumb', 'seo-topic-faq'];
+    schemas.forEach((schema, i) => {
+      const s = document.createElement('script');
+      s.type = 'application/ld+json';
+      s.id = ids[i];
+      s.text = JSON.stringify(schema);
+      document.head.appendChild(s);
+    });
+
+    return () => {
+      ['seo-topic-jsonld', 'seo-topic-breadcrumb', 'seo-topic-faq'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+      });
+    };
   }, [page, board, classSlug, subjectSlug, chapterSlug, topicSlug, currentType]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}`;
@@ -150,6 +204,12 @@ export default function SeoTopicPage() {
         title={page.title}
         description={page.meta_description}
         url={canonicalUrl}
+        type="article"
+        section={page.subject_name}
+        keywords={[page.topic_title, page.subject_name, page.chapter_title, page.board_name, page.class_name, 'exam prep', 'study notes'].filter(Boolean).join(', ')}
+        tags={[page.topic_title, page.subject_name, page.board_name].filter(Boolean)}
+        publishedTime={page.generated_at}
+        modifiedTime={page.updated_at || page.generated_at}
       />
 
       <div className="max-w-4xl mx-auto px-4 py-6">

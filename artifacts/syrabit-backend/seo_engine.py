@@ -12,6 +12,7 @@ URL pattern:
 """
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
@@ -654,7 +655,7 @@ async def get_related_topics(topic_slug: str, chapter_id: Optional[str] = None, 
     }
 
 
-# ─── PUBLIC: Sitemap entries ────────────────────────────────────────────────
+# ─── PUBLIC: Sitemap entries (JSON) ─────────────────────────────────────────
 
 @router.get("/sitemap-entries")
 async def get_sitemap_entries():
@@ -675,6 +676,63 @@ async def get_sitemap_entries():
         })
 
     return {"entries": entries, "total": len(entries)}
+
+
+# ─── PUBLIC: Dynamic sitemap XML ────────────────────────────────────────────
+
+CORE_URLS = [
+    ("https://syrabit.ai/", "weekly", "1.0"),
+    ("https://syrabit.ai/pricing", "monthly", "0.8"),
+    ("https://syrabit.ai/signup", "monthly", "0.9"),
+    ("https://syrabit.ai/library", "weekly", "0.9"),
+    ("https://syrabit.ai/exam-routine", "weekly", "0.8"),
+    ("https://syrabit.ai/terms", "yearly", "0.3"),
+    ("https://syrabit.ai/privacy", "yearly", "0.3"),
+]
+
+@router.get("/sitemap.xml", response_class=Response)
+async def get_dynamic_sitemap():
+    BASE = "https://syrabit.ai"
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>']
+    lines.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"'
+                 ' xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">')
+
+    for loc, freq, pri in CORE_URLS:
+        lines.append(f"  <url><loc>{loc}</loc><changefreq>{freq}</changefreq>"
+                     f"<priority>{pri}</priority><lastmod>{today}</lastmod></url>")
+
+    pages = []
+    try:
+        pages = await _db.seo_pages.find(
+            {"status": "published"},
+            {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1,
+             "chapter_slug": 1, "topic_slug": 1, "page_type": 1, "updated_at": 1},
+        ).to_list(50000)
+    except Exception:
+        pass
+
+    seen_topics = set()
+    for p in pages:
+        base_path = (f"/{p['board_slug']}/{p['class_slug']}/{p['subject_slug']}"
+                     f"/{p['chapter_slug']}/{p['topic_slug']}")
+        path = base_path if p["page_type"] == "notes" else f"{base_path}/{p['page_type']}"
+        loc = f"{BASE}{path}"
+        pri = "0.8" if p["page_type"] == "notes" else "0.7"
+        try:
+            raw = p.get("updated_at", "")
+            lastmod = raw[:10] if raw else today
+        except Exception:
+            lastmod = today
+        lines.append(f"  <url><loc>{loc}</loc><changefreq>monthly</changefreq>"
+                     f"<priority>{pri}</priority><lastmod>{lastmod}</lastmod></url>")
+        seen_topics.add(base_path)
+
+    lines.append("</urlset>")
+    xml = "\n".join(lines)
+    return Response(content=xml, media_type="application/xml; charset=utf-8",
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 # ─── PUBLIC: Browse by subject ──────────────────────────────────────────────
