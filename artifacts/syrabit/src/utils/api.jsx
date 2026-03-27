@@ -120,6 +120,44 @@ export const getSeoPageTypes = (board, classSlug, subjectSlug, chapterSlug, topi
 export const getSeoRelated = (topicSlug) =>
   axios.get(`${API_BASE}/seo/related/${topicSlug}`);
 
+// ── Admin SEO management ──────────────────────────────────────────────────────
+
+export const adminSeoStats = (token) =>
+  axios.get(`${API_BASE}/seo/stats`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoListTopics = (token, params = {}) =>
+  axios.get(`${API_BASE}/seo/topics`, { headers: adminHeaders(token), withCredentials: true, params });
+
+export const adminSeoCreateTopic = (token, data) =>
+  axios.post(`${API_BASE}/seo/topics`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoUpdateTopic = (token, topicId, data) =>
+  axios.patch(`${API_BASE}/seo/topics/${topicId}`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoDeleteTopic = (token, topicId) =>
+  axios.delete(`${API_BASE}/seo/topics/${topicId}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoExtractTopics = (token, subjectId) =>
+  axios.post(`${API_BASE}/seo/extract-topics`, subjectId ? { subject_id: subjectId } : {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoGenerate = (token, data) =>
+  axios.post(`${API_BASE}/seo/generate`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoListPages = (token, params = {}) =>
+  axios.get(`${API_BASE}/seo/pages`, { headers: adminHeaders(token), withCredentials: true, params });
+
+export const adminSeoUpdatePageStatus = (token, pageId, status) =>
+  axios.patch(`${API_BASE}/seo/pages/${pageId}/status`, null, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { status },
+  });
+
+export const adminSeoRegenerateSitemap = (token) =>
+  axios.post(`${API_BASE}/admin/content/regenerate-sitemap`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+// ── Payments (excluded from current build) ───────────────────────────────────
+
 export const createPaymentOrder = (plan) =>
   axios.post(`${API_BASE}/payments/create-order`, { plan }, authConfig());
 

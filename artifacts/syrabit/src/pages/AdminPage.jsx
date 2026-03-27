@@ -9,7 +9,7 @@ import {
   LayoutDashboard, GitBranch, FolderTree, PenTool, Users,
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
-  ChevronLeft, ChevronRight, Loader2, FileText,
+  ChevronLeft, ChevronRight, Loader2, FileText, Globe,
 } from 'lucide-react';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
@@ -30,6 +30,7 @@ import AdminSettings         from '@/components/admin/AdminSettings';
 import AdminRateLimits       from '@/components/admin/AdminRateLimits';
 import AdminActivityLog      from '@/components/admin/AdminActivityLog';
 import AdminHealth           from '@/components/admin/AdminHealth';
+import AdminSeoManager       from '@/components/admin/AdminSeoManager';
 
 // ── Section registry ──────────────────────────────────────────────────────────
 const SECTIONS = [
@@ -37,6 +38,7 @@ const SECTIONS = [
   { id: 'roadmap',       icon: GitBranch,       label: 'Roadmap',           group: 'main'     },
   { id: 'syllabus',      icon: FolderTree,      label: 'Syllabus',          group: 'content'  },
   { id: 'content',       icon: PenTool,         label: 'Content Editor',    group: 'content'  },
+  { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
   { id: 'conversations', icon: MessageSquare,   label: 'Conversations',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
@@ -66,6 +68,7 @@ const SECTION_COMPONENTS = {
   roadmap:       AdminRoadmap,
   syllabus:      AdminSyllabus,
   content:       AdminContentEditor,
+  seomanager:    AdminSeoManager,
   users:         AdminUsers,
   conversations: AdminConversations,
   analytics:     AdminAnalytics,

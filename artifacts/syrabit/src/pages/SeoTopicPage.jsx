@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
+import { Analytics } from '@/utils/analytics';
 import { BookOpen, ChevronRight, ArrowLeft, ArrowRight, FileText, HelpCircle,
   Calculator, BookMarked, Home, Sparkles, GraduationCap, Lightbulb } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -73,6 +74,7 @@ export default function SeoTopicPage() {
         setPage(pageRes.data);
         setPageTypes(typesRes.data || []);
         setRelated(relatedRes.data || { related: [], prev: null, next: null });
+        try { Analytics.seoPageView(board, classSlug, subjectSlug, topicSlug, currentType); } catch {}
       })
       .catch((err) => {
         if (cancelled) return;

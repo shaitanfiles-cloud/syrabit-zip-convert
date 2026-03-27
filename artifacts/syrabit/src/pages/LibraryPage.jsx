@@ -11,6 +11,7 @@ import {
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import PageMeta from '@/components/seo/PageMeta';
+import { Analytics } from '@/utils/analytics';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/context/AuthContext';
 import {
@@ -178,6 +179,7 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
     navigator.clipboard.writeText(shareUrl).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+      try { Analytics.subjectShared(sub.name, shareUrl); } catch {}
     });
   };
 
@@ -417,7 +419,7 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
         <div className="grid grid-cols-4 gap-1.5 pt-1">
           {/* Save / Unsave */}
           <button
-            onClick={() => onToggleSave(sub.id)}
+            onClick={() => { onToggleSave(sub.id); try { Analytics.subjectBookmarked(sub.name, !isSaved); } catch {} }}
             aria-label={isSaved ? `Unsave ${sub.name}` : `Save ${sub.name}`}
             className="flex items-center justify-center gap-1 h-10 rounded-xl text-xs font-medium transition-all duration-200 active:scale-95"
             style={
@@ -443,7 +445,7 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
 
           {/* Ask AI — gradient button */}
           <button
-            onClick={() => onAskAI(sub.id, hasDocument)}
+            onClick={() => onAskAI(sub.id, hasDocument, sub.name)}
             aria-label={`Ask AI about ${sub.name}`}
             className="flex items-center justify-center gap-1 h-10 rounded-xl text-xs font-semibold text-white transition-all duration-200 hover:opacity-90 hover:shadow-lg active:scale-95"
             style={{
@@ -601,10 +603,12 @@ export default function LibraryPage() {
 
   // ── Handlers (memoized to avoid re-creating on every render) ───────────────
   const handleOpen = useCallback((sub) => {
+    try { Analytics.subjectOpened(sub.id, sub.name); } catch {}
     navigate(`/subject/${sub.id}`);
   }, [navigate]);
 
-  const handleAskAI = useCallback((subjectId, hasDocument = false) => {
+  const handleAskAI = useCallback((subjectId, hasDocument = false, subjectName = '') => {
+    try { Analytics.chatStart(subjectId, subjectName, 'openai/gpt-oss-20b'); } catch {}
     const params = new URLSearchParams({ subject: subjectId });
     if (hasDocument) params.set('document_id', subjectId);
     navigate(`/chat?${params.toString()}`);
