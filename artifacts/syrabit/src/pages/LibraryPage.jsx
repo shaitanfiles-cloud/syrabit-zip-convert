@@ -6,6 +6,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import {
   Search, Bookmark, BookmarkCheck,
   BookOpen, Layers, ChevronRight, Sparkles, FileText,
+  Share2, Copy, Check as CheckIcon, X as XIcon,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
@@ -163,6 +164,22 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
       : null,
     [sub.boardSlug, sub.classSlug, sub.streamSlug, sub.slug]
   );
+
+  // ── Share state ────────────────────────────────────────────────────────────
+  const [showShare, setShowShare] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const shareUrl = useMemo(() => {
+    const path = seoPath || `/subject/${sub.id}`;
+    return `${window.location.origin}${path}`;
+  }, [seoPath, sub.id]);
+
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(shareUrl).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   return (
     <div
@@ -350,13 +367,59 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
           </Link>
         )}
 
-        {/* Action buttons — 3 equal columns */}
-        <div className="grid grid-cols-3 gap-2 pt-1">
+        {/* Share URL panel — slides in above buttons when Share is active */}
+        {showShare && (
+          <div
+            className="rounded-xl px-3 py-2.5 flex items-center gap-2"
+            style={{
+              background: 'rgba(139,92,246,0.07)',
+              border: '1px solid rgba(139,92,246,0.22)',
+            }}
+          >
+            {/* URL text */}
+            <span
+              className="flex-1 text-xs text-muted-foreground truncate font-mono select-all"
+              title={shareUrl}
+            >
+              {shareUrl}
+            </span>
+
+            {/* Copy button */}
+            <button
+              onClick={handleCopyLink}
+              aria-label="Copy link"
+              className="flex-shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 active:scale-95"
+              style={
+                copied
+                  ? { color: '#10b981', background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.30)' }
+                  : { color: 'hsl(var(--primary))', background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.25)' }
+              }
+              data-testid="share-copy-button"
+            >
+              {copied
+                ? <><CheckIcon size={12} /> Copied!</>
+                : <><Copy size={12} /> Copy</>
+              }
+            </button>
+
+            {/* Close */}
+            <button
+              onClick={() => setShowShare(false)}
+              aria-label="Close share"
+              className="flex-shrink-0 p-1 rounded-lg text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+            >
+              <XIcon size={13} />
+            </button>
+          </div>
+        )}
+
+        {/* Action buttons — 4 equal columns */}
+        <div className="grid grid-cols-4 gap-1.5 pt-1">
           {/* Save / Unsave */}
           <button
             onClick={() => onToggleSave(sub.id)}
             aria-label={isSaved ? `Unsave ${sub.name}` : `Save ${sub.name}`}
-            className="flex items-center justify-center gap-1.5 h-10 rounded-xl text-sm font-medium transition-all duration-200 active:scale-95"
+            className="flex items-center justify-center gap-1 h-10 rounded-xl text-xs font-medium transition-all duration-200 active:scale-95"
             style={
               isSaved
                 ? { color: 'hsl(var(--primary))', background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.30)' }
@@ -367,11 +430,11 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
             {isSaved ? 'Saved' : 'Save'}
           </button>
 
-          {/* Open - Goes to subject page */}
+          {/* Open */}
           <button
             onClick={() => onOpen(sub)}
             aria-label={`Open ${sub.name}`}
-            className="flex items-center justify-center gap-1.5 h-10 rounded-xl text-sm font-medium transition-all duration-200 active:scale-95"
+            className="flex items-center justify-center gap-1 h-10 rounded-xl text-xs font-medium transition-all duration-200 active:scale-95"
             style={{ color: 'hsl(var(--muted-foreground))', background: 'transparent', border: '1px solid rgba(139,92,246,0.15)' }}
             data-testid="subject-open-button"
           >
@@ -382,7 +445,7 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
           <button
             onClick={() => onAskAI(sub.id, hasDocument)}
             aria-label={`Ask AI about ${sub.name}`}
-            className="flex items-center justify-center gap-1.5 h-10 rounded-xl text-sm font-semibold text-white transition-all duration-200 hover:opacity-90 hover:shadow-lg active:scale-95"
+            className="flex items-center justify-center gap-1 h-10 rounded-xl text-xs font-semibold text-white transition-all duration-200 hover:opacity-90 hover:shadow-lg active:scale-95"
             style={{
               background: hasDocument
                 ? 'linear-gradient(135deg, #059669, #10b981)'
@@ -394,6 +457,22 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
             data-testid="subject-ask-ai-button"
           >
             Ask AI
+          </button>
+
+          {/* Share */}
+          <button
+            onClick={() => { setShowShare((v) => !v); setCopied(false); }}
+            aria-label={`Share ${sub.name}`}
+            className="flex items-center justify-center gap-1 h-10 rounded-xl text-xs font-medium transition-all duration-200 active:scale-95"
+            style={
+              showShare
+                ? { color: 'hsl(var(--primary))', background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.30)' }
+                : { color: 'hsl(var(--muted-foreground))', background: 'transparent', border: '1px solid rgba(139,92,246,0.15)' }
+            }
+            data-testid="subject-share-button"
+          >
+            <Share2 size={13} />
+            Share
           </button>
         </div>
       </div>
