@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
-import { BookOpen, ChevronRight, ArrowLeft, ArrowRight, FileText, HelpCircle, Calculator, BookMarked, Home } from 'lucide-react';
+import { BookOpen, ChevronRight, ArrowLeft, ArrowRight, FileText, HelpCircle,
+  Calculator, BookMarked, Home, Sparkles, GraduationCap, Lightbulb } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getSeoPage, getSeoPageTypes, getSeoRelated } from '@/utils/api';
@@ -16,8 +17,7 @@ const PAGE_TYPE_META = {
 
 function sanitizeHtml(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  const scripts = doc.querySelectorAll('script, iframe, object, embed, form');
-  scripts.forEach((el) => el.remove());
+  doc.querySelectorAll('script, iframe, object, embed, form').forEach((el) => el.remove());
   doc.querySelectorAll('*').forEach((el) => {
     for (const attr of [...el.attributes]) {
       if (attr.name.startsWith('on') || attr.value.trim().toLowerCase().startsWith('javascript:')) {
@@ -35,7 +35,7 @@ function renderMarkdown(text) {
     .replace(/^#### (.+)$/gm, '<h4 class="text-base font-semibold text-white mt-5 mb-2">$1</h4>')
     .replace(/^### (.+)$/gm, '<h3 class="text-lg font-semibold text-white mt-6 mb-2">$1</h3>')
     .replace(/^## (.+)$/gm, '<h2 class="text-xl font-bold text-white mt-8 mb-3 pb-2 border-b border-white/10">$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1 class="text-2xl font-bold text-white mt-8 mb-4">$1</h1>')
+    .replace(/^# (.+)$/gm, '<h2 class="text-2xl font-bold text-white mt-8 mb-4">$1</h2>')
     .replace(/\*\*(.+?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/^---$/gm, '<hr class="border-white/10 my-6" />')
@@ -115,7 +115,7 @@ export default function SeoTopicPage() {
       itemListElement: [
         { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
         { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
-        { '@type': 'ListItem', position: 3, name: page.subject_name || subjectSlug, item: `https://syrabit.ai/library` },
+        { '@type': 'ListItem', position: 3, name: page.subject_name || subjectSlug, item: 'https://syrabit.ai/library' },
         { '@type': 'ListItem', position: 4, name: page.chapter_title || chapterSlug },
         { '@type': 'ListItem', position: 5, name: page.topic_title || topicSlug, item: pageUrl },
       ],
@@ -129,9 +129,8 @@ export default function SeoTopicPage() {
       let currentQ = null;
       for (const line of lines) {
         const stripped = line.replace(/^#+\s*/, '').replace(/^\*\*/, '').replace(/\*\*$/, '').trim();
-        if (line.match(/^[#*]/) && stripped.endsWith('?')) {
-          currentQ = stripped;
-        } else if (currentQ && stripped.length > 10) {
+        if (line.match(/^[#*]/) && stripped.endsWith('?')) { currentQ = stripped; }
+        else if (currentQ && stripped.length > 10) {
           questions.push({ '@type': 'Question', name: currentQ, acceptedAnswer: { '@type': 'Answer', text: stripped } });
           currentQ = null;
           if (questions.length >= 10) break;
@@ -146,7 +145,6 @@ export default function SeoTopicPage() {
       const el = document.getElementById(id);
       if (el) el.remove();
     });
-
     const ids = ['seo-topic-jsonld', 'seo-topic-breadcrumb', 'seo-topic-faq'];
     schemas.forEach((schema, i) => {
       const s = document.createElement('script');
@@ -155,7 +153,6 @@ export default function SeoTopicPage() {
       s.text = JSON.stringify(schema);
       document.head.appendChild(s);
     });
-
     return () => {
       ['seo-topic-jsonld', 'seo-topic-breadcrumb', 'seo-topic-faq'].forEach((id) => {
         const el = document.getElementById(id);
@@ -197,6 +194,8 @@ export default function SeoTopicPage() {
   }
 
   const typeMeta = PAGE_TYPE_META[currentType] || PAGE_TYPE_META['notes'];
+  const boardShort = (page.board_name || board).toUpperCase();
+  const pageTypeLabel = currentType === 'notes' ? 'Notes' : currentType === 'important-questions' ? 'Important Questions for Board Exam' : currentType === 'mcqs' ? 'MCQ Practice' : currentType === 'definition' ? 'Definition & Meaning' : 'Examples & Solutions';
 
   return (
     <div className="min-h-screen bg-[#0a0a1a] text-white">
@@ -206,7 +205,20 @@ export default function SeoTopicPage() {
         url={canonicalUrl}
         type="article"
         section={page.subject_name}
-        keywords={[page.topic_title, page.subject_name, page.chapter_title, page.board_name, page.class_name, 'exam prep', 'study notes'].filter(Boolean).join(', ')}
+        keywords={[
+          page.topic_title,
+          `${page.topic_title} notes`,
+          `${page.topic_title} ${boardShort}`,
+          `${page.topic_title} ${page.class_name}`,
+          `${page.topic_title} important questions`,
+          page.subject_name,
+          page.chapter_title,
+          page.board_name,
+          page.class_name,
+          'board exam preparation',
+          'study notes',
+          'AHSEC', 'SEBA',
+        ].filter(Boolean).join(', ')}
         tags={[page.topic_title, page.subject_name, page.board_name].filter(Boolean)}
         publishedTime={page.generated_at}
         modifiedTime={page.updated_at || page.generated_at}
@@ -214,6 +226,7 @@ export default function SeoTopicPage() {
 
       <div className="max-w-4xl mx-auto px-4 py-6">
 
+        {/* Breadcrumb */}
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-gray-400 mb-6 flex-wrap">
           <Link to="/" className="hover:text-purple-400 transition-colors flex items-center gap-1">
             <Home size={14} aria-hidden="true" /> Home
@@ -228,39 +241,39 @@ export default function SeoTopicPage() {
           <span className="text-white font-medium">{page.topic_title}</span>
         </nav>
 
+        {/* Title block */}
         <div className="mb-6">
           <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <Badge variant="outline" className="text-xs text-purple-400 border-purple-500/30">
-              {page.board_name}
-            </Badge>
-            <Badge variant="outline" className="text-xs text-blue-400 border-blue-500/30">
-              {page.class_name}
-            </Badge>
-            <Badge variant="outline" className="text-xs text-emerald-400 border-emerald-500/30">
-              {page.subject_name}
-            </Badge>
+            <Badge variant="outline" className="text-xs text-purple-400 border-purple-500/30">{page.board_name}</Badge>
+            <Badge variant="outline" className="text-xs text-blue-400 border-blue-500/30">{page.class_name}</Badge>
+            <Badge variant="outline" className="text-xs text-emerald-400 border-emerald-500/30">{page.subject_name}</Badge>
           </div>
           <h1 className="text-2xl md:text-3xl font-bold text-white leading-tight">
-            {page.topic_title} — {page.board_name} {page.class_name} {page.subject_name}
+            {page.topic_title} — {pageTypeLabel}
           </h1>
-          <p className="text-gray-400 mt-2 text-sm">
-            {page.chapter_title} &middot; {page.word_count} words &middot; Updated {new Date(page.updated_at).toLocaleDateString()}
+          <p className="text-gray-400 mt-1 text-sm">
+            {page.subject_name} &middot; {page.chapter_title} &middot; {boardShort} {page.class_name}
+          </p>
+          <p className="text-gray-500 text-xs mt-1">
+            {page.word_count} words &middot; Updated {new Date(page.updated_at || page.generated_at || Date.now()).toLocaleDateString('en-IN')}
           </p>
         </div>
 
+        {/* Content type tabs */}
         <div className="flex gap-2 mb-8 overflow-x-auto pb-2" role="tablist" aria-label="Content type tabs">
           {Object.entries(PAGE_TYPE_META).map(([type, meta]) => {
             const available = pageTypes.some((p) => p.page_type === type);
             const Icon = meta.icon;
             const isActive = currentType === type;
             const linkPath = type === 'notes' ? basePath : `${basePath}/${type}`;
-
+            const ariaLabel = `${meta.label} for ${page.topic_title}`;
             return available ? (
               <Link
                 key={type}
                 to={linkPath}
                 role="tab"
                 aria-selected={isActive}
+                aria-label={ariaLabel}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${
                   isActive
                     ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/20'
@@ -271,10 +284,7 @@ export default function SeoTopicPage() {
                 {meta.label}
               </Link>
             ) : (
-              <span
-                key={type}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap bg-white/[0.02] text-gray-600 cursor-not-allowed"
-              >
+              <span key={type} className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap bg-white/[0.02] text-gray-600 cursor-not-allowed">
                 <Icon size={14} aria-hidden="true" />
                 {meta.label}
               </span>
@@ -282,20 +292,76 @@ export default function SeoTopicPage() {
           })}
         </div>
 
+        {/* Main content */}
         <article className="prose prose-invert max-w-none bg-white/[0.03] rounded-2xl border border-white/5 p-6 md:p-8">
           <div dangerouslySetInnerHTML={{ __html: renderMarkdown(page.content) }} />
         </article>
 
+        {/* Board exam tips section */}
+        <div className="mt-6 bg-amber-500/5 border border-amber-500/15 rounded-2xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Lightbulb size={16} className="text-amber-400" aria-hidden="true" />
+            <h2 className="text-white font-semibold text-base">
+              {boardShort} Board Exam Tips for {page.topic_title}
+            </h2>
+          </div>
+          <ul className="space-y-1.5 text-gray-400 text-sm">
+            <li className="flex items-start gap-2">
+              <span className="text-amber-400 mt-0.5">•</span>
+              <span>This topic is part of <strong className="text-gray-300">{page.chapter_title}</strong> in {boardShort} {page.class_name} {page.subject_name} syllabus.</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-amber-400 mt-0.5">•</span>
+              <span>Study the <Link to={`${basePath}/important-questions`} className="text-purple-400 hover:underline">important questions for {page.topic_title}</Link> and <Link to={`${basePath}/mcqs`} className="text-purple-400 hover:underline">MCQs</Link> to prepare for your {boardShort} exam.</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-amber-400 mt-0.5">•</span>
+              <span>Use the <Link to="/chat" className="text-purple-400 hover:underline">AI Chat</Link> to ask any question about {page.topic_title} and get instant, syllabus-aligned answers.</span>
+            </li>
+          </ul>
+        </div>
+
+        {/* Explore other content types for this topic */}
+        <div className="mt-6 bg-white/[0.025] border border-white/5 rounded-2xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <GraduationCap size={16} className="text-blue-400" aria-hidden="true" />
+            <h2 className="text-white font-semibold text-base">
+              More Study Material for {page.topic_title}
+            </h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {[
+              { type: 'notes',               label: `${page.topic_title} Notes` },
+              { type: 'definition',          label: `${page.topic_title} Definition` },
+              { type: 'important-questions', label: `${page.topic_title} Important Questions` },
+              { type: 'mcqs',                label: `${page.topic_title} MCQs` },
+              { type: 'examples',            label: `${page.topic_title} Examples` },
+            ].filter(({ type }) => type !== currentType && pageTypes.some(p => p.page_type === type)).map(({ type, label }) => (
+              <Link
+                key={type}
+                to={type === 'notes' ? basePath : `${basePath}/${type}`}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-sm text-gray-400 hover:text-white"
+                aria-label={label}
+              >
+                {PAGE_TYPE_META[type]?.icon && (() => { const Icon = PAGE_TYPE_META[type].icon; return <Icon size={12} aria-hidden="true" />; })()}
+                <span className="truncate">{PAGE_TYPE_META[type]?.label}</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+
+        {/* Prev/Next navigation */}
         {(related.prev || related.next) && (
           <div className="flex justify-between items-center mt-8 gap-4">
             {related.prev ? (
               <Link
                 to={related.prev.seo_path || '#'}
+                aria-label={`Previous topic: ${related.prev.title}`}
                 className="flex items-center gap-2 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-sm text-gray-300 hover:text-white group"
               >
                 <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform" aria-hidden="true" />
                 <div className="text-left">
-                  <div className="text-xs text-gray-500">Previous</div>
+                  <div className="text-xs text-gray-500">Previous Topic</div>
                   <div className="font-medium">{related.prev.title}</div>
                 </div>
               </Link>
@@ -303,10 +369,11 @@ export default function SeoTopicPage() {
             {related.next ? (
               <Link
                 to={related.next.seo_path || '#'}
+                aria-label={`Next topic: ${related.next.title}`}
                 className="flex items-center gap-2 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors text-sm text-gray-300 hover:text-white group text-right"
               >
                 <div>
-                  <div className="text-xs text-gray-500">Next</div>
+                  <div className="text-xs text-gray-500">Next Topic</div>
                   <div className="font-medium">{related.next.title}</div>
                 </div>
                 <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform" aria-hidden="true" />
@@ -315,36 +382,72 @@ export default function SeoTopicPage() {
           </div>
         )}
 
+        {/* Related topics — keyword-rich anchor text */}
         {related.related?.length > 0 && (
           <div className="mt-8 bg-white/[0.03] rounded-2xl border border-white/5 p-6">
-            <h2 className="text-lg font-bold text-white mb-4">Related Topics</h2>
+            <div className="flex items-center gap-2 mb-4">
+              <BookOpen size={16} className="text-purple-400" aria-hidden="true" />
+              <h2 className="text-lg font-bold text-white">
+                Related {page.subject_name} Topics — {boardShort} {page.class_name}
+              </h2>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {related.related.map((t) => (
                 <Link
                   key={t.id}
                   to={t.seo_path || '#'}
+                  aria-label={`${t.title} — ${boardShort} ${page.class_name} ${page.subject_name} Notes`}
                   className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors group"
                 >
-                  <BookOpen size={16} className="text-purple-400" aria-hidden="true" />
-                  <div>
-                    <div className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors">{t.title}</div>
+                  <BookOpen size={16} className="text-purple-400 flex-shrink-0" aria-hidden="true" />
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-gray-200 group-hover:text-white transition-colors truncate">
+                      {t.title}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {page.subject_name} &middot; {boardShort}
+                    </div>
                   </div>
-                  <ChevronRight size={14} className="ml-auto text-gray-600 group-hover:text-gray-400" aria-hidden="true" />
+                  <ChevronRight size={14} className="ml-auto text-gray-600 group-hover:text-gray-400 flex-shrink-0" aria-hidden="true" />
                 </Link>
               ))}
             </div>
           </div>
         )}
 
-        <div className="mt-8 text-center">
+        {/* AI CTA */}
+        <div className="mt-8 bg-violet-600/10 border border-violet-500/20 rounded-2xl p-6 flex flex-col sm:flex-row items-center gap-4">
+          <div className="flex-1 text-center sm:text-left">
+            <div className="flex items-center gap-2 justify-center sm:justify-start mb-1">
+              <Sparkles size={16} className="text-violet-400" aria-hidden="true" />
+              <span className="text-violet-400 text-sm font-medium">Study with AI</span>
+            </div>
+            <p className="text-gray-300 text-sm">
+              Got questions about <strong className="text-white">{page.topic_title}</strong>? Ask our AI tutor for instant, {boardShort}-aligned answers.
+            </p>
+          </div>
           <Link
-            to="/library"
-            className="inline-flex items-center gap-2 px-6 py-3 bg-purple-600/20 hover:bg-purple-600/30 text-purple-400 rounded-xl transition-colors text-sm font-medium"
+            to="/chat"
+            className="flex-shrink-0 px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-sm font-medium transition-colors whitespace-nowrap"
           >
-            <BookOpen size={16} aria-hidden="true" />
-            Explore More Subjects
+            Ask AI Tutor
           </Link>
         </div>
+
+        {/* Footer nav */}
+        <nav className="mt-8 pt-6 border-t border-white/5" aria-label="Site navigation">
+          <div className="flex flex-wrap gap-3 justify-center text-xs text-gray-500">
+            <Link to="/" className="hover:text-purple-400 transition-colors">Home</Link>
+            <Link to="/library" className="hover:text-purple-400 transition-colors">Study Library</Link>
+            <Link to="/pricing" className="hover:text-purple-400 transition-colors">Plans &amp; Pricing</Link>
+            <Link to="/signup" className="hover:text-purple-400 transition-colors">Get Started Free</Link>
+            <Link to="/chat" className="hover:text-purple-400 transition-colors">AI Tutor</Link>
+          </div>
+          <p className="text-center text-xs text-gray-600 mt-3">
+            Syrabit.ai — AI-powered exam prep for Assam Board students · {boardShort} · SEBA · AHSEC · Degree College
+          </p>
+        </nav>
+
       </div>
     </div>
   );
