@@ -421,8 +421,14 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "examples": "Solved Examples",
     }
 
-    grade_match = re.search(r'\d+', class_name)
-    grade_str = f"Class {grade_match.group()}" if grade_match else class_name
+    # "HS 1st Year" → "Class 11", "HS 2nd Year" → "Class 12"; plain digit fallback
+    _ord_match = re.search(r'(\d+)(st|nd|rd|th)\s*year', class_name, re.IGNORECASE)
+    if _ord_match:
+        _n = int(_ord_match.group(1))
+        grade_str = f"Class {10 + _n}" if _n <= 2 else f"Class {_n}"
+    else:
+        grade_match = re.search(r'\d+', class_name)
+        grade_str = f"Class {grade_match.group()}" if grade_match else class_name
 
     h = hierarchy
     title = f"{topic['title']} {type_title_labels.get(page_type, page_type.title())} – {board_name} {grade_str} {subject_name}"
@@ -1231,9 +1237,15 @@ async def generate_pilot_content(
     if not board:
         raise HTTPException(status_code=404, detail=f"Board '{board_name}' not found")
 
+    # Try exact regex on name first, then fall back to searching description
+    # (DB stores "HS 1st Year" with description "Class 11 — AHSEC")
     cls = await _db.classes.find_one(
         {"board_id": board["id"], "name": {"$regex": class_name, "$options": "i"}}, {"_id": 0}
     )
+    if not cls:
+        cls = await _db.classes.find_one(
+            {"board_id": board["id"], "description": {"$regex": class_name, "$options": "i"}}, {"_id": 0}
+        )
     if not cls:
         raise HTTPException(status_code=404, detail=f"Class '{class_name}' not found under {board_name}")
 
@@ -1429,9 +1441,10 @@ async def _auto_run_bg(job_id: str, page_types: list):
             try:
                 hierarchy = await _resolve_hierarchy(topic)
                 if not hierarchy:
-                    errors += len(page_types)
+                    logger.warning(f"Auto-run: no hierarchy for topic {topic.get('id')} (chapter_id={topic.get('chapter_id')}) — skipping")
+                    skipped += len(page_types)
                     done += len(page_types)
-                    _job_update(job_id, done=done, errors=errors)
+                    _job_update(job_id, done=done, skipped=skipped)
                     continue
 
                 for pt in page_types:
