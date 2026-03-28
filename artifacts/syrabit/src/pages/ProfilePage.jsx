@@ -39,10 +39,13 @@ import { DOC_ACCESS_CONFIG } from '@/utils/plans';
 
 // ── Local plan display config (badge + color mapping) ─────────────────────────
 const PLANS = {
-  free:    { label: 'Free',    credits: 30,   price: '₹0',   period: '/month',    badge: 'ACTIVE',      badgeColor: 'text-slate-400 bg-slate-400/10 border-slate-400/20',  docAccess: 'zero'    },
+  free:    { label: 'Free',    credits: 30,   price: '₹0',   period: '/month',    badge: 'FREE TIER',   badgeColor: 'text-slate-400 bg-slate-400/10 border-slate-400/20',  docAccess: 'zero'    },
   starter: { label: 'Starter', credits: 300,  price: '₹99',  period: ' one-time', badge: 'POPULAR',     badgeColor: 'text-violet-400 bg-violet-400/10 border-violet-400/20', docAccess: 'limited' },
   pro:     { label: 'Pro',     credits: 4000, price: '₹999', period: ' one-time', badge: 'BEST VALUE',  badgeColor: 'text-amber-400 bg-amber-400/10 border-amber-400/20',    docAccess: 'full'    },
 };
+
+// Plan hierarchy — higher number = higher tier
+const PLAN_RANK = { free: 0, starter: 1, pro: 2 };
 
 const PLAN_FEATURES = {
   free:    ['30 AI credits/month', 'All subjects access', 'Chat history (limited)', 'Zero document access'],
@@ -365,6 +368,13 @@ export default function ProfilePage() {
         },
         theme: { color: '#7c3aed' },
         modal: { ondismiss: () => setTopUpLoading(false) },
+        config: {
+          display: {
+            blocks: { upi: { name: 'Pay via UPI', instruments: [{ method: 'upi' }] } },
+            sequence: ['block.upi'],
+            preferences: { show_default_blocks: false },
+          },
+        },
         handler: async (response) => {
           try {
             await verifyCreditTopUp({
@@ -742,9 +752,14 @@ export default function ProfilePage() {
             {/* 3 plan cards */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {Object.entries(PLANS).map(([planKey, info]) => {
-                const isActive = plan === planKey;
-                const isPro    = planKey === 'pro';
-                const docInfo  = DOC_ACCESS_CONFIG[info.docAccess] || DOC_ACCESS_CONFIG.zero;
+                const isActive    = plan === planKey;
+                const isPro       = planKey === 'pro';
+                const isFree      = planKey === 'free';
+                const cardRank    = PLAN_RANK[planKey] ?? 0;
+                const userRank    = PLAN_RANK[plan]    ?? 0;
+                const isHigher    = cardRank > userRank;   // can upgrade to this
+                const isLower     = cardRank < userRank;   // already surpassed this
+                const docInfo     = DOC_ACCESS_CONFIG[info.docAccess] || DOC_ACCESS_CONFIG.zero;
                 return (
                   <div
                     key={planKey}
@@ -752,6 +767,8 @@ export default function ProfilePage() {
                     style={
                       isActive
                         ? { border: '1px solid rgba(139,92,246,0.50)', background: 'rgba(124,58,237,0.08)', boxShadow: '0 0 20px rgba(139,92,246,0.12)' }
+                        : isLower
+                        ? { border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.01)', opacity: 0.6 }
                         : { border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }
                     }
                   >
@@ -776,7 +793,7 @@ export default function ProfilePage() {
 
                     {/* Credits */}
                     <p className="font-bold text-2xl mt-1"
-                      style={{ color: isPro ? '#f59e0b' : 'hsl(var(--primary))' }}>
+                      style={{ color: isPro ? '#f59e0b' : isLower ? 'hsl(var(--muted-foreground))' : 'hsl(var(--primary))' }}>
                       {info.credits.toLocaleString()}
                       <span className="text-xs font-normal text-muted-foreground ml-1">credits</span>
                     </p>
@@ -809,6 +826,11 @@ export default function ProfilePage() {
                       <div className="mt-3 w-full h-8 rounded-lg flex items-center justify-center text-xs font-medium"
                         style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))' }}>
                         <CheckCircle size={12} className="mr-1" aria-hidden="true" /> Current Plan
+                      </div>
+                    ) : isLower || isFree ? (
+                      <div className="mt-3 w-full h-8 rounded-lg flex items-center justify-center text-[10px] font-medium text-muted-foreground/50"
+                        style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        Included in your plan
                       </div>
                     ) : (
                       <button

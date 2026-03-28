@@ -6846,6 +6846,7 @@ async def _get_razorpay_keys() -> tuple[str, str]:
 PLAN_PRICES_INR = {"starter": 9900, "pro": 99900}  # amount in paise (₹99 = 9900 paise)
 PLAN_CREDITS    = {"starter": 300, "pro": 4000}
 PLAN_DOC_ACCESS = {"starter": "limited", "pro": "full"}
+PLAN_RANK_MAP   = {"free": 0, "starter": 1, "pro": 2}
 
 class PaymentOrderRequest(BaseModel):
     plan: str  # "starter" or "pro"
@@ -6862,6 +6863,11 @@ async def create_payment_order(body: PaymentOrderRequest, user: dict = Depends(g
     plan = body.plan.lower()
     if plan not in PLAN_PRICES_INR:
         raise HTTPException(400, f"Invalid plan '{plan}'. Choose 'starter' or 'pro'.")
+
+    # Prevent purchasing a lower-tier plan (downgrade)
+    user_plan = user.get("plan", "free")
+    if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(user_plan, 0):
+        raise HTTPException(400, f"You are already on the {user_plan.capitalize()} plan or higher. You cannot purchase a lower-tier plan.")
 
     key_id, key_secret = await _get_razorpay_keys()
     if not key_id or not key_secret:
@@ -6897,6 +6903,11 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
     plan = body.plan.lower()
     if plan not in PLAN_PRICES_INR:
         raise HTTPException(400, f"Invalid plan '{plan}'.")
+
+    # Safety: block activating a lower-tier plan than the user already has
+    user_plan = user.get("plan", "free")
+    if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(user_plan, 0):
+        raise HTTPException(400, f"Cannot activate a lower-tier plan. You are already on {user_plan.capitalize()}.")
 
     key_id, key_secret = await _get_razorpay_keys()
     if not key_id or not key_secret:
