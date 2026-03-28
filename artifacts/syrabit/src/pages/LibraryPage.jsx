@@ -149,7 +149,8 @@ const FilterChip = memo(function FilterChip({ chip, isActive, onClick }) {
 });
 
 // ── Subject Card (memoized with deep optimization) ────────────────────────────
-const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOpen, onAskAI, onSeoNav, index }) {
+const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onToggleSave, onOpen, onAskAI, onSeoNav, index }) {
+  const [showChapters, setShowChapters] = useState(false);
   const thumbColors = useMemo(() => THUMB_GRADIENTS[sub.gradient] || THUMB_GRADIENTS.math, [sub.gradient]);
   const hasThumbnail = useMemo(() => !!sub.thumbnailUrl, [sub.thumbnailUrl]);
   const tags = useMemo(() => Array.isArray(sub.tags) ? sub.tags : [], [sub.tags]);
@@ -315,10 +316,6 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
           </p>
 
           <div className="flex items-center gap-4 text-xs text-muted-foreground mt-2">
-            <span className="flex items-center gap-1">
-              <Layers size={14} aria-hidden="true" />
-              {chapterCount} Chapters
-            </span>
             {totalTokens > 0 && (
               <span>{(totalTokens / 1000).toFixed(0)}K tokens</span>
             )}
@@ -331,6 +328,65 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
 
       {/* ── Card Body (non-link) ── */}
       <div className="px-4 pb-4 space-y-3">
+
+        {/* Chapter links */}
+        {chapters.length > 0 && (
+          <div>
+            <button
+              onClick={() => setShowChapters((v) => !v)}
+              className="flex items-center gap-1.5 w-full text-left text-xs font-medium transition-colors"
+              style={{ color: 'hsl(var(--muted-foreground))' }}
+            >
+              <Layers size={12} aria-hidden="true" style={{ color: 'hsl(var(--primary) / 0.6)' }} />
+              <span>{chapters.length} Chapters</span>
+              <ChevronRight
+                size={12}
+                className="ml-auto transition-transform duration-200"
+                style={{ transform: showChapters ? 'rotate(90deg)' : 'rotate(0deg)', color: 'hsl(var(--primary) / 0.4)' }}
+                aria-hidden="true"
+              />
+            </button>
+            {showChapters && (
+              <div
+                className="mt-2 rounded-xl overflow-hidden"
+                style={{
+                  background: 'rgba(139,92,246,0.04)',
+                  border: '1px solid rgba(139,92,246,0.10)',
+                }}
+              >
+                {chapters.map((ch, i) => {
+                  const chPath = sub.boardSlug && sub.classSlug && sub.slug && ch.slug
+                    ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}/${ch.slug}`
+                    : `/subject/${sub.id}`;
+                  return (
+                    <Link
+                      key={ch.id || i}
+                      to={chPath}
+                      className="flex items-center gap-2 px-3 py-2 text-xs transition-colors hover:bg-primary/8 group/ch"
+                      style={{ borderBottom: i < chapters.length - 1 ? '1px solid rgba(139,92,246,0.06)' : 'none' }}
+                      title={`${ch.title} — ${sub.name}`}
+                    >
+                      <span
+                        className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-semibold shrink-0"
+                        style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))' }}
+                      >
+                        {ch.order_index ?? i + 1}
+                      </span>
+                      <span className="text-foreground/80 group-hover/ch:text-primary truncate transition-colors">
+                        {ch.title}
+                      </span>
+                      <ChevronRight
+                        size={11}
+                        className="ml-auto shrink-0 text-muted-foreground/30 group-hover/ch:text-primary transition-colors"
+                        aria-hidden="true"
+                      />
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Tags */}
         {visibleTags.length > 0 && (
@@ -491,10 +547,11 @@ export default function LibraryPage() {
 
   // ── Single API call for all library data ─────────────────────────────────
   const { data: bundle, isLoading: bundleLoading, refetch: refetchBundle } = useLibraryBundle();
-  const subjects = bundle?.subjects || [];
-  const boards   = bundle?.boards   || [];
-  const classes  = bundle?.classes  || [];
-  const streams  = bundle?.streams  || [];
+  const subjects    = bundle?.subjects  || [];
+  const boards      = bundle?.boards    || [];
+  const classes     = bundle?.classes   || [];
+  const streams     = bundle?.streams   || [];
+  const allChapters = bundle?.chapters  || [];
   const { data: savedSubjects = [] } = useSavedSubjects(user);
   const toggleSaved = useToggleSavedSubject();
 
@@ -524,6 +581,16 @@ export default function LibraryPage() {
   const streamMap = useMemo(() => new Map(streams.map(s => [s.id, s])), [streams]);
   const classMap = useMemo(() => new Map(classes.map(c => [c.id, c])), [classes]);
   const boardMap = useMemo(() => new Map(boards.map(b => [b.id, b])), [boards]);
+
+  const chaptersBySubject = useMemo(() => {
+    const map = new Map();
+    for (const ch of allChapters) {
+      if (!ch.subject_id) continue;
+      if (!map.has(ch.subject_id)) map.set(ch.subject_id, []);
+      map.get(ch.subject_id).push(ch);
+    }
+    return map;
+  }, [allChapters]);
 
   const enrichedSubjects = useMemo(() => {
     return subjects.map((sub) => {
@@ -774,6 +841,7 @@ export default function LibraryPage() {
                 <SubjectCard
                   key={sub.id}
                   sub={sub}
+                  chapters={chaptersBySubject.get(sub.id) || []}
                   isSaved={savedSubjects.includes(sub.id)}
                   onToggleSave={(id) => toggleSaved.mutate(id)}
                   onOpen={handleOpen}

@@ -195,6 +195,7 @@ class LibraryBundleOut(BaseModel):
     classes: List[dict]
     streams: List[dict]
     subjects: List[dict]
+    chapters: List[dict] = []
 
 
 class ChatResponseOut(BaseModel):

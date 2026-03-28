@@ -3954,14 +3954,20 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         if not await is_mongo_available():
             return {"boards": [], "classes": [], "streams": [], "subjects": []}
         async with _slow_query("library_bundle"):
-            boards_data = await db.boards.find({}, {"_id": 0}).to_list(100)
-            classes_data = await db.classes.find({}, {"_id": 0}).to_list(100)
-            streams_data = await db.streams.find({}, {"_id": 0}).to_list(100)
-            subjects_data = await db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500)
+            boards_data, classes_data, streams_data, subjects_data, chapters_data = await asyncio.gather(
+                db.boards.find({}, {"_id": 0}).to_list(100),
+                db.classes.find({}, {"_id": 0}).to_list(100),
+                db.streams.find({}, {"_id": 0}).to_list(100),
+                db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
+                db.chapters.find(
+                    {},
+                    {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "description": 1},
+                ).sort("order_index", 1).to_list(5000),
+            )
         for s in subjects_data:
             if "thumbnail_url" in s and "thumbnailUrl" not in s:
                 s["thumbnailUrl"] = s.pop("thumbnail_url")
-        bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data}
+        bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data, "chapters": chapters_data}
         _set_content_cache("library-bundle", bundle)
         if response:
             response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
