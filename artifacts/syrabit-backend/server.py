@@ -1798,6 +1798,99 @@ async def rechunk_chapter(chapter_id: str) -> dict:
     }
 
 
+async def _fetch_content_card(query: str, subject_id: Optional[str] = None, subject_name: Optional[str] = None) -> Optional[str]:
+    """
+    Search seo_pages for the content card (full page content) most relevant to the query.
+    Returns the full page content text if found, else None.
+    """
+    try:
+        if not await is_mongo_available():
+            return None
+
+        keywords = _extract_keywords(query)
+        if not keywords:
+            return None
+
+        kw_regex = "|".join(keywords)
+        match_filter: dict = {"status": "published"}
+
+        if subject_id:
+            subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "slug": 1, "name": 1})
+            if subj and subj.get("slug"):
+                match_filter["subject_slug"] = subj["slug"]
+
+        if not subject_id and subject_name:
+            match_filter["subject_name"] = {"$regex": re.escape(subject_name), "$options": "i"}
+
+        match_filter["$or"] = [
+            {"content": {"$regex": kw_regex, "$options": "i"}},
+            {"topic_title": {"$regex": kw_regex, "$options": "i"}},
+            {"title": {"$regex": kw_regex, "$options": "i"}},
+        ]
+
+        pages = await db.seo_pages.find(
+            match_filter,
+            {"_id": 0, "content": 1, "topic_title": 1, "subject_name": 1, "chapter_title": 1, "page_type": 1},
+        ).limit(3).to_list(3)
+
+        if not pages:
+            return None
+
+        notes_pages = [p for p in pages if p.get("page_type") == "notes"]
+        best = notes_pages[0] if notes_pages else pages[0]
+
+        content = best.get("content", "")
+        if not content:
+            return None
+
+        topic_title = best.get("topic_title", "")
+        header = f"[Content Card: {topic_title}]" if topic_title else "[Content Card]"
+
+        relevant = _extract_relevant_sections(content, keywords)
+
+        return f"{header}\n{relevant}"
+
+    except Exception as e:
+        logger.error(f"Content card fetch error: {e}")
+        return None
+
+
+def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 2500) -> str:
+    """Extract the most relevant sections from a content page based on keywords."""
+    paragraphs = [p.strip() for p in content.split('\n') if p.strip()]
+    if not paragraphs:
+        return content[:max_chars]
+
+    scored = []
+    for i, para in enumerate(paragraphs):
+        para_lower = para.lower()
+        score = sum(1 for kw in keywords if kw in para_lower)
+        is_header = para.startswith('#') or para.startswith('**')
+        if is_header:
+            score += 0.5
+        scored.append((score, i, para))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+
+    selected_indices = set()
+    total_chars = 0
+    for score, idx, para in scored:
+        if score <= 0 and total_chars > 500:
+            break
+        for j in range(max(0, idx - 1), min(len(paragraphs), idx + 2)):
+            if j not in selected_indices:
+                selected_indices.add(j)
+                total_chars += len(paragraphs[j])
+        if total_chars >= max_chars:
+            break
+
+    if not selected_indices:
+        return content[:max_chars]
+
+    result = "\n".join(paragraphs[i] for i in sorted(selected_indices))
+    return result[:max_chars]
+
+
 async def rag_search(
     query: str,
     subject_id: Optional[str] = None,
@@ -2124,20 +2217,28 @@ async def resolve_rag_context(
             "source":  "document",
             "quality": "tier0",
         }
-    # Step 1: RAG DB lookup
-    rag_ctx = await rag_search(query, subject_id=subject_id, subject_name=subject_name)
+    cached_rag, content_card_text = await asyncio.gather(
+        rag_search(query, subject_id=subject_id, subject_name=subject_name),
+        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name),
+    )
 
-    # Step 2: High quality — real chunks found → trust RAG, skip web
+    rag_ctx = dict(cached_rag)
+
+    if content_card_text:
+        rag_ctx["content_card"] = content_card_text
+        if rag_ctx["quality"] == "none":
+            rag_ctx["quality"] = "high"
+            rag_ctx["source"] = "rag"
+        logger.info(f"RAG resolve: content card found ({len(content_card_text)} chars) | query: {query[:50]}")
+
     if rag_ctx["quality"] == "high":
-        logger.info(f"RAG resolve: HIGH-QUALITY database content found (chunks: {len(rag_ctx.get('chunks', []))}) | query: {query[:50]}")
+        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, card: {'yes' if content_card_text else 'no'}) | query: {query[:50]}")
         return rag_ctx
 
-    # Step 3: Medium — curriculum metadata found (subjects/chapters, no full chunks)
     if rag_ctx["quality"] == "medium":
-        logger.info(f"RAG resolve: MEDIUM database metadata only | query: {query[:50]}")
+        logger.info(f"RAG resolve: MEDIUM metadata only | query: {query[:50]}")
         return rag_ctx
 
-    # Nothing in DB — AI answers from training knowledge
     logger.info(f"RAG resolve: NO CONTEXT — AI uses training knowledge | query: {query[:50]}")
     return {"chunks": [], "chapters": [], "subjects": [], "source": "none", "quality": "none"}
 
@@ -2205,34 +2306,43 @@ def build_rag_system_prompt(
         )
         return base_prompt + grounding
 
+    content_card = rag_context.get("content_card", "")
+
     # ── Tier 1/2: Curriculum DB context ──────────────────────────────────────
-    if source == "rag" and (chunks or subjects or chapters):
+    if source == "rag" and (chunks or subjects or chapters or content_card):
 
         if quality == "high":
-            # Tier 1 — Real chunks (perfect RAG)
             grounding += (
                 "\n\n---\n"
-                "**GROUNDING CONTEXT (Tier 1 — Syllabus Content):**\n"
+                "**GROUNDING CONTEXT (Syllabus Content):**\n"
                 "The following content is from the student's actual syllabus database. "
                 "Base your answer **primarily** on this. Quote directly when possible.\n\n"
             )
+            if content_card:
+                grounding += f"**[Content Card — Full Page]**\n{content_card}\n\n"
             for i, c in enumerate(chunks, 1):
                 title = c.get("content_type", "content").capitalize()
                 grounding += f"**[Block {i} — {title}]**\n{c.get('content', '')[:400]}\n\n"
             grounding += (
                 "---\n"
-                "*INSTRUCTION: Prioritise the above syllabus blocks. "
-                "Supplement with your training knowledge only where the blocks are incomplete.*"
+                "*INSTRUCTION: Prioritise the content card and syllabus blocks above. "
+                "Answer the student's question using ONLY this data. "
+                "Do not add examples or exam tips unless the student specifically asks for them. "
+                "Supplement with your training knowledge only where the provided content is incomplete.*"
             )
 
         else:
-            # Tier 2 — Metadata only (subject descriptions + chapter titles)
             grounding += (
                 "\n\n---\n"
-                "**GROUNDING CONTEXT (Tier 2 — Curriculum Metadata):**\n"
-                "No specific content blocks were found, but the following curriculum "
-                "information is available from the syllabus database.\n\n"
+                "**GROUNDING CONTEXT (Curriculum Metadata):**\n"
             )
+            if content_card:
+                grounding += f"**[Content Card — Full Page]**\n{content_card}\n\n"
+            else:
+                grounding += (
+                    "No specific content blocks were found, but the following curriculum "
+                    "information is available from the syllabus database.\n\n"
+                )
             if subjects:
                 grounding += "**Matching subjects:**\n"
                 for s in subjects:
@@ -2255,8 +2365,9 @@ def build_rag_system_prompt(
 
             grounding += (
                 "\n---\n"
-                "*INSTRUCTION: Use the curriculum metadata above to keep your answer "
-                "syllabus-aligned. Draw on your training knowledge for the full answer.*"
+                "*INSTRUCTION: Use the content above to answer the student's question. "
+                "Do not add examples or exam tips unless the student specifically asks. "
+                "Draw on your training knowledge only where the provided content is incomplete.*"
             )
 
     return base_prompt + grounding if grounding else base_prompt
