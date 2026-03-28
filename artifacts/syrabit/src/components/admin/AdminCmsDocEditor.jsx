@@ -491,7 +491,11 @@ export default function AdminCmsDocEditor({ adminToken }) {
                 </button>
               ))}
             </div>
-            <div className="flex-1 overflow-hidden mdx-admin-editor">
+            <div
+              className="flex-1 overflow-hidden cms-light-editor-wrapper"
+              data-color-mode="light"
+              style={{ backgroundColor: '#ffffff', color: '#1a1a1a' }}
+            >
               <MDXEditor
                 ref={editorRef}
                 key={editDoc?.id ?? '__new__'}
@@ -512,8 +516,8 @@ export default function AdminCmsDocEditor({ adminToken }) {
                     toolbarContents: () => <MdxToolbar onAiParse={handleAiParse} aiParsing={aiParsing} />,
                   }),
                 ]}
-                className="mdx-editor-dark h-full"
-                contentEditableClassName="mdx-editor-content"
+                className="mdx-editor-light h-full"
+                contentEditableClassName="cms-editor-content"
               />
             </div>
             </div>
@@ -720,30 +724,7 @@ export default function AdminCmsDocEditor({ adminToken }) {
         </div>
       )}
 
-      {/* MDXEditor dark theme overrides */}
-      <style>{`
-        .mdx-admin-editor { background: #121212; }
-        .mdx-editor-dark { --mdxeditor-bg: #121212; height: 100%; overflow: hidden; }
-        .mdx-editor-dark ._editorRoot_uazmk_10 { height: 100%; background: #121212; }
-        .mdx-editor-dark ._contentEditable_uazmk_73 { min-height: calc(100vh - 200px); color: #E8E8E8; }
-        .mdx-editor-dark ._toolbarRoot_uazmk_127 { background: #191919; border-bottom: 1px solid rgba(255,255,255,0.07); }
-        .mdx-editor-dark ._toolbarToggleItem_uazmk_144, .mdx-editor-dark button[class*="_toolbarButton"] { color: rgba(232,232,232,0.65); }
-        .mdx-editor-dark ._toolbarToggleItem_uazmk_144:hover, .mdx-editor-dark button[class*="_toolbarButton"]:hover { background: rgba(149,117,224,0.15); color: #c4b0f0; }
-        .mdx-editor-content { padding: 1.5rem 2rem; min-height: 400px; line-height: 1.85; font-size: 0.93rem; color: #E8E8E8; }
-        .mdx-editor-content h1, .mdx-editor-content h2, .mdx-editor-content h3 { color: #f0eeff; font-family: 'Space Grotesk', sans-serif; }
-        .mdx-editor-content h2 { font-size: 1.3rem; font-weight: 700; margin: 1.8rem 0 0.7rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.4rem; }
-        .mdx-editor-content h3 { font-size: 1.05rem; font-weight: 600; margin: 1.3rem 0 0.5rem; }
-        .mdx-editor-content p { margin: 0 0 1rem; }
-        .mdx-editor-content ul, .mdx-editor-content ol { padding-left: 1.4rem; margin: 0.5rem 0 1rem; }
-        .mdx-editor-content li { margin: 0.3rem 0; }
-        .mdx-editor-content blockquote { border-left: 3px solid rgba(149,117,224,0.5); padding: 0.5rem 0 0.5rem 1rem; margin: 1rem 0; color: rgba(232,232,232,0.65); background: rgba(149,117,224,0.04); border-radius: 0 8px 8px 0; }
-        .mdx-editor-content code { background: rgba(232,232,232,0.08); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.85em; color: #c4b0f0; }
-        .mdx-editor-content pre { background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; padding: 1rem; margin: 1rem 0; }
-        .mdx-editor-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
-        .mdx-editor-content th { background: rgba(255,255,255,0.05); font-weight: 600; padding: 0.45rem 0.7rem; border: 1px solid rgba(255,255,255,0.08); color: #f0eeff; }
-        .mdx-editor-content td { padding: 0.4rem 0.7rem; border: 1px solid rgba(255,255,255,0.07); }
-        @keyframes spin { to { transform: rotate(360deg); } }
-      `}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
