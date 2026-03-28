@@ -327,15 +327,16 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         </div>
       )}
 
-      {/* Action Bar */}
+      {/* Action Bar — 2×2 grid */}
       <div
-        className="flex items-center gap-1.5 px-3 py-2.5"
+        className="grid grid-cols-2 gap-1.5 px-3 py-2.5"
         style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
       >
+        {/* Row 1 — left: Save */}
         <button
           onClick={() => { onToggleSave(sub.id); try { Analytics.subjectBookmarked(sub.name, !isSaved); } catch {} }}
           aria-label={isSaved ? `Unsave ${sub.name}` : `Save ${sub.name}`}
-          className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95"
+          className="flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95"
           style={
             isSaved
               ? { color: 'hsl(var(--primary))', background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.25)' }
@@ -347,15 +348,26 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           {isSaved ? 'Saved' : 'Save'}
         </button>
 
+        {/* Row 1 — right: Browse */}
+        <Link
+          to={subjectLandingPath}
+          className="flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
+          style={{ color: 'hsl(var(--muted-foreground))', border: '1px solid rgba(139,92,246,0.12)' }}
+        >
+          <BookOpen size={12} />
+          Browse
+        </Link>
+
+        {/* Row 2 — left: Ask AI */}
         <button
           onClick={() => onAskAI(sub.id, hasDocument, sub.name)}
           aria-label={`Ask AI about ${sub.name}`}
-          className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold text-white transition-all duration-200 hover:opacity-90 active:scale-95 ml-auto"
+          className="flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-semibold text-white transition-all duration-200 hover:opacity-90 active:scale-95"
           style={{
             background: hasDocument
               ? 'linear-gradient(135deg, #059669, #10b981)'
               : 'linear-gradient(135deg, #7c3aed, #8b5cf6)',
-            boxShadow: '0 2px 10px rgba(139,92,246,0.25)',
+            boxShadow: '0 2px 10px rgba(139,92,246,0.20)',
           }}
           data-testid="subject-ask-ai-button"
         >
@@ -363,25 +375,18 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           Ask AI
         </button>
 
-        <Link
-          to={subjectLandingPath}
-          className="flex items-center gap-1 h-8 px-3 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
-          style={{ color: 'hsl(var(--muted-foreground))', border: '1px solid rgba(139,92,246,0.12)' }}
-        >
-          <BookOpen size={12} />
-          Browse
-        </Link>
-
+        {/* Row 2 — right: WhatsApp Share */}
         <a
           href={whatsappShareUrl}
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`Share ${sub.name} on WhatsApp`}
-          className="flex items-center justify-center h-8 w-8 rounded-lg transition-all duration-200 active:scale-95 hover:bg-white/5 flex-shrink-0"
-          style={{ color: '#25D366', border: '1px solid rgba(37,211,102,0.20)' }}
+          className="flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
+          style={{ color: '#25D366', border: '1px solid rgba(37,211,102,0.22)' }}
           data-testid="subject-whatsapp-share"
         >
-          <Share2 size={13} />
+          <Share2 size={12} />
+          Share
         </a>
       </div>
     </div>
