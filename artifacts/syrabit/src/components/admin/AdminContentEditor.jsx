@@ -140,7 +140,9 @@ export default function AdminContentEditor({ adminToken }) {
   const [chapterStats, setChapterStats] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [aiParsing, setAiParsing] = useState(false);
+  const [thumbnailLoading, setThumbnailLoading] = useState(false);
   const fileInputRef = useRef(null);
+  const thumbnailInputRef = useRef(null);
   const contentTextareaRef = useRef(null);
 
   const CONTENT_TYPES = [
@@ -331,6 +333,41 @@ export default function AdminContentEditor({ adminToken }) {
       await load(true);
       toast.success(`${type} deleted`);
     } catch { toast.error(`Failed to delete ${type}`); }
+  };
+
+  const handleUploadThumbnail = async (file) => {
+    if (!file || !selSubject) return;
+    setThumbnailLoading(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const h = authHeaders(adminToken);
+      const res = await axios.post(
+        `${API}/admin/content/subjects/${selSubject}/thumbnail`,
+        form,
+        { ...h, headers: { ...h.headers, 'Content-Type': 'multipart/form-data' } },
+      );
+      toast.success('Thumbnail uploaded');
+      await load(true);
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || 'Failed to upload thumbnail');
+    } finally {
+      setThumbnailLoading(false);
+      if (thumbnailInputRef.current) thumbnailInputRef.current.value = '';
+    }
+  };
+
+  const handleClearThumbnail = async () => {
+    if (!selSubject) return;
+    try {
+      await axios.patch(
+        `${API}/admin/content/subjects/${selSubject}`,
+        { thumbnail_url: '' },
+        authHeaders(adminToken),
+      );
+      toast.success('Thumbnail removed');
+      await load(true);
+    } catch { toast.error('Failed to clear thumbnail'); }
   };
 
   const handleCreateChapter = async () => {
@@ -728,6 +765,66 @@ export default function AdminContentEditor({ adminToken }) {
                     <div>
                       <h3 className="text-xl font-bold text-white">{subjectData?.icon || '📚'} {subjectData?.name}</h3>
                       <p className="text-sm text-white/40">{subjectData?.description}</p>
+                    </div>
+
+                    {/* ── Thumbnail Upload ─────────────────────────────── */}
+                    <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
+                      <div className="flex items-center justify-between px-4 py-3 border-b border-white/8">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-white">Card Thumbnail</span>
+                          <span className="text-[10px] text-white/30 bg-white/5 px-2 py-0.5 rounded-full">shows as background on Library card</span>
+                        </div>
+                        {subjectData?.thumbnailUrl && (
+                          <button
+                            onClick={handleClearThumbnail}
+                            className="text-[11px] text-red-400/70 hover:text-red-400 transition-colors flex items-center gap-1"
+                          >
+                            <X size={11} /> Remove
+                          </button>
+                        )}
+                      </div>
+                      <div className="p-4 flex items-start gap-4">
+                        {/* Preview */}
+                        <div
+                          className="w-24 h-20 rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden"
+                          style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)' }}
+                        >
+                          {subjectData?.thumbnailUrl ? (
+                            <img
+                              src={subjectData.thumbnailUrl}
+                              alt="thumbnail"
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <span className="text-white/20 text-[10px] text-center px-1">No thumbnail</span>
+                          )}
+                        </div>
+                        {/* Upload controls */}
+                        <div className="flex-1 space-y-2">
+                          <p className="text-xs text-white/40">
+                            Upload the front-page image of the subject (PNG, JPG, WebP — max 2 MB). It will appear as a faint background behind the chapter list.
+                          </p>
+                          <input
+                            ref={thumbnailInputRef}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0];
+                              if (file) handleUploadThumbnail(file);
+                            }}
+                          />
+                          <button
+                            onClick={() => thumbnailInputRef.current?.click()}
+                            disabled={thumbnailLoading}
+                            className="flex items-center gap-2 h-9 px-4 rounded-lg text-xs font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
+                            style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', boxShadow: '0 2px 8px rgba(124,58,237,0.30)' }}
+                          >
+                            {thumbnailLoading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                            {thumbnailLoading ? 'Uploading…' : subjectData?.thumbnailUrl ? 'Replace Thumbnail' : 'Upload Thumbnail'}
+                          </button>
+                        </div>
+                      </div>
                     </div>
 
                     {/* Create Chapter CTA */}

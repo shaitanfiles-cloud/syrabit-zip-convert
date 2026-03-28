@@ -274,56 +274,72 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       {/* Chapters as Lesson Links */}
       {visibleChapters.length > 0 && (
         <div
-          className="mx-3 mb-3 rounded-xl overflow-hidden"
+          className="mx-3 mb-3 rounded-xl overflow-hidden relative"
           style={{
             background: 'rgba(139,92,246,0.03)',
             border: '1px solid rgba(139,92,246,0.08)',
           }}
         >
-          <div className="flex items-center gap-1.5 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(139,92,246,0.06)' }}>
-            <Layers size={11} className="text-purple-400/60" />
-            <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
-              {chapterCount} Lessons
-            </span>
-          </div>
-          {visibleChapters.map((ch, i) => {
-            const chPath = sub.boardSlug && sub.classSlug && sub.slug && ch.slug
-              ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}/${ch.slug}`
-              : subjectLandingPath;
-            return (
-              <Link
-                key={ch.id || i}
-                to={chPath}
-                className="flex items-center gap-2 px-3 py-2 text-xs transition-all hover:bg-purple-500/8 group/lesson"
-                style={{ borderBottom: i < visibleChapters.length - 1 ? '1px solid rgba(139,92,246,0.05)' : 'none' }}
-                title={`${ch.title} — ${sub.name}`}
-              >
-                <span
-                  className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0"
-                  style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))' }}
-                >
-                  {i + 1}
-                </span>
-                <span className="text-foreground/75 group-hover/lesson:text-purple-300 truncate transition-colors flex-1">
-                  {ch.title}
-                </span>
-                <ExternalLink
-                  size={10}
-                  className="shrink-0 text-muted-foreground/20 group-hover/lesson:text-purple-400 transition-colors"
-                />
-              </Link>
-            );
-          })}
-          {moreChapters > 0 && (
-            <Link
-              to={subjectLandingPath}
-              className="flex items-center justify-center gap-1 px-3 py-2 text-[11px] font-medium text-purple-400/70 hover:text-purple-300 hover:bg-purple-500/5 transition-colors"
-              style={{ borderTop: '1px solid rgba(139,92,246,0.06)' }}
-            >
-              +{moreChapters} more lessons
-              <ChevronRight size={11} />
-            </Link>
+          {/* Thumbnail background — semi-transparent so links stay readable */}
+          {sub.thumbnailUrl && (
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{
+                backgroundImage: `url(${sub.thumbnailUrl})`,
+                backgroundSize: 'cover',
+                backgroundPosition: 'center top',
+                opacity: 0.13,
+                zIndex: 0,
+              }}
+            />
           )}
+          {/* z-10 wrapper keeps chapter links above the thumbnail background */}
+          <div className="relative z-10">
+            <div className="flex items-center gap-1.5 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(139,92,246,0.06)' }}>
+              <Layers size={11} className="text-purple-400/60" />
+              <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                {chapterCount} Lessons
+              </span>
+            </div>
+            {visibleChapters.map((ch, i) => {
+              const chPath = sub.boardSlug && sub.classSlug && sub.slug && ch.slug
+                ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}/${ch.slug}`
+                : subjectLandingPath;
+              return (
+                <Link
+                  key={ch.id || i}
+                  to={chPath}
+                  className="flex items-center gap-2 px-3 py-2 text-xs transition-all hover:bg-purple-500/8 group/lesson"
+                  style={{ borderBottom: i < visibleChapters.length - 1 ? '1px solid rgba(139,92,246,0.05)' : 'none' }}
+                  title={`${ch.title} — ${sub.name}`}
+                >
+                  <span
+                    className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0"
+                    style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))' }}
+                  >
+                    {i + 1}
+                  </span>
+                  <span className="text-foreground/75 group-hover/lesson:text-purple-300 truncate transition-colors flex-1">
+                    {ch.title}
+                  </span>
+                  <ExternalLink
+                    size={10}
+                    className="shrink-0 text-muted-foreground/20 group-hover/lesson:text-purple-400 transition-colors"
+                  />
+                </Link>
+              );
+            })}
+            {moreChapters > 0 && (
+              <Link
+                to={subjectLandingPath}
+                className="flex items-center justify-center gap-1 px-3 py-2 text-[11px] font-medium text-purple-400/70 hover:text-purple-300 hover:bg-purple-500/5 transition-colors"
+                style={{ borderTop: '1px solid rgba(139,92,246,0.06)' }}
+              >
+                +{moreChapters} more lessons
+                <ChevronRight size={11} />
+              </Link>
+            )}
+          </div>
         </div>
       )}
 
