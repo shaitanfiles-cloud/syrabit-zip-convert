@@ -426,11 +426,9 @@ export default function LandingPage() {
             className="mb-6"
             style={{ fontSize: 'clamp(2.4rem,6vw,4.8rem)', fontWeight: 900, lineHeight: 1.08, letterSpacing: '-0.02em' }}
           >
-            <span className="shimmer-text">Ace your Assam Board</span>
-            <br />
-            <span className="text-white">Exams With </span>
+            <span className="text-white">Educational Chatbot For </span>
             <span style={{ background: 'linear-gradient(135deg,#a78bfa,#7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              Syrabit.ai
+              Assamboard Students
             </span>
           </motion.h1>
 
