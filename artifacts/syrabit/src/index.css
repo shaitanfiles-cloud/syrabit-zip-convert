@@ -80,24 +80,24 @@
      SECTION 1b — COLOR TOKENS (DARK MODE)
      ══════════════════════════════════════════════════════════════ */
   .dark {
-    /* ── Surfaces — warmer, easier on eyes ── */
-    --background: 238 28% 8%;         /* #100f19 — warm deep instead of cold pitch-black */
-    --foreground: 240 18% 86%;        /* #d5d1e8 — warm off-white, not harsh pure-white */
-    --card: 238 26% 11%;              /* #141220 — warm card bg */
-    --card-foreground: 240 18% 86%;
-    --popover: 238 28% 10%;
-    --popover-foreground: 240 18% 86%;
+    /* ── Surfaces — #121212 / #E8E8E8 neutral dark palette ── */
+    --background: 0 0% 7%;            /* #121212 */
+    --foreground: 0 0% 91%;           /* #E8E8E8 */
+    --card: 0 0% 10%;                 /* #1a1a1a */
+    --card-foreground: 0 0% 91%;
+    --popover: 0 0% 9%;               /* #171717 */
+    --popover-foreground: 0 0% 91%;
 
-    /* ── Brand — desaturated for comfort ── */
-    --primary: 258 50% 70%;           /* #9c84e0 — muted violet, less glare */
-    --primary-foreground: 261 80% 15%;
-    --secondary: 249 55% 16%;
+    /* ── Brand — violet accent stays vibrant on neutral bg ── */
+    --primary: 258 60% 68%;           /* #9575e0 — violet */
+    --primary-foreground: 258 80% 12%;
+    --secondary: 255 20% 16%;         /* #231f2e */
     --secondary-foreground: 258 55% 82%;
 
     /* ── Neutral ── */
-    --muted: 250 28% 13%;
-    --muted-foreground: 248 14% 58%;  /* softer secondary text */
-    --accent: 249 55% 16%;
+    --muted: 0 0% 13%;                /* #212121 */
+    --muted-foreground: 0 0% 55%;     /* #8c8c8c */
+    --accent: 255 20% 16%;
     --accent-foreground: 258 55% 82%;
 
     /* ── Destructive ── */
@@ -105,36 +105,36 @@
     --destructive-foreground: 0 72% 17%;
 
     /* ── Borders & Input ── */
-    --border: 255 38% 32%;            /* less vivid border */
-    --input: 252 36% 14%;
-    --ring: 258 50% 70%;
+    --border: 0 0% 20%;               /* #333 — clean neutral border */
+    --input: 0 0% 12%;                /* #1f1f1f */
+    --ring: 258 60% 68%;
 
     /* ── Sidebar ── */
-    --sidebar: 238 32% 7%;
-    --sidebar-foreground: 240 18% 86%;
-    --sidebar-primary: 258 50% 70%;
-    --sidebar-primary-foreground: 261 80% 15%;
-    --sidebar-accent: 249 55% 16%;
+    --sidebar: 0 0% 6%;                /* #0f0f0f */
+    --sidebar-foreground: 0 0% 91%;
+    --sidebar-primary: 258 60% 68%;
+    --sidebar-primary-foreground: 258 80% 12%;
+    --sidebar-accent: 255 20% 14%;
     --sidebar-accent-foreground: 258 55% 82%;
-    --sidebar-border: 252 30% 16%;
-    --sidebar-ring: 258 50% 70%;
+    --sidebar-border: 0 0% 16%;        /* #292929 */
+    --sidebar-ring: 258 60% 68%;
 
     /* ── Charts ── */
-    --chart-1: 258 50% 70%;
+    --chart-1: 258 60% 68%;
     --chart-2: 258 55% 62%;
     --chart-3: 41 70% 60%;
     --chart-4: 160 55% 50%;
     --chart-5: 350 65% 58%;
 
-    /* ── RGBA glassmorphism — warmer dark glass ── */
-    --card-glass: rgba(18, 16, 30, 0.82);
-    --card-glass-border: rgba(140, 110, 220, 0.12);
-    --popover-glass: rgba(18, 16, 30, 0.96);
-    --input-bg: rgba(140, 110, 220, 0.05);
-    --sidebar-glass: rgba(14, 12, 24, 0.88);
+    /* ── RGBA glassmorphism — neutral dark glass ── */
+    --card-glass: rgba(26, 26, 26, 0.90);
+    --card-glass-border: rgba(149, 117, 224, 0.12);
+    --popover-glass: rgba(23, 23, 23, 0.97);
+    --input-bg: rgba(149, 117, 224, 0.05);
+    --sidebar-glass: rgba(15, 15, 15, 0.95);
 
-    /* ── Glow — reduced intensity for comfort ── */
-    --glow-primary:   rgba(156, 132, 224, 0.22);
+    /* ── Glow ── */
+    --glow-primary:   rgba(149, 117, 224, 0.22);
     --glow-secondary: rgba(120, 130, 210, 0.16);
     --glow-accent:    rgba(180, 120, 240, 0.18);
   }

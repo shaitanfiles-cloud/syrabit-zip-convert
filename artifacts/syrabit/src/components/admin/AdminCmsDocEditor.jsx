@@ -1,9 +1,28 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import MDEditor, { commands } from '@uiw/react-md-editor';
 import {
-  Plus, Save, Trash2, X, Loader2, FileText, Globe, Lock,
-  Upload, Sparkles, RefreshCw, Eye, Edit2, BookOpen, ChevronRight,
+  MDXEditor,
+  headingsPlugin,
+  listsPlugin,
+  quotePlugin,
+  thematicBreakPlugin,
+  markdownShortcutPlugin,
+  codeBlockPlugin,
+  codeMirrorPlugin,
+  tablePlugin,
+  linkPlugin,
+  diffSourcePlugin,
+  toolbarPlugin,
+  UndoRedo, BoldItalicUnderlineToggles, BlockTypeSelect,
+  CreateLink, CodeToggle, InsertTable, InsertThematicBreak,
+  ListsToggle, Separator, DiffSourceToggleWrapper, InsertCodeBlock,
+  CodeMirrorEditor,
+} from '@mdxeditor/editor';
+import '@mdxeditor/editor/style.css';
+import {
+  Plus, Save, Trash2, Loader2, FileText, Globe, Lock,
+  Upload, Sparkles, Eye, Edit2, BookOpen,
   Tag, Link2, Search, FileUp, CheckCircle, AlertCircle, BarChart3,
+  RefreshCw, Merge,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -31,6 +50,50 @@ const EMPTY_DOC = {
   thumbnail_url: '', alt_text: '',
 };
 
+function MdxToolbar({ onAiParse, aiParsing }) {
+  return (
+    <DiffSourceToggleWrapper>
+      <UndoRedo />
+      <Separator />
+      <BoldItalicUnderlineToggles />
+      <CodeToggle />
+      <Separator />
+      <ListsToggle />
+      <Separator />
+      <BlockTypeSelect />
+      <Separator />
+      <CreateLink />
+      <InsertTable />
+      <InsertThematicBreak />
+      <InsertCodeBlock />
+      <Separator />
+      <button
+        type="button"
+        onClick={onAiParse}
+        disabled={aiParsing}
+        title="AI Structure Content"
+        style={{
+          display: 'flex', alignItems: 'center', gap: 4, padding: '2px 6px',
+          borderRadius: 4, fontSize: 11, fontWeight: 600, color: '#a78bfa',
+          background: 'rgba(167,139,250,0.10)', border: '1px solid rgba(167,139,250,0.20)',
+          cursor: aiParsing ? 'not-allowed' : 'pointer', opacity: aiParsing ? 0.5 : 1,
+        }}
+      >
+        {aiParsing ? (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style={{ animation: 'spin 1s linear infinite' }}>
+            <path d="M12 22C17.5228 22 22 17.5228 22 12H20C20 16.4183 16.4183 20 12 20V22Z"/>
+          </svg>
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2L13.09 8.26L19 7L14.74 11.74L20 14L13.74 14.91L14 21L9.26 16.74L7 21L7.91 14.74L2 14L7.26 11.26L3 7L8.91 8.09L12 2Z"/>
+          </svg>
+        )}
+        AI
+      </button>
+    </DiffSourceToggleWrapper>
+  );
+}
+
 export default function AdminCmsDocEditor({ adminToken }) {
   const [docs, setDocs]             = useState([]);
   const [loading, setLoading]       = useState(true);
@@ -40,9 +103,11 @@ export default function AdminCmsDocEditor({ adminToken }) {
   const [publishing, setPublishing] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [aiParsing, setAiParsing]   = useState(false);
+  const [merging, setMerging]       = useState(false);
   const [searchQ, setSearchQ]       = useState('');
   const [seoTab, setSeoTab]         = useState('content');
-  const pdfRef = useRef(null);
+  const pdfRef  = useRef(null);
+  const editorRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,68 +129,56 @@ export default function AdminCmsDocEditor({ adminToken }) {
   const openEdit = (doc) => {
     setEditDoc(doc);
     setForm({
-      title: doc.title || '',
-      content: doc.content || '',
+      title:            doc.title || '',
+      content:          doc.content || '',
       meta_description: doc.meta_description || '',
-      description: doc.description || '',
-      seo_tags: doc.seo_tags || '',
-      primary_keyword: doc.primary_keyword || '',
-      seo_slug: doc.seo_slug || '',
-      category: doc.category || '',
-      geo_tags: doc.geo_tags || '',
-      schema_type: doc.schema_type || 'Article',
-      status: doc.status || 'draft',
-      thumbnail_url: doc.thumbnail_url || '',
-      alt_text: doc.alt_text || '',
+      description:      doc.description || '',
+      seo_tags:         doc.seo_tags || '',
+      primary_keyword:  doc.primary_keyword || '',
+      seo_slug:         doc.seo_slug || '',
+      category:         doc.category || '',
+      geo_tags:         doc.geo_tags || '',
+      schema_type:      doc.schema_type || 'Article',
+      status:           doc.status || 'draft',
+      thumbnail_url:    doc.thumbnail_url || '',
+      alt_text:         doc.alt_text || '',
     });
     setSeoTab('content');
   };
 
   const handleTitleChange = (title) => {
     setForm(f => ({
-      ...f,
-      title,
+      ...f, title,
       seo_slug: f.seo_slug === autoSlug(f.title) || !f.seo_slug ? autoSlug(title) : f.seo_slug,
     }));
   };
 
-  const aiParseCommand = {
-    name: 'ai-parse',
-    keyCommand: 'ai-parse',
-    buttonProps: { 'aria-label': 'AI Structure Content', title: 'AI Structure Content' },
-    icon: (
-      <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 600, color: '#a78bfa', padding: '0 2px' }}>
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 2L13.09 8.26L19 7L14.74 11.74L20 14L13.74 14.91L14 21L9.26 16.74L7 21L7.91 14.74L2 14L7.26 11.26L3 7L8.91 8.09L12 2Z"/>
-        </svg>
-        AI
-      </span>
-    ),
-    execute: async () => {
-      if (!form.content.trim()) { toast.error('Add content first'); return; }
-      setAiParsing(true);
-      try {
-        const res = await axios.post(`${API}/admin/studio/parse`, {
-          raw_text: form.content,
-          subject: form.geo_tags || '',
-          chapter: form.title || '',
-        }, authHeaders(adminToken));
-        const blocks = res.data.blocks || [];
-        if (!blocks.length) { toast.error('AI could not parse content'); return; }
-        const formatted = blocks.map(b => `## ${b.title}\n\n${b.content}`).join('\n\n---\n\n');
-        setForm(f => ({ ...f, content: formatted }));
-        toast.success(`AI structured ${blocks.length} blocks`);
-      } catch (e) {
-        toast.error(e.response?.data?.detail || 'AI parsing failed');
-      } finally { setAiParsing(false); }
-    },
+  const handleAiParse = async () => {
+    const content = editorRef.current?.getMarkdown() || form.content;
+    if (!content.trim()) { toast.error('Add content first'); return; }
+    setAiParsing(true);
+    try {
+      const res = await axios.post(`${API}/admin/studio/parse`, {
+        raw_text: content,
+        subject:  form.geo_tags || '',
+        chapter:  form.title || '',
+      }, authHeaders(adminToken));
+      const blocks = res.data.blocks || [];
+      if (!blocks.length) { toast.error('AI could not parse content'); return; }
+      const formatted = blocks.map(b => `## ${b.title}\n\n${b.content}`).join('\n\n---\n\n');
+      setForm(f => ({ ...f, content: formatted }));
+      toast.success(`AI structured ${blocks.length} blocks`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'AI parsing failed');
+    } finally { setAiParsing(false); }
   };
 
   const handleSave = async () => {
     if (!form.title.trim()) { toast.error('Title is required'); return; }
+    const liveContent = editorRef.current?.getMarkdown() ?? form.content;
     setSaving(true);
     try {
-      const payload = { ...form, seo_slug: form.seo_slug || autoSlug(form.title) };
+      const payload = { ...form, content: liveContent, seo_slug: form.seo_slug || autoSlug(form.title) };
       if (editDoc) {
         await axios.patch(`${API}/admin/content/cms-documents/${editDoc.id}`, payload, authHeaders(adminToken));
         toast.success('Document updated');
@@ -148,7 +201,7 @@ export default function AdminCmsDocEditor({ adminToken }) {
       const newStatus = res.data.status;
       setForm(f => ({ ...f, status: newStatus }));
       setEditDoc(d => ({ ...d, status: newStatus }));
-      toast.success(newStatus === 'published' ? 'Published! Sitemap will update.' : 'Moved to draft');
+      toast.success(newStatus === 'published' ? 'Published!' : 'Moved to draft');
       await load();
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Failed to toggle publish');
@@ -181,7 +234,8 @@ export default function AdminCmsDocEditor({ adminToken }) {
       );
       const extracted = res.data.text || '';
       if (!extracted) { toast.error('No text extracted from PDF'); return; }
-      setForm(f => ({ ...f, content: f.content ? `${f.content}\n\n---\n\n${extracted}` : extracted }));
+      const current = editorRef.current?.getMarkdown() || form.content;
+      setForm(f => ({ ...f, content: current ? `${current}\n\n---\n\n${extracted}` : extracted }));
       toast.success(`Extracted ${res.data.chars?.toLocaleString() || '?'} chars from ${res.data.pages} pages`);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'PDF extraction failed');
@@ -195,27 +249,27 @@ export default function AdminCmsDocEditor({ adminToken }) {
     ? docs.filter(d => d.title?.toLowerCase().includes(searchQ.toLowerCase()) || d.seo_slug?.includes(searchQ))
     : docs;
 
-  const isEditing = editDoc !== null || (form.title && !editDoc);
-  const inEditor = isEditing || form.title || form.content;
+  const inEditor = editDoc !== null || form.title || form.content;
 
   return (
-    <div className="h-full flex overflow-hidden" style={{ background: '#0a0a14' }}>
+    <div className="h-full flex overflow-hidden" style={{ background: '#121212' }}>
       {/* Left — document list */}
-      <div className="w-72 flex-shrink-0 border-r border-white/10 flex flex-col" style={{ background: 'rgba(255,255,255,0.012)' }}>
-        <div className="px-4 py-3 border-b border-white/10 flex items-center gap-2">
+      <div className="w-72 flex-shrink-0 border-r flex flex-col" style={{ background: '#191919', borderColor: 'rgba(255,255,255,0.07)' }}>
+        <div className="px-4 py-3 border-b flex items-center gap-2" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
           <div className="relative flex-1">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-white/30" />
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.25)' }} />
             <input
               value={searchQ}
               onChange={e => setSearchQ(e.target.value)}
               placeholder="Search documents…"
-              className="w-full h-8 pl-8 pr-3 rounded-lg text-xs text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
+              className="w-full h-8 pl-8 pr-3 rounded-lg text-xs outline-none focus:border-violet-500"
+              style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
             />
           </div>
           <button
             onClick={openNew}
-            className="h-8 px-2 rounded-lg bg-violet-600 hover:bg-violet-500 text-white flex items-center gap-1 text-xs font-medium flex-shrink-0"
-            title="New document"
+            className="h-8 px-2 rounded-lg flex items-center gap-1 text-xs font-medium flex-shrink-0"
+            style={{ background: '#9575e0', color: 'white' }}
           >
             <Plus size={13} /> New
           </button>
@@ -229,9 +283,9 @@ export default function AdminCmsDocEditor({ adminToken }) {
             </div>
           ) : filtered.length === 0 ? (
             <div className="p-6 text-center">
-              <FileText size={28} className="text-white/15 mx-auto mb-3" />
-              <p className="text-xs text-white/30">{searchQ ? 'No results' : 'No documents yet'}</p>
-              {!searchQ && <button onClick={openNew} className="mt-3 text-xs text-violet-400 hover:text-violet-300">Create first →</button>}
+              <FileText size={28} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
+              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>{searchQ ? 'No results' : 'No documents yet'}</p>
+              {!searchQ && <button onClick={openNew} className="mt-3 text-xs" style={{ color: '#9575e0' }}>Create first →</button>}
             </div>
           ) : (
             filtered.map(doc => {
@@ -242,23 +296,30 @@ export default function AdminCmsDocEditor({ adminToken }) {
                 <div
                   key={doc.id}
                   onClick={() => openEdit(doc)}
-                  className={`mx-2 mb-1 p-3 rounded-xl cursor-pointer group transition-colors ${isActive ? 'bg-violet-500/15 border border-violet-500/30' : 'hover:bg-white/5 border border-transparent'}`}
+                  className="mx-2 mb-1 p-3 rounded-xl cursor-pointer group transition-colors"
+                  style={{
+                    border: isActive ? '1px solid rgba(149,117,224,0.30)' : '1px solid transparent',
+                    background: isActive ? 'rgba(149,117,224,0.10)' : 'transparent',
+                  }}
                 >
                   <div className="flex items-start gap-2">
                     <StIcon size={12} className="flex-shrink-0 mt-0.5" style={{ color: st.text }} />
                     <div className="min-w-0 flex-1">
-                      <p className={`text-sm font-medium truncate leading-tight ${isActive ? 'text-violet-200' : 'text-white/80'}`}>
+                      <p className="text-sm font-medium truncate leading-tight" style={{ color: isActive ? '#c4b0f0' : 'rgba(232,232,232,0.75)' }}>
                         {doc.title || 'Untitled'}
                       </p>
-                      <p className="text-[10px] text-white/30 truncate mt-0.5 font-mono">{doc.seo_slug || '—'}</p>
+                      <p className="text-[10px] truncate mt-0.5 font-mono" style={{ color: 'rgba(255,255,255,0.25)' }}>{doc.seo_slug || '—'}</p>
                       <div className="flex items-center gap-2 mt-1.5">
                         <span className="text-[10px]" style={{ color: st.text }}>{doc.status}</span>
-                        {doc.word_count > 0 && <span className="text-[10px] text-white/20">{doc.word_count}w</span>}
+                        {doc.word_count > 0 && <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.18)' }}>{doc.word_count}w</span>}
                       </div>
                     </div>
                     <button
                       onClick={e => handleDelete(doc.id, e)}
-                      className="opacity-0 group-hover:opacity-100 p-1 text-white/20 hover:text-red-400 rounded transition-all flex-shrink-0"
+                      className="opacity-0 group-hover:opacity-100 p-1 rounded transition-all flex-shrink-0"
+                      style={{ color: 'rgba(255,255,255,0.18)' }}
+                      onMouseEnter={e => e.currentTarget.style.color = '#f87171'}
+                      onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.18)'}
                     >
                       <Trash2 size={11} />
                     </button>
@@ -268,18 +329,18 @@ export default function AdminCmsDocEditor({ adminToken }) {
             })
           )}
         </div>
-        <div className="px-4 py-2 border-t border-white/10">
-          <p className="text-[10px] text-white/25 text-center">{docs.length} documents</p>
+        <div className="px-4 py-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+          <p className="text-[10px] text-center" style={{ color: 'rgba(255,255,255,0.20)' }}>{docs.length} documents</p>
         </div>
       </div>
 
       {/* Right — editor */}
       {!inEditor ? (
-        <div className="flex-1 flex items-center justify-center">
+        <div className="flex-1 flex items-center justify-center" style={{ color: 'rgba(232,232,232,0.40)' }}>
           <div className="text-center">
-            <BookOpen size={36} className="text-white/15 mx-auto mb-4" />
-            <p className="text-white/40 text-sm mb-1">Select a document or create a new one</p>
-            <button onClick={openNew} className="mt-3 h-9 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium flex items-center gap-2 mx-auto">
+            <BookOpen size={36} className="mx-auto mb-4" style={{ color: 'rgba(255,255,255,0.10)' }} />
+            <p className="text-sm mb-1">Select a document or create a new one</p>
+            <button onClick={openNew} className="mt-3 h-9 px-4 rounded-xl text-sm font-medium flex items-center gap-2 mx-auto" style={{ background: '#9575e0', color: 'white' }}>
               <Plus size={14} /> New Document
             </button>
           </div>
@@ -287,24 +348,24 @@ export default function AdminCmsDocEditor({ adminToken }) {
       ) : (
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {/* Toolbar */}
-          <div className="h-14 flex-shrink-0 border-b border-white/10 flex items-center px-5 gap-3" style={{ background: 'rgba(255,255,255,0.02)' }}>
+          <div className="h-14 flex-shrink-0 border-b flex items-center px-5 gap-3" style={{ background: '#191919', borderColor: 'rgba(255,255,255,0.07)' }}>
             <div className="flex-1 min-w-0">
               <input
                 value={form.title}
                 onChange={e => handleTitleChange(e.target.value)}
                 placeholder="Document title…"
-                className="w-full text-lg font-bold text-white bg-transparent outline-none placeholder-white/25 truncate"
+                className="w-full text-lg font-bold bg-transparent outline-none truncate"
+                style={{ color: '#E8E8E8' }}
               />
             </div>
 
-            {/* Status badge */}
             {editDoc && (
               <div
                 className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium border flex-shrink-0"
                 style={{
-                  background: STATUS_COLORS[form.status]?.bg,
+                  background:  STATUS_COLORS[form.status]?.bg,
                   borderColor: STATUS_COLORS[form.status]?.border,
-                  color: STATUS_COLORS[form.status]?.text,
+                  color:       STATUS_COLORS[form.status]?.text,
                 }}
               >
                 {form.status === 'published' ? <Globe size={11} /> : <Lock size={11} />}
@@ -312,37 +373,36 @@ export default function AdminCmsDocEditor({ adminToken }) {
               </div>
             )}
 
-            {/* PDF upload */}
             <input ref={pdfRef} type="file" accept=".pdf" className="hidden" onChange={handlePdfUpload} />
             <button
               onClick={() => pdfRef.current?.click()}
               disabled={pdfLoading}
-              className="h-8 px-3 rounded-lg bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/20 flex items-center gap-1.5 text-xs font-medium disabled:opacity-40 flex-shrink-0"
-              title="Upload PDF and append text to editor"
+              className="h-8 px-3 rounded-lg flex items-center gap-1.5 text-xs font-medium disabled:opacity-40 flex-shrink-0 border"
+              style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa', borderColor: 'rgba(59,130,246,0.20)' }}
             >
               {pdfLoading ? <Loader2 size={12} className="animate-spin" /> : <FileUp size={12} />}
               PDF
             </button>
 
-            {/* Publish toggle */}
             <button
               onClick={handlePublishToggle}
               disabled={publishing || !editDoc}
-              className={`h-8 px-3 rounded-lg flex items-center gap-1.5 text-xs font-medium disabled:opacity-40 flex-shrink-0 border transition-colors ${
+              className="h-8 px-3 rounded-lg flex items-center gap-1.5 text-xs font-medium disabled:opacity-40 flex-shrink-0 border"
+              style={
                 form.status === 'published'
-                  ? 'bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 border-amber-500/20'
-                  : 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border-emerald-500/20'
-              }`}
+                  ? { background: 'rgba(245,158,11,0.15)', color: '#fbbf24', borderColor: 'rgba(245,158,11,0.20)' }
+                  : { background: 'rgba(16,185,129,0.15)', color: '#34d399', borderColor: 'rgba(16,185,129,0.20)' }
+              }
             >
               {publishing ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />}
               {form.status === 'published' ? 'Unpublish' : 'Publish'}
             </button>
 
-            {/* Save */}
             <button
               onClick={handleSave}
               disabled={saving || !form.title.trim()}
-              className="h-8 px-4 rounded-lg bg-violet-600 hover:bg-violet-500 text-white flex items-center gap-1.5 text-xs font-semibold disabled:opacity-40 flex-shrink-0"
+              className="h-8 px-4 rounded-lg flex items-center gap-1.5 text-xs font-semibold disabled:opacity-40 flex-shrink-0"
+              style={{ background: '#9575e0', color: 'white' }}
             >
               {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
               {saving ? 'Saving…' : 'Save'}
@@ -350,20 +410,20 @@ export default function AdminCmsDocEditor({ adminToken }) {
           </div>
 
           {/* Sub-tabs */}
-          <div className="flex-shrink-0 border-b border-white/10 flex gap-0" style={{ background: 'rgba(255,255,255,0.015)' }}>
+          <div className="flex-shrink-0 border-b flex gap-0" style={{ background: 'rgba(255,255,255,0.012)', borderColor: 'rgba(255,255,255,0.07)' }}>
             {[
               { id: 'content', label: 'Content', icon: Edit2 },
-              { id: 'seo', label: 'SEO & Meta', icon: Tag },
-              { id: 'geo', label: 'GEO Tags', icon: Globe },
+              { id: 'seo',     label: 'SEO & Meta', icon: Tag },
+              { id: 'geo',     label: 'GEO Tags',   icon: Globe },
             ].map(t => (
               <button
                 key={t.id}
                 onClick={() => setSeoTab(t.id)}
-                className={`flex items-center gap-1.5 px-5 py-3 text-xs font-medium border-b-2 transition-colors ${
-                  seoTab === t.id
-                    ? 'border-violet-500 text-violet-400'
-                    : 'border-transparent text-white/40 hover:text-white/70'
-                }`}
+                className="flex items-center gap-1.5 px-5 py-3 text-xs font-medium border-b-2 transition-colors"
+                style={{
+                  borderBottomColor: seoTab === t.id ? '#9575e0' : 'transparent',
+                  color: seoTab === t.id ? '#c4b0f0' : 'rgba(255,255,255,0.35)',
+                }}
               >
                 <t.icon size={12} />
                 {t.label}
@@ -371,24 +431,38 @@ export default function AdminCmsDocEditor({ adminToken }) {
             ))}
             <div className="ml-auto flex items-center px-4 gap-3">
               {form.content && (
-                <span className="text-[10px] text-white/25">
+                <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.20)' }}>
                   {form.content.split(/\s+/).filter(Boolean).length}w · {form.content.length}ch
                 </span>
               )}
             </div>
           </div>
 
-          {/* Content tab — Gutenberg-style MD editor */}
+          {/* Content tab — MDXEditor */}
           {seoTab === 'content' && (
-            <div className="flex-1 overflow-hidden" data-color-mode="dark">
-              <MDEditor
-                value={form.content}
-                onChange={val => setForm(f => ({ ...f, content: val || '' }))}
-                height="100%"
-                preview="live"
-                visibleDragbar={false}
-                extraCommands={[aiParseCommand, commands.divider, commands.fullscreen]}
-                style={{ borderRadius: 0, border: 'none', height: '100%' }}
+            <div className="flex-1 overflow-hidden mdx-admin-editor">
+              <MDXEditor
+                ref={editorRef}
+                key={editDoc?.id ?? '__new__'}
+                markdown={form.content || ''}
+                onChange={md => setForm(f => ({ ...f, content: md }))}
+                plugins={[
+                  headingsPlugin(),
+                  listsPlugin(),
+                  quotePlugin(),
+                  thematicBreakPlugin(),
+                  markdownShortcutPlugin(),
+                  codeBlockPlugin({ defaultCodeBlockLanguage: 'text' }),
+                  codeMirrorPlugin({ codeBlockLanguages: { js: 'JavaScript', ts: 'TypeScript', python: 'Python', text: 'Text', md: 'Markdown', html: 'HTML', css: 'CSS' } }),
+                  tablePlugin(),
+                  linkPlugin(),
+                  diffSourcePlugin({ viewMode: 'rich-text', diffMarkdown: form.content || '' }),
+                  toolbarPlugin({
+                    toolbarContents: () => <MdxToolbar onAiParse={handleAiParse} aiParsing={aiParsing} />,
+                  }),
+                ]}
+                className="mdx-editor-dark h-full"
+                contentEditableClassName="mdx-editor-content"
               />
             </div>
           )}
@@ -398,109 +472,111 @@ export default function AdminCmsDocEditor({ adminToken }) {
             <div className="flex-1 overflow-y-auto p-6">
               <div className="max-w-2xl mx-auto space-y-5">
                 <div>
-                  <label className="text-xs text-white/50 block mb-1.5">URL Slug</label>
-                  <div className="flex items-center gap-2 h-10 rounded-xl bg-white/5 border border-white/10 overflow-hidden px-3">
-                    <Link2 size={13} className="text-white/30 flex-shrink-0" />
-                    <span className="text-white/25 text-sm">/learn/</span>
+                  <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>URL Slug</label>
+                  <div className="flex items-center gap-2 h-10 rounded-xl overflow-hidden px-3" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                    <Link2 size={13} style={{ color: 'rgba(255,255,255,0.25)' }} className="flex-shrink-0" />
+                    <span className="text-sm" style={{ color: 'rgba(255,255,255,0.20)' }}>/learn/</span>
                     <input
                       value={form.seo_slug}
                       onChange={e => setForm(f => ({ ...f, seo_slug: e.target.value }))}
                       placeholder="auto-from-title"
-                      className="flex-1 h-full text-sm text-white bg-transparent outline-none font-mono"
+                      className="flex-1 h-full text-sm bg-transparent outline-none font-mono"
+                      style={{ color: '#E8E8E8' }}
                     />
                   </div>
                 </div>
-
                 <div>
-                  <label className="text-xs text-white/50 block mb-1.5">
-                    Meta Description <span className="text-white/25">({form.meta_description?.length || 0}/160)</span>
+                  <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>
+                    Meta Description <span style={{ color: 'rgba(255,255,255,0.20)' }}>({form.meta_description?.length || 0}/160)</span>
                   </label>
                   <textarea
                     value={form.meta_description}
                     onChange={e => setForm(f => ({ ...f, meta_description: e.target.value.slice(0, 160) }))}
                     placeholder="160-character description for Google snippets…"
                     rows={3}
-                    className="w-full px-4 py-2.5 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 resize-none"
+                    className="w-full px-4 py-2.5 rounded-xl text-sm outline-none resize-none"
+                    style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                   />
                 </div>
-
                 <div>
-                  <label className="text-xs text-white/50 block mb-1.5">Primary Keyword</label>
+                  <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Primary Keyword</label>
                   <input
                     value={form.primary_keyword}
                     onChange={e => setForm(f => ({ ...f, primary_keyword: e.target.value }))}
                     placeholder="e.g. AHSEC Class 12 Physics Notes"
-                    className="w-full h-10 px-4 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
+                    className="w-full h-10 px-4 rounded-xl text-sm outline-none"
+                    style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                   />
                 </div>
-
                 <div>
-                  <label className="text-xs text-white/50 block mb-1.5">SEO Tags <span className="text-white/25">(comma-separated)</span></label>
+                  <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>SEO Tags <span style={{ color: 'rgba(255,255,255,0.20)' }}>(comma-separated)</span></label>
                   <input
                     value={form.seo_tags}
                     onChange={e => setForm(f => ({ ...f, seo_tags: e.target.value }))}
                     placeholder="ahsec, class 12, physics, optics, notes"
-                    className="w-full h-10 px-4 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
+                    className="w-full h-10 px-4 rounded-xl text-sm outline-none"
+                    style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                   />
                 </div>
-
                 <div>
-                  <label className="text-xs text-white/50 block mb-1.5">Category Path</label>
+                  <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Category Path</label>
                   <input
                     value={form.category}
                     onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
                     placeholder="ahsec/class12/science/physics"
-                    className="w-full h-10 px-4 rounded-xl text-sm text-white bg-white/5 border border-white/10 font-mono outline-none focus:border-violet-500"
+                    className="w-full h-10 px-4 rounded-xl text-sm font-mono outline-none"
+                    style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                   />
                 </div>
-
                 <div>
-                  <label className="text-xs text-white/50 block mb-1.5">Schema Type</label>
-                  <div className="flex gap-2">
+                  <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Schema Type</label>
+                  <div className="flex gap-2 flex-wrap">
                     {['Article', 'FAQPage', 'HowTo', 'EducationalOccupationalProgram'].map(s => (
                       <button
                         key={s}
                         onClick={() => setForm(f => ({ ...f, schema_type: s }))}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all"
+                        style={
                           form.schema_type === s
-                            ? 'border-violet-500 bg-violet-500/20 text-violet-300'
-                            : 'border-white/10 bg-white/5 text-white/40 hover:text-white/70'
-                        }`}
+                            ? { borderColor: '#9575e0', background: 'rgba(149,117,224,0.18)', color: '#c4b0f0' }
+                            : { borderColor: 'rgba(255,255,255,0.10)', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.40)' }
+                        }
                       >
                         {s}
                       </button>
                     ))}
                   </div>
                 </div>
-
                 <div>
-                  <label className="text-xs text-white/50 block mb-1.5">Long Description</label>
+                  <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Long Description</label>
                   <textarea
                     value={form.description}
                     onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
-                    placeholder="Optional extended description for the document…"
+                    placeholder="Optional extended description…"
                     rows={4}
-                    className="w-full px-4 py-2.5 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 resize-none"
+                    className="w-full px-4 py-2.5 rounded-xl text-sm outline-none resize-none"
+                    style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                   />
                 </div>
-
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-xs text-white/50 block mb-1.5">Thumbnail URL</label>
+                    <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Thumbnail URL</label>
                     <input
                       value={form.thumbnail_url}
                       onChange={e => setForm(f => ({ ...f, thumbnail_url: e.target.value }))}
                       placeholder="https://…"
-                      className="w-full h-10 px-4 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
+                      className="w-full h-10 px-4 rounded-xl text-sm outline-none"
+                      style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                     />
                   </div>
                   <div>
-                    <label className="text-xs text-white/50 block mb-1.5">Alt Text</label>
+                    <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Alt Text</label>
                     <input
                       value={form.alt_text}
                       onChange={e => setForm(f => ({ ...f, alt_text: e.target.value }))}
                       placeholder="Image alt text"
-                      className="w-full h-10 px-4 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
+                      className="w-full h-10 px-4 rounded-xl text-sm outline-none"
+                      style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                     />
                   </div>
                 </div>
@@ -512,73 +588,69 @@ export default function AdminCmsDocEditor({ adminToken }) {
           {seoTab === 'geo' && (
             <div className="flex-1 overflow-y-auto p-6">
               <div className="max-w-2xl mx-auto space-y-5">
-                <div className="px-4 py-3 rounded-xl border border-violet-500/20 bg-violet-500/5">
-                  <p className="text-xs text-violet-300 font-medium mb-1">GEO Targeting</p>
-                  <p className="text-xs text-white/40">These tags help AI search engines (Perplexity, ChatGPT, Gemini) surface this page for Assam board students.</p>
-                </div>
-
                 <div>
-                  <label className="text-xs text-white/50 block mb-1.5">GEO Context Tags <span className="text-white/25">(comma-separated)</span></label>
+                  <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>GEO Tags <span style={{ color: 'rgba(255,255,255,0.20)' }}>(board/class/subject/topic)</span></label>
                   <input
                     value={form.geo_tags}
                     onChange={e => setForm(f => ({ ...f, geo_tags: e.target.value }))}
-                    placeholder="AHSEC, Assam Board, Class 12, Science, Physics, Optics"
-                    className="w-full h-10 px-4 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
+                    placeholder="ahsec/class-12/pcm/physics"
+                    className="w-full h-10 px-4 rounded-xl text-sm font-mono outline-none"
+                    style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                   />
                 </div>
-
-                <div>
-                  <label className="text-xs text-white/50 block mb-2">Quick presets</label>
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      'AHSEC, Assam Board, Class 11, Science',
-                      'AHSEC, Assam Board, Class 12, Science',
-                      'AHSEC, Assam Board, Class 11, Arts',
-                      'AHSEC, Assam Board, Class 12, Arts',
-                      'Dibrugarh University, Degree, Science',
-                      'Dibrugarh University, Degree, Arts',
-                    ].map(preset => (
-                      <button
-                        key={preset}
-                        onClick={() => setForm(f => ({ ...f, geo_tags: preset }))}
-                        className="px-3 py-1.5 rounded-lg text-xs text-white/50 hover:text-white border border-white/10 hover:border-violet-500/40 transition-colors"
-                      >
-                        {preset}
-                      </button>
-                    ))}
-                  </div>
+                <div className="p-4 rounded-xl text-xs space-y-1" style={{ background: 'rgba(149,117,224,0.06)', border: '1px solid rgba(149,117,224,0.12)', color: 'rgba(232,232,232,0.55)' }}>
+                  <p className="font-semibold mb-2" style={{ color: '#c4b0f0' }}>GEO Presets</p>
+                  {['ahsec/class-11/arts', 'ahsec/class-12/science', 'ahsec/class-12/commerce', 'du/degree/bcom', 'du/degree/ba'].map(preset => (
+                    <button
+                      key={preset}
+                      onClick={() => setForm(f => ({ ...f, geo_tags: preset }))}
+                      className="block w-full text-left py-1.5 px-2.5 rounded-lg font-mono text-xs transition-colors"
+                      style={{ color: 'rgba(232,232,232,0.50)' }}
+                      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(149,117,224,0.10)'; e.currentTarget.style.color = '#c4b0f0'; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = ''; e.currentTarget.style.color = 'rgba(232,232,232,0.50)'; }}
+                    >
+                      {preset}
+                    </button>
+                  ))}
                 </div>
-
-                <div className="border-t border-white/10 pt-5">
-                  <p className="text-xs text-white/40 mb-3">Content stats</p>
-                  <div className="grid grid-cols-3 gap-3">
-                    {[
-                      { label: 'Words', value: form.content.split(/\s+/).filter(Boolean).length },
-                      { label: 'Characters', value: form.content.length },
-                      { label: 'Headings', value: (form.content.match(/^#{1,3}\s/gm) || []).length },
-                    ].map(stat => (
-                      <div key={stat.label} className="px-4 py-3 rounded-xl bg-white/[0.03] border border-white/10 text-center">
-                        <p className="text-lg font-bold text-white">{stat.value.toLocaleString()}</p>
-                        <p className="text-[10px] text-white/35 mt-0.5">{stat.label}</p>
-                      </div>
-                    ))}
+                {form.geo_tags && (
+                  <div className="p-4 rounded-xl text-xs space-y-2" style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.12)' }}>
+                    <p className="font-semibold" style={{ color: '#34d399' }}>Live GEO URL Preview</p>
+                    <p className="font-mono break-all" style={{ color: 'rgba(232,232,232,0.60)' }}>
+                      syrabit.ai/{form.geo_tags}/{form.seo_slug || 'your-slug'}
+                    </p>
                   </div>
-                </div>
-
-                <div className="border-t border-white/10 pt-5">
-                  <p className="text-xs text-white/40 mb-3">Live page URL</p>
-                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-white/[0.03] border border-white/10">
-                    <Globe size={12} className="text-violet-400 flex-shrink-0" />
-                    <span className="text-xs font-mono text-white/60">/learn/{form.seo_slug || autoSlug(form.title) || 'your-slug'}</span>
-                    {form.status === 'published' && <CheckCircle size={12} className="text-emerald-400 ml-auto" />}
-                    {form.status !== 'published' && <AlertCircle size={12} className="text-white/20 ml-auto" />}
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           )}
         </div>
       )}
+
+      {/* MDXEditor dark theme overrides */}
+      <style>{`
+        .mdx-admin-editor { background: #121212; }
+        .mdx-editor-dark { --mdxeditor-bg: #121212; height: 100%; overflow: hidden; }
+        .mdx-editor-dark ._editorRoot_uazmk_10 { height: 100%; background: #121212; }
+        .mdx-editor-dark ._contentEditable_uazmk_73 { min-height: calc(100vh - 200px); color: #E8E8E8; }
+        .mdx-editor-dark ._toolbarRoot_uazmk_127 { background: #191919; border-bottom: 1px solid rgba(255,255,255,0.07); }
+        .mdx-editor-dark ._toolbarToggleItem_uazmk_144, .mdx-editor-dark button[class*="_toolbarButton"] { color: rgba(232,232,232,0.65); }
+        .mdx-editor-dark ._toolbarToggleItem_uazmk_144:hover, .mdx-editor-dark button[class*="_toolbarButton"]:hover { background: rgba(149,117,224,0.15); color: #c4b0f0; }
+        .mdx-editor-content { padding: 1.5rem 2rem; min-height: 400px; line-height: 1.85; font-size: 0.93rem; color: #E8E8E8; }
+        .mdx-editor-content h1, .mdx-editor-content h2, .mdx-editor-content h3 { color: #f0eeff; font-family: 'Space Grotesk', sans-serif; }
+        .mdx-editor-content h2 { font-size: 1.3rem; font-weight: 700; margin: 1.8rem 0 0.7rem; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.4rem; }
+        .mdx-editor-content h3 { font-size: 1.05rem; font-weight: 600; margin: 1.3rem 0 0.5rem; }
+        .mdx-editor-content p { margin: 0 0 1rem; }
+        .mdx-editor-content ul, .mdx-editor-content ol { padding-left: 1.4rem; margin: 0.5rem 0 1rem; }
+        .mdx-editor-content li { margin: 0.3rem 0; }
+        .mdx-editor-content blockquote { border-left: 3px solid rgba(149,117,224,0.5); padding: 0.5rem 0 0.5rem 1rem; margin: 1rem 0; color: rgba(232,232,232,0.65); background: rgba(149,117,224,0.04); border-radius: 0 8px 8px 0; }
+        .mdx-editor-content code { background: rgba(232,232,232,0.08); padding: 0.1em 0.35em; border-radius: 4px; font-size: 0.85em; color: #c4b0f0; }
+        .mdx-editor-content pre { background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.07); border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+        .mdx-editor-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        .mdx-editor-content th { background: rgba(255,255,255,0.05); font-weight: 600; padding: 0.45rem 0.7rem; border: 1px solid rgba(255,255,255,0.08); color: #f0eeff; }
+        .mdx-editor-content td { padding: 0.4rem 0.7rem; border: 1px solid rgba(255,255,255,0.07); }
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }

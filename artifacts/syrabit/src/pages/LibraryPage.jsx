@@ -4,8 +4,9 @@ import {
   Search, Bookmark, BookmarkCheck,
   BookOpen, Layers, ChevronRight, Sparkles,
   Share2, RefreshCw, ExternalLink, Globe as GlobeIcon, Lock,
-  FileText, Clock, ArrowRight,
+  FileText, Clock, ArrowRight, BookText, Loader2,
 } from 'lucide-react';
+import { MasonryInfiniteGrid } from '@egjs/react-infinitegrid';
 
 const CMS_API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -79,6 +80,109 @@ function CmsDocsSection() {
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
         {docs.slice(0, 9).map(doc => <CmsDocCard key={doc.id} doc={doc} />)}
       </div>
+    </div>
+  );
+}
+
+function CmsPostCard({ post }) {
+  const to = `/subject/${post.subject_id}`;
+  const mins = post.word_count ? Math.max(1, Math.ceil(post.word_count / 200)) : null;
+  return (
+    <Link
+      to={to}
+      data-grid-groupkey={post.groupKey}
+      data-grid-key={post.subject_id}
+      className="block rounded-2xl overflow-hidden border transition-all duration-200 hover:-translate-y-0.5"
+      style={{ background: '#1a1a1a', border: '1px solid rgba(149,117,224,0.10)', boxShadow: '0 4px 20px rgba(0,0,0,0.30)' }}
+    >
+      <div className="p-4 flex flex-col gap-2">
+        <div className="flex items-start gap-2">
+          <BookText size={14} className="text-violet-400 shrink-0 mt-0.5" />
+          <h3 className="text-sm font-semibold leading-snug line-clamp-2" style={{ color: '#E8E8E8' }}>{post.title || 'Untitled Post'}</h3>
+        </div>
+        {post.word_count > 0 && (
+          <div className="flex items-center gap-3 text-[10px]" style={{ color: 'rgba(232,232,232,0.35)' }}>
+            {mins && <span className="flex items-center gap-1"><Clock size={9} />{mins} min</span>}
+            <span>{post.word_count.toLocaleString()} words</span>
+          </div>
+        )}
+        <div className="flex items-center justify-between mt-1">
+          {post.board_slug && (
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wide" style={{ background: 'rgba(149,117,224,0.12)', color: '#a78bfa' }}>
+              {post.board_slug}
+            </span>
+          )}
+          <span className="ml-auto flex items-center gap-1 text-[10px] font-medium" style={{ color: '#9575e0' }}>
+            Read <ArrowRight size={10} />
+          </span>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+const POSTS_PER_PAGE = 12;
+
+function CmsPostsGrid({ board, classSlug }) {
+  const [items,    setItems]    = useState([]);
+  const [total,    setTotal]    = useState(0);
+  const [loading,  setLoading]  = useState(false);
+  const [done,     setDone]     = useState(false);
+  const groupKey = useRef(0);
+
+  const fetchPage = useCallback(async (skip) => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams({ limit: POSTS_PER_PAGE, skip });
+      if (board)      params.append('board',      board);
+      if (classSlug)  params.append('class_slug', classSlug);
+      const res  = await fetch(`${CMS_API}/cms/posts?${params}`);
+      const data = await res.json();
+      const newItems = (data.items || []).map(p => ({ ...p, groupKey: groupKey.current }));
+      setItems(prev => skip === 0 ? newItems : [...prev, ...newItems]);
+      setTotal(data.total || 0);
+      if (skip + POSTS_PER_PAGE >= (data.total || 0)) setDone(true);
+      groupKey.current += 1;
+    } catch { /* silent */ }
+    finally { setLoading(false); }
+  }, [board, classSlug]);
+
+  useEffect(() => { setItems([]); setDone(false); groupKey.current = 0; fetchPage(0); }, [fetchPage]);
+
+  if (!loading && items.length === 0) return null;
+
+  return (
+    <div className="w-full max-w-6xl mx-auto px-4 md:px-6 pb-10">
+      <div className="flex items-center gap-2 mb-4 mt-2">
+        <BookText size={16} className="text-violet-400" />
+        <h2 className="text-base font-semibold text-foreground">Subject Blog Posts</h2>
+        {total > 0 && (
+          <span className="ml-1 px-2 py-0.5 rounded-full text-[10px] font-medium" style={{ background: 'rgba(149,117,224,0.12)', color: '#a78bfa' }}>{total}</span>
+        )}
+      </div>
+      <MasonryInfiniteGrid
+        className="cms-posts-masonry"
+        gap={16}
+        align="stretch"
+        useResizeObserver
+        observeChildren
+        onRequestAppend={({ groupKey: gk }) => {
+          if (loading || done) return;
+          fetchPage(items.length);
+        }}
+      >
+        {items.map(post => (
+          <CmsPostCard key={post.subject_id} post={post} />
+        ))}
+      </MasonryInfiniteGrid>
+      {loading && (
+        <div className="flex justify-center py-6">
+          <Loader2 size={20} className="animate-spin text-violet-400" />
+        </div>
+      )}
+      {done && items.length > 0 && (
+        <p className="text-center text-xs py-4" style={{ color: 'rgba(232,232,232,0.25)' }}>All {total} posts loaded</p>
+      )}
     </div>
   );
 }
@@ -914,6 +1018,7 @@ export default function LibraryPage() {
             )}
           </div>
           <CmsDocsSection />
+          <CmsPostsGrid />
         </div>
 
       </div>

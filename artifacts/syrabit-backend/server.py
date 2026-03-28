@@ -7473,6 +7473,63 @@ def _extract_headings_json(raw: str) -> str:
     return json.dumps(headings)
 
 
+def preprocess_markdown(md: str) -> str:
+    """wpautop-equivalent: normalise line endings, expand CMS shortcodes to GFM."""
+    if not md:
+        return ""
+    md = md.replace('\r\n', '\n').replace('\r', '\n')
+    md = re.sub(r'\[PYQ\s+year=(\d{4})\]', r'> 📋 **Past Year Question (\1)**', md)
+    md = re.sub(r'\[IMPORTANT\]', r'> ⚠️ **IMPORTANT**', md)
+    md = re.sub(r'\[TIP\]',       r'> 💡 **TIP**',       md)
+    md = re.sub(r'\[NOTE\]',      r'> 📌 **NOTE**',      md)
+    md = re.sub(r'\[EXAMPLE\]',   r'> 📝 **EXAMPLE**',  md)
+    return md
+
+
+async def merge_subject_content(subject_id: str) -> str:
+    """Aggregate a subject's chapters + chunks into a single markdown document."""
+    try:
+        subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+        if not subject:
+            return ""
+        chapters = await db.chapters.find(
+            {"subject_id": subject_id}, {"_id": 0}
+        ).sort("chapter_number", 1).to_list(100)
+
+        parts: list[str] = [f"# {subject.get('name', 'Subject')}\n\n"]
+        if subject.get("description"):
+            parts.append(f"{subject['description']}\n\n")
+
+        for chapter in chapters:
+            num   = chapter.get("chapter_number", "")
+            title = chapter.get("title", "")
+            heading = f"Chapter {num}: {title}" if num else title
+            parts.append(f"\n## {heading}\n\n")
+            if chapter.get("description"):
+                parts.append(f"{chapter['description']}\n\n")
+            cks = await db.chunks.find(
+                {"chapter_id": chapter["id"]}, {"_id": 0}
+            ).sort("order", 1).to_list(500)
+            for ck in cks:
+                content = (ck.get("content") or "").strip()
+                if not content:
+                    continue
+                ctype = (ck.get("type") or "").lower()
+                if ctype == "pyq":
+                    parts.append(f"> 📋 **Past Year Question**\n>\n> {content}\n\n")
+                elif ctype == "summary":
+                    parts.append(f"### Summary\n\n{content}\n\n")
+                elif ctype == "formula":
+                    parts.append(f"### Formula\n\n{content}\n\n")
+                else:
+                    parts.append(f"{content}\n\n")
+
+        return preprocess_markdown("".join(parts))
+    except Exception as exc:
+        logger.error(f"merge_subject_content({subject_id}): {exc}")
+        return ""
+
+
 class CMSDocument(BaseModel):
     title: str
     content: str = ""           # raw markdown (content_raw)
@@ -7748,26 +7805,138 @@ async def get_public_cms_document(doc_id: str):
         mark_mongo_down()
         raise HTTPException(status_code=503, detail="Content service unavailable")
 
+# ──────────────────────────────────────────────
+# CMS POSTS — subject-merged blog posts
+# ──────────────────────────────────────────────
+
+@api.get("/cms/post/{subject_id}")
+async def get_cms_post_by_subject(subject_id: str):
+    """Get merged blog post for a subject (public). Returns cache or generates on-the-fly."""
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(status_code=503, detail="Content service unavailable")
+        post = await db.cms_posts.find_one(
+            {"subject_id": subject_id, "status": "published"},
+            {"_id": 0, "merged_md": 0}
+        )
+        if post:
+            return post
+        # Generate on the fly (not cached yet)
+        merged_md = await merge_subject_content(subject_id)
+        if not merged_md:
+            raise HTTPException(status_code=404, detail="Subject not found or empty")
+        content_html = _md_to_html(merged_md)
+        headings     = _extract_headings_json(merged_md)
+        word_count   = len(re.sub(r'<[^>]+>', '', content_html).split())
+        subject      = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+        return {
+            "subject_id": subject_id,
+            "title":      (subject.get("name", "") if subject else ""),
+            "subject_merged_html": content_html,
+            "headings":   headings,
+            "word_count": word_count,
+            "status":     "live",
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        mark_mongo_down()
+        raise HTTPException(status_code=503, detail="Content service unavailable")
+
+
+@api.post("/admin/cms/merge/{subject_id}")
+async def admin_merge_subject(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """Merge subject chapters+chunks → cms_posts (admin). Returns word count + headings."""
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="Content service unavailable")
+    merged_md = await merge_subject_content(subject_id)
+    if not merged_md:
+        raise HTTPException(status_code=404, detail="Subject not found or has no chapters")
+    content_html  = _md_to_html(merged_md)
+    headings_json = _extract_headings_json(merged_md)
+    word_count    = len(re.sub(r'<[^>]+>', '', content_html).split())
+    subject       = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    now           = datetime.now(timezone.utc).isoformat()
+    post_data = {
+        "subject_id":          subject_id,
+        "title":               (subject.get("name", "") if subject else ""),
+        "slug":                (subject.get("slug", subject_id) if subject else subject_id),
+        "board_slug":          (subject.get("board_slug", "") if subject else ""),
+        "class_slug":          (subject.get("class_slug", "") if subject else ""),
+        "merged_md":           merged_md,
+        "subject_merged_html": content_html,
+        "headings":            headings_json,
+        "word_count":          word_count,
+        "status":              "published",
+        "updated_at":          now,
+    }
+    await db.cms_posts.update_one(
+        {"subject_id": subject_id},
+        {"$set": post_data, "$setOnInsert": {"created_at": now}},
+        upsert=True
+    )
+    headings = json.loads(headings_json) if headings_json else []
+    return {"subject_id": subject_id, "word_count": word_count, "headings": headings, "slug": post_data["slug"]}
+
+
+@api.get("/cms/posts")
+async def list_cms_posts(
+    board:      Optional[str] = None,
+    class_slug: Optional[str] = None,
+    subject_id: Optional[str] = None,
+    limit:      int = 20,
+    skip:       int = 0,
+):
+    """Paginated published cms_posts for Library infinite scroll."""
+    try:
+        if not await is_mongo_available():
+            return {"items": [], "total": 0}
+        query: dict = {"status": "published"}
+        if board:      query["board_slug"]  = board
+        if class_slug: query["class_slug"]  = class_slug
+        if subject_id: query["subject_id"]  = subject_id
+        limit = min(max(limit, 1), 50)
+        items = await db.cms_posts.find(
+            query, {"_id": 0, "merged_md": 0, "subject_merged_html": 0}
+        ).sort("updated_at", -1).skip(skip).limit(limit).to_list(limit)
+        total = await db.cms_posts.count_documents(query)
+        return {"items": items, "total": total}
+    except Exception:
+        mark_mongo_down()
+        return {"items": [], "total": 0}
+
+
 @api.post("/admin/content/regenerate-sitemap")
 async def regenerate_sitemap(admin: dict = Depends(get_admin_user)):
-    """Regenerate sitemap.xml with all published CMS documents"""
+    """Regenerate sitemap.xml — includes cms_documents AND cms_posts slugs."""
     try:
+        sitemap_entries = []
+        # CMS standalone documents
         docs = await db.cms_documents.find(
             {"status": "published"},
-            {"_id": 0, "seo_slug": 1, "category": 1, "updated_at": 1}
+            {"_id": 0, "seo_slug": 1, "id": 1, "category": 1, "updated_at": 1}
         ).to_list(1000)
-        
-        sitemap_entries = []
         for doc in docs:
-            url_path = f"/library/{doc.get('category', '')}/{doc.get('seo_slug', doc['id'])}".replace('//', '/')
+            slug = doc.get("seo_slug") or doc.get("id", "")
             sitemap_entries.append({
-                "url": url_path,
+                "url":     f"/learn/{slug}",
                 "lastmod": doc.get("updated_at", ""),
-                "priority": "0.8"
+                "priority": "0.8",
             })
-        
-        logger.info(f"Sitemap regenerated: {len(sitemap_entries)} CMS documents")
-        return {"message": f"Sitemap generated with {len(sitemap_entries)} documents", "count": len(sitemap_entries)}
+        # CMS subject-merged posts
+        posts = await db.cms_posts.find(
+            {"status": "published"},
+            {"_id": 0, "slug": 1, "subject_id": 1, "updated_at": 1}
+        ).to_list(2000)
+        for post in posts:
+            slug = post.get("slug") or post.get("subject_id", "")
+            sitemap_entries.append({
+                "url":     f"/subject/{post.get('subject_id', slug)}",
+                "lastmod": post.get("updated_at", ""),
+                "priority": "0.7",
+            })
+        logger.info(f"Sitemap regenerated: {len(sitemap_entries)} entries")
+        return {"message": f"Sitemap generated with {len(sitemap_entries)} entries", "count": len(sitemap_entries)}
     except Exception as e:
         logger.error(f"Sitemap generation error: {e}")
         raise HTTPException(status_code=500, detail="Sitemap generation failed")
