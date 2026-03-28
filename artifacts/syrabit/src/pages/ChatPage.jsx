@@ -119,8 +119,7 @@ function SourcesList({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
     return null;
   })();
 
-  const title = src?.title || ragSubjectName || 'Syrabit Library';
-  const url = src?.url || (ragSubjectId ? `/subject/${ragSubjectId}` : null);
+  const url = (ragSubjectId ? `/subject/${ragSubjectId}` : null) || src?.url || null;
   const isExternal = url && url.startsWith('http');
 
   const handleClick = () => {
@@ -132,43 +131,39 @@ function SourcesList({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
     }
   };
 
-  const snippet = src?.snippet || null;
-  const contentCardName = ragSubjectName || null;
-  const showSubline = snippet || contentCardName || sourceLabel;
+  const displayTitle = ragSubjectName || src?.title || 'Syrabit Library';
+
+  const Tag = url ? 'button' : 'div';
+  const ariaLabel = url
+    ? `${displayTitle}${isExternal ? ' — opens in new tab' : ''}`
+    : undefined;
 
   return (
     <div className="mt-3">
-      <button
-        onClick={handleClick}
-        className="flex items-center gap-2.5 px-3 py-2 rounded-xl transition-all hover:brightness-110 text-left cursor-pointer w-full max-w-lg"
+      <Tag
+        {...(url ? { onClick: handleClick, 'aria-label': ariaLabel } : {})}
+        className={`flex items-center gap-2.5 px-3 py-1.5 rounded-xl transition-all text-left w-full max-w-md ${url ? 'cursor-pointer hover:brightness-110' : ''}`}
         style={{
           background: 'rgba(59,130,246,0.10)',
           border: '1px solid rgba(59,130,246,0.25)',
         }}
-        title={url || title}
+        title={url || displayTitle}
       >
         <div
-          className="w-7 h-7 rounded-md flex items-center justify-center shrink-0"
+          className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
           style={{ background: 'rgba(59,130,246,0.15)' }}
         >
-          <BookOpen size={14} className="text-blue-400" />
+          <BookOpen size={13} className="text-blue-400" />
         </div>
-        <div className="min-w-0 flex-1 flex items-center gap-2">
-          <span className="text-[10px] font-semibold text-blue-400/60 uppercase tracking-wide shrink-0">
-            Syrabit.ai
-          </span>
-          <span className="text-[13px] font-semibold text-blue-300 truncate">
-            {title}
-          </span>
-          {contentCardName && contentCardName !== title && (
-            <span className="text-[10px] text-blue-400/50 truncate shrink-0 max-w-[120px] hidden sm:inline">
-              {contentCardName}
-            </span>
-          )}
-        </div>
+        <span className="text-[10px] font-semibold text-blue-400/50 uppercase tracking-wide shrink-0">
+          Syrabit
+        </span>
+        <span className="text-[12.5px] font-semibold text-blue-300 truncate min-w-0">
+          {displayTitle}
+        </span>
         {sourceLabel && (
           <span
-            className="text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0 whitespace-nowrap"
+            className="text-[9.5px] font-medium px-1.5 py-0.5 rounded-full shrink-0 whitespace-nowrap"
             style={{
               background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.15)',
               color: ragSource === 'web' ? '#60a5fa' : '#34d399',
@@ -177,8 +172,8 @@ function SourcesList({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
             {sourceLabel}
           </span>
         )}
-        {url && <ExternalLink size={11} className="text-blue-400/40 shrink-0" />}
-      </button>
+        {url && <ExternalLink size={10} className="text-blue-400/40 shrink-0" />}
+      </Tag>
     </div>
   );
 }
