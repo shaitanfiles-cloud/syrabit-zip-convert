@@ -552,6 +552,25 @@ async def update_page_status(page_id: str, status: str = "published", _admin: di
 
 # ─── PUBLIC: Serve SEO pages ────────────────────────────────────────────────
 
+async def _inject_qa(page: dict) -> dict:
+    """Attach published QA pairs to a page dict (best-effort)."""
+    try:
+        qa = await _db.qa_pairs.find(
+            {
+                "board_slug": page.get("board_slug", ""),
+                "class_slug": page.get("class_slug", ""),
+                "subject_slug": page.get("subject_slug", ""),
+                "topic_slug": page.get("topic_slug", ""),
+                "status": "published",
+            },
+            {"_id": 0},
+        ).sort("upvotes", -1).limit(20).to_list(20)
+        page["qa_pairs"] = qa
+    except Exception:
+        page["qa_pairs"] = []
+    return page
+
+
 @router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}")
 async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, topic_slug: str):
     page = await _db.seo_pages.find_one(
@@ -567,7 +586,7 @@ async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, t
     )
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
-    return page
+    return await _inject_qa(page)
 
 
 @router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}")
@@ -587,7 +606,7 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
     )
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
-    return page
+    return await _inject_qa(page)
 
 
 @router.get("/page-types/{board}/{class_slug}/{subject_slug}/{topic_slug}")

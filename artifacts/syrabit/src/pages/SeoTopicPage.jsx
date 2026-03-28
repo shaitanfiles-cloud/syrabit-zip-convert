@@ -7,6 +7,7 @@ import { BookOpen, ChevronRight, ArrowLeft, ArrowRight, FileText, HelpCircle,
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getSeoPage, getSeoPageTypes, getSeoRelated } from '@/utils/api';
+import CommonQuestions from '@/components/seo/CommonQuestions';
 
 const PAGE_TYPE_META = {
   'notes':               { label: 'Notes',               icon: FileText,   color: 'bg-blue-500/15 text-blue-400 border-blue-500/25' },
@@ -412,6 +413,17 @@ export default function SeoTopicPage() {
               ))}
             </div>
           </div>
+        )}
+
+        {/* Common Questions (from QA pairs) */}
+        {page?.qa_pairs?.length > 0 && (
+          <CommonQuestions
+            qaPairs={page.qa_pairs}
+            board={board}
+            classSlug={classSlug}
+            subjectSlug={subjectSlug}
+            topicSlug={topicSlug}
+          />
         )}
 
         {/* AI CTA */}

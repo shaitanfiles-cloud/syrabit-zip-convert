@@ -163,6 +163,28 @@ export const adminSeoPilot = (token, params = {}) =>
     params,
   });
 
+// ── QA Engine ─────────────────────────────────────────────────────────────────
+export const getTopicQa = (board, classSlug, subjectSlug, topicSlug) =>
+  axios.get(`${API_BASE}/seo/qa/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
+
+export const adminListChatMessages = (token, params = {}) =>
+  axios.get(`${API_BASE}/admin/chat-messages`, { headers: adminHeaders(token), withCredentials: true, params });
+
+export const adminListQaPairs = (token, params = {}) =>
+  axios.get(`${API_BASE}/admin/qa`, { headers: adminHeaders(token), withCredentials: true, params });
+
+export const adminCreateQaPair = (token, data) =>
+  axios.post(`${API_BASE}/admin/qa`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminUpdateQaStatus = (token, qaId, status) =>
+  axios.patch(`${API_BASE}/admin/qa/${qaId}/status`, { status }, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminDeleteQaPair = (token, qaId) =>
+  axios.delete(`${API_BASE}/admin/qa/${qaId}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminPromoteChatToQa = (token, msgId) =>
+  axios.post(`${API_BASE}/admin/qa/from-chat/${msgId}`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 // ── Payments (excluded from current build) ───────────────────────────────────
 
 export const createPaymentOrder = (plan) =>

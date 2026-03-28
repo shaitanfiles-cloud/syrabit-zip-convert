@@ -31,6 +31,7 @@ import AdminRateLimits       from '@/components/admin/AdminRateLimits';
 import AdminActivityLog      from '@/components/admin/AdminActivityLog';
 import AdminHealth           from '@/components/admin/AdminHealth';
 import AdminSeoManager       from '@/components/admin/AdminSeoManager';
+import AdminQaManager        from '@/components/admin/AdminQaManager';
 
 // ── Section registry ──────────────────────────────────────────────────────────
 const SECTIONS = [
@@ -39,6 +40,7 @@ const SECTIONS = [
   { id: 'syllabus',      icon: FolderTree,      label: 'Syllabus',          group: 'content'  },
   { id: 'content',       icon: PenTool,         label: 'Content Editor',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
+  { id: 'qamanager',     icon: MessageSquare,   label: 'QA Review',         group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
   { id: 'conversations', icon: MessageSquare,   label: 'Conversations',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
@@ -69,6 +71,7 @@ const SECTION_COMPONENTS = {
   syllabus:      AdminSyllabus,
   content:       AdminContentEditor,
   seomanager:    AdminSeoManager,
+  qamanager:     AdminQaManager,
   users:         AdminUsers,
   conversations: AdminConversations,
   analytics:     AdminAnalytics,

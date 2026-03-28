@@ -536,6 +536,12 @@ async def lifespan(app):
         await db.page_views.create_index("visitor_id")
     except Exception as e:
         logger.warning(f"Seeding/indexing skipped (MongoDB may not be ready): {e}")
+    # QA engine indexes (deferred import — qa_engine registered after this definition)
+    try:
+        from qa_engine import ensure_qa_indexes as _ensure_qa_indexes
+        await _ensure_qa_indexes()
+    except Exception as e:
+        logger.warning(f"QA index creation skipped: {e}")
     _rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
     asyncio.create_task(_migrate_supabase_users_to_pg())
     logger.info("Syrabit.ai API started")
@@ -4475,6 +4481,18 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     new_used = credits_info["used"] + 1
     await supa_update_user(user["id"], {"credits_used": new_used})
 
+    # Fire-and-forget: log chat turn for QA curation
+    asyncio.create_task(_log_chat_message(
+        user_id=user["id"],
+        question=msg.message,
+        raw_ai_answer=answer,
+        subject_id=msg.subject_id,
+        subject_name=msg.subject_name,
+        board_name=ctx_board_name,
+        class_name=ctx_class_name,
+        conversation_id=conv_id,
+    ))
+
     return {
         "answer": answer,
         "conversation_id": conv_id,
@@ -4702,6 +4720,16 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 user_msg_saved, answer,
                 rag_source_saved, rag_chunks_count,
                 credits_info["used"],
+            ))
+            asyncio.create_task(_log_chat_message(
+                user_id=user["id"],
+                question=user_msg_saved,
+                raw_ai_answer=answer,
+                subject_id=msg.subject_id,
+                subject_name=msg.subject_name,
+                board_name=ctx_board_name,
+                class_name=ctx_class_name,
+                conversation_id=conv_id,
             ))
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",
@@ -7161,6 +7189,11 @@ async def metrics_history(minutes: int = 60, admin: dict = Depends(get_admin_use
 from seo_engine import router as seo_router, init_seo_engine
 init_seo_engine(db, call_llm_api, get_admin_user)
 api.include_router(seo_router)
+
+from qa_engine import public_router as qa_public_router, admin_router as qa_admin_router, init_qa_engine, ensure_qa_indexes, log_chat_message as _log_chat_message
+init_qa_engine(db, get_admin_user)
+api.include_router(qa_public_router)
+api.include_router(qa_admin_router)
 
 # ─────────────────────────────────────────────
 # SARVAM AI — Translate, TTS, Transliterate
