@@ -120,6 +120,30 @@ export default function AdminCmsDocEditor({ adminToken }) {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('syrabit_cms_prefill');
+      if (!raw) return;
+      const prefill = JSON.parse(raw);
+      if (Date.now() - (prefill.timestamp || 0) > 10 * 60 * 1000) {
+        localStorage.removeItem('syrabit_cms_prefill');
+        return;
+      }
+      localStorage.removeItem('syrabit_cms_prefill');
+      setEditDoc(null);
+      setForm(f => ({
+        ...f,
+        title:            prefill.title     || f.title,
+        content:          prefill.content   || f.content,
+        seo_slug:         prefill.seo_slug  || f.seo_slug,
+        meta_description: prefill.meta_description || f.meta_description,
+        status:           'draft',
+      }));
+      setSeoTab('content');
+      toast.success(`Pre-filled with merged content for "${prefill.title}" — review and save`);
+    } catch {}
+  }, []);
+
   const openNew = () => {
     setEditDoc(null);
     setForm({ ...EMPTY_DOC });
@@ -438,8 +462,35 @@ export default function AdminCmsDocEditor({ adminToken }) {
             </div>
           </div>
 
-          {/* Content tab — MDXEditor */}
+          {/* Content tab — Template bar + MDXEditor */}
           {seoTab === 'content' && (
+            <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Template Library bar */}
+            <div className="flex items-center gap-1.5 px-4 py-2 border-b flex-shrink-0 flex-wrap" style={{ borderColor: 'rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.015)' }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="2" className="flex-shrink-0"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+              <span className="text-[10px] flex-shrink-0 mr-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>Insert:</span>
+              {[
+                { label: 'PYQ Block',   shortcode: '\n\n> **[PYQ year=2025]** _Question text here._ *(3 marks)*\n\n' },
+                { label: 'Formula Box', shortcode: '\n\n> **[FORMULA]** Name: `expression = result`\n\n' },
+                { label: 'AHSEC Tip',  shortcode: '\n\n> **[BOARD-TIP]** This topic is important for board exams.\n\n' },
+                { label: 'Note Block',  shortcode: '\n\n> **[NOTE]** Key insight or definition here.\n\n' },
+                { label: 'H2 Section',  shortcode: '\n\n## Section Title\n\n_Content here._\n\n---\n\n' },
+              ].map(t => (
+                <button
+                  key={t.label}
+                  onClick={() => {
+                    const current = editorRef.current?.getMarkdown() || form.content;
+                    setForm(f => ({ ...f, content: current + t.shortcode }));
+                  }}
+                  className="px-2 py-0.5 rounded text-[10px] border transition-colors"
+                  style={{ borderColor: 'rgba(255,255,255,0.10)', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.40)' }}
+                  onMouseEnter={e => { e.currentTarget.style.color = '#c4b0f0'; e.currentTarget.style.borderColor = 'rgba(149,117,224,0.40)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.40)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,0.10)'; }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
             <div className="flex-1 overflow-hidden mdx-admin-editor">
               <MDXEditor
                 ref={editorRef}
@@ -465,12 +516,54 @@ export default function AdminCmsDocEditor({ adminToken }) {
                 contentEditableClassName="mdx-editor-content"
               />
             </div>
+            </div>
           )}
 
           {/* SEO & Meta tab */}
           {seoTab === 'seo' && (
             <div className="flex-1 overflow-y-auto p-6">
               <div className="max-w-2xl mx-auto space-y-5">
+
+                {/* ── Google Snippet Preview ─────────────────────── */}
+                <div>
+                  <p className="text-xs font-medium mb-2" style={{ color: 'rgba(255,255,255,0.40)' }}>Google Search Preview</p>
+                  <div className="rounded-xl p-4" style={{ background: '#ffffff' }}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)' }} />
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium truncate" style={{ color: '#202124' }}>syrabit.ai</p>
+                        <p className="text-[10px] truncate" style={{ color: '#4d5156' }}>
+                          https://syrabit.ai/{form.seo_slug || 'your-slug-here'}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="text-base leading-tight mb-1" style={{ color: '#1a0dab', fontFamily: 'arial,sans-serif' }}>
+                      {form.title ? `${form.title} | Syrabit.ai` : 'Your Page Title — Syrabit.ai'}
+                    </p>
+                    <p className="text-sm leading-snug" style={{ color: '#4d5156', fontFamily: 'arial,sans-serif' }}>
+                      {form.meta_description
+                        ? (form.meta_description.length > 160 ? form.meta_description.slice(0, 157) + '…' : form.meta_description)
+                        : 'Your meta description will appear here. Write 120–160 characters to maximise click-through.'}
+                    </p>
+                    {form.meta_description && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <div className="flex-1 h-1 rounded-full" style={{ background: '#e5e7eb' }}>
+                          <div
+                            className="h-1 rounded-full transition-all"
+                            style={{
+                              width: `${Math.min(100, (form.meta_description.length / 160) * 100)}%`,
+                              background: form.meta_description.length > 160 ? '#dc2626' : form.meta_description.length > 110 ? '#16a34a' : '#f59e0b',
+                            }}
+                          />
+                        </div>
+                        <span className="text-[10px] flex-shrink-0" style={{ color: form.meta_description.length > 160 ? '#dc2626' : '#6b7280' }}>
+                          {form.meta_description.length}/160
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div>
                   <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>URL Slug</label>
                   <div className="flex items-center gap-2 h-10 rounded-xl overflow-hidden px-3" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>

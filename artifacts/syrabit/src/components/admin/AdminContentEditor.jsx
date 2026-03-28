@@ -4,13 +4,25 @@ import {
   FolderPlus, FilePlus, Edit2, FileText, Book,
   CheckCircle, Layers, Eye, Upload, Paperclip, Link2, BarChart3, Sparkles, RefreshCw,
   ChevronRight, ChevronDown, GraduationCap, Building2, GitBranch, ArrowLeft,
-  Scroll, Bold, Italic, List, ListOrdered, Heading1, Heading2, Heading3, Minus
+  Globe, LayoutTemplate
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import AdminSyllabusManager from './AdminSyllabusManager';
+import { TEMPLATES } from '@/utils/editorTemplates';
+import {
+  MDXEditor,
+  headingsPlugin, listsPlugin, quotePlugin, thematicBreakPlugin,
+  markdownShortcutPlugin, codeBlockPlugin, codeMirrorPlugin, tablePlugin,
+  linkPlugin, diffSourcePlugin, toolbarPlugin,
+  UndoRedo, BoldItalicUnderlineToggles, BlockTypeSelect,
+  CreateLink, CodeToggle, InsertTable, InsertThematicBreak,
+  ListsToggle, Separator, DiffSourceToggleWrapper, InsertCodeBlock,
+} from '@mdxeditor/editor';
+import '@mdxeditor/editor/style.css';
+
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -115,7 +127,7 @@ function InlineCreator({ placeholder, onCreate, icon: Icon, color = 'violet' }) 
   );
 }
 
-export default function AdminContentEditor({ adminToken }) {
+export default function AdminContentEditor({ adminToken, onNavigate }) {
   const [activeTab, setActiveTab] = useState('content');
 
   const [boards, setBoards] = useState([]);
@@ -144,6 +156,14 @@ export default function AdminContentEditor({ adminToken }) {
   const fileInputRef = useRef(null);
   const thumbnailInputRef = useRef(null);
   const contentTextareaRef = useRef(null);
+  const editorRef = useRef(null);
+
+  const [publishingBlog, setPublishingBlog]     = useState(false);
+  const [selectedChapters, setSelectedChapters] = useState(new Set());
+  const [bulkMerging, setBulkMerging]           = useState(false);
+  const [showPreview, setShowPreview]           = useState(false);
+  const [mergedSubjectIds, setMergedSubjectIds] = useState(new Set());
+  const [editorKey, setEditorKey]               = useState(0);
 
   const CONTENT_TYPES = [
     { value: 'notes', label: 'Notes', color: 'violet' },
@@ -251,6 +271,58 @@ export default function AdminContentEditor({ adminToken }) {
     setContentForm(f => ({ ...f, content: newContent }));
     setTimeout(() => { ta.focus(); ta.setSelectionRange(newCursor, newCursor); }, 0);
   }, [contentForm.content]);
+
+  const handlePublishAsBlog = useCallback(async (subjectId, subjectName) => {
+    if (!subjectId) return;
+    setPublishingBlog(true);
+    try {
+      const res = await axios.post(`${API}/admin/cms/merge/${subjectId}`, {}, authHeaders(adminToken));
+      const mergedMd = res.data?.merged_md || res.data?.content || '';
+      const prefill = {
+        subjectId,
+        title: subjectName || res.data?.title || subjectId,
+        content: mergedMd,
+        seo_slug: (subjectName || subjectId).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-'),
+        meta_description: `Complete ${subjectName || subjectId} notes, chapters, and PYQ for AHSEC students on Syrabit.`,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem('syrabit_cms_prefill', JSON.stringify(prefill));
+      setMergedSubjectIds(s => new Set([...s, subjectId]));
+      toast.success(`"${subjectName}" merged — opening CMS Editor`);
+      onNavigate?.('cms');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Merge failed');
+    } finally {
+      setPublishingBlog(false);
+    }
+  }, [adminToken, onNavigate]);
+
+  const handleBulkMerge = useCallback(async () => {
+    if (!selSubject || selectedChapters.size === 0) return;
+    setBulkMerging(true);
+    try {
+      const res = await axios.post(`${API}/admin/cms/merge/${selSubject}`, {}, authHeaders(adminToken));
+      const mergedMd = res.data?.merged_md || res.data?.content || '';
+      const name = subjectData?.name || selSubject;
+      const prefill = {
+        subjectId: selSubject,
+        title: name,
+        content: mergedMd,
+        seo_slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-'),
+        meta_description: `Complete ${name} notes, chapters, and PYQ for AHSEC students on Syrabit.`,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem('syrabit_cms_prefill', JSON.stringify(prefill));
+      setMergedSubjectIds(s => new Set([...s, selSubject]));
+      setSelectedChapters(new Set());
+      toast.success(`${selectedChapters.size} chapters merged — opening CMS Editor`);
+      onNavigate?.('cms');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Bulk merge failed');
+    } finally {
+      setBulkMerging(false);
+    }
+  }, [adminToken, selSubject, subjectData, selectedChapters, onNavigate]);
 
   const load = useCallback(async (bustCache = false) => {
     try {
@@ -548,103 +620,135 @@ export default function AdminContentEditor({ adminToken }) {
                   </div>
                 )}
                 <div className="flex-1 flex flex-col min-h-0">
-                  {/* Header row: label + char count + Write/Preview toggle */}
-                  <div className="flex items-center justify-between mb-1.5 flex-shrink-0">
-                    <label className="text-sm text-white/60">Content</label>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-white/25">{contentForm.content.length} chars</span>
-                      <div className="flex rounded-lg overflow-hidden border border-white/10">
-                        <button
-                          onClick={() => setContentMode('write')}
-                          className={`px-3 py-1 text-xs font-medium transition-colors ${contentMode === 'write' ? 'bg-violet-600 text-white' : 'bg-white/5 text-white/50 hover:text-white'}`}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => setContentMode('preview')}
-                          className={`px-3 py-1 text-xs font-medium transition-colors ${contentMode === 'preview' ? 'bg-violet-600 text-white' : 'bg-white/5 text-white/50 hover:text-white'}`}
-                        >
-                          Preview
-                        </button>
-                      </div>
+                  {/* Template Library row */}
+                  <div className="flex items-center gap-1.5 mb-2 flex-shrink-0 flex-wrap">
+                    <LayoutTemplate size={11} className="text-white/25 flex-shrink-0" />
+                    <span className="text-[10px] text-white/30 flex-shrink-0 mr-0.5">Insert:</span>
+                    {TEMPLATES.map(t => (
+                      <button
+                        key={t.label}
+                        onClick={() => {
+                          const current = editorRef.current?.getMarkdown?.() ?? contentForm.content;
+                          setContentForm(f => ({ ...f, content: current + t.shortcode }));
+                          setEditorKey(k => k + 1);
+                        }}
+                        className="px-2 py-0.5 rounded text-[10px] border border-white/10 bg-white/5 text-white/40 hover:text-violet-300 hover:border-violet-500/40 transition-colors"
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                    <div className="ml-auto flex items-center gap-2">
+                      <span className="text-[10px] text-white/25">{contentForm.content.length}ch</span>
+                      <button
+                        onClick={() => setShowPreview(p => !p)}
+                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium border transition-colors ${
+                          showPreview
+                            ? 'bg-violet-600/25 text-violet-300 border-violet-500/30'
+                            : 'bg-white/5 text-white/40 border-white/10 hover:text-white'
+                        }`}
+                      >
+                        <Eye size={10} />
+                        {showPreview ? 'Hide Blog Preview' : 'Blog Preview'}
+                      </button>
                     </div>
                   </div>
 
-                  {/* Formatting toolbar — only shown in Edit mode */}
-                  {contentMode === 'write' && (
-                    <div className="flex items-center gap-1 mb-2 p-1.5 rounded-lg bg-white/[0.04] border border-white/10 flex-wrap flex-shrink-0">
-                      {[
-                        { type: 'h1', icon: <Heading1 size={14} />, title: 'Heading 1' },
-                        { type: 'h2', icon: <Heading2 size={14} />, title: 'Heading 2' },
-                        { type: 'h3', icon: <Heading3 size={14} />, title: 'Heading 3' },
-                      ].map(btn => (
-                        <button key={btn.type} onMouseDown={(e) => { e.preventDefault(); formatText(btn.type); }} title={btn.title}
-                          className="px-2 py-1 rounded text-white/60 hover:text-white hover:bg-white/10 text-xs font-bold transition-colors flex items-center gap-1">
-                          {btn.icon}
-                        </button>
-                      ))}
-                      <div className="w-px h-5 bg-white/10 mx-1" />
-                      <button onMouseDown={(e) => { e.preventDefault(); formatText('bold'); }} title="Bold"
-                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><Bold size={13} /></button>
-                      <button onMouseDown={(e) => { e.preventDefault(); formatText('italic'); }} title="Italic"
-                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><Italic size={13} /></button>
-                      <div className="w-px h-5 bg-white/10 mx-1" />
-                      <button onMouseDown={(e) => { e.preventDefault(); formatText('ul'); }} title="Bullet list"
-                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><List size={13} /></button>
-                      <button onMouseDown={(e) => { e.preventDefault(); formatText('ol'); }} title="Numbered list"
-                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><ListOrdered size={13} /></button>
-                      <div className="w-px h-5 bg-white/10 mx-1" />
-                      <button onMouseDown={(e) => { e.preventDefault(); formatText('hr'); }} title="Divider"
-                        className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><Minus size={13} /></button>
-                      <div className="w-px h-5 bg-white/10 mx-1" />
-                      <button
-                        onClick={handleAiParse}
-                        disabled={aiParsing || !contentForm.content.trim()}
-                        title="AI Structure Content"
-                        className="flex items-center gap-1 px-2 py-1 rounded text-violet-400 hover:text-violet-300 hover:bg-violet-500/10 transition-colors text-xs font-medium disabled:opacity-40"
-                      >
-                        {aiParsing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                        AI Parse
-                      </button>
-                      {editView === 'edit-chapter' && editTarget?.id && (
-                        <>
-                          <div className="w-px h-5 bg-white/10 mx-1" />
-                          <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" className="hidden" onChange={() => handleFileAttach(editTarget.id)} />
-                          <button
-                            onClick={() => fileInputRef.current?.click()}
-                            disabled={uploading}
-                            title="Attach file (PDF, TXT, MD)"
-                            className="flex items-center gap-1 px-2 py-1 rounded text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors text-xs font-medium disabled:opacity-40"
-                          >
-                            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-                            Attach
-                          </button>
-                        </>
-                      )}
+                  {/* MDXEditor + optional split blog preview */}
+                  <div className={`flex-1 min-h-0 flex gap-3 ${showPreview ? '' : 'flex-col'}`}>
+                    <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-white/10 mdx-admin-editor flex flex-col">
+                      <MDXEditor
+                        ref={editorRef}
+                        key={`${editTarget?.id ?? '__new__'}-${editorKey}`}
+                        markdown={contentForm.content}
+                        onChange={md => setContentForm(f => ({ ...f, content: md }))}
+                        className="mdx-editor-dark h-full"
+                        contentEditableClassName="mdx-editor-content"
+                        plugins={[
+                          headingsPlugin(),
+                          listsPlugin(),
+                          quotePlugin(),
+                          thematicBreakPlugin(),
+                          markdownShortcutPlugin(),
+                          codeBlockPlugin({ defaultCodeBlockLanguage: 'text' }),
+                          codeMirrorPlugin({
+                            codeBlockLanguages: {
+                              js: 'JavaScript', ts: 'TypeScript', python: 'Python',
+                              text: 'Text', md: 'Markdown', html: 'HTML', css: 'CSS',
+                            },
+                          }),
+                          tablePlugin(),
+                          linkPlugin(),
+                          diffSourcePlugin({ viewMode: 'rich-text', diffMarkdown: '' }),
+                          toolbarPlugin({
+                            toolbarContents: () => (
+                              <DiffSourceToggleWrapper>
+                                <UndoRedo />
+                                <Separator />
+                                <BoldItalicUnderlineToggles />
+                                <CodeToggle />
+                                <Separator />
+                                <ListsToggle />
+                                <Separator />
+                                <BlockTypeSelect />
+                                <Separator />
+                                <CreateLink />
+                                <InsertTable />
+                                <InsertThematicBreak />
+                                <InsertCodeBlock />
+                                <Separator />
+                                <button
+                                  type="button"
+                                  onClick={handleAiParse}
+                                  disabled={aiParsing}
+                                  style={{
+                                    display: 'flex', alignItems: 'center', gap: 4,
+                                    padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+                                    color: '#a78bfa', background: 'rgba(167,139,250,0.10)',
+                                    border: '1px solid rgba(167,139,250,0.20)',
+                                    cursor: aiParsing ? 'not-allowed' : 'pointer',
+                                    opacity: aiParsing ? 0.5 : 1,
+                                  }}
+                                >
+                                  {aiParsing
+                                    ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                                    : <Sparkles size={12} />}
+                                  AI
+                                </button>
+                              </DiffSourceToggleWrapper>
+                            ),
+                          }),
+                        ]}
+                      />
                     </div>
-                  )}
+                    {showPreview && (
+                      <div className="flex-1 min-h-0 overflow-y-auto rounded-xl" style={{ background: '#f0f0f1' }}>
+                        <div style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '15px', lineHeight: '1.75', padding: '1.5rem 2rem', minHeight: '100%' }}>
+                          {contentForm.content.trim() ? (
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {contentForm.content}
+                            </ReactMarkdown>
+                          ) : (
+                            <p style={{ color: '#aaa', fontStyle: 'italic' }}>Blog preview appears here as you type…</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
 
-                  {/* Write or Preview area */}
-                  {contentMode === 'write' ? (
-                    <textarea
-                      ref={contentTextareaRef}
-                      value={contentForm.content}
-                      onChange={(e) => setContentForm({ ...contentForm, content: e.target.value })}
-                      placeholder="Start typing your content here, or use the toolbar above to add headings, bold text, and lists..."
-                      className="flex-1 w-full px-4 py-3 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 resize-none font-mono text-sm leading-relaxed"
-                      style={{ minHeight: '200px' }}
-                    />
-                  ) : (
-                    <div
-                      className="flex-1 w-full px-6 py-4 rounded-xl bg-white/5 border border-white/10 overflow-y-auto md-content text-sm"
-                      style={{ minHeight: '200px' }}
-                    >
-                      {contentForm.content.trim() ? (
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                          {contentForm.content}
-                        </ReactMarkdown>
-                      ) : (
-                        <p className="text-white/25 italic">Switch to Edit to start writing. Your formatted content will appear here.</p>
+                  {/* Attach file — edit mode only */}
+                  {editView === 'edit-chapter' && editTarget?.id && (
+                    <div className="flex items-center gap-3 mt-2 flex-shrink-0">
+                      <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" className="hidden" onChange={() => handleFileAttach(editTarget.id)} />
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={uploading}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors text-xs font-medium disabled:opacity-40"
+                      >
+                        {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                        Attach File (PDF / TXT / MD)
+                      </button>
+                      {chapterStats && (
+                        <span className="text-[11px] text-white/30">{chapterStats.chunk_count} chunks · {chapterStats.content_length?.toLocaleString()} chars</span>
                       )}
                     </div>
                   )}
@@ -748,23 +852,71 @@ export default function AdminContentEditor({ adminToken }) {
                     <p className="text-sm font-semibold text-white/60">Subjects ({filteredSubjects.length})</p>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {filteredSubjects.map(s => (
-                        <button key={s.id} onClick={() => setSelSubject(s.id)} className="p-4 rounded-xl border border-white/10 hover:border-violet-500/30 bg-white/[0.02] text-left transition-colors group">
+                        <div key={s.id} className="p-4 rounded-xl border border-white/10 hover:border-violet-500/30 bg-white/[0.02] text-left transition-colors group cursor-pointer" onClick={() => setSelSubject(s.id)}>
                           <div className="flex items-center justify-between">
                             <p className="text-sm font-medium text-white">{s.icon || '📚'} {s.name}</p>
-                            <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={12} /></button>
+                            <div className="flex items-center gap-1">
+                              {mergedSubjectIds.has(s.id) && <CheckCircle size={11} className="text-violet-400" />}
+                              <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={12} /></button>
+                            </div>
                           </div>
                           <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
-                          <p className="text-[10px] text-white/25 mt-2">{s.chapter_count || 0} chapters</p>
-                        </button>
+                          <div className="flex items-center justify-between mt-2">
+                            <p className="text-[10px] text-white/25">{s.chapter_count || 0} chapters</p>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handlePublishAsBlog(s.id, s.name); }}
+                              disabled={publishingBlog}
+                              className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium opacity-0 group-hover:opacity-100 disabled:opacity-30 transition-all"
+                              style={{ background: 'rgba(149,117,224,0.20)', color: '#c4b0f0' }}
+                            >
+                              <Globe size={9} /> Publish as Blog
+                            </button>
+                          </div>
+                        </div>
                       ))}
                     </div>
                     <InlineCreator placeholder="Subject" onCreate={handleCreateSubject} icon={BookOpen} color="violet" />
                   </div>
                 ) : selSubject ? (
                   <div className="p-6 max-w-5xl mx-auto space-y-6">
-                    <div>
-                      <h3 className="text-xl font-bold text-white">{subjectData?.icon || '📚'} {subjectData?.name}</h3>
-                      <p className="text-sm text-white/40">{subjectData?.description}</p>
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-xl font-bold text-white">{subjectData?.icon || '📚'} {subjectData?.name}</h3>
+                        <p className="text-sm text-white/40">{subjectData?.description}</p>
+                      </div>
+                    </div>
+
+                    {/* ── Workflow Tracker ──────────────────────────────── */}
+                    <div className="flex items-center gap-2 px-4 py-3 rounded-xl border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
+                      <div className={`flex items-center gap-1.5 text-xs font-medium ${chapters.length > 0 ? 'text-emerald-400' : 'text-white/30'}`}>
+                        {chapters.length > 0
+                          ? <CheckCircle size={13} />
+                          : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
+                        <span>{chapters.length} Chapter{chapters.length !== 1 ? 's' : ''}</span>
+                      </div>
+                      <ChevronRight size={11} className="text-white/20" />
+                      <div className={`flex items-center gap-1.5 text-xs font-medium ${mergedSubjectIds.has(selSubject) ? 'text-violet-400' : 'text-white/25'}`}>
+                        {mergedSubjectIds.has(selSubject)
+                          ? <CheckCircle size={13} />
+                          : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
+                        <span>Blog Merged</span>
+                      </div>
+                      <ChevronRight size={11} className="text-white/20" />
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-white/25">
+                        <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />
+                        <span>Published</span>
+                      </div>
+                      <div className="ml-auto">
+                        <button
+                          onClick={() => handlePublishAsBlog(selSubject, subjectData?.name || selSubject)}
+                          disabled={publishingBlog || chapters.length === 0}
+                          className="flex items-center gap-1.5 h-8 px-4 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
+                          style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: 'white', boxShadow: '0 2px 8px rgba(124,58,237,0.28)' }}
+                        >
+                          {publishingBlog ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />}
+                          Publish as Blog
+                        </button>
+                      </div>
                     </div>
 
                     {/* ── Thumbnail Upload ─────────────────────────────── */}
@@ -839,11 +991,56 @@ export default function AdminContentEditor({ adminToken }) {
 
                     {/* Chapters list */}
                     <div className="space-y-2">
-                      <p className="text-sm font-semibold text-white">Chapters ({chapters.length})</p>
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-semibold text-white">Chapters ({chapters.length})</p>
+                        {chapters.length > 0 && (
+                          <button
+                            onClick={() => setSelectedChapters(prev => prev.size === chapters.length ? new Set() : new Set(chapters.map(c => c.id)))}
+                            className="text-[10px] text-white/30 hover:text-white transition-colors"
+                          >
+                            {selectedChapters.size === chapters.length ? 'Deselect all' : 'Select all'}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Bulk action bar */}
+                      {selectedChapters.size > 0 && (
+                        <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(149,117,224,0.10)', border: '1px solid rgba(149,117,224,0.20)' }}>
+                          <span className="text-xs text-violet-300 font-medium">{selectedChapters.size} selected</span>
+                          <button
+                            onClick={handleBulkMerge}
+                            disabled={bulkMerging}
+                            className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-medium disabled:opacity-40 transition-colors"
+                            style={{ background: 'rgba(149,117,224,0.25)', color: '#c4b0f0' }}
+                          >
+                            {bulkMerging ? <Loader2 size={11} className="animate-spin" /> : <Globe size={11} />}
+                            Merge to Blog
+                          </button>
+                          <button
+                            onClick={() => setSelectedChapters(new Set())}
+                            className="ml-auto text-[10px] text-white/30 hover:text-white transition-colors"
+                          >
+                            Clear
+                          </button>
+                        </div>
+                      )}
+
                       {chapters.length === 0 && <p className="text-xs text-white/30 py-4 text-center">No chapters yet — create the first one above</p>}
                       {chapters.map(ch => (
-                        <div key={ch.id} className="p-3 rounded-xl border border-white/10 hover:border-violet-500/20 bg-white/[0.02] flex items-start justify-between transition-colors">
+                        <div key={ch.id} className="p-3 rounded-xl border hover:border-violet-500/20 bg-white/[0.02] flex items-start justify-between transition-colors"
+                          style={{ borderColor: selectedChapters.has(ch.id) ? 'rgba(149,117,224,0.35)' : 'rgba(255,255,255,0.08)', background: selectedChapters.has(ch.id) ? 'rgba(149,117,224,0.06)' : undefined }}>
                           <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={selectedChapters.has(ch.id)}
+                              onChange={e => setSelectedChapters(prev => {
+                                const next = new Set(prev);
+                                if (e.target.checked) next.add(ch.id); else next.delete(ch.id);
+                                return next;
+                              })}
+                              className="rounded flex-shrink-0 accent-violet-500 cursor-pointer"
+                              onClick={e => e.stopPropagation()}
+                            />
                             <Book size={14} className="text-violet-400 flex-shrink-0" />
                             <div className="min-w-0">
                               <div className="flex items-center gap-2">
