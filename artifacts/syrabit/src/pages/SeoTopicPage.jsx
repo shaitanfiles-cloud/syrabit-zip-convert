@@ -49,7 +49,7 @@ function renderMarkdown(text) {
 }
 
 export default function SeoTopicPage() {
-  const { board, classSlug, subjectSlug, chapterSlug, topicSlug, pageType } = useParams();
+  const { board, classSlug, subjectSlug, topicSlug, pageType } = useParams();
   const navigate = useNavigate();
   const currentType = pageType || 'notes';
 
@@ -65,8 +65,8 @@ export default function SeoTopicPage() {
     setError(null);
 
     Promise.all([
-      getSeoPage(board, classSlug, subjectSlug, chapterSlug, topicSlug, currentType),
-      getSeoPageTypes(board, classSlug, subjectSlug, chapterSlug, topicSlug),
+      getSeoPage(board, classSlug, subjectSlug, topicSlug, currentType),
+      getSeoPageTypes(board, classSlug, subjectSlug, topicSlug),
       getSeoRelated(topicSlug),
     ])
       .then(([pageRes, typesRes, relatedRes]) => {
@@ -83,11 +83,11 @@ export default function SeoTopicPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
-  }, [board, classSlug, subjectSlug, chapterSlug, topicSlug, currentType]);
+  }, [board, classSlug, subjectSlug, topicSlug, currentType]);
 
   useEffect(() => {
     if (!page) return;
-    const pageUrl = `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}${currentType !== 'notes' ? `/${currentType}` : ''}`;
+    const pageUrl = `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}/${topicSlug}${currentType !== 'notes' ? `/${currentType}` : ''}`;
 
     const articleSchema = {
       '@context': 'https://schema.org',
@@ -118,8 +118,7 @@ export default function SeoTopicPage() {
         { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
         { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
         { '@type': 'ListItem', position: 3, name: page.subject_name || subjectSlug, item: 'https://syrabit.ai/library' },
-        { '@type': 'ListItem', position: 4, name: page.chapter_title || chapterSlug },
-        { '@type': 'ListItem', position: 5, name: page.topic_title || topicSlug, item: pageUrl },
+        { '@type': 'ListItem', position: 4, name: page.topic_title || topicSlug, item: pageUrl },
       ],
     };
 
@@ -161,9 +160,9 @@ export default function SeoTopicPage() {
         if (el) el.remove();
       });
     };
-  }, [page, board, classSlug, subjectSlug, chapterSlug, topicSlug, currentType]);
+  }, [page, board, classSlug, subjectSlug, topicSlug, currentType]);
 
-  const basePath = `/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}`;
+  const basePath = `/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
   const canonicalUrl = `https://syrabit.ai${basePath}${currentType !== 'notes' ? `/${currentType}` : ''}`;
 
   if (loading) {
@@ -238,8 +237,6 @@ export default function SeoTopicPage() {
           <ChevronRight size={12} aria-hidden="true" />
           <span className="text-gray-500">{page.subject_name}</span>
           <ChevronRight size={12} aria-hidden="true" />
-          <span className="text-gray-500">{page.chapter_title}</span>
-          <ChevronRight size={12} aria-hidden="true" />
           <span className="text-white font-medium">{page.topic_title}</span>
         </nav>
 
@@ -251,10 +248,10 @@ export default function SeoTopicPage() {
             <Badge variant="outline" className="text-xs text-emerald-400 border-emerald-500/30">{page.subject_name}</Badge>
           </div>
           <h1 className="text-2xl md:text-3xl font-bold text-white leading-tight">
-            {page.topic_title} — {pageTypeLabel}
+            {page.topic_title} – {boardShort} {page.class_name} {page.subject_name}
           </h1>
           <p className="text-gray-400 mt-1 text-sm">
-            {page.subject_name} &middot; {page.chapter_title} &middot; {boardShort} {page.class_name}
+            {pageTypeLabel} &middot; {page.chapter_title}
           </p>
           <p className="text-gray-500 text-xs mt-1">
             {page.word_count} words &middot; Updated {new Date(page.updated_at || page.generated_at || Date.now()).toLocaleDateString('en-IN')}

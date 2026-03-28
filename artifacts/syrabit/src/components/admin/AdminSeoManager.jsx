@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import {
   adminSeoStats, adminSeoListTopics, adminSeoExtractTopics,
   adminSeoGenerate, adminSeoListPages, adminSeoUpdatePageStatus,
-  adminSeoRegenerateSitemap, adminSeoDeleteTopic,
+  adminSeoRegenerateSitemap, adminSeoDeleteTopic, adminSeoPilot,
 } from '@/utils/api';
 
 const PAGE_TYPES = [
@@ -41,6 +41,12 @@ export default function AdminSeoManager({ adminToken }) {
   const [extracting, setExtracting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [sitemap, setSitemap]       = useState(false);
+  const [piloting, setPiloting]     = useState(false);
+  const [pilotResult, setPilotResult] = useState(null);
+  const [pilotBoard, setPilotBoard]   = useState('AHSEC');
+  const [pilotClass, setPilotClass]   = useState('Class 11');
+  const [pilotSubject, setPilotSubject] = useState('maths');
+  const [pilotChapters, setPilotChapters] = useState(3);
 
   const [topicSearch, setTopicSearch]     = useState('');
   const [pageSearch, setPageSearch]       = useState('');
@@ -126,6 +132,28 @@ export default function AdminSeoManager({ adminToken }) {
     finally { setSitemap(false); }
   };
 
+  const handlePilot = async () => {
+    setPiloting(true);
+    setPilotResult(null);
+    try {
+      const res = await adminSeoPilot(adminToken, {
+        board_name: pilotBoard,
+        class_name: pilotClass,
+        subject_keyword: pilotSubject,
+        chapter_limit: pilotChapters,
+      });
+      setPilotResult(res.data);
+      toast.success(res.data?.message || 'Pilot complete');
+      setTimeout(load, 2000);
+    } catch (e) {
+      const msg = e?.response?.data?.detail || 'Pilot generation failed';
+      toast.error(msg);
+      setPilotResult({ error: msg });
+    } finally {
+      setPiloting(false);
+    }
+  };
+
   const toggleTopic = (id) => setSelectedTopics((prev) => {
     const n = new Set(prev);
     if (n.has(id)) n.delete(id); else n.add(id);
@@ -162,6 +190,7 @@ export default function AdminSeoManager({ adminToken }) {
     { id: 'pages',    label: 'SEO Pages',  count: pages.length },
     { id: 'topics',   label: 'Topics',     count: topics.length },
     { id: 'generate', label: 'Generate',   count: null },
+    { id: 'pilot',    label: 'Pilot',      count: null },
   ];
 
   return (
@@ -488,6 +517,94 @@ export default function AdminSeoManager({ adminToken }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ── Pilot Tab ─────────────────────────────────────────────────────────── */}
+      {tab === 'pilot' && (
+        <div className="space-y-5">
+          <div className="rounded-xl p-5 border border-white/8 space-y-4" style={{ background: 'rgba(255,255,255,0.02)' }}>
+            <div>
+              <h3 className="text-sm font-semibold text-white">Pilot Content Generation</h3>
+              <p className="text-xs text-white/40 mt-0.5">
+                Bootstrap SEO pages for the first N chapters of a subject. AI generates all page types (Notes, Definitions, MCQs, Examples, Important Questions) in one shot.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="space-y-1">
+                <label className="text-[11px] text-white/40 uppercase tracking-wider">Board</label>
+                <input
+                  value={pilotBoard}
+                  onChange={(e) => setPilotBoard(e.target.value)}
+                  className="w-full h-9 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 focus:outline-none focus:border-violet-500"
+                  placeholder="AHSEC"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] text-white/40 uppercase tracking-wider">Class</label>
+                <input
+                  value={pilotClass}
+                  onChange={(e) => setPilotClass(e.target.value)}
+                  className="w-full h-9 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 focus:outline-none focus:border-violet-500"
+                  placeholder="Class 11"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] text-white/40 uppercase tracking-wider">Subject keyword</label>
+                <input
+                  value={pilotSubject}
+                  onChange={(e) => setPilotSubject(e.target.value)}
+                  className="w-full h-9 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 focus:outline-none focus:border-violet-500"
+                  placeholder="maths"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-[11px] text-white/40 uppercase tracking-wider">Chapters</label>
+                <input
+                  type="number" min={1} max={20}
+                  value={pilotChapters}
+                  onChange={(e) => setPilotChapters(Number(e.target.value))}
+                  className="w-full h-9 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 focus:outline-none focus:border-violet-500"
+                />
+              </div>
+            </div>
+            <button
+              onClick={handlePilot}
+              disabled={piloting}
+              className="h-10 px-6 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 flex items-center gap-2 disabled:opacity-50 transition-colors"
+            >
+              {piloting ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
+              {piloting ? 'Running Pilot…' : 'Run Pilot'}
+            </button>
+          </div>
+
+          {pilotResult && (
+            <div className={`rounded-xl p-4 border text-sm space-y-2 ${pilotResult.error ? 'border-red-500/25 bg-red-500/5' : 'border-emerald-500/25 bg-emerald-500/5'}`}>
+              {pilotResult.error ? (
+                <p className="text-red-400">{pilotResult.error}</p>
+              ) : (
+                <>
+                  <p className="text-emerald-400 font-semibold">{pilotResult.message}</p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
+                    {[
+                      ['Chapters', pilotResult.chapters_processed],
+                      ['Topics created', pilotResult.topics_created],
+                      ['Pages generated', pilotResult.pages_generated],
+                      ['Errors', pilotResult.errors],
+                    ].map(([label, val]) => (
+                      <div key={label} className="rounded-lg p-3 border border-white/8" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                        <p className="text-lg font-bold text-white">{val ?? '—'}</p>
+                        <p className="text-[11px] text-white/30">{label}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-white/40 pt-1">
+                    Pages are saved as <span className="text-amber-400">draft</span> — go to SEO Pages tab to publish them, then hit Regen Sitemap.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

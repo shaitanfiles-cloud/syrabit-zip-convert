@@ -44,7 +44,7 @@ function mdToHtml(md = '') {
   return `<p>${html}</p>`;
 }
 
-function buildBotHtml(page, url, board, classSlug, subjectSlug, chapterSlug, topicSlug, currentType, related) {
+function buildBotHtml(page, url, board, classSlug, subjectSlug, topicSlug, currentType, related) {
   const canonical = `https://syrabit.ai${url.split('?')[0]}`;
   const ogImage = 'https://syrabit.ai/opengraph.jpg';
   const keywords = [
@@ -107,7 +107,7 @@ function buildBotHtml(page, url, board, classSlug, subjectSlug, chapterSlug, top
     }
   }
 
-  const basePath = `/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}`;
+  const basePath = `/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
   const pageTypes = ['notes', 'definition', 'important-questions', 'mcqs', 'examples'];
 
   const navLinks = related?.related?.slice(0, 6).map(t =>
@@ -187,7 +187,6 @@ hr{border:none;border-top:1px solid rgba(255,255,255,0.1);margin:20px 0}
   <a href="/">Home</a> &rsaquo;
   <a href="/library">Library</a> &rsaquo;
   <span>${page.subject_name || subjectSlug}</span> &rsaquo;
-  <span>${page.chapter_title || chapterSlug}</span> &rsaquo;
   <span>${page.topic_title || topicSlug}</span>
 </nav>
 
@@ -197,8 +196,8 @@ hr{border:none;border-top:1px solid rgba(255,255,255,0.1);margin:20px 0}
   <span class="badge">${page.subject_name || subjectSlug}</span>
 </div>
 
-<h1>${page.title || page.topic_title}</h1>
-<p class="meta">${page.chapter_title} &middot; ${page.word_count || 0} words &middot; ${page.board_name} ${page.class_name} &middot; Updated ${new Date(page.updated_at || page.generated_at || Date.now()).toLocaleDateString('en-IN')}</p>
+<h1>${page.topic_title || topicSlug} – ${page.board_name || board} ${page.class_name || classSlug} ${page.subject_name || subjectSlug}</h1>
+<p class="meta">${page.chapter_title || ''} &middot; ${page.word_count || 0} words &middot; Updated ${new Date(page.updated_at || page.generated_at || Date.now()).toLocaleDateString('en-IN')}</p>
 
 <p>${page.meta_description || excerpt}</p>
 
@@ -241,10 +240,10 @@ function botRenderPlugin() {
         const rawPath = (req.url || '/').split('?')[0];
         const parts = rawPath.split('/').filter(Boolean);
 
-        if (parts.length < 5 || SKIP_ROUTES.has(parts[0])) return next();
+        if (parts.length < 4 || SKIP_ROUTES.has(parts[0])) return next();
         if (parts[0].includes('.')) return next();
 
-        const [board, classSlug, subjectSlug, chapterSlug, topicSlug, pageTypePart] = parts;
+        const [board, classSlug, subjectSlug, topicSlug, pageTypePart] = parts;
         const currentType = pageTypePart || 'notes';
         const VALID_TYPES = new Set(['notes', 'definition', 'important-questions', 'mcqs', 'examples']);
         if (pageTypePart && !VALID_TYPES.has(pageTypePart)) return next();
@@ -252,7 +251,7 @@ function botRenderPlugin() {
         try {
           const apiBase = `http://localhost:8000/api/seo`;
           const [pageRes, relatedRes] = await Promise.allSettled([
-            fetch(`${apiBase}/page/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}/${currentType}`),
+            fetch(`${apiBase}/page/${board}/${classSlug}/${subjectSlug}/${topicSlug}/${currentType}`),
             fetch(`${apiBase}/related/${topicSlug}`),
           ]);
 
@@ -264,7 +263,7 @@ function botRenderPlugin() {
             related = await relatedRes.value.json();
           }
 
-          const html = buildBotHtml(page, rawPath, board, classSlug, subjectSlug, chapterSlug, topicSlug, currentType, related);
+          const html = buildBotHtml(page, rawPath, board, classSlug, subjectSlug, topicSlug, currentType, related);
           res.statusCode = 200;
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
           res.setHeader('X-Bot-Rendered', '1');

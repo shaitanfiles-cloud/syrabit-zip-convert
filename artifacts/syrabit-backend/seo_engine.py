@@ -6,9 +6,9 @@ Collections:
   - topics:     granular concepts under chapters (auto-extracted or admin-created)
   - seo_pages:  AI-generated study content per topic × page_type
 
-URL pattern:
-  /{board}/{class}/{subject}/{chapter}/{topic}
-  /{board}/{class}/{subject}/{chapter}/{topic}/{page_type}
+URL pattern (4-segment):
+  /{board}/{class}/{subject}/{topic}
+  /{board}/{class}/{subject}/{topic}/{page_type}
 """
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
@@ -56,131 +56,143 @@ PROMPTS = {
     "notes": """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Chapter: {chapter}
-Subject: {subject}
-Class: {class_name}
-Board: {board}
+Subject: {subject} | Class: {class_name} | Board: {board}
 
-Create comprehensive study notes with this exact structure:
+Write study notes using EXACTLY this structure — all sections required:
+
+## Summary
+[40-60 words: what {topic} is, why it matters, and its importance for {board} exam]
 
 ## Definition
-[Clear, exam-ready definition in 2-3 sentences]
+[Precise academic definition in 2-3 sentences using standard {board} terminology]
 
-## Detailed Explanation
-[Thorough explanation with key concepts, 300+ words]
-
-## Key Points to Remember
-[Bullet list of 5-8 essential points]
+## Explanation
+[Detailed explanation 250-350 words. Cover core concepts, sub-topics, and connections]
 
 ## Solved Examples
-[2-3 worked examples with step-by-step solutions]
+Example 1: [Complete step-by-step solution]
+Example 2: [Complete step-by-step solution]
+Example 3: [Complete step-by-step solution]
 
-## Exam Tips
-[3-4 specific tips for scoring marks on this topic in {board} exams]
+## Previous Year Questions (PYQs)
+[5 questions that appear in {board} {class_name} exams, with model answers — include 1-mark, 2-mark, and 3-5 mark types]
 
-## Common Mistakes to Avoid
-[3-4 mistakes students frequently make]
+## Key Points
+[6-8 bullet points for last-minute revision before the {board} exam]
 
-Keep language simple and accessible for Assam students. Use exam-relevant terminology.""",
+Language: simple and clear for {class_name} students in Assam. Every section must be complete and exam-focused.""",
 
     "definition": """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Chapter: {chapter}
-Subject: {subject}
+Subject: {subject} | Class: {class_name} | Board: {board}
 
-Write a comprehensive definition article:
+Write a definition article using EXACTLY this structure:
+
+## Summary
+[40-60 words: what {topic} means, its significance, and when students encounter it in {board} exams]
 
 ## Definition of {topic}
-[Precise academic definition, 2-3 sentences]
+[Precise, exam-ready academic definition in 2-3 sentences]
 
 ## Meaning and Explanation
-[Explain in simple terms what this concept means, why it matters]
+[Explain in simple terms — what it means, why it matters, how it connects to the syllabus]
 
 ## Characteristics / Properties
-[List 4-6 key characteristics or properties]
+[4-6 key characteristics or properties as a bullet list]
 
 ## Real-World Examples
-[3-4 relatable examples]
+[3-4 relatable, easy-to-understand examples]
 
 ## Related Concepts
-[Brief mention of 3-4 related topics students should also study]
+[3-4 related topics from the {board} {class_name} {subject} syllabus]
 
-## Frequently Asked Exam Questions
-[3 commonly asked questions about this definition in {board} exams with brief answers]
+## Exam Questions on This Definition
+[3 commonly asked questions in {board} exams with concise model answers]
 
-Keep language simple for Assam students.""",
+Keep language simple for {class_name} students in Assam.""",
 
     "important-questions": """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Chapter: {chapter}
-Subject: {subject}
+Subject: {subject} | Class: {class_name} | Board: {board}
 
-Create a comprehensive question bank:
+Create a question bank using EXACTLY this structure:
 
-## 1-Mark Questions (Very Short Answer)
-[5 questions with brief answers]
+## Summary
+[40-60 words: overview of {topic} and which types of questions appear in {board} exams]
 
-## 2-Mark Questions (Short Answer)
-[5 questions with concise answers]
+## 1-Mark Questions
+[5 questions with one-line answers — test basic recall]
+
+## 2-Mark Questions
+[5 questions with 2-3 sentence answers — test understanding]
 
 ## 3-Mark Questions
-[3 questions with structured answers]
+[4 questions with structured answers — test application]
 
 ## 5-Mark Questions (Long Answer)
-[3 questions with detailed, exam-ready answers]
+[3 questions with detailed, exam-ready answers — test analysis]
 
-## Previous Year Questions
-[Note: Include 3-4 sample questions that typically appear in {board} exams for this topic]
+## Previous Year Questions (PYQs)
+[4-5 actual-style questions from past {board} exams on {topic}, with complete answers]
 
-All answers should be exam-ready and follow {board} marking scheme guidelines.""",
+All answers must follow {board} marking scheme. Use exam-standard language.""",
 
     "mcqs": """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Chapter: {chapter}
-Subject: {subject}
+Subject: {subject} | Class: {class_name} | Board: {board}
 
-Create 15 Multiple Choice Questions:
+Create 15 MCQs using EXACTLY this structure:
 
-## Easy Level (5 MCQs)
-[Questions testing basic recall and definitions]
+## Summary
+[40-60 words: what {topic} concepts these MCQs test, aligned with {board} exam pattern]
 
-## Medium Level (5 MCQs)
-[Questions testing understanding and application]
+## Easy Level (MCQs 1-5)
+[Test basic recall and definitions — each with 4 options A/B/C/D, correct answer, brief explanation]
 
-## Hard Level (5 MCQs)
-[Questions testing analysis and problem-solving]
+## Medium Level (MCQs 6-10)
+[Test understanding and application — each with 4 options, correct answer, explanation]
 
-For each question provide:
-- The question with 4 options (A, B, C, D)
-- Correct answer
-- Brief explanation of why that answer is correct
+## Hard Level (MCQs 11-15)
+[Test analysis and problem-solving — each with 4 options, correct answer, detailed explanation]
 
-These should match {board} exam pattern and difficulty.""",
+Format each MCQ as:
+Q: [question]
+A) B) C) D)
+Answer: [letter]
+Explanation: [1-2 sentences]
+
+Match {board} exam pattern and difficulty level.""",
 
     "examples": """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Chapter: {chapter}
-Subject: {subject}
+Subject: {subject} | Class: {class_name} | Board: {board}
 
-Create a comprehensive examples guide:
+Create a solved examples guide using EXACTLY this structure:
+
+## Summary
+[40-60 words: what types of problems on {topic} appear in {board} exams and what skills they test]
 
 ## Basic Examples
-[3-4 simple examples with step-by-step solutions]
+Example 1: [Problem statement] → [Complete step-by-step solution]
+Example 2: [Problem statement] → [Complete step-by-step solution]
+Example 3: [Problem statement] → [Complete step-by-step solution]
 
 ## Intermediate Examples
-[3-4 moderately difficult examples]
+Example 4: [Problem statement] → [Complete step-by-step solution]
+Example 5: [Problem statement] → [Complete step-by-step solution]
 
-## Advanced / Exam-Level Examples
-[2-3 examples matching {board} exam difficulty]
+## Exam-Level Examples
+Example 6: [Problem matching {board} exam difficulty] → [Complete solution with all steps]
+Example 7: [Problem matching {board} exam difficulty] → [Complete solution with all steps]
 
-## Practice Problems
-[5 unsolved problems for student practice, with answers at the end]
+## Practice Problems (Try Yourself)
+[5 unsolved problems with answers only — for student practice]
 
-Show complete working for each solved example. Use exam-standard notation and methods.""",
+Show complete working for all solved examples. Use {board} exam-standard notation and methods.""",
 }
 
 
@@ -356,17 +368,24 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         logger.warning(f"Generated content too short ({word_count} words) for {topic['title']} / {page_type}")
         return None
 
-    type_labels = {
+    type_title_labels = {
         "notes": "Notes",
-        "definition": "Definition",
+        "definition": "Definition & Meaning",
         "important-questions": "Important Questions",
-        "mcqs": "MCQs",
-        "examples": "Examples",
+        "mcqs": "MCQ Practice",
+        "examples": "Solved Examples",
     }
 
+    grade_match = re.search(r'\d+', class_name)
+    grade_str = f"Class {grade_match.group()}" if grade_match else class_name
+
     h = hierarchy
-    title = f"{topic['title']} — {type_labels.get(page_type, page_type.title())} | {subject_name} {class_name} {board_name}"
-    meta_desc = f"{type_labels.get(page_type, '')} for {topic['title']} in {subject_name} ({class_name}, {board_name}). Comprehensive study material for AHSEC exam preparation."
+    title = f"{topic['title']} {type_title_labels.get(page_type, page_type.title())} – {board_name} {grade_str} {subject_name}"
+    meta_desc = (
+        f"Study {topic['title']} with comprehensive {type_title_labels.get(page_type, 'notes').lower()} "
+        f"for {board_name} {grade_str} {subject_name}. Covers definitions, examples, and important "
+        f"questions aligned with {board_name} syllabus for Assam students."
+    )
 
     page = {
         "id": f"seo-{uuid.uuid4().hex[:8]}",
@@ -533,14 +552,13 @@ async def update_page_status(page_id: str, status: str = "published", _admin: di
 
 # ─── PUBLIC: Serve SEO pages ────────────────────────────────────────────────
 
-@router.get("/page/{board}/{class_slug}/{subject_slug}/{chapter_slug}/{topic_slug}")
-async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, chapter_slug: str, topic_slug: str):
+@router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}")
+async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, topic_slug: str):
     page = await _db.seo_pages.find_one(
         {
             "board_slug": board,
             "class_slug": class_slug,
             "subject_slug": subject_slug,
-            "chapter_slug": chapter_slug,
             "topic_slug": topic_slug,
             "page_type": "notes",
             "status": "published",
@@ -552,14 +570,15 @@ async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, c
     return page
 
 
-@router.get("/page/{board}/{class_slug}/{subject_slug}/{chapter_slug}/{topic_slug}/{page_type}")
-async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, chapter_slug: str, topic_slug: str, page_type: str):
+@router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}")
+async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, topic_slug: str, page_type: str):
+    if page_type not in PAGE_TYPES:
+        raise HTTPException(status_code=404, detail="Invalid page type")
     page = await _db.seo_pages.find_one(
         {
             "board_slug": board,
             "class_slug": class_slug,
             "subject_slug": subject_slug,
-            "chapter_slug": chapter_slug,
             "topic_slug": topic_slug,
             "page_type": page_type,
             "status": "published",
@@ -571,14 +590,13 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, cha
     return page
 
 
-@router.get("/page-types/{board}/{class_slug}/{subject_slug}/{chapter_slug}/{topic_slug}")
-async def get_available_page_types(board: str, class_slug: str, subject_slug: str, chapter_slug: str, topic_slug: str):
+@router.get("/page-types/{board}/{class_slug}/{subject_slug}/{topic_slug}")
+async def get_available_page_types(board: str, class_slug: str, subject_slug: str, topic_slug: str):
     pages = await _db.seo_pages.find(
         {
             "board_slug": board,
             "class_slug": class_slug,
             "subject_slug": subject_slug,
-            "chapter_slug": chapter_slug,
             "topic_slug": topic_slug,
             "status": "published",
         },
@@ -639,14 +657,14 @@ async def get_related_topics(topic_slug: str, chapter_id: Optional[str] = None, 
 
     for t in same_chapter + adjacent_topics:
         hierarchy = await _resolve_hierarchy(t)
-        t["seo_path"] = f"/{hierarchy.get('board_slug', '')}/{hierarchy.get('class_slug', '')}/{hierarchy.get('subject_slug', '')}/{hierarchy.get('chapter_slug', '')}/{t['slug']}" if hierarchy else ""
+        t["seo_path"] = f"/{hierarchy.get('board_slug', '')}/{hierarchy.get('class_slug', '')}/{hierarchy.get('subject_slug', '')}/{t['slug']}" if hierarchy else ""
 
     if prev_topic:
         h = await _resolve_hierarchy(prev_topic)
-        prev_topic["seo_path"] = f"/{h.get('board_slug', '')}/{h.get('class_slug', '')}/{h.get('subject_slug', '')}/{h.get('chapter_slug', '')}/{prev_topic['slug']}" if h else ""
+        prev_topic["seo_path"] = f"/{h.get('board_slug', '')}/{h.get('class_slug', '')}/{h.get('subject_slug', '')}/{prev_topic['slug']}" if h else ""
     if next_topic:
         h = await _resolve_hierarchy(next_topic)
-        next_topic["seo_path"] = f"/{h.get('board_slug', '')}/{h.get('class_slug', '')}/{h.get('subject_slug', '')}/{h.get('chapter_slug', '')}/{next_topic['slug']}" if h else ""
+        next_topic["seo_path"] = f"/{h.get('board_slug', '')}/{h.get('class_slug', '')}/{h.get('subject_slug', '')}/{next_topic['slug']}" if h else ""
 
     return {
         "related": same_chapter + adjacent_topics,
@@ -666,7 +684,7 @@ async def get_sitemap_entries():
 
     entries = []
     for p in pages:
-        path = f"/{p['board_slug']}/{p['class_slug']}/{p['subject_slug']}/{p['chapter_slug']}/{p['topic_slug']}"
+        path = f"/{p['board_slug']}/{p['class_slug']}/{p['subject_slug']}/{p['topic_slug']}"
         if p["page_type"] != "notes":
             path += f"/{p['page_type']}"
         entries.append({
@@ -715,8 +733,7 @@ async def get_dynamic_sitemap():
 
     seen_topics = set()
     for p in pages:
-        base_path = (f"/{p['board_slug']}/{p['class_slug']}/{p['subject_slug']}"
-                     f"/{p['chapter_slug']}/{p['topic_slug']}")
+        base_path = f"/{p['board_slug']}/{p['class_slug']}/{p['subject_slug']}/{p['topic_slug']}"
         path = base_path if p["page_type"] == "notes" else f"{base_path}/{p['page_type']}"
         loc = f"{BASE}{path}"
         pri = "0.8" if p["page_type"] == "notes" else "0.7"
@@ -773,3 +790,103 @@ async def browse_subject_topics(board: str, class_slug: str, subject_slug: str):
         result.append(ch)
 
     return {"chapters": result, "total_topics": sum(len(ch["topics"]) for ch in result)}
+
+
+# ─── ADMIN: Pilot content generation (AHSEC Class 11 – first N chapters) ─────
+
+@router.post("/pilot")
+async def generate_pilot_content(
+    board_name: str = "AHSEC",
+    class_name: str = "Class 11",
+    subject_keyword: str = "maths",
+    chapter_limit: int = 3,
+    _admin: dict = Depends(_require_admin),
+):
+    """Generate seed content for the first `chapter_limit` chapters of a subject.
+    Used to bootstrap pilot SEO pages before batch generation."""
+    board = await _db.boards.find_one(
+        {"name": {"$regex": board_name, "$options": "i"}}, {"_id": 0}
+    )
+    if not board:
+        raise HTTPException(status_code=404, detail=f"Board '{board_name}' not found")
+
+    cls = await _db.classes.find_one(
+        {"board_id": board["id"], "name": {"$regex": class_name, "$options": "i"}}, {"_id": 0}
+    )
+    if not cls:
+        raise HTTPException(status_code=404, detail=f"Class '{class_name}' not found under {board_name}")
+
+    streams = await _db.streams.find({"class_id": cls["id"]}, {"_id": 0}).to_list(20)
+    stream_ids = [s["id"] for s in streams]
+
+    subject = await _db.subjects.find_one(
+        {"stream_id": {"$in": stream_ids}, "name": {"$regex": subject_keyword, "$options": "i"}},
+        {"_id": 0},
+    )
+    if not subject:
+        raise HTTPException(status_code=404, detail=f"Subject matching '{subject_keyword}' not found")
+
+    chapters = await _db.chapters.find(
+        {"subject_id": subject["id"]}, {"_id": 0}
+    ).sort("order_index", 1).limit(chapter_limit).to_list(chapter_limit)
+
+    if not chapters:
+        raise HTTPException(status_code=404, detail="No chapters found for this subject")
+
+    created_topics = 0
+    generated_pages = 0
+    errors = 0
+
+    for ch in chapters:
+        existing = await _db.topics.find_one({"chapter_id": ch["id"]}, {"_id": 0, "id": 1})
+        if existing:
+            topic = await _db.topics.find_one({"chapter_id": ch["id"]}, {"_id": 0})
+        else:
+            topic = {
+                "id": f"topic-{uuid.uuid4().hex[:8]}",
+                "chapter_id": ch["id"],
+                "subject_id": ch.get("subject_id", subject["id"]),
+                "title": ch.get("title", ""),
+                "slug": _slug(ch.get("title", "")),
+                "definition": ch.get("description", ""),
+                "examples": "",
+                "order": ch.get("order_index", 0),
+                "status": "published",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await _db.topics.insert_one(topic)
+            topic.pop("_id", None)
+            created_topics += 1
+
+        if not topic or not topic.get("id"):
+            continue
+
+        hierarchy = await _resolve_hierarchy(topic)
+        if not hierarchy:
+            errors += 1
+            continue
+
+        for pt in PAGE_TYPES:
+            existing_page = await _db.seo_pages.find_one(
+                {"topic_id": topic["id"], "page_type": pt}, {"_id": 0, "id": 1}
+            )
+            if existing_page:
+                continue
+            try:
+                page = await _generate_single_page(topic, pt, hierarchy)
+                if page:
+                    generated_pages += 1
+            except Exception as e:
+                logger.error(f"Pilot error {topic['title']}/{pt}: {e}")
+                errors += 1
+
+    return {
+        "board": board_name,
+        "class": class_name,
+        "subject": subject.get("name"),
+        "chapters_processed": len(chapters),
+        "topics_created": created_topics,
+        "pages_generated": generated_pages,
+        "errors": errors,
+        "message": f"Pilot complete: {generated_pages} pages generated for {len(chapters)} chapters",
+    }

@@ -52,7 +52,6 @@ const AdminLoginPage     = lazy(() => import("@/pages/AdminLoginPage"));
 const AdminPage          = lazy(() => import("@/pages/AdminPage"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
 const SeoTopicPage       = lazy(() => import("@/pages/SeoTopicPage"));
-const SeoSubjectRedirect = lazy(() => import("@/pages/SeoSubjectRedirect"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallback = () => (
@@ -179,10 +178,9 @@ function App() {
                   <Route path="/library"           element={<LibraryPage />} />
                   <Route path="/subject/:subjectId" element={<SubjectPage />} />
 
-                  {/* ── Programmatic SEO routes ── */}
-                  <Route path="/:board/:classSlug/:streamSlug/:subjectSlug" element={<SeoSubjectRedirect />} />
-                  <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/:topicSlug/:pageType" element={<SeoTopicPage />} />
-                  <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/:topicSlug" element={<SeoTopicPage />} />
+                  {/* ── Programmatic SEO routes: /{board}/{class-N}/{subject}/{topic}/{type?} ── */}
+                  <Route path="/:board/:classSlug/:subjectSlug/:topicSlug/:pageType" element={<SeoTopicPage />} />
+                  <Route path="/:board/:classSlug/:subjectSlug/:topicSlug" element={<SeoTopicPage />} />
 
                   {/* ── Protected routes (require login) ── */}
                   <Route path="/chat"              element={<AuthGuard><ChatPage /></AuthGuard>} />

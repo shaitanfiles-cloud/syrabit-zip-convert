@@ -108,14 +108,14 @@ export const adminUpdateRoadmapItem = (token, id, data) =>
 export const adminGetActivityLog = (token) =>
   axios.get(`${API_BASE}/admin/activity-log`, { headers: adminHeaders(token), withCredentials: true });
 
-export const getSeoPage = (board, classSlug, subjectSlug, chapterSlug, topicSlug, pageType) => {
-  let url = `${API_BASE}/seo/page/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}`;
+export const getSeoPage = (board, classSlug, subjectSlug, topicSlug, pageType) => {
+  let url = `${API_BASE}/seo/page/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
   if (pageType && pageType !== 'notes') url += `/${pageType}`;
   return axios.get(url);
 };
 
-export const getSeoPageTypes = (board, classSlug, subjectSlug, chapterSlug, topicSlug) =>
-  axios.get(`${API_BASE}/seo/page-types/${board}/${classSlug}/${subjectSlug}/${chapterSlug}/${topicSlug}`);
+export const getSeoPageTypes = (board, classSlug, subjectSlug, topicSlug) =>
+  axios.get(`${API_BASE}/seo/page-types/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
 
 export const getSeoRelated = (topicSlug) =>
   axios.get(`${API_BASE}/seo/related/${topicSlug}`);
@@ -155,6 +155,13 @@ export const adminSeoUpdatePageStatus = (token, pageId, status) =>
 
 export const adminSeoRegenerateSitemap = (token) =>
   axios.post(`${API_BASE}/admin/content/regenerate-sitemap`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoPilot = (token, params = {}) =>
+  axios.post(`${API_BASE}/seo/pilot`, null, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params,
+  });
 
 // ── Payments (excluded from current build) ───────────────────────────────────
 
