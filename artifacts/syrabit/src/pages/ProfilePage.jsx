@@ -19,7 +19,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/context/AuthContext';
 import { PageTitle } from '@/components/PageTitle';
 import { LogoMark } from '@/components/Logo';
-import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp, createStripeCheckout } from '@/utils/api';
+import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp } from '@/utils/api';
 import { toast } from 'sonner';
 
 // ── Load Razorpay checkout.js script once ─────────────────────────────────────
@@ -255,7 +255,7 @@ export default function ProfilePage() {
         return;
       }
 
-      // 3. Open Razorpay checkout
+      // 3. Open Razorpay checkout — UPI only (UPI ID + QR scanner)
       const options = {
         key:          orderData.key_id,
         amount:       orderData.amount,
@@ -271,6 +271,18 @@ export default function ProfilePage() {
         theme: { color: '#7c3aed' },
         modal: {
           ondismiss: () => setPaymentLoading(false),
+        },
+        config: {
+          display: {
+            blocks: {
+              upi: {
+                name: 'Pay via UPI',
+                instruments: [{ method: 'upi' }],
+              },
+            },
+            sequence: ['block.upi'],
+            preferences: { show_default_blocks: false },
+          },
         },
         handler: async (response) => {
           // 4. Verify payment on backend
@@ -311,29 +323,6 @@ export default function ProfilePage() {
     }
   };
 
-  // ── Stripe checkout ──────────────────────────────────────────────────────
-  const handleStripeCheckout = async () => {
-    if (!paymentPlan) return;
-    setPaymentLoading(true);
-    try {
-      const origin = window.location.origin;
-      const res = await createStripeCheckout(
-        paymentPlan,
-        `${origin}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
-        `${origin}/payment/cancel`
-      );
-      if (res.data?.checkout_url) {
-        window.location.href = res.data.checkout_url;
-      } else {
-        toast.error('Failed to create Stripe checkout session.');
-      }
-    } catch (err) {
-      const msg = err?.response?.data?.detail || 'Stripe checkout failed. Try Razorpay instead.';
-      toast.error(msg);
-    } finally {
-      setPaymentLoading(false);
-    }
-  };
 
   // ── Credit top-up checkout ──────────────────────────────────────────────
   const TOPUP_OPTIONS = [
@@ -1107,11 +1096,18 @@ export default function ProfilePage() {
                 ))}
               </ul>
 
-              <div className="space-y-2">
+              <div className="space-y-3">
+                {/* UPI QR hint */}
+                <div className="rounded-xl px-4 py-2.5 flex items-center gap-2.5 text-xs text-muted-foreground"
+                  style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.14)' }}>
+                  <span className="text-lg">📱</span>
+                  <span>Pay using any UPI app — Google Pay, PhonePe, Paytm, or scan the QR code</span>
+                </div>
+
                 <button
                   onClick={handleRazorpayCheckout}
                   disabled={paymentLoading}
-                  className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                  className="w-full h-12 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2.5 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                   style={{
                     background: paymentPlan === 'pro'
                       ? 'linear-gradient(135deg,#d97706,#f59e0b)'
@@ -1125,24 +1121,14 @@ export default function ProfilePage() {
                   {paymentLoading ? (
                     <Loader2 size={16} className="animate-spin" />
                   ) : (
-                    <CreditCard size={16} />
+                    <span className="text-base">🔗</span>
                   )}
-                  {paymentLoading ? 'Processing…' : `Pay ${PLANS[paymentPlan]?.price} — UPI / Cards / Net Banking`}
-                </button>
-
-                <button
-                  onClick={handleStripeCheckout}
-                  disabled={paymentLoading}
-                  className="w-full h-9 rounded-xl text-xs font-medium flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-                  style={{ background: 'rgba(99,102,241,0.10)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.25)' }}
-                >
-                  <Globe size={14} />
-                  Pay with International Card (USD)
+                  {paymentLoading ? 'Opening UPI payment…' : `Pay ${PLANS[paymentPlan]?.price} via UPI / Scanner`}
                 </button>
               </div>
 
               <p className="text-center text-xs text-muted-foreground/40">
-                Secured payments · Razorpay (India) · Stripe (International)
+                Secured by Razorpay · Supports all UPI apps & QR scanner
               </p>
             </motion.div>
           </motion.div>
