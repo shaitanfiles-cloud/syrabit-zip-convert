@@ -98,6 +98,8 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
   const [publishing, setPublishing]   = useState(false);
   const [pdfLoading, setPdfLoading]   = useState(false);
   const [aiParsing, setAiParsing]     = useState(false);
+  const [seoGenerating, setSeoGenerating] = useState(false);
+  const [seoResult, setSeoResult]     = useState(null);
   const [searchQ, setSearchQ]         = useState('');
   const [seoTab, setSeoTab]           = useState('content');
   const [filterType, setFilterType]   = useState('all');
@@ -390,6 +392,46 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
     const kw = terms[0];
     setForm(f => ({ ...f, primary_keyword: kw }));
     toast.success(`Primary keyword set to "${kw}"`);
+  };
+
+  const handleGenerateSeoMeta = async () => {
+    if (!form.title && !form.content && !form.primary_keyword) {
+      toast.error('Add a title or content first so AI has context');
+      return;
+    }
+    setSeoGenerating(true);
+    setSeoResult(null);
+    try {
+      const payload = {
+        title:           form.title,
+        content:         form.content?.slice(0, 3000) || '',
+        primary_keyword: form.primary_keyword,
+        seo_tags:        form.seo_tags,
+        linked_scope:    editDoc?.linked_scope || '',
+        board:           editDoc?.geo_tags?.includes('ahsec') ? 'AHSEC' : 'AHSEC',
+        subject:         form.category || form.seo_tags?.split(',')[0] || '',
+      };
+      const { data } = await axios.post(`${API}/admin/seo/generate`, payload, authHeaders(adminToken));
+      setSeoResult(data);
+      toast.success('SEO metadata generated — review and apply below');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'AI SEO generation failed');
+    } finally {
+      setSeoGenerating(false);
+    }
+  };
+
+  const applySeoResult = () => {
+    if (!seoResult) return;
+    setForm(f => ({
+      ...f,
+      title:           seoResult.seo_title || f.title,
+      meta_description: seoResult.meta_description || f.meta_description,
+      primary_keyword: seoResult.primary_keyword || f.primary_keyword,
+      seo_tags:        seoResult.seo_tags || f.seo_tags,
+    }));
+    setSeoResult(null);
+    toast.success('SEO metadata applied to page');
   };
 
   const handleAutoGeoTags = () => {
@@ -764,6 +806,105 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
           {seoTab === 'seo' && (
             <div className="flex-1 overflow-y-auto p-6">
               <div className="max-w-2xl mx-auto space-y-6">
+
+                {/* ── AI SEO + GEO Generator ─────────────────────────────── */}
+                <div className="rounded-xl p-4 border" style={{ background: 'rgba(139,92,246,0.06)', borderColor: 'rgba(139,92,246,0.20)' }}>
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <Sparkles size={13} style={{ color: '#a78bfa' }} />
+                      <span className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>AI SEO &amp; GEO Generator</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(139,92,246,0.18)', color: '#a78bfa' }}>Beta</span>
+                    </div>
+                    <button
+                      onClick={handleGenerateSeoMeta}
+                      disabled={seoGenerating}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-opacity disabled:opacity-50"
+                      style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+                      {seoGenerating
+                        ? <><Loader2 size={11} className="animate-spin" /> Generating…</>
+                        : <><Zap size={11} /> Generate Title + Meta</>}
+                    </button>
+                  </div>
+                  <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                    Generates a 55–65 char SEO title + 148–158 char GEO-rich meta description optimised for Google ranking and AI citation (Perplexity, ChatGPT search). Uses your current title, keyword, content, and linked syllabus scope as context.
+                  </p>
+
+                  {/* Result card */}
+                  {seoResult && (
+                    <div className="mt-4 space-y-3 pt-4 border-t" style={{ borderColor: 'rgba(139,92,246,0.18)' }}>
+                      {/* SEO Title */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'rgba(255,255,255,0.35)' }}>SEO Title</span>
+                          <span className="text-[10px]" style={{ color: seoResult.char_counts?.title > 65 ? '#dc2626' : '#16a34a' }}>
+                            {seoResult.char_counts?.title || seoResult.seo_title?.length || 0} / 65 chars
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium px-3 py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', color: '#e8e8e8' }}>
+                          {seoResult.seo_title}
+                        </p>
+                      </div>
+                      {/* Meta Description */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'rgba(255,255,255,0.35)' }}>Meta Description</span>
+                          <span className="text-[10px]" style={{ color: seoResult.char_counts?.meta > 160 ? '#dc2626' : seoResult.char_counts?.meta >= 140 ? '#16a34a' : '#f59e0b' }}>
+                            {seoResult.char_counts?.meta || seoResult.meta_description?.length || 0} / 160 chars
+                          </span>
+                        </div>
+                        <p className="text-xs leading-relaxed px-3 py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(232,232,232,0.75)' }}>
+                          {seoResult.meta_description}
+                        </p>
+                      </div>
+                      {/* Primary Keyword */}
+                      <div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Primary Keyword</span>
+                        <p className="text-xs font-mono px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', color: '#a78bfa' }}>
+                          {seoResult.primary_keyword}
+                        </p>
+                      </div>
+                      {/* GEO authority phrases */}
+                      {seoResult.geo_phrases?.length > 0 && (
+                        <div>
+                          <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1.5" style={{ color: 'rgba(255,255,255,0.35)' }}>GEO Authority Phrases</span>
+                          <div className="flex flex-wrap gap-2">
+                            {seoResult.geo_phrases.map((p, i) => (
+                              <span key={i} className="text-[10px] px-2 py-1 rounded-lg" style={{ background: 'rgba(16,185,129,0.10)', color: '#34d399', border: '1px solid rgba(16,185,129,0.18)' }}>
+                                {p}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* SEO Tags preview */}
+                      {seoResult.seo_tags && (
+                        <div>
+                          <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1.5" style={{ color: 'rgba(255,255,255,0.35)' }}>SEO Tags</span>
+                          <div className="flex flex-wrap gap-1.5">
+                            {seoResult.seo_tags.split(',').map(t => t.trim()).filter(Boolean).map((t, i) => (
+                              <span key={i} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)' }}>
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {/* Apply button */}
+                      <div className="flex gap-2 pt-1">
+                        <button onClick={applySeoResult}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold"
+                          style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+                          <CheckCircle size={12} /> Apply All to Page
+                        </button>
+                        <button onClick={() => setSeoResult(null)}
+                          className="px-3 py-2 rounded-lg text-xs"
+                          style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.40)' }}>
+                          Dismiss
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
 
                 {/* Google SERP preview */}
                 <div>

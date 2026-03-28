@@ -148,6 +148,8 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
   const [title, setTitle]           = useState('');
   const [slug, setSlug]             = useState('');
   const [metaDescription, setMetaDescription] = useState('');
+  const [seoGenerating, setSeoGenerating]     = useState(false);
+  const [seoResult, setSeoResult]             = useState(null);
   const [isRevision, setIsRevision] = useState(false);
   const [draftId, setDraftId]       = useState('');
   const [draftSaving, setDraftSaving]   = useState(false);
@@ -214,6 +216,44 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
   }, [adminToken]);
 
   useEffect(() => { loadDrafts(); }, [loadDrafts]);
+
+  const handleGenerateSeoMeta = useCallback(async () => {
+    if (!title && blocks.length === 0) {
+      toast.error('Add a title or parse some content first');
+      return;
+    }
+    setSeoGenerating(true);
+    setSeoResult(null);
+    try {
+      const contentSnippet = blocks.map(b => `${b.title}: ${b.content}`).join('\n').slice(0, 3000);
+      const sylSubj = sylSubjects.find(s => s._id === selectedSylSubjectId || s.id === selectedSylSubjectId);
+      const payload = {
+        title,
+        content: contentSnippet,
+        primary_keyword: '',
+        seo_tags: '',
+        subject: sylSubj?.name || subjectId,
+        linked_scope: sylSubj?.name ? `${sylSubj.name}` : '',
+        board: boards.find(b => b._id === selectedBoardId || b.id === selectedBoardId)?.name || 'AHSEC',
+        class_name: classes.find(c => c._id === selectedClassId || c.id === selectedClassId)?.name || '',
+      };
+      const { data } = await axios.post(`${API}/admin/seo/generate`, payload, authHeaders(adminToken));
+      setSeoResult(data);
+      toast.success('SEO metadata generated');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'AI SEO generation failed');
+    } finally {
+      setSeoGenerating(false);
+    }
+  }, [title, blocks, sylSubjects, selectedSylSubjectId, boards, selectedBoardId, classes, selectedClassId, subjectId, adminToken]);
+
+  const applyStudioSeoResult = useCallback(() => {
+    if (!seoResult) return;
+    if (seoResult.seo_title) setTitle(seoResult.seo_title.replace(/\s*\|\s*Syrabit.*$/i, '').trim());
+    if (seoResult.meta_description) setMetaDescription(seoResult.meta_description);
+    setSeoResult(null);
+    toast.success('Applied — update the title field in Publish Pipeline too');
+  }, [seoResult]);
 
   const loadGapSubjects = useCallback(async () => {
     setLoadingGaps(true);
@@ -791,6 +831,74 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
                   <p className="text-xs font-medium mb-2" style={{ color: 'rgba(255,255,255,0.35)' }}>Perplexity AI Citation</p>
                   <PerplexityPreview title={title} slug={slug} metaDescription={metaDescription} blocks={blocks} />
                 </div>
+              </div>
+
+              {/* ── AI SEO + GEO Generator ─────────────────────────────── */}
+              <div className="rounded-xl p-4 border" style={{ background: 'rgba(139,92,246,0.06)', borderColor: 'rgba(139,92,246,0.20)' }}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={12} style={{ color: '#a78bfa' }} />
+                    <span className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>AI SEO &amp; GEO Generator</span>
+                  </div>
+                  <button onClick={handleGenerateSeoMeta} disabled={seoGenerating}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50"
+                    style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+                    {seoGenerating
+                      ? <><Loader2 size={10} className="animate-spin" /> Generating…</>
+                      : <><Zap size={10} /> Generate Title + Meta</>}
+                  </button>
+                </div>
+                <p className="text-[11px]" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                  AI generates a 55–65 char SEO title + 148–158 char GEO-rich meta description using your parsed blocks, subject, board, and class as context.
+                </p>
+
+                {seoResult && (
+                  <div className="mt-3 pt-3 border-t space-y-2.5" style={{ borderColor: 'rgba(139,92,246,0.18)' }}>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-semibold uppercase" style={{ color: 'rgba(255,255,255,0.35)' }}>SEO Title</span>
+                        <span className="text-[10px]" style={{ color: (seoResult.char_counts?.title || 0) > 65 ? '#dc2626' : '#16a34a' }}>
+                          {seoResult.char_counts?.title || seoResult.seo_title?.length || 0}/65
+                        </span>
+                      </div>
+                      <p className="text-xs font-medium px-3 py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', color: '#e8e8e8' }}>
+                        {seoResult.seo_title}
+                      </p>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-semibold uppercase" style={{ color: 'rgba(255,255,255,0.35)' }}>Meta Description</span>
+                        <span className="text-[10px]" style={{ color: (seoResult.char_counts?.meta || 0) >= 140 ? '#16a34a' : '#f59e0b' }}>
+                          {seoResult.char_counts?.meta || seoResult.meta_description?.length || 0}/160
+                        </span>
+                      </div>
+                      <p className="text-[11px] leading-relaxed px-3 py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(232,232,232,0.70)' }}>
+                        {seoResult.meta_description}
+                      </p>
+                    </div>
+                    {seoResult.geo_phrases?.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {seoResult.geo_phrases.map((p, i) => (
+                          <span key={i} className="text-[10px] px-2 py-0.5 rounded-lg" style={{ background: 'rgba(16,185,129,0.10)', color: '#34d399', border: '1px solid rgba(16,185,129,0.18)' }}>
+                            {p}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2 pt-0.5">
+                      <button onClick={applyStudioSeoResult}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold"
+                        style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+                        <CheckCircle size={11} /> Apply Title + Meta
+                      </button>
+                      <button onClick={() => setSeoResult(null)}
+                        className="px-3 rounded-lg text-xs"
+                        style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.40)' }}>
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Meta description editor */}

@@ -9575,6 +9575,85 @@ async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends
     return {"success": True, "slug": body.slug, "url": publish_url}
 
 
+# ── SEO / GEO Metadata Generator ──────────────────────────────────────────────
+
+@api.post("/admin/seo/generate")
+async def generate_seo_metadata(data: dict = Body(...), admin: dict = Depends(get_admin_user)):
+    """Generate maximum SEO + GEO-rich page title and meta description using AI."""
+    title          = (data.get("title") or "").strip()
+    content_snippet= (data.get("content") or "")[:3000].strip()
+    primary_keyword= (data.get("primary_keyword") or "").strip()
+    seo_tags       = (data.get("seo_tags") or "").strip()
+    linked_scope   = (data.get("linked_scope") or "").strip()
+    board          = (data.get("board") or "AHSEC").strip()
+    class_name     = (data.get("class_name") or "").strip()
+    subject        = (data.get("subject") or "").strip()
+
+    prompt = f"""You are an expert SEO strategist and GEO (Generative Engine Optimization) specialist for Syrabit.ai, an educational platform serving AHSEC/SCERT Class 11 & 12 and Degree students in Assam, India.
+
+Your task: generate maximum-impact SEO and GEO metadata for a single educational page.
+
+Page context:
+- Title/Topic:       {title or '(not set)'}
+- Primary Keyword:   {primary_keyword or '(derive from topic)'}
+- Subject/Chapter:   {subject or '(educational content)'}
+- Board:             {board}
+- Class:             {class_name or '(not specified)'}
+- Syllabus scope:    {linked_scope or '(not linked)'}
+- Existing tags:     {seo_tags or '(none)'}
+- Content snippet:   {content_snippet[:600] or '(not provided)'}
+
+Rules for SEO Title (55–65 characters):
+- Primary keyword FIRST (exact match for query alignment)
+- Include board identifier: "AHSEC" or "Class 11/12" as relevant
+- Include content type: Notes / PYQ / Guide / Explained / MCQ
+- Power word from: Complete, Free, Best, Official, Detailed, Easy, Quick
+- End exactly with " | Syrabit" (saves chars vs "Syrabit.ai")
+- Total: 55–65 characters, never truncated by Google
+
+Rules for Meta Description (148–158 characters — this range triggers full-length snippets):
+- Open with the primary keyword or question students actually search
+- Mention content types covered: notes, definitions, examples, PYQ, MCQs
+- Include one board-authority signal: "per AHSEC {board} syllabus" or "NCERT-aligned"
+- Include one action verb: Access, Download, Study, Get, Master
+- End with a micro-CTA: "Free on Syrabit." or "Syrabit.ai — free."
+- 148–158 characters EXACTLY (count carefully)
+
+Rules for Primary Keyword (for <meta name="keywords"> and schema):
+- 4–7 words, exact-match the most-searched student query
+- Format: "[Subject] [topic] [board] [class]" or "AHSEC [subject] [topic] notes"
+
+Rules for SEO Tags (8–12 comma-separated tags):
+- Mix: exact-match head terms + long-tail variants + board-specific + question-format
+- Include: board name, class, subject, topic, "notes", "PYQ", "Assam", "AHSEC 2024-25"
+
+Rules for GEO Authority Phrases (3 phrases, for AI citation eligibility):
+- Start with "According to", "As per", "Based on" followed by a recognized source
+- Examples: "As per AHSEC 2024–25 syllabus", "According to NCERT textbook", "Based on SCERT Assam guidelines"
+- Must sound like authoritative citations an AI would quote
+
+Return ONLY valid JSON — no markdown fences, no commentary:
+{{"seo_title":"...","meta_description":"...","primary_keyword":"...","seo_tags":"tag1, tag2, tag3, tag4, tag5, tag6, tag7, tag8","geo_phrases":["...","...","..."],"char_counts":{{"title":0,"meta":0}}}}"""
+
+    try:
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=700)
+        json_match = re.search(r'\{.*\}', result, re.DOTALL)
+        if not json_match:
+            raise ValueError("No JSON in LLM response")
+        obj = json.loads(json_match.group())
+        # Enforce hard limits
+        seo_title = (obj.get("seo_title") or title or "Educational Notes | Syrabit")[:70]
+        meta_desc = (obj.get("meta_description") or "")[:160]
+        obj["seo_title"]       = seo_title
+        obj["meta_description"]= meta_desc
+        obj["char_counts"]     = {"title": len(seo_title), "meta": len(meta_desc)}
+        logger.info(f"SEO generate: title={len(seo_title)}ch meta={len(meta_desc)}ch")
+        return obj
+    except Exception as e:
+        logger.error(f"SEO generate error: {e}")
+        raise HTTPException(500, "AI SEO generation failed — check logs")
+
+
 # ── Studio Draft CRUD ─────────────────────────────────────────────────────────
 
 @api.get("/admin/studio/drafts")
