@@ -53,6 +53,8 @@ const AdminPage          = lazy(() => import("@/pages/AdminPage"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
 const SeoTopicPage       = lazy(() => import("@/pages/SeoTopicPage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
+const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
+const PaymentCancelPage  = lazy(() => import("@/pages/PaymentCancelPage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallback = () => (
@@ -166,6 +168,8 @@ function App() {
                   <Route path="/terms"    element={<TermsPage />} />
                   <Route path="/privacy"       element={<PrivacyPage />} />
                   <Route path="/exam-routine" element={<ExamRoutinePage />} />
+                  <Route path="/payment/success" element={<PaymentSuccessPage />} />
+                  <Route path="/payment/cancel" element={<PaymentCancelPage />} />
 
                   {/* ── Auth routes ── */}
                   <Route path="/login"          element={<LoginPage />} />

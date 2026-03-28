@@ -19,7 +19,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/context/AuthContext';
 import { PageTitle } from '@/components/PageTitle';
 import { LogoMark } from '@/components/Logo';
-import { apiClient, createPaymentOrder, verifyPayment } from '@/utils/api';
+import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp, createStripeCheckout } from '@/utils/api';
 import { toast } from 'sonner';
 
 // ── Load Razorpay checkout.js script once ─────────────────────────────────────
@@ -102,6 +102,9 @@ export default function ProfilePage() {
   const [paymentPlan, setPaymentPlan]       = useState(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [copiedId, setCopiedId]             = useState(false);
+  const [showTopUpModal, setShowTopUpModal] = useState(false);
+  const [topUpCredits, setTopUpCredits]     = useState(null);
+  const [topUpLoading, setTopUpLoading]     = useState(false);
 
   const editInputRef = useRef(null);
 
@@ -305,6 +308,105 @@ export default function ProfilePage() {
     } catch (err) {
       toast.error('Something went wrong. Please try again.');
       setPaymentLoading(false);
+    }
+  };
+
+  // ── Stripe checkout ──────────────────────────────────────────────────────
+  const handleStripeCheckout = async () => {
+    if (!paymentPlan) return;
+    setPaymentLoading(true);
+    try {
+      const origin = window.location.origin;
+      const res = await createStripeCheckout(
+        paymentPlan,
+        `${origin}/payment/success?session_id={CHECKOUT_SESSION_ID}`,
+        `${origin}/payment/cancel`
+      );
+      if (res.data?.checkout_url) {
+        window.location.href = res.data.checkout_url;
+      } else {
+        toast.error('Failed to create Stripe checkout session.');
+      }
+    } catch (err) {
+      const msg = err?.response?.data?.detail || 'Stripe checkout failed. Try Razorpay instead.';
+      toast.error(msg);
+    } finally {
+      setPaymentLoading(false);
+    }
+  };
+
+  // ── Credit top-up checkout ──────────────────────────────────────────────
+  const TOPUP_OPTIONS = [
+    { credits: 100,  price: '₹49',  label: '100 credits' },
+    { credits: 500,  price: '₹199', label: '500 credits' },
+    { credits: 1000, price: '₹349', label: '1,000 credits' },
+  ];
+
+  const handleTopUpCheckout = async () => {
+    if (!topUpCredits) return;
+    setTopUpLoading(true);
+    try {
+      const loaded = await loadRazorpay();
+      if (!loaded) {
+        toast.error('Failed to load payment gateway.');
+        setTopUpLoading(false);
+        return;
+      }
+      let orderData;
+      try {
+        const res = await createCreditTopUp(topUpCredits);
+        orderData = res.data;
+      } catch (err) {
+        const msg = err?.response?.data?.detail || 'Failed to create top-up order.';
+        toast.error(msg);
+        setTopUpLoading(false);
+        return;
+      }
+      const options = {
+        key: orderData.key_id,
+        amount: orderData.amount,
+        currency: orderData.currency,
+        name: 'Syrabit.ai',
+        description: `Credit Top-up — ${topUpCredits} credits`,
+        order_id: orderData.order_id,
+        prefill: {
+          name: profile?.name || '',
+          email: profile?.email || user?.email || '',
+          contact: profile?.phone || '',
+        },
+        theme: { color: '#7c3aed' },
+        modal: { ondismiss: () => setTopUpLoading(false) },
+        handler: async (response) => {
+          try {
+            await verifyCreditTopUp({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              credits: topUpCredits,
+            });
+            toast.success(`${topUpCredits} credits added to your account!`);
+            setShowTopUpModal(false);
+            await Promise.all([
+              apiClient().get('/user/profile').then(r => setProfile(r.data)),
+              apiClient().get('/user/stats').then(r => setStats(r.data)),
+            ]);
+            if (refreshUser) refreshUser();
+          } catch {
+            toast.error('Payment received but verification failed. Contact admin@syrabit.ai.');
+          } finally {
+            setTopUpLoading(false);
+          }
+        },
+      };
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', (response) => {
+        toast.error(`Payment failed: ${response.error?.description || 'Unknown error'}`);
+        setTopUpLoading(false);
+      });
+      rzp.open();
+    } catch {
+      toast.error('Something went wrong. Please try again.');
+      setTopUpLoading(false);
     }
   };
 
@@ -589,7 +691,7 @@ export default function ProfilePage() {
             {/* Credit progress bar */}
             <div className="mt-4">
               <div className="flex justify-between text-xs text-muted-foreground mb-1.5">
-                <span>{creditsLimit === 0 ? 'No credits — upgrade to chat' : 'Credits used today'}</span>
+                <span>{creditsLimit === 0 ? 'No credits — upgrade to chat' : 'Credits used'}</span>
                 <span className={isLowCredits ? 'text-amber-400' : ''}>
                   {creditsLimit === 0 ? '' : `${creditsUsed} / ${creditsLimit}`}
                 </span>
@@ -608,6 +710,15 @@ export default function ProfilePage() {
                   }}
                 />
               </div>
+              {plan !== 'free' && (
+                <button
+                  onClick={() => setShowTopUpModal(true)}
+                  className="mt-3 w-full h-8 rounded-lg text-xs font-semibold transition-all hover:opacity-90 active:scale-[0.98] flex items-center justify-center gap-1.5"
+                  style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))', border: '1px solid rgba(139,92,246,0.25)' }}
+                >
+                  <Zap size={12} /> Buy More Credits
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -996,26 +1107,113 @@ export default function ProfilePage() {
                 ))}
               </ul>
 
+              <div className="space-y-2">
+                <button
+                  onClick={handleRazorpayCheckout}
+                  disabled={paymentLoading}
+                  className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                  style={{
+                    background: paymentPlan === 'pro'
+                      ? 'linear-gradient(135deg,#d97706,#f59e0b)'
+                      : 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
+                    boxShadow: paymentPlan === 'pro'
+                      ? '0 4px 20px rgba(245,158,11,0.30)'
+                      : '0 4px 20px rgba(124,58,237,0.30)',
+                  }}
+                  data-testid="payment-confirm-button"
+                >
+                  {paymentLoading ? (
+                    <Loader2 size={16} className="animate-spin" />
+                  ) : (
+                    <CreditCard size={16} />
+                  )}
+                  {paymentLoading ? 'Processing…' : `Pay ${PLANS[paymentPlan]?.price} — UPI / Cards / Net Banking`}
+                </button>
+
+                <button
+                  onClick={handleStripeCheckout}
+                  disabled={paymentLoading}
+                  className="w-full h-9 rounded-xl text-xs font-medium flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
+                  style={{ background: 'rgba(99,102,241,0.10)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.25)' }}
+                >
+                  <Globe size={14} />
+                  Pay with International Card (USD)
+                </button>
+              </div>
+
+              <p className="text-center text-xs text-muted-foreground/40">
+                Secured payments · Razorpay (India) · Stripe (International)
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {/* ═══════════════════════════════════════════════════
+          DIALOG — CREDIT TOP-UP MODAL
+          ═══════════════════════════════════════════════════ */}
+      <AnimatePresence>
+        {showTopUpModal && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={(e) => { if (e.target === e.currentTarget) setShowTopUpModal(false); }}
+          >
+            <motion.div
+              className="w-full max-w-sm rounded-2xl p-5 space-y-4"
+              style={{ background: 'hsl(var(--card))', border: '1px solid rgba(139,92,246,0.25)' }}
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.18 }}
+            >
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-foreground">Buy More Credits</h3>
+                <button onClick={() => setShowTopUpModal(false)} className="text-muted-foreground hover:text-foreground p-1 rounded-lg hover:bg-accent/40">
+                  <X size={16} />
+                </button>
+              </div>
+
+              <p className="text-sm text-muted-foreground">
+                Add credits to your <span className="font-semibold text-foreground">{planInfo.label}</span> plan.
+                Current balance: <span className="font-bold" style={{ color: 'hsl(var(--primary))' }}>{creditsRemaining}</span> credits
+              </p>
+
+              <div className="space-y-2">
+                {TOPUP_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.credits}
+                    onClick={() => setTopUpCredits(opt.credits)}
+                    className="w-full flex items-center justify-between p-3 rounded-xl transition-all text-left"
+                    style={
+                      topUpCredits === opt.credits
+                        ? { background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(139,92,246,0.40)' }
+                        : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)' }
+                    }
+                  >
+                    <div className="flex items-center gap-3">
+                      <Zap size={16} className={topUpCredits === opt.credits ? 'text-violet-400' : 'text-muted-foreground/50'} />
+                      <div>
+                        <p className="text-sm font-semibold text-foreground">{opt.label}</p>
+                      </div>
+                    </div>
+                    <span className="text-sm font-bold" style={{ color: topUpCredits === opt.credits ? 'hsl(var(--primary))' : 'inherit' }}>
+                      {opt.price}
+                    </span>
+                  </button>
+                ))}
+              </div>
+
               <button
-                onClick={handleRazorpayCheckout}
-                disabled={paymentLoading}
+                onClick={handleTopUpCheckout}
+                disabled={topUpLoading || !topUpCredits}
                 className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
-                style={{
-                  background: paymentPlan === 'pro'
-                    ? 'linear-gradient(135deg,#d97706,#f59e0b)'
-                    : 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
-                  boxShadow: paymentPlan === 'pro'
-                    ? '0 4px 20px rgba(245,158,11,0.30)'
-                    : '0 4px 20px rgba(124,58,237,0.30)',
-                }}
-                data-testid="payment-confirm-button"
+                style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', boxShadow: '0 4px 20px rgba(124,58,237,0.30)' }}
               >
-                {paymentLoading ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <CreditCard size={16} />
-                )}
-                {paymentLoading ? 'Processing…' : `Pay ${PLANS[paymentPlan]?.price} with Razorpay`}
+                {topUpLoading ? <Loader2 size={16} className="animate-spin" /> : <CreditCard size={16} />}
+                {topUpLoading ? 'Processing…' : topUpCredits ? `Buy ${topUpCredits} credits` : 'Select a pack'}
               </button>
 
               <p className="text-center text-xs text-muted-foreground/40">

@@ -185,10 +185,19 @@ export const adminDeleteQaPair = (token, qaId) =>
 export const adminPromoteChatToQa = (token, msgId) =>
   axios.post(`${API_BASE}/admin/qa/from-chat/${msgId}`, {}, { headers: adminHeaders(token), withCredentials: true });
 
-// ── Payments (excluded from current build) ───────────────────────────────────
+// ── Payments ─────────────────────────────────────────────────────────────────
 
 export const createPaymentOrder = (plan) =>
   axios.post(`${API_BASE}/payments/create-order`, { plan }, authConfig());
 
 export const verifyPayment = (data) =>
   axios.post(`${API_BASE}/payments/verify`, data, authConfig());
+
+export const createCreditTopUp = (credits) =>
+  axios.post(`${API_BASE}/payments/credit-topup`, { credits, provider: 'razorpay' }, authConfig());
+
+export const verifyCreditTopUp = (data) =>
+  axios.post(`${API_BASE}/payments/credit-topup/verify`, data, authConfig());
+
+export const createStripeCheckout = (plan, successUrl, cancelUrl) =>
+  axios.post(`${API_BASE}/payments/stripe/create-checkout`, { plan, success_url: successUrl, cancel_url: cancelUrl }, authConfig());

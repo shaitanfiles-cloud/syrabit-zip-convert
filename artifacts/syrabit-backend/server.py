@@ -668,6 +668,9 @@ async def lifespan(app):
         await db.activity_log.create_index([("created_at", -1)])
         await db.notifications.create_index([("created_at", -1)])
         await db.settings.create_index("id", unique=True, sparse=True)
+        await db.payments.create_index("razorpay_payment_id", unique=True, sparse=True)
+        await db.payments.create_index("stripe_session_id", unique=True, sparse=True)
+        await db.payments.create_index([("user_id", 1), ("verified_at", -1)])
 
         try:
             await db.topics.create_index("chapter_id")
@@ -851,18 +854,19 @@ def supa_table(table: str):
 async def get_user_credits(user: dict) -> dict:
     """
     Lifetime credits — NO daily/monthly reset.
-    Free: 30 one-time. Starter: 300. Pro: 4000.
-    Credits are cumulative (never reset unless admin adjusts).
+    Uses the user's actual credits_limit from DB (includes top-ups and admin adjustments).
+    Falls back to PLAN_LIMITS only when credits_limit is not stored yet.
     """
     plan     = user.get("plan", "free")
     plan_cfg = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-    limit    = plan_cfg["lifetime_credits"]
-    used     = user.get("credits_used", 0)
+    db_limit = user.get("credits_limit")
+    limit    = db_limit if db_limit is not None else plan_cfg["lifetime_credits"]
+    used     = user.get("credits_used", 0) or 0
     return {
         "used": used,
         "limit": limit,
         "remaining": max(0, limit - used),
-        "document_access": plan_cfg["document_access"],
+        "document_access": user.get("document_access") or plan_cfg["document_access"],
     }
 
 # ── Plan configuration ────────────────────────────────────────────────────────
@@ -6782,8 +6786,8 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
     if plan not in PLAN_PRICES_INR:
         raise HTTPException(400, f"Invalid plan '{plan}'.")
 
-    _, key_secret = await _get_razorpay_keys()
-    if not key_secret:
+    key_id, key_secret = await _get_razorpay_keys()
+    if not key_id or not key_secret:
         raise HTTPException(503, "Payment gateway not configured.")
 
     # Verify HMAC-SHA256 signature
@@ -6796,6 +6800,34 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         logger.warning(f"Payment signature mismatch for user {user['id']}")
         raise HTTPException(400, "Payment verification failed — invalid signature.")
 
+    # Idempotency: check if already processed
+    existing = await db.payments.find_one({"razorpay_payment_id": body.razorpay_payment_id})
+    if existing:
+        return {"success": True, "plan": plan, "credits_added": PLAN_CREDITS[plan], "message": "Payment already processed."}
+
+    # Server-side validation: fetch order from Razorpay and verify amount + notes
+    try:
+        import razorpay
+        client = razorpay.Client(auth=(key_id, key_secret))
+        order = client.order.fetch(body.razorpay_order_id)
+        order_notes = order.get("notes", {})
+        order_plan = order_notes.get("plan", "")
+        order_user = order_notes.get("user_id", "")
+        if order_plan != plan:
+            logger.warning(f"Plan mismatch: order says '{order_plan}', client says '{plan}' for user {user['id']}")
+            raise HTTPException(400, "Plan mismatch — verification failed.")
+        if order_user != str(user["id"]):
+            logger.warning(f"User mismatch: order for '{order_user}', request from '{user['id']}'")
+            raise HTTPException(400, "Order does not belong to this user.")
+        if order.get("amount") != PLAN_PRICES_INR[plan]:
+            logger.warning(f"Amount mismatch for user {user['id']}: expected {PLAN_PRICES_INR[plan]}, got {order.get('amount')}")
+            raise HTTPException(400, "Amount mismatch — verification failed.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Razorpay order fetch error: {e}")
+        raise HTTPException(502, "Could not verify order details with Razorpay.")
+
     # Activate plan — add credits + upgrade plan + doc access
     user_id  = user["id"]
     credits  = PLAN_CREDITS[plan]
@@ -6805,6 +6837,7 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
     payment_record = {
         "user_id":            str(user_id),
         "plan":               plan,
+        "provider":           "razorpay",
         "amount_paise":       PLAN_PRICES_INR[plan],
         "razorpay_order_id":  body.razorpay_order_id,
         "razorpay_payment_id":body.razorpay_payment_id,
@@ -6830,6 +6863,7 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
             {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
              "$inc": {"credits_limit": credits}},
         )
+        _redis_invalidate_session(user_id)
         logger.info(f"Plan activated: user={user_id} plan={plan} credits+={credits}")
         return {
             "success": True,
@@ -6982,14 +7016,41 @@ async def razorpay_webhook(request: StarletteRequest2):
             user_id = notes.get("user_id")
             plan = notes.get("plan")
             rp_payment_id = entity.get("id", "")
-            if user_id and plan and plan in PLAN_CREDITS:
-                existing = await db.payments.find_one({"razorpay_payment_id": rp_payment_id})
-                if existing:
-                    logger.info(f"Razorpay duplicate event ignored: payment={rp_payment_id}")
-                    return {"received": True}
+            if not user_id or not rp_payment_id:
+                return {"received": True}
+            existing = await db.payments.find_one({"razorpay_payment_id": rp_payment_id})
+            if existing:
+                logger.info(f"Razorpay duplicate event ignored: payment={rp_payment_id}")
+                return {"received": True}
+            now_iso = datetime.now(timezone.utc).isoformat()
+            if plan == "topup":
+                topup_credits = int(notes.get("credits", 0))
+                if topup_credits > 0:
+                    await db.payments.insert_one({
+                        "user_id": user_id,
+                        "plan": "topup",
+                        "provider": "razorpay",
+                        "razorpay_payment_id": rp_payment_id,
+                        "amount_paise": entity.get("amount", 0),
+                        "credits_added": topup_credits,
+                        "verified_at": now_iso,
+                    })
+                    await db.users.update_one(
+                        {"id": user_id},
+                        {"$set": {"updated_at": now_iso},
+                         "$inc": {"credits_limit": topup_credits}},
+                    )
+                    if pg_pool:
+                        async with pg_pool.acquire() as conn:
+                            await conn.execute(
+                                "UPDATE users SET credits_limit=credits_limit+$1, updated_at=$2 WHERE id=$3",
+                                topup_credits, now_iso, user_id,
+                            )
+                    _redis_invalidate_session(user_id)
+                    logger.info(f"Razorpay topup webhook: user={user_id} credits+={topup_credits}")
+            elif plan and plan in PLAN_CREDITS:
                 credits = PLAN_CREDITS[plan]
                 doc_acc = PLAN_DOC_ACCESS[plan]
-                now_iso = datetime.now(timezone.utc).isoformat()
                 await db.payments.insert_one({
                     "user_id": user_id,
                     "plan": plan,
@@ -7060,6 +7121,81 @@ async def credit_topup(body: CreditTopUpRequest, user: dict = Depends(get_curren
             logger.error(f"Topup order error: {e}")
             raise HTTPException(502, "Failed to create top-up order.")
     raise HTTPException(400, "Unsupported provider. Use 'razorpay'.")
+
+
+class CreditTopUpVerifyRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+    credits: int
+
+@api.post("/payments/credit-topup/verify")
+async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depends(get_current_user)):
+    if body.credits not in TOPUP_PRICES_INR:
+        raise HTTPException(400, "Invalid top-up amount.")
+    key_id, key_secret = await _get_razorpay_keys()
+    if not key_id or not key_secret:
+        raise HTTPException(503, "Payment gateway not configured.")
+    expected = hmac.new(
+        key_secret.encode(),
+        f"{body.razorpay_order_id}|{body.razorpay_payment_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected, body.razorpay_signature):
+        raise HTTPException(400, "Payment verification failed — invalid signature.")
+    user_id = user["id"]
+    existing = await db.payments.find_one({"razorpay_payment_id": body.razorpay_payment_id})
+    if existing:
+        return {"success": True, "credits_added": body.credits, "message": "Credits already applied."}
+    # Server-side validation: verify order amount, user, and credits from Razorpay
+    try:
+        import razorpay
+        client = razorpay.Client(auth=(key_id, key_secret))
+        order = client.order.fetch(body.razorpay_order_id)
+        order_notes = order.get("notes", {})
+        order_credits = int(order_notes.get("credits", 0))
+        order_user = order_notes.get("user_id", "")
+        if order_user != str(user_id):
+            raise HTTPException(400, "Order does not belong to this user.")
+        if order_credits != body.credits:
+            logger.warning(f"Topup credits mismatch: order={order_credits}, client={body.credits}")
+            raise HTTPException(400, "Credits mismatch — verification failed.")
+        if order.get("amount") != TOPUP_PRICES_INR[body.credits]:
+            raise HTTPException(400, "Amount mismatch — verification failed.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Razorpay order fetch error (topup): {e}")
+        raise HTTPException(502, "Could not verify order details with Razorpay.")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.payments.insert_one({
+        "user_id": str(user_id),
+        "plan": "topup",
+        "provider": "razorpay",
+        "razorpay_order_id": body.razorpay_order_id,
+        "razorpay_payment_id": body.razorpay_payment_id,
+        "amount_paise": TOPUP_PRICES_INR[body.credits],
+        "credits_added": body.credits,
+        "verified_at": now_iso,
+    })
+    if pg_pool:
+        async with pg_pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET credits_limit=credits_limit+$1, updated_at=$2 WHERE id=$3",
+                body.credits, now_iso, user_id,
+            )
+    await db.users.update_one(
+        {"id": str(user_id)},
+        {"$set": {"updated_at": now_iso},
+         "$inc": {"credits_limit": body.credits}},
+    )
+    _redis_invalidate_session(user_id)
+    logger.info(f"Credit top-up verified: user={user_id} credits+={body.credits}")
+    return {
+        "success": True,
+        "credits_added": body.credits,
+        "message": f"{body.credits} credits added to your account!",
+    }
 
 
 # ─────────────────────────────────────────────
