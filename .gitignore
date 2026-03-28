@@ -1,17 +1,43 @@
 # See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
-# compiled output
-dist
-tmp
-out-tsc
+# ── Node.js ───────────────────────────────────────────────────────────────────
+node_modules/
+dist/
+tmp/
+out-tsc/
 *.tsbuildinfo
 .expo
 .expo-shared
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
+coverage/
 
-# dependencies
-node_modules
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.Python
+venv/
+env/
+ENV/
+.pytest_cache/
+*.pyo
+*.pyd
 
-# IDEs and editors
+# ── Environment / Secrets ─────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Build outputs ─────────────────────────────────────────────────────────────
+artifacts/syrabit/dist/
+artifacts/syrabit-backend/static/
+
+# ── IDEs and editors ─────────────────────────────────────────────────────────
 /.idea
 .project
 .classpath
@@ -19,31 +45,21 @@ node_modules
 *.launch
 .settings/
 *.sublime-workspace
-
-# IDE - VSCode
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
 !.vscode/extensions.json
-
-# misc
-/.sass-cache
-/connect.lock
-/coverage
-/libpeerconnection.log
-npm-debug.log
-yarn-error.log
-testem.log
-/typings
-
-# System Files
-.DS_Store
-Thumbs.db
-
 .cursor/rules/nx-rules.mdc
 .github/instructions/nx.instructions.md
 
-# Replit
+# ── OS files ─────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+/.sass-cache
+/connect.lock
+/libpeerconnection.log
+
+# ── Replit internals (not needed in clone) ────────────────────────────────────
 .cache/
 .local/

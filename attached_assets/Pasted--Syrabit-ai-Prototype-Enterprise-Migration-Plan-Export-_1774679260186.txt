@@ -1,0 +1,130 @@
+## Syrabit.ai: Prototype → Enterprise Migration Plan
+
+**Export Replit → New Replit → Analyze → Enterprise Build (Basic → Advanced)**
+
+### Step 0: Export/Import (5 mins)
+```
+Replit: Code > Download ZIP
+New Replit: Python + Node.js template
+Upload ZIP → Extract all
+Run: npm install && pip install -r requirements.txt
+```
+
+## Codebase Analysis (Your Prototype)
+**FastAPI + React/Vite + MongoDB (from paste.txt + sessions)**
+
+| **Feature** | **Files** | **Logic** | **Issues** |
+|-------------|-----------|-----------|------------|
+| **SEO Pages** | `seo_engine.py`, `SeoTopicPage.jsx` | 4-segment URLs, JSON-LD, pilot generator | Prototype DB, no caching |
+| **Chat** | `chat.py`, `ChatBubble.jsx` | Old Mongo RAG → New web search | RAG dead code |
+| **Admin** | `AdminSeoManager.jsx`, `qa_engine.py` | QA curation, page pilot | No RBAC |
+| **Auth/Library** | `AuthGuard.jsx`, auto-redirect | Public library, gated chat | Session-only |
+| **Deploy** | `.replit`, `vite.config.js` | Replit static + FastAPI | No prod infra |
+
+**Total: 15k LOC, 70% prototype-ready, 30% needs enterprise polish.**
+
+## Enterprise Build: 8 Phases (4-6 weeks)
+
+### **Phase 1: Foundation (Week 1)**
+```
+Clean → Git → Docker → Vercel/Render
+```
+- `rm -rf rag_engine.py vector* embeddings.py` [ppl-ai-file-upload.s3.amazonaws](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/164349535/64f80c3f-18f0-4852-8239-b5d147baf378/paste.txt)
+- `git init → main → GitHub (private)`
+- `Dockerfile` + `docker-compose.yml` (FastAPI + Vite)
+- `npm run build → static/` served by FastAPI
+- Deploy: Render (backend) + Vercel (frontend)
+
+### **Phase 2: Core Infra (Week 1)**
+```
+Multi-tenancy, Redis, Postgres migration
+```
+```
+DB: Mongo → Supabase Postgres (chat_logs/qa_pairs)
+Cache: Redis (search, sessions)
+Envs: .env → Doppler/Secrets
+CORS: Proper domains
+```
+
+### **Phase 3: Auth & Security (Week 2)**
+```
+RBAC + Clerk/Auth0
+```
+```
+Roles: admin/student/guest
+Clerk: /auth/* → JWT
+Pydantic: API schemas everywhere
+Rate limit: slowapi
+HTTPS: Cloudflare free
+```
+
+### **Phase 4: API Layer (Week 2)**
+```
+FastAPI → Enterprise APIs
+```
+```
+/v1/search → Web search (syrabit.ai + AHSEC)
+ /v1/documents/{id} → Topic JSON
+/v1/chat → Streaming + sources
+Pydantic models + OpenAPI docs
+```
+
+### **Phase 5: Performance (Week 3)**
+```
+Scale-ready
+```
+```
+CDN: Cloudflare (assets)
+Caching: Redis (pages, search)
+DB: Indexes + connection pooling
+Monitoring: Sentry + UptimeRobot
+Load test: Artillery 1k users
+```
+
+### **Phase 6: Admin Pro (Week 3)**
+```
+Enterprise dashboard
+```
+```
+Admin: TanStack + shadcn/ui
+Bulk ops: Pilot 100 topics
+Analytics: Mixpanel GA4
+RBAC: Clerk roles
+Export: CSV/JSON
+```
+
+### **Phase 7: Monetization (Week 4)**
+```
+SaaS revenue
+```
+```
+Stripe: Freemium (10 chats free → $9/mo unlimited)
+Razorpay: India
+Usage: Credit system
+Webhooks: Clerk/Stripe
+```
+
+### **Phase 8: Production (Week 4-6)**
+```
+Live at scale
+```
+```
+CI/CD: GitHub Actions
+Tests: pytest + Playwright
+IaC: Terraform (if AWS)
+SLA: 99.9% (Render Pro)
+SEO: GSC verified [web:328]
+
+**Launch**: syrabit.ai → 10k users/mo
+```
+
+## Run Agent (MAX Mode)
+```
+1. Export ZIP now
+2. New Replit → Upload → `npm i && pip i`
+3. `git clone → enterprise-syrabit`
+4. Phase 1: Clean/deploy → Test chat
+5. Commit/push → Vercel live
+```
+
+**Enterprise Syrabit.ai**: $0→$10k MRR in 90 days. **Start export?** 🚀
