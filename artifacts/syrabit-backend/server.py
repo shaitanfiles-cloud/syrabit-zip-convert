@@ -4714,6 +4714,136 @@ async def delete_syllabus_subject(
         raise HTTPException(status_code=500, detail=f"Error deleting syllabus: {e}")
 
 
+def _slugify(text: str) -> str:
+    """Convert text to URL-friendly slug."""
+    import re as _re
+    text = text.lower().strip()
+    text = _re.sub(r'[^\w\s-]', '', text)
+    text = _re.sub(r'[\s_]+', '-', text)
+    text = _re.sub(r'-+', '-', text).strip('-')
+    return text
+
+
+@api.post("/admin/syllabus/publish/{board_id}/{class_id}/{stream_id}/{subject_id}")
+async def publish_syllabus_as_card(
+    board_id: str,
+    class_id: str,
+    stream_id: str,
+    subject_id: str,
+    admin: dict = Depends(get_admin_user)
+):
+    """Publish a subject-level syllabus as a cms_documents card visible in the library."""
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="MongoDB unavailable")
+
+    # ── 1. Load syllabus (with fallback chain) ────────────────────────────────
+    syllabus = await db.syllabi.find_one(
+        {"board_id": board_id, "class_id": class_id, "stream_id": stream_id, "subject_id": subject_id},
+        {"_id": 0}
+    )
+    if not syllabus:
+        syllabus = await db.syllabi.find_one(
+            {"board_id": board_id, "class_id": class_id, "stream_id": stream_id},
+            {"_id": 0}
+        )
+    if not syllabus:
+        raise HTTPException(status_code=404, detail="No syllabus found for this scope")
+
+    # ── 2. Resolve names / slugs ──────────────────────────────────────────────
+    board_doc   = await db.boards.find_one({"id": board_id}, {"_id": 0})
+    class_doc   = await db.classes.find_one({"id": class_id}, {"_id": 0})
+    stream_doc  = await db.streams.find_one({"id": stream_id}, {"_id": 0})
+    subject_doc = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+
+    board_name   = (board_doc  or {}).get("name",  board_id)
+    class_name   = (class_doc  or {}).get("name",  class_id)
+    stream_name  = (stream_doc or {}).get("name",  stream_id)
+    subject_name = (subject_doc or {}).get("name", subject_id)
+    board_slug   = (board_doc  or {}).get("slug",  _slugify(board_name))
+    class_slug   = (class_doc  or {}).get("slug",  _slugify(class_name))
+    subject_slug = (subject_doc or {}).get("slug", _slugify(subject_name))
+
+    title       = f"{subject_name} Syllabus — {board_name} {class_name}"
+    seo_slug    = f"{board_slug}-{class_slug}-{_slugify(subject_name)}-syllabus"
+    geo_tags    = f"{class_name}, {board_name}, {stream_name}"
+    seo_tags    = f"Syllabus,{subject_name},{board_name},{class_name}"
+    meta_desc   = (
+        f"Complete {subject_name} syllabus for {board_name} {class_name} ({stream_name}). "
+        f"Covers key topics, chapters, and learning guidelines as per the {board_name} board."
+    )
+
+    # ── 3. Build structured markdown ──────────────────────────────────────────
+    chapters    = syllabus.get("chapters", [])
+    topics      = syllabus.get("topics", [])
+    guidelines  = syllabus.get("guidelines", "").strip()
+    geo_phrases = syllabus.get("geo_phrases", [])
+    content_desc = syllabus.get("content", "").strip()
+
+    md_parts = [f"# {title}\n"]
+    if content_desc:
+        md_parts.append(f"{content_desc}\n")
+    if topics:
+        md_parts.append("## Key Topics\n")
+        for t in topics:
+            md_parts.append(f"- {t}")
+        md_parts.append("")
+    if chapters:
+        md_parts.append("## Chapters\n")
+        for i, ch in enumerate(chapters, 1):
+            md_parts.append(f"{i}. {ch}")
+        md_parts.append("")
+    if guidelines:
+        md_parts.append("## Learning Guidelines\n")
+        md_parts.append(guidelines)
+        md_parts.append("")
+    if geo_phrases:
+        md_parts.append("## Board Authority Notes\n")
+        for phrase in geo_phrases:
+            md_parts.append(f"> {phrase}")
+        md_parts.append("")
+
+    raw_md       = "\n".join(md_parts)
+    content_html = _md_to_html(raw_md)
+    headings_json = _extract_headings_json(raw_md)
+    word_count   = len(re.sub(r'<[^>]+>', '', content_html).split())
+    now          = datetime.now(timezone.utc).isoformat()
+
+    # ── 4. Upsert into cms_documents ──────────────────────────────────────────
+    existing = await db.cms_documents.find_one({"seo_slug": seo_slug}, {"_id": 0, "id": 1})
+    doc_id   = (existing or {}).get("id") or str(uuid.uuid4())
+
+    doc_data = {
+        "id":              doc_id,
+        "type":            "syllabus",
+        "title":           title,
+        "content":         raw_md,
+        "content_html":    content_html,
+        "meta_description": meta_desc,
+        "description":     content_desc,
+        "seo_tags":        seo_tags,
+        "geo_tags":        geo_tags,
+        "primary_keyword": f"{subject_name} Syllabus",
+        "seo_slug":        seo_slug,
+        "category":        "syllabus",
+        "schema_type":     "Course",
+        "headings":        headings_json,
+        "word_count":      word_count,
+        "status":          "published",
+        "linked_subject_id": subject_id,
+        "linked_scope":    f"{board_id}/{class_id}/{stream_id}/{subject_id}",
+        "rag_processed":   False,
+        "updated_at":      now,
+        "created_by":      admin.get("email", "admin"),
+    }
+    await db.cms_documents.update_one(
+        {"seo_slug": seo_slug},
+        {"$set": doc_data, "$setOnInsert": {"created_at": now}},
+        upsert=True
+    )
+    logger.info(f"Syllabus card published: {seo_slug} (subject={subject_id})")
+    return {"id": doc_id, "seo_slug": seo_slug, "title": title, "url": f"/learn/{seo_slug}"}
+
+
 # ─────────────────────────────────────────────
 # AI CHAT ROUTES
 # ─────────────────────────────────────────────

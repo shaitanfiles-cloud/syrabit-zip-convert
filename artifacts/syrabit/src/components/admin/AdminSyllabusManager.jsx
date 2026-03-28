@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Save, Trash2, Plus, Loader2, CheckCircle, BookOpen, GitBranch, Info } from 'lucide-react';
+import { Save, Trash2, Plus, Loader2, CheckCircle, BookOpen, GitBranch, Info, Globe, ExternalLink } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -15,6 +16,8 @@ const EMPTY_FORM = { content: '', chapters: [], topics: [], guidelines: '', geo_
 export default function AdminSyllabusManager({ adminToken, boards = [], classes = [], streams = [], subjects = [] }) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [publishedSlug, setPublishedSlug] = useState('');
 
   const [selectedBoardId, setSelectedBoardId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
@@ -95,6 +98,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
+    setPublishedSlug('');
     if (canLoad) {
       fetchSyllabus();
     } else {
@@ -135,11 +139,34 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       setEditingSyllabus(null);
       setFormData(EMPTY_FORM);
       setIsFallback(false);
+      setPublishedSlug('');
     } catch (err) {
       console.error('Delete error:', err);
       toast.error(err.response?.data?.detail || 'Failed to delete syllabus');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const publishSyllabus = async () => {
+    if (!selectedStreamId || !selectedSubjectId) {
+      toast.error('Select a Stream and Subject to publish a syllabus card');
+      return;
+    }
+    try {
+      setPublishing(true);
+      const res = await axios.post(
+        `${API}/admin/syllabus/publish/${selectedBoardId}/${selectedClassId}/${selectedStreamId}/${selectedSubjectId}`,
+        {},
+        authHeaders(adminToken)
+      );
+      setPublishedSlug(res.data.seo_slug);
+      toast.success('Syllabus card published to library!');
+    } catch (err) {
+      console.error('Publish error:', err);
+      toast.error(err.response?.data?.detail || 'Failed to publish syllabus card');
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -488,6 +515,35 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
               </button>
             )}
           </div>
+
+          {/* Publish as Syllabus Card — only for subject-level saved syllabi */}
+          {editingSyllabus && !isFallback && selectedSubjectId && selectedStreamId && (
+            <div className="pt-2 border-t border-white/10">
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={publishSyllabus}
+                  disabled={publishing || saving}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 disabled:opacity-40 text-emerald-300 font-medium text-sm transition-colors border border-emerald-500/20"
+                >
+                  {publishing ? <Loader2 size={15} className="animate-spin" /> : <Globe size={15} />}
+                  {publishing ? 'Publishing...' : 'Publish as Syllabus Card'}
+                </button>
+                {publishedSlug && (
+                  <Link
+                    to={`/learn/${publishedSlug}`}
+                    target="_blank"
+                    className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs text-emerald-400 hover:text-emerald-300 transition-colors"
+                  >
+                    <ExternalLink size={13} />
+                    View Card
+                  </Link>
+                )}
+              </div>
+              <p className="text-[10px] text-white/25 mt-2">
+                Creates a discoverable library card at <span className="text-white/40">/learn/…</span> tagged "Syllabus" — visible to all students.
+              </p>
+            </div>
+          )}
         </>
       )}
 

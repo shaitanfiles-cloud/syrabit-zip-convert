@@ -45,7 +45,14 @@ function CmsDocCard({ doc }) {
         {tags.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {tags.map(t => (
-              <span key={t} className="px-2 py-0.5 rounded-full text-[10px] font-medium" style={{ background: 'rgba(139,92,246,0.10)', color: '#a78bfa' }}>{t}</span>
+              <span
+                key={t}
+                className="px-2 py-0.5 rounded-full text-[10px] font-medium"
+                style={t.toLowerCase() === 'syllabus'
+                  ? { background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.2)' }
+                  : { background: 'rgba(139,92,246,0.10)', color: '#a78bfa' }
+                }
+              >{t}</span>
             ))}
           </div>
         )}

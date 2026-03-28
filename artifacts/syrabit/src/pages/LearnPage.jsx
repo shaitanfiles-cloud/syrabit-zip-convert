@@ -4,7 +4,7 @@ import { Helmet } from 'react-helmet-async';
 import {
   BookOpen, ChevronRight, Clock, BarChart3, Share2,
   ArrowLeft, List, Loader2, AlertCircle, ExternalLink,
-  Globe, CheckCircle,
+  Globe, CheckCircle, GraduationCap, Layers,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import axios from 'axios';
@@ -235,10 +235,26 @@ export default function LearnPage() {
 
           {/* Hero header */}
           <div className="mb-8">
+            {/* Syllabus type banner */}
+            {doc?.type === 'syllabus' && (
+              <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] w-fit">
+                <GraduationCap size={14} className="text-emerald-400" />
+                <span className="text-xs font-semibold text-emerald-300">Official Syllabus</span>
+                <span className="text-white/25 text-xs">·</span>
+                <span className="text-xs text-white/40">AI-assisted learning available</span>
+              </div>
+            )}
             {tags.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-4">
                 {tags.slice(0, 5).map(tag => (
-                  <span key={tag} className="px-2.5 py-1 rounded-full text-[11px] font-medium border" style={{ borderColor: 'rgba(139,92,246,0.2)', background: 'rgba(139,92,246,0.08)', color: '#a78bfa' }}>
+                  <span
+                    key={tag}
+                    className="px-2.5 py-1 rounded-full text-[11px] font-medium border"
+                    style={tag.toLowerCase() === 'syllabus'
+                      ? { borderColor: 'rgba(16,185,129,0.25)', background: 'rgba(16,185,129,0.08)', color: '#6ee7b7' }
+                      : { borderColor: 'rgba(139,92,246,0.2)', background: 'rgba(139,92,246,0.08)', color: '#a78bfa' }
+                    }
+                  >
                     {tag}
                   </span>
                 ))}
@@ -310,8 +326,30 @@ export default function LearnPage() {
             <TocSidebar toc={toc} activeId={activeId} />
           </div>
 
+          {/* Syllabus: Lessons Coming Soon */}
+          {doc?.type === 'syllabus' && (
+            <div className="mt-8 rounded-2xl border border-white/10 overflow-hidden">
+              <div className="px-6 py-4 border-b border-white/[0.06] flex items-center gap-2" style={{ background: 'rgba(16,185,129,0.05)' }}>
+                <Layers size={15} className="text-emerald-400" />
+                <span className="text-sm font-semibold text-white">Lesson Content</span>
+                <span className="ml-auto px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/20">Coming Soon</span>
+              </div>
+              <div className="px-6 py-8 text-center" style={{ background: 'rgba(255,255,255,0.015)' }}>
+                <GraduationCap size={32} className="mx-auto text-white/10 mb-3" />
+                <p className="text-white/50 text-sm mb-1">Detailed lesson content is being prepared for each chapter.</p>
+                <p className="text-white/30 text-xs">Each chapter will have full explanations, examples, and practice questions.</p>
+                <Link
+                  to="/chat"
+                  className="inline-flex items-center gap-2 mt-5 h-9 px-4 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 text-sm font-medium transition-colors border border-emerald-500/20"
+                >
+                  <BookOpen size={13} /> Ask AI about this subject now
+                </Link>
+              </div>
+            </div>
+          )}
+
           {/* Footer CTA */}
-          <div className="mt-12 rounded-2xl border border-white/10 p-6 flex flex-col sm:flex-row items-center gap-4" style={{ background: 'rgba(139,92,246,0.06)' }}>
+          <div className="mt-8 rounded-2xl border border-white/10 p-6 flex flex-col sm:flex-row items-center gap-4" style={{ background: 'rgba(139,92,246,0.06)' }}>
             <div className="flex-1 text-center sm:text-left">
               <p className="text-white font-semibold mb-1">Want AI-powered answers on this topic?</p>
               <p className="text-white/45 text-sm">Ask Syrabit — your AHSEC exam tutor — any question about this content.</p>
