@@ -11,6 +11,7 @@ import {
   adminSeoGenerate, adminSeoListPages, adminSeoUpdatePageStatus,
   adminSeoRegenerateSitemap, adminSeoDeleteTopic, adminSeoPilot,
   adminSeoAutoRun, adminSeoJobStatus, adminSeoInsights, adminSeoExpand,
+  adminSeoBulkPublish,
 } from '@/utils/api';
 
 const PAGE_TYPES = [
@@ -131,6 +132,7 @@ export default function AdminSeoManager({ adminToken }) {
   const [extracting, setExtracting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [sitemap, setSitemap]       = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [activeJob, setActiveJob]   = useState(null);
   const [actionLoading, setActionLoading] = useState(null);
   const pollRef = useRef(null);
@@ -277,6 +279,17 @@ export default function AdminSeoManager({ adminToken }) {
     finally { setSitemap(false); }
   };
 
+  const handleBulkPublish = async () => {
+    if (!confirm(`Publish all draft SEO pages? This will make them publicly indexed.`)) return;
+    setPublishing(true);
+    try {
+      const res = await adminSeoBulkPublish(adminToken);
+      toast.success(res.data?.message || 'Pages published');
+      load();
+    } catch { toast.error('Bulk publish failed'); }
+    finally { setPublishing(false); }
+  };
+
   const handleInsightAction = async (insight) => {
     setActionLoading(insight.title);
     try {
@@ -365,6 +378,14 @@ export default function AdminSeoManager({ adminToken }) {
             style={{ color: 'rgba(255,255,255,0.60)', borderColor: 'rgba(255,255,255,0.10)' }}>
             {sitemap ? <Loader2 size={13} className="animate-spin" /> : <Map size={13} />} Regen Sitemap
           </button>
+          {draftCount > 0 && (
+            <button onClick={handleBulkPublish} disabled={publishing}
+              className="h-9 px-3 rounded-xl text-xs flex items-center gap-1.5 transition-colors border disabled:opacity-50"
+              style={{ color: '#34d399', borderColor: 'rgba(52,211,153,0.30)', background: 'rgba(52,211,153,0.07)' }}>
+              {publishing ? <Loader2 size={13} className="animate-spin" /> : <CheckCheck size={13} />}
+              Publish All ({draftCount})
+            </button>
+          )}
           <a href="/api/seo/sitemap.xml" target="_blank" rel="noopener"
             className="h-9 px-3 rounded-xl text-xs flex items-center gap-1.5 transition-colors"
             style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.25)' }}>

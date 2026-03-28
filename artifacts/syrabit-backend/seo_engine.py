@@ -669,7 +669,23 @@ def _md_to_html(text: str) -> str:
     return f"<p>{h}</p>"
 
 
-def _render_seo_html(page: dict, page_url: str) -> str:
+_PAGE_TYPE_LABELS = {
+    "notes": "Notes",
+    "definition": "Definitions",
+    "important-questions": "Important Questions",
+    "mcqs": "MCQs",
+    "examples": "Solved Examples",
+}
+
+
+def _render_seo_html(
+    page: dict,
+    page_url: str,
+    page_type_links: list = None,   # [{type, label, url, active}]
+    related_topics: list = None,    # [{title, seo_path, slug}]
+    prev_topic: dict = None,
+    next_topic: dict = None,
+) -> str:
     title = html_mod.escape(page.get("title", ""))
     desc = html_mod.escape(page.get("meta_description", ""))
     topic = html_mod.escape(page.get("topic_title", ""))
@@ -677,15 +693,19 @@ def _render_seo_html(page: dict, page_url: str) -> str:
     board = html_mod.escape(page.get("board_name", ""))
     cls = html_mod.escape(page.get("class_name", ""))
     chapter = html_mod.escape(page.get("chapter_title", ""))
+    page_type = page.get("page_type", "notes")
     content_html = _md_to_html(page.get("content", ""))
     generated = page.get("generated_at", "")
     updated = page.get("updated_at", generated)
+    kw = page.get("primary_keyword", f"{topic} {board} {cls}")
 
+    # ── Schema.org graph ────────────────────────────────────────────────────
     graph_nodes = [
         {
             "@type": "Article",
             "headline": page.get("title", ""),
             "description": page.get("meta_description", ""),
+            "keywords": kw,
             "author": {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai"},
             "publisher": {
                 "@type": "Organization",
@@ -716,12 +736,53 @@ def _render_seo_html(page: dict, page_url: str) -> str:
             "itemListElement": [
                 {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
                 {"@type": "ListItem", "position": 2, "name": "Library", "item": "https://syrabit.ai/library"},
-                {"@type": "ListItem", "position": 3, "name": subject, "item": "https://syrabit.ai/library"},
-                {"@type": "ListItem", "position": 4, "name": topic, "item": page_url},
+                {"@type": "ListItem", "position": 3, "name": page.get("subject_name", ""), "item": "https://syrabit.ai/library"},
+                {"@type": "ListItem", "position": 4, "name": page.get("topic_title", ""), "item": page_url},
             ],
         },
     ]
 
+    # ── Page-type specific schema ────────────────────────────────────────────
+    if page_type == "definition":
+        graph_nodes.append({
+            "@type": "DefinedTerm",
+            "name": page.get("topic_title", ""),
+            "description": page.get("meta_description", ""),
+            "inDefinedTermSet": {
+                "@type": "DefinedTermSet",
+                "name": f"{page.get('subject_name', '')} — {board} {cls}",
+                "url": f"https://syrabit.ai/{page.get('board_slug','')}/{page.get('class_slug','')}/{page.get('subject_slug','')}",
+            },
+            "url": page_url,
+        })
+
+    if page_type == "mcqs":
+        raw_content = page.get("content", "")
+        mcq_questions = []
+        current_q = None
+        for line in raw_content.split("\n"):
+            stripped = line.strip()
+            if stripped and (stripped[0].isdigit() or stripped.startswith("Q")):
+                current_q = stripped.lstrip("0123456789).Q ").strip()
+            elif current_q and stripped.lower().startswith(("a)", "a.")):
+                mcq_questions.append({
+                    "@type": "Question",
+                    "name": current_q,
+                    "acceptedAnswer": {"@type": "Answer", "text": stripped},
+                })
+                current_q = None
+                if len(mcq_questions) >= 10:
+                    break
+        if mcq_questions:
+            graph_nodes.append({
+                "@type": "Quiz",
+                "name": f"{page.get('topic_title', '')} MCQs — {board} {cls}",
+                "educationalLevel": f"{cls} {board}".strip(),
+                "about": {"@type": "Thing", "name": page.get("topic_title", "")},
+                "hasPart": mcq_questions,
+            })
+
+    # ── FAQ extraction for all page types ───────────────────────────────────
     qa_pairs = page.get("qa_pairs", [])
     faq_items = []
     if qa_pairs:
@@ -753,6 +814,37 @@ def _render_seo_html(page: dict, page_url: str) -> str:
         graph_nodes.append({"@type": "FAQPage", "mainEntity": faq_items})
 
     ld_json = json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False)
+
+    # ── Page-type navigation HTML ────────────────────────────────────────────
+    pt_nav_html = ""
+    if page_type_links:
+        links_html = ""
+        for ptl in page_type_links:
+            if ptl.get("active"):
+                links_html += f'<span class="pt-active">{html_mod.escape(ptl["label"])}</span>'
+            else:
+                links_html += f'<a class="pt-link" href="{html_mod.escape(ptl["url"])}">{html_mod.escape(ptl["label"])}</a>'
+        pt_nav_html = f'<nav class="pt-nav" aria-label="Page types">{links_html}</nav>'
+
+    # ── Related topics HTML ──────────────────────────────────────────────────
+    related_html = ""
+    if related_topics:
+        items = ""
+        for rt in related_topics[:6]:
+            rt_path = html_mod.escape(rt.get("seo_path", "#"))
+            rt_title = html_mod.escape(rt.get("title", ""))
+            items += f'<li><a href="https://syrabit.ai{rt_path}">{rt_title}</a></li>'
+        related_html = f'<section class="related"><h2>Related Topics in {html_mod.escape(page.get("subject_name",""))}</h2><ul>{items}</ul></section>'
+
+    # ── Prev / Next navigation HTML ──────────────────────────────────────────
+    prevnext_html = ""
+    parts = []
+    if prev_topic and prev_topic.get("seo_path"):
+        parts.append(f'<a class="pn-prev" href="https://syrabit.ai{html_mod.escape(prev_topic["seo_path"])}">&larr; {html_mod.escape(prev_topic.get("title","Previous"))}</a>')
+    if next_topic and next_topic.get("seo_path"):
+        parts.append(f'<a class="pn-next" href="https://syrabit.ai{html_mod.escape(next_topic["seo_path"])}">{html_mod.escape(next_topic.get("title","Next"))} &rarr;</a>')
+    if parts:
+        prevnext_html = f'<nav class="pn-nav" aria-label="Topic navigation">{"".join(parts)}</nav>'
 
     return f"""<!DOCTYPE html>
 <html lang="en-IN">
@@ -797,6 +889,21 @@ def _render_seo_html(page: dict, page_url: str) -> str:
 <meta name="dc.language" content="en-IN">
 <meta name="dc.source" content="https://syrabit.ai">
 <script type="application/ld+json">{ld_json}</script>
+<style>
+body{{font-family:system-ui,sans-serif;max-width:860px;margin:0 auto;padding:1rem 1.25rem;color:#1a1a1a;line-height:1.7}}
+h1{{font-size:1.75rem;margin-bottom:.5rem}}h2{{font-size:1.3rem;margin-top:2rem}}
+.pt-nav{{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0 1.5rem}}
+.pt-link{{padding:.35rem .8rem;border-radius:6px;border:1px solid #d1d5db;color:#374151;text-decoration:none;font-size:.9rem}}
+.pt-link:hover{{background:#f3f4f6}}.pt-active{{padding:.35rem .8rem;border-radius:6px;background:#7c3aed;color:#fff;font-size:.9rem;font-weight:600}}
+.related{{background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:1rem 1.25rem;margin:2rem 0}}
+.related h2{{margin-top:0;font-size:1.1rem}}.related ul{{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.5rem}}
+.related ul li a{{color:#7c3aed;text-decoration:none;font-size:.9rem}}.related ul li a:hover{{text-decoration:underline}}
+.pn-nav{{display:flex;justify-content:space-between;margin:2rem 0;padding-top:1rem;border-top:1px solid #e5e7eb}}
+.pn-prev,.pn-next{{color:#7c3aed;text-decoration:none;font-size:.9rem;max-width:45%}}.pn-prev:hover,.pn-next:hover{{text-decoration:underline}}
+nav[aria-label="Breadcrumb"]{{font-size:.85rem;color:#6b7280;margin-bottom:.5rem}}
+nav[aria-label="Breadcrumb"] a{{color:#7c3aed;text-decoration:none}}
+footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-top:1px solid #e5e7eb}}
+</style>
 </head>
 <body>
 <header>
@@ -809,11 +916,14 @@ def _render_seo_html(page: dict, page_url: str) -> str:
 <p><strong>{board}</strong> &middot; {cls} &middot; {subject} &middot; {chapter}</p>
 </header>
 <main>
+{pt_nav_html}
 <article>
 <h1>{topic} — {board} {cls} {subject}</h1>
 <p><em>{desc}</em></p>
 {content_html}
 </article>
+{related_html}
+{prevnext_html}
 <footer>
 <p>Source: <a href="{html_mod.escape(page_url)}">Syrabit.ai — {topic}</a></p>
 <p>&copy; Syrabit.ai — AI-powered exam prep for Assam Board students</p>
@@ -821,6 +931,35 @@ def _render_seo_html(page: dict, page_url: str) -> str:
 </main>
 </body>
 </html>"""
+
+
+async def _build_page_type_links(page: dict, current_type: str, board: str, class_slug: str, subject_slug: str, topic_slug: str) -> list:
+    """Return navigation links for all published page types of this topic."""
+    sibling_types = await _db.seo_pages.find(
+        {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
+         "topic_slug": topic_slug, "status": "published"},
+        {"_id": 0, "page_type": 1},
+    ).to_list(10)
+    published_types = {s["page_type"] for s in sibling_types}
+    links = []
+    for pt in PAGE_TYPES:
+        if pt in published_types:
+            base = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{topic_slug}"
+            url = base if pt == "notes" else f"{base}/{pt}"
+            links.append({"type": pt, "label": _PAGE_TYPE_LABELS.get(pt, pt), "url": url, "active": pt == current_type})
+    return links
+
+
+async def _build_related_data(page: dict, board: str, class_slug: str, subject_slug: str, topic_slug: str):
+    """Fetch related topics, prev, next for internal linking."""
+    topic = await _db.topics.find_one({"slug": topic_slug}, {"_id": 0})
+    if not topic:
+        return [], None, None
+    rel = await get_related_topics(topic_slug=topic_slug)
+    related = rel.get("related", [])
+    prev_t = rel.get("prev")
+    next_t = rel.get("next")
+    return related, prev_t, next_t
 
 
 @router.get("/html/{board}/{class_slug}/{subject_slug}/{topic_slug}", response_class=HTMLResponse)
@@ -834,7 +973,11 @@ async def get_seo_html_default(board: str, class_slug: str, subject_slug: str, t
         raise HTTPException(status_code=404, detail="Page not found")
     page = await _inject_qa(page)
     page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{topic_slug}"
-    return HTMLResponse(content=_render_seo_html(page, page_url))
+    pt_links, (related, prev_t, next_t) = await asyncio.gather(
+        _build_page_type_links(page, "notes", board, class_slug, subject_slug, topic_slug),
+        _build_related_data(page, board, class_slug, subject_slug, topic_slug),
+    )
+    return HTMLResponse(content=_render_seo_html(page, page_url, pt_links, related, prev_t, next_t))
 
 
 @router.get("/html/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}", response_class=HTMLResponse)
@@ -850,7 +993,11 @@ async def get_seo_html_typed(board: str, class_slug: str, subject_slug: str, top
         raise HTTPException(status_code=404, detail="Page not found")
     page = await _inject_qa(page)
     page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}"
-    return HTMLResponse(content=_render_seo_html(page, page_url))
+    pt_links, (related, prev_t, next_t) = await asyncio.gather(
+        _build_page_type_links(page, page_type, board, class_slug, subject_slug, topic_slug),
+        _build_related_data(page, board, class_slug, subject_slug, topic_slug),
+    )
+    return HTMLResponse(content=_render_seo_html(page, page_url, pt_links, related, prev_t, next_t))
 
 
 @router.get("/page-types/{board}/{class_slug}/{subject_slug}/{topic_slug}")
@@ -1164,6 +1311,31 @@ async def generate_pilot_content(
         "errors": errors,
         "message": f"Pilot complete: {generated_pages} pages generated for {len(chapters)} chapters",
     }
+
+# ─── ADMIN: Bulk publish ─────────────────────────────────────────────────────
+
+@router.post("/bulk-publish")
+async def bulk_publish_pages(
+    page_type: Optional[str] = None,
+    subject_id: Optional[str] = None,
+    _admin: dict = Depends(_require_admin),
+):
+    """Publish all draft SEO pages (optionally filtered by page_type or subject)."""
+    query: dict = {"status": {"$ne": "published"}}
+    if page_type:
+        query["page_type"] = page_type
+    if subject_id:
+        query["subject_id"] = subject_id
+
+    result = await _db.seo_pages.update_many(
+        query,
+        {"$set": {"status": "published", "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {
+        "published": result.modified_count,
+        "message": f"Published {result.modified_count} pages",
+    }
+
 
 # ─── ADMIN: Job progress tracking (in-memory) ────────────────────────────────
 

@@ -178,6 +178,13 @@ export const adminSeoInsights = (token) =>
 export const adminSeoExpand = (token, boardSlug, pageTypes = null) =>
   axios.post(`${API_BASE}/seo/expand/${boardSlug}`, pageTypes ? { page_types: pageTypes } : {}, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminSeoBulkPublish = (token, pageType = null, subjectId = null) =>
+  axios.post(`${API_BASE}/seo/bulk-publish`, null, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { ...(pageType ? { page_type: pageType } : {}), ...(subjectId ? { subject_id: subjectId } : {}) },
+  });
+
 // ── QA Engine ─────────────────────────────────────────────────────────────────
 export const getTopicQa = (board, classSlug, subjectSlug, topicSlug) =>
   axios.get(`${API_BASE}/seo/qa/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
