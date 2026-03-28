@@ -306,10 +306,24 @@ const TESTIMONIALS = [
 export default function LandingPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const [countdown, setCountdown] = useState(4);
+  const [dismissed, setDismissed] = useState(false);
 
+  // Redirect logged-in users immediately
   useEffect(() => {
     if (user) navigate('/library', { replace: true });
   }, [user, navigate]);
+
+  // Auto-redirect all visitors to /library after countdown
+  useEffect(() => {
+    if (dismissed) return;
+    if (countdown <= 0) {
+      navigate('/library', { replace: true });
+      return;
+    }
+    const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [countdown, dismissed, navigate]);
 
   const year = new Date().getFullYear();
 
@@ -322,6 +336,34 @@ export default function LandingPage() {
         keywords="AHSEC exam preparation, Assam board Class 11 12 AI tutor, SEBA exam notes, Degree college study material, B.Com B.A B.Sc notes Assam, AHSEC 2025 preparation, AI study tool India, free exam prep app"
       />
       <PublicNavbar />
+
+      {/* ── Auto-redirect countdown bar ────────────────────────────────────── */}
+      {!dismissed && (
+        <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between gap-3 px-4 py-2.5 text-sm"
+          style={{ background: 'rgba(124,58,237,0.92)', backdropFilter: 'blur(12px)' }}>
+          {/* Progress bar */}
+          <div className="absolute bottom-0 left-0 h-0.5 bg-white/30 transition-all duration-1000"
+            style={{ width: `${((4 - countdown) / 4) * 100}%` }} />
+          <div className="flex items-center gap-2 text-white/90 text-xs sm:text-sm">
+            <span className="font-semibold text-white">Taking you to the Library</span>
+            <span className="text-white/60">in {countdown}s…</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={() => navigate('/library', { replace: true })}
+              className="h-7 px-3 rounded-lg text-xs font-semibold text-white bg-white/20 hover:bg-white/30 transition-colors"
+            >
+              Go now
+            </button>
+            <button
+              onClick={() => setDismissed(true)}
+              className="h-7 px-3 rounded-lg text-xs text-white/60 hover:text-white transition-colors"
+            >
+              Stay
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ══════════════════════════════════════════
           SECTION 1 — HERO
