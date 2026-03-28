@@ -656,14 +656,18 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
 
                   {/* MDXEditor + optional split blog preview */}
                   <div className={`flex-1 min-h-0 flex gap-3 ${showPreview ? '' : 'flex-col'}`}>
-                    <div className="flex-1 min-h-0 rounded-xl overflow-hidden border border-white/10 mdx-admin-editor flex flex-col">
+                    <div
+                      className="flex-1 min-h-0 rounded-xl overflow-hidden border border-black/10 cms-light-editor-wrapper flex flex-col"
+                      data-color-mode="light"
+                      style={{ backgroundColor: '#ffffff', color: '#1a1a1a' }}
+                    >
                       <MDXEditor
                         ref={editorRef}
                         key={`${editTarget?.id ?? '__new__'}-${editorKey}`}
                         markdown={contentForm.content}
                         onChange={md => setContentForm(f => ({ ...f, content: md }))}
-                        className="mdx-editor-dark h-full"
-                        contentEditableClassName="mdx-editor-content"
+                        className="mdx-editor-light h-full"
+                        contentEditableClassName="cms-editor-content"
                         plugins={[
                           headingsPlugin(),
                           listsPlugin(),

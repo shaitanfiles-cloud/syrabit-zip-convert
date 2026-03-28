@@ -50,56 +50,62 @@ const SharedMdxEditor = forwardRef(function SharedMdxEditor(
   }));
 
   return (
-    <MDXEditor
-      ref={editorRef}
-      key={editorKey ?? 'shared-editor'}
-      markdown={markdown || ''}
-      onChange={onChange}
-      plugins={[
-        headingsPlugin(),
-        listsPlugin(),
-        quotePlugin(),
-        thematicBreakPlugin(),
-        markdownShortcutPlugin(),
-        codeBlockPlugin({ defaultCodeBlockLanguage: 'text' }),
-        codeMirrorPlugin({
-          codeBlockLanguages: {
-            js: 'JavaScript', ts: 'TypeScript', python: 'Python',
-            text: 'Text', md: 'Markdown', html: 'HTML', css: 'CSS',
-          },
-        }),
-        tablePlugin(),
-        linkPlugin(),
-        diffSourcePlugin({ viewMode: 'rich-text', diffMarkdown: '' }),
-        toolbarPlugin({
-          toolbarContents: () => (
-            <DiffSourceToggleWrapper>
-              <UndoRedo />
-              <Separator />
-              <BoldItalicUnderlineToggles />
-              <CodeToggle />
-              <Separator />
-              <ListsToggle />
-              <Separator />
-              <BlockTypeSelect />
-              <Separator />
-              <CreateLink />
-              <InsertTable />
-              <InsertThematicBreak />
-              <InsertCodeBlock />
-              {onAiParse && (
-                <>
-                  <Separator />
-                  <AiBtn onAiParse={onAiParse} aiParsing={aiParsing} />
-                </>
-              )}
-            </DiffSourceToggleWrapper>
-          ),
-        }),
-      ]}
-      className="mdx-editor-dark h-full"
-      contentEditableClassName="mdx-editor-content"
-    />
+    <div
+      className="flex-1 h-full cms-light-editor-wrapper"
+      data-color-mode="light"
+      style={{ backgroundColor: '#ffffff', color: '#1a1a1a' }}
+    >
+      <MDXEditor
+        ref={editorRef}
+        key={editorKey ?? 'shared-editor'}
+        markdown={markdown || ''}
+        onChange={onChange}
+        plugins={[
+          headingsPlugin(),
+          listsPlugin(),
+          quotePlugin(),
+          thematicBreakPlugin(),
+          markdownShortcutPlugin(),
+          codeBlockPlugin({ defaultCodeBlockLanguage: 'text' }),
+          codeMirrorPlugin({
+            codeBlockLanguages: {
+              js: 'JavaScript', ts: 'TypeScript', python: 'Python',
+              text: 'Text', md: 'Markdown', html: 'HTML', css: 'CSS',
+            },
+          }),
+          tablePlugin(),
+          linkPlugin(),
+          diffSourcePlugin({ viewMode: 'rich-text', diffMarkdown: '' }),
+          toolbarPlugin({
+            toolbarContents: () => (
+              <DiffSourceToggleWrapper>
+                <UndoRedo />
+                <Separator />
+                <BoldItalicUnderlineToggles />
+                <CodeToggle />
+                <Separator />
+                <ListsToggle />
+                <Separator />
+                <BlockTypeSelect />
+                <Separator />
+                <CreateLink />
+                <InsertTable />
+                <InsertThematicBreak />
+                <InsertCodeBlock />
+                {onAiParse && (
+                  <>
+                    <Separator />
+                    <AiBtn onAiParse={onAiParse} aiParsing={aiParsing} />
+                  </>
+                )}
+              </DiffSourceToggleWrapper>
+            ),
+          }),
+        ]}
+        className="mdx-editor-light h-full"
+        contentEditableClassName="cms-editor-content"
+      />
+    </div>
   );
 });
 
