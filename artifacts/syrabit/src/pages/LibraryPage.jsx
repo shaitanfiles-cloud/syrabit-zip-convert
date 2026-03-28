@@ -787,7 +787,7 @@ export default function LibraryPage() {
 
   if (bundleLoading) {
     return (
-      <AppLayout pageTitle="Library">
+      <AppLayout pageTitle="Library" hideNavbar>
         <PageMeta
           title="AHSEC Subject Library"
           description="Explore AHSEC Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
@@ -799,7 +799,7 @@ export default function LibraryPage() {
   }
 
   return (
-    <AppLayout pageTitle="Library">
+    <AppLayout pageTitle="Library" hideNavbar>
       <Toaster richColors position="top-right" />
       <PageMeta
         title="AHSEC Subject Library"
@@ -810,7 +810,7 @@ export default function LibraryPage() {
 
         {/* ── Sticky controls header ───────────────────────────────── */}
         <div
-          className="shrink-0 w-full z-20"
+          className="sticky top-0 shrink-0 w-full z-20"
           style={{
             background: 'var(--background)',
             backdropFilter: 'blur(16px)',
