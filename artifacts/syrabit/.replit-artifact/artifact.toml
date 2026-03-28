@@ -41,7 +41,7 @@ run = "python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4 --no
 [services.production]
 
 [services.production.build]
-args = [ "sh", "-c", "python3 -m venv /home/runner/workspace/.venv-prod && /home/runner/workspace/.venv-prod/bin/pip install --no-cache-dir -r /home/runner/workspace/artifacts/syrabit-backend/requirements.txt" ]
+args = [ "sh", "-c", "python3 -m venv --clear /home/runner/workspace/.venv-prod && /home/runner/workspace/.venv-prod/bin/pip install --no-cache-dir -r /home/runner/workspace/artifacts/syrabit-backend/requirements.txt" ]
 
 [services.production.run]
 args = [ "sh", "-c", "/home/runner/workspace/.venv-prod/bin/python -m uvicorn server:app --host 0.0.0.0 --port $PORT --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend" ]
