@@ -23,6 +23,7 @@ import os, uuid, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, tim
 import mistune as _mistune
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
+import ga4_client
 
 
 # ─────────────────────────────────────────────
@@ -5727,54 +5728,69 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
         p = u.get("plan", "free")
         plan_usage[p] = plan_usage.get(p, 0) + u.get("credits_used", 0)
     
-    # Library analytics
-    library_stats = await get_library_analytics(days=days)
-    
-    visitor_stats = await get_visitor_stats()
+    # Library analytics + GA4 + MongoDB visitor stats (all in parallel)
+    ga4_vs, ga4_pages, ga4_refs, library_stats, mongo_vs = await asyncio.gather(
+        ga4_client.get_visitor_stats_ga4(days=7),
+        ga4_client.get_top_pages_ga4(limit=20),
+        ga4_client.get_top_referrers_ga4(limit=15),
+        get_library_analytics(days=days),
+        get_visitor_stats(),
+        return_exceptions=True,
+    )
 
-    # Top visited pages (last 7 days)
+    # Prefer GA4 data; fall back to MongoDB
+    visitor_stats = ga4_vs if isinstance(ga4_vs, dict) else (mongo_vs if isinstance(mongo_vs, dict) else {})
+
+    # Top visited pages — GA4 preferred
     top_pages = []
-    try:
-        pipeline = [
-            {"$group": {"_id": "$path", "views": {"$sum": 1}, "unique": {"$addToSet": "$visitor_id"}}},
-            {"$project": {"path": "$_id", "views": 1, "unique_visitors": {"$size": "$unique"}, "_id": 0}},
-            {"$sort": {"views": -1}},
-            {"$limit": 15},
-        ]
-        top_pages = await db.page_views.aggregate(pipeline).to_list(15)
-    except Exception:
-        pass
+    if isinstance(ga4_pages, list):
+        top_pages = ga4_pages
+    else:
+        try:
+            pipeline = [
+                {"$group": {"_id": "$path", "views": {"$sum": 1}, "unique": {"$addToSet": "$visitor_id"}}},
+                {"$project": {"path": "$_id", "views": 1, "unique_visitors": {"$size": "$unique"}, "_id": 0}},
+                {"$sort": {"views": -1}},
+                {"$limit": 15},
+            ]
+            top_pages = await db.page_views.aggregate(pipeline).to_list(15)
+        except Exception:
+            pass
 
-    # Referrer breakdown (last 7 days)
+    # Referrers — GA4 preferred
     top_referrers = []
-    try:
-        ref_pipeline = [
-            {"$match": {"referrer": {"$ne": None, "$ne": ""}}},
-            {"$group": {"_id": "$referrer", "count": {"$sum": 1}}},
-            {"$sort": {"count": -1}},
-            {"$limit": 10},
-        ]
-        raw_refs = await db.page_views.aggregate(ref_pipeline).to_list(10)
-        for r in raw_refs:
-            if r.get("_id"):
-                from urllib.parse import urlparse
-                try:
-                    domain = urlparse(r["_id"]).netloc or r["_id"]
-                except Exception:
-                    domain = r["_id"]
-                top_referrers.append({"source": domain, "count": r["count"]})
-    except Exception:
-        pass
+    if isinstance(ga4_refs, list):
+        top_referrers = ga4_refs
+    else:
+        try:
+            ref_pipeline = [
+                {"$match": {"referrer": {"$ne": None, "$ne": ""}}},
+                {"$group": {"_id": "$referrer", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 10},
+            ]
+            raw_refs = await db.page_views.aggregate(ref_pipeline).to_list(10)
+            for r in raw_refs:
+                if r.get("_id"):
+                    from urllib.parse import urlparse
+                    try:
+                        domain = urlparse(r["_id"]).netloc or r["_id"]
+                    except Exception:
+                        domain = r["_id"]
+                    top_referrers.append({"source": domain, "count": r["count"]})
+        except Exception:
+            pass
 
     return {
         "daily_signups": daily_signups,
         "plan_usage": plan_usage,
-        "library": library_stats,
+        "library": library_stats if isinstance(library_stats, dict) else {},
         "total_users": len(users),
         "active_users": sum(1 for u in users if u.get("credits_used", 0) > 0),
         "visitor_stats": visitor_stats,
         "top_pages": top_pages,
         "top_referrers": top_referrers,
+        "ga4_connected": isinstance(ga4_vs, dict),
     }
 
 
@@ -9834,6 +9850,54 @@ async def admin_analytics_predictor(admin: dict = Depends(get_admin_user)):
         "signups_this_month": users_this_month,
         "signups_last_month": users_last_month,
     }
+
+
+# ─────────────────────────────────────────────
+# GOOGLE ANALYTICS 4 OAUTH SETUP
+# ─────────────────────────────────────────────
+@api.get("/admin/ga4/status")
+async def ga4_status(admin: dict = Depends(get_admin_user)):
+    connected = bool(os.getenv("GA4_REFRESH_TOKEN"))
+    property_id = os.getenv("GA4_PROPERTY_ID", "")
+    return {
+        "connected": connected,
+        "property_id": property_id,
+        "client_id_set": bool(os.getenv("GOOGLE_OAUTH_CLIENT_ID")),
+        "client_secret_set": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
+    }
+
+
+@api.get("/admin/ga4/auth-url")
+async def ga4_auth_url(redirect_uri: str, admin: dict = Depends(get_admin_user)):
+    url = ga4_client.get_oauth_url(redirect_uri)
+    return {"url": url}
+
+
+@api.post("/admin/ga4/connect")
+async def ga4_connect(
+    code: str = Body(...),
+    redirect_uri: str = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    tokens = await ga4_client.exchange_code_for_tokens(code, redirect_uri)
+    if not tokens or "refresh_token" not in tokens:
+        raise HTTPException(status_code=400, detail="Failed to exchange code — ensure you selected the correct Google account with GA4 access and that you clicked 'Allow'.")
+    refresh_token = tokens["refresh_token"]
+    # Store in env for current process
+    os.environ["GA4_REFRESH_TOKEN"] = refresh_token
+    return {
+        "status": "connected",
+        "refresh_token": refresh_token,
+        "message": "Copy the refresh_token value and add it as GA4_REFRESH_TOKEN in Replit Secrets to persist across restarts.",
+    }
+
+
+@api.get("/admin/ga4/test")
+async def ga4_test(admin: dict = Depends(get_admin_user)):
+    stats = await ga4_client.get_visitor_stats_ga4(days=7)
+    if stats is None:
+        return {"ok": False, "reason": "GA4 not configured or refresh token missing"}
+    return {"ok": True, "stats": stats}
 
 
 # ─────────────────────────────────────────────

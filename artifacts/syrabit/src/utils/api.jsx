@@ -72,6 +72,18 @@ export const adminGetRevenue = (token, days = 30) =>
 export const adminGetPredictor = (token) =>
   axios.get(`${API_BASE}/admin/analytics/predictor`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminGetGA4Status = (token) =>
+  axios.get(`${API_BASE}/admin/ga4/status`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminGetGA4AuthUrl = (token, redirectUri) =>
+  axios.get(`${API_BASE}/admin/ga4/auth-url`, { headers: adminHeaders(token), withCredentials: true, params: { redirect_uri: redirectUri } });
+
+export const adminConnectGA4 = (token, code, redirectUri) =>
+  axios.post(`${API_BASE}/admin/ga4/connect`, { code, redirect_uri: redirectUri }, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminTestGA4 = (token) =>
+  axios.get(`${API_BASE}/admin/ga4/test`, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminGetSettings = (token) =>
   axios.get(`${API_BASE}/admin/settings`, { headers: adminHeaders(token), withCredentials: true });
 

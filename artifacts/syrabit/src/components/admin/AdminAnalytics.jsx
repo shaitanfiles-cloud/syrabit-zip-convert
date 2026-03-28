@@ -1,12 +1,14 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Loader2, RefreshCw, Eye, Globe, TrendingUp, Users, Search, BookOpen, Bot,
-  FileText, ExternalLink, BarChart2, Flame, DollarSign, Zap, Target, ArrowUpRight, ArrowDownRight } from 'lucide-react';
+  FileText, ExternalLink, BarChart2, Flame, DollarSign, Zap, Target, ArrowUpRight, ArrowDownRight,
+  CheckCircle, AlertCircle, Link as LinkIcon } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line, PieChart, Pie, Cell,
 } from 'recharts';
 import axios from 'axios';
-import { adminGetAnalytics, adminGetRevenue, adminGetPredictor, API_BASE } from '@/utils/api';
+import { adminGetAnalytics, adminGetRevenue, adminGetPredictor,
+  adminGetGA4Status, adminGetGA4AuthUrl, adminTestGA4, API_BASE } from '@/utils/api';
 
 const TT = {
   contentStyle: {
@@ -79,32 +81,59 @@ export default function AdminAnalytics({ adminToken }) {
   const [heatmap, setHeatmap]   = useState(null);
   const [revenue, setRevenue]   = useState(null);
   const [predict, setPredict]   = useState(null);
+  const [ga4Status, setGa4Status] = useState(null);
   const [loading, setLoading]   = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [tab, setTab]           = useState('overview');
+  const [ga4Testing, setGa4Testing] = useState(false);
+  const [ga4TestResult, setGa4TestResult] = useState(null);
 
   const h = { withCredentials: true };
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
     try {
-      const [r1, r2, r3, r4, r5] = await Promise.allSettled([
+      const [r1, r2, r3, r4, r5, r6] = await Promise.allSettled([
         adminGetAnalytics(adminToken),
         axios.get(`${API_BASE}/admin/analytics/funnel`, h),
         axios.get(`${API_BASE}/admin/analytics/content-heatmap`, h),
         adminGetRevenue(adminToken, 30),
         adminGetPredictor(adminToken),
+        adminGetGA4Status(adminToken),
       ]);
       if (r1.status === 'fulfilled') setData(r1.value.data);
       if (r2.status === 'fulfilled') setFunnel(r2.value.data);
       if (r3.status === 'fulfilled') setHeatmap(r3.value.data);
       if (r4.status === 'fulfilled') setRevenue(r4.value.data);
       if (r5.status === 'fulfilled') setPredict(r5.value.data);
+      if (r6.status === 'fulfilled') setGa4Status(r6.value.data);
       setLastRefresh(new Date());
     } catch {}
     finally { setLoading(false); setRefreshing(false); }
   }, [adminToken]);
+
+  const handleGA4Connect = async () => {
+    const redirectUri = `${window.location.origin}/admin?ga4callback=1`;
+    try {
+      const r = await adminGetGA4AuthUrl(adminToken, redirectUri);
+      window.open(r.data.url, '_blank', 'width=600,height=700');
+    } catch (e) {
+      alert('Failed to get GA4 auth URL');
+    }
+  };
+
+  const handleGA4Test = async () => {
+    setGa4Testing(true);
+    setGa4TestResult(null);
+    try {
+      const r = await adminTestGA4(adminToken);
+      setGa4TestResult(r.data);
+    } catch (e) {
+      setGa4TestResult({ ok: false, reason: 'Request failed' });
+    }
+    setGa4Testing(false);
+  };
 
   useEffect(() => {
     load();
@@ -336,6 +365,64 @@ export default function AdminAnalytics({ adminToken }) {
       {/* ── SEO & PAGES ── */}
       {tab === 'seo' && (
         <>
+          {/* GA4 Connection Card */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-blue-900/40 flex items-center justify-center">
+                <Globe size={14} className="text-blue-400" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-slate-200 font-medium text-sm">Google Analytics 4</h3>
+                <p className="text-slate-500 text-xs">Real visitor & page data from GA4</p>
+              </div>
+              {ga4Status && (
+                <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
+                  ga4Status.connected ? 'bg-emerald-900/40 text-emerald-400' : 'bg-slate-800 text-slate-400'
+                }`}>
+                  {ga4Status.connected
+                    ? <><CheckCircle size={11} /> Connected</>
+                    : <><AlertCircle size={11} /> Not connected</>}
+                </div>
+              )}
+            </div>
+
+            {ga4Status && !ga4Status.connected && (
+              <div className="space-y-3">
+                <p className="text-slate-400 text-sm">
+                  Connect GA4 to pull real visitor counts, page views, and top pages directly into this dashboard.
+                </p>
+                <div className="bg-slate-800/60 rounded-lg p-3 space-y-1.5 text-xs text-slate-400">
+                  <p className="font-medium text-slate-300 mb-1">Setup steps:</p>
+                  <p>1. Add <code className="text-violet-300">GA4_REFRESH_TOKEN</code> secret after connecting below</p>
+                  <p>2. Your Property ID is already saved: <code className="text-emerald-300">{ga4Status.property_id || 'not set'}</code></p>
+                  <p>3. OAuth credentials: {ga4Status.client_id_set ? '✓ Client ID' : '✗ Client ID'} · {ga4Status.client_secret_set ? '✓ Secret' : '✗ Secret'}</p>
+                </div>
+                <button onClick={handleGA4Connect}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors">
+                  <LinkIcon size={13} /> Connect Google Analytics
+                </button>
+              </div>
+            )}
+
+            {ga4Status?.connected && (
+              <div className="flex items-center gap-3 flex-wrap">
+                <p className="text-slate-400 text-sm flex-1">Property <code className="text-emerald-300">{ga4Status.property_id}</code> · Data flows automatically into dashboard</p>
+                <button onClick={handleGA4Test} disabled={ga4Testing}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs bg-slate-800 text-slate-300 hover:text-white border border-slate-700 transition-all">
+                  {ga4Testing ? <Loader2 size={11} className="animate-spin" /> : <BarChart2 size={11} />} Test Connection
+                </button>
+              </div>
+            )}
+
+            {ga4TestResult && (
+              <div className={`mt-3 p-3 rounded-lg text-xs ${ga4TestResult.ok ? 'bg-emerald-900/30 text-emerald-300 border border-emerald-800/40' : 'bg-red-900/30 text-red-300 border border-red-800/40'}`}>
+                {ga4TestResult.ok
+                  ? `✓ GA4 working — ${ga4TestResult.stats?.total_visitors?.toLocaleString() || 0} total visitors tracked`
+                  : `✗ ${ga4TestResult.reason}`}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-3 gap-3">
             <Stat icon={Eye}       label="Total Visitors"  value={vs.total_visitors?.toLocaleString() || 0} color="#8b5cf6" />
             <Stat icon={BarChart2} label="Pages Tracked"   value={hasTopPages ? data.top_pages.length : 0}  color="#06b6d4" />
