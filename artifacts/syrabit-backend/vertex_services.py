@@ -28,9 +28,9 @@ GEMINI_KEY   = os.getenv("GEMINI_API_KEY", "").strip()
 _BASE        = "https://generativelanguage.googleapis.com/v1beta"
 _BASE_V1     = "https://generativelanguage.googleapis.com/v1"
 _EMBED_MODEL = "text-embedding-004"
-_GEN_MODEL   = "gemini-2.0-flash"
-_PRO_MODEL   = "gemini-1.5-pro"          # 1 M token context for docs
-_VISION_MODEL = "gemini-2.0-flash"        # multimodal
+_GEN_MODEL   = "gemini-2.5-flash-preview-05-20"   # highest accuracy Gemini flash
+_PRO_MODEL   = "gemini-2.5-flash-preview-05-20"  # long-doc: 1M ctx same model
+_VISION_MODEL = "gemini-2.5-flash-preview-05-20"  # multimodal
 
 
 def _ok() -> bool:

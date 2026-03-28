@@ -1876,27 +1876,59 @@ async def _fetch_content_card(query: str, subject_id: Optional[str] = None, subj
             {"title": {"$regex": kw_regex, "$options": "i"}},
         ]
 
-        pages = await db.seo_pages.find(
+        # Fetch from seo_pages AND chapters (blog pages) in parallel for full coverage
+        seo_task = db.seo_pages.find(
             match_filter,
-            {"_id": 0, "content": 1, "topic_title": 1, "subject_name": 1, "chapter_title": 1, "page_type": 1},
-        ).limit(3).to_list(3)
+            {"_id": 0, "content": 1, "topic_title": 1, "subject_name": 1, "chapter_title": 1, "page_type": 1, "slug": 1},
+        ).limit(6).to_list(6)
 
-        if not pages:
+        # Also check published chapter blog pages for this subject
+        ch_filter: dict = {}
+        if subject_id:
+            ch_filter["subject_id"] = subject_id
+        if keywords:
+            ch_filter["$or"] = [
+                {"content": {"$regex": "|".join(keywords), "$options": "i"}},
+                {"title":   {"$regex": "|".join(keywords), "$options": "i"}},
+            ]
+        ch_filter["content"] = {"$exists": True, "$ne": ""}
+        ch_task = db.chapters.find(
+            ch_filter,
+            {"_id": 0, "title": 1, "content": 1, "subject_id": 1},
+        ).limit(4).to_list(4)
+
+        pages, chapter_pages = await asyncio.gather(seo_task, ch_task)
+
+        if not pages and not chapter_pages:
             return None
 
+        cards = []
+
+        # Priority: notes pages first, then any seo_page
         notes_pages = [p for p in pages if p.get("page_type") == "notes"]
-        best = notes_pages[0] if notes_pages else pages[0]
+        ordered_pages = notes_pages + [p for p in pages if p not in notes_pages]
+        for p in ordered_pages[:3]:
+            content = p.get("content", "")
+            if not content:
+                continue
+            topic_title = p.get("topic_title") or p.get("chapter_title") or ""
+            header = f"[Content: {topic_title}]" if topic_title else "[Content Page]"
+            relevant = _extract_relevant_sections(content, keywords, max_chars=3500)
+            cards.append(f"{header}\n{relevant}")
 
-        content = best.get("content", "")
-        if not content:
+        # Append chapter blog content
+        for ch in chapter_pages[:2]:
+            content = ch.get("content", "")
+            if not content:
+                continue
+            header = f"[Chapter: {ch.get('title', '')}]"
+            relevant = _extract_relevant_sections(content, keywords, max_chars=2000)
+            cards.append(f"{header}\n{relevant}")
+
+        if not cards:
             return None
 
-        topic_title = best.get("topic_title", "")
-        header = f"[Content Card: {topic_title}]" if topic_title else "[Content Card]"
-
-        relevant = _extract_relevant_sections(content, keywords)
-
-        return f"{header}\n{relevant}"
+        return "\n\n---\n\n".join(cards)
 
     except Exception as e:
         logger.error(f"Content card fetch error: {e}")
@@ -1981,10 +2013,10 @@ async def rag_search(
             ch_all_filter = {"subject_id": subject_id}
 
             chunks, subjects_found, chapters_kw, chapters_all = await asyncio.gather(
-                db.chunks.find(chunk_filter, {"_id": 0}).limit(5).to_list(5),
+                db.chunks.find(chunk_filter, {"_id": 0}).limit(12).to_list(12),
                 db.subjects.find(subj_kw_filter, {"_id": 0}).limit(1).to_list(1),
-                db.chapters.find(ch_kw_filter, {"_id": 0, "title": 1, "description": 1, "order_index": 1}).sort("order_index", 1).limit(5).to_list(5),
-                db.chapters.find(ch_all_filter, {"_id": 0, "title": 1, "description": 1, "order_index": 1}).sort("order_index", 1).limit(15).to_list(15),
+                db.chapters.find(ch_kw_filter, {"_id": 0, "title": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(8).to_list(8),
+                db.chapters.find(ch_all_filter, {"_id": 0, "title": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(25).to_list(25),
             )
             # Use keyword-matching chapters when available; otherwise use the full chapter list
             chapters_found = chapters_kw if chapters_kw else chapters_all
@@ -2007,9 +2039,9 @@ async def rag_search(
             _subj_proj = {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1}
             _ch_proj   = {"_id": 0, "id": 1, "subject_id": 1, "title": 1, "description": 1, "order_index": 1}
             chunks, subjects_by_name, chapters_by_title = await asyncio.gather(
-                db.chunks.find({"$or": regex_parts}, {"_id": 0}).limit(8).to_list(8),
+                db.chunks.find({"$or": regex_parts}, {"_id": 0}).limit(15).to_list(15),
                 db.subjects.find(subj_kw_filter, _subj_proj).limit(55).to_list(55),
-                db.chapters.find(ch_title_filter, _ch_proj).sort("order_index", 1).limit(15).to_list(15),
+                db.chapters.find(ch_title_filter, _ch_proj).sort("order_index", 1).limit(25).to_list(25),
             )
 
             # ── Resolve chunks → parent subjects (via chapter_id) ─────────────────
@@ -2370,20 +2402,23 @@ def build_rag_system_prompt(
             grounding += (
                 "\n\n---\n"
                 "**GROUNDING CONTEXT (Syllabus Content):**\n"
-                "The following content is from the student's actual syllabus database. "
-                "Base your answer **primarily** on this. Quote directly when possible.\n\n"
+                "The following is the COMPLETE content from the student's actual curriculum database — "
+                "content cards, chapter notes, and indexed syllabus blocks. "
+                "Base your answer **exclusively** on this. Quote verbatim where possible.\n\n"
             )
             if content_card:
-                grounding += f"**[Content Card — Full Page]**\n{content_card}\n\n"
+                grounding += f"**[Content Card — Full Page Content]**\n{content_card}\n\n"
             for i, c in enumerate(chunks, 1):
                 title = c.get("content_type", "content").capitalize()
-                grounding += f"**[Block {i} — {title}]**\n{c.get('content', '')[:400]}\n\n"
+                grounding += f"**[Block {i} — {title}]**\n{c.get('content', '')[:800]}\n\n"
             grounding += (
                 "---\n"
-                "*INSTRUCTION: Prioritise the content card and syllabus blocks above. "
-                "Answer the student's question using ONLY this data. "
-                "Do not add examples or exam tips unless the student specifically asks for them. "
-                "Supplement with your training knowledge only where the provided content is incomplete.*"
+                "*ACCURACY INSTRUCTION: Use ONLY the grounding context above to answer. "
+                "Every fact, definition, and detail in your response must come from these blocks. "
+                "If the answer is not covered in the grounding context, say: "
+                "'This specific detail is not in our database for your subject — here is my best answer based on standard curriculum:' "
+                "and then answer from training knowledge. "
+                "Never hallucinate or invent facts. Quote or paraphrase directly from the content blocks.*"
             )
 
         else:
@@ -2392,37 +2427,41 @@ def build_rag_system_prompt(
                 "**GROUNDING CONTEXT (Curriculum Metadata):**\n"
             )
             if content_card:
-                grounding += f"**[Content Card — Full Page]**\n{content_card}\n\n"
+                grounding += f"**[Content Card — Full Page Content]**\n{content_card}\n\n"
             else:
                 grounding += (
-                    "No specific content blocks were found, but the following curriculum "
-                    "information is available from the syllabus database.\n\n"
+                    "The following curriculum metadata is from the syllabus database. "
+                    "Use it to frame an accurate, board-aligned answer.\n\n"
                 )
             if subjects:
-                grounding += "**Matching subjects:**\n"
+                grounding += "**Matching subjects in database:**\n"
                 for s in subjects:
-                    desc = s.get("description", "")[:200]
-                    tags = ", ".join(s.get("tags", [])[:5])
+                    desc = s.get("description", "")[:300]
+                    tags = ", ".join(s.get("tags", [])[:8])
                     grounding += f"- **{s.get('name', '')}**: {desc}"
                     if tags:
-                        grounding += f" *(topics: {tags})*"
+                        grounding += f" *(key topics: {tags})*"
                     grounding += "\n"
 
             if chapters:
-                grounding += "\n**Chapters covered in this subject:**\n"
+                grounding += "\n**Chapters & content in this subject:**\n"
                 for ch in chapters:
                     title = ch.get('title', '')
                     desc = (ch.get('description') or '').strip()
+                    ch_content = (ch.get('content') or '').strip()
                     grounding += f"- **{title}**"
                     if desc:
                         grounding += f": {desc[:300]}"
+                    if ch_content and not desc:
+                        grounding += f": {ch_content[:400]}"
                     grounding += "\n"
 
             grounding += (
                 "\n---\n"
-                "*INSTRUCTION: Use the content above to answer the student's question. "
-                "Do not add examples or exam tips unless the student specifically asks. "
-                "Draw on your training knowledge only where the provided content is incomplete.*"
+                "*ACCURACY INSTRUCTION: Answer using the curriculum context above as the primary source. "
+                "Cross-reference with your training knowledge for the AHSEC/SEBA/Degree curriculum in Assam. "
+                "If you are unsure about any specific fact, state it clearly rather than guessing. "
+                "Do not add examples or exam tips unless the student explicitly asks.*"
             )
 
     return base_prompt + grounding if grounding else base_prompt
@@ -2488,7 +2527,7 @@ _llm_batcher = _LlmBatcher()
 _LLM_PROVIDERS = []
 # Gemini first — most reliable right now (Fireworks suspended, Groq rate-limited)
 if _GEMINI_KEY:
-    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.0-flash"})
+    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash-preview-05-20"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
 if _FIREWORKS_KEY:
@@ -2536,9 +2575,11 @@ _MODEL_ALIAS_MAP = {
 #  Bedrock     amazon.nova-micro-v1:0  — free tier: 30 RPM cap, lowest latency on Bedrock
 #                                        paid tier: 66.7 RPS / 33K TPS (no cap)
 _SLM_SLOT_CANDIDATES = [
-    # Gemini first — working key, high concurrency, generous free limits
-    ("gemini",      "gemini-2.0-flash",                                  8),
-    ("gemini",      "gemini-2.0-flash-lite",                            10),
+    # Gemini 2.5 Flash Preview — primary: highest accuracy, 10 RPM free
+    ("gemini",      "gemini-2.5-flash-preview-05-20",                    6),
+    # Gemini 2.0 Flash — hot fallback: lower quality but 15 RPM
+    ("gemini",      "gemini-2.0-flash",                                  6),
+    ("gemini",      "gemini-2.0-flash-lite",                             8),
     # Groq as secondary (rate-limited but fast when available)
     ("groq",        "llama-3.3-70b-versatile",                           8),
     ("groq",        "llama-3.1-8b-instant",                              4),
@@ -4974,7 +5015,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     if conv_id:
         conv = await supa_get_conversation(conv_id, user["id"])
         if conv:
-            for m in conv.get("messages", [])[-3:]:
+            for m in conv.get("messages", [])[-6:]:
                 role = m.get("role", "")
                 content = m.get("content") or ""
                 if role in ("user", "assistant") and content.strip():
@@ -5201,7 +5242,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     history_messages = []
 
     if conv_id and raw_conv:
-        for m in raw_conv.get("messages", [])[-3:]:
+        for m in raw_conv.get("messages", [])[-6:]:
             role = m.get("role", "")
             content = m.get("content") or ""
             if role in ("user", "assistant") and content.strip():
@@ -10613,6 +10654,7 @@ _llm_cost_log: list = []   # in-memory ring buffer (max 10k entries)
 _LLM_COST_MAX = 10_000
 
 COST_PER_1K_TOKENS = {
+    "gemini-2.5-flash-preview-05-20": {"in": 0.0001875, "out": 0.0006},
     "gemini-2.0-flash":       {"in": 0.000075, "out": 0.0003},
     "gemini-2.0-flash-lite":  {"in": 0.0000375, "out": 0.00015},
     "gemini-1.5-pro":         {"in": 0.00125,   "out": 0.005},
