@@ -25,6 +25,7 @@ venv/
 .venv/
 .venv-prod/
 .pythonlibs/
+.python-deps/
 env/
 ENV/
 .pytest_cache/

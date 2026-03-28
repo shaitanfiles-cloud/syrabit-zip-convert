@@ -118,7 +118,7 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 - **Testing**: pytest suite in `tests/` (17 tests: health, auth, API, security headers); run `cd artifacts/syrabit-backend && python3 -m pytest tests/ -v`
 - **Docker**: `Dockerfile` (Python 3.11-slim, non-root user, healthcheck) + `docker-compose.yml` with resource limits
 - **Endpoints**: 139 API endpoints total (as of Phase 8 completion)
-- **Deployment**: Root `pyproject.toml` and `uv.lock` removed entirely to prevent platform auto-detection from running `uv sync`; Python deps installed via `pip install` from `artifacts/syrabit-backend/requirements.txt` into a fresh `.venv-prod` venv (created via `python3 -m venv`); `path-to-regexp` pinned to 8.4.0 via pnpm override
+- **Deployment**: Root `pyproject.toml` and `uv.lock` removed entirely to prevent platform auto-detection from running `uv sync`; Python deps installed via `PIP_USER=0 pip3 install --target=.python-deps` (avoids Nix pip `user=yes` config that breaks virtualenvs); run uses `PYTHONPATH=.python-deps`; `path-to-regexp` pinned to 8.4.0 via pnpm override
 
 ### `scripts` (`@workspace/scripts`)
 
