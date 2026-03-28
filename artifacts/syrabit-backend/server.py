@@ -1642,7 +1642,7 @@ async def get_recent_user_events(limit: int = 10) -> list:
 # AUTO-CHUNKING FOR RAG
 # ─────────────────────────────────────────────
 
-async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None) -> list:
+async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None) -> list:
     """
     Automatically split chapter content into searchable chunks.
     
@@ -1651,6 +1651,7 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
     - Each chunk: 100-800 chars (optimal for RAG)
     - Extract keywords for each chunk
     - Store in 'chunks' collection for fast retrieval
+    - Attach syllabus_id and geo_tags metadata for GEO grounding
     
     Returns: List of created chunk IDs
     """
@@ -1725,6 +1726,10 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
                             "char_count": len(chunk_text),
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         }
+                        if syllabus_id:
+                            chunk["syllabus_id"] = syllabus_id
+                        if geo_tags:
+                            chunk["geo_tags"] = geo_tags[:5]
                         await db.chunks.insert_one(chunk)
                         chunks_created.append(chunk["id"])
                     sub_chunk = []
@@ -1745,10 +1750,13 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
                         "char_count": len(chunk_text),
                         "created_at": datetime.now(timezone.utc).isoformat(),
                     }
+                    if syllabus_id:
+                        chunk["syllabus_id"] = syllabus_id
+                    if geo_tags:
+                        chunk["geo_tags"] = geo_tags[:5]
                     await db.chunks.insert_one(chunk)
                     chunks_created.append(chunk["id"])
         else:
-            # Paragraph is good size, create chunk
             chunk_keywords = _extract_keywords(para_clean)
             
             chunk = {
@@ -1762,6 +1770,10 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
                 "char_count": len(para_clean),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
+            if syllabus_id:
+                chunk["syllabus_id"] = syllabus_id
+            if geo_tags:
+                chunk["geo_tags"] = geo_tags[:5]
             await db.chunks.insert_one(chunk)
             chunks_created.append(chunk["id"])
     
@@ -2278,6 +2290,7 @@ def build_rag_system_prompt(
     if syllabus and syllabus.get("content"):
         syllabus_content = syllabus.get("content", "")
         syllabus_topics = ", ".join(syllabus.get("topics", [])[:10])
+        geo_phrases = syllabus.get("geo_phrases", [])
         grounding = (
             "\n\n---\n"
             "**CURRICULUM CONSTRAINTS (Tier -1 — Board Syllabus):**\n"
@@ -2287,11 +2300,17 @@ def build_rag_system_prompt(
         )
         if syllabus_topics:
             grounding += f"**Key topics:** {syllabus_topics}\n\n"
+        if geo_phrases:
+            grounding += "**GEO Authority Phrases (weave naturally into answers):**\n"
+            for gp in geo_phrases[:8]:
+                grounding += f"- {gp}\n"
+            grounding += "\n"
         grounding += (
             "---\n"
             "*INSTRUCTION: Keep your answer within the scope of this curriculum. "
             "Do not introduce concepts beyond the standard curriculum unless explicitly requested. "
-            "Prioritize accuracy over breadth.*\n"
+            "Prioritize accuracy over breadth. "
+            "When relevant, cite specific board exam stats, PYQ frequency data, and authoritative syllabus references.*\n"
         )
 
     # ── Tier 0: Uploaded subject document ────────────────────────────────────
@@ -4339,7 +4358,9 @@ async def get_syllabus(board_id: str, class_id: str):
         if not await is_mongo_available():
             return {"board_id": board_id, "class_id": class_id, "content": "", "chapters": [], "topics": [], "found": False}
         
-        syllabus = await db.syllabi.find_one({"board_id": board_id, "class_id": class_id}, {"_id": 0})
+        syllabus = await db.syllabi.find_one({"board_id": board_id, "class_id": class_id, "stream_id": {"$exists": False}}, {"_id": 0})
+        if not syllabus:
+            syllabus = await db.syllabi.find_one({"board_id": board_id, "class_id": class_id}, {"_id": 0})
         
         if syllabus:
             logger.info(f"Syllabus found: {board_id}/{class_id}")
@@ -4370,6 +4391,7 @@ async def create_or_update_syllabus(
             "chapters": data.get("chapters", []),
             "topics": data.get("topics", []),
             "guidelines": data.get("guidelines", ""),
+            "geo_phrases": data.get("geo_phrases", []),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         
@@ -4450,6 +4472,7 @@ async def create_or_update_syllabus_stream(
             "chapters": data.get("chapters", []),
             "topics": data.get("topics", []),
             "guidelines": data.get("guidelines", ""),
+            "geo_phrases": data.get("geo_phrases", []),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         await db.syllabi.update_one(
@@ -8383,9 +8406,17 @@ class StudioParseRequest(BaseModel):
 async def admin_studio_parse(body: StudioParseRequest, admin: dict = Depends(get_admin_user)):
     if not body.raw_text.strip():
         raise HTTPException(400, "Empty text")
-    prompt = f"""You are an educational content parser for AHSEC/Degree students in Assam.
+    prompt = f"""You are an educational content parser and GEO (Generative Engine Optimization) specialist for AHSEC/Degree students in Assam.
 Analyze the following raw educational text and categorize it into structured blocks.
-Return a JSON array of blocks, each with: type (one of: "summary", "definition", "example", "pyq", "formula", "note"), title, content.
+Return a JSON array of blocks, each with: type (one of: "summary", "definition", "example", "pyq", "formula", "note", "faq"), title, content.
+
+GEO REQUIREMENTS — weave these naturally into every block:
+- Cite AHSEC board exam frequency (e.g. "Asked in AHSEC 2019, 2021, 2023")
+- Include authoritative references (textbook name, author, page when available)
+- Add "According to the AHSEC syllabus..." or "As per NCERT..." framing
+- For definitions, start with the canonical textbook wording
+- For PYQ blocks, note mark allocation and year
+- Generate 1-2 FAQ blocks with question+answer pairs students commonly search for
 
 Subject: {body.subject or 'General'}
 Chapter: {body.chapter or 'General'}
@@ -8396,7 +8427,7 @@ Raw text:
 ---
 
 Return ONLY valid JSON array. Example:
-[{{"type":"summary","title":"Chapter Overview","content":"..."}},{{"type":"definition","title":"Term Name","content":"..."}}]"""
+[{{"type":"summary","title":"Chapter Overview","content":"..."}},{{"type":"definition","title":"Term Name","content":"..."}},{{"type":"faq","title":"FAQ: What is...?","content":"Q: What is...?\\nA: According to NCERT, ..."}}]"""
 
     try:
         result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4096)
@@ -8657,6 +8688,17 @@ async def admin_automation_auto_generate(admin: dict = Depends(get_admin_user)):
         slug = gap["suggested_slug"]
         title = gap["query"].title()
         now_iso = datetime.now(timezone.utc).isoformat()
+        geo_meta = {
+            "geo_source": "auto-generated from content gap",
+            "geo_query_count": gap.get("count", 0),
+            "geo_suggested_sections": [
+                "Summary (cite AHSEC syllabus)",
+                "Definition (NCERT/SCERT reference)",
+                "Explanation (curriculum-aligned)",
+                "PYQs (with year and marks)",
+                "FAQs (3 common student questions)",
+            ],
+        }
         await db.seo_topics.update_one(
             {"slug": slug},
             {"$set": {
@@ -8664,11 +8706,12 @@ async def admin_automation_auto_generate(admin: dict = Depends(get_admin_user)):
                 "slug": slug,
                 "status": "draft",
                 "source": "auto-generated",
+                "geo_meta": geo_meta,
                 "created_at": now_iso,
             }},
             upsert=True,
         )
-        generated.append({"slug": slug, "title": title})
+        generated.append({"slug": slug, "title": title, "geo_meta": geo_meta})
     return {"generated": generated, "count": len(generated)}
 
 
@@ -8744,6 +8787,53 @@ async def admin_update_referral_config(body: ReferralConfigUpdate, admin: dict =
 async def admin_get_referral_config(admin: dict = Depends(get_admin_user)):
     cfg = await db.api_config.find_one({}, {"_id": 0})
     return cfg.get("referral", {"enabled": False, "reward_credits": 10, "referrer_credits": 10}) if cfg else {"enabled": False, "reward_credits": 10, "referrer_credits": 10}
+
+
+@api.get("/llms.txt")
+async def serve_llms_txt():
+    lines = [
+        "# Syrabit.ai",
+        "> AI-powered exam preparation for AHSEC Class 11/12 and Degree students in Assam, India.",
+        "",
+        "## About",
+        "Syrabit.ai provides AI-generated study notes, definitions, important questions, MCQs,",
+        "and solved examples aligned with the AHSEC (Assam Higher Secondary Education Council)",
+        "and Degree college curricula. Content is grounded in NCERT/SCERT textbooks and",
+        "covers subjects like Physics, Chemistry, Mathematics, Biology, Economics, and more.",
+        "",
+        "## Content Structure",
+        "- /library — Browse all subjects and chapters",
+        "- /{board}/{class}/{subject}/{topic} — Study notes for a topic",
+        "- /{board}/{class}/{subject}/{topic}/definition — Definitions",
+        "- /{board}/{class}/{subject}/{topic}/important-questions — PYQ bank",
+        "- /{board}/{class}/{subject}/{topic}/mcqs — Multiple choice questions",
+        "- /{board}/{class}/{subject}/{topic}/examples — Solved examples",
+        "",
+        "## API",
+        "- /api/seo/sitemap.xml — Full sitemap",
+        "- /api/seo/sitemap-entries — JSON sitemap entries",
+        "- /api/seo/page/{board}/{class}/{subject}/{topic} — JSON page data",
+        "- /api/seo/html/{board}/{class}/{subject}/{topic} — Pre-rendered HTML",
+        "",
+        "## Boards Covered",
+        "- AHSEC (Assam Higher Secondary Education Council) — Class 11, Class 12",
+        "- Degree (Gauhati University, Dibrugarh University, etc.) — 2nd Sem, 4th Sem",
+        "",
+        "## Contact",
+        "- Website: https://syrabit.ai",
+        "- Purpose: Educational content for Assam Board students",
+    ]
+    try:
+        page_count = await db.seo_pages.count_documents({"status": "published"})
+        topic_count = await db.topics.count_documents({"status": "published"})
+        lines.append("")
+        lines.append(f"## Stats")
+        lines.append(f"- Published topics: {topic_count}")
+        lines.append(f"- Published pages: {page_count}")
+    except Exception:
+        pass
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse("\n".join(lines), media_type="text/plain; charset=utf-8")
 
 
 app.include_router(api)

@@ -53,7 +53,7 @@ def _slug(text: str) -> str:
 PAGE_TYPES = ["notes", "definition", "important-questions", "mcqs", "examples"]
 
 PROMPTS = {
-    "notes": """You are an expert {board} teacher for {class_name}.
+    "notes": """You are an expert {board} teacher for {class_name} and a GEO (Generative Engine Optimization) specialist.
 
 Topic: {topic}
 Subject: {subject} | Class: {class_name} | Board: {board}
@@ -61,13 +61,13 @@ Subject: {subject} | Class: {class_name} | Board: {board}
 Write study notes using EXACTLY this structure — all sections required:
 
 ## Summary
-[40-60 words: what {topic} is, why it matters, and its importance for {board} exam]
+[40-60 words: what {topic} is, why it matters, and its importance for {board} exam. Start with "According to the {board} syllabus..."]
 
 ## Definition
-[Precise academic definition in 2-3 sentences using standard {board} terminology]
+[Precise academic definition in 2-3 sentences using standard {board} terminology. Cite the textbook: "As defined in NCERT/SCERT {subject}..."]
 
 ## Explanation
-[Detailed explanation 250-350 words. Cover core concepts, sub-topics, and connections]
+[Detailed explanation 250-350 words. Cover core concepts, sub-topics, and connections. Include at least one citation like "As per the {board} {class_name} curriculum..."]
 
 ## Solved Examples
 Example 1: [Complete step-by-step solution]
@@ -75,12 +75,20 @@ Example 2: [Complete step-by-step solution]
 Example 3: [Complete step-by-step solution]
 
 ## Previous Year Questions (PYQs)
-[5 questions that appear in {board} {class_name} exams, with model answers — include 1-mark, 2-mark, and 3-5 mark types]
+[5 questions that appear in {board} {class_name} exams, with model answers — include 1-mark, 2-mark, and 3-5 mark types. Format: "Q (AHSEC 20XX, X marks): ..."]
 
 ## Key Points
 [6-8 bullet points for last-minute revision before the {board} exam]
 
-Language: simple and clear for {class_name} students in Assam. Every section must be complete and exam-focused.""",
+## Frequently Asked Questions
+Q1: What is {topic} in {subject}?
+A1: [Concise answer citing {board} syllabus]
+Q2: Why is {topic} important for {board} exams?
+A2: [Answer with exam frequency data]
+Q3: [Common student question about {topic}]
+A3: [Clear answer]
+
+Language: simple and clear for {class_name} students in Assam. Every section must be complete and exam-focused. Use authoritative framing throughout.""",
 
     "definition": """You are an expert {board} teacher for {class_name}.
 
@@ -636,49 +644,78 @@ def _render_seo_html(page: dict, page_url: str) -> str:
     generated = page.get("generated_at", "")
     updated = page.get("updated_at", generated)
 
-    ld_json = json.dumps({
-        "@context": "https://schema.org",
-        "@graph": [
-            {
-                "@type": "Article",
-                "headline": page.get("title", ""),
-                "description": page.get("meta_description", ""),
-                "author": {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai"},
-                "publisher": {
-                    "@type": "Organization",
-                    "name": "Syrabit.ai",
-                    "url": "https://syrabit.ai",
-                    "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
-                },
-                "datePublished": generated,
-                "dateModified": updated,
-                "image": "https://syrabit.ai/opengraph.jpg",
-                "mainEntityOfPage": {"@type": "WebPage", "@id": page_url},
-                "educationalLevel": f"{cls} {board}".strip(),
-                "about": {"@type": "Thing", "name": page.get("topic_title", "")},
-                "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
-                "inLanguage": "en-IN",
+    graph_nodes = [
+        {
+            "@type": "Article",
+            "headline": page.get("title", ""),
+            "description": page.get("meta_description", ""),
+            "author": {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai"},
+            "publisher": {
+                "@type": "Organization",
+                "name": "Syrabit.ai",
+                "url": "https://syrabit.ai",
+                "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
             },
-            {
-                "@type": "Course",
-                "name": f"{topic} — {cls} {board}".strip(),
-                "description": page.get("meta_description", ""),
-                "provider": {"@type": "Organization", "name": "Syrabit.ai", "sameAs": "https://syrabit.ai"},
-                "educationalLevel": f"{cls} {board}".strip(),
-                "url": page_url,
-                "inLanguage": "en-IN",
-            },
-            {
-                "@type": "BreadcrumbList",
-                "itemListElement": [
-                    {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
-                    {"@type": "ListItem", "position": 2, "name": "Library", "item": "https://syrabit.ai/library"},
-                    {"@type": "ListItem", "position": 3, "name": subject, "item": "https://syrabit.ai/library"},
-                    {"@type": "ListItem", "position": 4, "name": topic, "item": page_url},
-                ],
-            },
-        ],
-    }, ensure_ascii=False)
+            "datePublished": generated,
+            "dateModified": updated,
+            "image": "https://syrabit.ai/opengraph.jpg",
+            "mainEntityOfPage": {"@type": "WebPage", "@id": page_url},
+            "educationalLevel": f"{cls} {board}".strip(),
+            "about": {"@type": "Thing", "name": page.get("topic_title", "")},
+            "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
+            "inLanguage": "en-IN",
+        },
+        {
+            "@type": "Course",
+            "name": f"{topic} — {cls} {board}".strip(),
+            "description": page.get("meta_description", ""),
+            "provider": {"@type": "Organization", "name": "Syrabit.ai", "sameAs": "https://syrabit.ai"},
+            "educationalLevel": f"{cls} {board}".strip(),
+            "url": page_url,
+            "inLanguage": "en-IN",
+        },
+        {
+            "@type": "BreadcrumbList",
+            "itemListElement": [
+                {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
+                {"@type": "ListItem", "position": 2, "name": "Library", "item": "https://syrabit.ai/library"},
+                {"@type": "ListItem", "position": 3, "name": subject, "item": "https://syrabit.ai/library"},
+                {"@type": "ListItem", "position": 4, "name": topic, "item": page_url},
+            ],
+        },
+    ]
+
+    qa_pairs = page.get("qa_pairs", [])
+    faq_items = []
+    if qa_pairs:
+        for qp in qa_pairs[:10]:
+            faq_items.append({
+                "@type": "Question",
+                "name": qp.get("question", ""),
+                "acceptedAnswer": {"@type": "Answer", "text": qp.get("answer", "")},
+            })
+    else:
+        raw_content = page.get("content", "")
+        lines = raw_content.split("\n") if raw_content else []
+        current_q = None
+        for line in lines:
+            stripped = line.strip().lstrip("#").strip().replace("**", "").strip()
+            if stripped.endswith("?") and len(stripped) > 15:
+                current_q = stripped
+            elif current_q and len(stripped) > 20:
+                faq_items.append({
+                    "@type": "Question",
+                    "name": current_q,
+                    "acceptedAnswer": {"@type": "Answer", "text": stripped},
+                })
+                current_q = None
+                if len(faq_items) >= 10:
+                    break
+
+    if len(faq_items) >= 2:
+        graph_nodes.append({"@type": "FAQPage", "mainEntity": faq_items})
+
+    ld_json = json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False)
 
     return f"""<!DOCTYPE html>
 <html lang="en-IN">

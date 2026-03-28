@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import { Analytics } from '@/utils/analytics';
 import { BookOpen, ChevronRight, ArrowLeft, ArrowRight, FileText, HelpCircle,
-  Calculator, BookMarked, Home, Sparkles, GraduationCap, Lightbulb } from 'lucide-react';
+  Calculator, BookMarked, Home, Sparkles, GraduationCap, Lightbulb, List } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getSeoPage, getSeoPageTypes, getSeoRelated } from '@/utils/api';
@@ -48,6 +48,96 @@ function renderMarkdown(text) {
     .replace(/\n/g, '<br/>');
   return sanitizeHtml(`<p class="text-gray-300 leading-relaxed mb-3">${html}</p>`);
 }
+
+function extractTocItems(content) {
+  if (!content) return [];
+  const items = [];
+  const lines = content.split('\n');
+  const idCounts = {};
+  for (const line of lines) {
+    const match = line.match(/^(#{2,3})\s+(.+)$/);
+    if (match) {
+      const level = match[1].length;
+      const text = match[2].replace(/\*\*/g, '').trim();
+      let baseId = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      idCounts[baseId] = (idCounts[baseId] || 0) + 1;
+      const id = idCounts[baseId] > 1 ? `${baseId}-${idCounts[baseId]}` : baseId;
+      items.push({ id, text, level });
+    }
+  }
+  return items;
+}
+
+function renderMarkdownWithIds(text) {
+  if (!text) return '';
+  const idCounts = {};
+  const makeId = (t) => {
+    let baseId = t.replace(/\*\*/g, '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    idCounts[baseId] = (idCounts[baseId] || 0) + 1;
+    return idCounts[baseId] > 1 ? `${baseId}-${idCounts[baseId]}` : baseId;
+  };
+  let html = text
+    .replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/^#### (.+)$/gm, (_, t) => {
+      return `<h4 id="${makeId(t)}" class="text-base font-semibold text-white mt-5 mb-2">${t}</h4>`;
+    })
+    .replace(/^### (.+)$/gm, (_, t) => {
+      return `<h3 id="${makeId(t)}" class="text-lg font-semibold text-white mt-6 mb-2">${t}</h3>`;
+    })
+    .replace(/^## (.+)$/gm, (_, t) => {
+      return `<h2 id="${makeId(t)}" class="text-xl font-bold text-white mt-8 mb-3 pb-2 border-b border-white/10">${t}</h2>`;
+    })
+    .replace(/^# (.+)$/gm, (_, t) => {
+      return `<h2 id="${makeId(t)}" class="text-2xl font-bold text-white mt-8 mb-4">${t}</h2>`;
+    })
+    .replace(/\*\*(.+?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^---$/gm, '<hr class="border-white/10 my-6" />')
+    .replace(/^- (.+)$/gm, '<li class="ml-4 mb-1 text-gray-300 list-disc">$1</li>')
+    .replace(/^(\d+)\. (.+)$/gm, '<li class="ml-4 mb-1 text-gray-300 list-decimal" value="$1">$2</li>')
+    .replace(/`([^`]+)`/g, '<code class="bg-white/10 text-purple-300 px-1.5 py-0.5 rounded text-sm">$1</code>')
+    .replace(/\n\n/g, '</p><p class="text-gray-300 leading-relaxed mb-3">')
+    .replace(/\n/g, '<br/>');
+  return sanitizeHtml(`<p class="text-gray-300 leading-relaxed mb-3">${html}</p>`);
+}
+
+const StickyTOC = ({ items }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  if (!items || items.length < 2) return null;
+  return (
+    <div className="mb-6">
+      <button
+        onClick={() => setIsOpen((v) => !v)}
+        className="flex items-center gap-2 w-full px-4 py-3 rounded-xl bg-white/[0.04] border border-white/10 hover:border-purple-500/30 transition-colors text-sm text-gray-300"
+        aria-expanded={isOpen}
+        aria-controls="toc-list"
+      >
+        <List size={16} className="text-purple-400" />
+        <span className="font-medium text-white">Table of Contents</span>
+        <span className="text-xs text-gray-500 ml-auto">{items.length} sections</span>
+        <ChevronRight
+          size={14}
+          className="transition-transform duration-200"
+          style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+        />
+      </button>
+      {isOpen && (
+        <nav id="toc-list" aria-label="Table of Contents" className="mt-2 rounded-xl bg-white/[0.03] border border-white/5 p-4 space-y-1">
+          {items.map((item) => (
+            <a
+              key={item.id}
+              href={`#${item.id}`}
+              className="block text-sm hover:text-purple-400 transition-colors"
+              style={{ paddingLeft: item.level === 3 ? '1.25rem' : '0', color: item.level === 2 ? 'rgba(255,255,255,0.8)' : 'rgba(255,255,255,0.5)' }}
+            >
+              {item.text}
+            </a>
+          ))}
+        </nav>
+      )}
+    </div>
+  );
+};
 
 export default function SeoTopicPage() {
   const { board, classSlug, subjectSlug, topicSlug, pageType } = useParams();
@@ -307,9 +397,12 @@ export default function SeoTopicPage() {
           })}
         </div>
 
+        {/* Table of Contents */}
+        <StickyTOC items={extractTocItems(page.content)} />
+
         {/* Main content */}
         <article className="prose prose-invert max-w-none bg-white/[0.03] rounded-2xl border border-white/5 p-6 md:p-8">
-          <div dangerouslySetInnerHTML={{ __html: renderMarkdown(page.content) }} />
+          <div dangerouslySetInnerHTML={{ __html: renderMarkdownWithIds(page.content) }} />
         </article>
 
         {/* Board exam tips section */}

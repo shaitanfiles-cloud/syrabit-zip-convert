@@ -52,18 +52,6 @@ const THUMB_GRADIENTS = {
 const FILTER_CHIPS = [
   { id: 'all',         label: 'All'      },
   { id: 'saved',       label: '★ Saved'  },
-  // AHSEC filters
-  { id: 'class-11',    label: 'Class 11' },
-  { id: 'class-12',    label: 'Class 12' },
-  { id: 'science-pcm', label: 'PCM'      },
-  { id: 'science-pcb', label: 'PCB'      },
-  { id: 'arts',        label: 'Arts'     },
-  // DEGREE filters
-  { id: '2nd-sem',     label: '2nd Sem'  },
-  { id: '4th-sem',     label: '4th Sem'  },
-  { id: 'bcom',        label: 'B.Com'    },
-  { id: 'ba',          label: 'B.A'      },
-  { id: 'bsc',         label: 'B.Sc'     },
 ];
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -544,6 +532,8 @@ export default function LibraryPage() {
 
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
+  const [selectedBoardSlug, setSelectedBoardSlug] = useState('all');
+  const [selectedClassSlug, setSelectedClassSlug] = useState('all');
 
   // ── Single API call for all library data ─────────────────────────────────
   const { data: bundle, isLoading: bundleLoading, refetch: refetchBundle } = useLibraryBundle();
@@ -611,23 +601,39 @@ export default function LibraryPage() {
 
   // ── Filter + search pipeline (memoized to avoid re-filtering on re-render) ──
   const savedSubjectsSet = useMemo(() => new Set(savedSubjects), [savedSubjects]);
+  const dynamicStreamChips = useMemo(() => {
+    const streamSlugs = new Set();
+    const chips = [];
+    const filtered = enrichedSubjects.filter((sub) => {
+      if (selectedBoardSlug !== 'all' && sub.boardSlug !== selectedBoardSlug) return false;
+      if (selectedClassSlug !== 'all' && sub.classSlug !== selectedClassSlug) return false;
+      return true;
+    });
+    for (const sub of filtered) {
+      if (sub.streamSlug && !streamSlugs.has(sub.streamSlug)) {
+        streamSlugs.add(sub.streamSlug);
+        chips.push({ id: sub.streamSlug, label: sub.streamName || sub.streamSlug });
+      }
+    }
+    return chips;
+  }, [enrichedSubjects, selectedBoardSlug, selectedClassSlug]);
+
+  const allFilterChips = useMemo(() => [...FILTER_CHIPS, ...dynamicStreamChips], [dynamicStreamChips]);
+
   const filteredSubjects = useMemo(() => {
     return enrichedSubjects.filter((sub) => {
-      // Gate 1: published only
       if (sub.status && sub.status !== 'published') return false;
 
-      // Gate 2: filter chip
+      if (selectedBoardSlug !== 'all' && sub.boardSlug !== selectedBoardSlug) return false;
+      if (selectedClassSlug !== 'all' && sub.classSlug !== selectedClassSlug) return false;
+
       if (activeFilter === 'all') {
-        // pass
       } else if (activeFilter === 'saved') {
         if (!savedSubjectsSet.has(sub.id)) return false;
-      } else if (['class-11', 'class-12', '2nd-sem', '4th-sem'].includes(activeFilter)) {
-        if (sub.classSlug !== activeFilter) return false;
       } else {
         if (sub.streamSlug !== activeFilter) return false;
       }
 
-      // Gate 3: search
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();
         const inName = sub.name?.toLowerCase().includes(q);
@@ -640,7 +646,7 @@ export default function LibraryPage() {
 
       return true;
     });
-  }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet]);
+  }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, selectedBoardSlug, selectedClassSlug]);
 
   // ── JSON-LD ItemList schema ───────────────────────────────────────────────
   useEffect(() => {
@@ -684,6 +690,8 @@ export default function LibraryPage() {
   const handleResetFilters = useCallback(() => {
     setSearchQuery('');
     setActiveFilter('all');
+    setSelectedBoardSlug('all');
+    setSelectedClassSlug('all');
   }, []);
 
   const handleRefetchSubjects = useCallback(() => {
@@ -784,14 +792,54 @@ export default function LibraryPage() {
             )}
           </div>
 
-          {/* ── Filter chips ── */}
+          {/* ── Board / Class dropdown filters ── */}
+          <div className="flex gap-3">
+            <select
+              value={selectedBoardSlug}
+              onChange={(e) => { setSelectedBoardSlug(e.target.value); setSelectedClassSlug('all'); setActiveFilter('all'); }}
+              aria-label="Filter by board"
+              className="h-10 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20"
+              style={{
+                background: 'var(--card)',
+                border: '1px solid rgba(139,92,246,0.15)',
+                color: 'hsl(var(--foreground))',
+                minWidth: 130,
+              }}
+            >
+              <option value="all">All Boards</option>
+              {boards.map((b) => (
+                <option key={b.id} value={b.slug}>{b.name}</option>
+              ))}
+            </select>
+            <select
+              value={selectedClassSlug}
+              onChange={(e) => { setSelectedClassSlug(e.target.value); setActiveFilter('all'); }}
+              aria-label="Filter by class"
+              className="h-10 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20"
+              style={{
+                background: 'var(--card)',
+                border: '1px solid rgba(139,92,246,0.15)',
+                color: 'hsl(var(--foreground))',
+                minWidth: 130,
+              }}
+            >
+              <option value="all">All Classes</option>
+              {classes
+                .filter((c) => selectedBoardSlug === 'all' || boards.find((b) => b.slug === selectedBoardSlug)?.id === c.board_id)
+                .map((c) => (
+                  <option key={c.id} value={c.slug}>{c.name}</option>
+                ))}
+            </select>
+          </div>
+
+          {/* ── Stream / filter chips ── */}
           <div
             role="group"
             aria-label="Subject filters"
             className="flex gap-2 overflow-x-auto pb-0.5 no-scrollbar"
             data-testid="library-filter-chips"
           >
-            {FILTER_CHIPS.map((chip) => (
+            {allFilterChips.map((chip) => (
               <FilterChip
                 key={chip.id}
                 chip={chip}

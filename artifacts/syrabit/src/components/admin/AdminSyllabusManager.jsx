@@ -10,7 +10,7 @@ function authHeaders(token) {
   return { headers: isRealJwt ? { Authorization: `Bearer ${token}` } : {}, withCredentials: true };
 }
 
-const EMPTY_FORM = { content: '', chapters: [], topics: [], guidelines: '' };
+const EMPTY_FORM = { content: '', chapters: [], topics: [], guidelines: '', geo_phrases: [] };
 
 export default function AdminSyllabusManager({ adminToken, boards = [], classes = [], streams = [] }) {
   const [loading, setLoading] = useState(false);
@@ -25,6 +25,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [newChapter, setNewChapter] = useState('');
   const [newTopic, setNewTopic] = useState('');
+  const [newGeoPhrase, setNewGeoPhrase] = useState('');
 
   const filteredClasses = classes.filter(c => c.board_id === selectedBoardId);
   const filteredStreams = streams.filter(s => s.class_id === selectedClassId);
@@ -64,6 +65,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
           chapters: data.chapters || [],
           topics: data.topics || [],
           guidelines: data.guidelines || '',
+          geo_phrases: data.geo_phrases || [],
         });
       } else {
         setEditingSyllabus(null);
@@ -145,6 +147,15 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   };
 
   const removeTopic = (i) => setFormData({ ...formData, topics: formData.topics.filter((_, idx) => idx !== i) });
+
+  const addGeoPhrase = () => {
+    if (newGeoPhrase.trim()) {
+      setFormData({ ...formData, geo_phrases: [...(formData.geo_phrases || []), newGeoPhrase.trim()] });
+      setNewGeoPhrase('');
+    }
+  };
+
+  const removeGeoPhrase = (i) => setFormData({ ...formData, geo_phrases: (formData.geo_phrases || []).filter((_, idx) => idx !== i) });
 
   const scopeLabel = selectedStream
     ? `${selectedBoard?.name || ''} · ${selectedClass?.name || ''} · ${selectedStream.name}`
@@ -276,6 +287,42 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
               className="w-full px-4 py-3 rounded-xl border border-white/10 bg-white/5 text-white placeholder-white/20 text-sm focus:border-indigo-500 outline-none transition-colors resize-none"
               rows={3}
             />
+          </div>
+
+          {/* GEO Authority Phrases */}
+          <div className="space-y-2">
+            <label className="text-xs font-semibold text-white/60 uppercase tracking-wide">
+              GEO Authority Phrases <span className="text-white/30 font-normal normal-case">(injected into AI answers)</span>
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newGeoPhrase}
+                onChange={(e) => setNewGeoPhrase(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && addGeoPhrase()}
+                placeholder='e.g., "As per AHSEC 2024 syllabus, this topic carries 5 marks"'
+                className="flex-1 px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white placeholder-white/25 text-sm focus:border-emerald-500 outline-none"
+              />
+              <button
+                onClick={addGeoPhrase}
+                className="px-3 py-2 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 transition-colors"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+            {(formData.geo_phrases || []).length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-1">
+                {formData.geo_phrases.map((phrase, i) => (
+                  <div key={i} className="px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-200 text-xs flex items-center gap-2">
+                    {phrase}
+                    <button onClick={() => removeGeoPhrase(i)} className="hover:text-white transition-colors">
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-[10px] text-white/25">These phrases get woven into every AI answer for this syllabus scope. Use exam stats, textbook citations, and board-authority language.</p>
           </div>
 
           {/* Key Topics */}
