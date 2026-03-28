@@ -1,9 +1,6 @@
 # Syrabit.ai — robots.txt
 
 User-agent: *
-Allow: /library
-Allow: /learn/
-Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history

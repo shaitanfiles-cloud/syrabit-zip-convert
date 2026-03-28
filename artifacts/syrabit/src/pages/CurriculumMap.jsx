@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { ChevronRight, BookOpen, GraduationCap, Layers, FileText, ExternalLink } from 'lucide-react';
-import { PageMeta } from '@/components/PageMeta';
+import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
@@ -121,7 +121,7 @@ export default function CurriculumMap() {
       <PageMeta
         title="Curriculum Map — AHSEC & Degree Subject Browser | Syrabit.ai"
         description="Browse the full Assam board curriculum: AHSEC Class 11-12 (PCM, PCB, Arts, Commerce) and Degree (B.Com, B.A, B.Sc) — all subjects and chapters in one place."
-        canonical="https://syrabit.ai/curriculum"
+        url="https://syrabit.ai/curriculum"
         keywords="AHSEC syllabus, Assam board curriculum, Class 11 12 chapters, Degree syllabus Assam, SEBA curriculum map"
       />
       <PublicNavbar />

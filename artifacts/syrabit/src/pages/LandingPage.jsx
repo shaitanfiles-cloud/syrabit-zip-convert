@@ -10,7 +10,7 @@ import {
   Twitter, Github, Mail, Globe,
   ChevronRight,
 } from 'lucide-react';
-import { PageMeta } from '@/components/PageMeta';
+import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
 import { useAuth } from '@/context/AuthContext';
 import { LogoMark, LogoFull } from '@/components/Logo';
@@ -332,7 +332,7 @@ export default function LandingPage() {
       <PageMeta
         title="Syrabit.ai — AI-Powered AHSEC & Degree Exam Preparation for Assam Students"
         description="Ace AHSEC Class 11-12 and Degree (B.Com, B.A, B.Sc) exams with Syrabit.ai. Instant AI tutor, syllabus-aligned notes, PYQs, MCQs — free to start. Trusted by 500+ Assam board students."
-        canonical="https://syrabit.ai/"
+        url="https://syrabit.ai/"
         keywords="AHSEC exam preparation, Assam board Class 11 12 AI tutor, SEBA exam notes, Degree college study material, B.Com B.A B.Sc notes Assam, AHSEC 2025 preparation, AI study tool India, free exam prep app"
       />
       <PublicNavbar />
