@@ -34,15 +34,23 @@ export const Sidebar = () => {
     <TooltipProvider delayDuration={0}>
       <aside
         className={cn(
-          'hidden md:flex flex-col h-screen sticky top-0 bg-card border-r border-border transition-all duration-300 z-40',
+          'hidden md:flex flex-col h-screen sticky top-0 border-r border-border/60 transition-all duration-300 z-40',
           collapsed ? 'w-[64px]' : 'w-[240px]'
         )}
+        style={{
+          background: 'rgba(10,8,20,0.92)',
+          backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)',
+        }}
         role="navigation"
         aria-label="Main navigation"
         data-testid="app-sidebar"
       >
         {/* Logo */}
-        <div className="flex items-center h-16 px-3 border-b border-border overflow-hidden">
+        <div
+          className="flex items-center h-16 px-3 overflow-hidden"
+          style={{ borderBottom: '1px solid rgba(139,92,246,0.12)' }}
+        >
           <Link to="/library" className="flex items-center min-w-0">
             {collapsed ? (
               <LogoMark size="sm" />
@@ -53,7 +61,7 @@ export const Sidebar = () => {
         </div>
 
         {/* Nav items */}
-        <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
+        <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto">
           {NAV_ITEMS.map(({ to, icon: Icon, label }) => {
             const active = isActive(to);
             return (
@@ -64,15 +72,34 @@ export const Sidebar = () => {
                     className={cn(
                       'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 relative group',
                       active
-                        ? 'bg-primary/15 text-primary nav-item-active shadow-[0_0_12px_rgba(139,92,246,0.1)]'
-                        : 'text-muted-foreground hover:text-foreground hover:bg-accent/40 hover:translate-x-0.5'
+                        ? 'text-violet-300 nav-item-active'
+                        : 'text-muted-foreground hover:text-foreground hover:translate-x-0.5'
                     )}
+                    style={active ? {
+                      background: 'linear-gradient(135deg, rgba(124,58,237,0.18), rgba(109,40,217,0.08))',
+                      boxShadow: '0 2px 12px rgba(124,58,237,0.12)',
+                    } : {}}
+                    onMouseEnter={e => {
+                      if (!active) e.currentTarget.style.background = 'rgba(139,92,246,0.08)';
+                    }}
+                    onMouseLeave={e => {
+                      if (!active) e.currentTarget.style.background = '';
+                    }}
                     data-testid={`sidebar-nav-${label.toLowerCase()}`}
                   >
-                    <Icon size={18} className="flex-shrink-0" />
+                    <Icon
+                      size={18}
+                      className={cn('flex-shrink-0 transition-colors', active ? 'text-violet-400' : '')}
+                    />
                     {!collapsed && <span>{label}</span>}
                     {active && !collapsed && (
-                      <div className="ml-auto w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_6px_hsl(var(--primary))]" />
+                      <div
+                        className="ml-auto w-1.5 h-1.5 rounded-full"
+                        style={{
+                          background: 'linear-gradient(135deg,#a78bfa,#7c3aed)',
+                          boxShadow: '0 0 8px rgba(167,139,250,0.8)',
+                        }}
+                      />
                     )}
                   </Link>
                 </TooltipTrigger>
@@ -85,12 +112,14 @@ export const Sidebar = () => {
 
           {user?.is_admin && (
             <>
-              <Separator className="my-2" />
+              <Separator className="my-2 opacity-30" />
               <Tooltip>
                 <TooltipTrigger asChild>
                   <Link
                     to="/admin"
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
+                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground transition-all duration-200"
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(139,92,246,0.08)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = ''; }}
                     data-testid="sidebar-nav-admin"
                   >
                     <ShieldCheck size={18} className="flex-shrink-0" />
@@ -104,12 +133,17 @@ export const Sidebar = () => {
         </nav>
 
         {/* Bottom actions */}
-        <div className="px-2 py-3 border-t border-border space-y-1">
+        <div
+          className="px-2 py-3 space-y-0.5"
+          style={{ borderTop: '1px solid rgba(139,92,246,0.10)' }}
+        >
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={handleLogout}
-                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:text-red-400 transition-all duration-200"
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239,68,68,0.08)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = ''; }}
                 aria-label="Log out of Syrabit.ai"
                 data-testid="sidebar-logout-button"
               >
@@ -122,7 +156,9 @@ export const Sidebar = () => {
 
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="w-full flex items-center justify-center py-2 text-muted-foreground hover:text-foreground transition-colors rounded-xl hover:bg-accent/40"
+            className="w-full flex items-center justify-center py-2 text-muted-foreground hover:text-foreground transition-all duration-200 rounded-xl"
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(139,92,246,0.08)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = ''; }}
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             data-testid="sidebar-collapse-button"
           >

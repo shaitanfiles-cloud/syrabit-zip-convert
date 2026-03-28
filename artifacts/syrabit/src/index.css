@@ -71,9 +71,10 @@
     --sidebar-glass: rgba(255, 255, 255, 0.60);
 
     /* ── Glow — soft in light mode ── */
-    --glow-primary:   rgba(124, 58, 237, 0.30);
-    --glow-secondary: rgba(99, 102, 241, 0.20);
-    --glow-accent:    rgba(168, 85, 247, 0.25);
+    --glow-primary:   rgba(124, 58, 237, 0.35);
+    --glow-secondary: rgba(99, 102, 241, 0.25);
+    --glow-accent:    rgba(168, 85, 247, 0.30);
+    --glow-tertiary:  rgba(59, 130, 246, 0.20);
   }
 
   /* ══════════════════════════════════════════════════════════════
@@ -134,9 +135,10 @@
     --sidebar-glass: rgba(15, 15, 15, 0.95);
 
     /* ── Glow ── */
-    --glow-primary:   rgba(149, 117, 224, 0.22);
-    --glow-secondary: rgba(120, 130, 210, 0.16);
-    --glow-accent:    rgba(180, 120, 240, 0.18);
+    --glow-primary:   rgba(149, 117, 224, 0.28);
+    --glow-secondary: rgba(120, 130, 210, 0.20);
+    --glow-accent:    rgba(180, 120, 240, 0.22);
+    --glow-tertiary:  rgba(80, 120, 220, 0.16);
   }
 
   /* ── Base resets ── */
@@ -396,14 +398,51 @@
 
   /* ── Button hover glow + lift ── */
   .btn-glow {
-    transition: transform 0.12s ease-out, box-shadow 0.12s ease-out;
+    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out, filter 0.15s ease-out;
   }
   .btn-glow:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 20px var(--glow-primary), 0 0 0 1px rgba(140,110,220,0.12);
+    transform: translateY(-2px);
+    box-shadow: 0 8px 28px var(--glow-primary), 0 0 0 1px rgba(140,110,220,0.15);
+    filter: brightness(1.08);
   }
   .btn-glow:active {
-    transform: translateY(0) scale(0.98);
+    transform: translateY(0) scale(0.97);
+    filter: brightness(1.0);
+  }
+
+  /* ── Gradient button (primary CTA) ── */
+  .btn-gradient {
+    background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+    color: #fff;
+    font-weight: 700;
+    border-radius: 0.875rem;
+    box-shadow: 0 6px 24px rgba(139,92,246,0.40), 0 0 0 1px rgba(255,255,255,0.06) inset;
+    transition: transform 0.15s ease-out, box-shadow 0.15s ease-out, filter 0.15s ease-out;
+  }
+  .btn-gradient:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 10px 36px rgba(139,92,246,0.55), 0 0 0 1px rgba(255,255,255,0.08) inset;
+    filter: brightness(1.1);
+  }
+  .btn-gradient:active {
+    transform: scale(0.97);
+  }
+
+  /* ── Ghost / outline button ── */
+  .btn-ghost-violet {
+    background: rgba(139,92,246,0.06);
+    color: rgba(255,255,255,0.70);
+    border: 1px solid rgba(139,92,246,0.22);
+    border-radius: 0.875rem;
+    font-weight: 600;
+    transition: all 0.15s ease-out;
+  }
+  .btn-ghost-violet:hover {
+    background: rgba(139,92,246,0.12);
+    border-color: rgba(139,92,246,0.40);
+    color: rgba(255,255,255,0.90);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 16px rgba(139,92,246,0.18);
   }
 
   /* ── Reading content — comfortable line width ── */
@@ -432,12 +471,14 @@
     position: fixed;
     inset: 0;
     background:
-      radial-gradient(ellipse 600px 400px at 20% 20%, var(--glow-primary), transparent),
-      radial-gradient(ellipse 500px 350px at 80% 80%, var(--glow-secondary), transparent),
-      radial-gradient(ellipse 400px 300px at 60% 30%, var(--glow-accent), transparent);
+      radial-gradient(ellipse 800px 600px at 15% 15%, var(--glow-primary), transparent),
+      radial-gradient(ellipse 600px 500px at 85% 85%, var(--glow-secondary), transparent),
+      radial-gradient(ellipse 500px 400px at 65% 25%, var(--glow-accent), transparent),
+      radial-gradient(ellipse 400px 350px at 35% 75%, var(--glow-tertiary), transparent),
+      radial-gradient(ellipse 350px 300px at 90% 30%, rgba(99,102,241,0.12), transparent);
     pointer-events: none;
     z-index: -2;
-    opacity: 0.18;
+    opacity: 0.28;
     animation: meshFloat 45s ease-in-out infinite;
   }
 
@@ -458,9 +499,22 @@
   /* ── GLASSMORPHISM CARD ── */
   .glass-card {
     background: var(--card-glass);
-    backdrop-filter: blur(20px) saturate(1.5);
-    -webkit-backdrop-filter: blur(20px) saturate(1.5);
+    backdrop-filter: blur(24px) saturate(1.6);
+    -webkit-backdrop-filter: blur(24px) saturate(1.6);
     border: 1px solid var(--card-glass-border);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 0 0 1px rgba(255,255,255,0.04) inset;
+  }
+
+  /* ── PREMIUM GLASS CARD (stronger glow variant) ── */
+  .glass-card-premium {
+    background: var(--card-glass);
+    backdrop-filter: blur(28px) saturate(1.8);
+    -webkit-backdrop-filter: blur(28px) saturate(1.8);
+    border: 1px solid rgba(139,92,246,0.22);
+    box-shadow:
+      0 12px 40px rgba(0,0,0,0.22),
+      0 0 0 1px rgba(255,255,255,0.05) inset,
+      0 0 60px rgba(124,58,237,0.06);
   }
 
   /* ── GLOW BORDER (mask-composite gradient border) ── */
@@ -511,10 +565,10 @@
     top: 50%;
     transform: translateY(-50%);
     width: 3px;
-    height: 20px;
-    background: hsl(var(--primary));
-    border-radius: 0 2px 2px 0;
-    box-shadow: 0 0 8px var(--glow-primary);
+    height: 22px;
+    background: linear-gradient(180deg, #a78bfa, #7c3aed);
+    border-radius: 0 3px 3px 0;
+    box-shadow: 0 0 12px var(--glow-primary), 0 0 4px rgba(167,139,250,0.5);
   }
 
   /* ── ORBIT RING square variant (for rounded-xl logo marks) ── */

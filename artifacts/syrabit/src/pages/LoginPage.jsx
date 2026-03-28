@@ -1,12 +1,38 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Mail, Lock, Eye, EyeOff, Loader2, MessageSquare, BarChart3, AlertCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Mail, Lock, Eye, EyeOff, Loader2, MessageSquare, BarChart3, AlertCircle, Sparkles } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
+
+const BENEFITS = [
+  {
+    icon: Sparkles,
+    title: 'AI-Powered Tutor',
+    desc: 'Instant, syllabus-aligned answers for AHSEC Class 11 & 12',
+    color: '#a78bfa',
+    bg: 'rgba(124,58,237,0.14)',
+    border: 'rgba(139,92,246,0.22)',
+  },
+  {
+    icon: MessageSquare,
+    title: 'Chat History',
+    desc: 'Every conversation saved and searchable — never start over',
+    color: '#67e8f9',
+    bg: 'rgba(6,182,212,0.10)',
+    border: 'rgba(6,182,212,0.18)',
+  },
+  {
+    icon: BarChart3,
+    title: 'Track Progress',
+    desc: 'Transparent credit system — see exactly how much you use',
+    color: '#86efac',
+    bg: 'rgba(16,185,129,0.10)',
+    border: 'rgba(16,185,129,0.18)',
+  },
+];
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -38,64 +64,140 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex bg-[#06060e]">
-      {/* Left panel - desktop only */}
-      <div className="hidden lg:flex lg:w-1/2 relative futuristic-bg grid-overlay flex-col items-center justify-center p-12">
-        <div className="max-w-md anim-slide-left">
-          <Link to="/" className="flex items-center gap-3 mb-12">
+
+      {/* ── Left panel — branded visual (desktop only) ── */}
+      <div
+        className="hidden lg:flex lg:w-[52%] relative flex-col justify-between p-12 overflow-hidden"
+        style={{
+          background: 'linear-gradient(135deg, #0e0620 0%, #130928 40%, #0e0e22 100%)',
+        }}
+      >
+        {/* Layered glow orbs */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-[-15%] left-[-10%] w-[600px] h-[600px] rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.28) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+          <div className="absolute bottom-[-10%] right-[-15%] w-[500px] h-[500px] rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(99,102,241,0.20) 0%, transparent 70%)', filter: 'blur(50px)' }} />
+          <div className="absolute top-[40%] right-[10%] w-[300px] h-[300px] rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(168,85,247,0.16) 0%, transparent 70%)', filter: 'blur(30px)' }} />
+        </div>
+
+        {/* Grid overlay */}
+        <div className="absolute inset-0 pointer-events-none opacity-[0.04]"
+          style={{
+            backgroundImage: 'linear-gradient(rgba(139,92,246,1) 1px,transparent 1px),linear-gradient(to right,rgba(139,92,246,1) 1px,transparent 1px)',
+            backgroundSize: '60px 60px',
+          }} />
+
+        {/* Content */}
+        <div className="relative z-10">
+          <Link to="/" className="inline-block mb-14">
             <LogoFull size="md" textClassName="text-white text-2xl" />
           </Link>
-          <h2 className="text-3xl font-semibold text-white mb-4">Your AI tutor for AHSEC exams</h2>
-          <p className="text-white/60 mb-10">Get instant, syllabus-aligned answers for Class 11-12 subjects. Study smarter, not harder.</p>
-          <div className="space-y-4">
-            {[
-              { icon: null,         title: 'Structured Syllabus', desc: 'AHSEC Class 11 & 12, all streams' },
-              { icon: MessageSquare, title: 'AI Tutor Chat', desc: 'Ask questions, get exam-ready answers' },
-              { icon: BarChart3,    title: 'Track Progress', desc: 'Monitor your learning with credits' },
-            ].map(({ icon: Icon, title, desc }, i) => (
-              <div key={title} className="flex items-start gap-3 glass-card rounded-xl p-4 hover:border-violet-500/30 transition-all duration-300 hover:-translate-y-0.5" style={{ animationDelay: `${0.2 + i * 0.1}s`, animation: `slideInLeft 0.6s cubic-bezier(0.16,1,0.3,1) both ${0.3 + i * 0.12}s` }}>
-                <div className="w-8 h-8 rounded-lg bg-violet-600/20 flex items-center justify-center flex-shrink-0 mt-0.5 overflow-hidden">
-                  {Icon ? (
-                    <Icon size={16} className="text-violet-400" />
-                  ) : (
-                    <img src="/logo.png" alt="Syrabit.ai" className="w-6 h-6 rounded object-cover" />
-                  )}
+
+          <div className="anim-slide-left">
+            <div
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-6"
+              style={{ background: 'rgba(124,58,237,0.16)', border: '1px solid rgba(139,92,246,0.28)' }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
+              <span className="text-xs font-semibold tracking-widest" style={{ color: '#a78bfa' }}>
+                AI EXAM PREP
+              </span>
+            </div>
+            <h2
+              className="mb-4 text-white"
+              style={{ fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 800, lineHeight: 1.18, letterSpacing: '-0.02em' }}
+            >
+              Your AI tutor for<br />
+              <span style={{ background: 'linear-gradient(135deg,#a78bfa,#7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                AHSEC exams
+              </span>
+            </h2>
+            <p className="mb-10 max-w-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.52)', fontSize: '0.95rem' }}>
+              Get instant, syllabus-aligned answers for Class 11–12 subjects. Study smarter, not harder.
+            </p>
+
+            <div className="space-y-3">
+              {BENEFITS.map(({ icon: Icon, title, desc, color, bg, border }, i) => (
+                <div
+                  key={title}
+                  className="flex items-start gap-3.5 rounded-2xl p-4 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg"
+                  style={{
+                    background: bg,
+                    border: `1px solid ${border}`,
+                    animation: `slideInLeft 0.6s cubic-bezier(0.16,1,0.3,1) both ${0.3 + i * 0.12}s`,
+                  }}
+                >
+                  <div
+                    className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5"
+                    style={{ background: 'rgba(255,255,255,0.06)', border: `1px solid ${border}` }}
+                  >
+                    <Icon size={16} style={{ color }} />
+                  </div>
+                  <div>
+                    <p className="text-white text-sm font-semibold">{title}</p>
+                    <p className="text-xs mt-0.5 leading-relaxed" style={{ color: 'rgba(255,255,255,0.48)' }}>{desc}</p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-white text-sm font-medium">{title}</p>
-                  <p className="text-white/50 text-xs mt-0.5">{desc}</p>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
+        </div>
+
+        {/* Bottom tagline */}
+        <div className="relative z-10">
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>
+            Trusted by 500+ Assam board students · Free to start
+          </p>
         </div>
       </div>
 
-      {/* Right panel - auth form */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center p-6">
-        <div className="w-full max-w-sm anim-slide-right">
+      {/* ── Right panel — auth form ── */}
+      <div className="w-full lg:w-[48%] flex items-center justify-center p-6 relative">
+        {/* Subtle background glow */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
+            style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.08) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+        </div>
+
+        <div className="w-full max-w-sm relative z-10 anim-slide-right">
           {/* Mobile logo */}
           <Link to="/" className="flex items-center gap-2 mb-8 lg:hidden">
             <LogoFull size="sm" textClassName="text-white" />
           </Link>
 
-          <div className="glass-card rounded-2xl p-6 border border-white/10 anim-scale-in" style={{ animationDelay: '0.15s' }}>
-            <div className="mb-6">
-              <h1 className="text-2xl font-semibold text-white">Welcome back</h1>
-              <p className="text-white/50 text-sm mt-1">Sign in to your account</p>
+          {/* Form card */}
+          <div
+            className="rounded-2xl p-7"
+            style={{
+              background: 'rgba(255,255,255,0.04)',
+              backdropFilter: 'blur(24px)',
+              WebkitBackdropFilter: 'blur(24px)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              boxShadow: '0 16px 48px rgba(0,0,0,0.30), 0 0 0 1px rgba(255,255,255,0.04) inset',
+            }}
+          >
+            <div className="mb-7">
+              <h1 className="text-2xl font-bold text-white tracking-tight">Welcome back</h1>
+              <p className="mt-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.45)' }}>Sign in to your account to continue</p>
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl p-3 mb-4 text-sm">
-                <AlertCircle size={16} />
+              <div className="flex items-center gap-2 text-red-400 rounded-xl p-3 mb-5 text-sm"
+                style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.18)' }}>
+                <AlertCircle size={16} className="flex-shrink-0" />
                 {error}
               </div>
             )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="email" className="text-white/80 text-sm">Email</Label>
+                <Label htmlFor="email" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                  Email address
+                </Label>
                 <div className="relative">
-                  <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+                  <Mail size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="email"
                     type="email"
@@ -103,7 +205,7 @@ export default function LoginPage() {
                     placeholder="your@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="pl-9 bg-white/5 border-white/15 text-white placeholder:text-white/30 focus:border-violet-500 input-glow"
+                    className="pl-10 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
                     required
                     data-testid="auth-email-input"
                   />
@@ -111,9 +213,11 @@ export default function LoginPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="password" className="text-white/80 text-sm">Password</Label>
+                <Label htmlFor="password" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                  Password
+                </Label>
                 <div className="relative">
-                  <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+                  <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="password"
                     type={showPass ? 'text' : 'password'}
@@ -121,41 +225,48 @@ export default function LoginPage() {
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="pl-9 pr-10 bg-white/5 border-white/15 text-white placeholder:text-white/30 focus:border-violet-500 input-glow"
+                    className="pl-10 pr-11 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
                     required
                     data-testid="auth-password-input"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 transition-colors"
+                    style={{ color: 'rgba(255,255,255,0.28)' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.60)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.28)'; }}
                   >
-                    {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                    {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
               </div>
 
               <div className="flex justify-end">
-                <Link to="/reset-password" className="text-xs text-violet-400 hover:text-violet-300">
+                <Link to="/reset-password" className="text-xs font-medium transition-colors" style={{ color: '#a78bfa' }}
+                  onMouseEnter={e => { e.currentTarget.style.color = '#c4b5fd'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = '#a78bfa'; }}>
                   Forgot password?
                 </Link>
               </div>
 
-              <Button
+              <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/25 h-11 btn-glow"
+                className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >
-                {loading ? <Loader2 size={18} className="animate-spin mr-2" /> : null}
-                {loading ? 'Signing in...' : 'Sign In'}
-              </Button>
+                {loading ? <Loader2 size={17} className="animate-spin" /> : null}
+                {loading ? 'Signing in…' : 'Sign In'}
+              </button>
             </form>
 
-            <p className="text-center text-white/50 text-sm mt-4">
+            <p className="text-center text-sm mt-6" style={{ color: 'rgba(255,255,255,0.40)' }}>
               Don't have an account?{' '}
-              <Link to="/signup" className="text-violet-400 hover:text-violet-300 font-medium">
-                Sign up
+              <Link to="/signup" className="font-semibold transition-colors" style={{ color: '#a78bfa' }}
+                onMouseEnter={e => { e.currentTarget.style.color = '#c4b5fd'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = '#a78bfa'; }}>
+                Sign up free
               </Link>
             </p>
           </div>

@@ -372,10 +372,11 @@ export default function LandingPage() {
 
         {/* ── Gradient mesh background ── */}
         <div className="absolute inset-0 pointer-events-none">
-          <GlowOrb color="radial-gradient(circle,#7c3aed,transparent)" size={700} x="-10%" y="-20%" blur={120} opacity={0.22} animRange={40} duration={18} />
-          <GlowOrb color="radial-gradient(circle,#4f46e5,transparent)" size={500} x="60%" y="40%" blur={100} opacity={0.16} animRange={30} duration={14} />
-          <GlowOrb color="radial-gradient(circle,#8b5cf6,transparent)" size={400} x="30%" y="60%" blur={90}  opacity={0.12} animRange={25} duration={20} />
-          <GlowOrb color="radial-gradient(circle,#2563eb,transparent)" size={300} x="80%" y="-10%" blur={80}  opacity={0.10} animRange={20} duration={16} />
+          <GlowOrb color="radial-gradient(circle,#7c3aed,transparent)" size={900} x="-15%" y="-25%" blur={130} opacity={0.26} animRange={45} duration={20} />
+          <GlowOrb color="radial-gradient(circle,#4f46e5,transparent)" size={650} x="58%" y="38%" blur={110} opacity={0.18} animRange={35} duration={15} />
+          <GlowOrb color="radial-gradient(circle,#8b5cf6,transparent)" size={500} x="28%" y="58%" blur={100} opacity={0.14} animRange={28} duration={22} />
+          <GlowOrb color="radial-gradient(circle,#2563eb,transparent)" size={400} x="82%" y="-15%" blur={90}  opacity={0.12} animRange={22} duration={17} />
+          <GlowOrb color="radial-gradient(circle,#6d28d9,transparent)" size={350} x="50%" y="80%" blur={80}   opacity={0.10} animRange={18} duration={25} />
         </div>
 
         {/* ── Floating particles ── */}
@@ -424,12 +425,20 @@ export default function LandingPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
             className="mb-6"
-            style={{ fontSize: 'clamp(2.4rem,6vw,4.8rem)', fontWeight: 900, lineHeight: 1.08, letterSpacing: '-0.02em' }}
+            style={{ fontSize: 'clamp(2.5rem,6.5vw,5rem)', fontWeight: 900, lineHeight: 1.06, letterSpacing: '-0.03em' }}
           >
-            <span className="text-white">Educational Chatbot For </span>
-            <span style={{ background: 'linear-gradient(135deg,#a78bfa,#7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-              Assamboard Students
+            <span className="text-white">AI Tutor for </span>
+            <span style={{
+              background: 'linear-gradient(135deg,#c4b5fd 0%,#a78bfa 40%,#7c3aed 80%)',
+              WebkitBackgroundClip: 'text',
+              WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+              filter: 'drop-shadow(0 0 30px rgba(139,92,246,0.30))',
+            }}>
+              Assam Board
             </span>
+            <br />
+            <span className="text-white">Students</span>
           </motion.h1>
 
           {/* Subheadline */}
@@ -438,10 +447,10 @@ export default function LandingPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay: 0.35 }}
             className="max-w-2xl mx-auto mb-10 leading-relaxed"
-            style={{ fontSize: 'clamp(1rem,2vw,1.15rem)', color: 'rgba(255,255,255,0.52)' }}
+            style={{ fontSize: 'clamp(1rem,2vw,1.18rem)', color: 'rgba(255,255,255,0.50)', letterSpacing: '0.01em' }}
           >
-            Syrabit is an Educational Chatbot for Assam board Students providing
-            syllabus-aligned answers and PYQ insights — powered by AI.
+            Syrabit gives AHSEC Class 11–12 students instant, syllabus-aligned AI answers,
+            PYQ insights, and structured subject notes — all in one place.
           </motion.p>
 
           {/* CTA buttons */}
@@ -451,17 +460,16 @@ export default function LandingPage() {
             transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay: 0.48 }}
             className="flex flex-col sm:flex-row items-center justify-center gap-4"
           >
-            <motion.div whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.97 }}>
+            <motion.div whileHover={{ scale: 1.04, y: -3 }} whileTap={{ scale: 0.97 }}>
               <Link
                 to="/signup"
-                className="flex items-center gap-2.5 text-white font-bold"
+                className="flex items-center gap-2.5 text-white font-bold btn-gradient"
                 style={{
                   height: 54,
-                  padding: '0 2rem',
+                  padding: '0 2.25rem',
                   borderRadius: '1rem',
                   fontSize: '1rem',
-                  background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
-                  boxShadow: '0 6px 32px rgba(139,92,246,0.45),0 0 0 1px rgba(255,255,255,0.06)',
+                  boxShadow: '0 8px 36px rgba(139,92,246,0.50), 0 0 0 1px rgba(255,255,255,0.08) inset',
                 }}
                 data-testid="landing-hero-primary-cta-button"
               >
@@ -469,18 +477,19 @@ export default function LandingPage() {
                 Start for Free — No Card Needed
               </Link>
             </motion.div>
-            <motion.div whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.97 }}>
+            <motion.div whileHover={{ scale: 1.03, y: -2 }} whileTap={{ scale: 0.97 }}>
               <a
                 href="#features"
-                className="flex items-center gap-2.5 font-semibold transition-colors"
+                className="flex items-center gap-2.5 font-semibold transition-all duration-200 hover:border-white/22 hover:bg-white/[0.07]"
                 style={{
                   height: 54,
-                  padding: '0 2rem',
+                  padding: '0 2.25rem',
                   borderRadius: '1rem',
                   fontSize: '1rem',
-                  color: 'rgba(255,255,255,0.65)',
-                  border: '1px solid rgba(255,255,255,0.12)',
-                  background: 'rgba(255,255,255,0.04)',
+                  color: 'rgba(255,255,255,0.68)',
+                  border: '1px solid rgba(255,255,255,0.14)',
+                  background: 'rgba(255,255,255,0.05)',
+                  backdropFilter: 'blur(8px)',
                 }}
                 data-testid="landing-hero-secondary-cta-button"
               >

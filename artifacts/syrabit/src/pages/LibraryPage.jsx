@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import {
   Search, Bookmark, BookmarkCheck,
   BookOpen, Layers, ChevronRight, Sparkles,
-  Share2, RefreshCw, ExternalLink, Globe as GlobeIcon, Lock,
+  Share2, RefreshCw, ExternalLink, Lock,
   FileText, Clock, ArrowRight, BookText, Loader2, Sun, Moon,
 } from 'lucide-react';
 import { MasonryInfiniteGrid } from '@egjs/react-infinitegrid';
@@ -311,15 +311,29 @@ const FilterChip = memo(function FilterChip({ chip, isActive, onClick }) {
               color: '#fff',
               fontWeight: 600,
               background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)',
-              boxShadow: '0 4px 16px var(--glow-primary, rgba(139,92,246,0.35))',
+              boxShadow: '0 4px 20px rgba(139,92,246,0.40), 0 0 0 1px rgba(255,255,255,0.06) inset',
             }
           : {
               color: 'hsl(var(--muted-foreground))',
-              fontWeight: 400,
-              background: 'var(--card)',
-              border: '1px solid rgba(139,92,246,0.12)',
+              fontWeight: 500,
+              background: 'rgba(139,92,246,0.05)',
+              border: '1px solid rgba(139,92,246,0.14)',
             }
       }
+      onMouseEnter={e => {
+        if (!isActive) {
+          e.currentTarget.style.background = 'rgba(139,92,246,0.10)';
+          e.currentTarget.style.borderColor = 'rgba(139,92,246,0.22)';
+          e.currentTarget.style.color = 'hsl(var(--foreground))';
+        }
+      }}
+      onMouseLeave={e => {
+        if (!isActive) {
+          e.currentTarget.style.background = 'rgba(139,92,246,0.05)';
+          e.currentTarget.style.borderColor = 'rgba(139,92,246,0.14)';
+          e.currentTarget.style.color = 'hsl(var(--muted-foreground))';
+        }
+      }}
       data-testid="library-filter-chip"
     >
       {chip.label}
@@ -364,53 +378,50 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
   return (
     <div
-      className="w-full rounded-2xl overflow-hidden transition-all duration-300 group/card"
+      className="w-full rounded-2xl overflow-hidden transition-all duration-300 group/card hover:-translate-y-0.5"
       style={{
         background: 'var(--card)',
         border: isSaved
-          ? '1px solid rgba(139,92,246,0.35)'
+          ? '1px solid rgba(139,92,246,0.40)'
           : '1px solid rgba(139,92,246,0.10)',
         boxShadow: isSaved
-          ? '0 0 24px var(--glow-primary, rgba(139,92,246,0.12)), 0 8px 32px rgba(0,0,0,0.25)'
+          ? '0 0 32px rgba(139,92,246,0.15), 0 8px 32px rgba(0,0,0,0.25)'
           : '0 4px 24px rgba(0,0,0,0.18)',
         animationDelay: `${index * 50}ms`,
       }}
       data-testid="library-subject-card"
       data-subject-id={sub.id}
     >
-      {/* Browser Chrome */}
+      {/* Color Accent Header Strip — replaces browser chrome */}
       <div
-        className="flex items-center gap-2 px-3 py-2"
+        className="flex items-center justify-between px-3.5 py-2.5"
         style={{
-          background: 'rgba(255,255,255,0.03)',
-          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          background: `linear-gradient(135deg, ${thumbColors[0]}22, ${thumbColors[1]}14)`,
+          borderBottom: `1px solid ${thumbColors[0]}28`,
         }}
       >
-        <div className="flex gap-1.5 shrink-0">
-          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#ff5f57' }} />
-          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#ffbd2e' }} />
-          <span className="w-2.5 h-2.5 rounded-full" style={{ background: '#28c840' }} />
+        <div className="flex items-center gap-2">
+          <div
+            className="w-5 h-5 rounded-md flex items-center justify-center"
+            style={{ background: `linear-gradient(135deg, ${thumbColors[0]}, ${thumbColors[1]})`, boxShadow: `0 0 8px ${thumbColors[0]}50` }}
+          >
+            <Layers size={10} className="text-white" />
+          </div>
+          <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: thumbColors[0] }}>
+            {sub.streamName || sub.boardName || 'Subject'}
+          </span>
         </div>
-        <Link
-          to={subjectLandingPath}
-          className="flex-1 flex items-center gap-1.5 h-6 px-2.5 rounded-md text-[11px] font-mono truncate transition-colors hover:bg-white/5"
-          style={{
-            background: 'rgba(255,255,255,0.04)',
-            color: 'rgba(255,255,255,0.45)',
-            border: '1px solid rgba(255,255,255,0.06)',
-          }}
-          title={`Open ${sub.name}`}
-        >
-          {hasDocument ? (
-            <Lock size={9} className="shrink-0 text-emerald-400" />
-          ) : (
-            <GlobeIcon size={9} className="shrink-0 opacity-50" />
+        <div className="flex items-center gap-2">
+          {hasDocument && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold"
+              style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>
+              <Lock size={7} /> Doc
+            </span>
           )}
-          <span className="truncate">{displayUrl}</span>
-        </Link>
-        {isSaved && (
-          <BookmarkCheck size={13} className="shrink-0 text-purple-400" />
-        )}
+          {isSaved && (
+            <BookmarkCheck size={13} className="text-violet-400" style={{ filter: 'drop-shadow(0 0 4px rgba(139,92,246,0.5))' }} />
+          )}
+        </div>
       </div>
 
       {/* Card Content */}

@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { BookOpen, MessageSquare, Clock, User, ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { cn } from '@/lib/utils';
+
 
 const NAV_ITEMS = [
   { to: '/library', icon: BookOpen,      label: 'Browser'  },
@@ -23,13 +23,15 @@ export function BottomNav() {
 
   return (
     <nav
-      className="md:hidden fixed bottom-0 left-0 right-0 z-50 border-t border-border"
+      className="md:hidden fixed bottom-0 left-0 right-0 z-50"
       role="navigation"
       aria-label="Mobile navigation"
       style={{
-        background: 'rgba(6,6,14,0.85)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
+        background: 'rgba(5,4,14,0.90)',
+        backdropFilter: 'blur(28px) saturate(1.6)',
+        WebkitBackdropFilter: 'blur(28px) saturate(1.6)',
+        borderTop: '1px solid rgba(139,92,246,0.12)',
+        boxShadow: '0 -4px 24px rgba(0,0,0,0.25)',
       }}
       data-testid="app-bottom-nav"
     >
@@ -40,18 +42,23 @@ export function BottomNav() {
             <Link
               key={to}
               to={to}
-              className={cn(
-                'flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-colors min-w-[44px] min-h-[44px]',
-                active
-                  ? 'text-primary bg-primary/12'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
+              className="flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 min-w-[44px] min-h-[44px] relative"
+              style={active ? {
+                color: '#a78bfa',
+                background: 'rgba(124,58,237,0.14)',
+              } : {
+                color: 'rgba(255,255,255,0.45)',
+              }}
               aria-label={label}
               aria-current={active ? 'page' : undefined}
               data-testid={`bottom-nav-${label.toLowerCase()}`}
             >
-              <Icon size={20} aria-hidden="true" />
-              <span>{label}</span>
+              <Icon
+                size={20}
+                aria-hidden="true"
+                style={active ? { filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.7))' } : {}}
+              />
+              <span style={active ? { color: '#a78bfa' } : {}}>{label}</span>
               {active && (
                 <span className="bottom-nav-active-dot" aria-hidden="true" />
               )}

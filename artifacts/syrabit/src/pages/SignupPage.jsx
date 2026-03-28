@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Mail, Lock, Eye, EyeOff, Loader2, User, CheckCircle, AlertCircle } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Mail, Lock, Eye, EyeOff, Loader2, User, CheckCircle, AlertCircle, BookOpen, Zap, GraduationCap } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
@@ -21,6 +20,13 @@ const getPasswordStrength = (password) => {
 };
 
 const STRENGTH_COLORS = ['', 'bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg-emerald-500', 'bg-emerald-400'];
+
+const PERKS = [
+  { icon: BookOpen, text: 'Browse all 55+ subjects — free forever' },
+  { icon: Zap, text: 'Starter: 300 credits for just ₹99' },
+  { icon: GraduationCap, text: 'AI tutor for AHSEC & Degree programs' },
+  { icon: CheckCircle, text: 'Upgrade anytime — no lock-in' },
+];
 
 export default function SignupPage() {
   const [name, setName] = useState('');
@@ -63,71 +69,151 @@ export default function SignupPage() {
 
   return (
     <div className="min-h-screen flex bg-[#06060e]">
-      {/* Left panel */}
-      <div className="hidden lg:flex lg:w-1/2 relative futuristic-bg grid-overlay flex-col items-center justify-center p-12">
-        <div className="max-w-md anim-slide-left">
-          <Link to="/" className="flex items-center gap-3 mb-12">
+
+      {/* ── Left panel — branded visual (desktop only) ── */}
+      <div
+        className="hidden lg:flex lg:w-[52%] relative flex-col justify-between p-12 overflow-hidden"
+        style={{
+          background: 'linear-gradient(135deg, #0e0620 0%, #130928 40%, #0e0e22 100%)',
+        }}
+      >
+        {/* Layered glow orbs */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-[-15%] left-[-10%] w-[600px] h-[600px] rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.28) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+          <div className="absolute bottom-[-10%] right-[-15%] w-[500px] h-[500px] rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(5,150,105,0.16) 0%, transparent 70%)', filter: 'blur(50px)' }} />
+          <div className="absolute top-[35%] right-[5%] w-[350px] h-[350px] rounded-full"
+            style={{ background: 'radial-gradient(circle, rgba(168,85,247,0.14) 0%, transparent 70%)', filter: 'blur(35px)' }} />
+        </div>
+
+        {/* Grid overlay */}
+        <div className="absolute inset-0 pointer-events-none opacity-[0.04]"
+          style={{
+            backgroundImage: 'linear-gradient(rgba(139,92,246,1) 1px,transparent 1px),linear-gradient(to right,rgba(139,92,246,1) 1px,transparent 1px)',
+            backgroundSize: '60px 60px',
+          }} />
+
+        {/* Content */}
+        <div className="relative z-10">
+          <Link to="/" className="inline-block mb-14">
             <LogoFull size="md" textClassName="text-white text-2xl" />
           </Link>
-          <h2 className="text-3xl font-semibold text-white mb-4">For AHSEC & Degree students</h2>
-          <p className="text-white/60 mb-10">Start your AI-powered exam prep journey today.</p>
-          <div className="space-y-3">
-            {[
-              'Browse all 55 subjects — free forever',
-              'Starter: 300 credits for just ₹99',
-              'AI tutor for AHSEC & Degree programs',
-              'Upgrade anytime — no lock-in',
-            ].map((perk, i) => (
-              <div key={perk} className="flex items-center gap-3" style={{ animation: `slideInLeft 0.6s cubic-bezier(0.16,1,0.3,1) both ${0.3 + i * 0.1}s` }}>
-                <CheckCircle size={18} className="text-emerald-400 flex-shrink-0" aria-hidden="true" />
-                <span className="text-white/80 text-sm">{perk}</span>
-              </div>
-            ))}
+
+          <div className="anim-slide-left">
+            <div
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-6"
+              style={{ background: 'rgba(16,185,129,0.14)', border: '1px solid rgba(16,185,129,0.25)' }}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-xs font-semibold tracking-widest" style={{ color: '#6ee7b7' }}>
+                FREE TO START
+              </span>
+            </div>
+            <h2
+              className="mb-4 text-white"
+              style={{ fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 800, lineHeight: 1.18, letterSpacing: '-0.02em' }}
+            >
+              For AHSEC & Degree<br />
+              <span style={{ background: 'linear-gradient(135deg,#a78bfa,#7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+                students
+              </span>
+            </h2>
+            <p className="mb-10 max-w-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.52)', fontSize: '0.95rem' }}>
+              Start your AI-powered exam prep journey today. No credit card required to get started.
+            </p>
+
+            <div className="space-y-3.5">
+              {PERKS.map(({ icon: Icon, text }, i) => (
+                <div
+                  key={text}
+                  className="flex items-center gap-3.5"
+                  style={{ animation: `slideInLeft 0.6s cubic-bezier(0.16,1,0.3,1) both ${0.3 + i * 0.1}s` }}
+                >
+                  <div
+                    className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                    style={{ background: 'rgba(16,185,129,0.14)', border: '1px solid rgba(16,185,129,0.22)' }}
+                  >
+                    <Icon size={14} className="text-emerald-400" />
+                  </div>
+                  <span className="text-sm" style={{ color: 'rgba(255,255,255,0.72)' }}>{text}</span>
+                </div>
+              ))}
+            </div>
           </div>
+        </div>
+
+        {/* Bottom */}
+        <div className="relative z-10">
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>
+            Trusted by 500+ Assam board students
+          </p>
         </div>
       </div>
 
-      {/* Right panel */}
-      <div className="w-full lg:w-1/2 flex items-center justify-center p-6">
-        <div className="w-full max-w-sm anim-slide-right">
+      {/* ── Right panel — auth form ── */}
+      <div className="w-full lg:w-[48%] flex items-center justify-center p-6 relative overflow-y-auto">
+        {/* Subtle background glow */}
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
+            style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.08) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+        </div>
+
+        <div className="w-full max-w-sm relative z-10 anim-slide-right py-8">
+          {/* Mobile logo */}
           <Link to="/" className="flex items-center gap-2 mb-8 lg:hidden">
             <LogoFull size="sm" textClassName="text-white" />
           </Link>
 
-          <div className="glass-card rounded-2xl p-6 border border-white/10 anim-scale-in" style={{ animationDelay: '0.15s' }}>
-            <div className="mb-6">
-              <h1 className="text-2xl font-semibold text-white">Create your account</h1>
-              <p className="text-white/50 text-sm mt-1">Start for free, no credit card required</p>
+          {/* Form card */}
+          <div
+            className="rounded-2xl p-7"
+            style={{
+              background: 'rgba(255,255,255,0.04)',
+              backdropFilter: 'blur(24px)',
+              WebkitBackdropFilter: 'blur(24px)',
+              border: '1px solid rgba(255,255,255,0.10)',
+              boxShadow: '0 16px 48px rgba(0,0,0,0.30), 0 0 0 1px rgba(255,255,255,0.04) inset',
+            }}
+          >
+            <div className="mb-7">
+              <h1 className="text-2xl font-bold text-white tracking-tight">Create your account</h1>
+              <p className="mt-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.45)' }}>Start for free — no credit card required</p>
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl p-3 mb-4 text-sm">
-                <AlertCircle size={16} />
+              <div className="flex items-center gap-2 text-red-400 rounded-xl p-3 mb-5 text-sm"
+                style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.18)' }}>
+                <AlertCircle size={16} className="flex-shrink-0" />
                 {error}
               </div>
             )}
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="name" className="text-white/80 text-sm">Full Name</Label>
+                <Label htmlFor="name" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                  Full Name
+                </Label>
                 <div className="relative">
-                  <User size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+                  <User size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="name"
                     autoComplete="name"
                     placeholder="Your name"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="pl-9 bg-white/5 border-white/15 text-white placeholder:text-white/30 focus:border-violet-500 input-glow"
+                    className="pl-10 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
                     required
                   />
                 </div>
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="email" className="text-white/80 text-sm">Email</Label>
+                <Label htmlFor="email" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                  Email address
+                </Label>
                 <div className="relative">
-                  <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+                  <Mail size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="email"
                     type="email"
@@ -135,7 +221,7 @@ export default function SignupPage() {
                     placeholder="your@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    className="pl-9 bg-white/5 border-white/15 text-white placeholder:text-white/30 focus:border-violet-500 input-glow"
+                    className="pl-10 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
                     required
                     data-testid="auth-email-input"
                   />
@@ -143,9 +229,11 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="password" className="text-white/80 text-sm">Password</Label>
+                <Label htmlFor="password" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                  Password
+                </Label>
                 <div className="relative">
-                  <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+                  <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="password"
                     type={showPass ? 'text' : 'password'}
@@ -153,25 +241,28 @@ export default function SignupPage() {
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    className="pl-9 pr-10 bg-white/5 border-white/15 text-white placeholder:text-white/30 focus:border-violet-500 input-glow"
+                    className="pl-10 pr-11 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
                     required
                     data-testid="auth-password-input"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 transition-colors"
+                    style={{ color: 'rgba(255,255,255,0.28)' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.60)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.28)'; }}
                   >
-                    {showPass ? <EyeOff size={16} /> : <Eye size={16} />}
+                    {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
                 {password && (
-                  <div className="space-y-1">
+                  <div className="space-y-1 pt-1">
                     <div className="flex gap-1">
                       {[1, 2, 3, 4].map((i) => (
                         <div
                           key={i}
-                          className={`h-1 flex-1 rounded-full transition-colors ${i <= strength.score ? STRENGTH_COLORS[strength.score] : 'bg-white/10'}`}
+                          className={`h-1 flex-1 rounded-full transition-all duration-300 ${i <= strength.score ? STRENGTH_COLORS[strength.score] : 'bg-white/10'}`}
                         />
                       ))}
                     </div>
@@ -183,9 +274,11 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="confirm" className="text-white/80 text-sm">Confirm Password</Label>
+                <Label htmlFor="confirm" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                  Confirm Password
+                </Label>
                 <div className="relative">
-                  <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+                  <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="confirm"
                     type={showConfirm ? 'text' : 'password'}
@@ -193,15 +286,18 @@ export default function SignupPage() {
                     placeholder="••••••••"
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    className={`pl-9 pr-10 bg-white/5 border-white/15 text-white placeholder:text-white/30 focus:border-violet-500 input-glow ${confirmPassword && !passwordsMatch ? 'border-red-500/50' : ''}`}
+                    className={`pl-10 pr-11 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25 ${confirmPassword && !passwordsMatch ? 'border-red-500/40' : ''}`}
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowConfirm(!showConfirm)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 transition-colors"
+                    style={{ color: 'rgba(255,255,255,0.28)' }}
+                    onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.60)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.28)'; }}
                   >
-                    {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+                    {showConfirm ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
                 {confirmPassword && !passwordsMatch && (
@@ -209,37 +305,40 @@ export default function SignupPage() {
                 )}
               </div>
 
-              <div className="flex items-start gap-3">
+              <div className="flex items-start gap-3 py-1">
                 <button
                   type="button"
                   onClick={() => setAgreed(!agreed)}
-                  className={`mt-0.5 w-4 h-4 rounded flex-shrink-0 border flex items-center justify-center transition-colors cursor-pointer ${agreed ? 'bg-violet-600 border-violet-600' : 'border-white/30 bg-white/5'}`}
+                  className={`mt-0.5 w-4 h-4 rounded flex-shrink-0 border flex items-center justify-center transition-all cursor-pointer ${agreed ? 'border-violet-500' : 'border-white/25 bg-white/5'}`}
+                  style={agreed ? { background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' } : {}}
                   aria-label="Agree to terms"
                 >
                   {agreed && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                 </button>
-                <span className="text-xs text-white/50">
+                <span className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
                   I agree to the{' '}
-                  <Link to="/terms" target="_blank" rel="noopener noreferrer" className="text-violet-400 hover:text-violet-300">Terms</Link>
+                  <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Terms</Link>
                   {' '}and{' '}
-                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="text-violet-400 hover:text-violet-300">Privacy Policy</Link>
+                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Privacy Policy</Link>
                 </span>
               </div>
 
-              <Button
+              <button
                 type="submit"
                 disabled={loading}
-                className="w-full bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/25 h-11 btn-glow"
+                className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold text-white transition-all duration-150 active:scale-[0.97] disabled:opacity-60 btn-gradient"
                 data-testid="auth-submit-button"
               >
-                {loading ? <Loader2 size={18} className="animate-spin mr-2" /> : null}
-                {loading ? 'Creating account...' : 'Create Account'}
-              </Button>
+                {loading ? <Loader2 size={17} className="animate-spin" /> : null}
+                {loading ? 'Creating account…' : 'Create Account'}
+              </button>
             </form>
 
-            <p className="text-center text-white/50 text-sm mt-4">
+            <p className="text-center text-sm mt-6" style={{ color: 'rgba(255,255,255,0.40)' }}>
               Already have an account?{' '}
-              <Link to="/login" className="text-violet-400 hover:text-violet-300 font-medium">
+              <Link to="/login" className="font-semibold transition-colors" style={{ color: '#a78bfa' }}
+                onMouseEnter={e => { e.currentTarget.style.color = '#c4b5fd'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = '#a78bfa'; }}>
                 Sign in
               </Link>
             </p>

@@ -10,7 +10,7 @@ export const PublicNavbar = () => {
   const { user } = useAuth();
 
   useEffect(() => {
-    const handleScroll = () => setScrolled(window.scrollY > 20);
+    const handleScroll = () => setScrolled(window.scrollY > 30);
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
@@ -23,15 +23,15 @@ export const PublicNavbar = () => {
 
   return (
     <nav
-      className="fixed top-0 left-0 right-0 z-50 transition-all duration-300"
+      className="fixed top-0 left-0 right-0 z-50 transition-all duration-400"
       style={
         scrolled
           ? {
-              background: 'rgba(6,6,14,0.9)',
-              backdropFilter: 'blur(24px)',
-              WebkitBackdropFilter: 'blur(24px)',
-              borderBottom: '1px solid rgba(255,255,255,0.08)',
-              boxShadow: '0 4px 24px rgba(0,0,0,0.2)',
+              background: 'rgba(5,4,14,0.88)',
+              backdropFilter: 'blur(28px) saturate(1.6)',
+              WebkitBackdropFilter: 'blur(28px) saturate(1.6)',
+              borderBottom: '1px solid rgba(139,92,246,0.14)',
+              boxShadow: '0 4px 32px rgba(0,0,0,0.28), 0 0 0 1px rgba(255,255,255,0.03) inset',
             }
           : { background: 'transparent' }
       }
@@ -46,14 +46,13 @@ export const PublicNavbar = () => {
           </Link>
 
           {/* ─── Desktop Nav Links ─── */}
-          <div className="hidden md:flex items-center gap-1">
+          <div className="hidden md:flex items-center gap-0.5">
             {navLinks.map((link) =>
               link.internal ? (
                 <Link
                   key={link.label}
                   to={link.href}
-                  className="px-4 py-2 rounded-xl text-sm text-white/60 hover:text-white hover:bg-white/[0.06] transition-all"
-                  style={{ fontWeight: 500 }}
+                  className="px-4 py-2 rounded-xl text-sm font-medium text-white/55 hover:text-white hover:bg-white/[0.07] transition-all duration-150"
                 >
                   {link.label}
                 </Link>
@@ -61,8 +60,7 @@ export const PublicNavbar = () => {
                 <a
                   key={link.label}
                   href={link.href}
-                  className="px-4 py-2 rounded-xl text-sm text-white/60 hover:text-white hover:bg-white/[0.06] transition-all"
-                  style={{ fontWeight: 500 }}
+                  className="px-4 py-2 rounded-xl text-sm font-medium text-white/55 hover:text-white hover:bg-white/[0.07] transition-all duration-150"
                 >
                   {link.label}
                 </a>
@@ -74,19 +72,15 @@ export const PublicNavbar = () => {
           <div className="hidden md:flex items-center gap-2">
             <Link
               to="/admin/login"
-              className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-violet-400 border border-violet-500/30 hover:bg-violet-500/10 transition-all"
+              className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-violet-400/80 border border-violet-500/20 hover:bg-violet-500/10 hover:border-violet-500/40 hover:text-violet-300 transition-all duration-150"
             >
-              <Shield size={14} /> Admin
+              <Shield size={13} /> Admin
             </Link>
 
             {user ? (
               <Link
                 to="/library"
-                className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-white font-semibold transition-all hover:opacity-90 active:scale-95"
-                style={{
-                  background: 'linear-gradient(to right, #7c3aed, #8b5cf6)',
-                  boxShadow: '0 4px 16px rgba(139,92,246,0.3)',
-                }}
+                className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-white font-semibold transition-all duration-150 hover:opacity-90 active:scale-95 hover:-translate-y-px btn-gradient"
               >
                 Go to App <ArrowRight size={14} />
               </Link>
@@ -94,18 +88,13 @@ export const PublicNavbar = () => {
               <>
                 <Link
                   to="/login"
-                  className="h-9 px-4 rounded-xl text-sm text-white/70 hover:text-white hover:bg-white/[0.08] transition-all"
-                  style={{ fontWeight: 500 }}
+                  className="h-9 px-4 rounded-xl text-sm font-medium text-white/65 hover:text-white hover:bg-white/[0.08] transition-all duration-150"
                 >
                   Sign In
                 </Link>
                 <Link
                   to="/signup"
-                  className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-white font-semibold transition-all hover:opacity-90 active:scale-95"
-                  style={{
-                    background: 'linear-gradient(to right, #7c3aed, #8b5cf6)',
-                    boxShadow: '0 4px 16px rgba(139,92,246,0.3)',
-                  }}
+                  className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-white font-semibold transition-all duration-150 active:scale-95 btn-gradient"
                   data-testid="landing-nav-cta-button"
                 >
                   Get Started Free <ArrowRight size={14} />
@@ -129,11 +118,12 @@ export const PublicNavbar = () => {
       {/* ─── Mobile Menu ─── */}
       {menuOpen && (
         <div
-          className="md:hidden border-t border-white/[0.08] px-5 py-4 space-y-1"
+          className="md:hidden px-5 py-4 space-y-1"
           style={{
-            background: 'rgba(6,6,14,0.97)',
-            backdropFilter: 'blur(24px)',
-            WebkitBackdropFilter: 'blur(24px)',
+            background: 'rgba(5,4,14,0.97)',
+            backdropFilter: 'blur(28px)',
+            WebkitBackdropFilter: 'blur(28px)',
+            borderTop: '1px solid rgba(139,92,246,0.12)',
           }}
         >
           {navLinks.map((link) =>
@@ -157,10 +147,10 @@ export const PublicNavbar = () => {
               </a>
             )
           )}
-          <div className="pt-3 space-y-2 border-t border-white/[0.06] mt-2">
+          <div className="pt-3 space-y-2 mt-2" style={{ borderTop: '1px solid rgba(139,92,246,0.10)' }}>
             <Link
               to="/admin/login"
-              className="flex items-center gap-2 w-full px-3 py-2.5 rounded-xl text-sm text-violet-400 border border-violet-500/30 hover:bg-violet-500/10 transition-all"
+              className="flex items-center gap-2 w-full px-3 py-2.5 rounded-xl text-sm text-violet-400 border border-violet-500/25 hover:bg-violet-500/10 transition-all"
               onClick={() => setMenuOpen(false)}
             >
               <Shield size={14} /> Admin Panel
@@ -168,8 +158,7 @@ export const PublicNavbar = () => {
             {user ? (
               <Link
                 to="/library"
-                className="flex items-center justify-center gap-2 w-full h-10 rounded-xl text-sm text-white font-semibold"
-                style={{ background: 'linear-gradient(to right, #7c3aed, #8b5cf6)' }}
+                className="flex items-center justify-center gap-2 w-full h-10 rounded-xl text-sm text-white font-semibold btn-gradient"
                 onClick={() => setMenuOpen(false)}
               >
                 Go to App <ArrowRight size={14} />
@@ -185,8 +174,7 @@ export const PublicNavbar = () => {
                 </Link>
                 <Link
                   to="/signup"
-                  className="flex items-center justify-center gap-2 w-full h-10 rounded-xl text-sm text-white font-semibold"
-                  style={{ background: 'linear-gradient(to right, #7c3aed, #8b5cf6)' }}
+                  className="flex items-center justify-center gap-2 w-full h-10 rounded-xl text-sm text-white font-semibold btn-gradient"
                   onClick={() => setMenuOpen(false)}
                 >
                   Get Started Free <ArrowRight size={14} />
