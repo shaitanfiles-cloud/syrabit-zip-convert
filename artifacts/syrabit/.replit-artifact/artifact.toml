@@ -41,17 +41,13 @@ run = "python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4 --no
 [services.production]
 
 [services.production.build]
-args = [ "uv", "sync", "--frozen", "--no-dev" ]
-
-[services.production.build.env]
-UV_PROJECT_ENVIRONMENT = "/home/runner/workspace/.venv-prod"
+args = [ "sh", "-c", "python3 -m venv /home/runner/workspace/.venv-prod && /home/runner/workspace/.venv-prod/bin/pip install --no-cache-dir -r /home/runner/workspace/artifacts/syrabit-backend/requirements.txt" ]
 
 [services.production.run]
 args = [ "sh", "-c", "/home/runner/workspace/.venv-prod/bin/python -m uvicorn server:app --host 0.0.0.0 --port $PORT --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend" ]
 
 [services.production.run.env]
 PORT = "8000"
-UV_PROJECT_ENVIRONMENT = "/home/runner/workspace/.venv-prod"
 
 [services.env]
 PORT = "8000"
