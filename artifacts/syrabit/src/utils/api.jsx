@@ -66,6 +66,12 @@ export const adminGetConversations = (token) =>
 export const adminGetAnalytics = (token) =>
   axios.get(`${API_BASE}/admin/analytics`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminGetRevenue = (token, days = 30) =>
+  axios.get(`${API_BASE}/admin/analytics/revenue`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
+
+export const adminGetPredictor = (token) =>
+  axios.get(`${API_BASE}/admin/analytics/predictor`, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminGetSettings = (token) =>
   axios.get(`${API_BASE}/admin/settings`, { headers: adminHeaders(token), withCredentials: true });
 
