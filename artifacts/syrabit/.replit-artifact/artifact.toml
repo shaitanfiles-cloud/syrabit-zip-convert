@@ -39,9 +39,8 @@ localPort = 8000
 run = "python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend"
 
 [services.production]
-build = [ "uv", "sync" ]
-run = "uv run python -m uvicorn server:app --host 0.0.0.0 --port $PORT --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend"
+build = [ "sh", "-c", "UV_PROJECT_ENVIRONMENT=/home/runner/workspace/.venv-prod uv sync --frozen --no-dev" ]
+run = "/home/runner/workspace/.venv-prod/bin/python -m uvicorn server:app --host 0.0.0.0 --port $PORT --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend"
 
 [services.env]
 PORT = "8000"
-UV_PROJECT_ENVIRONMENT = "/home/runner/workspace/.pythonlibs"
