@@ -512,7 +512,7 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
                 : 'border-transparent text-white/50 hover:text-white'
             }`}
           >
-            <Scroll size={16} />
+            <BookOpen size={16} />
             Syllabus Manager
           </button>
         </div>
