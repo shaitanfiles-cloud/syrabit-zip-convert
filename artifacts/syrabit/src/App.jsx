@@ -25,13 +25,6 @@ const queryClient = new QueryClient({
   },
 });
 
-import axios from 'axios';
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
-queryClient.prefetchQuery({
-  queryKey: ['library-bundle'],
-  queryFn: () => axios.get(`${API_BASE}/content/library-bundle`).then(r => r.data),
-  staleTime: 30 * 60 * 1000,
-});
 
 // ── React.lazy() code splitting — all pages ────────────────────────────────
 const LandingPage        = lazy(() => import("@/pages/LandingPage"));

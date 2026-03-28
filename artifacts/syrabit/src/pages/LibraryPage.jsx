@@ -296,7 +296,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                   className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0"
                   style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))' }}
                 >
-                  {ch.order_index ?? i + 1}
+                  {i + 1}
                 </span>
                 <span className="text-foreground/75 group-hover/lesson:text-purple-300 truncate transition-colors flex-1">
                   {ch.title}
@@ -680,11 +680,23 @@ export default function LibraryPage() {
               >
                 <BookOpen className="w-10 h-10" style={{ color: 'hsl(var(--muted-foreground) / 0.3)' }} />
               </div>
-              <h3 className="text-foreground font-semibold text-lg">No subjects found</h3>
+              <h3 className="text-foreground font-semibold text-lg">
+                {activeFilter === 'saved' && !user ? 'Sign in to save subjects' : 'No subjects found'}
+              </h3>
               <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
-                Try adjusting your search or filters to discover more subjects
+                {activeFilter === 'saved' && !user
+                  ? 'Create a free account to bookmark subjects and track your progress'
+                  : 'Try adjusting your search or filters to discover more subjects'}
               </p>
-              {(searchQuery || activeFilter !== 'all') && (
+              {activeFilter === 'saved' && !user ? (
+                <Link
+                  to="/signup"
+                  className="mt-4 px-5 py-2 rounded-xl text-sm text-white font-medium transition-all duration-200 active:scale-95"
+                  style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 20px hsl(var(--primary)/0.3)' }}
+                >
+                  Sign up free
+                </Link>
+              ) : (searchQuery || activeFilter !== 'all') && (
                 <button
                   onClick={handleResetFilters}
                   className="mt-4 px-4 py-2 rounded-xl text-sm text-primary hover:text-white transition-all duration-200 active:scale-95"

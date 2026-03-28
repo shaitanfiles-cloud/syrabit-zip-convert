@@ -189,33 +189,40 @@ export default function SeoTopicPage() {
     setLoading(true);
     setError(null);
 
-    Promise.all([
+    Promise.allSettled([
       getSeoPage(board, classSlug, subjectSlug, topicSlug, currentType),
       getSeoPageTypes(board, classSlug, subjectSlug, topicSlug),
       getSeoRelated(topicSlug),
     ])
-      .then(([pageRes, typesRes, relatedRes]) => {
+      .then(async ([pageResult, typesResult, relatedResult]) => {
         if (cancelled) return;
-        setPage(pageRes.data);
-        setPageTypes(typesRes.data || []);
-        setRelated(relatedRes.data || { related: [], prev: null, next: null });
-        try { Analytics.seoPageView(board, classSlug, subjectSlug, topicSlug, currentType); } catch {}
-      })
-      .catch(async (err) => {
-        if (cancelled) return;
-        if (err.response?.status === 404 && currentType === 'notes') {
-          try {
-            const fallbackRes = await getChapterBySlug(board, classSlug, subjectSlug, topicSlug);
-            if (!cancelled) {
-              setPage(fallbackRes.data);
-              setPageTypes([]);
-              setRelated({ related: [], prev: null, next: null });
-            }
-          } catch {
-            if (!cancelled) setError('Page not found');
-          }
+
+        const pageOk = pageResult.status === 'fulfilled';
+        const typesOk = typesResult.status === 'fulfilled';
+        const relatedOk = relatedResult.status === 'fulfilled';
+
+        if (pageOk) {
+          setPage(pageResult.value.data);
+          setPageTypes(typesOk ? (typesResult.value.data || []) : []);
+          setRelated(relatedOk ? (relatedResult.value.data || { related: [], prev: null, next: null }) : { related: [], prev: null, next: null });
+          try { Analytics.seoPageView(board, classSlug, subjectSlug, topicSlug, currentType); } catch {}
         } else {
-          setError(err.response?.status === 404 ? 'Page not found' : 'Failed to load content');
+          const err = pageResult.reason;
+          const status = err?.response?.status;
+          if (status === 404 && currentType === 'notes') {
+            try {
+              const fallbackRes = await getChapterBySlug(board, classSlug, subjectSlug, topicSlug);
+              if (!cancelled) {
+                setPage(fallbackRes.data);
+                setPageTypes([]);
+                setRelated({ related: [], prev: null, next: null });
+              }
+            } catch {
+              if (!cancelled) setError('Page not found');
+            }
+          } else {
+            setError(status === 404 ? 'Page not found' : 'Failed to load content');
+          }
         }
       })
       .finally(() => { if (!cancelled) setLoading(false); });

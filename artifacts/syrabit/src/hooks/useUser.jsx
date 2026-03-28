@@ -53,6 +53,7 @@ export const useToggleSavedSubject = () => {
     // ── Invalidate on settled (success or error) ───────────────────────────
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['saved-subjects'] });
+      queryClient.invalidateQueries({ queryKey: ['library-bundle'] });
     },
   });
 };

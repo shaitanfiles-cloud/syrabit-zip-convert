@@ -237,7 +237,7 @@ export default function SubjectLandingPage() {
                       className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0"
                       style={{ background: 'rgba(139,92,246,0.10)', color: 'rgb(167,139,250)' }}
                     >
-                      {ch.chapter_number || ch.order_index || i + 1}
+                      {i + 1}
                     </span>
                     <div className="flex-1 min-w-0">
                       <h3 className="text-sm font-semibold text-white group-hover/ch:text-purple-300 transition-colors">
