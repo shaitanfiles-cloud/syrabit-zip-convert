@@ -6083,6 +6083,322 @@ async def upload_subject_thumbnail(
     return {"thumbnailUrl": data_url}
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AI THUMBNAIL GENERATOR — Vision analysis + PIL abstract variant generation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hex_to_rgb(h: str) -> tuple:
+    h = h.lstrip('#')
+    if len(h) == 3:
+        h = ''.join(c*2 for c in h)
+    try:
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+    except Exception:
+        return (100, 80, 200)
+
+
+def _extract_dominant_colors(img_bytes: bytes, n: int = 5) -> list:
+    """Fast dominant color extraction using PIL pixel sampling."""
+    from PIL import Image
+    import io as _io
+    img = Image.open(_io.BytesIO(img_bytes)).convert('RGB').resize((120, 180))
+    pixels = list(img.getdata())
+    buckets: dict = {}
+    for r, g, b in pixels:
+        key = (r // 48 * 48, g // 48 * 48, b // 48 * 48)
+        buckets[key] = buckets.get(key, 0) + 1
+    top = sorted(buckets.items(), key=lambda x: -x[1])[:n]
+    return [f'#{r:02x}{g:02x}{b:02x}' for (r, g, b), _ in top]
+
+
+async def _analyze_with_groq_vision(b64_img: str, mime: str = "image/jpeg") -> dict:
+    """Call Groq vision model to get color/style analysis of a cover image."""
+    if not _GROQ_KEY:
+        return {}
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=25) as _c:
+            resp = await _c.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {_GROQ_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64_img}"}},
+                            {"type": "text", "text": (
+                                "Analyze this book cover. Return ONLY valid JSON (no extra text):\n"
+                                "{\"dominant_colors\":[\"#hex1\",\"#hex2\",\"#hex3\"],"
+                                "\"secondary_colors\":[\"#hex4\",\"#hex5\"],"
+                                "\"style\":\"minimalist|bold|academic|colorful|dark|light\","
+                                "\"mood\":\"serious|vibrant|calm|educational|professional\","
+                                "\"bg_is_dark\":true,"
+                                "\"accent_color\":\"#hex\"}"
+                            )}
+                        ]
+                    }],
+                    "max_tokens": 250,
+                    "temperature": 0.05,
+                },
+            )
+        if resp.status_code == 200:
+            raw = resp.json()["choices"][0]["message"]["content"]
+            m = re.search(r'\{.*\}', raw, re.DOTALL)
+            if m:
+                return json.loads(m.group())
+    except Exception as _ve:
+        logger.warning(f"Vision analysis failed: {_ve}")
+    return {}
+
+
+def _generate_abstract_variant(colors: list, variant: int, size=(400, 600)) -> str:
+    """
+    Generate a copyright-safe abstract educational background using PIL.
+    Returns a PNG data URL (~120-200 KB).
+    """
+    from PIL import Image, ImageDraw, ImageFilter
+    import io as _io, math as _math
+
+    W, H = size
+    palette = [_hex_to_rgb(c) for c in (colors or ['#7c3aed', '#1e1b4b', '#f8fafc'])]
+    while len(palette) < 5:
+        palette.append(palette[-1])
+
+    img = Image.new('RGB', (W, H))
+    draw = ImageDraw.Draw(img, 'RGBA')
+
+    if variant == 0:
+        # ── Gradient Wash + bokeh ──────────────────────────────────────────
+        c1, c2 = palette[0], palette[1]
+        for y in range(H):
+            t = y / H
+            r = int(c1[0] * (1 - t) + c2[0] * t)
+            g = int(c1[1] * (1 - t) + c2[1] * t)
+            b = int(c1[2] * (1 - t) + c2[2] * t)
+            draw.line([(0, y), (W, y)], fill=(r, g, b))
+        # bokeh circles
+        spots = [(80, 120, 110), (320, 480, 150), (200, 300, 80), (350, 100, 60)]
+        for (cx, cy, rad), col in zip(spots, [palette[2], palette[3], palette[4], palette[1]]):
+            draw.ellipse([cx - rad, cy - rad, cx + rad, cy + rad], fill=(*col, 55))
+        img = img.filter(ImageFilter.GaussianBlur(2))
+
+    elif variant == 1:
+        # ── Geometric Blocks ───────────────────────────────────────────────
+        img.paste(palette[1], [0, 0, W, H])
+        # upper band
+        draw.rectangle([0, 0, W, H // 3], fill=(*palette[0], 255))
+        # diagonal cut
+        draw.polygon([(0, H // 3), (W, H // 4), (W, H // 3), (0, H // 3 + 40)], fill=(*palette[2], 200))
+        # accent rectangles
+        rects = [(30, H // 2, 120, H // 2 + 90), (W - 140, 60, W - 30, 160), (150, H - 160, 280, H - 40)]
+        for rx0, ry0, rx1, ry1 in rects:
+            draw.rectangle([rx0, ry0, rx1, ry1], fill=(*palette[3], 100))
+        # thin lines
+        for i in range(0, W, 35):
+            draw.line([(i, 0), (i + 60, H)], fill=(*palette[4], 40), width=1)
+        img = img.filter(ImageFilter.GaussianBlur(1))
+
+    elif variant == 2:
+        # ── Layered Abstract Circles ──────────────────────────────────────
+        img.paste(palette[0], [0, 0, W, H])
+        circles = [
+            (W * 0.75, H * 0.25, 220, palette[1], 130),
+            (W * 0.20, H * 0.65, 180, palette[2], 110),
+            (W * 0.55, H * 0.55, 150, palette[3], 90),
+            (W * 0.10, H * 0.15, 100, palette[4], 70),
+            (W * 0.85, H * 0.80, 130, palette[1], 80),
+        ]
+        for (cx, cy, r, col, alpha) in circles:
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*col, alpha))
+        img = img.filter(ImageFilter.GaussianBlur(3))
+        # sharp geometric overlay
+        overlay_draw = ImageDraw.Draw(img)
+        overlay_draw.rectangle([0, H * 0.72, W, H], fill=(*palette[0], 180))
+
+    buf = _io.BytesIO()
+    img.save(buf, format='PNG', optimize=True)
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode()
+    return f'data:image/png;base64,{b64}'
+
+
+@api.post("/admin/thumbnail/generate")
+async def generate_ai_thumbnails(
+    subject_id: str = Form(...),
+    file: Optional[UploadFile] = File(default=None),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Upload a book cover (or use existing thumbnailUrl) → Vision analysis → 3 abstract variants.
+    Returns: {original_url, variants:[v1,v2,v3], analysis:{colors,style,mood}, auto_selected:0}
+    """
+    # ── Get or read the source image ──────────────────────────────────────
+    subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subj:
+        raise HTTPException(404, "Subject not found")
+
+    img_bytes: Optional[bytes] = None
+    mime_type = "image/png"
+
+    if file and file.filename:
+        img_bytes = await file.read()
+        mime_type = file.content_type or "image/png"
+    elif subj.get("thumbnailUrl", "").startswith("data:"):
+        # decode existing base64 thumbnail
+        data_url = subj["thumbnailUrl"]
+        header, b64_str = data_url.split(",", 1)
+        mime_type = header.split(":")[1].split(";")[0]
+        img_bytes = base64.b64decode(b64_str)
+
+    if not img_bytes:
+        raise HTTPException(400, "No source image: upload a file or ensure the subject has an existing thumbnail")
+
+    if len(img_bytes) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Image must be under 3 MB")
+
+    # ── Resize source to 400×600 for Vision ───────────────────────────────
+    from PIL import Image as _PILImage
+    import io as _io
+    try:
+        src_img = _PILImage.open(_io.BytesIO(img_bytes)).convert('RGB')
+        src_img.thumbnail((400, 600), _PILImage.LANCZOS)
+        buf = _io.BytesIO()
+        src_img.save(buf, format='PNG')
+        buf.seek(0)
+        img_bytes_resized = buf.read()
+    except Exception as _pe:
+        logger.warning(f"PIL resize failed: {_pe}")
+        img_bytes_resized = img_bytes
+
+    b64_src = base64.b64encode(img_bytes_resized).decode()
+    original_url = f"data:{mime_type};base64,{b64_src}"
+
+    # ── Step 1: Groq Vision analysis (best-effort) ────────────────────────
+    analysis = await _analyze_with_groq_vision(b64_src, "image/png")
+
+    # ── Step 2: PIL color extraction (always-on fallback) ─────────────────
+    pil_colors = _extract_dominant_colors(img_bytes_resized)
+
+    if analysis.get("dominant_colors"):
+        colors = analysis["dominant_colors"][:3] + analysis.get("secondary_colors", [])[:2]
+        colors = (colors + pil_colors)[:5]
+    else:
+        colors = pil_colors[:5]
+        analysis = {"dominant_colors": colors, "style": "educational", "mood": "academic"}
+
+    # ── Step 3: Generate 3 abstract variants ──────────────────────────────
+    loop = asyncio.get_event_loop()
+    variants = await asyncio.gather(
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 0),
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 1),
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 2),
+    )
+
+    # ── Step 4: Persist to MongoDB ─────────────────────────────────────────
+    thumbnails_data = {
+        "original_url":    original_url,
+        "variant1_url":    variants[0],
+        "variant2_url":    variants[1],
+        "variant3_url":    variants[2],
+        "analysis":        analysis,
+        "generated_at":    datetime.now(timezone.utc).isoformat(),
+        "auto_selected":   0,
+    }
+    await db.subjects.update_one(
+        {"id": subject_id},
+        {"$set": {
+            "thumbnail_variants": thumbnails_data,
+            "thumbnailUrl": original_url,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    logger.info(f"AI thumbnails generated for subject {subject_id}: {len(colors)} colors extracted")
+    return {
+        "original_url":  original_url,
+        "variants":      list(variants),
+        "analysis":      analysis,
+        "auto_selected": 0,
+    }
+
+
+@api.post("/admin/thumbnail/apply")
+async def apply_thumbnail_variant(
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Set the active thumbnailUrl for a subject to one of the generated variants."""
+    subject_id = data.get("subject_id", "")
+    thumb_url  = data.get("thumbnail_url", "")
+    if not subject_id or not thumb_url:
+        raise HTTPException(400, "subject_id and thumbnail_url required")
+    await db.subjects.update_one(
+        {"id": subject_id},
+        {"$set": {"thumbnailUrl": thumb_url, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    return {"success": True}
+
+
+@api.post("/admin/thumbnail/generate-bulk")
+async def generate_ai_thumbnails_bulk(
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Bulk generate AI thumbnail variants for up to 50 subjects that already have a thumbnailUrl.
+    Returns streaming-style progress list.
+    """
+    subject_ids = data.get("subject_ids", [])[:50]
+    if not subject_ids:
+        raise HTTPException(400, "subject_ids required")
+
+    results = []
+    for sid in subject_ids:
+        subj = await db.subjects.find_one({"id": sid}, {"_id": 0, "thumbnailUrl": 1, "name": 1})
+        if not subj or not subj.get("thumbnailUrl", "").startswith("data:"):
+            results.append({"subject_id": sid, "status": "skipped", "reason": "no thumbnail"})
+            continue
+        try:
+            data_url = subj["thumbnailUrl"]
+            _, b64_str = data_url.split(",", 1)
+            img_bytes = base64.b64decode(b64_str)
+            colors    = _extract_dominant_colors(img_bytes)
+            from PIL import Image as _PILImage
+            import io as _io
+            src_img = _PILImage.open(_io.BytesIO(img_bytes)).convert('RGB')
+            src_img.thumbnail((400, 600), _PILImage.LANCZOS)
+            buf = _io.BytesIO(); src_img.save(buf, format='PNG'); buf.seek(0)
+            img_bytes_r = buf.read()
+            pil_colors = _extract_dominant_colors(img_bytes_r)
+            b64_src = base64.b64encode(img_bytes_r).decode()
+            analysis = await _analyze_with_groq_vision(b64_src, "image/png")
+            all_colors = (analysis.get("dominant_colors", [])[:3] + pil_colors)[:5] or pil_colors
+            loop = asyncio.get_event_loop()
+            variants = await asyncio.gather(
+                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 0),
+                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 1),
+                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 2),
+            )
+            thumbnails_data = {
+                "original_url": data_url,
+                "variant1_url": variants[0],
+                "variant2_url": variants[1],
+                "variant3_url": variants[2],
+                "analysis": analysis,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.subjects.update_one(
+                {"id": sid},
+                {"$set": {"thumbnail_variants": thumbnails_data, "updated_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            results.append({"subject_id": sid, "name": subj.get("name",""), "status": "done"})
+        except Exception as _be:
+            logger.error(f"Bulk thumb error for {sid}: {_be}")
+            results.append({"subject_id": sid, "status": "failed", "error": str(_be)})
+
+    return {"results": results, "total": len(subject_ids), "done": sum(1 for r in results if r["status"] == "done")}
+
+
 @api.delete("/admin/content/subjects/{subject_id}")
 async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_user)):
     result = await db.subjects.delete_one({"id": subject_id})
