@@ -223,8 +223,13 @@ class TopicUpdate(BaseModel):
 
 class GenerateRequest(BaseModel):
     topic_id: Optional[str] = None
+    topic_ids: Optional[List[str]] = None
     page_types: Optional[List[str]] = None
     batch: Optional[bool] = False
+
+
+class PageTypesRequest(BaseModel):
+    page_types: Optional[List[str]] = None
 
 
 async def _resolve_hierarchy(topic: dict) -> dict:
@@ -1186,12 +1191,12 @@ async def get_job_progress(job_id: str, _admin: dict = Depends(_require_admin)):
 
 @router.post("/auto-run")
 async def auto_run_pipeline(
-    page_types: Optional[List[str]] = None,
-    background_tasks: BackgroundTasks = None,
+    background_tasks: BackgroundTasks,
+    data: PageTypesRequest = PageTypesRequest(),
     _admin: dict = Depends(_require_admin),
 ):
     """One-click: extract all topics → generate all missing pages → regen sitemap."""
-    types_to_run = page_types or PAGE_TYPES
+    types_to_run = (data.page_types if data else None) or PAGE_TYPES
     job_id = f"job-{uuid.uuid4().hex[:10]}"
     _seo_jobs[job_id] = {
         "job_id": job_id,
@@ -1410,8 +1415,8 @@ async def seo_insights(_admin: dict = Depends(_require_admin)):
 @router.post("/expand/{board_slug}")
 async def expand_board_content(
     board_slug: str,
-    page_types: Optional[List[str]] = None,
-    background_tasks: BackgroundTasks = None,
+    background_tasks: BackgroundTasks,
+    data: PageTypesRequest = PageTypesRequest(),
     _admin: dict = Depends(_require_admin),
 ):
     """Generate all missing pages for a specific board (gap-fill only, skips existing)."""
@@ -1419,7 +1424,7 @@ async def expand_board_content(
     if not board:
         raise HTTPException(status_code=404, detail=f"Board '{board_slug}' not found")
 
-    types_to_run = page_types or PAGE_TYPES
+    types_to_run = (data.page_types if data else None) or PAGE_TYPES
     job_id = f"expand-{board_slug}-{uuid.uuid4().hex[:8]}"
 
     _seo_jobs[job_id] = {
