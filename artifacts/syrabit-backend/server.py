@@ -9136,56 +9136,192 @@ class StudioPublishRequest(BaseModel):
     subject_slug: str = ""
     meta_description: str = ""
     keywords: list = []
+    board_id: str = ""
+    class_id: str = ""
+    stream_id: str = ""
+    is_revision: bool = False
+    parent_revision_id: str = ""
+
 
 @api.post("/admin/studio/publish")
 async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends(get_admin_user)):
     now_iso = datetime.now(timezone.utc).isoformat()
+
+    # ── 1. Resolve board / class slugs from DB if IDs supplied ────────────────
+    board_slug = body.board
+    class_slug_resolved = body.class_slug
+    if body.board_id:
+        bd = await db.boards.find_one({"id": body.board_id}, {"_id": 0})
+        if bd:
+            board_slug = bd.get("slug") or _slugify(bd.get("name", body.board))
+    if body.class_id:
+        cd = await db.classes.find_one({"id": body.class_id}, {"_id": 0})
+        if cd:
+            class_slug_resolved = cd.get("slug") or _slugify(cd.get("name", body.class_slug))
+
+    subject_slug_resolved = body.subject_slug or body.slug.split("-")[0]
+    publish_url = f"/{board_slug}/{class_slug_resolved}/{subject_slug_resolved}/{body.slug}"
+
+    # ── 2. Build HTML from blocks ──────────────────────────────────────────────
     html_parts = []
     for block in body.blocks:
         btype = re.sub(r'[^a-z]', '', block.get("type", "note"))
-        title = _html_mod.escape(str(block.get("title", "")))
-        content = _html_mod.escape(str(block.get("content", "")))
-        html_parts.append(f'<section class="content-block {btype}"><h3>{title}</h3><div>{content}</div></section>')
-
+        btitle  = _html_mod.escape(str(block.get("title", "")))
+        bcontent = _html_mod.escape(str(block.get("content", "")))
+        html_parts.append(f'<section class="content-block {btype}"><h3>{btitle}</h3><div>{bcontent}</div></section>')
     page_html = "\n".join(html_parts)
+
+    # ── 3. Upsert SEO topic ────────────────────────────────────────────────────
     topic_doc = {
         "title": body.title,
         "slug": body.slug,
-        "board": body.board,
-        "class_slug": body.class_slug,
-        "subject_slug": body.subject_slug or body.slug.split("-")[0],
+        "board": board_slug,
+        "class_slug": class_slug_resolved,
+        "subject_slug": subject_slug_resolved,
         "meta_description": body.meta_description or body.title,
         "keywords": body.keywords,
         "status": "published",
-        "created_at": now_iso,
+        "board_id": body.board_id,
+        "class_id": body.class_id,
+        "stream_id": body.stream_id,
         "updated_at": now_iso,
         "source": "studio",
     }
-    await db.seo_topics.update_one(
-        {"slug": body.slug},
-        {"$set": topic_doc},
-        upsert=True,
-    )
+    existing_topic = await db.seo_topics.find_one({"slug": body.slug}, {"_id": 0, "created_at": 1})
+    if not existing_topic:
+        topic_doc["created_at"] = now_iso
+    await db.seo_topics.update_one({"slug": body.slug}, {"$set": topic_doc}, upsert=True)
+
+    # ── 4. Upsert SEO page (or create revision copy) ───────────────────────────
     page_doc = {
         "topic_slug": body.slug,
-        "board": body.board,
-        "class_slug": body.class_slug,
-        "subject_slug": body.subject_slug or body.slug.split("-")[0],
+        "board": board_slug,
+        "class_slug": class_slug_resolved,
+        "subject_slug": subject_slug_resolved,
         "html": page_html,
         "blocks": body.blocks,
         "status": "published",
         "page_type": "notes",
-        "created_at": now_iso,
         "updated_at": now_iso,
         "source": "studio",
     }
-    await db.seo_pages.update_one(
-        {"topic_slug": body.slug, "page_type": "notes"},
-        {"$set": page_doc},
-        upsert=True,
+    if body.is_revision and body.parent_revision_id:
+        from datetime import date as _date
+        rev_slug = f"{body.slug}-rev-{_date.today().isoformat()}"
+        revision_doc = {
+            **page_doc,
+            "topic_slug": rev_slug,
+            "is_revision": True,
+            "parent_revision_id": body.parent_revision_id,
+            "created_at": now_iso,
+        }
+        await db.seo_pages.insert_one(revision_doc)
+        logger.info(f"Studio revision created: {rev_slug} ← {body.parent_revision_id}")
+    else:
+        existing_page = await db.seo_pages.find_one({"topic_slug": body.slug, "page_type": "notes"}, {"_id": 0, "created_at": 1})
+        if not existing_page:
+            page_doc["created_at"] = now_iso
+        await db.seo_pages.update_one(
+            {"topic_slug": body.slug, "page_type": "notes"},
+            {"$set": page_doc},
+            upsert=True,
+        )
+
+    # ── 5. Auto-create syllabus CMS stub when syllabus block detected ──────────
+    syllabus_block = next((b for b in body.blocks if b.get("type") == "syllabus"), None)
+    if syllabus_block and body.subject_id:
+        syl_title = f"{body.title} — Syllabus Scope"
+        syl_slug  = f"{body.slug}-syllabus"
+        syl_id    = str(uuid.uuid4())
+        syl_doc = {
+            "id":               syl_id,
+            "title":            syl_title,
+            "seo_slug":         syl_slug,
+            "content":          syllabus_block.get("content", ""),
+            "type":             "syllabus",
+            "status":           "draft",
+            "linked_subject_id": body.subject_id,
+            "linked_board_id":  body.board_id,
+            "linked_class_id":  body.class_id,
+            "linked_stream_id": body.stream_id,
+            "source":           "studio-auto",
+            "created_at":       now_iso,
+            "updated_at":       now_iso,
+        }
+        await db.cms_documents.update_one(
+            {"seo_slug": syl_slug},
+            {"$set": syl_doc},
+            upsert=True,
+        )
+        logger.info(f"Syllabus CMS stub auto-created: {syl_slug}")
+
+    logger.info(f"Studio published: {body.slug} → {publish_url}")
+    return {"success": True, "slug": body.slug, "url": publish_url}
+
+
+# ── Studio Draft CRUD ─────────────────────────────────────────────────────────
+
+@api.get("/admin/studio/drafts")
+async def list_studio_drafts(admin: dict = Depends(get_admin_user)):
+    """List all studio drafts, newest first."""
+    drafts = await db.studio_drafts.find({}, {"_id": 0}).sort("updated_at", -1).limit(50).to_list(50)
+    return drafts
+
+
+@api.post("/admin/studio/drafts")
+async def save_studio_draft(data: dict = Body(...), admin: dict = Depends(get_admin_user)):
+    """Save or update a studio draft by slug."""
+    slug = data.get("slug", "").strip()
+    draft_id = data.get("id") or str(uuid.uuid4())
+    now_iso  = datetime.now(timezone.utc).isoformat()
+    draft = {
+        "id":           draft_id,
+        "title":        data.get("title", "Untitled"),
+        "slug":         slug,
+        "blocks":       data.get("blocks", []),
+        "subject_id":   data.get("subject_id", ""),
+        "board_id":     data.get("board_id", ""),
+        "class_id":     data.get("class_id", ""),
+        "stream_id":    data.get("stream_id", ""),
+        "subject_slug": data.get("subject_slug", ""),
+        "updated_at":   now_iso,
+    }
+    existing = await db.studio_drafts.find_one({"slug": slug} if slug else {"id": draft_id}, {"_id": 0, "created_at": 1})
+    if not existing:
+        draft["created_at"] = now_iso
+    filter_q = {"slug": slug} if slug else {"id": draft_id}
+    await db.studio_drafts.update_one(filter_q, {"$set": draft}, upsert=True)
+    logger.info(f"Studio draft saved: {draft_id} ({slug})")
+    return {"id": draft_id, "message": "Draft saved"}
+
+
+@api.delete("/admin/studio/drafts/{draft_id}")
+async def delete_studio_draft(draft_id: str, admin: dict = Depends(get_admin_user)):
+    await db.studio_drafts.delete_one({"id": draft_id})
+    return {"message": "Draft deleted"}
+
+
+@api.post("/admin/studio/drafts/{draft_id}/publish")
+async def publish_studio_draft(draft_id: str, data: dict = Body(default={}), admin: dict = Depends(get_admin_user)):
+    """Publish a saved draft. Optional body overrides: board_id, class_id, is_revision, parent_revision_id."""
+    draft = await db.studio_drafts.find_one({"id": draft_id}, {"_id": 0})
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    pub_body = StudioPublishRequest(
+        title            = draft.get("title", "Untitled"),
+        slug             = draft.get("slug", draft_id),
+        blocks           = draft.get("blocks", []),
+        subject_id       = draft.get("subject_id", ""),
+        board_id         = data.get("board_id", draft.get("board_id", "")),
+        class_id         = data.get("class_id", draft.get("class_id", "")),
+        stream_id        = data.get("stream_id", draft.get("stream_id", "")),
+        subject_slug     = draft.get("subject_slug", ""),
+        is_revision      = data.get("is_revision", False),
+        parent_revision_id = data.get("parent_revision_id", ""),
     )
-    logger.info(f"Studio published: {body.slug}")
-    return {"success": True, "slug": body.slug, "url": f"/ahsec/{body.class_slug}/{body.subject_slug or 'general'}/{body.slug}"}
+    result = await admin_studio_publish(pub_body, admin)
+    await db.studio_drafts.update_one({"id": draft_id}, {"$set": {"last_published_at": datetime.now(timezone.utc).isoformat()}})
+    return {**result, "draft_id": draft_id}
 
 
 # ─────────────────────────────────────────────

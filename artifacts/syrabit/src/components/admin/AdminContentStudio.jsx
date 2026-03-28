@@ -1,9 +1,11 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Loader2, Sparkles, Eye, Code, Send, FileText,
   BookOpen, Layers, HelpCircle, Calculator, StickyNote,
-  CheckCircle, AlertCircle, Copy, Check, RefreshCw,
-  Globe, Zap, AlertTriangle,
+  CheckCircle, AlertCircle, Copy, RefreshCw,
+  Globe, Zap, AlertTriangle, GitBranch, Save,
+  ChevronDown, ChevronRight, Square, CheckSquare,
+  ArrowRightLeft, Link2, ExternalLink, List,
 } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE } from '@/utils/api';
@@ -16,6 +18,10 @@ function authHeaders(token) {
   return { headers: isRealJwt ? { Authorization: `Bearer ${token}` } : {}, withCredentials: true };
 }
 
+function slugify(text) {
+  return (text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+}
+
 const BLOCK_ICONS = {
   summary:    { icon: FileText,    color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)' },
   definition: { icon: BookOpen,    color: '#3b82f6', bg: 'rgba(59,130,246,0.12)' },
@@ -23,6 +29,8 @@ const BLOCK_ICONS = {
   pyq:        { icon: HelpCircle,  color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
   formula:    { icon: Calculator,  color: '#ec4899', bg: 'rgba(236,72,153,0.12)' },
   note:       { icon: StickyNote,  color: '#64748b', bg: 'rgba(100,116,139,0.12)' },
+  faq:        { icon: HelpCircle,  color: '#06b6d4', bg: 'rgba(6,182,212,0.12)' },
+  syllabus:   { icon: List,        color: '#34d399', bg: 'rgba(52,211,153,0.12)' },
 };
 
 function BlockCard({ block, index, onEdit, onRemove }) {
@@ -32,60 +40,102 @@ function BlockCard({ block, index, onEdit, onRemove }) {
   const [editContent, setEditContent] = useState(block.content);
 
   return (
-    <div className="bg-slate-800/60 border border-slate-700/50 rounded-xl p-4 group">
+    <div className="border rounded-xl p-4 group transition-colors" style={{ borderColor: 'rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.025)' }}>
       <div className="flex items-center gap-2 mb-3">
-        <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: cfg.bg }}>
+        <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: cfg.bg }}>
           <Icon size={14} style={{ color: cfg.color }} />
         </div>
-        <span className="text-xs font-bold uppercase tracking-wider" style={{ color: cfg.color }}>{block.type}</span>
-        <span className="text-slate-400 text-sm font-medium ml-2">{block.title}</span>
-        <div className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <span className="text-[10px] font-bold uppercase tracking-wider flex-shrink-0" style={{ color: cfg.color }}>{block.type}</span>
+        <span className="text-sm font-medium truncate min-w-0" style={{ color: 'rgba(232,232,232,0.80)' }}>{block.title}</span>
+        <div className="ml-auto flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
           <button onClick={() => { setEditing(!editing); setEditContent(block.content); }}
-            className="px-2 py-1 text-xs text-slate-400 hover:text-white bg-slate-700 rounded-lg">
+            className="px-2 py-0.5 text-[10px] rounded-lg" style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.50)' }}>
             {editing ? 'Cancel' : 'Edit'}
           </button>
           <button onClick={() => onRemove(index)}
-            className="px-2 py-1 text-xs text-red-400 hover:text-red-300 bg-slate-700 rounded-lg">
+            className="px-2 py-0.5 text-[10px] rounded-lg" style={{ background: 'rgba(248,113,113,0.10)', color: '#f87171' }}>
             Remove
           </button>
         </div>
       </div>
       {editing ? (
         <div className="space-y-2">
-          <textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} rows={4}
-            className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white resize-y" />
+          <textarea value={editContent} onChange={e => setEditContent(e.target.value)} rows={4}
+            className="w-full rounded-lg px-3 py-2 text-sm resize-y outline-none"
+            style={{ background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.10)', color: '#E8E8E8' }} />
           <button onClick={() => { onEdit(index, editContent); setEditing(false); }}
-            className="px-3 py-1.5 text-xs bg-violet-600 text-white rounded-lg hover:bg-violet-500">Save</button>
+            className="px-3 py-1.5 text-xs rounded-lg" style={{ background: '#7c3aed', color: 'white' }}>Save</button>
         </div>
       ) : (
-        <p className="text-slate-300 text-sm leading-relaxed whitespace-pre-wrap">{block.content}</p>
+        <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: 'rgba(232,232,232,0.55)' }}>{block.content}</p>
       )}
     </div>
   );
 }
 
-function PreviewPane({ blocks, title }) {
+function SerpPreview({ title, slug, metaDescription }) {
   return (
-    <div className="bg-white/[0.02] border border-slate-700/50 rounded-xl p-6 overflow-y-auto max-h-[600px]">
-      <h2 className="text-white text-xl font-bold mb-6">{title || 'Preview'}</h2>
-      {blocks.map((block, i) => {
-        const cfg = BLOCK_ICONS[block.type] || BLOCK_ICONS.note;
-        return (
-          <div key={i} className="mb-6 pb-4 border-b border-slate-800 last:border-0">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-bold uppercase" style={{ color: cfg.color }}>{block.type}</span>
-              <span className="text-slate-200 font-semibold">{block.title}</span>
-            </div>
-            <p className="text-slate-400 text-sm leading-relaxed whitespace-pre-wrap">{block.content}</p>
-          </div>
-        );
-      })}
-      {blocks.length === 0 && <p className="text-slate-600 text-center py-12">Paste text and click Parse to see preview</p>}
+    <div className="rounded-xl p-4" style={{ background: '#ffffff' }}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)' }} />
+        <div className="min-w-0">
+          <p className="text-xs font-medium" style={{ color: '#202124' }}>syrabit.ai</p>
+          <p className="text-[10px] truncate" style={{ color: '#4d5156' }}>https://syrabit.ai/{slug || 'your-slug'}</p>
+        </div>
+      </div>
+      <p className="text-base leading-tight mb-1" style={{ color: '#1a0dab', fontFamily: 'arial,sans-serif' }}>
+        {title ? `${title} | Syrabit.ai` : 'Your Page Title — Syrabit.ai'}
+      </p>
+      <p className="text-sm leading-snug" style={{ color: '#4d5156', fontFamily: 'arial,sans-serif' }}>
+        {metaDescription
+          ? (metaDescription.length > 160 ? metaDescription.slice(0, 157) + '…' : metaDescription)
+          : 'Your meta description will appear here. Write 120–160 characters for best click-through.'}
+      </p>
     </div>
   );
 }
 
-export default function AdminContentStudio({ adminToken }) {
+function PerplexityPreview({ title, slug, metaDescription, blocks }) {
+  const tags = blocks.filter(b => ['definition', 'summary', 'pyq'].includes(b.type)).slice(0, 3);
+  return (
+    <div className="rounded-xl p-4" style={{ background: '#0d1117', border: '1px solid rgba(139,92,246,0.25)' }}>
+      <div className="flex items-start gap-3">
+        <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
+          <Sparkles size={11} className="text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold mb-1" style={{ color: '#e2e8f0' }}>
+            {title || 'Your page title as the AI answer heading'}
+          </p>
+          <p className="text-[11px] leading-relaxed mb-2" style={{ color: '#94a3b8' }}>
+            {metaDescription || 'Your meta description appears as the AI-generated excerpt. Perplexity cites pages with clear educational intent and AHSEC-aligned content.'}
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px]" style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa' }}>
+              <Globe size={9} /> syrabit.ai/{slug || 'slug'}
+            </div>
+            {tags.map((b, i) => (
+              <span key={i} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.35)' }}>
+                {b.type}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="flex-shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.20)', color: '#a78bfa' }}>
+          [1]
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const selStyle = {
+  color: '#E8E8E8', background: 'rgba(255,255,255,0.05)',
+  border: '1px solid rgba(255,255,255,0.10)', borderRadius: 8,
+  padding: '6px 10px', fontSize: 12, outline: 'none', width: '100%',
+};
+
+export default function AdminContentStudio({ adminToken, onNavigate }) {
   const [rawText, setRawText]       = useState('');
   const [subject, setSubject]       = useState('');
   const [subjectId, setSubjectId]   = useState('');
@@ -97,28 +147,83 @@ export default function AdminContentStudio({ adminToken }) {
   const [view, setView]             = useState('editor');
   const [title, setTitle]           = useState('');
   const [slug, setSlug]             = useState('');
-  const [merging, setMerging]       = useState(false);
+  const [metaDescription, setMetaDescription] = useState('');
+  const [isRevision, setIsRevision] = useState(false);
+  const [draftId, setDraftId]       = useState('');
+  const [draftSaving, setDraftSaving]   = useState(false);
+  const [drafts, setDrafts]         = useState([]);
+  const [showDrafts, setShowDrafts] = useState(false);
 
-  const [allSubjects, setAllSubjects] = useState([]);
-  const [gapSubjects, setGapSubjects] = useState([]);
-  const [loadingGaps, setLoadingGaps] = useState(false);
+  const [boards, setBoards]         = useState([]);
+  const [classes, setClasses]       = useState([]);
+  const [streams, setStreams]       = useState([]);
+  const [sylSubjects, setSylSubjects] = useState([]);
+  const [selectedBoardId, setSelectedBoardId]       = useState('');
+  const [selectedClassId, setSelectedClassId]       = useState('');
+  const [selectedStreamId, setSelectedStreamId]     = useState('');
+  const [selectedSylSubjectId, setSelectedSylSubjectId] = useState('');
+  const [syllabusOpen, setSyllabusOpen]             = useState(false);
+  const [syllabusLoading, setSyllabusLoading]       = useState(false);
+
+  const [allSubjects, setAllSubjects]   = useState([]);
+  const [gapSubjects, setGapSubjects]   = useState([]);
+  const [loadingGaps, setLoadingGaps]   = useState(false);
   const [gapGenSubject, setGapGenSubject] = useState(null);
   const [gapGenStatus, setGapGenStatus]   = useState({});
+  const [bulkSelected, setBulkSelected]   = useState(new Set());
+  const [bulkGenerating, setBulkGenerating] = useState(false);
+  const [bulkProgress, setBulkProgress]   = useState({ done: 0, total: 0 });
+  const [mergingToCms, setMergingToCms]   = useState({});
 
   const headers = { withCredentials: true };
+
+  const selectedBoard = boards.find(b => b.id === selectedBoardId);
+  const selectedClass = classes.find(c => c.id === selectedClassId);
+  const boardSlug  = selectedBoard?.slug || slugify(selectedBoard?.name || 'ahsec') || 'ahsec';
+  const classSlug  = selectedClass?.slug || slugify(selectedClass?.name || 'class-12') || 'class-12';
+  const subjectSlug = slugify(subject || 'subject');
+  const publishPath = `/${boardSlug}/${classSlug}/${subjectSlug}/${slug || 'chapter-slug'}`;
+
+  useEffect(() => {
+    axios.get(`${API}/content/boards`).then(r => setBoards(r.data || [])).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!selectedBoardId) { setClasses([]); setSelectedClassId(''); return; }
+    axios.get(`${API}/content/classes?board_id=${selectedBoardId}`).then(r => setClasses(r.data || [])).catch(() => {});
+    setSelectedClassId('');
+  }, [selectedBoardId]);
+
+  useEffect(() => {
+    if (!selectedClassId) { setStreams([]); setSelectedStreamId(''); return; }
+    axios.get(`${API}/content/streams?class_id=${selectedClassId}`).then(r => setStreams(r.data || [])).catch(() => {});
+    setSelectedStreamId('');
+  }, [selectedClassId]);
+
+  useEffect(() => {
+    if (!selectedStreamId) { setSylSubjects([]); setSelectedSylSubjectId(''); return; }
+    axios.get(`${API}/content/subjects?stream_id=${selectedStreamId}`).then(r => setSylSubjects(r.data || [])).catch(() => {});
+    setSelectedSylSubjectId('');
+  }, [selectedStreamId]);
+
+  const loadDrafts = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/admin/studio/drafts`, authHeaders(adminToken));
+      setDrafts(res.data || []);
+    } catch {}
+  }, [adminToken]);
+
+  useEffect(() => { loadDrafts(); }, [loadDrafts]);
 
   const loadGapSubjects = useCallback(async () => {
     setLoadingGaps(true);
     try {
       const res = await axios.get(`${API}/content/subjects`);
-      const subjects = res.data || [];
-      setAllSubjects(subjects);
-      setGapSubjects(subjects.filter(s => (s.chapter_count || 0) < 3));
-    } catch {
-      toast.error('Could not load subjects');
-    } finally {
-      setLoadingGaps(false);
-    }
+      const subs = res.data || [];
+      setAllSubjects(subs);
+      setGapSubjects(subs.filter(s => (s.chapter_count || 0) < 3));
+    } catch { toast.error('Could not load subjects'); }
+    finally { setLoadingGaps(false); }
   }, []);
 
   useEffect(() => {
@@ -137,15 +242,47 @@ export default function AdminContentStudio({ adminToken }) {
       setBlocks(parsed);
       if (!title && parsed.length > 0) setTitle(parsed[0].title || subject || 'Untitled');
       if (!slug && (subject || chapter))
-        setSlug((subject + '-' + chapter).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-'));
-    } catch (err) {
-      toast.error('AI parse failed');
-    } finally {
-      setParsing(false);
-    }
-  }, [rawText, subject, chapter, title, slug]);
+        setSlug(slugify((subject + '-' + chapter)));
+      if (!metaDescription) {
+        const summaryBlock = parsed.find(b => b.type === 'summary' || b.type === 'note');
+        if (summaryBlock) setMetaDescription(summaryBlock.content.slice(0, 160));
+      }
+    } catch { toast.error('AI parse failed'); }
+    finally { setParsing(false); }
+  }, [rawText, subject, chapter, title, slug, metaDescription]);
 
-  const handlePublish = useCallback(async () => {
+  const handleLoadSyllabus = async () => {
+    if (!selectedBoardId || !selectedClassId) { toast.error('Select Board and Class first'); return; }
+    setSyllabusLoading(true);
+    try {
+      let url = `${API}/syllabi/${selectedBoardId}/${selectedClassId}`;
+      if (selectedStreamId && selectedSylSubjectId)
+        url = `${API}/syllabi/${selectedBoardId}/${selectedClassId}/${selectedStreamId}/${selectedSylSubjectId}`;
+      else if (selectedStreamId)
+        url = `${API}/syllabi/${selectedBoardId}/${selectedClassId}/${selectedStreamId}`;
+      const res = await axios.get(url, { withCredentials: true });
+      const syl = res.data;
+      if (!syl?.content && !syl?.chapters?.length && !syl?.topics?.length) {
+        toast.error('No syllabus found for this scope'); return;
+      }
+      const parts = [];
+      if (syl.content) parts.push(syl.content);
+      if (syl.topics?.length)   parts.push(`Key Topics: ${syl.topics.join(', ')}`);
+      if (syl.chapters?.length) parts.push(`Chapters: ${syl.chapters.join(', ')}`);
+      if (syl.guidelines)       parts.push(`Guidelines: ${syl.guidelines}`);
+      const sylBlock = {
+        type: 'syllabus',
+        title: `${subject || selectedClass?.name || 'Subject'} — Syllabus Scope`,
+        content: parts.filter(Boolean).join('\n\n'),
+      };
+      setBlocks(prev => [sylBlock, ...prev.filter(b => b.type !== 'syllabus')]);
+      setSyllabusOpen(false);
+      toast.success('Syllabus context loaded as first block');
+    } catch { toast.error('Failed to load syllabus'); }
+    finally { setSyllabusLoading(false); }
+  };
+
+  const handlePublish = useCallback(async (asRevision = false) => {
     if (!blocks.length || !slug.trim()) return;
     setPublishing(true);
     try {
@@ -153,53 +290,87 @@ export default function AdminContentStudio({ adminToken }) {
         title: title || 'Untitled',
         slug: slug.trim(),
         blocks,
-        subject_slug: subject.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        subject_id:   subjectId,
+        subject_slug: subjectSlug,
+        meta_description: metaDescription,
+        board_id:  selectedBoardId,
+        class_id:  selectedClassId,
+        stream_id: selectedStreamId,
+        is_revision: asRevision,
+        parent_revision_id: asRevision ? (draftId || slug) : '',
       }, headers);
       setPublished(res.data);
-      toast.success('Published to SEO pages!');
-    } catch (err) {
-      toast.error('Publish failed');
-    } finally {
-      setPublishing(false);
-    }
-  }, [blocks, title, slug, subject]);
+      toast.success(asRevision ? 'Revision published!' : 'Published to live pages!');
+    } catch { toast.error('Publish failed'); }
+    finally { setPublishing(false); }
+  }, [blocks, title, slug, subjectId, subjectSlug, metaDescription, selectedBoardId, selectedClassId, selectedStreamId, draftId]);
 
-  const handleMergeToBlog = useCallback(async () => {
-    if (!subjectId) { toast.error('Select a subject with a known ID first (use Gap Fill mode)'); return; }
-    setMerging(true);
+  const handleSaveDraft = async () => {
+    if (!blocks.length && !rawText.trim()) { toast.error('Nothing to save'); return; }
+    setDraftSaving(true);
     try {
-      await axios.post(`${API}/admin/cms/merge/${subjectId}`, {}, authHeaders(adminToken));
-      toast.success(`Blog merged for ${subject || subjectId} — go to CMS Editor to review`);
+      const res = await axios.post(`${API}/admin/studio/drafts`, {
+        id:           draftId || undefined,
+        title, slug, blocks,
+        subject_id:   subjectId,
+        subject_slug: subjectSlug,
+        board_id:     selectedBoardId,
+        class_id:     selectedClassId,
+        stream_id:    selectedStreamId,
+      }, authHeaders(adminToken));
+      setDraftId(res.data.id);
+      await loadDrafts();
+      toast.success('Draft saved');
+    } catch { toast.error('Draft save failed'); }
+    finally { setDraftSaving(false); }
+  };
+
+  const handleLoadDraft = (draft) => {
+    setDraftId(draft.id);
+    setTitle(draft.title || '');
+    setSlug(draft.slug || '');
+    setBlocks(draft.blocks || []);
+    setSubjectId(draft.subject_id || '');
+    if (draft.board_id) setSelectedBoardId(draft.board_id);
+    if (draft.class_id) setSelectedClassId(draft.class_id);
+    setView('editor');
+    setShowDrafts(false);
+    toast.success(`Loaded draft: ${draft.title}`);
+  };
+
+  const handleMergeToCms = async (s) => {
+    setMergingToCms(prev => ({ ...prev, [s.id]: true }));
+    try {
+      await axios.post(`${API}/admin/cms/merge/${s.id}`, {}, authHeaders(adminToken));
+      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({
+        title:     `${s.name} — Blog`,
+        timestamp: Date.now(),
+      }));
+      toast.success(`Merged "${s.name}" → CMS Editor`);
+      onNavigate?.('cms');
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Merge failed');
     } finally {
-      setMerging(false);
+      setMergingToCms(prev => ({ ...prev, [s.id]: false }));
     }
-  }, [adminToken, subjectId, subject]);
-
-  const handleEditBlock  = (index, newContent) => setBlocks(prev => prev.map((b, i) => i === index ? { ...b, content: newContent } : b));
-  const handleRemoveBlock = (index) => setBlocks(prev => prev.filter((_, i) => i !== index));
-
-  const handleGapFill = (s) => {
-    setSubject(s.name);
-    setSubjectId(s.id);
-    setView('editor');
-    setRawText('');
-    setBlocks([]);
-    setTitle(s.name);
-    setSlug(s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'));
-    toast.success(`Loaded "${s.name}" — paste notes then click Parse with AI`);
   };
 
   const handleAutoGenerate = useCallback(async (s) => {
     setGapGenSubject(s.id);
     setGapGenStatus(prev => ({ ...prev, [s.id]: 'generating' }));
     try {
-      const prompt = `Generate comprehensive educational notes for: ${s.name}. Include key concepts, definitions, examples, and PYQ-style questions for AHSEC students.`;
+      let syllabusContext = '';
+      if (selectedBoardId && selectedClassId) {
+        try {
+          const sr = await axios.get(`${API}/syllabi/${selectedBoardId}/${selectedClassId}`, { withCredentials: true });
+          const syl = sr.data;
+          if (syl?.topics?.length) syllabusContext = `\nSyllabus topics: ${syl.topics.slice(0, 10).join(', ')}`;
+          if (syl?.chapters?.length) syllabusContext += `\nChapters: ${syl.chapters.slice(0, 8).join(', ')}`;
+        } catch {}
+      }
+      const prompt = `Generate comprehensive educational notes for AHSEC students on: ${s.name}.${syllabusContext}\nInclude: key concepts (with AHSEC board exam frequency), textbook definitions, worked examples, PYQ-style questions with marks, and 2 FAQ blocks.`;
       const res = await axios.post(`${API_BASE}/admin/studio/parse`, {
-        raw_text: prompt,
-        subject: s.name,
-        chapter: 'Overview',
+        raw_text: prompt, subject: s.name, chapter: 'Overview',
       }, headers);
       const parsed = res.data.blocks || [];
       if (!parsed.length) { setGapGenStatus(prev => ({ ...prev, [s.id]: 'failed' })); return; }
@@ -209,7 +380,7 @@ export default function AdminContentStudio({ adminToken }) {
         {
           subject_id:   s.id,
           title:        `${s.name} — Overview`,
-          slug:         s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-overview',
+          slug:         slugify(s.name) + '-overview',
           content:      markdown,
           content_type: 'notes',
           order:        1,
@@ -225,94 +396,220 @@ export default function AdminContentStudio({ adminToken }) {
     } finally {
       setGapGenSubject(null);
     }
-  }, [adminToken, loadGapSubjects]);
+  }, [adminToken, loadGapSubjects, selectedBoardId, selectedClassId]);
+
+  const handleBulkAutoGen = async () => {
+    const selected = [...bulkSelected]
+      .map(id => gapSubjects.find(s => s.id === id))
+      .filter(Boolean);
+    if (!selected.length) return;
+    setBulkGenerating(true);
+    setBulkProgress({ done: 0, total: selected.length });
+    const tasks = selected.map(s =>
+      handleAutoGenerate(s).then(() => setBulkProgress(p => ({ ...p, done: p.done + 1 })))
+    );
+    await Promise.allSettled(tasks);
+    setBulkGenerating(false);
+    setBulkSelected(new Set());
+    loadGapSubjects();
+    toast.success(`Bulk generation complete (${selected.length} subjects)`);
+  };
+
+  const handleGapFill = (s) => {
+    setSubject(s.name); setSubjectId(s.id);
+    setView('editor');
+    setRawText(''); setBlocks([]);
+    setTitle(s.name);
+    setSlug(slugify(s.name));
+    toast.success(`Loaded "${s.name}" — paste notes then Parse`);
+  };
+
+  const handleEditBlock   = (index, newContent) => setBlocks(prev => prev.map((b, i) => i === index ? { ...b, content: newContent } : b));
+  const handleRemoveBlock = (index)              => setBlocks(prev => prev.filter((_, i) => i !== index));
+
+  const toggleBulkSelect = (id) => {
+    setBulkSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllGaps = () => {
+    if (bulkSelected.size === gapSubjects.length) setBulkSelected(new Set());
+    else setBulkSelected(new Set(gapSubjects.map(s => s.id)));
+  };
+
+  const hasSyllabusBlock = blocks.some(b => b.type === 'syllabus');
 
   return (
-    <div className="p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="p-6 space-y-5 min-h-full" style={{ background: '#121212' }}>
+
+      {/* ── Header ──────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-white font-bold text-lg flex items-center gap-2">
-            <Sparkles size={18} className="text-violet-400" />
+          <h2 className="font-bold text-lg flex items-center gap-2" style={{ color: '#E8E8E8' }}>
+            <Sparkles size={18} style={{ color: '#a78bfa' }} />
             AI Content Studio
           </h2>
-          <p className="text-slate-500 text-sm mt-1">Paste raw notes → AI categorizes → Edit → Publish to SEO pages</p>
+          <p className="text-sm mt-1" style={{ color: 'rgba(255,255,255,0.35)' }}>
+            Paste raw notes → AI categorizes → Edit → Publish to SEO pages
+          </p>
         </div>
-        <div className="flex gap-1 bg-slate-800/50 rounded-xl p-1">
-          {[
-            { id: 'editor',  label: 'Editor',   icon: Code },
-            { id: 'preview', label: 'Preview',  icon: Eye },
-            { id: 'gaps',    label: 'Gap Fill',  icon: AlertTriangle },
-          ].map(t => (
-            <button key={t.id} onClick={() => setView(t.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                view === t.id ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <t.icon size={12} />
-              {t.label}
-              {t.id === 'gaps' && gapSubjects.length > 0 && (
-                <span className="ml-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400">{gapSubjects.length}</span>
-              )}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <button onClick={() => setShowDrafts(v => !v)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border"
+            style={showDrafts
+              ? { background: 'rgba(245,158,11,0.15)', color: '#fbbf24', borderColor: 'rgba(245,158,11,0.25)' }
+              : { background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.40)', borderColor: 'rgba(255,255,255,0.10)' }}>
+            <Save size={11} /> Drafts {drafts.length > 0 && `(${drafts.length})`}
+          </button>
+          <div className="flex gap-1 rounded-xl p-1" style={{ background: 'rgba(255,255,255,0.05)' }}>
+            {[
+              { id: 'editor',  label: 'Editor',   icon: Code },
+              { id: 'preview', label: 'Preview',  icon: Eye },
+              { id: 'gaps',    label: 'Gap Fill',  icon: AlertTriangle },
+            ].map(t => (
+              <button key={t.id} onClick={() => setView(t.id)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all"
+                style={view === t.id
+                  ? { background: '#7c3aed', color: 'white' }
+                  : { color: 'rgba(255,255,255,0.40)' }}>
+                <t.icon size={12} />
+                {t.label}
+                {t.id === 'gaps' && gapSubjects.length > 0 && (
+                  <span className="ml-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'rgba(245,158,11,0.25)', color: '#fbbf24' }}>
+                    {gapSubjects.length}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* ── Gap Fill Mode ────────────────────────────────── */}
+      {/* ── Drafts panel ────────────────────────────────────────────────── */}
+      {showDrafts && (
+        <div className="rounded-xl p-4 border" style={{ background: 'rgba(255,255,255,0.025)', borderColor: 'rgba(245,158,11,0.15)' }}>
+          <p className="text-xs font-semibold mb-3" style={{ color: '#fbbf24' }}>Saved Drafts</p>
+          {drafts.length === 0 ? (
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>No drafts yet. Use "Save Draft" in the Publish Pipeline.</p>
+          ) : (
+            <div className="space-y-1.5 max-h-48 overflow-y-auto">
+              {drafts.map(d => (
+                <div key={d.id} className="flex items-center gap-3 px-3 py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate" style={{ color: '#E8E8E8' }}>{d.title}</p>
+                    <p className="text-[10px] font-mono truncate" style={{ color: 'rgba(255,255,255,0.25)' }}>{d.slug} · {d.blocks?.length || 0} blocks</p>
+                  </div>
+                  <button onClick={() => handleLoadDraft(d)}
+                    className="text-[10px] px-2 py-1 rounded-lg flex-shrink-0" style={{ background: '#7c3aed', color: 'white' }}>
+                    Load
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════
+          GAP FILL TAB
+      ══════════════════════════════════════════════════════════════ */}
       {view === 'gaps' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-2">
             <div>
-              <h3 className="text-white font-semibold">Subjects with &lt; 3 Chapters</h3>
-              <p className="text-slate-500 text-xs mt-0.5">Auto-generate a starter chapter or load into the editor to add notes manually.</p>
+              <h3 className="text-sm font-semibold" style={{ color: '#E8E8E8' }}>Subjects with &lt; 3 Chapters</h3>
+              <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>Auto-generate or manually fill content for under-resourced subjects.</p>
             </div>
-            <button onClick={loadGapSubjects} disabled={loadingGaps}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-400 hover:text-white bg-slate-800 rounded-lg disabled:opacity-50">
-              {loadingGaps ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-              Refresh
-            </button>
+            <div className="flex items-center gap-2">
+              {bulkSelected.size > 0 && !bulkGenerating && (
+                <button onClick={handleBulkAutoGen}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg"
+                  style={{ background: 'rgba(139,92,246,0.25)', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.35)' }}>
+                  <Sparkles size={11} /> Bulk Auto-Gen ({bulkSelected.size})
+                </button>
+              )}
+              {bulkGenerating && (
+                <div className="flex items-center gap-2 text-xs" style={{ color: '#fbbf24' }}>
+                  <Loader2 size={12} className="animate-spin" />
+                  Generating {bulkProgress.done}/{bulkProgress.total}…
+                  <div className="w-24 h-1.5 rounded-full" style={{ background: 'rgba(255,255,255,0.10)' }}>
+                    <div className="h-1.5 rounded-full transition-all" style={{ background: '#fbbf24', width: `${(bulkProgress.done / bulkProgress.total) * 100}%` }} />
+                  </div>
+                </div>
+              )}
+              <button onClick={loadGapSubjects} disabled={loadingGaps}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg disabled:opacity-50"
+                style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.50)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                {loadingGaps ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                Refresh
+              </button>
+            </div>
           </div>
+
+          {/* Select-all row */}
+          {gapSubjects.length > 0 && !loadingGaps && (
+            <div className="flex items-center gap-2 px-1">
+              <button onClick={selectAllGaps} className="flex items-center gap-1.5 text-xs" style={{ color: 'rgba(255,255,255,0.40)' }}>
+                {bulkSelected.size === gapSubjects.length
+                  ? <CheckSquare size={13} style={{ color: '#a78bfa' }} />
+                  : <Square size={13} />}
+                {bulkSelected.size === gapSubjects.length ? 'Deselect All' : 'Select All'}
+              </button>
+              <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.20)' }}>{gapSubjects.length} subjects need content</span>
+            </div>
+          )}
 
           {loadingGaps ? (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {[...Array(6)].map((_, i) => (
-                <div key={i} className="h-24 rounded-xl animate-pulse bg-slate-800/60" />
-              ))}
+              {[...Array(6)].map((_, i) => <div key={i} className="h-28 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.04)' }} />)}
             </div>
           ) : gapSubjects.length === 0 ? (
             <div className="text-center py-16">
-              <CheckCircle size={36} className="text-emerald-400 mx-auto mb-3" />
-              <p className="text-slate-300 font-semibold">All subjects have 3+ chapters!</p>
-              <p className="text-slate-500 text-sm mt-1">No gaps detected in the curriculum.</p>
+              <CheckCircle size={36} className="mx-auto mb-3" style={{ color: '#34d399' }} />
+              <p className="text-sm font-semibold" style={{ color: '#E8E8E8' }}>All subjects have 3+ chapters!</p>
+              <p className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.30)' }}>No gaps detected in the curriculum.</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {gapSubjects.map(s => {
                 const status = gapGenStatus[s.id];
-                const isGenerating = gapGenSubject === s.id;
+                const isGen  = gapGenSubject === s.id;
+                const isSel  = bulkSelected.has(s.id);
                 return (
-                  <div key={s.id} className="p-4 rounded-xl border bg-slate-900/60" style={{ borderColor: status === 'done' ? 'rgba(16,185,129,0.30)' : 'rgba(255,255,255,0.07)' }}>
-                    <div className="flex items-start justify-between gap-2 mb-2">
-                      <p className="text-sm font-medium text-white">{s.icon || '📚'} {s.name}</p>
-                      {status === 'done' && <CheckCircle size={14} className="text-emerald-400 flex-shrink-0 mt-0.5" />}
-                      {status === 'failed' && <AlertCircle size={14} className="text-red-400 flex-shrink-0 mt-0.5" />}
-                    </div>
-                    <p className="text-xs text-amber-400 mb-3">{s.chapter_count || 0} / 3 chapters</p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleGapFill(s)}
-                        className="flex-1 py-1.5 rounded-lg text-xs font-medium text-slate-300 bg-slate-700 hover:bg-slate-600 transition-colors"
-                      >
-                        Load in Editor
+                  <div key={s.id} className="p-4 rounded-xl border transition-all"
+                    style={{
+                      borderColor: isSel ? 'rgba(139,92,246,0.35)' : status === 'done' ? 'rgba(52,211,153,0.30)' : 'rgba(255,255,255,0.07)',
+                      background:  isSel ? 'rgba(139,92,246,0.07)' : 'rgba(255,255,255,0.02)',
+                    }}>
+                    <div className="flex items-start gap-2 mb-2">
+                      <button onClick={() => toggleBulkSelect(s.id)} className="mt-0.5 flex-shrink-0">
+                        {isSel ? <CheckSquare size={13} style={{ color: '#a78bfa' }} /> : <Square size={13} style={{ color: 'rgba(255,255,255,0.20)' }} />}
                       </button>
-                      <button
-                        onClick={() => handleAutoGenerate(s)}
-                        disabled={isGenerating || status === 'done'}
-                        className="flex-1 py-1.5 rounded-lg text-xs font-medium disabled:opacity-40 transition-colors flex items-center justify-center gap-1"
-                        style={{ background: 'rgba(139,92,246,0.20)', color: '#a78bfa' }}
-                      >
-                        {isGenerating ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
-                        {status === 'done' ? 'Generated!' : isGenerating ? 'Generating…' : 'Auto-Generate'}
+                      <p className="text-sm font-medium flex-1 min-w-0" style={{ color: '#E8E8E8' }}>{s.icon || '📚'} {s.name}</p>
+                      {status === 'done'   && <CheckCircle size={13} style={{ color: '#34d399', flexShrink: 0 }} />}
+                      {status === 'failed' && <AlertCircle size={13} style={{ color: '#f87171', flexShrink: 0 }} />}
+                    </div>
+                    <p className="text-xs ml-5 mb-3" style={{ color: '#fbbf24' }}>{s.chapter_count || 0} / 3 chapters</p>
+                    <div className="flex gap-1.5 flex-wrap ml-5">
+                      <button onClick={() => handleGapFill(s)}
+                        className="px-2 py-1 rounded-lg text-[10px] font-medium flex-1 min-w-[70px]"
+                        style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(232,232,232,0.65)' }}>
+                        Load Editor
+                      </button>
+                      <button onClick={() => handleAutoGenerate(s)} disabled={isGen || status === 'done'}
+                        className="px-2 py-1 rounded-lg text-[10px] font-medium disabled:opacity-40 flex items-center justify-center gap-1 flex-1 min-w-[70px]"
+                        style={{ background: 'rgba(139,92,246,0.20)', color: '#a78bfa' }}>
+                        {isGen ? <Loader2 size={9} className="animate-spin" /> : <Sparkles size={9} />}
+                        {status === 'done' ? 'Done!' : isGen ? 'Gen…' : 'Auto-Gen'}
+                      </button>
+                      <button onClick={() => handleMergeToCms(s)} disabled={!!mergingToCms[s.id]}
+                        className="px-2 py-1 rounded-lg text-[10px] font-medium disabled:opacity-40 flex items-center justify-center gap-1 flex-1 min-w-[70px]"
+                        style={{ background: 'rgba(99,102,241,0.18)', color: '#818cf8' }}>
+                        {mergingToCms[s.id] ? <Loader2 size={9} className="animate-spin" /> : <ArrowRightLeft size={9} />}
+                        CMS Blog
                       </button>
                     </div>
                   </div>
@@ -323,101 +620,281 @@ export default function AdminContentStudio({ adminToken }) {
         </div>
       )}
 
-      {/* ── Editor + Preview tabs ─────────────────────────── */}
+      {/* ══════════════════════════════════════════════════════════════
+          EDITOR + PREVIEW TABS
+      ══════════════════════════════════════════════════════════════ */}
       {view !== 'gaps' && (
         <>
-          <div className="grid grid-cols-3 gap-3">
-            <input value={subject} onChange={(e) => setSubject(e.target.value)}
-              placeholder="Subject (e.g. Physics)"
-              className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600" />
-            <input value={chapter} onChange={(e) => setChapter(e.target.value)}
-              placeholder="Chapter (e.g. Optics)"
-              className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-600" />
-            <button onClick={handleParse} disabled={parsing || !rawText.trim()}
-              className="flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors">
-              {parsing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-              {parsing ? 'AI Parsing...' : 'Parse with AI'}
-            </button>
+          {/* Board / Class row */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div>
+              <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Board</p>
+              <select value={selectedBoardId} onChange={e => setSelectedBoardId(e.target.value)} style={selStyle}>
+                <option value="">— Board —</option>
+                {boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Class</p>
+              <select value={selectedClassId} onChange={e => setSelectedClassId(e.target.value)} disabled={!selectedBoardId} style={selStyle}>
+                <option value="">— Class —</option>
+                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Subject</p>
+              <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="e.g. Physics"
+                style={{ ...selStyle, padding: '6px 10px' }} />
+            </div>
+            <div>
+              <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Chapter</p>
+              <input value={chapter} onChange={e => setChapter(e.target.value)} placeholder="e.g. Optics"
+                style={{ ...selStyle, padding: '6px 10px' }} />
+            </div>
           </div>
 
-          {subjectId && (
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.20)' }}>
-              <CheckCircle size={12} className="text-violet-400" />
-              <span className="text-violet-300">Subject linked: <span className="font-mono text-violet-200">{subjectId}</span> — {subject}</span>
-              <button onClick={() => { setSubjectId(''); }} className="ml-auto text-white/30 hover:text-white text-[10px]">Unlink</button>
+          {/* Parse button + Syllabus loader toggle */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <button onClick={handleParse} disabled={parsing || !rawText.trim()}
+              className="flex items-center gap-2 disabled:opacity-50 text-white rounded-lg px-5 py-2 text-sm font-medium transition-colors"
+              style={{ background: '#7c3aed' }}>
+              {parsing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {parsing ? 'AI Parsing…' : 'Parse with AI'}
+            </button>
+
+            {(selectedBoardId && selectedClassId) && (
+              <button onClick={() => setSyllabusOpen(v => !v)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border"
+                style={syllabusOpen
+                  ? { background: 'rgba(52,211,153,0.12)', color: '#34d399', borderColor: 'rgba(52,211,153,0.30)' }
+                  : { background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.40)', borderColor: 'rgba(255,255,255,0.10)' }}>
+                <BookOpen size={12} />
+                {hasSyllabusBlock ? 'Syllabus Loaded ✓' : 'Load Subject Syllabus'}
+                {syllabusOpen ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+              </button>
+            )}
+
+            {publishPath && selectedBoardId && (
+              <div className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-[10px] font-mono ml-auto"
+                style={{ background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.35)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <Globe size={10} style={{ color: '#9575e0' }} />
+                {publishPath}
+              </div>
+            )}
+          </div>
+
+          {/* Syllabus context picker */}
+          {syllabusOpen && (
+            <div className="rounded-xl p-4 border space-y-3" style={{ background: 'rgba(52,211,153,0.04)', borderColor: 'rgba(52,211,153,0.15)' }}>
+              <p className="text-xs font-semibold" style={{ color: '#34d399' }}>Load Subject Syllabus as Context Block</p>
+              <div className="flex items-end gap-2 flex-wrap">
+                <div>
+                  <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.30)' }}>Stream</p>
+                  <select value={selectedStreamId} onChange={e => setSelectedStreamId(e.target.value)} style={{ ...selStyle, width: 'auto' }}>
+                    <option value="">— Stream —</option>
+                    {streams.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.30)' }}>Subject</p>
+                  <select value={selectedSylSubjectId} onChange={e => setSelectedSylSubjectId(e.target.value)} disabled={!selectedStreamId} style={{ ...selStyle, width: 'auto' }}>
+                    <option value="">— Subject —</option>
+                    {sylSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+                <button onClick={handleLoadSyllabus} disabled={syllabusLoading}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
+                  style={{ background: '#34d399', color: '#064e3b' }}>
+                  {syllabusLoading ? <Loader2 size={13} className="animate-spin" /> : <BookOpen size={13} />}
+                  Insert Scope
+                </button>
+              </div>
+              <p className="text-[10px]" style={{ color: 'rgba(52,211,153,0.60)' }}>
+                Inserts a syllabus block at position 1. On publish, auto-creates a CMS syllabus stub if subject ID is set.
+              </p>
             </div>
           )}
 
-          {view === 'editor' ? (
+          {subjectId && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs" style={{ background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.20)' }}>
+              <Link2 size={12} style={{ color: '#a78bfa' }} />
+              <span style={{ color: '#c4b0f0' }}>Subject linked: <span className="font-mono">{subjectId}</span> — {subject}</span>
+              <button onClick={() => { setSubjectId(''); }} className="ml-auto text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Unlink</button>
+            </div>
+          )}
+
+          {/* ── EDITOR VIEW ──────────────────────────────────────────── */}
+          {view === 'editor' && (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              <div className="space-y-4">
-                <div>
-                  <label className="text-slate-500 text-xs mb-1 block">Raw Text Input</label>
-                  <textarea value={rawText} onChange={(e) => setRawText(e.target.value)}
-                    placeholder="Paste your raw educational notes, textbook content, or study material here..."
-                    rows={16}
-                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-white placeholder-slate-600 resize-y font-mono" />
-                  <p className="text-xs text-slate-600 mt-1">{rawText.length} characters</p>
-                </div>
+              <div className="space-y-3">
+                <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>Raw Text Input</label>
+                <textarea value={rawText} onChange={e => setRawText(e.target.value)}
+                  placeholder="Paste your raw educational notes, textbook content, or study material here…"
+                  rows={18}
+                  className="w-full rounded-xl px-4 py-3 text-sm resize-y outline-none font-mono"
+                  style={{ color: '#E8E8E8', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.08)' }} />
+                <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.20)' }}>{rawText.length} chars · max 8,000 sent to AI</p>
               </div>
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <label className="text-slate-500 text-xs">Structured Blocks {blocks.length > 0 && `(${blocks.length})`}</label>
+                  <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                    Structured Blocks {blocks.length > 0 && <span style={{ color: '#a78bfa' }}>({blocks.length})</span>}
+                  </label>
                   {blocks.length > 0 && (
-                    <button onClick={() => setBlocks([])} className="text-xs text-slate-500 hover:text-slate-300">Clear all</button>
+                    <button onClick={() => setBlocks([])} className="text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Clear all</button>
                   )}
                 </div>
-                <div className="space-y-3 max-h-[500px] overflow-y-auto pr-1">
+                <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
                   {blocks.map((block, i) => (
                     <BlockCard key={i} block={block} index={i} onEdit={handleEditBlock} onRemove={handleRemoveBlock} />
                   ))}
                   {blocks.length === 0 && (
-                    <div className="bg-slate-800/30 border border-dashed border-slate-700 rounded-xl p-8 text-center">
-                      <Sparkles size={24} className="text-slate-700 mx-auto mb-3" />
-                      <p className="text-slate-600 text-sm">AI-parsed blocks will appear here</p>
-                      <p className="text-slate-700 text-xs mt-1">Paste text and click "Parse with AI"</p>
+                    <div className="rounded-xl p-10 text-center border border-dashed" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+                      <Sparkles size={24} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
+                      <p className="text-sm" style={{ color: 'rgba(255,255,255,0.25)' }}>AI-parsed blocks will appear here</p>
+                      <p className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.15)' }}>Paste text and click "Parse with AI"</p>
                     </div>
                   )}
                 </div>
               </div>
             </div>
-          ) : (
-            <PreviewPane blocks={blocks} title={title} />
           )}
 
-          {blocks.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-              <h3 className="text-slate-300 text-sm font-semibold mb-4">Publish Pipeline</h3>
-              <div className="grid grid-cols-2 gap-3 mb-4">
+          {/* ── PREVIEW VIEW ─────────────────────────────────────────── */}
+          {view === 'preview' && (
+            <div className="space-y-4">
+              {/* Live page iframe */}
+              {slug ? (
+                <div className="rounded-xl overflow-hidden border" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+                  <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ background: '#1a1a1a', borderColor: 'rgba(255,255,255,0.07)' }}>
+                    <Eye size={11} style={{ color: '#9575e0' }} />
+                    <span className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.40)' }}>/learn/{slug}</span>
+                    <a href={`/learn/${slug}`} target="_blank" rel="noreferrer" className="ml-auto">
+                      <ExternalLink size={10} style={{ color: 'rgba(255,255,255,0.25)' }} />
+                    </a>
+                  </div>
+                  <iframe src={`/learn/${slug}`} className="w-full border-0" style={{ height: 340 }} title="Live Preview" />
+                </div>
+              ) : (
+                <div className="rounded-xl p-6 text-center border border-dashed" style={{ borderColor: 'rgba(255,255,255,0.07)' }}>
+                  <p className="text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>Set a URL slug in the Publish Pipeline to see live preview</p>
+                </div>
+              )}
+
+              {/* SEO simulators */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="text-slate-500 text-xs mb-1 block">Page Title</label>
-                  <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Page title"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white" />
+                  <p className="text-xs font-medium mb-2" style={{ color: 'rgba(255,255,255,0.35)' }}>Google SERP Preview</p>
+                  <SerpPreview title={title} slug={slug} metaDescription={metaDescription} />
                 </div>
                 <div>
-                  <label className="text-slate-500 text-xs mb-1 block">URL Slug</label>
-                  <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="url-slug"
-                    className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono" />
+                  <p className="text-xs font-medium mb-2" style={{ color: 'rgba(255,255,255,0.35)' }}>Perplexity AI Citation</p>
+                  <PerplexityPreview title={title} slug={slug} metaDescription={metaDescription} blocks={blocks} />
                 </div>
               </div>
-              <div className="flex items-center gap-3 flex-wrap">
-                <button onClick={handlePublish} disabled={publishing || !slug.trim()}
-                  className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg px-5 py-2.5 text-sm font-medium transition-colors">
-                  {publishing ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                  {publishing ? 'Publishing...' : 'Publish Page'}
+
+              {/* Meta description editor */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>Meta Description <span style={{ color: 'rgba(255,255,255,0.18)' }}>({metaDescription.length}/160)</span></label>
+                  {blocks.length > 0 && (
+                    <button onClick={() => {
+                      const b = blocks.find(b => b.type === 'summary' || b.type === 'note' || b.type === 'definition');
+                      if (b) setMetaDescription(b.content.slice(0, 160));
+                    }} className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border"
+                      style={{ color: '#a78bfa', borderColor: 'rgba(167,139,250,0.25)', background: 'rgba(167,139,250,0.08)' }}>
+                      <Zap size={9} /> Auto-fill from block
+                    </button>
+                  )}
+                </div>
+                <textarea value={metaDescription} onChange={e => setMetaDescription(e.target.value.slice(0, 160))} rows={2}
+                  placeholder="Write a 120–160 char description for Google snippets…"
+                  className="w-full px-4 py-2.5 rounded-xl text-sm outline-none resize-none"
+                  style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }} />
+              </div>
+
+              {/* Block list preview */}
+              {blocks.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium mb-2" style={{ color: 'rgba(255,255,255,0.35)' }}>Content Blocks Preview</p>
+                  <div className="space-y-3">
+                    {blocks.map((block, i) => {
+                      const cfg = BLOCK_ICONS[block.type] || BLOCK_ICONS.note;
+                      return (
+                        <div key={i} className="pb-3 border-b" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="text-[10px] font-bold uppercase" style={{ color: cfg.color }}>{block.type}</span>
+                            <span className="text-sm font-semibold" style={{ color: 'rgba(232,232,232,0.80)' }}>{block.title}</span>
+                          </div>
+                          <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: 'rgba(232,232,232,0.50)' }}>{block.content}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Publish Pipeline ─────────────────────────────────────── */}
+          {blocks.length > 0 && (
+            <div className="rounded-xl p-5 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+              <p className="text-sm font-semibold mb-4" style={{ color: 'rgba(232,232,232,0.70)' }}>Publish Pipeline</p>
+
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-[10px] block mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Page Title</label>
+                  <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Page title"
+                    className="w-full h-9 px-3 rounded-lg text-sm outline-none"
+                    style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', color: '#E8E8E8' }} />
+                </div>
+                <div>
+                  <label className="text-[10px] block mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>URL Slug</label>
+                  <input value={slug} onChange={e => setSlug(e.target.value)} placeholder="url-slug"
+                    className="w-full h-9 px-3 rounded-lg text-sm font-mono outline-none"
+                    style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', color: '#E8E8E8' }} />
+                </div>
+              </div>
+
+              {/* Computed URL display */}
+              {selectedBoardId && slug && (
+                <div className="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg text-[10px] font-mono"
+                  style={{ background: 'rgba(149,117,224,0.07)', border: '1px solid rgba(149,117,224,0.15)', color: 'rgba(196,176,240,0.70)' }}>
+                  <Globe size={10} style={{ color: '#9575e0' }} />
+                  syrabit.ai{publishPath}
+                  {hasSyllabusBlock && <span className="ml-2 px-1.5 py-0.5 rounded text-[9px]" style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399' }}>+ syllabus stub</span>}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button onClick={() => handlePublish(false)} disabled={publishing || !slug.trim()}
+                  className="flex items-center gap-2 disabled:opacity-50 text-white rounded-lg px-5 py-2.5 text-sm font-medium"
+                  style={{ background: '#059669' }}>
+                  {publishing && !isRevision ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                  {publishing && !isRevision ? 'Publishing…' : 'Publish Page'}
                 </button>
-                {subjectId && (
-                  <button onClick={handleMergeToBlog} disabled={merging}
-                    className="flex items-center gap-2 disabled:opacity-50 text-white rounded-lg px-5 py-2.5 text-sm font-medium transition-colors"
-                    style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)' }}>
-                    {merging ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
-                    {merging ? 'Merging…' : 'Merge to Blog'}
+
+                {published && (
+                  <button onClick={() => handlePublish(true)} disabled={publishing}
+                    className="flex items-center gap-2 disabled:opacity-50 text-white rounded-lg px-4 py-2.5 text-sm font-medium"
+                    style={{ background: 'rgba(245,158,11,0.20)', border: '1px solid rgba(245,158,11,0.30)', color: '#fbbf24' }}>
+                    {publishing && isRevision ? <Loader2 size={14} className="animate-spin" /> : <GitBranch size={14} />}
+                    Publish Revision
                   </button>
                 )}
+
+                <button onClick={handleSaveDraft} disabled={draftSaving}
+                  className="flex items-center gap-2 disabled:opacity-50 rounded-lg px-4 py-2.5 text-sm font-medium"
+                  style={{ background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.20)', color: '#fbbf24' }}>
+                  {draftSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                  {draftSaving ? 'Saving…' : draftId ? 'Update Draft' : 'Save Draft'}
+                </button>
+
                 {published && (
-                  <div className="flex items-center gap-2 text-emerald-400 text-sm">
+                  <div className="flex items-center gap-2 text-sm" style={{ color: '#34d399' }}>
                     <CheckCircle size={14} />
-                    Published! URL: <code className="text-xs bg-slate-800 px-2 py-0.5 rounded">{published.url}</code>
+                    Live at <code className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(52,211,153,0.10)', color: '#6ee7b7' }}>{published.url}</code>
+                    <a href={published.url} target="_blank" rel="noreferrer"><ExternalLink size={12} /></a>
                   </div>
                 )}
               </div>
