@@ -5728,12 +5728,20 @@ async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_
 async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_admin_user)):
     chapter_id = str(uuid.uuid4())
     _order = data.order or data.order_index or 1
+    _slug = data.slug.strip() if data.slug else ""
+    if not _slug:
+        _slug = re.sub(r'[^a-z0-9]+', '-', data.title.lower()).strip('-')
+    existing = await db.chapters.find_one({"subject_id": data.subject_id, "slug": _slug})
+    if existing:
+        _slug = f"{_slug}-{chapter_id[:6]}"
     chap = {
         "id": chapter_id,
         "subject_id": data.subject_id,
         "title": data.title,
+        "slug": _slug,
         "description": data.description,
         "content": data.content,
+        "content_type": data.content_type or "notes",
         "chapter_number": data.chapter_number,
         "order": _order,
         "order_index": _order,
@@ -6116,7 +6124,17 @@ async def delete_content_upload(content_id: str, admin: dict = Depends(get_admin
 @api.patch("/admin/content/chapters/{chapter_id}")
 async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depends(get_admin_user)):
     """Update existing chapter - auto-rechunks if content changed"""
-    allowed = {k: v for k, v in data.items() if k in ["title", "description", "content", "order", "status"]}
+    allowed = {k: v for k, v in data.items() if k in ["title", "slug", "description", "content", "content_type", "order", "status", "attached_files"]}
+    if "slug" in allowed:
+        allowed["slug"] = re.sub(r'[^a-z0-9]+', '-', (allowed["slug"] or "").lower()).strip('-')
+    if "title" in allowed and not allowed.get("slug"):
+        allowed["slug"] = re.sub(r'[^a-z0-9]+', '-', allowed["title"].lower()).strip('-')
+    if allowed.get("slug"):
+        chapter = await db.chapters.find_one({"id": chapter_id}, {"subject_id": 1})
+        if chapter:
+            dup = await db.chapters.find_one({"subject_id": chapter["subject_id"], "slug": allowed["slug"], "id": {"$ne": chapter_id}})
+            if dup:
+                allowed["slug"] = f"{allowed['slug']}-{chapter_id[:6]}"
     allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
     
     # Check if content is being updated
@@ -6158,6 +6176,98 @@ async def admin_rechunk_chapter(chapter_id: str, admin: dict = Depends(get_admin
     except Exception as e:
         logger.error(f"Re-chunking failed for chapter {chapter_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Re-chunking failed: {str(e)}")
+
+
+@api.get("/admin/content/chapters/{chapter_id}/stats")
+async def get_chapter_stats(chapter_id: str, admin: dict = Depends(get_admin_user)):
+    """Get chunk and content stats for a single chapter."""
+    chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    chunk_count = await db.chunks.count_documents({"chapter_id": chapter_id})
+    content_len = len(chapter.get("content", "") or "")
+    return {
+        "chapter_id": chapter_id,
+        "content_length": content_len,
+        "chunk_count": chunk_count,
+        "has_slug": bool(chapter.get("slug")),
+        "content_type": chapter.get("content_type", "notes"),
+        "attached_files": chapter.get("attached_files", []),
+    }
+
+
+@api.post("/admin/content/chapters/{chapter_id}/attach-file")
+async def attach_file_to_chapter(
+    chapter_id: str,
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user)
+):
+    """Upload and attach a file (PDF/text) to a chapter."""
+    chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0, "id": 1, "subject_id": 1, "attached_files": 1})
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    file_content = await file.read()
+    max_file_size = 10 * 1024 * 1024
+    if len(file_content) > max_file_size:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+    file_ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else 'txt'
+    if file_ext not in ('pdf', 'txt', 'md'):
+        raise HTTPException(status_code=400, detail="Only PDF, TXT, and MD files are supported")
+    file_id = str(uuid.uuid4())
+
+    extracted_text = ""
+    pdf_url = ""
+
+    if file_ext == 'pdf' and supa:
+        import time as _t
+        storage_path = f"pdfs/{chapter['subject_id']}/{_t.time():.0f}_{file.filename.replace(' ', '_')}"
+        try:
+            supa.storage.from_("study-materials").upload(path=storage_path, file=file_content, file_options={"content-type": "application/pdf", "upsert": "false"})
+            pdf_url = supa.storage.from_("study-materials").get_public_url(storage_path)
+        except Exception as e:
+            logger.warning(f"Supabase upload failed, storing base64: {e}")
+            import base64
+            pdf_url = f"data:application/pdf;base64,{base64.b64encode(file_content).decode()}"
+        try:
+            from PyPDF2 import PdfReader
+            import io
+            reader = PdfReader(io.BytesIO(file_content))
+            extracted_text = "\n".join(p.extract_text() or "" for p in reader.pages).strip()
+        except Exception:
+            pass
+    elif file_ext in ('txt', 'md'):
+        extracted_text = file_content.decode('utf-8', errors='ignore')
+
+    attachment = {
+        "id": file_id,
+        "file_name": file.filename,
+        "file_ext": file_ext,
+        "file_size": len(file_content),
+        "url": pdf_url,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    existing_files = chapter.get("attached_files", []) or []
+    existing_files.append(attachment)
+    update_fields = {"attached_files": existing_files}
+
+    if extracted_text and len(extracted_text) > 50:
+        old_content = (await db.chapters.find_one({"id": chapter_id}, {"content": 1})).get("content", "") or ""
+        separator = "\n\n---\n\n"
+        update_fields["content"] = old_content + separator + f"## {file.filename}\n\n{extracted_text}" if old_content else extracted_text
+        update_fields["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
+
+    if extracted_text and len(extracted_text) > 100:
+        try:
+            await rechunk_chapter(chapter_id)
+        except Exception:
+            pass
+
+    _invalidate_content_cache("chapters")
+    return {"attachment": attachment, "text_extracted": len(extracted_text)}
 
 
 @api.post("/admin/content/bulk-rechunk")

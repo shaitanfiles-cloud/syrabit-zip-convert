@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Search, Plus, Save, Trash2, X, BookOpen, Loader2,
   FolderPlus, FilePlus, Edit2, FileText, Book,
-  CheckCircle, Layers, Eye,
+  CheckCircle, Layers, Eye, Upload, Paperclip, Link2, BarChart3, Sparkles, RefreshCw,
   ChevronRight, ChevronDown, GraduationCap, Building2, GitBranch, ArrowLeft,
   Scroll, Bold, Italic, List, ListOrdered, Heading1, Heading2, Heading3, Minus
 } from 'lucide-react';
@@ -133,11 +133,79 @@ export default function AdminContentEditor({ adminToken }) {
   const [viewerItem, setViewerItem] = useState(null);
 
   const [editView, setEditView] = useState(null);
-  const [contentForm, setContentForm] = useState({ title: '', description: '', content: '', order: 1 });
+  const [contentForm, setContentForm] = useState({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1 });
   const [editTarget, setEditTarget] = useState(null);
   const [saving, setSaving] = useState(false);
   const [contentMode, setContentMode] = useState('preview');
+  const [chapterStats, setChapterStats] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [aiParsing, setAiParsing] = useState(false);
+  const fileInputRef = useRef(null);
   const contentTextareaRef = useRef(null);
+
+  const CONTENT_TYPES = [
+    { value: 'notes', label: 'Notes', color: 'violet' },
+    { value: 'pyq', label: 'PYQ', color: 'amber' },
+    { value: 'formula', label: 'Formula Sheet', color: 'pink' },
+    { value: 'summary', label: 'Summary', color: 'emerald' },
+    { value: 'solution', label: 'Solution', color: 'blue' },
+    { value: 'reference', label: 'Reference', color: 'slate' },
+  ];
+
+  const autoSlug = (title) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+  const loadChapterStats = useCallback(async (chapterId) => {
+    try {
+      const res = await axios.get(`${API}/admin/content/chapters/${chapterId}/stats`, authHeaders(adminToken));
+      setChapterStats(res.data);
+    } catch { setChapterStats(null); }
+  }, [adminToken]);
+
+  const handleFileAttach = useCallback(async (chapterId) => {
+    const file = fileInputRef.current?.files?.[0];
+    if (!file || !chapterId) return;
+    const MAX_SIZE = 10 * 1024 * 1024;
+    if (file.size > MAX_SIZE) { toast.error('File too large (max 10 MB)'); return; }
+    const allowed = ['pdf', 'txt', 'md'];
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (!allowed.includes(ext)) { toast.error(`Only ${allowed.join(', ')} files allowed`); return; }
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await axios.post(`${API}/admin/content/chapters/${chapterId}/attach-file`, formData, { ...authHeaders(adminToken), headers: { ...authHeaders(adminToken).headers, 'Content-Type': 'multipart/form-data' } });
+      toast.success(`File attached (${res.data.text_extracted} chars extracted)`);
+      refreshChapters(selSubject);
+      if (chapterId) loadChapterStats(chapterId);
+      const freshChapter = await axios.get(`${API}/admin/content/chapters/${selSubject}`, authHeaders(adminToken));
+      const updated = (freshChapter.data || []).find(c => c.id === chapterId);
+      if (updated) setContentForm(f => ({ ...f, content: updated.content || f.content }));
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'File upload failed');
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, [adminToken, selSubject, loadChapterStats]);
+
+  const handleAiParse = useCallback(async () => {
+    if (!contentForm.content.trim()) return toast.error('Add content first');
+    setAiParsing(true);
+    try {
+      const res = await axios.post(`${API}/admin/studio/parse`, {
+        raw_text: contentForm.content,
+        subject: subjects.find(s => s.id === selSubject)?.name || '',
+        chapter: contentForm.title || '',
+      }, authHeaders(adminToken));
+      const blocks = res.data.blocks || [];
+      if (blocks.length === 0) return toast.error('AI could not parse content');
+      const formatted = blocks.map(b => `## ${b.title}\n\n${b.content}`).join('\n\n---\n\n');
+      setContentForm(f => ({ ...f, content: formatted }));
+      toast.success(`AI structured ${blocks.length} blocks`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'AI parsing failed');
+    } finally { setAiParsing(false); }
+  }, [contentForm.content, contentForm.title, selSubject, subjects]);
 
   const formatText = useCallback((type) => {
     const ta = contentTextareaRef.current;
@@ -269,10 +337,12 @@ export default function AdminContentEditor({ adminToken }) {
     if (!selSubject || !contentForm.title) return;
     setSaving(true);
     try {
-      await axios.post(`${API}/admin/content/chapters`, { subject_id: selSubject, title: contentForm.title, description: contentForm.description, content: contentForm.content, order: contentForm.order, status: 'published' }, authHeaders(adminToken));
+      const slug = contentForm.slug || autoSlug(contentForm.title);
+      await axios.post(`${API}/admin/content/chapters`, { subject_id: selSubject, title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, status: 'published' }, authHeaders(adminToken));
       toast.success('Chapter created');
       setEditView(null);
-      setContentForm({ title: '', description: '', content: '', order: 1 });
+      setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1 });
+      setChapterStats(null);
       refreshChapters(selSubject);
     } catch { toast.error('Failed to create chapter'); }
     finally { setSaving(false); }
@@ -282,10 +352,12 @@ export default function AdminContentEditor({ adminToken }) {
     if (!editTarget || !contentForm.title) return;
     setSaving(true);
     try {
-      await axios.patch(`${API}/admin/content/chapters/${editTarget.id}`, { title: contentForm.title, description: contentForm.description, content: contentForm.content, order: contentForm.order }, authHeaders(adminToken));
+      const slug = contentForm.slug || autoSlug(contentForm.title);
+      await axios.patch(`${API}/admin/content/chapters/${editTarget.id}`, { title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order }, authHeaders(adminToken));
       toast.success('Chapter updated');
       setEditView(null); setEditTarget(null);
-      setContentForm({ title: '', description: '', content: '', order: 1 });
+      setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1 });
+      setChapterStats(null);
       refreshChapters(selSubject);
     } catch { toast.error('Failed to update'); }
     finally { setSaving(false); }
@@ -383,19 +455,61 @@ export default function AdminContentEditor({ adminToken }) {
           ) : editView === 'new-chapter' || editView === 'edit-chapter' ? (
             <div className="flex-1 flex flex-col overflow-hidden">
               <div className="px-8 pt-7 pb-4 flex-shrink-0">
-                <button onClick={() => { setEditView(null); setEditTarget(null); }} className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white mb-5"><ArrowLeft size={16} /> Back</button>
+                <button onClick={() => { setEditView(null); setEditTarget(null); setChapterStats(null); }} className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white mb-5"><ArrowLeft size={16} /> Back</button>
                 <h3 className="text-2xl font-bold text-white mb-0.5">{editView === 'edit-chapter' ? 'Edit Chapter' : 'Create Chapter'}</h3>
                 <p className="text-white/50 text-sm">for {subjectData?.name}</p>
               </div>
               <div className="flex-1 flex flex-col min-h-0 px-8 pb-8 gap-4">
-                <div className="flex-shrink-0">
-                  <label className="text-sm text-white/60 block mb-1.5">Title *</label>
-                  <input value={contentForm.title} onChange={(e) => setContentForm({ ...contentForm, title: e.target.value })} placeholder="Chapter title" className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+                <div className="flex-shrink-0 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-sm text-white/60 block mb-1.5">Title *</label>
+                    <input value={contentForm.title} onChange={(e) => { const title = e.target.value; setContentForm(f => ({ ...f, title, slug: f.slug === autoSlug(f.title) || !f.slug ? autoSlug(title) : f.slug })); }} placeholder="Chapter title" className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+                  </div>
+                  <div>
+                    <label className="text-sm text-white/60 block mb-1.5">URL Slug</label>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center flex-1 h-11 rounded-xl bg-white/5 border border-white/10 overflow-hidden">
+                        <span className="px-3 text-xs text-white/30 flex-shrink-0"><Link2 size={12} /></span>
+                        <input value={contentForm.slug} onChange={(e) => setContentForm({ ...contentForm, slug: e.target.value })} placeholder="auto-generated-slug" className="flex-1 h-full text-sm text-white bg-transparent outline-none font-mono pr-3" />
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex-shrink-0">
-                  <label className="text-sm text-white/60 block mb-1.5">Description</label>
-                  <textarea value={contentForm.description} onChange={(e) => setContentForm({ ...contentForm, description: e.target.value })} rows={2} placeholder="Brief description..." className="w-full px-4 py-3 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 resize-none" />
+                <div className="flex-shrink-0 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-sm text-white/60 block mb-1.5">Content Type</label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {CONTENT_TYPES.map(ct => (
+                        <button
+                          key={ct.value}
+                          onClick={() => setContentForm(f => ({ ...f, content_type: ct.value }))}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${contentForm.content_type === ct.value ? 'border-violet-500 bg-violet-500/20 text-violet-300' : 'border-white/10 bg-white/5 text-white/50 hover:text-white hover:border-white/20'}`}
+                        >
+                          {ct.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-sm text-white/60 block mb-1.5">Description</label>
+                    <input value={contentForm.description} onChange={(e) => setContentForm({ ...contentForm, description: e.target.value })} placeholder="Brief description..." className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+                  </div>
                 </div>
+
+                {chapterStats && (
+                  <div className="flex-shrink-0 flex items-center gap-4 px-4 py-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs">
+                    <div className="flex items-center gap-1.5 text-white/60">
+                      <BarChart3 size={12} className="text-violet-400" />
+                      <span>{chapterStats.chunk_count} chunks</span>
+                    </div>
+                    <div className="text-white/40">{chapterStats.content_length.toLocaleString()} chars</div>
+                    <div className={`${chapterStats.has_slug ? 'text-emerald-400' : 'text-amber-400'}`}>{chapterStats.has_slug ? 'Slug OK' : 'No slug'}</div>
+                    {(chapterStats.attached_files || []).length > 0 && (
+                      <div className="flex items-center gap-1 text-blue-400"><Paperclip size={11} />{chapterStats.attached_files.length} files</div>
+                    )}
+                    <button onClick={() => loadChapterStats(editTarget?.id)} className="ml-auto text-white/30 hover:text-white p-1"><RefreshCw size={11} /></button>
+                  </div>
+                )}
                 <div className="flex-1 flex flex-col min-h-0">
                   {/* Header row: label + char count + Write/Preview toggle */}
                   <div className="flex items-center justify-between mb-1.5 flex-shrink-0">
@@ -445,6 +559,31 @@ export default function AdminContentEditor({ adminToken }) {
                       <div className="w-px h-5 bg-white/10 mx-1" />
                       <button onMouseDown={(e) => { e.preventDefault(); formatText('hr'); }} title="Divider"
                         className="p-1.5 rounded text-white/60 hover:text-white hover:bg-white/10 transition-colors"><Minus size={13} /></button>
+                      <div className="w-px h-5 bg-white/10 mx-1" />
+                      <button
+                        onClick={handleAiParse}
+                        disabled={aiParsing || !contentForm.content.trim()}
+                        title="AI Structure Content"
+                        className="flex items-center gap-1 px-2 py-1 rounded text-violet-400 hover:text-violet-300 hover:bg-violet-500/10 transition-colors text-xs font-medium disabled:opacity-40"
+                      >
+                        {aiParsing ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        AI Parse
+                      </button>
+                      {editView === 'edit-chapter' && editTarget?.id && (
+                        <>
+                          <div className="w-px h-5 bg-white/10 mx-1" />
+                          <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" className="hidden" onChange={() => handleFileAttach(editTarget.id)} />
+                          <button
+                            onClick={() => fileInputRef.current?.click()}
+                            disabled={uploading}
+                            title="Attach file (PDF, TXT, MD)"
+                            className="flex items-center gap-1 px-2 py-1 rounded text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors text-xs font-medium disabled:opacity-40"
+                          >
+                            {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                            Attach
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -593,12 +732,12 @@ export default function AdminContentEditor({ adminToken }) {
 
                     {/* Create Chapter CTA */}
                     <button
-                      onClick={() => { setEditView('new-chapter'); setContentForm({ title: '', description: '', content: '', order: chapters.length + 1 }); }}
+                      onClick={() => { setEditView('new-chapter'); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: chapters.length + 1 }); setChapterStats(null); }}
                       className="w-full p-5 rounded-xl border border-dashed border-violet-500/30 hover:border-violet-500/60 bg-violet-500/5 hover:bg-violet-500/10 text-center transition-colors"
                     >
                       <BookOpen size={28} className="mx-auto text-violet-400 mb-2" />
                       <p className="text-sm font-bold text-white">Create New Chapter</p>
-                      <p className="text-[11px] text-white/40 mt-1">Add chapter content with Markdown</p>
+                      <p className="text-[11px] text-white/40 mt-1">Add chapter content with Markdown — slug auto-generated</p>
                     </button>
 
                     {/* Chapters list */}
@@ -610,13 +749,21 @@ export default function AdminContentEditor({ adminToken }) {
                           <div className="flex items-center gap-2 min-w-0">
                             <Book size={14} className="text-violet-400 flex-shrink-0" />
                             <div className="min-w-0">
-                              <p className="text-sm font-medium text-white truncate">{ch.title}</p>
-                              {ch.description && <p className="text-xs text-white/40 truncate">{ch.description}</p>}
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium text-white truncate">{ch.title}</p>
+                                {ch.content_type && ch.content_type !== 'notes' && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-white/50 uppercase">{ch.content_type}</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-2 mt-0.5">
+                                {ch.slug && <span className="text-[10px] text-white/25 font-mono truncate max-w-[180px]">/{ch.slug}</span>}
+                                {ch.description && <span className="text-xs text-white/40 truncate">{ch.description}</span>}
+                              </div>
                             </div>
                           </div>
                           <div className="flex gap-0.5 flex-shrink-0">
                             <button onClick={() => setViewerItem(ch)} className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-white/30 hover:text-emerald-400" title="Preview" data-testid={`open-chapter-${ch.id}`}><Eye size={14} /></button>
-                            <button onClick={() => { setEditTarget(ch); setContentForm({ title: ch.title, description: ch.description || '', content: ch.content || '', order: ch.order || 1 }); setEditView('edit-chapter'); }}
+                            <button onClick={() => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1 }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
                               className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400"><Edit2 size={14} /></button>
                             <button onClick={() => handleDeleteChapter(ch.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400"><Trash2 size={14} /></button>
                           </div>
