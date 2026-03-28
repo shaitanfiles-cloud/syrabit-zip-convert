@@ -258,7 +258,7 @@ export default function ProfilePage() {
         return;
       }
 
-      // 3. Open Razorpay checkout — UPI only (UPI ID + QR scanner)
+      // 3. Open Razorpay checkout — all payment methods
       const options = {
         key:          orderData.key_id,
         amount:       orderData.amount,
@@ -274,18 +274,6 @@ export default function ProfilePage() {
         theme: { color: '#7c3aed' },
         modal: {
           ondismiss: () => setPaymentLoading(false),
-        },
-        config: {
-          display: {
-            blocks: {
-              upi: {
-                name: 'Pay via UPI',
-                instruments: [{ method: 'upi' }],
-              },
-            },
-            sequence: ['block.upi'],
-            preferences: { show_default_blocks: false },
-          },
         },
         handler: async (response) => {
           // 4. Verify payment on backend
@@ -368,13 +356,6 @@ export default function ProfilePage() {
         },
         theme: { color: '#7c3aed' },
         modal: { ondismiss: () => setTopUpLoading(false) },
-        config: {
-          display: {
-            blocks: { upi: { name: 'Pay via UPI', instruments: [{ method: 'upi' }] } },
-            sequence: ['block.upi'],
-            preferences: { show_default_blocks: false },
-          },
-        },
         handler: async (response) => {
           try {
             await verifyCreditTopUp({

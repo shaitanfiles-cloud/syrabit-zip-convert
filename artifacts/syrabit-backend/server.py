@@ -7635,7 +7635,7 @@ async def admin_update_plan_config(data: dict, admin: dict = Depends(get_admin_u
 # ─────────────────────────────────────────────
 DEFAULT_API_CONFIG = {
     "groq":        {"key": ""},
-    "payment":     {"razorpay_key_id": "", "razorpay_key_secret": ""},
+    "payment":     {"razorpay_key_id": "", "razorpay_key_secret": "", "razorpay_webhook_secret": ""},
     "email":       {"resend_key": ""},
     "push":        {"onesignal_key": ""},
     "analytics":   {"posthog_key": ""},
@@ -7666,19 +7666,16 @@ async def admin_update_api_config(data: dict, admin: dict = Depends(get_admin_us
 # ─────────────────────────────────────────────
 # RAZORPAY PAYMENT INTEGRATION
 # ─────────────────────────────────────────────
-async def _get_razorpay_keys() -> tuple[str, str]:
-    """Read Razorpay keys from admin api-config stored in MongoDB."""
+async def _get_razorpay_keys() -> tuple[str, str, str]:
+    """Read Razorpay keys from admin api-config stored in MongoDB.
+    Returns (key_id, key_secret, webhook_secret).
+    Each value is resolved independently: admin config first, then env var fallback."""
     cfg = await db.api_config.find_one({}, {"_id": 0})
-    if cfg:
-        payment = cfg.get("payment", {})
-        key_id = payment.get("razorpay_key_id", "").strip()
-        key_secret = payment.get("razorpay_key_secret", "").strip()
-        if key_id and key_secret:
-            return key_id, key_secret
-    # Fall back to environment variables
-    key_id = os.environ.get("RAZORPAY_KEY_ID", "").strip()
-    key_secret = os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
-    return key_id, key_secret
+    payment = cfg.get("payment", {}) if cfg else {}
+    key_id = payment.get("razorpay_key_id", "").strip() or os.environ.get("RAZORPAY_KEY_ID", "").strip()
+    key_secret = payment.get("razorpay_key_secret", "").strip() or os.environ.get("RAZORPAY_KEY_SECRET", "").strip()
+    webhook_secret = payment.get("razorpay_webhook_secret", "").strip() or os.environ.get("RAZORPAY_WEBHOOK_SECRET", "").strip()
+    return key_id, key_secret, webhook_secret
 
 PLAN_PRICES_INR = {"starter": 9900, "pro": 99900}  # amount in paise (₹99 = 9900 paise)
 PLAN_CREDITS    = {"starter": 300, "pro": 4000}
@@ -7706,7 +7703,7 @@ async def create_payment_order(body: PaymentOrderRequest, user: dict = Depends(g
     if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(user_plan, 0):
         raise HTTPException(400, f"You are already on the {user_plan.capitalize()} plan or higher. You cannot purchase a lower-tier plan.")
 
-    key_id, key_secret = await _get_razorpay_keys()
+    key_id, key_secret, _ = await _get_razorpay_keys()
     if not key_id or not key_secret:
         raise HTTPException(503, "Payment gateway not configured. Please contact admin@syrabit.ai.")
 
@@ -7746,7 +7743,7 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
     if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(user_plan, 0):
         raise HTTPException(400, f"Cannot activate a lower-tier plan. You are already on {user_plan.capitalize()}.")
 
-    key_id, key_secret = await _get_razorpay_keys()
+    key_id, key_secret, _ = await _get_razorpay_keys()
     if not key_id or not key_secret:
         raise HTTPException(503, "Payment gateway not configured.")
 
@@ -7959,16 +7956,17 @@ async def stripe_webhook(request: StarletteRequest2):
 
 @api.post("/webhooks/razorpay")
 async def razorpay_webhook(request: StarletteRequest2):
-    _, key_secret = await _get_razorpay_keys()
-    if not key_secret:
-        raise HTTPException(503, "Razorpay not configured")
+    _, _, webhook_secret = await _get_razorpay_keys()
+    if not webhook_secret:
+        logger.error("RAZORPAY_WEBHOOK_SECRET not set — rejecting webhook")
+        raise HTTPException(503, "Razorpay webhook secret not configured")
     try:
         raw_body = await request.body()
         rp_signature = request.headers.get("x-razorpay-signature", "")
         if not rp_signature:
             raise HTTPException(400, "Missing x-razorpay-signature header")
         expected_sig = hmac.new(
-            key_secret.encode(), raw_body, hashlib.sha256
+            webhook_secret.encode(), raw_body, hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(expected_sig, rp_signature):
             logger.warning("Razorpay webhook signature mismatch")
@@ -8064,7 +8062,7 @@ async def credit_topup(body: CreditTopUpRequest, user: dict = Depends(get_curren
     user_id = user["id"]
     amount = TOPUP_PRICES_INR[body.credits]
     if body.provider == "razorpay":
-        key_id, key_secret = await _get_razorpay_keys()
+        key_id, key_secret, _ = await _get_razorpay_keys()
         if not key_id or not key_secret:
             raise HTTPException(503, "Razorpay not configured.")
         try:
@@ -8099,7 +8097,7 @@ class CreditTopUpVerifyRequest(BaseModel):
 async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depends(get_current_user)):
     if body.credits not in TOPUP_PRICES_INR:
         raise HTTPException(400, "Invalid top-up amount.")
-    key_id, key_secret = await _get_razorpay_keys()
+    key_id, key_secret, _ = await _get_razorpay_keys()
     if not key_id or not key_secret:
         raise HTTPException(503, "Payment gateway not configured.")
     expected = hmac.new(
@@ -8155,6 +8153,11 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
         {"$set": {"updated_at": now_iso},
          "$inc": {"credits_limit": body.credits}},
     )
+    # Mirror updated credits_limit to Supabase
+    new_limit = (user.get("credits_limit") or 0) + body.credits
+    _supa_mirror(lambda: supa.table("users").update({
+        "credits_limit": new_limit, "updated_at": now_iso,
+    }).eq("id", str(user_id)).execute())
     _redis_invalidate_session(user_id)
     logger.info(f"Credit top-up verified: user={user_id} credits+={body.credits}")
     return {

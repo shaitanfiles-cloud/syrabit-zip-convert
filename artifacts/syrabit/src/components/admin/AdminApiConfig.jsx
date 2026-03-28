@@ -46,7 +46,7 @@ function SecretInput({ value, onChange, placeholder }) {
 
 export default function AdminApiConfig({ adminToken }) {
   const [active, setActive] = useState('groq');
-  const [creds, setCreds] = useState({ groqKey: '', supabaseUrl: '', supabaseServiceKey: '', supabaseAnonKey: '', razorpayKeyId: '', razorpayKeySecret: '', resendKey: '', oneSignalKey: '', posthogKey: '', googleClientId: '', googleClientSecret: '' });
+  const [creds, setCreds] = useState({ groqKey: '', supabaseUrl: '', supabaseServiceKey: '', supabaseAnonKey: '', razorpayKeyId: '', razorpayKeySecret: '', razorpayWebhookSecret: '', resendKey: '', oneSignalKey: '', posthogKey: '', googleClientId: '', googleClientSecret: '' });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -63,6 +63,7 @@ export default function AdminApiConfig({ adminToken }) {
           supabaseAnonKey: cfg.supabase?.anon_key || '',
           razorpayKeyId: cfg.payment?.razorpay_key_id || '',
           razorpayKeySecret: cfg.payment?.razorpay_key_secret || '',
+          razorpayWebhookSecret: cfg.payment?.razorpay_webhook_secret || '',
           resendKey: cfg.email?.resend_key || '',
           oneSignalKey: cfg.push?.onesignal_key || '',
           posthogKey: cfg.analytics?.posthog_key || '',
@@ -80,7 +81,7 @@ export default function AdminApiConfig({ adminToken }) {
   const buildPayload = () => ({
     groq: { key: creds.groqKey },
     supabase: { url: creds.supabaseUrl, service_key: creds.supabaseServiceKey, anon_key: creds.supabaseAnonKey },
-    payment: { razorpay_key_id: creds.razorpayKeyId, razorpay_key_secret: creds.razorpayKeySecret },
+    payment: { razorpay_key_id: creds.razorpayKeyId, razorpay_key_secret: creds.razorpayKeySecret, razorpay_webhook_secret: creds.razorpayWebhookSecret },
     email: { resend_key: creds.resendKey },
     push: { onesignal_key: creds.oneSignalKey },
     analytics: { posthog_key: creds.posthogKey },
@@ -204,6 +205,9 @@ export default function AdminApiConfig({ adminToken }) {
               </div>
               <div><label className="text-xs text-white/40 block mb-1">Razorpay Key Secret</label>
                 <SecretInput value={creds.razorpayKeySecret} onChange={(e) => setCreds((c) => ({...c, razorpayKeySecret: e.target.value}))} placeholder="secret..." />
+              </div>
+              <div><label className="text-xs text-white/40 block mb-1">Razorpay Webhook Secret</label>
+                <SecretInput value={creds.razorpayWebhookSecret} onChange={(e) => setCreds((c) => ({...c, razorpayWebhookSecret: e.target.value}))} placeholder="webhook_secret..." />
               </div>
             </div>
           )}
