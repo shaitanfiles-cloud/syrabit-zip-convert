@@ -2050,7 +2050,7 @@ async def vector_rag_search(
                 sim = vertex_services.cosine_similarity(query_vec, vec)
                 slug = p.get("topic_slug", "")
                 title = p.get("topic_title") or p.get("chapter_title") or slug
-                content_snippet = _extract_relevant_sections(p.get("content", ""), [], max_chars=800)
+                content_snippet = _extract_relevant_sections(p.get("content", ""), [], max_chars=1500)
                 scored.append({
                     "slug":    slug,
                     "title":   title,
@@ -2062,7 +2062,7 @@ async def vector_rag_search(
             vec = ch.get("embedding")
             if vec:
                 sim = vertex_services.cosine_similarity(query_vec, vec)
-                content_snippet = _extract_relevant_sections(ch.get("content", ""), [], max_chars=800)
+                content_snippet = _extract_relevant_sections(ch.get("content", ""), [], max_chars=1500)
                 scored.append({
                     "slug":    f"chapter/{ch.get('id', '')}",
                     "title":   ch.get("title", ""),
@@ -2445,12 +2445,36 @@ async def resolve_rag_context(
     return {"chunks": [], "chapters": [], "subjects": [], "vector_hits": [], "source": "none", "quality": "none"}
 
 
+async def web_search_fallback(query: str, num_results: int = 5) -> list:
+    """
+    Perform a DuckDuckGo web search and return top result snippets.
+    Returns a list of dicts with keys: title, url, snippet.
+    Falls back gracefully to an empty list on any error.
+    """
+    try:
+        from duckduckgo_search import DDGS
+        results = []
+        with DDGS() as ddgs:
+            for r in ddgs.text(query, max_results=num_results):
+                results.append({
+                    "title":   r.get("title", ""),
+                    "url":     r.get("href", ""),
+                    "snippet": r.get("body", ""),
+                })
+        logger.info(f"Web search fallback: {len(results)} results for query: {query[:60]}")
+        return results
+    except Exception as exc:
+        logger.warning(f"Web search fallback failed: {exc}")
+        return []
+
+
 def build_rag_system_prompt(
     context: dict,
     rag_context: dict,
     user_info: dict = None,
     query: str = "",
     syllabus: dict = None,
+    web_results: list = None,
 ) -> str:
     """
     Selects the adaptive prompt mode (casual / concise / structured) based on
@@ -2461,6 +2485,7 @@ def build_rag_system_prompt(
       Tier 0 — document (uploaded .txt file — absolute priority)
       Tier 1 — DB content chunks
       Tier 2 — Subject metadata (descriptions, tags, chapter titles)
+      Tier 3 — Web search results (fallback when library has no content)
     """
     base_prompt = build_system_prompt(context, user_info=user_info, query=query)
     source      = rag_context.get("source",  "none")
@@ -2543,15 +2568,16 @@ def build_rag_system_prompt(
                 grounding += f"**[CONTENT CARD — Full page content]:**\n{content_card}\n\n"
             for i, c in enumerate(chunks, 1):
                 title = c.get("content_type", "content").capitalize()
-                grounding += f"**[BLOCK {i} — {title}]:**\n{c.get('content', '')[:800]}\n\n"
+                grounding += f"**[BLOCK {i} — {title}]:**\n{c.get('content', '')[:1500]}\n\n"
             grounding += (
                 "---\n"
                 "**ACCURACY LOCK:**\n"
                 "1. Answer ONLY from the grounding above. Structure: Explanation → Key Points → Examples → Sources\n"
                 "2. End every answer with: 'Sources: [PAGE: slug1], [PAGE: slug2]' citing which pages you used.\n"
-                "3. If the answer is NOT in the grounding, say exactly: "
-                "'Not found in Syrabit library. Based on standard curriculum:' then answer.\n"
-                "4. NEVER hallucinate. NEVER invent facts not present in the grounding.\n"
+                "3. If the answer is NOT in the grounding: check for Tier 3 web search results below — "
+                "use those and label 'From web search:'. If those are absent, answer from standard curriculum "
+                "knowledge and note 'Based on standard curriculum knowledge:'. Never stop without an answer.\n"
+                "4. NEVER hallucinate. NEVER invent facts not present in the grounding or web results.\n"
                 "5. Temperature is 0.05 — be deterministic and precise.*"
             )
 
@@ -2597,6 +2623,28 @@ def build_rag_system_prompt(
                 "If you are unsure about any specific fact, state it clearly rather than guessing. "
                 "Do not add examples or exam tips unless the student explicitly asks.*"
             )
+
+    # ── Tier 3: Web search fallback ─────────────────────────────────────────
+    if web_results:
+        web_block = (
+            "\n\n---\n"
+            "**WEB SEARCH RESULTS (Tier 3 — Fallback when library has no content):**\n"
+            "The Syrabit library does not have content for this topic yet. "
+            "The following results are from a live web search. "
+            "Use them to provide a helpful answer and label your response clearly with 'From web search:'.\n\n"
+        )
+        for i, r in enumerate(web_results, 1):
+            title   = r.get("title", "")
+            url     = r.get("url", "")
+            snippet = r.get("snippet", "")
+            web_block += f"[Result {i}] {title}\n{snippet}\nSource: {url}\n\n"
+        web_block += (
+            "---\n"
+            "*INSTRUCTION: Synthesise the web search results above into a clear, student-friendly answer. "
+            "Start your answer with 'From web search:' so the student knows the source. "
+            "Do not fabricate facts — use only what is in the results above.*\n"
+        )
+        grounding += web_block
 
     return base_prompt + grounding if grounding else base_prompt
 
@@ -5132,6 +5180,11 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         document_text=document_text,
     )
 
+    # ── Web search fallback when library has no content ───────────────────────
+    web_results = []
+    if rag_ctx.get("quality") == "none" and _classify_question(msg.message) != "casual":
+        web_results = await web_search_fallback(msg.message)
+
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
         {
@@ -5151,6 +5204,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         },
         query=msg.message,
         syllabus=syllabus,
+        web_results=web_results or None,
     )
 
     conv_id = msg.conversation_id
@@ -5361,6 +5415,11 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         _fetch_history(),
     )
 
+    # ── Web search fallback when library has no content ───────────────────────
+    web_results = []
+    if rag_ctx.get("quality") == "none" and _classify_question(msg.message) != "casual":
+        web_results = await web_search_fallback(msg.message)
+
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
         {
@@ -5380,6 +5439,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         },
         query=msg.message,
         syllabus=syllabus,
+        web_results=web_results or None,
     )
 
     conv_id = msg.conversation_id
@@ -5413,6 +5473,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     rag_quality_saved = rag_ctx.get("quality", "none")
     rag_chunks_count = len(rag_ctx.get("chunks",   []))
     rag_subjects_count = len(rag_ctx.get("subjects", []))
+    web_search_used  = bool(web_results)
     # Resolve the primary subject this answer came from (for frontend badge link)
     _rag_subjs = rag_ctx.get("subjects", [])
     rag_subject_id   = (_rag_subjs[0].get("id")   if _rag_subjs else None) or msg.subject_id   or None
@@ -5424,8 +5485,8 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         # Run library search immediately (before LLM, non-blocking)
         lib_sources_task = asyncio.create_task(syrabit_library_search(msg.message))
 
-        # Send RAG metadata with full quality info + subject link data
-        yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name})}\n\n"
+        # Send RAG metadata with full quality info + subject link data + web search flag
+        yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'web_search_used': web_search_used})}\n\n"
 
         # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
         cache_key = _cache_key(msg.message)
@@ -5485,6 +5546,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             "rag_chunks": rag_chunks_count,
             "words": len(answer.split()) if answer else 0,
             "sources": lib_sources,
+            "web_search_used": web_search_used,
         }
         yield f"data: {json.dumps(done_payload)}\n\n"
         yield "data: [DONE]\n\n"

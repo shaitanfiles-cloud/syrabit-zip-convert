@@ -41,15 +41,37 @@ _STRUCTURED_TRIGGERS = {
 }
 
 
+_ACADEMIC_SHORT_RE = re.compile(
+    r'^(?:'
+    r'[A-Z]{2,6}'       # true all-caps abbreviations: DNA, ATP, RNA, RBC
+    r'|[A-Z][a-z]?\d+[\w]*'  # chemical formulas starting with capital: H2O, Fe2O3, CO2
+    r'|\d+[\w]+'        # numbers with units/tags: 5G, 3D
+    r'|pH'              # explicit known exception: pH (mixed case)
+    r')$'
+)
+
+
 def _classify_question(query: str) -> str:
     """
     Classify a student query into one of three prompt modes.
     Returns: 'casual' | 'structured' | 'concise'
     """
     q = query.strip().lower()
+    raw = query.strip()
 
-    if len(q) < 6:
+    # Single char or pure punctuation → casual
+    if len(q) <= 1 or re.fullmatch(r'[\W_]+', q):
         return "casual"
+
+    # Short query: check if it looks like an academic term before marking casual
+    if len(q) < 6:
+        if _ACADEMIC_SHORT_RE.match(raw):
+            return "concise"
+        # Only fall back to casual if it's in the known casual set
+        if q in _CASUAL_TRIGGERS:
+            return "casual"
+        # Unknown short string → treat as academic (concise) to be safe
+        return "concise"
 
     if q in _CASUAL_TRIGGERS:
         return "casual"
@@ -142,7 +164,9 @@ ANSWER FORMAT (follow this structure every time):
 4. Sources        — list as: "Sources: [PAGE: slug1], [PAGE: slug2]" using only pages cited in the grounding context
 
 If grounding content is provided, base your answer on it and quote relevant parts verbatim.
-If the answer is NOT in the grounding, say: "Not found in Syrabit library. Based on standard curriculum:" then answer.
+If the answer is NOT in the grounding but web search results are provided (Tier 3), use those to answer and label with "From web search:".
+If neither grounding nor web search results are available, answer from standard curriculum knowledge and note: "Based on standard curriculum knowledge:".
+Never respond with only "Not found in Syrabit library" and stop — always provide a useful answer.
 
 Respond in plain text only. No markdown headers. No code blocks."""
 
@@ -161,15 +185,19 @@ STRICT RULES:
 2. Answer only questions relevant to the student's board, class, and stream syllabus.
 3. ACCURACY FIRST: Use the grounding context as your primary and authoritative source.
    Quote definitions and facts verbatim from the grounding content when available.
-   If a specific fact is not in the grounding context, say: "Based on the standard curriculum:"
-   and then answer — do NOT silently hallucinate.
+   If the grounding doesn't cover the answer but web search results are provided (Tier 3),
+   use those and label with "From web search:".
+   If neither is available, answer from standard curriculum knowledge and note:
+   "Based on standard curriculum knowledge:" — do NOT silently hallucinate or stop.
 4. Structure every answer in EXACTLY this order:
    ▸ Explanation   — Definition or direct answer (1-2 sentences, board-exam language, from grounding)
    ▸ Key Points    — Detailed bullet list (4-8 items, each grounded in provided content, verbatim where possible)
    ▸ Examples      — 1-2 concrete examples (only if present in grounding; label "Example:")
    ▸ PYQs Tip      — Note if this is a common previous year question pattern (label "Exam Note:")
    ▸ Sources       — End with "Sources: [PAGE: slug1], [PAGE: slug2]" using slugs from the grounding context
-5. If NOT found in grounding: say "Not found in Syrabit library. Based on standard curriculum:" then answer.
+5. If NOT found in grounding: check if Tier 3 web search results are included — use those and label
+   "From web search:". If those are also absent, answer from standard curriculum knowledge and note
+   "Based on standard curriculum knowledge:". Never end without providing a useful answer.
 6. Match answer length to question weight:
    - 2-mark: 3-5 lines total
    - 5-mark: 1 paragraph + bullet list
