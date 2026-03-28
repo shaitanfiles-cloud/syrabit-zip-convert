@@ -179,7 +179,7 @@ function BlogView({ subject, subjectId }) {
   const htmlContent = post.subject_merged_html || '';
 
   return (
-    <div className="blog-view-tab w-full">
+    <div className="blog-view-tab w-full" style={{ background: '#f0f0f1', padding: '1.5rem 0 4rem' }}>
       {subject && (
         <ArticleJsonLd subject={subject} title={post.title || subject.name} url={subjectUrl} wordCount={post.word_count} />
       )}
@@ -187,7 +187,8 @@ function BlogView({ subject, subjectId }) {
         <article ref={articleRef} className="flex-1 min-w-0 pb-16 min-w-0">
 
           {/* Hero info bar — gray header strip */}
-          <div className="blog-hero-bar flex flex-wrap items-center gap-3 text-[11px]">
+          <div className="blog-hero-bar flex flex-wrap items-center gap-3 text-[11px]"
+            style={{ background: '#f8f9fa', borderBottom: '1px solid #e2e2e2', color: '#777', padding: '0.6rem 2rem', marginBottom: 0, borderRadius: '4px 4px 0 0' }}>
             {readMins && (
               <span className="flex items-center gap-1"><Clock size={11} />{readMins} min read</span>
             )}
@@ -212,10 +213,12 @@ function BlogView({ subject, subjectId }) {
           {htmlContent ? (
             <div
               className="learn-article"
+              style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '16px', lineHeight: '1.7', padding: '2rem 2.5rem 2.5rem', boxShadow: '0 1px 12px rgba(0,0,0,0.09)', borderRadius: '0 0 4px 4px', maxWidth: 'none' }}
               dangerouslySetInnerHTML={{ __html: htmlContent }}
             />
           ) : (
-            <div className="learn-article">
+            <div className="learn-article"
+              style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '16px', lineHeight: '1.7', padding: '2rem 2.5rem 2.5rem', boxShadow: '0 1px 12px rgba(0,0,0,0.09)', borderRadius: '0 0 4px 4px', maxWidth: 'none' }}>
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
                 {post.merged_md || ''}
               </ReactMarkdown>
@@ -223,9 +226,9 @@ function BlogView({ subject, subjectId }) {
           )}
 
           {/* AI Tutor CTA */}
-          <div className="blog-ai-cta">
-            <p className="text-sm mb-1">Have a question about this topic?</p>
-            <p className="text-xs mb-3">Get AHSEC-aligned answers instantly from our AI tutor.</p>
+          <div className="blog-ai-cta" style={{ background: '#f5f0ff', border: '1px solid #c4b0f0', marginTop: '2.5rem', padding: '1.25rem 1.5rem', borderRadius: '12px' }}>
+            <p className="text-sm mb-1" style={{ color: '#5b35a8', fontWeight: 600 }}>Have a question about this topic?</p>
+            <p className="text-xs mb-3" style={{ color: '#7c5cbf' }}>Get AHSEC-aligned answers instantly from our AI tutor.</p>
             <Link to={`/chat?subject=${subjectId}`}>
               <Button size="sm" style={{ background: 'hsl(258 60% 68%)', color: 'white' }}>Ask AI Tutor</Button>
             </Link>
