@@ -358,7 +358,7 @@ export default function LearnPage() {
               to="/chat"
               className="h-10 px-5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold flex items-center gap-2 flex-shrink-0 transition-colors"
             >
-              <BookOpen size={14} /> Ask AI Tutor
+              <BookOpen size={14} /> Ask Syra
             </Link>
           </div>
         </div>

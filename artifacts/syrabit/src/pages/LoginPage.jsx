@@ -109,9 +109,9 @@ export default function LoginPage() {
               className="mb-4 text-white"
               style={{ fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 800, lineHeight: 1.18, letterSpacing: '-0.02em' }}
             >
-              Your AI tutor for<br />
+              Educational Browser For<br />
               <span style={{ background: 'linear-gradient(135deg,#a78bfa,#7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                AHSEC exams
+                Assam Board Students
               </span>
             </h2>
             <p className="mb-10 max-w-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.52)', fontSize: '0.95rem' }}>

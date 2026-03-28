@@ -228,9 +228,9 @@ function BlogView({ subject, subjectId }) {
           {/* AI Tutor CTA */}
           <div className="blog-ai-cta" style={{ background: '#f5f0ff', border: '1px solid #c4b0f0', marginTop: '2.5rem', padding: '1.25rem 1.5rem', borderRadius: '12px' }}>
             <p className="text-sm mb-1" style={{ color: '#5b35a8', fontWeight: 600 }}>Have a question about this topic?</p>
-            <p className="text-xs mb-3" style={{ color: '#7c5cbf' }}>Get AHSEC-aligned answers instantly from our AI tutor.</p>
+            <p className="text-xs mb-3" style={{ color: '#7c5cbf' }}>Get AHSEC-aligned answers instantly from Syra.</p>
             <Link to={`/chat?subject=${subjectId}`}>
-              <Button size="sm" style={{ background: 'hsl(258 60% 68%)', color: 'white' }}>Ask AI Tutor</Button>
+              <Button size="sm" style={{ background: 'hsl(258 60% 68%)', color: 'white' }}>Ask Syra</Button>
             </Link>
           </div>
         </article>

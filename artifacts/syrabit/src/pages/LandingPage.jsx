@@ -196,7 +196,7 @@ const FEATURES = [
   {
     icon: Brain,
     title: 'AI-Powered Answers',
-    desc: 'Instant, syllabus-grounded answers from an AI tutor trained on AHSEC content — not generic internet data.',
+    desc: 'Browse and ask questions on any chapter — get instant, syllabus-grounded answers based on AHSEC content, not generic internet data.',
     gradient: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
     glow: 'rgba(139,92,246,0.28)',
     border: 'rgba(139,92,246,0.20)',
@@ -255,7 +255,7 @@ const SUBJECTS = [
 const STEPS = [
   { num: '01', title: 'Create your free account',   desc: 'Sign up in under 30 seconds with email — no credit card needed. Get Starter (300 credits) for ₹99 or Pro (4000 credits) for ₹999.', icon: GraduationCap },
   { num: '02', title: 'Pick your subject',           desc: "Browse the library by board, class, and stream. Save subjects you're preparing for and jump straight into the material.",             icon: BookOpen      },
-  { num: '03', title: 'Chat with your AI Tutor',    desc: 'Ask anything. The AI responds with syllabus-grounded answers, worked examples, formulas, and PYQ insights — instantly.',            icon: MessageSquare },
+  { num: '03', title: 'Ask Syra — your study companion', desc: 'Ask anything about your syllabus. Syra responds with grounded answers, worked examples, formulas, and PYQ insights — instantly.', icon: MessageSquare },
 ];
 
 const PLANS = [
@@ -330,10 +330,10 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen text-white overflow-x-hidden" style={{ background: '#06060e' }}>
       <PageMeta
-        title="Syrabit.ai — AI-Powered AHSEC & Degree Exam Preparation for Assam Students"
-        description="Ace AHSEC Class 11-12 and Degree (B.Com, B.A, B.Sc) exams with Syrabit.ai. Instant AI tutor, syllabus-aligned notes, PYQs, MCQs — free to start. Trusted by 500+ Assam board students."
+        title="Syrabit.ai — Educational Browser For Assam Board Students"
+        description="Syrabit.ai is the educational browser for Assam Board students. Browse AHSEC Class 11-12 and Degree (B.Com, B.A, B.Sc) syllabus content, get instant answers, PYQs, notes, and MCQs — free to start. Trusted by 500+ students."
         url="https://syrabit.ai/"
-        keywords="AHSEC exam preparation, Assam board Class 11 12 AI tutor, SEBA exam notes, Degree college study material, B.Com B.A B.Sc notes Assam, AHSEC 2025 preparation, AI study tool India, free exam prep app"
+        keywords="AHSEC educational browser, Assam board study app, Class 11 12 exam prep, AHSEC syllabus browser, degree exam prep Assam, B.Com B.A B.Sc notes, SEBA AHSEC 2025 study tool, free educational browser India"
       />
       <PublicNavbar />
 

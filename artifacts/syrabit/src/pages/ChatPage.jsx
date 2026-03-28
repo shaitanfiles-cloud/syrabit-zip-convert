@@ -776,7 +776,7 @@ export default function ChatPage() {
                     className="text-foreground mb-1.5 shimmer-text"
                     style={{ fontSize: '1.2rem', fontWeight: 700 }}
                   >
-                    {subject ? `Ask me about ${subject.name}` : "Hi! I'm your AI Tutor"}
+                    {subject ? `Ask me about ${subject.name}` : "Hi! I'm Syra — your educational browser"}
                   </h2>
                   <p className="text-muted-foreground text-sm max-w-sm mx-auto">
                     {documentId

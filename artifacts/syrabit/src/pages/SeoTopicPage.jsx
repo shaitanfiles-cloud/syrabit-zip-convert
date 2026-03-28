@@ -630,7 +630,7 @@ export default function SeoTopicPage() {
                   <span className="text-violet-400 text-sm font-semibold">Study with AI</span>
                 </div>
                 <p className="text-gray-300 text-sm leading-relaxed">
-                  Got questions about <strong className="text-white">{page.topic_title}</strong>? Ask our AI tutor for instant, {boardShort}-aligned answers.
+                  Got questions about <strong className="text-white">{page.topic_title}</strong>? Browse more or ask Syra for instant, {boardShort}-aligned answers.
                 </p>
               </div>
               <Link
@@ -638,7 +638,7 @@ export default function SeoTopicPage() {
                 className="shrink-0 px-6 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-sm font-medium transition-colors flex items-center gap-2"
               >
                 <Sparkles size={14} />
-                Ask AI Tutor
+                Ask Syra
               </Link>
             </div>
 
@@ -649,10 +649,10 @@ export default function SeoTopicPage() {
                 <Link to="/library" className="hover:text-purple-400 transition-colors">Browser</Link>
                 <Link to="/pricing" className="hover:text-purple-400 transition-colors">Plans & Pricing</Link>
                 <Link to="/signup" className="hover:text-purple-400 transition-colors">Get Started Free</Link>
-                <Link to="/chat" className="hover:text-purple-400 transition-colors">AI Tutor</Link>
+                <Link to="/chat" className="hover:text-purple-400 transition-colors">Ask Syra</Link>
               </div>
               <p className="text-center text-xs text-gray-600 mt-3">
-                Syrabit.ai — AI-powered exam prep for Assam Board students
+                Syrabit.ai — Educational Browser For Assam Board Students
               </p>
             </nav>
           </div>

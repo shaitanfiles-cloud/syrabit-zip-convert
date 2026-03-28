@@ -299,7 +299,7 @@ export default function SubjectLandingPage() {
             <Link to="/" className="hover:text-purple-400 transition-colors">Home</Link>
             <Link to="/library" className="hover:text-purple-400 transition-colors">Browser</Link>
             <Link to="/pricing" className="hover:text-purple-400 transition-colors">Plans & Pricing</Link>
-            <Link to="/chat" className="hover:text-purple-400 transition-colors">AI Tutor</Link>
+            <Link to="/chat" className="hover:text-purple-400 transition-colors">Ask Syra</Link>
           </div>
           <p className="text-center text-xs text-gray-600 mt-3">
             Syrabit.ai — AI-powered exam prep for Assam Board students

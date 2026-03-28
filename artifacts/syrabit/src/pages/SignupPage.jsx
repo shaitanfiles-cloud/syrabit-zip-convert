@@ -24,7 +24,7 @@ const STRENGTH_COLORS = ['', 'bg-red-500', 'bg-orange-500', 'bg-yellow-500', 'bg
 const PERKS = [
   { icon: BookOpen, text: 'Browse all 55+ subjects — free forever' },
   { icon: Zap, text: 'Starter: 300 credits for just ₹99' },
-  { icon: GraduationCap, text: 'AI tutor for AHSEC & Degree programs' },
+  { icon: GraduationCap, text: 'Ask Syra — your Assam board study companion' },
   { icon: CheckCircle, text: 'Upgrade anytime — no lock-in' },
 ];
 
