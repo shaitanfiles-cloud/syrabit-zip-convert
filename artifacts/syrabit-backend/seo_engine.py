@@ -11,7 +11,7 @@ URL pattern (4-segment):
   /{board}/{class}/{subject}/{topic}/{page_type}
 """
 
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Cookie
 from fastapi.responses import Response, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -37,10 +37,13 @@ def init_seo_engine(db: AsyncIOMotorDatabase, call_llm_api: Callable, get_admin_
     _get_admin_fn = get_admin_user_fn
 
 
-async def _require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(_security)):
+async def _require_admin(
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(_security),
+    syrabit_admin_session: Optional[str] = Cookie(default=None),
+):
     if _get_admin_fn is None:
         raise HTTPException(status_code=503, detail="Auth not initialized")
-    return await _get_admin_fn(creds=creds)
+    return await _get_admin_fn(creds=creds, syrabit_admin_session=syrabit_admin_session)
 
 
 def _slug(text: str) -> str:
