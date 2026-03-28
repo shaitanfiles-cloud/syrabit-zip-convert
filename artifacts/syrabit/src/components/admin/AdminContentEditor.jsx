@@ -1081,6 +1081,7 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
             boards={boards}
             classes={classes}
             streams={streams}
+            subjects={subjects}
           />
         </div>
       )}

@@ -230,8 +230,8 @@ _rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=600)
 # Syllabus cache — 30-minute TTL; syllabi almost never change between requests
 _syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=1800)
 
-def _syllabus_cache_key(board_id: str, class_id: str, stream_id: Optional[str]) -> str:
-    return f"{board_id}|{class_id}|{stream_id or ''}"
+def _syllabus_cache_key(board_id: str, class_id: str, stream_id: Optional[str], subject_id: Optional[str] = None) -> str:
+    return f"{board_id}|{class_id}|{stream_id or ''}|{subject_id or ''}"
 
 def _rag_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str]) -> str:
     raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}"
@@ -4627,6 +4627,93 @@ async def delete_syllabus_stream(
         logger.error(f"Delete stream syllabus error: {e}")
         raise HTTPException(status_code=500, detail=f"Error deleting syllabus: {e}")
 
+
+@api.get("/syllabi/{board_id}/{class_id}/{stream_id}/{subject_id}")
+async def get_syllabus_subject(board_id: str, class_id: str, stream_id: str, subject_id: str):
+    """Fetch syllabus for a specific subject. Fallback: stream → board+class."""
+    try:
+        if not await is_mongo_available():
+            return {"board_id": board_id, "class_id": class_id, "stream_id": stream_id, "subject_id": subject_id, "content": "", "chapters": [], "topics": [], "found": False}
+        syllabus = await db.syllabi.find_one({"board_id": board_id, "class_id": class_id, "stream_id": stream_id, "subject_id": subject_id}, {"_id": 0})
+        if syllabus:
+            logger.info(f"Subject syllabus found: {board_id}/{class_id}/{stream_id}/{subject_id}")
+            return syllabus
+        # Fall back to stream level
+        fallback = await db.syllabi.find_one({"board_id": board_id, "class_id": class_id, "stream_id": stream_id, "subject_id": {"$exists": False}}, {"_id": 0})
+        if not fallback:
+            fallback = await db.syllabi.find_one({"board_id": board_id, "class_id": class_id, "stream_id": {"$exists": False}}, {"_id": 0})
+        if not fallback:
+            fallback = await db.syllabi.find_one({"board_id": board_id, "class_id": class_id}, {"_id": 0})
+        if fallback:
+            logger.info(f"Using fallback syllabus for subject {subject_id}")
+            return {**fallback, "is_fallback": True}
+        return {"board_id": board_id, "class_id": class_id, "stream_id": stream_id, "subject_id": subject_id, "content": "", "chapters": [], "topics": [], "found": False}
+    except Exception as e:
+        logger.error(f"Get subject syllabus error: {e}")
+        return {"board_id": board_id, "class_id": class_id, "stream_id": stream_id, "subject_id": subject_id, "content": "", "chapters": [], "topics": [], "found": False}
+
+
+@api.post("/admin/syllabi/{board_id}/{class_id}/{stream_id}/{subject_id}")
+async def create_or_update_syllabus_subject(
+    board_id: str,
+    class_id: str,
+    stream_id: str,
+    subject_id: str,
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user)
+):
+    """Create or update syllabus for a specific subject."""
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(status_code=503, detail="MongoDB unavailable")
+        syllabus_doc = {
+            "board_id": board_id,
+            "class_id": class_id,
+            "stream_id": stream_id,
+            "subject_id": subject_id,
+            "content": data.get("content", ""),
+            "chapters": data.get("chapters", []),
+            "topics": data.get("topics", []),
+            "guidelines": data.get("guidelines", ""),
+            "geo_phrases": data.get("geo_phrases", []),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.syllabi.update_one(
+            {"board_id": board_id, "class_id": class_id, "stream_id": stream_id, "subject_id": subject_id},
+            {"$set": syllabus_doc},
+            upsert=True
+        )
+        logger.info(f"Subject syllabus saved: {board_id}/{class_id}/{stream_id}/{subject_id}")
+        return {"message": "Syllabus saved successfully", "subject_id": subject_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Save subject syllabus error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error saving syllabus: {e}")
+
+
+@api.delete("/admin/syllabi/{board_id}/{class_id}/{stream_id}/{subject_id}")
+async def delete_syllabus_subject(
+    board_id: str,
+    class_id: str,
+    stream_id: str,
+    subject_id: str,
+    admin: dict = Depends(get_admin_user)
+):
+    """Delete syllabus for a specific subject."""
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(status_code=503, detail="MongoDB unavailable")
+        await db.syllabi.delete_one({"board_id": board_id, "class_id": class_id, "stream_id": stream_id, "subject_id": subject_id})
+        logger.info(f"Subject syllabus deleted: {board_id}/{class_id}/{stream_id}/{subject_id}")
+        return {"message": "Syllabus deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete subject syllabus error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error deleting syllabus: {e}")
+
+
 # ─────────────────────────────────────────────
 # AI CHAT ROUTES
 # ─────────────────────────────────────────────
@@ -4695,11 +4782,15 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     if subj_ctx:
         logger.info(f"Chat [NON-STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
 
-    # ── Fetch syllabus (stream-specific → board+class fallback) ─────────────
+    # ── Fetch syllabus (subject → stream → board+class fallback) ────────────
     syllabus = None
     if ctx_board_id and ctx_class_id:
         try:
-            if ctx_stream_id:
+            if ctx_stream_id and msg.subject_id:
+                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0})
+                if syllabus:
+                    logger.info(f"Chat [NON-STREAM]: Subject syllabus loaded for {ctx_board_id}/{ctx_class_id}/{ctx_stream_id}/{msg.subject_id}")
+            if not syllabus and ctx_stream_id:
                 syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id}, {"_id": 0})
                 if syllabus:
                     logger.info(f"Chat [NON-STREAM]: Stream syllabus loaded for {ctx_board_id}/{ctx_class_id}/{ctx_stream_id}")
@@ -4916,12 +5007,14 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     async def _fetch_syllabus():
         if not (ctx_board_id and ctx_class_id):
             return None
-        _sck = _syllabus_cache_key(ctx_board_id, ctx_class_id, ctx_stream_id)
+        _sck = _syllabus_cache_key(ctx_board_id, ctx_class_id, ctx_stream_id, msg.subject_id)
         if _sck in _syllabus_cache:
             return _syllabus_cache[_sck]
         try:
             s = None
-            if ctx_stream_id:
+            if ctx_stream_id and msg.subject_id:
+                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0})
+            if not s and ctx_stream_id:
                 s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id}, {"_id": 0})
             if not s:
                 s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": {"$exists": False}}, {"_id": 0})

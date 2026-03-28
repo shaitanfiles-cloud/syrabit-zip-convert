@@ -12,13 +12,14 @@ function authHeaders(token) {
 
 const EMPTY_FORM = { content: '', chapters: [], topics: [], guidelines: '', geo_phrases: [] };
 
-export default function AdminSyllabusManager({ adminToken, boards = [], classes = [], streams = [] }) {
+export default function AdminSyllabusManager({ adminToken, boards = [], classes = [], streams = [], subjects = [] }) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [selectedBoardId, setSelectedBoardId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedStreamId, setSelectedStreamId] = useState('');
+  const [selectedSubjectId, setSelectedSubjectId] = useState('');
 
   const [editingSyllabus, setEditingSyllabus] = useState(null);
   const [isFallback, setIsFallback] = useState(false);
@@ -29,26 +30,38 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
 
   const filteredClasses = classes.filter(c => c.board_id === selectedBoardId);
   const filteredStreams = streams.filter(s => s.class_id === selectedClassId);
+  const filteredSubjects = selectedStreamId
+    ? subjects.filter(s => s.stream_id === selectedStreamId)
+    : selectedClassId
+    ? subjects
+    : [];
 
   const selectedBoard = boards.find(b => b.id === selectedBoardId);
   const selectedClass = classes.find(c => c.id === selectedClassId);
   const selectedStream = streams.find(s => s.id === selectedStreamId);
+  const selectedSubject = subjects.find(s => s.id === selectedSubjectId);
 
   const canLoad = selectedBoardId && selectedClassId;
 
   const syllabusEndpoint = useCallback(() => {
+    if (selectedStreamId && selectedSubjectId) {
+      return `${API}/syllabi/${selectedBoardId}/${selectedClassId}/${selectedStreamId}/${selectedSubjectId}`;
+    }
     if (selectedStreamId) {
       return `${API}/syllabi/${selectedBoardId}/${selectedClassId}/${selectedStreamId}`;
     }
     return `${API}/syllabi/${selectedBoardId}/${selectedClassId}`;
-  }, [selectedBoardId, selectedClassId, selectedStreamId]);
+  }, [selectedBoardId, selectedClassId, selectedStreamId, selectedSubjectId]);
 
   const adminSyllabusEndpoint = useCallback(() => {
+    if (selectedStreamId && selectedSubjectId) {
+      return `${API}/admin/syllabi/${selectedBoardId}/${selectedClassId}/${selectedStreamId}/${selectedSubjectId}`;
+    }
     if (selectedStreamId) {
       return `${API}/admin/syllabi/${selectedBoardId}/${selectedClassId}/${selectedStreamId}`;
     }
     return `${API}/admin/syllabi/${selectedBoardId}/${selectedClassId}`;
-  }, [selectedBoardId, selectedClassId, selectedStreamId]);
+  }, [selectedBoardId, selectedClassId, selectedStreamId, selectedSubjectId]);
 
   const fetchSyllabus = useCallback(async () => {
     if (!canLoad) return;
@@ -89,7 +102,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       setFormData(EMPTY_FORM);
       setIsFallback(false);
     }
-  }, [selectedBoardId, selectedClassId, selectedStreamId]);
+  }, [selectedBoardId, selectedClassId, selectedStreamId, selectedSubjectId]);
 
   const saveSyllabus = async () => {
     if (!canLoad) {
@@ -157,11 +170,27 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
 
   const removeGeoPhrase = (i) => setFormData({ ...formData, geo_phrases: (formData.geo_phrases || []).filter((_, idx) => idx !== i) });
 
-  const scopeLabel = selectedStream
+  const scopeLabel = selectedSubject
+    ? `${selectedBoard?.name || ''} · ${selectedClass?.name || ''} · ${selectedStream?.name || ''} · ${selectedSubject.name}`
+    : selectedStream
     ? `${selectedBoard?.name || ''} · ${selectedClass?.name || ''} · ${selectedStream.name}`
     : selectedClass
     ? `${selectedBoard?.name || ''} · ${selectedClass?.name || ''}`
     : '';
+
+  const fallbackNotice = isFallback && editingSyllabus ? (
+    selectedSubjectId
+      ? `Showing a fallback syllabus — no subject-specific syllabus exists yet for "${selectedSubject?.name}". Save below to create one.`
+      : `Showing the general board+class syllabus as a preview — no stream-specific syllabus exists yet for ${selectedStream?.name}. Save below to create one.`
+  ) : null;
+
+  const saveButtonLabel = saving
+    ? 'Saving...'
+    : isFallback && selectedSubjectId
+    ? `Create Subject Syllabus for ${selectedSubject?.name || ''}`
+    : isFallback && selectedStreamId
+    ? `Create Stream Syllabus for ${selectedStream?.name || ''}`
+    : 'Save Syllabus';
 
   return (
     <div className="space-y-5">
@@ -170,12 +199,12 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         <BookOpen size={22} className="text-indigo-400" />
         <div>
           <h2 className="text-lg font-bold text-white">Universal Syllabus Manager</h2>
-          <p className="text-xs text-white/40 mt-0.5">Create syllabi that auto-inject into every AI answer for a board, class, or specific stream</p>
+          <p className="text-xs text-white/40 mt-0.5">Create syllabi that auto-inject into every AI answer for a board, class, stream, or specific subject</p>
         </div>
       </div>
 
-      {/* Selectors */}
-      <div className="grid grid-cols-3 gap-3">
+      {/* Selectors — 2×2 grid */}
+      <div className="grid grid-cols-2 gap-3">
         {/* Board */}
         <div>
           <label className="text-[10px] font-semibold text-white/50 uppercase tracking-wide mb-1.5 block">Board</label>
@@ -185,6 +214,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
               setSelectedBoardId(e.target.value);
               setSelectedClassId('');
               setSelectedStreamId('');
+              setSelectedSubjectId('');
             }}
             className="w-full px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-white text-sm focus:border-indigo-500 outline-none transition-colors"
           >
@@ -201,6 +231,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
             onChange={(e) => {
               setSelectedClassId(e.target.value);
               setSelectedStreamId('');
+              setSelectedSubjectId('');
             }}
             disabled={!selectedBoardId}
             className="w-full px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-white text-sm focus:border-indigo-500 outline-none transition-colors disabled:opacity-40"
@@ -219,12 +250,33 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
           </label>
           <select
             value={selectedStreamId}
-            onChange={(e) => setSelectedStreamId(e.target.value)}
+            onChange={(e) => {
+              setSelectedStreamId(e.target.value);
+              setSelectedSubjectId('');
+            }}
             disabled={!selectedClassId}
             className="w-full px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-white text-sm focus:border-indigo-500 outline-none transition-colors disabled:opacity-40"
           >
             <option value="">All Streams (General)</option>
             {filteredStreams.map(s => <option key={s.id} value={s.id}>{s.icon ? `${s.icon} ` : ''}{s.name}</option>)}
+          </select>
+        </div>
+
+        {/* Subject (optional) */}
+        <div>
+          <label className="text-[10px] font-semibold text-white/50 uppercase tracking-wide mb-1.5 flex items-center gap-1">
+            <BookOpen size={10} />
+            Subject
+            <span className="text-white/25 font-normal normal-case tracking-normal ml-1">(optional)</span>
+          </label>
+          <select
+            value={selectedSubjectId}
+            onChange={(e) => setSelectedSubjectId(e.target.value)}
+            disabled={!selectedStreamId}
+            className="w-full px-3 py-2.5 rounded-xl border border-white/10 bg-white/5 text-white text-sm focus:border-indigo-500 outline-none transition-colors disabled:opacity-40"
+          >
+            <option value="">All Subjects in Stream</option>
+            {filteredSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
       </div>
@@ -234,9 +286,11 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         <div className="flex items-start gap-2 p-3 rounded-xl border border-white/10 bg-white/[0.02]">
           <Info size={14} className="text-indigo-400 mt-0.5 flex-shrink-0" />
           <p className="text-xs text-white/50 leading-relaxed">
-            {selectedStreamId
+            {selectedSubjectId
+              ? <>This syllabus applies only to <span className="text-indigo-300 font-medium">{selectedSubject?.name}</span> within {selectedStream?.name}. It takes highest priority — the AI uses it when a student asks about this specific subject.</>
+              : selectedStreamId
               ? <>This syllabus applies only to <span className="text-indigo-300 font-medium">{scopeLabel}</span>. The AI will use it when a student from this exact stream asks a question.</>
-              : <>This is a <span className="text-indigo-300 font-medium">general syllabus</span> for <span className="text-white/70">{scopeLabel}</span>. The AI uses it as a fallback when no stream-specific syllabus exists.</>
+              : <>This is a <span className="text-indigo-300 font-medium">general syllabus</span> for <span className="text-white/70">{scopeLabel}</span>. The AI uses it as a fallback when no stream- or subject-specific syllabus exists.</>
             }
           </p>
         </div>
@@ -251,10 +305,10 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       )}
 
       {/* Fallback notice */}
-      {!loading && isFallback && editingSyllabus && (
+      {!loading && fallbackNotice && (
         <div className="flex items-center gap-2 p-3 rounded-xl border border-amber-500/20 bg-amber-500/5 text-amber-200 text-xs">
           <Info size={14} className="flex-shrink-0" />
-          Showing the general board+class syllabus as a preview — no stream-specific syllabus exists yet for {selectedStream?.name}. Save below to create one.
+          {fallbackNotice}
         </div>
       )}
 
@@ -267,7 +321,9 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
               value={formData.content}
               onChange={(e) => setFormData({ ...formData, content: e.target.value })}
               placeholder={
-                selectedStreamId
+                selectedSubjectId
+                  ? `e.g., ${selectedSubject?.name || 'Physics'} for AHSEC Class 11 covers mechanics, thermodynamics, and optics. Emphasis on board exam patterns and numerical problem-solving...`
+                  : selectedStreamId
                   ? `e.g., AHSEC Class 11 ${selectedStream?.name || 'Science'} covers Physics, Chemistry, and ${selectedStream?.name?.includes('PCM') ? 'Mathematics' : 'Biology'}. Focus on conceptual understanding and AHSEC board exam patterns...`
                   : 'e.g., AHSEC Class 11 covers Science, Arts, and Commerce streams. This syllabus serves as the general curriculum guide for all AI responses...'
               }
@@ -419,7 +475,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
               className="flex-1 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-600/40 text-white font-medium text-sm transition-colors flex items-center justify-center gap-2"
             >
               {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-              {saving ? 'Saving...' : isFallback ? `Create Stream Syllabus for ${selectedStream?.name || ''}` : 'Save Syllabus'}
+              {saveButtonLabel}
             </button>
             {editingSyllabus && !isFallback && (
               <button
@@ -439,7 +495,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         <div className="p-5 rounded-xl bg-white/[0.02] border border-white/10 text-center">
           <BookOpen size={28} className="mx-auto text-white/15 mb-2" />
           <p className="text-white/50 text-sm">Select a Board and Class to manage their syllabus</p>
-          <p className="text-white/25 text-xs mt-1">Stream is optional — use it for stream-specific AI guidance</p>
+          <p className="text-white/25 text-xs mt-1">Stream and Subject are optional — use them for more targeted AI guidance</p>
         </div>
       )}
     </div>
