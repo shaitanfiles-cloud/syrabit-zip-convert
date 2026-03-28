@@ -143,8 +143,8 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
     return `https://wa.me/?text=${encodeURIComponent(text)}`;
   }, [sub.name, subjectLandingPath]);
 
-  const visibleChapters = useMemo(() => chapters.slice(0, 6), [chapters]);
-  const moreChapters = chapters.length - 6;
+  const visibleChapters = useMemo(() => chapters.slice(0, 3), [chapters]);
+  const moreChapters = chapters.length - 3;
 
   return (
     <div
@@ -198,7 +198,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       </div>
 
       {/* Card Content */}
-      <div className="px-4 pt-3 pb-2">
+      <div className="px-3 sm:px-4 pt-3 pb-2">
         <Link to={subjectLandingPath} className="block group/title">
           <div className="flex items-start gap-3 mb-2">
             <div
@@ -217,38 +217,34 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
               >
                 {sub.name}
               </h3>
-              <div className="flex items-center gap-1.5 mt-0.5">
+              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-0.5">
                 <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))' }}>
                   {sub.boardName}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
                   {sub.className}
                 </span>
-                <span className="text-[11px] text-muted-foreground/60">·</span>
-                <span className="text-[11px] text-muted-foreground/60">
-                  {sub.streamName}
-                </span>
+                {sub.streamName && (
+                  <>
+                    <span className="text-[11px] text-muted-foreground/60">·</span>
+                    <span className="text-[11px] text-muted-foreground/60">
+                      {sub.streamName}
+                    </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
         </Link>
 
         {sub.description && (
-          <p
-            className="text-muted-foreground text-xs leading-relaxed mb-2"
-            style={{
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              overflow: 'hidden',
-            }}
-          >
+          <p className="text-muted-foreground text-xs leading-relaxed mb-1.5 sm:mb-2 line-clamp-1 sm:line-clamp-2">
             {sub.description}
           </p>
         )}
 
         {visibleTags.length > 0 && (
-          <div className="flex flex-wrap gap-1 mb-3">
+          <div className="flex flex-wrap gap-1 mb-2 sm:mb-3">
             {visibleTags.map((tag) => (
               <span
                 key={tag}
@@ -274,7 +270,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       {/* Chapters as Lesson Links */}
       {visibleChapters.length > 0 && (
         <div
-          className="mx-3 mb-3 rounded-xl overflow-hidden relative"
+          className="mx-3 mb-2 sm:mb-3 rounded-xl overflow-hidden relative"
           style={{
             background: 'rgba(139,92,246,0.03)',
             border: '1px solid rgba(139,92,246,0.08)',
@@ -309,7 +305,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                 <Link
                   key={ch.id || i}
                   to={chPath}
-                  className="flex items-center gap-2 px-3 py-2 text-xs transition-all hover:bg-purple-500/8 group/lesson"
+                  className="flex items-center gap-2 px-3 py-2.5 sm:py-2 text-xs transition-all hover:bg-purple-500/8 group/lesson"
                   style={{ borderBottom: i < visibleChapters.length - 1 ? '1px solid rgba(139,92,246,0.05)' : 'none' }}
                   title={`${ch.title} — ${sub.name}`}
                 >
@@ -352,7 +348,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         <button
           onClick={() => { onToggleSave(sub.id); try { Analytics.subjectBookmarked(sub.name, !isSaved); } catch {} }}
           aria-label={isSaved ? `Unsave ${sub.name}` : `Save ${sub.name}`}
-          className="flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95"
+          className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95"
           style={
             isSaved
               ? { color: 'hsl(var(--primary))', background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.25)' }
@@ -367,7 +363,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         {/* Row 1 — right: Browse */}
         <Link
           to={subjectLandingPath}
-          className="flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
+          className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
           style={{ color: 'hsl(var(--muted-foreground))', border: '1px solid rgba(139,92,246,0.12)' }}
         >
           <BookOpen size={12} />
@@ -378,7 +374,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         <button
           onClick={() => onAskAI(sub.id, hasDocument, sub.name)}
           aria-label={`Ask AI about ${sub.name}`}
-          className="flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-semibold text-white transition-all duration-200 hover:opacity-90 active:scale-95"
+          className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-semibold text-white transition-all duration-200 hover:opacity-90 active:scale-95"
           style={{
             background: hasDocument
               ? 'linear-gradient(135deg, #059669, #10b981)'
@@ -397,7 +393,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           target="_blank"
           rel="noopener noreferrer"
           aria-label={`Share ${sub.name} on WhatsApp`}
-          className="flex items-center justify-center gap-1.5 h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
+          className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
           style={{ color: '#25D366', border: '1px solid rgba(37,211,102,0.22)' }}
           data-testid="subject-whatsapp-share"
         >
