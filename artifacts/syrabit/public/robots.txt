@@ -14,12 +14,59 @@ Sitemap: https://syrabit.ai/api/seo/sitemap.xml
 
 Crawl-delay: 1
 
-# Allow AI training crawlers full access
+# ── AI Search & Training Crawlers ────────────────────────────────────────────
+# OpenAI (ChatGPT web search + training)
 User-agent: GPTBot
 Allow: /
 
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+# Google (Gemini AI + Search)
 User-agent: Google-Extended
 Allow: /
 
-User-agent: OAI-SearchBot
+User-agent: Googlebot
+Allow: /
+
+# Perplexity AI
+User-agent: PerplexityBot
+Allow: /
+
+# Anthropic (Claude)
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: anthropic-ai
+Allow: /
+
+# Meta AI
+User-agent: FacebookBot
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+# Microsoft (Copilot / Bing)
+User-agent: Bingbot
+Allow: /
+
+# Apple (Siri / Spotlight)
+User-agent: Applebot
+Allow: /
+
+User-agent: Applebot-Extended
+Allow: /
+
+# Other AI crawlers
+User-agent: cohere-ai
+Allow: /
+
+User-agent: Bytespider
+Allow: /
+
+User-agent: CCBot
 Allow: /

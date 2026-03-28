@@ -114,7 +114,7 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 - **Admin Endpoints (new)**: `/admin/dashboard/metrics`, `/admin/studio/parse`, `/admin/studio/publish`, `/admin/analytics/funnel`, `/admin/analytics/content-heatmap`, `/admin/analytics/revenue`, `/admin/analytics/predictor`, `/admin/automation/insights`, `/admin/automation/auto-generate`, `/admin/monetization/overview`, `/admin/monetization/referrals`, `/admin/monetization/referral-config`
 - **Admin**: `ADMIN_EMAILS=admin@syrabit.ai`; watchfiles watches `/artifacts/syrabit` — server.py edits require workflow restart
 - **Form accessibility**: All inputs have proper `autocomplete` attributes (email, current-password, new-password, name)
-- **SEO**: `seo_engine.py` handles SEO routes; 404s are expected until content is generated
+- **SEO**: `seo_engine.py` handles SEO routes; 404s are expected until content is generated; bot-readable HTML endpoints at `/api/seo/html/{board}/{class}/{subject}/{topic}` serve pre-rendered HTML with JSON-LD, Dublin Core, and citation meta tags; `robots.txt` allows all major AI crawlers (GPTBot, ChatGPT-User, OAI-SearchBot, PerplexityBot, ClaudeBot, Googlebot, Google-Extended, Bingbot, FacebookBot, Applebot, etc.); sitemap includes both SPA and HTML bot URLs
 - **Testing**: pytest suite in `tests/` (17 tests: health, auth, API, security headers); run `cd artifacts/syrabit-backend && python3 -m pytest tests/ -v`
 - **Docker**: `Dockerfile` (Python 3.11-slim, non-root user, healthcheck) + `docker-compose.yml` with resource limits
 - **Endpoints**: 139 API endpoints total (as of Phase 8 completion)

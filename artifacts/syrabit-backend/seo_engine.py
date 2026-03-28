@@ -12,13 +12,13 @@ URL pattern (4-segment):
 """
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 from typing import Any, Callable, Coroutine, List, Optional
 from datetime import datetime, timezone
-import asyncio, uuid, re, logging
+import asyncio, uuid, re, logging, json, html as html_mod
 
 logger = logging.getLogger(__name__)
 
@@ -609,6 +609,176 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
     return await _inject_qa(page)
 
 
+def _md_to_html(text: str) -> str:
+    if not text:
+        return ""
+    h = html_mod.escape(text)
+    h = re.sub(r'^#### (.+)$', r'<h4>\1</h4>', h, flags=re.MULTILINE)
+    h = re.sub(r'^### (.+)$', r'<h3>\1</h3>', h, flags=re.MULTILINE)
+    h = re.sub(r'^## (.+)$', r'<h2>\1</h2>', h, flags=re.MULTILINE)
+    h = re.sub(r'^# (.+)$', r'<h1>\1</h1>', h, flags=re.MULTILINE)
+    h = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', h)
+    h = re.sub(r'\*(.+?)\*', r'<em>\1</em>', h)
+    h = re.sub(r'^- (.+)$', r'<li>\1</li>', h, flags=re.MULTILINE)
+    h = re.sub(r'\n\n', '</p><p>', h)
+    return f"<p>{h}</p>"
+
+
+def _render_seo_html(page: dict, page_url: str) -> str:
+    title = html_mod.escape(page.get("title", ""))
+    desc = html_mod.escape(page.get("meta_description", ""))
+    topic = html_mod.escape(page.get("topic_title", ""))
+    subject = html_mod.escape(page.get("subject_name", ""))
+    board = html_mod.escape(page.get("board_name", ""))
+    cls = html_mod.escape(page.get("class_name", ""))
+    chapter = html_mod.escape(page.get("chapter_title", ""))
+    content_html = _md_to_html(page.get("content", ""))
+    generated = page.get("generated_at", "")
+    updated = page.get("updated_at", generated)
+
+    ld_json = json.dumps({
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "Article",
+                "headline": page.get("title", ""),
+                "description": page.get("meta_description", ""),
+                "author": {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai"},
+                "publisher": {
+                    "@type": "Organization",
+                    "name": "Syrabit.ai",
+                    "url": "https://syrabit.ai",
+                    "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
+                },
+                "datePublished": generated,
+                "dateModified": updated,
+                "image": "https://syrabit.ai/opengraph.jpg",
+                "mainEntityOfPage": {"@type": "WebPage", "@id": page_url},
+                "educationalLevel": f"{cls} {board}".strip(),
+                "about": {"@type": "Thing", "name": page.get("topic_title", "")},
+                "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
+                "inLanguage": "en-IN",
+            },
+            {
+                "@type": "Course",
+                "name": f"{topic} — {cls} {board}".strip(),
+                "description": page.get("meta_description", ""),
+                "provider": {"@type": "Organization", "name": "Syrabit.ai", "sameAs": "https://syrabit.ai"},
+                "educationalLevel": f"{cls} {board}".strip(),
+                "url": page_url,
+                "inLanguage": "en-IN",
+            },
+            {
+                "@type": "BreadcrumbList",
+                "itemListElement": [
+                    {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
+                    {"@type": "ListItem", "position": 2, "name": "Library", "item": "https://syrabit.ai/library"},
+                    {"@type": "ListItem", "position": 3, "name": subject, "item": "https://syrabit.ai/library"},
+                    {"@type": "ListItem", "position": 4, "name": topic, "item": page_url},
+                ],
+            },
+        ],
+    }, ensure_ascii=False)
+
+    return f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{title} | Syrabit.ai</title>
+<meta name="description" content="{desc}">
+<link rel="canonical" href="{html_mod.escape(page_url)}">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:locale" content="en_IN">
+<meta property="og:title" content="{title}">
+<meta property="og:description" content="{desc}">
+<meta property="og:type" content="article">
+<meta property="og:url" content="{html_mod.escape(page_url)}">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="article:published_time" content="{html_mod.escape(generated)}">
+<meta property="article:modified_time" content="{html_mod.escape(updated)}">
+<meta property="article:section" content="{subject}">
+<meta property="article:tag" content="{topic}">
+<meta property="article:tag" content="{subject}">
+<meta property="article:tag" content="{board}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@SyrabitAI">
+<meta name="twitter:title" content="{title}">
+<meta name="twitter:description" content="{desc}">
+<meta name="twitter:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="citation_title" content="{title}">
+<meta name="citation_author" content="Syrabit.ai">
+<meta name="citation_publication_date" content="{html_mod.escape(generated[:10] if generated else '')}">
+<meta name="citation_online_date" content="{html_mod.escape(updated[:10] if updated else '')}">
+<meta name="citation_publisher" content="Syrabit.ai">
+<meta name="citation_public_url" content="{html_mod.escape(page_url)}">
+<meta name="dc.title" content="{title}">
+<meta name="dc.creator" content="Syrabit.ai">
+<meta name="dc.subject" content="{subject} — {board} {cls}">
+<meta name="dc.description" content="{desc}">
+<meta name="dc.publisher" content="Syrabit.ai">
+<meta name="dc.type" content="Text">
+<meta name="dc.language" content="en-IN">
+<meta name="dc.source" content="https://syrabit.ai">
+<script type="application/ld+json">{ld_json}</script>
+</head>
+<body>
+<header>
+<nav aria-label="Breadcrumb">
+<a href="https://syrabit.ai">Home</a> &rsaquo;
+<a href="https://syrabit.ai/library">Library</a> &rsaquo;
+<span>{subject}</span> &rsaquo;
+<span>{topic}</span>
+</nav>
+<p><strong>{board}</strong> &middot; {cls} &middot; {subject} &middot; {chapter}</p>
+</header>
+<main>
+<article>
+<h1>{topic} — {board} {cls} {subject}</h1>
+<p><em>{desc}</em></p>
+{content_html}
+</article>
+<footer>
+<p>Source: <a href="{html_mod.escape(page_url)}">Syrabit.ai — {topic}</a></p>
+<p>&copy; Syrabit.ai — AI-powered exam prep for Assam Board students</p>
+</footer>
+</main>
+</body>
+</html>"""
+
+
+@router.get("/html/{board}/{class_slug}/{subject_slug}/{topic_slug}", response_class=HTMLResponse)
+async def get_seo_html_default(board: str, class_slug: str, subject_slug: str, topic_slug: str):
+    page = await _db.seo_pages.find_one(
+        {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
+         "topic_slug": topic_slug, "page_type": "notes", "status": "published"},
+        {"_id": 0},
+    )
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    page = await _inject_qa(page)
+    page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{topic_slug}"
+    return HTMLResponse(content=_render_seo_html(page, page_url))
+
+
+@router.get("/html/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}", response_class=HTMLResponse)
+async def get_seo_html_typed(board: str, class_slug: str, subject_slug: str, topic_slug: str, page_type: str):
+    if page_type not in PAGE_TYPES:
+        raise HTTPException(status_code=404, detail="Invalid page type")
+    page = await _db.seo_pages.find_one(
+        {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
+         "topic_slug": topic_slug, "page_type": page_type, "status": "published"},
+        {"_id": 0},
+    )
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    page = await _inject_qa(page)
+    page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}"
+    return HTMLResponse(content=_render_seo_html(page, page_url))
+
+
 @router.get("/page-types/{board}/{class_slug}/{subject_slug}/{topic_slug}")
 async def get_available_page_types(board: str, class_slug: str, subject_slug: str, topic_slug: str):
     pages = await _db.seo_pages.find(
@@ -753,10 +923,17 @@ async def get_dynamic_sitemap():
 
     seen_topics = set()
     for p in pages:
-        base_path = f"/{p['board_slug']}/{p['class_slug']}/{p['subject_slug']}/{p['topic_slug']}"
-        path = base_path if p["page_type"] == "notes" else f"{base_path}/{p['page_type']}"
+        bs = p.get("board_slug")
+        cs = p.get("class_slug")
+        ss = p.get("subject_slug")
+        ts = p.get("topic_slug")
+        pt = p.get("page_type", "notes")
+        if not all([bs, cs, ss, ts]):
+            continue
+        base_path = f"/{bs}/{cs}/{ss}/{ts}"
+        path = base_path if pt == "notes" else f"{base_path}/{pt}"
         loc = f"{BASE}{path}"
-        pri = "0.8" if p["page_type"] == "notes" else "0.7"
+        pri = "0.8" if pt == "notes" else "0.7"
         try:
             raw = p.get("updated_at", "")
             lastmod = raw[:10] if raw else today
@@ -764,6 +941,9 @@ async def get_dynamic_sitemap():
             lastmod = today
         lines.append(f"  <url><loc>{loc}</loc><changefreq>monthly</changefreq>"
                      f"<priority>{pri}</priority><lastmod>{lastmod}</lastmod></url>")
+        html_loc = f"{BASE}/api/seo/html{path}"
+        lines.append(f"  <url><loc>{html_loc}</loc><changefreq>monthly</changefreq>"
+                     f"<priority>0.6</priority><lastmod>{lastmod}</lastmod></url>")
         seen_topics.add(base_path)
 
     lines.append("</urlset>")
