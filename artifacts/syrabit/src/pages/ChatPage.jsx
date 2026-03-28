@@ -101,95 +101,65 @@ const bubbleVariants = {
     transition: { duration: 0.22, ease: [0.25, 0.1, 0.25, 1] } },
 };
 
-// ── RAG source badge ──────────────────────────────────────────────────────────
-function RagBadge({ source, chunks, subjectId, subjectName }) {
+// ── Single clickable source card (merges library + RAG info) ─────────────────
+function SourcesList({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectName }) {
   const navigate = useNavigate();
-  if (!source || source === 'none') return null;
 
-  const handleSubjectClick = (e) => {
-    e.stopPropagation();
-    if (subjectId) navigate(`/subject/${subjectId}`);
+  const hasSrc = sources && sources.length > 0;
+  const hasRag = ragSource && ragSource !== 'none';
+
+  if (!hasSrc && !hasRag) return null;
+
+  const src = hasSrc ? sources[0] : null;
+
+  const sourceLabel = (() => {
+    if (ragSource === 'document') return 'Document';
+    if (ragSource === 'rag' || ragSource === 'rag+web') return `Syllabus${ragChunks ? ` · ${ragChunks} blocks` : ''}`;
+    if (ragSource === 'web') return 'Web search';
+    return null;
+  })();
+
+  const title = src?.title || ragSubjectName || 'Syrabit Library';
+  const url = src?.url || (ragSubjectId ? `/subject/${ragSubjectId}` : null);
+  const isExternal = url && url.startsWith('http');
+
+  const handleClick = () => {
+    if (!url) return;
+    if (isExternal) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } else {
+      navigate(url);
+    }
   };
 
-  if (source === 'document') {
-    return (
-      <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium"
-        style={{ background: 'rgba(16,185,129,0.12)', color: '#34d399', border: '1px solid rgba(16,185,129,0.25)' }}
-        title="Answer grounded in the uploaded subject document (Tier 0 — highest priority)"
-      >
-        <FileText size={9} aria-hidden="true" />
-        {subjectName && subjectId ? (
-          <button
-            onClick={handleSubjectClick}
-            className="hover:underline cursor-pointer bg-transparent border-none p-0 text-[10px] font-medium"
-            style={{ color: 'inherit' }}
-            title={`View content card: ${subjectName}`}
-          >
-            {subjectName}
-          </button>
-        ) : 'Document'}
-      </span>
-    );
-  }
-  if (source === 'rag' || source === 'rag+web') {
-    const label = subjectName || `Syllabus · ${chunks} blocks`;
-    return (
-      <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium"
-        style={{ background: 'rgba(16,185,129,0.10)', color: '#34d399', border: '1px solid rgba(16,185,129,0.20)' }}
-        title={subjectName ? `Source: ${subjectName} — ${chunks} content blocks used` : `Answer grounded in ${chunks} syllabus content blocks`}
-      >
-        <Database size={9} aria-hidden="true" />
-        {subjectId ? (
-          <button
-            onClick={handleSubjectClick}
-            className="hover:underline cursor-pointer bg-transparent border-none p-0 text-[10px] font-medium"
-            style={{ color: 'inherit' }}
-            title={`View content card: ${label}`}
-          >
-            {label}
-          </button>
-        ) : label}
-      </span>
-    );
-  }
-  if (source === 'web') {
-    return (
-      <span
-        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium"
-        style={{ background: 'rgba(59,130,246,0.10)', color: '#60a5fa', border: '1px solid rgba(59,130,246,0.20)' }}
-        title="No syllabus content found — answer supplemented by web search"
-      >
-        <Globe size={9} aria-hidden="true" /> Web search
-      </span>
-    );
-  }
-  return null;
-}
-
-// ── Single clickable content-card source ─────────────────────────────────────
-function SourcesList({ sources }) {
-  if (!sources || sources.length === 0) return null;
-  const src = sources[0];
   return (
     <div className="mt-3">
-      <a
-        href={src.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg transition-colors hover:brightness-110"
+      <button
+        onClick={handleClick}
+        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg transition-colors hover:brightness-110 text-left cursor-pointer"
         style={{
           background: 'rgba(59,130,246,0.12)',
           border: '1px solid rgba(59,130,246,0.3)',
         }}
+        title={url || title}
       >
         <BookOpen size={14} className="text-blue-400 shrink-0" />
         <span className="text-[13px] font-medium text-blue-400">
-          {src.title}
+          {title}
         </span>
-        <ExternalLink size={12} className="text-blue-400/60 shrink-0" />
-      </a>
+        {sourceLabel && (
+          <span
+            className="text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0"
+            style={{
+              background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.15)',
+              color: ragSource === 'web' ? '#60a5fa' : '#34d399',
+            }}
+          >
+            {sourceLabel}
+          </span>
+        )}
+        {url && <ExternalLink size={12} className="text-blue-400/60 shrink-0" />}
+      </button>
     </div>
   );
 }
@@ -308,7 +278,13 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
             )}
 
             {!msg.streaming && msg.content && (
-              <SourcesList sources={msg.sources} />
+              <SourcesList
+                sources={msg.sources}
+                ragSource={msg.rag_source}
+                ragChunks={msg.rag_chunks}
+                ragSubjectId={msg.rag_subject_id}
+                ragSubjectName={msg.rag_subject_name}
+              />
             )}
 
             {!msg.streaming && msg.content && (
@@ -316,7 +292,6 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
                 {timeStr && (
                   <span className="text-[11px] text-muted-foreground">{timeStr}</span>
                 )}
-                <RagBadge source={msg.rag_source} chunks={msg.rag_chunks} subjectId={msg.rag_subject_id} subjectName={msg.rag_subject_name} />
                 <button
                   onClick={handleCopy}
                   className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
