@@ -7869,6 +7869,70 @@ async def publish_cms_document(doc_id: str, admin: dict = Depends(get_admin_user
     return {"status": new_status}
 
 
+@api.post("/admin/content/cms-documents/{doc_id}/link-syllabus")
+async def link_cms_syllabus(doc_id: str, data: dict = Body(...), admin: dict = Depends(get_admin_user)):
+    """Link a CMS document to a syllabus scope. Auto-populates canonical URL and geo_tags."""
+    doc = await db.cms_documents.find_one({"id": doc_id}, {"_id": 0, "id": 1})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    board_id   = data.get("board_id", "")
+    class_id   = data.get("class_id", "")
+    stream_id  = data.get("stream_id", "")
+    subject_id = data.get("subject_id", "")
+    board_doc   = await db.boards.find_one({"id": board_id},   {"_id": 0}) or {}
+    class_doc   = await db.classes.find_one({"id": class_id},  {"_id": 0}) or {}
+    stream_doc  = await db.streams.find_one({"id": stream_id}, {"_id": 0}) or {}
+    subject_doc = await db.subjects.find_one({"id": subject_id}, {"_id": 0}) or {}
+    board_name   = board_doc.get("name",   board_id)
+    class_name   = class_doc.get("name",   class_id)
+    stream_name  = stream_doc.get("name",  stream_id)
+    subject_name = subject_doc.get("name", subject_id)
+    canonical = f"/{_slugify(board_name)}/{_slugify(class_name)}/{_slugify(subject_name)}"
+    geo_phrase = ", ".join(filter(None, [class_name, board_name, stream_name]))
+    updates = {
+        "linked_subject_id": subject_id,
+        "linked_board_id":   board_id,
+        "linked_class_id":   class_id,
+        "linked_stream_id":  stream_id,
+        "linked_scope":      f"{board_id}/{class_id}/{stream_id}/{subject_id}",
+        "canonical_url":     canonical,
+        "geo_tags":          geo_phrase,
+        "updated_at":        datetime.now(timezone.utc).isoformat(),
+    }
+    await db.cms_documents.update_one({"id": doc_id}, {"$set": updates})
+    logger.info(f"CMS doc {doc_id} linked to scope {board_id}/{class_id}/{stream_id}/{subject_id}")
+    return {"message": "Linked to syllabus scope", "canonical_url": canonical, "geo_tags": geo_phrase,
+            "board_name": board_name, "class_name": class_name, "stream_name": stream_name, "subject_name": subject_name}
+
+
+@api.post("/admin/content/cms-documents/{doc_id}/revisions")
+async def save_cms_revision(doc_id: str, admin: dict = Depends(get_admin_user)):
+    """Create a dated draft revision duplicate of a CMS document."""
+    doc = await db.cms_documents.find_one({"id": doc_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    from datetime import date as _date
+    date_str  = _date.today().strftime("%Y-%m-%d")
+    rev_id    = f"{doc_id}-rev-{uuid.uuid4().hex[:6]}"
+    base_slug = doc.get("seo_slug", _slugify(doc.get("title", "doc")))
+    rev_slug  = f"{base_slug}-rev-{date_str}"
+    revision  = {
+        **doc,
+        "id":             rev_id,
+        "title":          f"{doc.get('title', 'Untitled')} — Rev {date_str}",
+        "seo_slug":       rev_slug,
+        "status":         "draft",
+        "is_revision":    True,
+        "source_doc_id":  doc_id,
+        "created_at":     datetime.now(timezone.utc).isoformat(),
+        "updated_at":     datetime.now(timezone.utc).isoformat(),
+    }
+    revision.pop("_id", None)
+    await db.cms_documents.insert_one(revision)
+    logger.info(f"Revision created: {rev_id} from {doc_id}")
+    return {"id": rev_id, "title": revision["title"], "seo_slug": rev_slug}
+
+
 @api.post("/admin/content/extract-pdf-text")
 async def extract_pdf_text(file: UploadFile = File(...), admin: dict = Depends(get_admin_user)):
     """Extract text from a PDF upload (no Supabase needed) for pasting into the editor."""
