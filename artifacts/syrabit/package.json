@@ -32,6 +32,7 @@
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.4",
     "@tanstack/react-query": "catalog:",
+    "@uiw/react-md-editor": "^4.0.11",
     "axios": "^1.8.4",
     "class-variance-authority": "catalog:",
     "clsx": "catalog:",

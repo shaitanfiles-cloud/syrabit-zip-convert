@@ -1,4 +1,5 @@
 import "./App.css";
+import '@uiw/react-md-editor/markdown-editor.css';
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
@@ -49,6 +50,7 @@ const SubjectLandingPage = lazy(() => import("@/pages/SubjectLandingPage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
 const PaymentCancelPage  = lazy(() => import("@/pages/PaymentCancelPage"));
+const LearnPage          = lazy(() => import("@/pages/LearnPage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallback = () => (
@@ -177,6 +179,9 @@ function App() {
                   <Route path="/library"           element={<LibraryPage />} />
                   <Route path="/curriculum"        element={<CurriculumMap />} />
                   <Route path="/subject/:subjectId" element={<SubjectPage />} />
+
+                  {/* ── CMS Learn pages ── */}
+                  <Route path="/learn/:slug" element={<LearnPage />} />
 
                   {/* ── Programmatic SEO routes: /{board}/{class-N}/{subject}/{topic}/{type?} ── */}
                   <Route path="/:board/:classSlug/:subjectSlug/:topicSlug/:pageType" element={<SeoTopicPage />} />

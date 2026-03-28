@@ -20,6 +20,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
 import os, uuid, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys, html as _html_mod
+import mistune as _mistune
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
 
@@ -7444,9 +7445,38 @@ async def admin_apply_supabase(data: dict, admin: dict = Depends(get_admin_user)
 # CMS LIBRARY ENDPOINTS
 # ─────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKDOWN PROCESSING HELPERS (WordPress-style auto-format)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_md_renderer = _mistune.create_markdown(
+    plugins=["table", "strikethrough", "footnotes", "task_lists"],
+    escape=False,
+)
+
+def _md_to_html(raw: str) -> str:
+    """Convert markdown to safe HTML using mistune with GFM plugins."""
+    if not raw:
+        return ""
+    return _md_renderer(raw) or ""
+
+def _extract_headings_json(raw: str) -> str:
+    """Return JSON array of {level, text, anchor} extracted from markdown content."""
+    headings = []
+    for line in raw.splitlines():
+        m = re.match(r'^(#{1,3})\s+(.+)', line.strip())
+        if m:
+            level = len(m.group(1))
+            text = m.group(2).strip()
+            anchor = re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
+            headings.append({"level": level, "text": text, "anchor": anchor})
+    return json.dumps(headings)
+
+
 class CMSDocument(BaseModel):
     title: str
-    content: str
+    content: str = ""           # raw markdown (content_raw)
+    content_html: Optional[str] = ""   # processed HTML (auto-generated if empty)
     meta_description: Optional[str] = ""  # 160 char SEO description
     description: Optional[str] = ""  # Long description (2000 char)
     seo_tags: Optional[str] = ""
@@ -7456,6 +7486,8 @@ class CMSDocument(BaseModel):
     alt_text: Optional[str] = ""
     category: Optional[str] = ""  # e.g., ahsec/class12/pcm/physics
     headings: Optional[str] = ""  # JSON string of extracted headings
+    geo_tags: Optional[str] = ""  # board/class/subject/topic for GEO targeting
+    schema_type: Optional[str] = "Article"  # Article, FAQPage, HowTo
     status: str = "draft"
 
 @api.get("/admin/content/cms-documents")
@@ -7472,24 +7504,30 @@ async def get_cms_documents(admin: dict = Depends(get_admin_user)):
 
 @api.post("/admin/content/cms-documents")
 async def create_cms_document(doc: CMSDocument, admin: dict = Depends(get_admin_user)):
-    """Create new SEO-optimized CMS document"""
+    """Create new SEO-optimized CMS document with auto markdown→HTML processing"""
     doc_id = str(uuid.uuid4())
-    word_count = len(doc.content.split())
+    raw_md = doc.content or ""
+    content_html = doc.content_html or _md_to_html(raw_md)
+    headings_json = doc.headings or _extract_headings_json(raw_md)
+    word_count = len(re.sub(r'<[^>]+>', '', content_html).split())
     now = datetime.now(timezone.utc).isoformat()
     
     doc_data = {
         "id": doc_id,
         "title": doc.title,
-        "content": doc.content,
+        "content": raw_md,          # raw markdown
+        "content_html": content_html,  # processed HTML
         "meta_description": doc.meta_description,
         "description": doc.description,
         "seo_tags": doc.seo_tags,
+        "geo_tags": doc.geo_tags,
         "primary_keyword": doc.primary_keyword,
         "seo_slug": doc.seo_slug,
         "thumbnail_url": doc.thumbnail_url,
         "alt_text": doc.alt_text,
         "category": doc.category,
-        "headings": doc.headings,
+        "headings": headings_json,
+        "schema_type": doc.schema_type,
         "status": doc.status,
         "word_count": word_count,
         "rag_processed": False,
@@ -7504,20 +7542,26 @@ async def create_cms_document(doc: CMSDocument, admin: dict = Depends(get_admin_
 
 @api.patch("/admin/content/cms-documents/{doc_id}")
 async def update_cms_document(doc_id: str, doc: CMSDocument, admin: dict = Depends(get_admin_user)):
-    """Update existing SEO-optimized CMS document"""
-    word_count = len(doc.content.split())
+    """Update existing CMS document — auto re-processes markdown → HTML"""
+    raw_md = doc.content or ""
+    content_html = doc.content_html or _md_to_html(raw_md)
+    headings_json = doc.headings or _extract_headings_json(raw_md)
+    word_count = len(re.sub(r'<[^>]+>', '', content_html).split())
     updates = {
         "title": doc.title,
-        "content": doc.content,
+        "content": raw_md,
+        "content_html": content_html,
         "meta_description": doc.meta_description,
         "description": doc.description,
         "seo_tags": doc.seo_tags,
+        "geo_tags": doc.geo_tags,
         "primary_keyword": doc.primary_keyword,
         "seo_slug": doc.seo_slug,
         "thumbnail_url": doc.thumbnail_url,
         "alt_text": doc.alt_text,
         "category": doc.category,
-        "headings": doc.headings,
+        "headings": headings_json,
+        "schema_type": doc.schema_type,
         "status": doc.status,
         "word_count": word_count,
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -7529,6 +7573,57 @@ async def update_cms_document(doc_id: str, doc: CMSDocument, admin: dict = Depen
     
     updated = await db.cms_documents.find_one({"id": doc_id}, {"_id": 0})
     return updated
+
+
+@api.post("/admin/content/cms-documents/{doc_id}/publish")
+async def publish_cms_document(doc_id: str, admin: dict = Depends(get_admin_user)):
+    """Toggle document status between published/draft"""
+    doc = await db.cms_documents.find_one({"id": doc_id}, {"_id": 0, "status": 1})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    new_status = "published" if doc.get("status") != "published" else "draft"
+    await db.cms_documents.update_one(
+        {"id": doc_id},
+        {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"status": new_status}
+
+
+@api.post("/admin/content/extract-pdf-text")
+async def extract_pdf_text(file: UploadFile = File(...), admin: dict = Depends(get_admin_user)):
+    """Extract text from a PDF upload (no Supabase needed) for pasting into the editor."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files accepted")
+    raw = await file.read()
+    if len(raw) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (max 20 MB)")
+    try:
+        import io
+        import pypdf
+        reader = pypdf.PdfReader(io.BytesIO(raw))
+        pages = []
+        for page in reader.pages:
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(text.strip())
+        extracted = "\n\n".join(pages)
+        return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
+    except ImportError:
+        # Fallback to PyPDF2 if pypdf not available
+        try:
+            import PyPDF2, io
+            reader = PyPDF2.PdfReader(io.BytesIO(raw))
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text() or ""
+                if text.strip():
+                    pages.append(text.strip())
+            extracted = "\n\n".join(pages)
+            return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"PDF extraction failed: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"PDF extraction failed: {e}")
 
 @api.delete("/admin/content/cms-documents/{doc_id}")
 async def delete_cms_document(doc_id: str, admin: dict = Depends(get_admin_user)):

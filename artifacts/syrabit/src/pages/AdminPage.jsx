@@ -36,6 +36,7 @@ import AdminQaManager        from '@/components/admin/AdminQaManager';
 import AdminContentStudio    from '@/components/admin/AdminContentStudio';
 import AdminAutomation       from '@/components/admin/AdminAutomation';
 import AdminMonetization     from '@/components/admin/AdminMonetization';
+import AdminCmsDocEditor     from '@/components/admin/AdminCmsDocEditor';
 
 // ── Section registry ──────────────────────────────────────────────────────────
 const SECTIONS = [
@@ -43,6 +44,7 @@ const SECTIONS = [
   { id: 'roadmap',       icon: GitBranch,       label: 'Roadmap',           group: 'main'     },
   { id: 'syllabus',      icon: FolderTree,      label: 'Syllabus',          group: 'content'  },
   { id: 'content',       icon: PenTool,         label: 'Content Editor',    group: 'content'  },
+  { id: 'cms',           icon: FileText,        label: 'CMS Editor',        group: 'content'  },
   { id: 'studio',        icon: Sparkles,        label: 'Content Studio',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
   { id: 'qamanager',     icon: MessageSquare,   label: 'QA Review',         group: 'content'  },
@@ -77,6 +79,7 @@ const SECTION_COMPONENTS = {
   roadmap:       AdminRoadmap,
   syllabus:      AdminSyllabus,
   content:       AdminContentEditor,
+  cms:           AdminCmsDocEditor,
   studio:        AdminContentStudio,
   seomanager:    AdminSeoManager,
   qamanager:     AdminQaManager,
