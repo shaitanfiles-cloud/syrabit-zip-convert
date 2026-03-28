@@ -14,6 +14,7 @@ import {
   Sparkles, Eye, Edit2, BookOpen, Tag, Link2, Search,
   FileUp, GitBranch, ExternalLink, Monitor, ArrowRightLeft,
   CheckCircle, Copy, Zap, ChevronDown, ChevronRight as ChevronRightIcon,
+  Languages, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -120,6 +121,10 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
   const [linkedScopeLabel, setLinkedScopeLabel]   = useState('');
   const [scopePickerOpen, setScopePickerOpen]     = useState(false);
   const [autoKeywordLoading, setAutoKeywordLoading] = useState(false);
+  const [translateOpen, setTranslateOpen]         = useState(false);
+  const [translateLang, setTranslateLang]         = useState('as');
+  const [translating, setTranslating]             = useState(false);
+  const [translateResult, setTranslateResult]     = useState('');
 
   const pdfRef    = useRef(null);
   const editorRef = useRef(null);
@@ -311,6 +316,24 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
       setPdfLoading(false);
       if (pdfRef.current) pdfRef.current.value = '';
     }
+  };
+
+  const handleTranslate = async () => {
+    const content = editorRef.current?.getMarkdown() || form.content;
+    if (!content) { toast.error('No content to translate'); return; }
+    setTranslating(true);
+    setTranslateResult('');
+    try {
+      const res = await axios.post(
+        `${API}/admin/vertex/translate`,
+        { text: content.slice(0, 4000), target_lang: translateLang, source_lang: 'en' },
+        authHeaders(adminToken)
+      );
+      setTranslateResult(res.data.translated || '');
+      toast.success('Translation ready');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Translation failed');
+    } finally { setTranslating(false); }
   };
 
   const handleInsertSyllabus = async () => {
@@ -620,6 +643,14 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
               PDF
             </button>
 
+            <button onClick={() => { setTranslateOpen(v => !v); setTranslateResult(''); }}
+              className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium flex-shrink-0 border"
+              style={translateOpen
+                ? { background: 'rgba(16,185,129,0.20)', color: '#34d399', borderColor: 'rgba(16,185,129,0.35)' }
+                : { background: 'rgba(16,185,129,0.10)', color: '#34d399', borderColor: 'rgba(16,185,129,0.20)' }}>
+              <Languages size={12} /> Translate
+            </button>
+
             {editDoc && (
               <button onClick={handleSaveRevision} disabled={savingRevision} title="Save as new revision"
                 className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium disabled:opacity-40 flex-shrink-0 border"
@@ -759,6 +790,43 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
                   </div>
                 )}
               </div>
+
+              {/* Gemini Translate Panel */}
+              {translateOpen && (
+                <div style={{ background: 'rgba(16,185,129,0.06)', borderBottom: '1px solid rgba(16,185,129,0.18)', padding: '10px 16px' }}>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <Languages size={14} color="#34d399" />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#34d399' }}>Gemini Translate</span>
+                    <select value={translateLang} onChange={e => setTranslateLang(e.target.value)}
+                      style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(16,185,129,0.30)', borderRadius: 8, padding: '4px 10px', color: '#e8e8e8', fontSize: 12 }}>
+                      <option value="as">Assamese (অসমীয়া)</option>
+                      <option value="hi">Hindi (हिन्दी)</option>
+                      <option value="bn">Bengali (বাংলা)</option>
+                      <option value="bho">Bodo (बड़ो)</option>
+                    </select>
+                    <button onClick={handleTranslate} disabled={translating}
+                      style={{ background: 'rgba(16,185,129,0.2)', border: '1px solid rgba(16,185,129,0.35)', color: '#34d399', borderRadius: 8, padding: '4px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {translating ? <Loader2 size={12} className="animate-spin" /> : <Languages size={12} />}
+                      {translating ? 'Translating…' : 'Translate Content'}
+                    </button>
+                    <button onClick={() => setTranslateOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', marginLeft: 'auto' }}>
+                      <X size={14} />
+                    </button>
+                  </div>
+                  {translateResult && (
+                    <div style={{ marginTop: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(16,185,129,0.20)', borderRadius: 8, padding: '10px 14px', maxHeight: 180, overflowY: 'auto' }}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span style={{ fontSize: 10, fontWeight: 700, color: '#34d399', textTransform: 'uppercase' }}>Translation Result</span>
+                        <button onClick={() => { navigator.clipboard.writeText(translateResult); toast.success('Copied!'); }}
+                          style={{ background: 'rgba(16,185,129,0.15)', border: '1px solid rgba(16,185,129,0.3)', color: '#34d399', borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <Copy size={10} /> Copy
+                        </button>
+                      </div>
+                      <p style={{ fontSize: 13, color: '#e8e8e8', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{translateResult}</p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Editor area — split when preview is on */}
               <div className={`flex-1 min-h-0 flex ${canPreview ? 'gap-0' : ''} overflow-hidden`}>

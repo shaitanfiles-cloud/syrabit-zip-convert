@@ -24,6 +24,7 @@ import mistune as _mistune
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
 import ga4_client
+import vertex_services
 
 
 # ─────────────────────────────────────────────
@@ -9902,6 +9903,148 @@ async def ga4_test(admin: dict = Depends(get_admin_user)):
     if stats is None:
         return {"ok": False, "reason": "GA4 not configured or refresh token missing"}
     return {"ok": True, "stats": stats}
+
+
+# ─────────────────────────────────────────────
+# VERTEX AI / GEMINI POWERED SERVICES
+# ─────────────────────────────────────────────
+
+@api.get("/admin/vertex/health")
+async def vertex_health(admin: dict = Depends(get_admin_user)):
+    """Check status of all Vertex AI / Gemini services."""
+    return await vertex_services.health_check()
+
+
+@api.post("/admin/vertex/translate")
+async def vertex_translate(
+    text: str = Body(...),
+    target_lang: str = Body("as"),
+    source_lang: str = Body("en"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Translate educational content to Assamese or other regional languages."""
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    result = await vertex_services.translate(text, target_lang=target_lang, source_lang=source_lang)
+    if result is None:
+        raise HTTPException(status_code=503, detail="Translation failed — check GEMINI_API_KEY")
+    return {"translated": result, "target_lang": target_lang, "source_lang": source_lang}
+
+
+@api.post("/admin/vertex/semantic-search")
+async def vertex_semantic_search(
+    query: str = Body(...),
+    top_k: int = Body(10),
+    admin: dict = Depends(get_admin_user),
+):
+    """Semantic search across all published SEO topics using text embeddings."""
+    topics = await db.seo_topics.find(
+        {}, {"_id": 0, "slug": 1, "title": 1, "subject_name": 1, "class_name": 1, "status": 1}
+    ).to_list(5000)
+    results = await vertex_services.semantic_search(query, topics, text_key="title", top_k=top_k)
+    return {"query": query, "results": results, "total_searched": len(topics)}
+
+
+@api.post("/admin/vertex/enhance")
+async def vertex_enhance_content(
+    content: str = Body(...),
+    page_type: str = Body("notes"),
+    subject: str = Body(""),
+    topic: str = Body(""),
+    class_name: str = Body("Class 11"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Improve AI-generated content with Gemini."""
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    enhanced = await vertex_services.enhance_content(content, page_type, subject, topic, class_name)
+    if enhanced is None:
+        raise HTTPException(status_code=503, detail="Enhancement failed")
+    return {"enhanced": enhanced, "original_length": len(content), "enhanced_length": len(enhanced)}
+
+
+@api.post("/admin/vertex/quality-score")
+async def vertex_quality_score(
+    content: str = Body(...),
+    page_type: str = Body("notes"),
+    topic: str = Body(""),
+    subject: str = Body(""),
+    admin: dict = Depends(get_admin_user),
+):
+    """Score the quality of educational content with Gemini."""
+    return await vertex_services.score_content(content, page_type, topic, subject)
+
+
+@api.post("/admin/vertex/suggest-topics")
+async def vertex_suggest_topics(
+    subject: str = Body(...),
+    class_name: str = Body("Class 11"),
+    board: str = Body("AHSEC"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Suggest missing high-value topics for a subject using AI."""
+    existing = await db.seo_topics.distinct(
+        "title",
+        {"subject_name": subject, "class_name": class_name}
+    )
+    suggestions = await vertex_services.suggest_topics(subject, class_name, existing, board)
+    return {"subject": subject, "class_name": class_name, "suggestions": suggestions, "existing_count": len(existing)}
+
+
+@api.post("/admin/vertex/seo-meta")
+async def vertex_seo_meta(
+    topic: str = Body(...),
+    subject: str = Body(""),
+    class_name: str = Body("Class 11"),
+    page_type: str = Body("notes"),
+    board: str = Body("AHSEC"),
+    content_preview: str = Body(""),
+    admin: dict = Depends(get_admin_user),
+):
+    """Generate optimised SEO metadata (title, description, keywords, OG tags)."""
+    meta = await vertex_services.generate_seo_meta(topic, subject, class_name, page_type, board, content_preview)
+    if not meta:
+        raise HTTPException(status_code=503, detail="SEO meta generation failed")
+    return meta
+
+
+@api.get("/admin/vertex/content-gaps")
+async def vertex_content_gaps(admin: dict = Depends(get_admin_user)):
+    """Identify high-value content gaps by cross-referencing searches with published content."""
+    published = await db.seo_topics.distinct("slug", {"status": "published"})
+
+    search_pipeline = [
+        {"$match": {"type": "search"}},
+        {"$group": {"_id": "$query", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 30},
+    ]
+    top_searches = []
+    try:
+        raw = await db.analytics.aggregate(search_pipeline).to_list(30)
+        top_searches = [r["_id"] for r in raw if r.get("_id")]
+    except Exception:
+        pass
+
+    subjects = await db.seo_topics.distinct("subject_name")
+    gaps = await vertex_services.find_content_gaps(published, top_searches, subjects)
+    return {"gaps": gaps, "published_count": len(published), "search_queries_analyzed": len(top_searches)}
+
+
+@api.post("/admin/vertex/extract-document")
+async def vertex_extract_document(
+    file: UploadFile = File(...),
+    task: str = "extract_topics",
+    admin: dict = Depends(get_admin_user),
+):
+    """Extract structured data from PDF textbooks/question papers using Gemini 1.5 Pro."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    pdf_bytes = await file.read()
+    if len(pdf_bytes) > 20 * 1024 * 1024:  # 20MB limit
+        raise HTTPException(status_code=400, detail="PDF too large — max 20MB")
+    result = await vertex_services.extract_from_document(pdf_bytes, task=task)
+    return result
 
 
 # ─────────────────────────────────────────────

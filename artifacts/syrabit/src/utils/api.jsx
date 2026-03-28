@@ -241,3 +241,28 @@ export const verifyCreditTopUp = (data) =>
 
 export const createStripeCheckout = (plan, successUrl, cancelUrl) =>
   axios.post(`${API_BASE}/payments/stripe/create-checkout`, { plan, success_url: successUrl, cancel_url: cancelUrl }, authConfig());
+
+// ── Vertex AI / Gemini Services ──────────────────────────────────────────────
+export const vertexHealth = (token) =>
+  axios.get(`${API_BASE}/admin/vertex/health`, { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexTranslate = (token, text, target_lang = 'as', source_lang = 'en') =>
+  axios.post(`${API_BASE}/admin/vertex/translate`, { text, target_lang, source_lang }, { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexSemanticSearch = (token, query, top_k = 10) =>
+  axios.post(`${API_BASE}/admin/vertex/semantic-search`, { query, top_k }, { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexEnhance = (token, content, page_type, subject, topic, class_name) =>
+  axios.post(`${API_BASE}/admin/vertex/enhance`, { content, page_type, subject, topic, class_name }, { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexQualityScore = (token, content, page_type, topic, subject) =>
+  axios.post(`${API_BASE}/admin/vertex/quality-score`, { content, page_type, topic, subject }, { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexSuggestTopics = (token, subject, class_name, board = 'AHSEC') =>
+  axios.post(`${API_BASE}/admin/vertex/suggest-topics`, { subject, class_name, board }, { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexSeoMeta = (token, data) =>
+  axios.post(`${API_BASE}/admin/vertex/seo-meta`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexContentGaps = (token) =>
+  axios.get(`${API_BASE}/admin/vertex/content-gaps`, { headers: adminHeaders(token), withCredentials: true });

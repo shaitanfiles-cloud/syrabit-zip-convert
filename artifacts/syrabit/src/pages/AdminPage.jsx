@@ -10,7 +10,7 @@ import {
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, FileText, Globe,
-  Sparkles, Crown,
+  Sparkles, Crown, Cpu,
 } from 'lucide-react';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
@@ -35,6 +35,7 @@ import AdminSeoManager       from '@/components/admin/AdminSeoManager';
 import AdminContentStudio    from '@/components/admin/AdminContentStudio';
 import AdminMonetization     from '@/components/admin/AdminMonetization';
 import AdminCmsDocEditor     from '@/components/admin/AdminCmsDocEditor';
+import AdminVertexPanel      from '@/components/admin/AdminVertexPanel';
 
 // ── Section registry ──────────────────────────────────────────────────────────
 const SECTIONS = [
@@ -45,6 +46,7 @@ const SECTIONS = [
   { id: 'cms',           icon: FileText,        label: 'CMS Editor',        group: 'content'  },
   { id: 'studio',        icon: Sparkles,        label: 'Content Studio',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
+  { id: 'vertex',        icon: Cpu,             label: 'Gemini AI Studio',  group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
   { id: 'conversations', icon: MessageSquare,   label: 'Conversations',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
@@ -90,6 +92,7 @@ const SECTION_COMPONENTS = {
   ratelimits:    AdminRateLimits,
   activitylog:   AdminActivityLog,
   health:        AdminHealth,
+  vertex:        AdminVertexPanel,
 };
 
 // ── AdminPage ─────────────────────────────────────────────────────────────────

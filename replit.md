@@ -1,8 +1,24 @@
-# Workspace
+# Workspace — Syrabit.ai
 
 ## Overview
 
-pnpm workspace monorepo using TypeScript. Each package manages its own dependencies.
+pnpm workspace monorepo. Primary artifact: **Syrabit.ai** — AI-powered educational platform for AHSEC Class 11/12 + Degree students in Assam.
+
+### Vertex AI / Gemini Integration (vertex_services.py)
+9 AI-powered services all driven by `GEMINI_API_KEY`:
+1. **Text Embeddings** (`text-embedding-004`) — semantic topic search
+2. **Translation** (Gemini multilingual) — Assamese, Hindi, Bengali, Bodo
+3. **Vision Analysis** (Gemini Vision) — thumbnail analysis
+4. **Content Enhancer** — improve generated notes/MCQs
+5. **Quality Scorer** — score content before publishing
+6. **Topic Suggester** — find missing high-value topics
+7. **SEO Meta Generator** — title/description/keywords/OG tags
+8. **Content Gap Finder** — cross-references searches vs published pages
+9. **Long Doc Reader** (Gemini 1.5 Pro 1M ctx) — extract from AHSEC PDFs
+
+Admin endpoints: `/api/admin/vertex/*`
+Frontend panel: Admin → Gemini AI Studio (sidebar)
+CMS Editor: Translate button in toolbar (Assamese/Hindi/Bengali/Bodo)
 
 ## Stack
 
