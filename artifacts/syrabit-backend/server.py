@@ -2782,6 +2782,13 @@ class _SmartKeyPool:
             f"cooling {self._RL_COOLDOWN}s"
         )
 
+    def mark_403(self, slot):
+        slot["cooldown_until"] = float("inf")  # permanently disabled for session
+        logger.error(
+            f"SLM pool: {slot['provider']}/{slot['model']} → 403 Forbidden (auth/permission error). "
+            f"Slot permanently disabled. Check the API key for '{slot['provider']}'."
+        )
+
     def mark_err(self, slot):
         slot["errors"] += 1
         cd = min(self._ERR_COOLDOWN * slot["errors"], 120.0)   # cap at 2 min
@@ -3223,8 +3230,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             except Exception as e:
                 err_str = str(e)
                 is_429 = "429" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower() or "throttl" in err_str.lower()
+                is_403 = "403" in err_str or "forbidden" in err_str.lower() or "permission" in err_str.lower() or "unauthorized" in err_str.lower()
                 if is_429:
                     _slm_pool.mark_429(slot)
+                elif is_403:
+                    _slm_pool.mark_403(slot)
                 else:
                     _slm_pool.mark_err(slot)
                 logger.warning(f"SLM pool: {p_name}/{p_model} failed ({type(e).__name__}: {err_str[:80]})")

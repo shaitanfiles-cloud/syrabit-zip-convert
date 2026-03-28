@@ -32,9 +32,22 @@ _GEN_MODEL   = "gemini-2.5-flash-preview-05-20"   # highest accuracy Gemini flas
 _PRO_MODEL   = "gemini-2.5-flash-preview-05-20"  # long-doc: 1M ctx same model
 _VISION_MODEL = "gemini-2.5-flash-preview-05-20"  # multimodal
 
+_GEMINI_FORBIDDEN = False  # set True on 403 — stops all further Gemini calls for session
+
 
 def _ok() -> bool:
-    return bool(GEMINI_KEY)
+    return bool(GEMINI_KEY) and not _GEMINI_FORBIDDEN
+
+
+def _mark_forbidden():
+    global _GEMINI_FORBIDDEN
+    if not _GEMINI_FORBIDDEN:
+        _GEMINI_FORBIDDEN = True
+        logger.error(
+            "Gemini API returned 403 Forbidden — GEMINI_API_KEY is invalid or the model is not "
+            "accessible with this key. Disabling all Gemini calls for this session. "
+            "Check GEMINI_API_KEY in your environment secrets."
+        )
 
 
 def _headers() -> dict:
@@ -58,6 +71,9 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
     try:
         async with httpx.AsyncClient(timeout=15) as c:
             r = await c.post(url, json=body, headers=_headers())
+            if r.status_code == 403:
+                _mark_forbidden()
+                return None
             r.raise_for_status()
             return r.json()["embedding"]["values"]
     except Exception as e:
@@ -167,6 +183,9 @@ async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg",
     try:
         async with httpx.AsyncClient(timeout=30) as c:
             r = await c.post(url, json=body, headers=_headers())
+            if r.status_code == 403:
+                _mark_forbidden()
+                return None
             r.raise_for_status()
             return r.json()["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
@@ -393,6 +412,9 @@ async def extract_from_document(pdf_bytes: bytes, task: str = "extract_mcqs") ->
     try:
         async with httpx.AsyncClient(timeout=120) as c:
             r = await c.post(url, json=body, headers=_headers())
+            if r.status_code == 403:
+                _mark_forbidden()
+                return {"error": "Gemini Vision is not configured — check GEMINI_API_KEY"}
             r.raise_for_status()
             raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
             cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```")
@@ -421,6 +443,9 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
     try:
         async with httpx.AsyncClient(timeout=45) as c:
             r = await c.post(url, json=body, headers=_headers())
+            if r.status_code == 403:
+                _mark_forbidden()
+                return None
             r.raise_for_status()
             return r.json()["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
