@@ -168,6 +168,44 @@ function RagBadge({ source, chunks, subjectId, subjectName }) {
   return null;
 }
 
+// ── Clickable library sources panel ──────────────────────────────────────────
+function SourcesList({ sources }) {
+  if (!sources || sources.length === 0) return null;
+  return (
+    <div className="mt-3 rounded-xl overflow-hidden border"
+      style={{ borderColor: 'rgba(124,58,237,0.2)', background: 'rgba(124,58,237,0.04)' }}>
+      <div className="flex items-center gap-1.5 px-3 py-2 border-b"
+        style={{ borderColor: 'rgba(124,58,237,0.12)', background: 'rgba(124,58,237,0.06)' }}>
+        <BookOpen size={11} className="text-violet-400 shrink-0" />
+        <span className="text-[11px] font-semibold text-violet-400 uppercase tracking-wide">
+          Sources from Syrabit Library
+        </span>
+      </div>
+      <div className="divide-y" style={{ borderColor: 'rgba(124,58,237,0.08)' }}>
+        {sources.map((src, i) => (
+          <a
+            key={i}
+            href={src.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-start gap-2.5 px-3 py-2.5 hover:bg-violet-500/10 transition-colors group"
+          >
+            <span className="shrink-0 mt-0.5 text-[11px] font-bold text-violet-400 w-4">[{i + 1}]</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-xs font-medium text-white/80 group-hover:text-white transition-colors truncate">
+                📖 {src.title}
+              </p>
+              {src.snippet && (
+                <p className="text-[11px] text-white/40 mt-0.5 line-clamp-1">{src.snippet}</p>
+              )}
+            </div>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Markdown renderer for AI answers ─────────────────────────────────────────
 function MarkdownContent({ content, streaming }) {
   return (
@@ -279,6 +317,10 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
 
             {!msg.streaming && msg.content && (
               <MarkdownContent content={msg.content} streaming={false} />
+            )}
+
+            {!msg.streaming && msg.content && (
+              <SourcesList sources={msg.sources} />
             )}
 
             {!msg.streaming && msg.content && (
@@ -509,6 +551,7 @@ export default function ChatPage() {
       let ragChunks = 0;
       let ragSubjectId = null;
       let ragSubjectName = null;
+      let libSources = [];
 
       // RAF-based batching: accumulate chunks between animation frames
       // so React re-renders at most 60×/sec instead of on every token
@@ -557,8 +600,9 @@ export default function ChatPage() {
                 rafId = requestAnimationFrame(flushPending);
               }
             }
-            // ── syrabit_done: credits metadata ─────────────────────────
+            // ── syrabit_done: credits metadata + library sources ───────
             if (parsed.event === 'syrabit_done') {
+              if (parsed.sources) libSources = parsed.sources;
               setCredits((c) => ({
                 ...c,
                 used: parsed.credits_used_total || c.used + 1,
@@ -579,10 +623,10 @@ export default function ChatPage() {
       if (pendingChunk) { fullContent += pendingChunk; pendingChunk = ''; }
 
       setConversationId(newConvId);
-      // Finalize: remove streaming flag, attach RAG metadata + subject link
+      // Finalize: remove streaming flag, attach RAG metadata + library sources
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
-          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName }
+          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, sources: libSources }
           : m
       ));
       setCredits((c) => ({ ...c, used: c.used + 1 }));

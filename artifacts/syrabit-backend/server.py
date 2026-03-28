@@ -1924,6 +1924,88 @@ async def _web_search_instant_fallback(query: str) -> dict:
 
 
 
+async def syrabit_library_search(
+    query: str,
+    board_slug: str = None,
+    class_slug: str = None,
+) -> list:
+    """Search Syrabit's own SEO pages + subjects library.
+    Returns up to 4 dicts: {title, url, snippet} — always clickable syrabit.ai links."""
+    if not await is_mongo_available():
+        return []
+
+    keywords = _extract_keywords(query)
+    if not keywords:
+        return []
+
+    pattern = "|".join(re.escape(kw) for kw in keywords[:5])
+    rx = {"$regex": pattern, "$options": "i"}
+    results: list = []
+    seen: set = set()
+
+    # ── 1. SEO pages (published topic pages) ──────────────────────────────────
+    try:
+        page_filter: dict = {
+            "status": "published",
+            "$or": [
+                {"topic_title": rx},
+                {"meta_description": rx},
+                {"subject_name": rx},
+            ],
+        }
+        if board_slug:
+            page_filter["board_slug"] = board_slug
+        if class_slug:
+            page_filter["class_slug"] = class_slug
+
+        pages = await db.seo_pages.find(
+            page_filter,
+            {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1,
+             "topic_slug": 1, "topic_title": 1, "meta_description": 1, "subject_name": 1},
+        ).limit(4).to_list(4)
+
+        for p in pages:
+            url = (
+                f"https://syrabit.ai/{p['board_slug']}/{p['class_slug']}"
+                f"/{p['subject_slug']}/{p['topic_slug']}"
+            )
+            if url not in seen:
+                seen.add(url)
+                results.append({
+                    "title": p.get("topic_title") or f"{p.get('subject_name', '')} — {p['topic_slug']}",
+                    "url": url,
+                    "snippet": (p.get("meta_description") or "")[:160],
+                })
+    except Exception as exc:
+        logger.debug(f"syrabit_library_search seo_pages error: {exc}")
+
+    # ── 2. Subjects (fills gaps up to 4 results) ───────────────────────────────
+    if len(results) < 4:
+        try:
+            subj_filter: dict = {
+                "status": "published",
+                "$or": [{"name": rx}, {"description": rx}, {"tags": rx}],
+            }
+            subjects = await db.subjects.find(
+                subj_filter,
+                {"_id": 0, "id": 1, "name": 1, "description": 1},
+            ).limit(4 - len(results)).to_list(4)
+
+            for s in subjects:
+                url = f"https://syrabit.ai/subject/{s['id']}" if s.get("id") else "https://syrabit.ai/library"
+                if url not in seen:
+                    seen.add(url)
+                    results.append({
+                        "title": s.get("name", "Syrabit Library"),
+                        "url": url,
+                        "snippet": (s.get("description") or "")[:160],
+                    })
+        except Exception as exc:
+            logger.debug(f"syrabit_library_search subjects error: {exc}")
+
+    return results[:4]
+
+
 async def resolve_rag_context(
     query: str,
     subject_id: Optional[str] = None,
@@ -4444,7 +4526,12 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     if answer is None:
         try:
-            answer = await call_llm_api(messages, model=msg.model or LLM_MODEL, max_tokens=max_tokens)
+            # Run LLM + library search in parallel to minimise latency
+            answer, lib_sources = await asyncio.gather(
+                call_llm_api(messages, model=msg.model or LLM_MODEL, max_tokens=max_tokens),
+                syrabit_library_search(msg.message, board_slug=None, class_slug=None),
+                return_exceptions=False,
+            )
             if not is_casual:
                 _redis_set_ai_cache(cache_key, answer)
                 _ai_response_cache[cache_key] = answer
@@ -4454,6 +4541,8 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         except Exception as e:
             logger.error(f"AI chat error: {e}")
             raise HTTPException(status_code=503, detail="AI service temporarily unavailable")
+    else:
+        lib_sources = await syrabit_library_search(msg.message)
 
     now = datetime.now(timezone.utc).isoformat()
     new_messages = [
@@ -4500,6 +4589,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         "credits_used": new_used,
         "rag_source": rag_ctx.get("source", "none"),
         "rag_chunks_used": len(rag_ctx.get("chunks", [])),
+        "sources": lib_sources,
     }
 
 async def _persist_chat_turn(
@@ -4659,6 +4749,9 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     async def event_stream():
         nonlocal full_response
+        # Run library search immediately (before LLM, non-blocking)
+        lib_sources_task = asyncio.create_task(syrabit_library_search(msg.message))
+
         # Send RAG metadata with full quality info + subject link data
         yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name})}\n\n"
 
@@ -4699,7 +4792,13 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         answer = "".join(full_response)
         new_used_optimistic = credits_info["used"] + 1 if answer else credits_info["used"]
 
-        # ── syrabit_done event with credits metadata ─────────────────────
+        # Await the library search task (started at top of event_stream)
+        try:
+            lib_sources = await lib_sources_task
+        except Exception:
+            lib_sources = []
+
+        # ── syrabit_done event with credits metadata + library sources ────
         done_payload = {
             "event": "syrabit_done",
             "conversation_id": conv_id,
@@ -4709,6 +4808,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             "rag_source": rag_source_saved,
             "rag_chunks": rag_chunks_count,
             "words": len(answer.split()) if answer else 0,
+            "sources": lib_sources,
         }
         yield f"data: {json.dumps(done_payload)}\n\n"
         yield "data: [DONE]\n\n"
@@ -4734,6 +4834,20 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+# ─────────────────────────────────────────────
+# PUBLIC SEARCH API  — /api/v1/search
+# ─────────────────────────────────────────────
+@api.get("/v1/search")
+async def public_library_search(q: str = "", board: Optional[str] = None, class_num: Optional[str] = None):
+    """Public search endpoint: returns matching syrabit.ai library pages.
+    Example: GET /api/v1/search?q=limits+class+11+ahsec
+    """
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="q parameter is required")
+    results = await syrabit_library_search(q.strip(), board_slug=board, class_slug=class_num)
+    return {"query": q, "results": results, "count": len(results)}
+
 
 # ─────────────────────────────────────────────
 # CONVERSATION ROUTES
