@@ -1,10 +1,9 @@
-import { useState, useEffect, useMemo, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Search, Bookmark, BookmarkCheck,
-  BookOpen, Layers, ChevronRight, Sparkles, FileText,
-  Share2, Copy, Check as CheckIcon, X as XIcon,
-  ExternalLink, Globe as GlobeIcon, Lock,
+  BookOpen, Layers, ChevronRight, Sparkles,
+  Share2, RefreshCw, ExternalLink, Globe as GlobeIcon, Lock,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
@@ -45,39 +44,67 @@ function getOnboardingProfile() {
 }
 
 function LibrarySkeleton() {
+  const pulse = { background: 'rgba(255,255,255,0.06)' };
+  const pulseDim = { background: 'rgba(255,255,255,0.04)' };
   return (
-    <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5 space-y-5">
-      <div className="flex gap-2 animate-pulse">
-        {[80, 96, 72, 88].map((w) => (
-          <div
-            key={w}
-            className="h-9 rounded-xl flex-shrink-0"
-            style={{ width: w, background: 'rgba(255,255,255,0.06)' }}
-          />
-        ))}
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-        {[...Array(6)].map((_, i) => (
-          <div
-            key={i}
-            className="rounded-2xl border animate-pulse"
-            style={{
-              background: 'rgba(255,255,255,0.04)',
-              borderColor: 'rgba(139,92,246,0.07)',
-            }}
-          >
-            <div className="h-10 rounded-t-2xl" style={{ background: 'rgba(255,255,255,0.03)' }} />
-            <div className="p-4 space-y-3">
-              <div className="h-5 rounded-lg w-3/4" style={{ background: 'rgba(255,255,255,0.08)' }} />
-              <div className="h-3 rounded w-1/2" style={{ background: 'rgba(255,255,255,0.05)' }} />
-              <div className="space-y-2">
-                {[...Array(3)].map((_, j) => (
-                  <div key={j} className="h-8 rounded-lg" style={{ background: 'rgba(255,255,255,0.04)' }} />
-                ))}
-              </div>
+    <div className="flex flex-col h-full w-full overflow-hidden animate-pulse">
+      {/* Sticky header skeleton */}
+      <div className="shrink-0 w-full" style={{ borderBottom: '1px solid rgba(139,92,246,0.08)' }}>
+        <div className="w-full max-w-6xl mx-auto px-4 md:px-6 pt-5 pb-3 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-2">
+              <div className="h-6 w-48 rounded-lg" style={pulse} />
+              <div className="h-3 w-32 rounded" style={pulseDim} />
             </div>
+            <div className="h-9 w-24 rounded-xl" style={pulse} />
           </div>
-        ))}
+          <div className="h-11 w-full rounded-xl" style={pulseDim} />
+          <div className="flex gap-2.5">
+            <div className="h-9 flex-1 rounded-xl" style={pulseDim} />
+            <div className="h-9 flex-1 rounded-xl" style={pulseDim} />
+          </div>
+          <div className="flex gap-2">
+            {[60, 80, 72, 68, 90].map((w) => (
+              <div key={w} className="h-8 rounded-full flex-shrink-0" style={{ width: w, ...pulseDim }} />
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Cards skeleton */}
+      <div className="flex-1 overflow-hidden">
+        <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            {[...Array(6)].map((_, i) => (
+              <div
+                key={i}
+                className="rounded-2xl border"
+                style={{ background: 'rgba(255,255,255,0.03)', borderColor: 'rgba(139,92,246,0.07)' }}
+              >
+                <div className="h-9 rounded-t-2xl" style={pulseDim} />
+                <div className="p-3 space-y-2.5">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-xl flex-shrink-0" style={pulse} />
+                    <div className="flex-1 space-y-1.5">
+                      <div className="h-4 rounded w-3/4" style={pulse} />
+                      <div className="h-3 rounded w-1/2" style={pulseDim} />
+                    </div>
+                  </div>
+                  <div className="h-3 rounded w-full" style={pulseDim} />
+                  <div className="space-y-1.5">
+                    {[...Array(3)].map((_, j) => (
+                      <div key={j} className="h-9 rounded-lg" style={pulseDim} />
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5 pt-1">
+                    {[...Array(4)].map((_, j) => (
+                      <div key={j} className="h-10 rounded-lg" style={pulseDim} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -115,7 +142,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
   const thumbColors = useMemo(() => THUMB_GRADIENTS[sub.gradient] || THUMB_GRADIENTS.math, [sub.gradient]);
   const tags = useMemo(() => Array.isArray(sub.tags) ? sub.tags : [], [sub.tags]);
   const visibleTags = useMemo(() => tags.slice(0, 3), [tags]);
-  const chapterCount = useMemo(() => sub.chapter_count || sub.chapterCount || chapters.length || 0, [sub.chapter_count, sub.chapterCount, chapters.length]);
+  const chapterCount = useMemo(() => chapters.length || sub.chapter_count || sub.chapterCount || 0, [chapters.length, sub.chapter_count, sub.chapterCount]);
   const hasDocument = useMemo(() => sub.has_document === true, [sub.has_document]);
 
   const seoPath = useMemo(() =>
@@ -414,7 +441,7 @@ export default function LibraryPage() {
   const [selectedBoardSlug, setSelectedBoardSlug] = useState('all');
   const [selectedClassSlug, setSelectedClassSlug] = useState('all');
 
-  const { data: bundle, isLoading: bundleLoading, refetch: refetchBundle } = useLibraryBundle();
+  const { data: bundle, isLoading: bundleLoading, isFetching, refetch: refetchBundle } = useLibraryBundle();
   const subjects    = bundle?.subjects  || [];
   const boards      = bundle?.boards    || [];
   const classes     = bundle?.classes   || [];
@@ -423,14 +450,17 @@ export default function LibraryPage() {
   const { data: savedSubjects = [] } = useSavedSubjects(user);
   const toggleSaved = useToggleSavedSubject();
 
+  // Run the onboarding auto-filter exactly once when streams first load
+  const onboardingApplied = useRef(false);
   useEffect(() => {
-    if (!streams.length) return;
+    if (onboardingApplied.current || !streams.length) return;
+    onboardingApplied.current = true;
     const profile = getOnboardingProfile();
     if (profile?.stream_id) {
       const stream = streams.find((s) => s.id === profile.stream_id);
       if (stream?.slug) setActiveFilter(stream.slug);
     }
-  }, [streams.length]);
+  }, [streams]);
 
   useEffect(() => {
     const handleContentUploaded = () => {
@@ -492,28 +522,30 @@ export default function LibraryPage() {
   const allFilterChips = useMemo(() => [...FILTER_CHIPS, ...dynamicStreamChips], [dynamicStreamChips]);
 
   const filteredSubjects = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
     return enrichedSubjects.filter((sub) => {
       if (sub.status && sub.status !== 'published') return false;
       if (selectedBoardSlug !== 'all' && sub.boardSlug !== selectedBoardSlug) return false;
       if (selectedClassSlug !== 'all' && sub.classSlug !== selectedClassSlug) return false;
-      if (activeFilter === 'all') {
-      } else if (activeFilter === 'saved') {
+      if (activeFilter === 'saved') {
         if (!savedSubjectsSet.has(sub.id)) return false;
-      } else {
+      } else if (activeFilter !== 'all') {
         if (sub.streamSlug !== activeFilter) return false;
       }
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const inName = sub.name?.toLowerCase().includes(q);
-        const inTags = Array.isArray(sub.tags) && sub.tags.some((t) => t.toLowerCase().includes(q));
-        const inClass = sub.className?.toLowerCase().includes(q);
-        const inStream = sub.streamName?.toLowerCase().includes(q);
-        const inBoard = sub.boardName?.toLowerCase().includes(q);
-        if (!inName && !inTags && !inClass && !inStream && !inBoard) return false;
+      if (q) {
+        const subChapters = chaptersBySubject.get(sub.id) || [];
+        const inName    = sub.name?.toLowerCase().includes(q);
+        const inDesc    = sub.description?.toLowerCase().includes(q);
+        const inTags    = Array.isArray(sub.tags) && sub.tags.some((t) => t.toLowerCase().includes(q));
+        const inClass   = sub.className?.toLowerCase().includes(q);
+        const inStream  = sub.streamName?.toLowerCase().includes(q);
+        const inBoard   = sub.boardName?.toLowerCase().includes(q);
+        const inChapter = subChapters.some((ch) => ch.title?.toLowerCase().includes(q));
+        if (!inName && !inDesc && !inTags && !inClass && !inStream && !inBoard && !inChapter) return false;
       }
       return true;
     });
-  }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, selectedBoardSlug, selectedClassSlug]);
+  }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, selectedBoardSlug, selectedClassSlug, chaptersBySubject]);
 
   useEffect(() => {
     if (!filteredSubjects.length) return;
@@ -553,9 +585,9 @@ export default function LibraryPage() {
     setSelectedClassSlug('all');
   }, []);
 
-  const handleRefetchSubjects = useCallback(() => {
-    refetchBundle();
-    toast.success('Library updated!');
+  const handleRefetchSubjects = useCallback(async () => {
+    await refetchBundle();
+    toast.success('Library refreshed');
   }, [refetchBundle]);
 
   const handleSearchChange = useCallback((e) => {
@@ -620,10 +652,11 @@ export default function LibraryPage() {
               </div>
               <button
                 onClick={handleRefetchSubjects}
-                className="h-9 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center gap-1.5 shrink-0"
+                disabled={isFetching}
+                className="h-9 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-60 transition-all flex items-center gap-1.5 shrink-0 active:scale-95"
               >
-                <Layers size={13} />
-                Refresh
+                <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
+                {isFetching ? 'Updating…' : 'Refresh'}
               </button>
             </div>
 
@@ -721,7 +754,7 @@ export default function LibraryPage() {
         <div className="flex-1 overflow-y-auto">
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
             {filteredSubjects.length === 0 ? (
-              <div className="col-span-full flex flex-col items-center justify-center py-20 text-center">
+              <div className="flex flex-col items-center justify-center py-20 text-center">
                 <div
                   className="w-20 h-20 rounded-2xl flex items-center justify-center mb-5"
                   style={{
@@ -729,36 +762,59 @@ export default function LibraryPage() {
                     border: '1px solid rgba(139,92,246,0.12)',
                   }}
                 >
-                  <BookOpen className="w-10 h-10" style={{ color: 'hsl(var(--muted-foreground) / 0.3)' }} />
+                  {activeFilter === 'saved'
+                    ? <Bookmark className="w-9 h-9" style={{ color: 'hsl(var(--primary) / 0.4)' }} />
+                    : <BookOpen className="w-9 h-9" style={{ color: 'hsl(var(--muted-foreground) / 0.3)' }} />
+                  }
                 </div>
-                <h3 className="text-foreground font-semibold text-lg">
-                  {activeFilter === 'saved' && !user ? 'Sign in to save subjects' : 'No subjects found'}
-                </h3>
-                <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
-                  {activeFilter === 'saved' && !user
-                    ? 'Create a free account to bookmark subjects and track your progress'
-                    : 'Try adjusting your search or filters to discover more subjects'}
-                </p>
+
                 {activeFilter === 'saved' && !user ? (
-                  <Link
-                    to="/signup"
-                    className="mt-4 px-5 py-2 rounded-xl text-sm text-white font-medium transition-all duration-200 active:scale-95"
-                    style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 20px hsl(var(--primary)/0.3)' }}
-                  >
-                    Sign up free
-                  </Link>
-                ) : (searchQuery || activeFilter !== 'all') && (
-                  <button
-                    onClick={handleResetFilters}
-                    className="mt-4 px-4 py-2 rounded-xl text-sm text-primary hover:text-white transition-all duration-200 active:scale-95"
-                    style={{
-                      border: '1px solid rgba(139,92,246,0.25)',
-                      background: 'rgba(139,92,246,0.06)',
-                    }}
-                    data-testid="library-reset-filters-button"
-                  >
-                    Reset filters
-                  </button>
+                  <>
+                    <h3 className="text-foreground font-semibold text-lg">Sign in to see saved subjects</h3>
+                    <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
+                      Create a free account to bookmark subjects and track your progress
+                    </p>
+                    <Link
+                      to="/signup"
+                      className="mt-5 px-5 py-2 rounded-xl text-sm text-white font-medium transition-all duration-200 active:scale-95"
+                      style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 20px hsl(var(--primary)/0.3)' }}
+                    >
+                      Sign up free
+                    </Link>
+                  </>
+                ) : activeFilter === 'saved' && user ? (
+                  <>
+                    <h3 className="text-foreground font-semibold text-lg">No saved subjects yet</h3>
+                    <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
+                      Tap the bookmark on any subject card to save it here for quick access
+                    </p>
+                    <button
+                      onClick={() => setActiveFilter('all')}
+                      className="mt-5 px-5 py-2 rounded-xl text-sm text-white font-medium transition-all duration-200 active:scale-95"
+                      style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 20px hsl(var(--primary)/0.3)' }}
+                    >
+                      Browse all subjects
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <h3 className="text-foreground font-semibold text-lg">No subjects found</h3>
+                    <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
+                      {searchQuery
+                        ? `No results for "${searchQuery}" — try a different term or clear the search`
+                        : 'Try adjusting your filters to discover more subjects'}
+                    </p>
+                    {(searchQuery || activeFilter !== 'all' || selectedBoardSlug !== 'all' || selectedClassSlug !== 'all') && (
+                      <button
+                        onClick={handleResetFilters}
+                        className="mt-5 px-4 py-2 rounded-xl text-sm text-primary hover:text-white transition-all duration-200 active:scale-95"
+                        style={{ border: '1px solid rgba(139,92,246,0.25)', background: 'rgba(139,92,246,0.06)' }}
+                        data-testid="library-reset-filters-button"
+                      >
+                        Reset all filters
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
             ) : (
