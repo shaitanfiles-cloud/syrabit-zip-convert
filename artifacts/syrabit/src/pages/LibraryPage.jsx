@@ -885,12 +885,18 @@ export default function LibraryPage() {
               )}
             </div>
 
+          </div>
+        </div>
+
+        {/* ── Scrollable cards area ─────────────────────────────────── */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
 
             {/* Filter chips */}
             <div
               role="group"
               aria-label="Subject filters"
-              className="flex gap-2 overflow-x-auto pb-0.5 no-scrollbar"
+              className="flex gap-2 overflow-x-auto pb-4 no-scrollbar"
               data-testid="library-filter-chips"
             >
               {allFilterChips.map((chip) => (
@@ -902,13 +908,6 @@ export default function LibraryPage() {
                 />
               ))}
             </div>
-
-          </div>
-        </div>
-
-        {/* ── Scrollable cards area ─────────────────────────────────── */}
-        <div className="flex-1 overflow-y-auto">
-          <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
             {filteredSubjects.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <div
