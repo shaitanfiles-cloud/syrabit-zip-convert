@@ -201,137 +201,136 @@ const SubjectCard = memo(function SubjectCard({ sub, isSaved, onToggleSave, onOp
       data-testid="library-subject-card"
       data-subject-id={sub.id}
     >
-      {/* ── Thumbnail ── */}
-      <div className="relative h-44 overflow-hidden group">
-        {/* Document indicator badge — top-left overlay when doc exists */}
-        {hasDocument && (
-          <div
-            className="absolute top-3 left-3 z-10 flex items-center gap-1 px-2 py-1 rounded-lg text-white text-[10px] font-semibold"
-            style={{ background: 'rgba(16,185,129,0.75)', backdropFilter: 'blur(8px)', border: '1px solid rgba(16,185,129,0.35)' }}
-          >
-            <FileText size={10} aria-hidden="true" /> DOC
-          </div>
-        )}
-        {hasThumbnail ? (
-          <img
-            src={sub.thumbnailUrl}
-            alt={`${sub.name} — AHSEC ${sub.className} ${sub.streamName} | Syrabit`}
-            className="w-full h-full object-cover transition-transform duration-500"
-            loading="lazy"
-            decoding="async"
-          />
-        ) : (
-          /* Gradient fallback thumbnail */
-          <div
-            className="w-full h-full transition-transform duration-500"
-            style={{
-              background: `linear-gradient(135deg, ${thumbColors[0]}, ${thumbColors[1]})`,
-            }}
-          >
-            {/* Subject icon centered */}
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span aria-hidden="true" style={{ fontSize: '3rem', opacity: 0.85 }}>{sub.icon || '📚'}</span>
+      {/* ── Thumbnail + Description as SEO link ── */}
+      <Link
+        to={seoPath || `/subject/${sub.id}`}
+        className="block group/card"
+        title={`${sub.name} — ${[sub.boardName, sub.className, sub.streamName].filter(Boolean).join(' ')} Notes & Study Material`}
+      >
+        <div className="relative h-44 overflow-hidden">
+          {hasDocument && (
+            <div
+              className="absolute top-3 left-3 z-10 flex items-center gap-1 px-2 py-1 rounded-lg text-white text-[10px] font-semibold"
+              style={{ background: 'rgba(16,185,129,0.75)', backdropFilter: 'blur(8px)', border: '1px solid rgba(16,185,129,0.35)' }}
+            >
+              <FileText size={10} aria-hidden="true" /> DOC
             </div>
-          </div>
-        )}
+          )}
+          {hasThumbnail ? (
+            <img
+              src={sub.thumbnailUrl}
+              alt={`${sub.name} — ${sub.boardName} ${sub.className} ${sub.streamName} | Syrabit`}
+              className="w-full h-full object-cover transition-transform duration-500 group-hover/card:scale-105"
+              loading="lazy"
+              decoding="async"
+            />
+          ) : (
+            <div
+              className="w-full h-full transition-transform duration-500 group-hover/card:scale-105"
+              style={{
+                background: `linear-gradient(135deg, ${thumbColors[0]}, ${thumbColors[1]})`,
+              }}
+            >
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span aria-hidden="true" style={{ fontSize: '3rem', opacity: 0.85 }}>{sub.icon || '📚'}</span>
+              </div>
+            </div>
+          )}
 
-        {/* Gradient overlay */}
-        <div
-          className="absolute inset-0"
-          style={{
-            background: 'linear-gradient(to top, rgba(0,0,0,0.80), rgba(0,0,0,0.30), rgba(0,0,0,0.10))',
-          }}
-        />
-
-        {/* Stream badge — top-left */}
-        <div
-          className="absolute top-3 left-3 px-2.5 py-1 rounded-lg text-white text-xs font-semibold"
-          style={{
-            background: 'rgba(0,0,0,0.50)',
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-            border: '1px solid rgba(255,255,255,0.10)',
-          }}
-        >
-          {sub.streamName || '—'}
-        </div>
-
-        {/* Class badge — top-right */}
-        <div
-          className="absolute top-3 right-3 px-2.5 py-1 rounded-lg text-white text-xs font-semibold"
-          style={{
-            background: 'linear-gradient(135deg, rgba(124,58,237,0.85), rgba(139,92,246,0.85))',
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-            boxShadow: '0 2px 10px rgba(124,58,237,0.3)',
-          }}
-        >
-          {sub.className || '—'}
-        </div>
-
-        {/* Saved indicator — top-right, offset from class badge */}
-        {isSaved && (
           <div
-            className="absolute top-3 flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-white"
+            className="absolute inset-0"
             style={{
-              right: '4.5rem',
-              background: 'rgba(124,58,237,0.70)',
+              background: 'linear-gradient(to top, rgba(0,0,0,0.80), rgba(0,0,0,0.30), rgba(0,0,0,0.10))',
+            }}
+          />
+
+          <div
+            className="absolute top-3 left-3 px-2.5 py-1 rounded-lg text-white text-xs font-semibold"
+            style={{
+              background: 'rgba(0,0,0,0.50)',
               backdropFilter: 'blur(12px)',
               WebkitBackdropFilter: 'blur(12px)',
+              border: '1px solid rgba(255,255,255,0.10)',
             }}
           >
-            <BookmarkCheck size={12} />
+            {sub.streamName || '—'}
           </div>
-        )}
 
-        {/* Title overlay — bottom */}
-        <div className="absolute bottom-3 left-3.5 right-3.5">
-          <h3
-            className="text-white"
+          <div
+            className="absolute top-3 right-3 px-2.5 py-1 rounded-lg text-white text-xs font-semibold"
             style={{
-              fontSize: '1.05rem',
-              fontWeight: 700,
-              lineHeight: 1.3,
-              textShadow: '0 1px 6px rgba(0,0,0,0.5)',
+              background: 'linear-gradient(135deg, rgba(124,58,237,0.85), rgba(139,92,246,0.85))',
+              backdropFilter: 'blur(12px)',
+              WebkitBackdropFilter: 'blur(12px)',
+              boxShadow: '0 2px 10px rgba(124,58,237,0.3)',
             }}
           >
-            {sub.name}
-          </h3>
-          <p className="text-white/65 mt-0.5" style={{ fontSize: '0.78rem' }}>
-            {[sub.boardName, sub.className, sub.streamName].filter(Boolean).join(' · ')}
+            {sub.className || '—'}
+          </div>
+
+          {isSaved && (
+            <div
+              className="absolute top-3 flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-white"
+              style={{
+                right: '4.5rem',
+                background: 'rgba(124,58,237,0.70)',
+                backdropFilter: 'blur(12px)',
+                WebkitBackdropFilter: 'blur(12px)',
+              }}
+            >
+              <BookmarkCheck size={12} />
+            </div>
+          )}
+
+          <div className="absolute bottom-3 left-3.5 right-3.5">
+            <h3
+              className="text-white group-hover/card:text-purple-200 transition-colors"
+              style={{
+                fontSize: '1.05rem',
+                fontWeight: 700,
+                lineHeight: 1.3,
+                textShadow: '0 1px 6px rgba(0,0,0,0.5)',
+              }}
+            >
+              {sub.name}
+            </h3>
+            <p className="text-white/65 mt-0.5" style={{ fontSize: '0.78rem' }}>
+              {[sub.boardName, sub.className, sub.streamName].filter(Boolean).join(' · ')}
+            </p>
+          </div>
+        </div>
+
+        <div className="px-4 pt-3.5 pb-2">
+          <p
+            className="text-muted-foreground leading-relaxed group-hover/card:text-foreground/70 transition-colors"
+            style={{
+              fontSize: '0.82rem',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+            }}
+          >
+            {sub.description || 'No description available.'}
           </p>
-        </div>
-      </div>
 
-      {/* ── Card Body ── */}
-      <div className="px-4 pt-3.5 pb-4 space-y-3">
-        {/* Description — 2-line clamp */}
-        <p
-          className="text-muted-foreground leading-relaxed"
-          style={{
-            fontSize: '0.82rem',
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-          }}
-        >
-          {sub.description || 'No description available.'}
-        </p>
-
-        {/* Stats row */}
-        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <Layers size={14} aria-hidden="true" />
-            {chapterCount} Chapters
-          </span>
-          {totalTokens > 0 && (
-            <span>{(totalTokens / 1000).toFixed(0)}K tokens</span>
-          )}
-          {totalChats > 0 && (
-            <span>{totalChats} chats</span>
-          )}
+          <div className="flex items-center gap-4 text-xs text-muted-foreground mt-2">
+            <span className="flex items-center gap-1">
+              <Layers size={14} aria-hidden="true" />
+              {chapterCount} Chapters
+            </span>
+            {totalTokens > 0 && (
+              <span>{(totalTokens / 1000).toFixed(0)}K tokens</span>
+            )}
+            {totalChats > 0 && (
+              <span>{totalChats} chats</span>
+            )}
+          </div>
         </div>
+      </Link>
+
+      {/* ── Card Body (non-link) ── */}
+      <div className="px-4 pb-4 space-y-3">
 
         {/* Tags */}
         {visibleTags.length > 0 && (

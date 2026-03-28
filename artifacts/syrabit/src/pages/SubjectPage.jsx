@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
-import { BookOpen, MessageSquare, Loader2, ArrowLeft, FileText, Calculator, BookMarked, HelpCircle, List } from 'lucide-react';
+import { BookOpen, MessageSquare, Loader2, ArrowLeft, FileText, Calculator, BookMarked, HelpCircle, List, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -178,51 +178,76 @@ export default function SubjectPage() {
             </div>
           ) : (
             <Accordion type="multiple" className="space-y-2">
-              {chapters.map((chapter) => (
-                <AccordionItem
-                  key={chapter.id}
-                  value={chapter.id}
-                  className="glass-card rounded-xl border-0 px-4"
-                >
-                  <AccordionTrigger
-                    className="hover:no-underline py-4"
-                    onClick={() => loadChunks(chapter.id)}
+              {chapters.map((chapter) => {
+                const chapterSeoPath = subject.board_slug && subject.class_slug && subject.slug && chapter.slug
+                  ? `/${subject.board_slug}/${subject.class_slug}/${subject.slug}/${chapter.slug}`
+                  : null;
+                return (
+                  <AccordionItem
+                    key={chapter.id}
+                    value={chapter.id}
+                    className="glass-card rounded-xl border-0 px-4"
                   >
-                    <div className="flex items-center gap-3">
-                      <span className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center text-xs font-semibold text-primary flex-shrink-0">
-                        {chapter.chapter_number}
-                      </span>
-                      <span className="text-sm font-medium text-foreground text-left">{chapter.title}</span>
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent className="pb-4">
-                    {loadingChapter === chapter.id ? (
-                      <div className="flex justify-center py-4">
-                        <Loader2 size={20} className="animate-spin text-primary" />
+                    <AccordionTrigger
+                      className="hover:no-underline py-4"
+                      onClick={() => loadChunks(chapter.id)}
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center text-xs font-semibold text-primary flex-shrink-0">
+                          {chapter.chapter_number}
+                        </span>
+                        <span className="text-sm font-medium text-foreground text-left">{chapter.title}</span>
                       </div>
-                    ) : chapter.content ? (
-                      <div className="px-4 py-2">
-                        <div className="md-content-light text-sm">
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {chapter.content}
-                          </ReactMarkdown>
+                    </AccordionTrigger>
+                    <AccordionContent className="pb-4">
+                      {chapterSeoPath && (
+                        <Link
+                          to={chapterSeoPath}
+                          className="block mb-3 px-4 py-3 rounded-xl bg-primary/5 border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-all group/ch"
+                          title={`${chapter.title} — ${subject.name} Notes & Study Material`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <FileText size={14} className="text-primary flex-shrink-0" aria-hidden="true" />
+                            <span className="text-sm font-medium text-foreground group-hover/ch:text-primary transition-colors">
+                              {chapter.title} — Notes & Study Material
+                            </span>
+                            <ChevronRight size={14} className="ml-auto text-muted-foreground group-hover/ch:text-primary flex-shrink-0 transition-colors" aria-hidden="true" />
+                          </div>
+                          {chapter.description && (
+                            <p className="text-xs text-muted-foreground mt-1 ml-6 line-clamp-2">
+                              {chapter.description}
+                            </p>
+                          )}
+                        </Link>
+                      )}
+                      {loadingChapter === chapter.id ? (
+                        <div className="flex justify-center py-4">
+                          <Loader2 size={20} className="animate-spin text-primary" />
                         </div>
+                      ) : chapter.content ? (
+                        <div className="px-4 py-2">
+                          <div className="md-content-light text-sm">
+                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                              {chapter.content}
+                            </ReactMarkdown>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-center py-4">
+                          <p className="text-sm text-muted-foreground">No content added yet</p>
+                        </div>
+                      )}
+                      <div className="mt-3">
+                        <Link to={`/chat?subject=${subjectId}`}>
+                          <Button size="sm" className="text-xs bg-primary hover:bg-primary/90 text-primary-foreground">
+                            Ask AI about this chapter
+                          </Button>
+                        </Link>
                       </div>
-                    ) : (
-                      <div className="text-center py-4">
-                        <p className="text-sm text-muted-foreground">No content added yet</p>
-                      </div>
-                    )}
-                    <div className="mt-3">
-                      <Link to={`/chat?subject=${subjectId}`}>
-                        <Button size="sm" className="text-xs bg-primary hover:bg-primary/90 text-primary-foreground">
-                          Ask AI about this chapter
-                        </Button>
-                      </Link>
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
+                    </AccordionContent>
+                  </AccordionItem>
+                );
+              })}
             </Accordion>
           )}
         </div>
