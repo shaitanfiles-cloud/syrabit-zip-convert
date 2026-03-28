@@ -39,8 +39,7 @@ localPort = 8000
 run = "python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend"
 
 [services.production]
-build = [ "pip", "install", "-r", "artifacts/syrabit-backend/requirements.txt" ]
-run = "python3 -m gunicorn server:app --bind 0.0.0.0:8000 --workers 4 --worker-class uvicorn.workers.UvicornWorker --chdir /home/runner/workspace/artifacts/syrabit-backend"
+run = "python3 -m uvicorn server:app --host 0.0.0.0 --port $PORT --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend"
 
 [services.env]
 PORT = "8000"
