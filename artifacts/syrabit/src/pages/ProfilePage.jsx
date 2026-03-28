@@ -155,10 +155,10 @@ export default function ProfilePage() {
 
   const plan = profile?.plan || 'free';
   const planInfo = PLANS[plan] || PLANS.free;
-  const creditsUsed      = profile?.credits_used     || 0;
-  const creditsLimit     = profile?.credits_limit     || 0;
-  const creditsRemaining = profile?.credits_remaining || 0;
-  const docAccess        = profile?.document_access   || PLANS[plan]?.docAccess || 'zero';
+  const creditsUsed      = profile?.credits_used  ?? 0;
+  const creditsLimit     = profile?.credits_limit ?? 0;
+  const creditsRemaining = Math.max(0, profile?.credits_remaining ?? 0);
+  const docAccess        = profile?.document_access || PLANS[plan]?.docAccess || 'zero';
   const docCfg           = DOC_ACCESS_CONFIG[docAccess] || DOC_ACCESS_CONFIG.zero;
   // Guard against NaN when free plan (0/0)
   const creditPercent = creditsLimit > 0 ? Math.min(100, (creditsUsed / creditsLimit) * 100) : 100;
@@ -670,7 +670,7 @@ export default function ProfilePage() {
             ═══════════════════════════════════════════════════ */}
         <div className="glass-card rounded-2xl overflow-hidden">
           <div className="px-4 py-3 border-b border-border">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Usage This Session</p>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Lifetime Usage</p>
           </div>
           <div className="p-4">
             <div className="grid grid-cols-2 gap-3">
@@ -754,10 +754,8 @@ export default function ProfilePage() {
               {Object.entries(PLANS).map(([planKey, info]) => {
                 const isActive    = plan === planKey;
                 const isPro       = planKey === 'pro';
-                const isFree      = planKey === 'free';
                 const cardRank    = PLAN_RANK[planKey] ?? 0;
                 const userRank    = PLAN_RANK[plan]    ?? 0;
-                const isHigher    = cardRank > userRank;   // can upgrade to this
                 const isLower     = cardRank < userRank;   // already surpassed this
                 const docInfo     = DOC_ACCESS_CONFIG[info.docAccess] || DOC_ACCESS_CONFIG.zero;
                 return (
@@ -827,7 +825,7 @@ export default function ProfilePage() {
                         style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))' }}>
                         <CheckCircle size={12} className="mr-1" aria-hidden="true" /> Current Plan
                       </div>
-                    ) : isLower || isFree ? (
+                    ) : isLower ? (
                       <div className="mt-3 w-full h-8 rounded-lg flex items-center justify-center text-[10px] font-medium text-muted-foreground/50"
                         style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
                         Included in your plan

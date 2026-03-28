@@ -866,7 +866,7 @@ async def get_user_credits(user: dict) -> dict:
         "used": used,
         "limit": limit,
         "remaining": max(0, limit - used),
-        "document_access": user.get("document_access") or plan_cfg["document_access"],
+        "document_access": plan_cfg["document_access"],
     }
 
 # ── Plan configuration ────────────────────────────────────────────────────────
@@ -4702,9 +4702,9 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         rag_ctx,
         user_info={
             "name":        user.get("name", ""),
-            "board_name":  ctx_board_name,
-            "class_name":  ctx_class_name,
-            "stream_name": ctx_stream_name,
+            "board_name":  ctx_board_name or user.get("board_name", ""),
+            "class_name":  ctx_class_name or user.get("class_name", ""),
+            "stream_name": ctx_stream_name or user.get("stream_name", ""),
             "plan":        user.get("plan", "free"),
         },
         query=msg.message,
@@ -4929,9 +4929,9 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         rag_ctx,
         user_info={
             "name":        user.get("name", ""),
-            "board_name":  ctx_board_name,
-            "class_name":  ctx_class_name,
-            "stream_name": ctx_stream_name,
+            "board_name":  ctx_board_name or user.get("board_name", ""),
+            "class_name":  ctx_class_name or user.get("class_name", ""),
+            "stream_name": ctx_stream_name or user.get("stream_name", ""),
             "plan":        user.get("plan", "free"),
         },
         query=msg.message,
