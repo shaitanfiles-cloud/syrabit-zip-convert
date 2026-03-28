@@ -89,7 +89,7 @@ function StickyToc({ headings, activeId }) {
                 h.level === 3 ? 'pl-4' : 'pl-0'
               } ${
                 activeId === h.anchor
-                  ? 'text-violet-400 font-medium'
+                  ? 'text-violet-400 font-medium toc-active'
                   : 'text-white/40 hover:text-white/70'
               }`}
               style={{ borderLeft: h.level === 2 ? (activeId === h.anchor ? '2px solid #9575e0' : '2px solid transparent') : 'none' }}
@@ -179,14 +179,15 @@ function BlogView({ subject, subjectId }) {
   const htmlContent = post.subject_merged_html || '';
 
   return (
-    <>
+    <div className="blog-view-tab w-full">
       {subject && (
         <ArticleJsonLd subject={subject} title={post.title || subject.name} url={subjectUrl} wordCount={post.word_count} />
       )}
-      <div className="flex gap-8 max-w-5xl mx-auto px-4 sm:px-6">
-        <article ref={articleRef} className="flex-1 min-w-0 learn-article pb-16">
-          {/* Hero info bar */}
-          <div className="flex flex-wrap items-center gap-3 mb-6 pb-4 text-[11px]" style={{ borderBottom: '1px solid rgba(232,232,232,0.08)', color: 'rgba(232,232,232,0.40)' }}>
+      <div className="flex gap-8 max-w-4xl mx-auto px-4 sm:px-6">
+        <article ref={articleRef} className="flex-1 min-w-0 pb-16 min-w-0">
+
+          {/* Hero info bar — gray header strip */}
+          <div className="blog-hero-bar flex flex-wrap items-center gap-3 text-[11px]">
             {readMins && (
               <span className="flex items-center gap-1"><Clock size={11} />{readMins} min read</span>
             )}
@@ -197,7 +198,7 @@ function BlogView({ subject, subjectId }) {
               <span className="flex items-center gap-1"><Hash size={11} />{headings.filter(h => h.level === 2).length} sections</span>
             )}
             <button
-              className="ml-auto flex items-center gap-1 hover:text-white/70 transition-colors"
+              className="ml-auto flex items-center gap-1 transition-colors"
               onClick={() => {
                 navigator.share?.({ title: post.title, url: window.location.href })
                   .catch(() => {});
@@ -207,21 +208,24 @@ function BlogView({ subject, subjectId }) {
             </button>
           </div>
 
+          {/* White content card */}
           {htmlContent ? (
             <div
               className="learn-article"
               dangerouslySetInnerHTML={{ __html: htmlContent }}
             />
           ) : (
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
-              {post.merged_md || ''}
-            </ReactMarkdown>
+            <div className="learn-article">
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
+                {post.merged_md || ''}
+              </ReactMarkdown>
+            </div>
           )}
 
           {/* AI Tutor CTA */}
-          <div className="mt-12 p-5 rounded-2xl" style={{ background: 'rgba(149,117,224,0.08)', border: '1px solid rgba(149,117,224,0.18)' }}>
-            <p className="text-sm font-semibold mb-1" style={{ color: '#c4b0f0' }}>Have a question about this topic?</p>
-            <p className="text-xs mb-3" style={{ color: 'rgba(232,232,232,0.50)' }}>Get AHSEC-aligned answers instantly from our AI tutor.</p>
+          <div className="blog-ai-cta">
+            <p className="text-sm mb-1">Have a question about this topic?</p>
+            <p className="text-xs mb-3">Get AHSEC-aligned answers instantly from our AI tutor.</p>
             <Link to={`/chat?subject=${subjectId}`}>
               <Button size="sm" style={{ background: 'hsl(258 60% 68%)', color: 'white' }}>Ask AI Tutor</Button>
             </Link>
@@ -230,7 +234,7 @@ function BlogView({ subject, subjectId }) {
 
         <StickyToc headings={headings} activeId={activeId} />
       </div>
-    </>
+    </div>
   );
 }
 
