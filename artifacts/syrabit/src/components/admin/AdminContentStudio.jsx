@@ -8,7 +8,7 @@ import {
   ArrowRightLeft, Link2, ExternalLink, List,
 } from 'lucide-react';
 import axios from 'axios';
-import { API_BASE } from '@/utils/api';
+import { API_BASE, vertexQualityScore } from '@/utils/api';
 import { toast } from 'sonner';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
@@ -144,6 +144,9 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
   const [parsing, setParsing]       = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished]   = useState(null);
+  const [qualityChecking, setQualityChecking] = useState(false);
+  const [qualityScore, setQualityScore] = useState(null);
+  const [qualityWarning, setQualityWarning] = useState(false);
   const [view, setView]             = useState('editor');
   const [title, setTitle]           = useState('');
   const [slug, setSlug]             = useState('');
@@ -324,6 +327,26 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
 
   const handlePublish = useCallback(async (asRevision = false) => {
     if (!blocks.length || !slug.trim()) return;
+
+    // Quality Gate — auto-score before publish
+    if (!asRevision && !qualityWarning) {
+      setQualityChecking(true);
+      try {
+        const contentSnippet = blocks.map(b => b.content).join('\n').slice(0, 3000);
+        const qRes = await vertexQualityScore(adminToken, contentSnippet, 'notes', title, subject || '');
+        const score = qRes.data?.score || qRes.data?.overall_score || 0;
+        setQualityScore(score);
+        if (score < 7) {
+          setQualityWarning(true);
+          setQualityChecking(false);
+          toast.warning(`Quality score ${score}/10 is below threshold. Review content or publish anyway.`);
+          return;
+        }
+      } catch { /* skip on error */ }
+      finally { setQualityChecking(false); }
+    }
+    setQualityWarning(false);
+
     setPublishing(true);
     try {
       const res = await axios.post(`${API_BASE}/admin/studio/publish`, {
@@ -340,10 +363,11 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
         parent_revision_id: asRevision ? (draftId || slug) : '',
       }, headers);
       setPublished(res.data);
+      setQualityScore(null);
       toast.success(asRevision ? 'Revision published!' : 'Published to live pages!');
     } catch { toast.error('Publish failed'); }
     finally { setPublishing(false); }
-  }, [blocks, title, slug, subjectId, subjectSlug, metaDescription, selectedBoardId, selectedClassId, selectedStreamId, draftId]);
+  }, [blocks, title, slug, subjectId, subjectSlug, metaDescription, selectedBoardId, selectedClassId, selectedStreamId, draftId, qualityWarning, adminToken, subject]);
 
   const handleSaveDraft = async () => {
     if (!blocks.length && !rawText.trim()) { toast.error('Nothing to save'); return; }
@@ -974,12 +998,28 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
                 </div>
               )}
 
+              {/* Quality Gate warning banner */}
+              {qualityWarning && qualityScore !== null && (
+                <div className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl mb-2 text-sm"
+                  style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.30)' }}>
+                  <div className="flex items-center gap-2 text-amber-400">
+                    <AlertTriangle size={14} />
+                    <span>Quality score <strong>{qualityScore}/10</strong> is below the 7-point threshold. Improve content or override.</span>
+                  </div>
+                  <button onClick={() => handlePublish(false)}
+                    className="shrink-0 px-3 py-1 rounded-lg text-xs font-semibold"
+                    style={{ background: 'rgba(245,158,11,0.20)', border: '1px solid rgba(245,158,11,0.40)', color: '#fbbf24' }}>
+                    Publish Anyway
+                  </button>
+                </div>
+              )}
+
               <div className="flex items-center gap-2 flex-wrap">
-                <button onClick={() => handlePublish(false)} disabled={publishing || !slug.trim()}
+                <button onClick={() => handlePublish(false)} disabled={publishing || qualityChecking || !slug.trim()}
                   className="flex items-center gap-2 disabled:opacity-50 text-white rounded-lg px-5 py-2.5 text-sm font-medium"
                   style={{ background: '#059669' }}>
-                  {publishing && !isRevision ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                  {publishing && !isRevision ? 'Publishing…' : 'Publish Page'}
+                  {qualityChecking ? <Loader2 size={14} className="animate-spin" /> : publishing && !qualityWarning ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+                  {qualityChecking ? 'Checking quality…' : publishing && !qualityWarning ? 'Publishing…' : 'Publish Page'}
                 </button>
 
                 {published && (

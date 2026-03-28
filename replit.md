@@ -18,7 +18,25 @@ pnpm workspace monorepo. Primary artifact: **Syrabit.ai** — AI-powered educati
 
 Admin endpoints: `/api/admin/vertex/*`
 Frontend panel: Admin → Gemini AI Studio (sidebar)
-CMS Editor: Translate button in toolbar (Assamese/Hindi/Bengali/Bodo)
+CMS Editor: Translate button + AI Write (Gemini palette) in toolbar
+
+## Admin Panel — Upgrade Wave (All 12 + 5 Quick Wins COMPLETE)
+
+| # | Feature | Component | Status |
+|---|---------|-----------|--------|
+| T001 | Internal Linking Engine | AdminSeoManager → "🔗 Int. Links" tab | ✅ Done |
+| T002 | Quality Gate in Content Studio | AdminContentStudio → auto-score + warning banner | ✅ Done |
+| T003 | FAQ Auto-Extractor | AdminConversations → Extract FAQs button | ✅ Done |
+| T004 | Conversion Funnel + Drop-Off Rates | AdminMonetization → Funnel tab | ✅ Done |
+| T005 | PDF-to-Syllabus Importer | AdminSyllabusManager → PDF Import panel | ✅ Done |
+| T006 | Schema.org Auto-Injection | AdminSeoManager → "🧬 Schema" tab | ✅ Done |
+| T007 | Inline Gemini Writing (AI Palette) | AdminCmsDocEditor → AI Write toolbar button + palette | ✅ Done |
+| T008 | Dashboard Content Pipeline Tracker | AdminDashboard → Pipeline widget | ✅ Done |
+| T009 | Page-Level Conversion Tracker | AdminAnalytics → "📄 Page Conversions" tab | ✅ Done |
+| T010 | Churn Risk Scoring | AdminUsers → Risk badge on user rows | ✅ Done |
+| T011 | LLM Cost Tracker | AdminHealth → "💸 LLM Costs" tab | ✅ Done |
+| T012 | Notification Trigger Builder | AdminNotifications → Rule editor | ✅ Done |
+| T013 | Sitemap Validator | AdminSeoManager → "🗺 Sitemap" tab | ✅ Done |
 
 ## Stack
 

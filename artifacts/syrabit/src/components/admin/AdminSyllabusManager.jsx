@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Save, Trash2, Plus, Loader2, CheckCircle, BookOpen, GitBranch, Info, Globe, ExternalLink } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Save, Trash2, Plus, Loader2, CheckCircle, BookOpen, GitBranch, Info, Globe, ExternalLink, FileUp, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import axios from 'axios';
+import { syllabusImportPdf } from '@/utils/api';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -18,6 +19,9 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [publishedSlug, setPublishedSlug] = useState('');
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfResult, setPdfResult] = useState(null);
+  const pdfRef = useRef(null);
 
   const [selectedBoardId, setSelectedBoardId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
@@ -170,6 +174,42 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
     }
   };
 
+  const handlePdfImport = async (file) => {
+    if (!file) return;
+    if (!selectedBoardId || !selectedClassId) {
+      toast.error('Select Board and Class before importing a PDF');
+      return;
+    }
+    setPdfLoading(true);
+    setPdfResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('board_id', selectedBoardId);
+      fd.append('class_id', selectedClassId);
+      if (selectedStreamId) fd.append('stream_id', selectedStreamId);
+      if (selectedSubjectId) fd.append('subject_id', selectedSubjectId);
+      const res = await syllabusImportPdf(adminToken, fd);
+      setPdfResult(res.data);
+      if (res.data?.syllabus) {
+        const s = res.data.syllabus;
+        setFormData(f => ({
+          ...f,
+          content:  s.content  || f.content,
+          chapters: s.chapters?.length ? s.chapters : f.chapters,
+          topics:   s.topics?.length   ? s.topics   : f.topics,
+          guidelines: s.guidelines || f.guidelines,
+        }));
+        toast.success(`PDF imported — ${s.chapters?.length || 0} chapters, ${s.topics?.length || 0} topics extracted`);
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'PDF import failed');
+    } finally {
+      setPdfLoading(false);
+      if (pdfRef.current) pdfRef.current.value = '';
+    }
+  };
+
   const addChapter = () => {
     if (newChapter.trim()) {
       setFormData({ ...formData, chapters: [...formData.chapters, newChapter.trim()] });
@@ -228,6 +268,33 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
           <h2 className="text-lg font-bold text-white">Universal Syllabus Manager</h2>
           <p className="text-xs text-white/40 mt-0.5">Create syllabi that auto-inject into every AI answer for a board, class, stream, or specific subject</p>
         </div>
+      </div>
+
+      {/* PDF Import Panel */}
+      <div className="rounded-xl border p-4 space-y-3" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.20)' }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-white flex items-center gap-2">
+              <FileUp size={14} className="text-violet-400" /> PDF-to-Syllabus Importer
+            </p>
+            <p className="text-xs mt-0.5 text-white/40">Upload an official syllabus PDF — Gemini extracts chapters, topics, and guidelines automatically</p>
+          </div>
+          <input ref={pdfRef} type="file" accept=".pdf" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) handlePdfImport(f); }} />
+          <button onClick={() => pdfRef.current?.click()} disabled={pdfLoading || !canLoad}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+            style={{ background: 'rgba(139,92,246,0.20)', border: '1px solid rgba(139,92,246,0.35)', color: '#c4b0f0' }}>
+            {pdfLoading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            {pdfLoading ? 'Importing…' : 'Import PDF'}
+          </button>
+        </div>
+        {!canLoad && <p className="text-[11px] text-amber-400/70">Select Board and Class above first</p>}
+        {pdfResult && (
+          <div className="rounded-lg p-3 border text-xs space-y-1" style={{ background: 'rgba(52,211,153,0.06)', borderColor: 'rgba(52,211,153,0.20)' }}>
+            <p className="font-semibold text-emerald-400">Import Complete</p>
+            <p className="text-white/50">{pdfResult.pages_processed || 0} pages processed · {pdfResult.syllabus?.chapters?.length || 0} chapters · {pdfResult.syllabus?.topics?.length || 0} topics</p>
+          </div>
+        )}
       </div>
 
       {/* Selectors — 2×2 grid */}

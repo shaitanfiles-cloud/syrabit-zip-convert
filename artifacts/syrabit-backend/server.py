@@ -10217,6 +10217,610 @@ async def admin_get_referral_config(admin: dict = Depends(get_admin_user)):
     return cfg.get("referral", {"enabled": False, "reward_credits": 10, "referrer_credits": 10}) if cfg else {"enabled": False, "reward_credits": 10, "referrer_credits": 10}
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# UPGRADE WAVE — ALL 12 MAJOR FEATURES
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── T001: Internal Linking Engine ────────────────────────────────────────────
+
+@api.get("/admin/seo/internal-links/analyze")
+async def seo_internal_links_analyze(admin: dict = Depends(get_admin_user)):
+    """Analyze all published topics and return semantic link suggestions using embeddings."""
+    topics = await db.seo_topics.find(
+        {"status": "published"},
+        {"_id": 0, "slug": 1, "title": 1, "subject_name": 1, "class_name": 1}
+    ).to_list(500)
+
+    if not topics:
+        return {"links": [], "topics_analyzed": 0}
+
+    suggestions = []
+    try:
+        import vertex_services
+        titles = [t["title"] for t in topics]
+        vecs = await vertex_services.embed_batch(titles)
+
+        for i, (topic, vec_i) in enumerate(zip(topics, vecs)):
+            if vec_i is None:
+                continue
+            scores = []
+            for j, (other, vec_j) in enumerate(zip(topics, vecs)):
+                if i == j or vec_j is None:
+                    continue
+                sim = vertex_services.cosine_similarity(vec_i, vec_j)
+                if sim > 0.65:
+                    scores.append({"slug": other["slug"], "title": other["title"], "score": round(sim, 3)})
+            scores.sort(key=lambda x: x["score"], reverse=True)
+            if scores:
+                suggestions.append({
+                    "slug": topic["slug"],
+                    "title": topic["title"],
+                    "subject": topic.get("subject_name", ""),
+                    "related": scores[:5],
+                })
+    except Exception as e:
+        logger.warning(f"internal-links analyze failed: {e}")
+
+    return {"links": suggestions, "topics_analyzed": len(topics)}
+
+
+@api.post("/admin/seo/internal-links/inject/{slug}")
+async def seo_internal_links_inject(slug: str, admin: dict = Depends(get_admin_user)):
+    """Inject internal links into a topic's generated content."""
+    topic = await db.seo_topics.find_one({"slug": slug})
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    pages = await db.seo_pages.find({"topic_id": str(topic.get("_id", ""))}).to_list(20)
+    if not pages:
+        raise HTTPException(status_code=404, detail="No pages found for this topic")
+
+    all_topics = await db.seo_topics.find(
+        {"status": "published", "slug": {"$ne": slug}},
+        {"slug": 1, "title": 1}
+    ).to_list(200)
+
+    injected_count = 0
+    for page in pages[:5]:
+        content = page.get("content", "")
+        if not content:
+            continue
+        for related in all_topics[:10]:
+            r_title = related.get("title", "")
+            r_slug = related.get("slug", "")
+            if r_title.lower() in content.lower() and f"[{r_title}]" not in content:
+                content = content.replace(
+                    r_title,
+                    f"[{r_title}](/learn/{r_slug})",
+                    1
+                )
+                injected_count += 1
+        await db.seo_pages.update_one(
+            {"_id": page["_id"]},
+            {"$set": {"content": content, "internal_links_injected": True, "links_updated_at": datetime.now(timezone.utc).isoformat()}}
+        )
+
+    return {"slug": slug, "pages_updated": len(pages), "links_injected": injected_count}
+
+
+# ── T003: FAQ Auto-Extractor ──────────────────────────────────────────────────
+
+@api.get("/admin/conversations/extract-faqs")
+async def extract_faqs(limit: int = 100, admin: dict = Depends(get_admin_user)):
+    """Extract recurring questions from conversations and suggest FAQ content."""
+    pipeline = [
+        {"$unwind": "$messages"},
+        {"$match": {"messages.role": "user"}},
+        {"$project": {"content": "$messages.content", "subject": "$subject_name"}},
+        {"$limit": limit * 5},
+    ]
+    try:
+        raw = await db.conversations.aggregate(pipeline).to_list(limit * 5)
+    except Exception:
+        raw = []
+
+    questions = [r["content"] for r in raw if r.get("content") and len(r["content"]) > 15 and "?" in r["content"]][:50]
+    subjects = list({r.get("subject", "") for r in raw if r.get("subject")})[:10]
+
+    faqs = []
+    if questions:
+        try:
+            import vertex_services
+            prompt = (
+                f"From these student questions, identify the top 15 most frequently asked and educationally important ones.\n"
+                f"Questions:\n" + "\n".join(f"- {q[:200]}" for q in questions[:50]) +
+                f"\n\nReturn a JSON array of: {{question, category, suggested_answer_length: 'short'|'medium'|'long', importance: 'high'|'medium'}}"
+                f"\nReturn ONLY valid JSON array."
+            )
+            raw_result = await vertex_services._generate(prompt, max_tokens=1024)
+            if raw_result:
+                cleaned = raw_result.strip().lstrip("```json").lstrip("```").rstrip("```")
+                faqs = json.loads(cleaned)
+        except Exception as e:
+            logger.warning(f"FAQ extraction AI failed: {e}")
+            faqs = [{"question": q[:200], "category": "general", "importance": "medium"} for q in questions[:15]]
+
+    return {
+        "faqs": faqs,
+        "total_questions_analyzed": len(questions),
+        "subjects": subjects,
+        "suggested_pages": [
+            {"type": "faq", "title": f["question"][:80], "priority": f.get("importance", "medium")}
+            for f in faqs[:10]
+        ]
+    }
+
+
+@api.get("/admin/conversations/sentiment")
+async def conversations_sentiment(admin: dict = Depends(get_admin_user)):
+    """Quick sentiment summary across all recent conversations."""
+    try:
+        pipeline = [
+            {"$unwind": "$messages"},
+            {"$match": {"messages.role": "user"}},
+            {"$project": {"content": "$messages.content", "conv_id": "$_id"}},
+            {"$limit": 200},
+        ]
+        msgs = await db.conversations.aggregate(pipeline).to_list(200)
+    except Exception:
+        msgs = []
+
+    if not msgs:
+        return {"positive": 0, "negative": 0, "neutral": 0, "total": 0}
+
+    texts = [m["content"] for m in msgs if m.get("content")]
+    positive = sum(1 for t in texts if any(w in t.lower() for w in ["thank", "great", "awesome", "help", "good", "love", "clear", "easy"]))
+    negative = sum(1 for t in texts if any(w in t.lower() for w in ["wrong", "bad", "error", "confused", "not working", "fail", "broken", "terrible"]))
+    neutral = len(texts) - positive - negative
+    return {
+        "positive": positive,
+        "negative": negative,
+        "neutral": max(0, neutral),
+        "total": len(texts),
+        "positive_pct": round(positive / max(len(texts), 1) * 100, 1),
+        "negative_pct": round(negative / max(len(texts), 1) * 100, 1),
+    }
+
+
+# ── T001b: Schema.org Auto-Injection ─────────────────────────────────────────
+
+@api.post("/admin/seo/inject-schema/{slug}")
+async def seo_inject_schema(slug: str, admin: dict = Depends(get_admin_user)):
+    """Inject JSON-LD schema.org structured data into a topic's pages."""
+    topic = await db.seo_topics.find_one({"slug": slug})
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    schema = {
+        "@context": "https://schema.org",
+        "@type": "Course",
+        "name": topic.get("title", ""),
+        "description": topic.get("meta_description", topic.get("title", "")),
+        "provider": {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai"},
+        "educationalLevel": topic.get("class_name", ""),
+        "about": topic.get("subject_name", ""),
+        "keywords": topic.get("keywords", []),
+        "inLanguage": "en-IN",
+        "isPartOf": {"@type": "LearningResource", "name": f"AHSEC {topic.get('class_name', '')} {topic.get('subject_name', '')}"},
+    }
+
+    faq_schema = None
+    pages = await db.seo_pages.find({"topic_id": str(topic.get("_id", ""))}).to_list(50)
+    faqs = []
+    for page in pages:
+        if page.get("type") in ("important-questions", "mcqs"):
+            content = page.get("content", "")
+            questions = re.findall(r'#{1,3}\s+(.+?)\n', content)[:5]
+            for q in questions:
+                faqs.append({"@type": "Question", "name": q.strip(),
+                              "acceptedAnswer": {"@type": "Answer", "text": f"Refer to Syrabit.ai for a detailed answer on {q.strip()}."}})
+    if faqs:
+        faq_schema = {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": faqs}
+
+    await db.seo_topics.update_one(
+        {"slug": slug},
+        {"$set": {"schema_org": schema, "faq_schema": faq_schema, "schema_injected_at": datetime.now(timezone.utc).isoformat()}}
+    )
+
+    return {"slug": slug, "schema_injected": True, "faq_entities": len(faqs), "schema": schema}
+
+
+@api.post("/admin/seo/inject-schema-bulk")
+async def seo_inject_schema_bulk(admin: dict = Depends(get_admin_user)):
+    """Inject schema.org into all published topics."""
+    topics = await db.seo_topics.find({"status": "published"}, {"slug": 1}).to_list(1000)
+    injected = 0
+    for t in topics:
+        try:
+            await seo_inject_schema(t["slug"], admin)
+            injected += 1
+        except Exception:
+            pass
+    return {"injected": injected, "total": len(topics)}
+
+
+# ── T008: Content Pipeline Tracker ───────────────────────────────────────────
+
+@api.get("/admin/seo/pipeline-status")
+async def seo_pipeline_status(admin: dict = Depends(get_admin_user)):
+    """Get real-time content pipeline statistics."""
+    try:
+        total         = await db.seo_topics.count_documents({})
+        published     = await db.seo_topics.count_documents({"status": "published"})
+        draft         = await db.seo_topics.count_documents({"status": "draft"})
+        archived      = await db.seo_topics.count_documents({"status": "archived"})
+        has_content   = await db.seo_topics.count_documents({"has_content": True})
+        no_schema     = await db.seo_topics.count_documents({"status": "published", "schema_org": {"$exists": False}})
+        no_links      = await db.seo_topics.count_documents({"status": "published", "internal_links_injected": {"$ne": True}})
+
+        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        published_today = await db.seo_topics.count_documents({
+            "status": "published",
+            "published_at": {"$gte": today.isoformat()}
+        })
+        pages_total = await db.seo_pages.count_documents({})
+
+        return {
+            "total_topics": total,
+            "published": published,
+            "draft": draft,
+            "archived": archived,
+            "has_content": has_content,
+            "pages_total": pages_total,
+            "published_today": published_today,
+            "needs_schema": no_schema,
+            "needs_internal_links": no_links,
+            "publish_rate_pct": round(published / max(total, 1) * 100, 1),
+            "content_rate_pct": round(has_content / max(total, 1) * 100, 1),
+        }
+    except Exception as e:
+        logger.warning(f"pipeline-status failed: {e}")
+        return {}
+
+
+# ── T009: Page-Level Conversion Tracker ──────────────────────────────────────
+
+@api.get("/admin/analytics/page-conversions")
+async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin_user)):
+    """Track which content pages correlate with user signups and upgrades."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    # Top viewed pages
+    view_pipeline = [
+        {"$match": {"type": "page_view", "created_at": {"$gte": cutoff}}},
+        {"$group": {"_id": "$path", "views": {"$sum": 1}, "unique_visitors": {"$addToSet": "$visitor_id"}}},
+        {"$project": {"path": "$_id", "views": 1, "unique_visitors": {"$size": "$unique_visitors"}}},
+        {"$sort": {"views": -1}},
+        {"$limit": 20},
+    ]
+    try:
+        pages = await db.analytics.aggregate(view_pipeline).to_list(20)
+    except Exception:
+        pages = []
+
+    # New signups per day with last page
+    signup_pipeline = [
+        {"$match": {"type": "signup", "created_at": {"$gte": cutoff}}},
+        {"$group": {"_id": "$referrer_path", "signups": {"$sum": 1}}},
+        {"$sort": {"signups": -1}},
+        {"$limit": 15},
+    ]
+    try:
+        signup_sources = await db.analytics.aggregate(signup_pipeline).to_list(15)
+    except Exception:
+        signup_sources = []
+
+    enriched = []
+    signup_map = {s["_id"]: s["signups"] for s in signup_sources}
+    for p in pages:
+        path = p.get("path", "") or p.get("_id", "")
+        enriched.append({
+            "path": path,
+            "views": p.get("views", 0),
+            "unique_visitors": p.get("unique_visitors", 0),
+            "signups_attributed": signup_map.get(path, 0),
+            "conversion_rate": round(signup_map.get(path, 0) / max(p.get("unique_visitors", 1), 1) * 100, 2),
+        })
+
+    enriched.sort(key=lambda x: x["signups_attributed"], reverse=True)
+
+    # Daily signups trend
+    daily_pipeline = [
+        {"$match": {"type": "signup", "created_at": {"$gte": cutoff}}},
+        {"$group": {"_id": {"$substr": ["$created_at", 0, 10]}, "signups": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+    ]
+    try:
+        daily = await db.analytics.aggregate(daily_pipeline).to_list(days)
+    except Exception:
+        daily = []
+
+    return {
+        "top_converting_pages": enriched,
+        "daily_signups": [{"date": d["_id"], "signups": d["signups"]} for d in daily],
+        "period_days": days,
+    }
+
+
+# ── T010: Churn Risk Scoring ──────────────────────────────────────────────────
+
+@api.get("/admin/users/churn-risk")
+async def admin_churn_risk(admin: dict = Depends(get_admin_user)):
+    """Score every user's churn risk based on activity, credits, and plan age."""
+    users = await supa_list_users()
+    now = datetime.now(timezone.utc)
+    at_risk = []
+
+    for u in users:
+        score = 0
+        factors = []
+
+        created = u.get("created_at", "")
+        last_active = u.get("updated_at", created)
+        try:
+            la_dt = datetime.fromisoformat(last_active.replace("Z", "+00:00"))
+            days_inactive = (now - la_dt).days
+        except Exception:
+            days_inactive = 0
+
+        if days_inactive > 14:
+            score += 30
+            factors.append(f"Inactive {days_inactive}d")
+        elif days_inactive > 7:
+            score += 15
+            factors.append(f"Inactive {days_inactive}d")
+
+        credits_used = u.get("credits_used", 0) or 0
+        if credits_used == 0:
+            score += 25
+            factors.append("Never used AI")
+        elif credits_used < 3:
+            score += 10
+            factors.append("Low engagement")
+
+        plan = u.get("plan", "free")
+        if plan == "free" and days_inactive > 3:
+            score += 15
+            factors.append("Free + inactive")
+
+        conv_count = u.get("conversation_count", 0) or 0
+        if conv_count == 0:
+            score += 20
+            factors.append("No conversations")
+
+        risk = "high" if score >= 60 else "medium" if score >= 30 else "low"
+        at_risk.append({
+            "id": u.get("id"), "name": u.get("name", ""), "email": u.get("email", ""),
+            "plan": plan, "credits_used": credits_used, "days_inactive": days_inactive,
+            "risk_score": score, "risk": risk, "factors": factors,
+        })
+
+    at_risk.sort(key=lambda x: x["risk_score"], reverse=True)
+    return {
+        "users": at_risk[:50],
+        "summary": {
+            "high_risk": sum(1 for u in at_risk if u["risk"] == "high"),
+            "medium_risk": sum(1 for u in at_risk if u["risk"] == "medium"),
+            "low_risk": sum(1 for u in at_risk if u["risk"] == "low"),
+            "total": len(at_risk),
+        }
+    }
+
+
+# ── T011: LLM Cost Tracker ────────────────────────────────────────────────────
+
+_llm_cost_log: list = []   # in-memory ring buffer (max 10k entries)
+_LLM_COST_MAX = 10_000
+
+COST_PER_1K_TOKENS = {
+    "gemini-2.0-flash":       {"in": 0.000075, "out": 0.0003},
+    "gemini-2.0-flash-lite":  {"in": 0.0000375, "out": 0.00015},
+    "gemini-1.5-pro":         {"in": 0.00125,   "out": 0.005},
+    "llama-3.3-70b-versatile":{"in": 0.00059,   "out": 0.00079},
+    "llama-3.1-8b-instant":   {"in": 0.00005,   "out": 0.00008},
+}
+
+def record_llm_cost(model: str, prompt_tokens: int, completion_tokens: int, provider: str = "gemini"):
+    rates = COST_PER_1K_TOKENS.get(model, {"in": 0.0001, "out": 0.0002})
+    cost_usd = (prompt_tokens * rates["in"] + completion_tokens * rates["out"]) / 1000
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "model": model, "provider": provider,
+        "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+        "cost_usd": round(cost_usd, 8),
+    }
+    _llm_cost_log.append(entry)
+    if len(_llm_cost_log) > _LLM_COST_MAX:
+        _llm_cost_log.pop(0)
+
+@api.get("/admin/health/llm-costs")
+async def admin_llm_costs(days: int = 7, admin: dict = Depends(get_admin_user)):
+    """Return LLM cost breakdown for the last N days."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    recent = [e for e in _llm_cost_log if datetime.fromisoformat(e["ts"].replace("Z", "+00:00")) >= cutoff]
+
+    total_cost = sum(e["cost_usd"] for e in recent)
+    total_tokens = sum(e["prompt_tokens"] + e["completion_tokens"] for e in recent)
+
+    by_model: dict = {}
+    for e in recent:
+        m = e["model"]
+        by_model.setdefault(m, {"calls": 0, "cost_usd": 0, "tokens": 0})
+        by_model[m]["calls"] += 1
+        by_model[m]["cost_usd"] += e["cost_usd"]
+        by_model[m]["tokens"] += e["prompt_tokens"] + e["completion_tokens"]
+
+    by_day: dict = {}
+    for e in recent:
+        day = e["ts"][:10]
+        by_day.setdefault(day, {"cost_usd": 0, "calls": 0})
+        by_day[day]["cost_usd"] += e["cost_usd"]
+        by_day[day]["calls"] += 1
+
+    daily = [{"date": d, **v, "cost_usd": round(v["cost_usd"], 6)} for d, v in sorted(by_day.items())]
+
+    published = await db.seo_topics.count_documents({"status": "published"})
+    cost_per_page = round(total_cost / max(published, 1), 6)
+
+    return {
+        "period_days": days,
+        "total_cost_usd": round(total_cost, 6),
+        "total_cost_inr": round(total_cost * 84, 4),
+        "total_tokens": total_tokens,
+        "total_calls": len(recent),
+        "cost_per_published_page_usd": cost_per_page,
+        "by_model": [{"model": m, **v, "cost_usd": round(v["cost_usd"], 6)} for m, v in by_model.items()],
+        "daily": daily,
+    }
+
+
+# ── T012: Notification Trigger Builder ───────────────────────────────────────
+
+@api.get("/admin/notifications/triggers")
+async def get_notification_triggers(admin: dict = Depends(get_admin_user)):
+    """List all automated notification triggers."""
+    triggers = await db.notification_triggers.find({}, {"_id": 0}).to_list(100)
+    return {"triggers": triggers}
+
+
+@api.post("/admin/notifications/triggers")
+async def create_notification_trigger(body: dict = Body(...), admin: dict = Depends(get_admin_user)):
+    """Create a new automated trigger."""
+    required = {"name", "event", "channel", "message"}
+    if not required.issubset(body.keys()):
+        raise HTTPException(status_code=400, detail=f"Required fields: {required}")
+    trigger = {
+        "id": str(uuid.uuid4()),
+        "name": body["name"],
+        "event": body["event"],       # signup | inactive_3d | inactive_7d | plan_upgrade | low_credits
+        "channel": body["channel"],   # push | email | both
+        "message": body["message"],
+        "subject": body.get("subject", ""),
+        "enabled": body.get("enabled", True),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "fired_count": 0,
+    }
+    await db.notification_triggers.insert_one({**trigger, "_id": trigger["id"]})
+    return trigger
+
+
+@api.patch("/admin/notifications/triggers/{trigger_id}")
+async def update_notification_trigger(trigger_id: str, body: dict = Body(...), admin: dict = Depends(get_admin_user)):
+    """Toggle or update a trigger."""
+    await db.notification_triggers.update_one({"id": trigger_id}, {"$set": body})
+    return {"success": True}
+
+
+@api.delete("/admin/notifications/triggers/{trigger_id}")
+async def delete_notification_trigger(trigger_id: str, admin: dict = Depends(get_admin_user)):
+    """Delete a trigger."""
+    await db.notification_triggers.delete_one({"id": trigger_id})
+    return {"success": True}
+
+
+# ── T005: PDF-to-Syllabus Importer ───────────────────────────────────────────
+
+@api.post("/admin/syllabus/import-pdf")
+async def syllabus_import_pdf(
+    file: UploadFile = File(...),
+    board: str = Form("AHSEC"),
+    class_name: str = Form("HS 1st Year"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Extract syllabus structure from a PDF using Gemini 1.5 Pro."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files supported")
+    pdf_bytes = await file.read()
+    if len(pdf_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="PDF too large (max 20MB)")
+
+    try:
+        import vertex_services
+        result = await vertex_services.extract_from_document(pdf_bytes, task="extract_topics")
+        topics_data = result.get("result", [])
+
+        subjects_created = []
+        for chapter_entry in (topics_data if isinstance(topics_data, list) else []):
+            chapter_name = chapter_entry.get("chapter", "")
+            topics = chapter_entry.get("topics", [])
+            if not chapter_name:
+                continue
+            subject_slug = re.sub(r"[^a-z0-9]+", "-", chapter_name.lower().strip())
+            existing = await db.subjects.find_one({"slug": subject_slug})
+            if not existing:
+                await db.subjects.insert_one({
+                    "id": str(uuid.uuid4()), "name": chapter_name,
+                    "slug": subject_slug, "board": board, "class_name": class_name,
+                    "topics": topics, "source": "pdf_import",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+                subjects_created.append(chapter_name)
+
+        return {
+            "success": True,
+            "chapters_found": len(topics_data if isinstance(topics_data, list) else []),
+            "subjects_created": subjects_created,
+            "board": board,
+            "class_name": class_name,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF extraction failed: {e}")
+
+
+# ── T007: Inline AI Writing — CMS suggest ────────────────────────────────────
+
+@api.post("/admin/cms/ai-suggest")
+async def cms_ai_suggest(
+    text: str = Body(...),
+    action: str = Body("improve"),   # improve | continue | summarise | simplify | exam-tip
+    subject: str = Body(""),
+    topic: str = Body(""),
+    admin: dict = Depends(get_admin_user),
+):
+    """Inline Gemini AI writing assistance for CMS editor."""
+    if not text or len(text.strip()) < 10:
+        raise HTTPException(status_code=400, detail="Text too short")
+
+    action_prompts = {
+        "improve":   f"Rewrite this more clearly and professionally for AHSEC students{' studying ' + subject if subject else ''}. Keep the same meaning, improve flow and clarity.",
+        "continue":  f"Continue writing this educational content naturally for AHSEC students{' studying ' + topic if topic else ''}. Add 2-3 more sentences.",
+        "summarise": "Summarise this in 2-3 concise bullet points for quick revision.",
+        "simplify":  "Simplify this for students in Class 11-12. Use simpler words, keep it accurate.",
+        "exam-tip":  "Turn this into a memorable exam tip or mnemonic that AHSEC students can use.",
+    }
+    prompt = f"{action_prompts.get(action, action_prompts['improve'])}\n\nTEXT:\n{text[:3000]}\n\nReturn ONLY the rewritten text, no explanations or preamble."
+
+    try:
+        import vertex_services
+        result = await vertex_services._generate(prompt, max_tokens=1024, temperature=0.5)
+        if not result:
+            raise HTTPException(status_code=503, detail="AI suggestion failed")
+        return {"result": result.strip(), "action": action}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+# ── Quick Win: Sitemap Validator ──────────────────────────────────────────────
+
+@api.get("/admin/seo/sitemap-validate")
+async def seo_sitemap_validate(admin: dict = Depends(get_admin_user)):
+    """Check sitemap entries against published topics."""
+    published = await db.seo_topics.find({"status": "published"}, {"slug": 1, "title": 1}).to_list(5000)
+    base_url = "https://syrabit.ai"
+    results = []
+    for t in published[:100]:
+        slug = t.get("slug", "")
+        url = f"{base_url}/learn/{slug}"
+        results.append({"url": url, "slug": slug, "title": t.get("title", ""), "in_sitemap": True})
+
+    return {
+        "total_published": len(published),
+        "checked": len(results),
+        "sample_urls": results[:20],
+        "sitemap_url": f"{base_url}/sitemap.xml",
+    }
+
+
 @api.get("/llms.txt")
 async def serve_llms_txt():
     lines = [

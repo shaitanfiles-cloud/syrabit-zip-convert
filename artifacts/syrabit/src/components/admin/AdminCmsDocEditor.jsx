@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
+import { cmsAiSuggest } from '@/utils/api';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -125,6 +126,11 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
   const [translateLang, setTranslateLang]         = useState('as');
   const [translating, setTranslating]             = useState(false);
   const [translateResult, setTranslateResult]     = useState('');
+  const [aiPaletteOpen, setAiPaletteOpen]         = useState(false);
+  const [aiPaletteText, setAiPaletteText]         = useState('');
+  const [aiPaletteAction, setAiPaletteAction]     = useState('improve');
+  const [aiPaletteResult, setAiPaletteResult]     = useState('');
+  const [aiPaletteLoading, setAiPaletteLoading]   = useState(false);
 
   const pdfRef    = useRef(null);
   const editorRef = useRef(null);
@@ -334,6 +340,33 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Translation failed');
     } finally { setTranslating(false); }
+  };
+
+  const handleAiPalette = async () => {
+    const selected = aiPaletteText.trim();
+    if (!selected) { toast.error('Enter or paste text to rewrite'); return; }
+    setAiPaletteLoading(true);
+    setAiPaletteResult('');
+    try {
+      const res = await cmsAiSuggest(adminToken, selected, aiPaletteAction, form.geo_tags || '', form.title || '');
+      const suggestion = res.data?.suggestion || res.data?.text || '';
+      setAiPaletteResult(suggestion);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'AI suggestion failed');
+    } finally { setAiPaletteLoading(false); }
+  };
+
+  const applyAiPaletteResult = () => {
+    if (!aiPaletteResult) return;
+    const current = editorRef.current?.getMarkdown() || form.content;
+    const updated = aiPaletteText
+      ? current.replace(aiPaletteText, aiPaletteResult)
+      : current + '\n\n' + aiPaletteResult;
+    setForm(f => ({ ...f, content: updated }));
+    setAiPaletteOpen(false);
+    setAiPaletteText('');
+    setAiPaletteResult('');
+    toast.success('AI suggestion applied to content');
   };
 
   const handleInsertSyllabus = async () => {
@@ -643,6 +676,14 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
               PDF
             </button>
 
+            <button onClick={() => { setAiPaletteOpen(v => !v); setAiPaletteResult(''); }}
+              className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium flex-shrink-0 border"
+              style={aiPaletteOpen
+                ? { background: 'rgba(139,92,246,0.25)', color: '#c4b5fd', borderColor: 'rgba(139,92,246,0.45)' }
+                : { background: 'rgba(139,92,246,0.10)', color: '#a78bfa', borderColor: 'rgba(139,92,246,0.22)' }}>
+              <Sparkles size={12} /> AI Write
+            </button>
+
             <button onClick={() => { setTranslateOpen(v => !v); setTranslateResult(''); }}
               className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium flex-shrink-0 border"
               style={translateOpen
@@ -823,6 +864,58 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
                         </button>
                       </div>
                       <p style={{ fontSize: 13, color: '#e8e8e8', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{translateResult}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Gemini AI Writing Palette */}
+              {aiPaletteOpen && (
+                <div style={{ background: 'rgba(139,92,246,0.07)', borderBottom: '1px solid rgba(139,92,246,0.22)', padding: '10px 16px' }}>
+                  <div className="flex items-center gap-3 flex-wrap mb-2">
+                    <Sparkles size={14} color="#a78bfa" />
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#a78bfa' }}>Gemini AI Palette</span>
+                    <select value={aiPaletteAction} onChange={e => setAiPaletteAction(e.target.value)}
+                      style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(139,92,246,0.30)', borderRadius: 8, padding: '4px 10px', color: '#e8e8e8', fontSize: 12 }}>
+                      <option value="improve">Improve writing</option>
+                      <option value="simplify">Simplify</option>
+                      <option value="expand">Expand explanation</option>
+                      <option value="summarize">Summarize</option>
+                      <option value="rewrite">Rewrite formally</option>
+                      <option value="bullets">Convert to bullets</option>
+                    </select>
+                    <button onClick={handleAiPalette} disabled={aiPaletteLoading || !aiPaletteText.trim()}
+                      style={{ background: 'rgba(139,92,246,0.20)', border: '1px solid rgba(139,92,246,0.40)', color: '#c4b5fd', borderRadius: 8, padding: '4px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6, opacity: aiPaletteLoading || !aiPaletteText.trim() ? 0.5 : 1 }}>
+                      {aiPaletteLoading ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
+                      {aiPaletteLoading ? 'Rewriting…' : 'Run'}
+                    </button>
+                    <button onClick={() => setAiPaletteOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.35)', marginLeft: 'auto' }}>
+                      <X size={14} />
+                    </button>
+                  </div>
+                  <textarea
+                    value={aiPaletteText}
+                    onChange={e => { setAiPaletteText(e.target.value); setAiPaletteResult(''); }}
+                    placeholder="Paste or type the text you want Gemini to rewrite…"
+                    rows={3}
+                    style={{ width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(139,92,246,0.20)', borderRadius: 8, padding: '8px 12px', color: '#e8e8e8', fontSize: 12, resize: 'vertical', outline: 'none' }}
+                  />
+                  {aiPaletteResult && (
+                    <div style={{ marginTop: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(139,92,246,0.20)', borderRadius: 8, padding: '10px 14px' }}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span style={{ fontSize: 10, fontWeight: 700, color: '#a78bfa', textTransform: 'uppercase' }}>Suggestion</span>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => { navigator.clipboard.writeText(aiPaletteResult); toast.success('Copied!'); }}
+                            style={{ background: 'rgba(139,92,246,0.15)', border: '1px solid rgba(139,92,246,0.3)', color: '#a78bfa', borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <Copy size={10} /> Copy
+                          </button>
+                          <button onClick={applyAiPaletteResult}
+                            style={{ background: 'rgba(139,92,246,0.25)', border: '1px solid rgba(139,92,246,0.4)', color: '#c4b5fd', borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <CheckCircle size={10} /> Apply to Content
+                          </button>
+                        </div>
+                      </div>
+                      <p style={{ fontSize: 13, color: '#e8e8e8', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{aiPaletteResult}</p>
                     </div>
                   )}
                 </div>

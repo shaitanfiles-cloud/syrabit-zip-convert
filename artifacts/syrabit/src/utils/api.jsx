@@ -266,3 +266,55 @@ export const vertexSeoMeta = (token, data) =>
 
 export const vertexContentGaps = (token) =>
   axios.get(`${API_BASE}/admin/vertex/content-gaps`, { headers: adminHeaders(token), withCredentials: true });
+
+// ── Upgrade Wave API Helpers ──────────────────────────────────────────────────
+export const seoInternalLinksAnalyze = (token) =>
+  axios.get(`${API_BASE}/admin/seo/internal-links/analyze`, { headers: adminHeaders(token), withCredentials: true });
+
+export const seoInternalLinksInject = (token, slug) =>
+  axios.post(`${API_BASE}/admin/seo/internal-links/inject/${slug}`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const seoInjectSchema = (token, slug) =>
+  axios.post(`${API_BASE}/admin/seo/inject-schema/${slug}`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const seoInjectSchemaBulk = (token) =>
+  axios.post(`${API_BASE}/admin/seo/inject-schema-bulk`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const seoPipelineStatus = (token) =>
+  axios.get(`${API_BASE}/admin/seo/pipeline-status`, { headers: adminHeaders(token), withCredentials: true });
+
+export const seoSitemapValidate = (token) =>
+  axios.get(`${API_BASE}/admin/seo/sitemap-validate`, { headers: adminHeaders(token), withCredentials: true });
+
+export const extractFaqs = (token, limit = 100) =>
+  axios.get(`${API_BASE}/admin/conversations/extract-faqs?limit=${limit}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const conversationsSentiment = (token) =>
+  axios.get(`${API_BASE}/admin/conversations/sentiment`, { headers: adminHeaders(token), withCredentials: true });
+
+export const pageConversions = (token, days = 30) =>
+  axios.get(`${API_BASE}/admin/analytics/page-conversions?days=${days}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const churnRisk = (token) =>
+  axios.get(`${API_BASE}/admin/users/churn-risk`, { headers: adminHeaders(token), withCredentials: true });
+
+export const llmCosts = (token, days = 7) =>
+  axios.get(`${API_BASE}/admin/health/llm-costs?days=${days}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const getNotificationTriggers = (token) =>
+  axios.get(`${API_BASE}/admin/notifications/triggers`, { headers: adminHeaders(token), withCredentials: true });
+
+export const createNotificationTrigger = (token, data) =>
+  axios.post(`${API_BASE}/admin/notifications/triggers`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const updateNotificationTrigger = (token, id, data) =>
+  axios.patch(`${API_BASE}/admin/notifications/triggers/${id}`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const deleteNotificationTrigger = (token, id) =>
+  axios.delete(`${API_BASE}/admin/notifications/triggers/${id}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const syllabusImportPdf = (token, formData) =>
+  axios.post(`${API_BASE}/admin/syllabus/import-pdf`, formData, { headers: { ...adminHeaders(token), 'Content-Type': 'multipart/form-data' }, withCredentials: true });
+
+export const cmsAiSuggest = (token, text, action, subject = '', topic = '') =>
+  axios.post(`${API_BASE}/admin/cms/ai-suggest`, { text, action, subject, topic }, { headers: adminHeaders(token), withCredentials: true });

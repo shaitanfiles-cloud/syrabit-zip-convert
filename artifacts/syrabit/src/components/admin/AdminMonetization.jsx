@@ -253,25 +253,46 @@ export default function AdminMonetization({ adminToken }) {
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
             <h3 className="text-slate-400 text-sm font-medium mb-4">Conversion Funnel</h3>
             <div className="space-y-3">
-              {funnel.funnel?.map((stage, i) => (
-                <div key={i} className="relative">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-white text-sm font-medium">{stage.stage}</span>
-                    <span className="text-slate-400 text-sm">{stage.count} ({stage.pct}%)</span>
+              {funnel.funnel?.map((stage, i) => {
+                const nextStage = funnel.funnel[i + 1];
+                const dropOffPct = nextStage && stage.count > 0
+                  ? Math.round(((stage.count - nextStage.count) / stage.count) * 100)
+                  : null;
+                const gradients = [
+                  'linear-gradient(90deg,#3b82f6,#60a5fa)',
+                  'linear-gradient(90deg,#8b5cf6,#a78bfa)',
+                  'linear-gradient(90deg,#10b981,#34d399)',
+                  'linear-gradient(90deg,#f59e0b,#fbbf24)',
+                ];
+                return (
+                  <div key={i}>
+                    <div className="relative">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-white text-sm font-medium">{stage.stage}</span>
+                        <span className="text-slate-400 text-sm">{stage.count?.toLocaleString()} ({stage.pct}%)</span>
+                      </div>
+                      <div className="h-8 rounded-lg overflow-hidden bg-slate-800">
+                        <div
+                          className="h-full rounded-lg transition-all duration-500"
+                          style={{ width: `${stage.pct}%`, background: gradients[i % gradients.length] }}
+                        />
+                      </div>
+                    </div>
+                    {dropOffPct !== null && (
+                      <div className="flex items-center gap-1.5 mt-1 mb-1 pl-2">
+                        <div className="w-px h-3 bg-slate-700" />
+                        <span className="text-[11px] font-medium"
+                          style={{ color: dropOffPct > 50 ? '#f87171' : dropOffPct > 25 ? '#fbbf24' : '#34d399' }}>
+                          ↓ {dropOffPct}% drop-off
+                        </span>
+                        <span className="text-[10px] text-slate-600">
+                          ({(stage.count - nextStage.count)?.toLocaleString()} lost)
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  <div className="h-8 rounded-lg overflow-hidden bg-slate-800">
-                    <div
-                      className="h-full rounded-lg transition-all duration-500"
-                      style={{
-                        width: `${stage.pct}%`,
-                        background: i === 0 ? 'linear-gradient(90deg,#3b82f6,#60a5fa)' :
-                                   i === 1 ? 'linear-gradient(90deg,#8b5cf6,#a78bfa)' :
-                                            'linear-gradient(90deg,#10b981,#34d399)',
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">

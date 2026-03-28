@@ -12,6 +12,8 @@ import {
   adminSeoRegenerateSitemap, adminSeoDeleteTopic, adminSeoPilot,
   adminSeoAutoRun, adminSeoJobStatus, adminSeoInsights, adminSeoExpand,
   adminSeoBulkPublish,
+  seoInternalLinksAnalyze, seoInternalLinksInject,
+  seoInjectSchemaBulk, seoInjectSchema, seoSitemapValidate,
 } from '@/utils/api';
 
 const PAGE_TYPES = [
@@ -149,6 +151,19 @@ export default function AdminSeoManager({ adminToken }) {
   const [pilotClass, setPilotClass]   = useState('Class 11');
   const [pilotSubject, setPilotSubject] = useState('');
   const [pilotChapters, setPilotChapters] = useState(3);
+
+  // Internal Links
+  const [linksData, setLinksData]     = useState(null);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [injectSlug, setInjectSlug]   = useState('');
+  const [injecting, setInjecting]     = useState(false);
+  // Schema
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [schemaSlug, setSchemaSlug]   = useState('');
+  const [schemaResult, setSchemaResult] = useState(null);
+  // Sitemap
+  const [sitemapData, setSitemapData] = useState(null);
+  const [sitemapValidating, setSitemapValidating] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -310,6 +325,55 @@ export default function AdminSeoManager({ adminToken }) {
     }
   };
 
+  const handleLinksAnalyze = async () => {
+    setLinksLoading(true);
+    try {
+      const res = await seoInternalLinksAnalyze(adminToken);
+      setLinksData(res.data);
+    } catch { toast.error('Link analysis failed'); }
+    finally { setLinksLoading(false); }
+  };
+
+  const handleLinksInject = async () => {
+    if (!injectSlug.trim()) { toast.error('Enter a slug'); return; }
+    setInjecting(true);
+    try {
+      const res = await seoInternalLinksInject(adminToken, injectSlug.trim());
+      toast.success(res.data?.message || 'Links injected');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Injection failed'); }
+    finally { setInjecting(false); }
+  };
+
+  const handleSchemaInjectSingle = async () => {
+    if (!schemaSlug.trim()) { toast.error('Enter a slug'); return; }
+    setSchemaLoading(true);
+    try {
+      const res = await seoInjectSchema(adminToken, schemaSlug.trim());
+      setSchemaResult(res.data);
+      toast.success('Schema injected');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Schema inject failed'); }
+    finally { setSchemaLoading(false); }
+  };
+
+  const handleSchemaBulk = async () => {
+    if (!confirm('Inject schema.org markup for ALL published pages? This will take a while.')) return;
+    setSchemaLoading(true);
+    try {
+      const res = await seoInjectSchemaBulk(adminToken);
+      toast.success(res.data?.message || 'Bulk schema injection started');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Bulk inject failed'); }
+    finally { setSchemaLoading(false); }
+  };
+
+  const handleSitemapValidate = async () => {
+    setSitemapValidating(true);
+    try {
+      const res = await seoSitemapValidate(adminToken);
+      setSitemapData(res.data);
+    } catch { toast.error('Sitemap validation failed'); }
+    finally { setSitemapValidating(false); }
+  };
+
   const handlePilot = async () => {
     setPiloting(true);
     setPilotResult(null);
@@ -358,6 +422,9 @@ export default function AdminSeoManager({ adminToken }) {
     { id: 'insights', label: '✦ Insights', count: insights?.insights?.length ?? null },
     { id: 'generate', label: 'Generate',   count: null },
     { id: 'pilot',    label: 'Pilot',      count: null },
+    { id: 'links',    label: '🔗 Int. Links', count: null },
+    { id: 'schema',   label: '🧬 Schema',  count: null },
+    { id: 'sitemap',  label: '🗺 Sitemap', count: null },
   ];
 
   return (
@@ -843,6 +910,184 @@ export default function AdminSeoManager({ adminToken }) {
               <p className="text-xs font-semibold" style={{ color: '#f87171' }}>Error: {pilotResult.error}</p>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Internal Links Tab ─────────────────────────────────────── */}
+      {tab === 'links' && (
+        <div className="space-y-5">
+          <div className="rounded-xl border p-5 space-y-4" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-white">Internal Link Analysis</p>
+                <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>Analyzes all published pages and maps semantic link opportunities</p>
+              </div>
+              <button onClick={handleLinksAnalyze} disabled={linksLoading}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+                style={{ background: '#7c3aed', color: '#fff' }}>
+                {linksLoading ? <Loader2 size={14} className="animate-spin" /> : <Activity size={14} />}
+                {linksLoading ? 'Analyzing…' : 'Analyze Links'}
+              </button>
+            </div>
+            {linksData && (
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { label: 'Pages Analyzed', val: linksData.pages_analyzed },
+                  { label: 'Opportunities', val: linksData.total_opportunities },
+                  { label: 'High Priority', val: linksData.high_priority },
+                ].map(s => (
+                  <div key={s.label} className="rounded-lg p-3 text-center border" style={{ background: 'rgba(124,58,237,0.08)', borderColor: 'rgba(124,58,237,0.20)' }}>
+                    <p className="text-xl font-bold text-white">{s.val ?? '—'}</p>
+                    <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.40)' }}>{s.label}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {linksData?.top_opportunities?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'rgba(255,255,255,0.30)' }}>Top Link Opportunities</p>
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {linksData.top_opportunities.slice(0, 20).map((op, i) => (
+                    <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.03)' }}>
+                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,58,237,0.15)', color: '#a78bfa' }}>
+                        {(op.score * 100).toFixed(0)}%
+                      </span>
+                      <span className="text-xs flex-1 truncate" style={{ color: 'rgba(232,232,232,0.70)' }}>{op.source_slug}</span>
+                      <ArrowRight size={11} style={{ color: 'rgba(255,255,255,0.25)', flexShrink: 0 }} />
+                      <span className="text-xs flex-1 truncate text-right" style={{ color: 'rgba(255,255,255,0.40)' }}>{op.target_slug}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border p-5 space-y-3" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+            <p className="text-sm font-semibold text-white">Inject Links into a Page</p>
+            <div className="flex gap-2">
+              <input value={injectSlug} onChange={e => setInjectSlug(e.target.value)}
+                placeholder="page-slug (e.g. ahsec/class-11/physics/motion/notes)"
+                className="flex-1 h-9 px-3 rounded-xl text-sm outline-none font-mono"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', color: '#E8E8E8' }} />
+              <button onClick={handleLinksInject} disabled={injecting || !injectSlug.trim()}
+                className="px-4 h-9 rounded-xl text-sm font-semibold disabled:opacity-40"
+                style={{ background: '#059669', color: '#fff' }}>
+                {injecting ? <Loader2 size={14} className="animate-spin" /> : 'Inject'}
+              </button>
+            </div>
+            <p className="text-[11px]" style={{ color: 'rgba(255,255,255,0.25)' }}>
+              Injects contextually-relevant internal links into the specified page using semantic similarity.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ── Schema Tab ─────────────────────────────────────────────── */}
+      {tab === 'schema' && (
+        <div className="space-y-5">
+          <div className="rounded-xl border p-5 space-y-4" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+            <div>
+              <p className="text-sm font-semibold text-white mb-1">Inject Schema for Single Page</p>
+              <p className="text-xs mb-3" style={{ color: 'rgba(255,255,255,0.35)' }}>Add structured data (schema.org) to a specific page to improve rich snippet eligibility</p>
+              <div className="flex gap-2">
+                <input value={schemaSlug} onChange={e => setSchemaSlug(e.target.value)}
+                  placeholder="page-slug"
+                  className="flex-1 h-9 px-3 rounded-xl text-sm outline-none font-mono"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.10)', color: '#E8E8E8' }} />
+                <button onClick={handleSchemaInjectSingle} disabled={schemaLoading || !schemaSlug.trim()}
+                  className="px-4 h-9 rounded-xl text-sm font-semibold disabled:opacity-40"
+                  style={{ background: '#0891b2', color: '#fff' }}>
+                  {schemaLoading ? <Loader2 size={14} className="animate-spin" /> : 'Inject'}
+                </button>
+              </div>
+              {schemaResult && (
+                <div className="mt-3 rounded-lg p-3 border text-xs font-mono overflow-x-auto" style={{ background: 'rgba(8,145,178,0.07)', borderColor: 'rgba(8,145,178,0.20)', color: '#67e8f9' }}>
+                  {JSON.stringify(schemaResult, null, 2).slice(0, 600)}
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="rounded-xl border p-5" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+            <p className="text-sm font-semibold text-white mb-1">Bulk Schema Injection</p>
+            <p className="text-xs mb-4" style={{ color: 'rgba(255,255,255,0.35)' }}>
+              Auto-generate and inject schema.org JSON-LD markup into all {publishedCount} published pages. 
+              Uses EducationalOrganization + Article schema types.
+            </p>
+            <button onClick={handleSchemaBulk} disabled={schemaLoading}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold disabled:opacity-40"
+              style={{ background: 'linear-gradient(135deg,#0891b2,#06b6d4)', color: '#fff' }}>
+              {schemaLoading ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+              Bulk Inject Schema ({publishedCount} pages)
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Sitemap Tab ─────────────────────────────────────────────── */}
+      {tab === 'sitemap' && (
+        <div className="space-y-5">
+          <div className="rounded-xl border p-5 space-y-4" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-white">Sitemap Validator</p>
+                <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>Validates your sitemap.xml coverage and detects missing or stale URLs</p>
+              </div>
+              <button onClick={handleSitemapValidate} disabled={sitemapValidating}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+                style={{ background: '#16a34a', color: '#fff' }}>
+                {sitemapValidating ? <Loader2 size={14} className="animate-spin" /> : <Map size={14} />}
+                {sitemapValidating ? 'Validating…' : 'Validate Sitemap'}
+              </button>
+            </div>
+            {sitemapData && (
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[
+                    { label: 'Total URLs', val: sitemapData.total_urls },
+                    { label: 'In Sitemap', val: sitemapData.in_sitemap },
+                    { label: 'Missing', val: sitemapData.missing },
+                    { label: 'Coverage %', val: sitemapData.coverage_pct != null ? `${sitemapData.coverage_pct}%` : '—' },
+                  ].map(s => (
+                    <div key={s.label} className="rounded-lg p-3 text-center border" style={{ background: 'rgba(22,163,74,0.08)', borderColor: 'rgba(22,163,74,0.20)' }}>
+                      <p className="text-xl font-bold text-white">{s.val ?? '—'}</p>
+                      <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.40)' }}>{s.label}</p>
+                    </div>
+                  ))}
+                </div>
+                {sitemapData.issues?.length > 0 && (
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'rgba(255,255,255,0.30)' }}>Issues Detected</p>
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                      {sitemapData.issues.map((issue, i) => (
+                        <div key={i} className="flex items-start gap-2 p-2 rounded-lg" style={{ background: 'rgba(239,68,68,0.06)' }}>
+                          <AlertTriangle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+                          <span className="text-xs font-mono" style={{ color: 'rgba(232,232,232,0.60)' }}>{issue}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {sitemapData.ok && !sitemapData.issues?.length && (
+                  <div className="flex items-center gap-2 p-3 rounded-xl" style={{ background: 'rgba(22,163,74,0.08)', border: '1px solid rgba(22,163,74,0.20)' }}>
+                    <CheckCircle2 size={16} className="text-emerald-400" />
+                    <p className="text-sm font-medium text-emerald-400">Sitemap is valid — {sitemapData.coverage_pct}% coverage</p>
+                  </div>
+                )}
+              </div>
+            )}
+            {!sitemapData && !sitemapValidating && (
+              <p className="text-sm text-center py-4" style={{ color: 'rgba(255,255,255,0.20)' }}>Click "Validate Sitemap" to run a coverage check</p>
+            )}
+          </div>
+          <div className="rounded-xl border p-4" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+            <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'rgba(255,255,255,0.25)' }}>Sitemap Actions</p>
+            <button onClick={handleRegenerateSitemap} disabled={sitemap}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', color: 'rgba(232,232,232,0.70)' }}>
+              {sitemap ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+              Regenerate sitemap.xml
+            </button>
+          </div>
         </div>
       )}
     </div>

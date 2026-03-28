@@ -4,9 +4,10 @@ import {
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, Wifi, Database, DollarSign, Crown,
+  Layers, Link2, Code2, FileCheck,
 } from 'lucide-react';
 import axios from 'axios';
-import { adminGetDashboard, API_BASE } from '@/utils/api';
+import { adminGetDashboard, seoPipelineStatus, API_BASE } from '@/utils/api';
 
 function StatCard({ label, value, icon: Icon, color, subLabel, subValue, pulse }) {
   return (
@@ -109,6 +110,52 @@ function DepStatusCard({ name, status, latency }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function PipelineWidget({ token }) {
+  const [pipe, setPipe] = useState(null);
+  useEffect(() => {
+    seoPipelineStatus(token).then(r => setPipe(r.data)).catch(() => {});
+  }, [token]);
+  if (!pipe) return null;
+  const bars = [
+    { label: 'Published', value: pipe.published, total: pipe.total_topics, color: '#10b981' },
+    { label: 'Has Content', value: pipe.has_content, total: pipe.total_topics, color: '#7c3aed' },
+    { label: 'Needs Schema', value: pipe.needs_schema, total: pipe.total_topics, color: '#f59e0b', invert: true },
+    { label: 'Needs Links', value: pipe.needs_internal_links, total: pipe.total_topics, color: '#3b82f6', invert: true },
+  ];
+  return (
+    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Layers size={14} className="text-violet-400" />
+          <h3 className="text-slate-300 font-semibold text-sm">Content Pipeline</h3>
+          <span className="text-xs text-slate-600">({pipe.total_topics} topics · {pipe.pages_total} pages)</span>
+        </div>
+        {pipe.published_today > 0 && (
+          <span style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)', color: '#10b981', borderRadius: 20, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}>
+            +{pipe.published_today} today
+          </span>
+        )}
+      </div>
+      <div className="space-y-3">
+        {bars.map(b => {
+          const pct = Math.round((b.value / Math.max(b.total, 1)) * 100);
+          return (
+            <div key={b.label}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-xs text-slate-500">{b.label}</span>
+                <span className="text-xs font-mono" style={{ color: b.color }}>{b.value} ({pct}%)</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: b.color }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -297,6 +344,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </div>
       )}
+
+      <PipelineWidget token={adminToken} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {quickActions.map((action) => (

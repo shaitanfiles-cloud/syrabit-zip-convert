@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Bell, Send, Clock, Trash2, Users, Loader2, Info, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { Bell, Send, Clock, Trash2, Users, Loader2, Info, CheckCircle2, AlertTriangle, XCircle, Zap, Plus, ToggleLeft, ToggleRight } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
+import { getNotificationTriggers, createNotificationTrigger, updateNotificationTrigger, deleteNotificationTrigger } from '@/utils/api';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -9,6 +10,20 @@ const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;
   return isRealJwt ? { Authorization: `Bearer ${token}` } : {};
 };
+
+const TRIGGER_EVENTS = [
+  { id: 'signup',       label: 'User Signed Up' },
+  { id: 'inactive_3d',  label: 'Inactive 3 Days' },
+  { id: 'inactive_7d',  label: 'Inactive 7 Days' },
+  { id: 'plan_upgrade', label: 'Plan Upgraded' },
+  { id: 'low_credits',  label: 'Low Credits (< 2)' },
+];
+
+const TRIGGER_CHANNELS = [
+  { id: 'push',  label: 'Push' },
+  { id: 'email', label: 'Email' },
+  { id: 'both',  label: 'Both' },
+];
 
 const NOTIF_TYPES = [
   { id: 'info',    icon: Info,          color: 'text-blue-400',    bg: 'bg-blue-500/10',    border: 'border-blue-500/25'    },
@@ -33,6 +48,10 @@ export default function AdminNotifications({ adminToken }) {
   const [sending, setSending]   = useState(false);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState(null);
+  const [mainTab, setMainTab]   = useState('broadcast'); // 'broadcast' | 'triggers'
+  const [triggers, setTriggers] = useState([]);
+  const [trigLoading, setTrigLoading] = useState(false);
+  const [newTrig, setNewTrig]   = useState({ name: '', event: 'signup', channel: 'push', message: '', subject: '', enabled: true });
 
   useEffect(() => {
     axios.get(`${API_BASE}/admin/notifications`, {
@@ -49,7 +68,36 @@ export default function AdminNotifications({ adminToken }) {
         setNotifs([]);
       })
       .finally(() => setLoading(false));
+    // Load triggers
+    getNotificationTriggers(adminToken).then(r => setTriggers(r.data.triggers || [])).catch(() => {});
   }, [adminToken]);
+
+  const handleSaveTrigger = async () => {
+    if (!newTrig.name || !newTrig.message) { toast.error('Name and message required'); return; }
+    setTrigLoading(true);
+    try {
+      const r = await createNotificationTrigger(adminToken, newTrig);
+      setTriggers(prev => [...prev, r.data]);
+      setNewTrig({ name: '', event: 'signup', channel: 'push', message: '', subject: '', enabled: true });
+      toast.success('Trigger created!');
+    } catch { toast.error('Failed to create trigger'); }
+    finally { setTrigLoading(false); }
+  };
+
+  const handleToggleTrigger = async (id, enabled) => {
+    try {
+      await updateNotificationTrigger(adminToken, id, { enabled: !enabled });
+      setTriggers(prev => prev.map(t => t.id === id ? { ...t, enabled: !enabled } : t));
+    } catch { toast.error('Failed to toggle trigger'); }
+  };
+
+  const handleDeleteTrigger = async (id) => {
+    try {
+      await deleteNotificationTrigger(adminToken, id);
+      setTriggers(prev => prev.filter(t => t.id !== id));
+      toast.success('Deleted');
+    } catch { toast.error('Failed to delete trigger'); }
+  };
 
   const handleSend = async (status) => {
     if (!title.trim() || !message.trim()) { toast.error('Title and message required'); return; }
@@ -82,7 +130,94 @@ export default function AdminNotifications({ adminToken }) {
   const TypeIcon = currentType.icon;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 max-w-5xl">
+    <div className="space-y-4 max-w-5xl">
+      {/* Main tabs */}
+      <div style={{ display: 'flex', gap: 4, padding: '4px' }}>
+        {[
+          { id: 'broadcast', label: '📢 Broadcast' },
+          { id: 'triggers',  label: `⚡ Automation Triggers (${triggers.length})` },
+        ].map(t => (
+          <button key={t.id} onClick={() => setMainTab(t.id)}
+            style={{ padding: '6px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: 'none', background: mainTab === t.id ? '#7c3aed' : 'rgba(255,255,255,0.04)', color: mainTab === t.id ? '#fff' : 'rgba(232,232,232,0.45)' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Trigger Builder Tab */}
+      {mainTab === 'triggers' && (
+        <div className="space-y-4">
+          {/* New trigger form */}
+          <div style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 16, padding: 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+              <Zap size={15} color="#a78bfa" />
+              <span style={{ fontWeight: 700, color: '#e8e8e8', fontSize: 14 }}>Create Automation Trigger</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+              <input value={newTrig.name} onChange={e => setNewTrig(p => ({ ...p, name: e.target.value }))} placeholder="Trigger name (e.g. Welcome Email)"
+                style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)', color: '#e8e8e8', fontSize: 13, outline: 'none' }} />
+              <input value={newTrig.subject} onChange={e => setNewTrig(p => ({ ...p, subject: e.target.value }))} placeholder="Email subject (optional)"
+                style={{ padding: '8px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)', color: '#e8e8e8', fontSize: 13, outline: 'none' }} />
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+              <select value={newTrig.event} onChange={e => setNewTrig(p => ({ ...p, event: e.target.value }))}
+                style={{ padding: '8px 12px', borderRadius: 8, background: '#0f172a', border: '1px solid rgba(255,255,255,0.10)', color: '#e8e8e8', fontSize: 13 }}>
+                {TRIGGER_EVENTS.map(e => <option key={e.id} value={e.id}>{e.label}</option>)}
+              </select>
+              <select value={newTrig.channel} onChange={e => setNewTrig(p => ({ ...p, channel: e.target.value }))}
+                style={{ padding: '8px 12px', borderRadius: 8, background: '#0f172a', border: '1px solid rgba(255,255,255,0.10)', color: '#e8e8e8', fontSize: 13 }}>
+                {TRIGGER_CHANNELS.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+              </select>
+            </div>
+            <textarea value={newTrig.message} onChange={e => setNewTrig(p => ({ ...p, message: e.target.value }))} placeholder="Message body... (use {name} for personalisation)"
+              rows={3} style={{ width: '100%', padding: '8px 12px', borderRadius: 8, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)', color: '#e8e8e8', fontSize: 13, outline: 'none', resize: 'none', boxSizing: 'border-box' }} />
+            <button onClick={handleSaveTrigger} disabled={trigLoading}
+              style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 6, padding: '8px 18px', borderRadius: 8, background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', color: '#fff', fontWeight: 700, fontSize: 13, border: 'none', cursor: 'pointer' }}>
+              {trigLoading ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} Save Trigger
+            </button>
+          </div>
+
+          {/* Existing triggers */}
+          {triggers.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 48 }}>
+              <Zap size={32} color="rgba(139,92,246,0.2)" style={{ margin: '0 auto 12px' }} />
+              <p style={{ color: 'rgba(232,232,232,0.35)', fontSize: 13 }}>No triggers yet — create your first automation above</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {triggers.map(t => (
+                <div key={t.id} style={{ background: 'rgba(255,255,255,0.02)', border: `1px solid ${t.enabled ? 'rgba(139,92,246,0.20)' : 'rgba(255,255,255,0.06)'}`, borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#e8e8e8' }}>{t.name}</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 20, background: t.enabled ? 'rgba(16,185,129,0.12)' : 'rgba(100,116,139,0.12)', color: t.enabled ? '#10b981' : '#64748b' }}>
+                        {t.enabled ? 'Active' : 'Paused'}
+                      </span>
+                    </div>
+                    <p style={{ fontSize: 11, color: 'rgba(232,232,232,0.4)', marginTop: 2 }}>
+                      {TRIGGER_EVENTS.find(e => e.id === t.event)?.label || t.event} → {t.channel} · {t.message?.slice(0, 60)}...
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => handleToggleTrigger(t.id, t.enabled)}
+                      style={{ padding: '5px 10px', borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.04)', color: t.enabled ? '#f59e0b' : '#10b981' }}>
+                      {t.enabled ? 'Pause' : 'Resume'}
+                    </button>
+                    <button onClick={() => handleDeleteTrigger(t.id)}
+                      style={{ padding: '5px 10px', borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(239,68,68,0.06)', color: '#ef4444' }}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Broadcast Tab */}
+      {mainTab === 'broadcast' && (
+    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
       {/* Compose */}
       <div className="lg:col-span-7 rounded-2xl border border-white/6 p-5 space-y-4" style={{ background: 'rgba(255,255,255,0.02)' }}>
         <h2 className="text-base font-bold text-white">Compose Notification</h2>
@@ -234,6 +369,8 @@ export default function AdminNotifications({ adminToken }) {
           })}
         </div>
       </div>
+    </div>
+      )}
     </div>
   );
 }

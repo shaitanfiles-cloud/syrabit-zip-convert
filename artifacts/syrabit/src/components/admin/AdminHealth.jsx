@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2 } from 'lucide-react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
 import axios from 'axios';
+import { llmCosts } from '@/utils/api';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -54,6 +55,10 @@ export default function AdminHealth({ adminToken }) {
   const [metricsData, setMetricsData] = useState(null);
   const [metricsLoading, setMetricsLoading] = useState(true);
   const [timeRange, setTimeRange] = useState(60);
+  const [llmData, setLlmData] = useState(null);
+  const [llmLoading, setLlmLoading] = useState(false);
+  const [llmDays, setLlmDays] = useState(7);
+  const [healthTab, setHealthTab] = useState('infra'); // 'infra' | 'llm'
 
   const healthUrl = `${import.meta.env.VITE_BACKEND_URL || ''}/health`;
 
@@ -76,8 +81,17 @@ export default function AdminHealth({ adminToken }) {
       .finally(() => setMetricsLoading(false));
   }, [adminToken, timeRange]);
 
+  const loadLlmCosts = useCallback(async () => {
+    setLlmLoading(true);
+    try {
+      const r = await llmCosts(adminToken, llmDays);
+      setLlmData(r.data);
+    } catch {} finally { setLlmLoading(false); }
+  }, [adminToken, llmDays]);
+
   useEffect(() => { loadHealth(); }, []);
   useEffect(() => { loadMetrics(); }, [loadMetrics]);
+  useEffect(() => { if (healthTab === 'llm') loadLlmCosts(); }, [healthTab, loadLlmCosts]);
 
   useEffect(() => {
     const interval = setInterval(loadMetrics, 60000);
@@ -104,6 +118,96 @@ export default function AdminHealth({ adminToken }) {
 
   return (
     <div className="space-y-6 max-w-4xl">
+      {/* Tab Bar */}
+      <div style={{ display: 'flex', gap: 4 }}>
+        {[
+          { id: 'infra', label: '🖥 Infrastructure' },
+          { id: 'llm',   label: '🤖 LLM Cost Tracker' },
+        ].map(t => (
+          <button key={t.id} onClick={() => setHealthTab(t.id)}
+            style={{ padding: '6px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: 'none', background: healthTab === t.id ? '#7c3aed' : 'rgba(255,255,255,0.04)', color: healthTab === t.id ? '#fff' : 'rgba(232,232,232,0.45)' }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* LLM Cost Tab */}
+      {healthTab === 'llm' && (
+        <div className="space-y-4">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            {[7, 14, 30].map(d => (
+              <button key={d} onClick={() => { setLlmDays(d); setLlmLoading(true); llmCosts(adminToken, d).then(r => setLlmData(r.data)).catch(() => {}).finally(() => setLlmLoading(false)); }}
+                style={{ padding: '5px 12px', borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: `1px solid ${llmDays === d ? 'rgba(139,92,246,0.4)' : 'rgba(255,255,255,0.08)'}`, background: llmDays === d ? 'rgba(139,92,246,0.15)' : 'transparent', color: llmDays === d ? '#a78bfa' : 'rgba(232,232,232,0.4)' }}>
+                {d}d
+              </button>
+            ))}
+            <button onClick={loadLlmCosts} disabled={llmLoading} style={{ marginLeft: 8, padding: '5px 12px', borderRadius: 7, fontSize: 11, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.08)', background: 'transparent', color: 'rgba(232,232,232,0.4)' }}>
+              {llmLoading ? 'Loading…' : '↻ Refresh'}
+            </button>
+          </div>
+          {llmLoading ? (
+            <div className="flex justify-center p-10"><RefreshCw size={20} className="animate-spin text-white/20" /></div>
+          ) : llmData ? (
+            <>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { label: `Total Cost (${llmDays}d)`, value: `$${llmData.total_cost_usd || '0.000000'}`, color: 'amber' },
+                  { label: 'Total Cost (INR)', value: `₹${llmData.total_cost_inr || '0.0000'}`, color: 'emerald' },
+                  { label: 'Total Tokens', value: (llmData.total_tokens || 0).toLocaleString(), color: 'violet' },
+                  { label: 'Cost/Page', value: `$${llmData.cost_per_published_page_usd || '0.000000'}`, color: 'blue' },
+                ].map(s => <PeakBadge key={s.label} label={s.label} value={s.value} color={s.color} />)}
+              </div>
+
+              {(llmData.by_model?.length > 0) && (
+                <div className="rounded-xl border border-white/6 p-5" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                  <h3 className="text-sm font-semibold text-white mb-4">Cost by Model</h3>
+                  <div className="space-y-3">
+                    {llmData.by_model.map(m => {
+                      const pct = llmData.total_cost_usd > 0 ? Math.round(m.cost_usd / llmData.total_cost_usd * 100) : 0;
+                      return (
+                        <div key={m.model}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ fontSize: 12, color: 'rgba(232,232,232,0.7)', fontFamily: 'monospace' }}>{m.model}</span>
+                            <span style={{ fontSize: 12, color: '#a78bfa' }}>${m.cost_usd} ({m.calls} calls)</span>
+                          </div>
+                          <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                            <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(90deg,#7c3aed,#a78bfa)', borderRadius: 2 }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {(llmData.daily?.length > 0) && (
+                <div className="rounded-xl border border-white/6 p-5" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                  <h3 className="text-sm font-semibold text-white mb-4">Daily LLM Spend</h3>
+                  <ResponsiveContainer width="100%" height={160}>
+                    <BarChart data={llmData.daily}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                      <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} tickFormatter={d => d?.slice(5)} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: 'rgba(255,255,255,0.3)', fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, fontSize: 12 }} />
+                      <Bar dataKey="cost_usd" name="Cost (USD)" fill="#7c3aed" radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {llmData.total_calls === 0 && (
+                <div style={{ textAlign: 'center', padding: 48, color: 'rgba(232,232,232,0.35)' }}>
+                  <DollarSign size={32} style={{ margin: '0 auto 12px', opacity: 0.2 }} />
+                  <p style={{ fontSize: 13 }}>No LLM calls recorded yet — costs will appear here as content is generated</p>
+                </div>
+              )}
+            </>
+          ) : null}
+        </div>
+      )}
+
+      {/* Infrastructure Tab */}
+      {healthTab === 'infra' && (<>
       <div className={`rounded-2xl p-4 flex items-center gap-3 border ${
         loading ? 'border-white/8 bg-zinc-500/5' :
         hasError ? 'border-red-500/20 bg-red-500/5' :
@@ -305,6 +409,7 @@ export default function AdminHealth({ adminToken }) {
           ))}
         </ol>
       </div>
+      </>)}
     </div>
   );
 }
