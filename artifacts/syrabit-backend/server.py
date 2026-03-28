@@ -1971,6 +1971,119 @@ def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 25
     return result[:max_chars]
 
 
+async def _embed_and_store_page(page_slug: str, content: str) -> bool:
+    """Embed a published seo_page and persist the vector. Called on every publish."""
+    try:
+        vec = await vertex_services.embed_text(content[:8000], task_type="RETRIEVAL_DOCUMENT")
+        if vec:
+            await db.seo_pages.update_one(
+                {"topic_slug": page_slug},
+                {"$set": {"embedding": vec, "embedding_model": "text-embedding-004"}},
+            )
+            logger.info(f"Page embedded: {page_slug} (dim={len(vec)})")
+            return True
+    except Exception as e:
+        logger.warning(f"Embed-on-publish failed for {page_slug}: {e}")
+    return False
+
+
+async def _embed_and_store_chapter(chapter_id: str, content: str, title: str = "") -> bool:
+    """Embed a chapter's content and persist the vector."""
+    try:
+        text = f"{title}\n\n{content}" if title else content
+        vec = await vertex_services.embed_text(text[:8000], task_type="RETRIEVAL_DOCUMENT")
+        if vec:
+            await db.chapters.update_one(
+                {"id": chapter_id},
+                {"$set": {"embedding": vec, "embedding_model": "text-embedding-004"}},
+            )
+            return True
+    except Exception as e:
+        logger.warning(f"Embed chapter {chapter_id} failed: {e}")
+    return False
+
+
+async def vector_rag_search(
+    query: str,
+    subject_id: Optional[str] = None,
+    top_k: int = 12,
+) -> list:
+    """
+    Vector similarity search over all published seo_pages + chapters.
+    Returns top-k results sorted by cosine similarity with [PAGE: slug] metadata.
+
+    Falls back to empty list if embedding fails or no vectors exist yet.
+    """
+    try:
+        query_vec = await vertex_services.embed_text(query, task_type="RETRIEVAL_QUERY")
+        if not query_vec:
+            return []
+
+        # Build page filter
+        page_filter: dict = {"status": "published", "embedding": {"$exists": True}}
+        if subject_id:
+            subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "slug": 1})
+            if subj and subj.get("slug"):
+                page_filter["subject_slug"] = subj["slug"]
+
+        # Fetch candidates (limit high to allow good ranking)
+        pages = await db.seo_pages.find(
+            page_filter,
+            {"_id": 0, "topic_slug": 1, "content": 1, "topic_title": 1,
+             "chapter_title": 1, "page_type": 1, "embedding": 1},
+        ).limit(200).to_list(200)
+
+        # Fetch chapter candidates
+        ch_filter: dict = {"embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
+        if subject_id:
+            ch_filter["subject_id"] = subject_id
+        chapters = await db.chapters.find(
+            ch_filter,
+            {"_id": 0, "id": 1, "title": 1, "content": 1, "subject_id": 1, "embedding": 1},
+        ).limit(100).to_list(100)
+
+        # Score all candidates by cosine similarity
+        scored = []
+        for p in pages:
+            vec = p.get("embedding")
+            if vec:
+                sim = vertex_services.cosine_similarity(query_vec, vec)
+                slug = p.get("topic_slug", "")
+                title = p.get("topic_title") or p.get("chapter_title") or slug
+                content_snippet = _extract_relevant_sections(p.get("content", ""), [], max_chars=800)
+                scored.append({
+                    "slug":    slug,
+                    "title":   title,
+                    "content": content_snippet,
+                    "score":   sim,
+                    "source":  "page",
+                })
+        for ch in chapters:
+            vec = ch.get("embedding")
+            if vec:
+                sim = vertex_services.cosine_similarity(query_vec, vec)
+                content_snippet = _extract_relevant_sections(ch.get("content", ""), [], max_chars=800)
+                scored.append({
+                    "slug":    f"chapter/{ch.get('id', '')}",
+                    "title":   ch.get("title", ""),
+                    "content": content_snippet,
+                    "score":   sim,
+                    "source":  "chapter",
+                })
+
+        scored.sort(key=lambda x: -x["score"])
+        top = scored[:top_k]
+        logger.info(
+            f"Vector RAG: query='{query[:40]}' → {len(top)} results "
+            f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}])" if top else
+            f"Vector RAG: query='{query[:40]}' → no results"
+        )
+        return top
+    except Exception as e:
+        logger.error(f"vector_rag_search failed: {e}")
+        return []
+
+
 async def rag_search(
     query: str,
     subject_id: Optional[str] = None,
@@ -2297,9 +2410,10 @@ async def resolve_rag_context(
             "source":  "document",
             "quality": "tier0",
         }
-    cached_rag, content_card_text = await asyncio.gather(
+    cached_rag, content_card_text, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
         _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name),
+        vector_rag_search(query, subject_id=subject_id, top_k=12),
     )
 
     rag_ctx = dict(cached_rag)
@@ -2311,8 +2425,16 @@ async def resolve_rag_context(
             rag_ctx["source"] = "rag"
         logger.info(f"RAG resolve: content card found ({len(content_card_text)} chars) | query: {query[:50]}")
 
+    # Vector hits: inject as high-quality grounding with [PAGE: slug] citations
+    if vector_hits:
+        rag_ctx["vector_hits"] = vector_hits
+        if rag_ctx["quality"] == "none":
+            rag_ctx["quality"] = "high"
+            rag_ctx["source"] = "rag"
+        logger.info(f"RAG resolve: vector hits={len(vector_hits)} (best_sim={vector_hits[0]['score']:.3f}) | query: {query[:50]}")
+
     if rag_ctx["quality"] == "high":
-        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, card: {'yes' if content_card_text else 'no'}) | query: {query[:50]}")
+        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(vector_hits)}, card: {'yes' if content_card_text else 'no'}) | query: {query[:50]}")
         return rag_ctx
 
     if rag_ctx["quality"] == "medium":
@@ -2320,7 +2442,7 @@ async def resolve_rag_context(
         return rag_ctx
 
     logger.info(f"RAG resolve: NO CONTEXT — AI uses training knowledge | query: {query[:50]}")
-    return {"chunks": [], "chapters": [], "subjects": [], "source": "none", "quality": "none"}
+    return {"chunks": [], "chapters": [], "subjects": [], "vector_hits": [], "source": "none", "quality": "none"}
 
 
 def build_rag_system_prompt(
@@ -2347,6 +2469,7 @@ def build_rag_system_prompt(
     chapters    = rag_context.get("chapters", [])
     subjects    = rag_context.get("subjects", [])
     document_text = rag_context.get("document_text", "")
+    vector_hits = rag_context.get("vector_hits", [])
 
     grounding = ""
 
@@ -2395,30 +2518,41 @@ def build_rag_system_prompt(
 
     content_card = rag_context.get("content_card", "")
 
-    # ── Tier 1/2: Curriculum DB context ──────────────────────────────────────
-    if source == "rag" and (chunks or subjects or chapters or content_card):
+    # ── Tier 1/2: Curriculum DB context (including vector hits) ─────────────
+    if source == "rag" and (chunks or subjects or chapters or content_card or vector_hits):
 
         if quality == "high":
             grounding += (
                 "\n\n---\n"
-                "**GROUNDING CONTEXT (Syllabus Content):**\n"
-                "The following is the COMPLETE content from the student's actual curriculum database — "
-                "content cards, chapter notes, and indexed syllabus blocks. "
-                "Base your answer **exclusively** on this. Quote verbatim where possible.\n\n"
+                "**GROUNDING CONTEXT (Syrabit Library — 97% Accuracy Mode):**\n"
+                "The following is the COMPLETE content from the student's actual curriculum database. "
+                "Every answer MUST cite sources using [PAGE: slug] format. "
+                "Quote verbatim where possible.\n\n"
             )
+            # Vector hits — highest confidence (semantic similarity ranked)
+            if vector_hits:
+                grounding += "**[VECTOR SEARCH RESULTS — Semantically matched pages]:**\n\n"
+                for hit in vector_hits:
+                    slug = hit.get("slug", "")
+                    title = hit.get("title", slug)
+                    content = hit.get("content", "")
+                    score = hit.get("score", 0)
+                    grounding += f"[PAGE: {slug}] — {title} (relevance: {score:.2f})\n{content}\n\n"
+
             if content_card:
-                grounding += f"**[Content Card — Full Page Content]**\n{content_card}\n\n"
+                grounding += f"**[CONTENT CARD — Full page content]:**\n{content_card}\n\n"
             for i, c in enumerate(chunks, 1):
                 title = c.get("content_type", "content").capitalize()
-                grounding += f"**[Block {i} — {title}]**\n{c.get('content', '')[:800]}\n\n"
+                grounding += f"**[BLOCK {i} — {title}]:**\n{c.get('content', '')[:800]}\n\n"
             grounding += (
                 "---\n"
-                "*ACCURACY INSTRUCTION: Use ONLY the grounding context above to answer. "
-                "Every fact, definition, and detail in your response must come from these blocks. "
-                "If the answer is not covered in the grounding context, say: "
-                "'This specific detail is not in our database for your subject — here is my best answer based on standard curriculum:' "
-                "and then answer from training knowledge. "
-                "Never hallucinate or invent facts. Quote or paraphrase directly from the content blocks.*"
+                "**ACCURACY LOCK:**\n"
+                "1. Answer ONLY from the grounding above. Structure: Explanation → Key Points → Examples → Sources\n"
+                "2. End every answer with: 'Sources: [PAGE: slug1], [PAGE: slug2]' citing which pages you used.\n"
+                "3. If the answer is NOT in the grounding, say exactly: "
+                "'Not found in Syrabit library. Based on standard curriculum:' then answer.\n"
+                "4. NEVER hallucinate. NEVER invent facts not present in the grounding.\n"
+                "5. Temperature is 0.05 — be deterministic and precise.*"
             )
 
         else:
@@ -2681,7 +2815,7 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
         "model": model,
         "messages": messages,
         "max_tokens": api_max,
-        "temperature": 0.3,
+        "temperature": 0.05,
         "stream": False,
     }
     client = sarvam_llm_client
@@ -2833,7 +2967,7 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     )
     stream = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.7,
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.05,
     )
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
@@ -2848,7 +2982,7 @@ async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int)
         base_url="https://api.x.ai/v1",
     )
     stream = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.7,
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.05,
     )
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
@@ -2889,7 +3023,7 @@ async def _stream_bedrock(messages: list, model: str, max_tokens: int):
             kwargs = dict(
                 modelId=model,
                 messages=converse_messages,
-                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.7},
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.05},
             )
             if system_parts:
                 kwargs["system"] = system_parts
@@ -9605,6 +9739,16 @@ async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends
             upsert=True,
         )
 
+    # ── 4b. Embed page for vector search ─────────────────────────────────────
+    # Run fire-and-forget so publish response is never delayed by embedding
+    _embed_content = " ".join(
+        (b.get("content") or b.get("text") or "")
+        for b in (body.blocks or []) if isinstance(b, dict)
+    )
+    if not _embed_content:
+        _embed_content = body.title or ""
+    asyncio.create_task(_embed_and_store_page(body.slug, _embed_content))
+
     # ── 5. Auto-create syllabus CMS stub when syllabus block detected ──────────
     syllabus_block = next((b for b in body.blocks if b.get("type") == "syllabus"), None)
     if syllabus_block and body.subject_id:
@@ -10908,6 +11052,84 @@ async def serve_llms_txt():
         pass
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse("\n".join(lines), media_type="text/plain; charset=utf-8")
+
+
+# ── Vector Search: Admin batch-embed endpoint ──────────────────────────────
+
+@api.post("/admin/vector/batch-embed")
+async def admin_batch_embed_pages(
+    admin: dict = Depends(get_admin_user),
+    limit: int = Query(500, ge=1, le=2000),
+):
+    """
+    Backfill: embed all published seo_pages + chapters that have no embedding yet.
+    Safe to run multiple times — only processes un-embedded documents.
+    Returns count of newly embedded documents.
+    """
+    pages_done = 0
+    chapters_done = 0
+    errors = []
+
+    # Pages without embedding
+    cursor = db.seo_pages.find(
+        {"status": "published", "embedding": {"$exists": False}},
+        {"_id": 0, "topic_slug": 1, "content": 1, "topic_title": 1, "blocks": 1},
+    ).limit(limit)
+    async for page in cursor:
+        slug = page.get("topic_slug", "")
+        content = page.get("content", "")
+        if not content:
+            blocks = page.get("blocks") or []
+            content = " ".join(
+                (b.get("content") or b.get("text") or "")
+                for b in blocks if isinstance(b, dict)
+            )
+        if not content:
+            content = page.get("topic_title", "")
+        if content:
+            ok = await _embed_and_store_page(slug, content)
+            if ok:
+                pages_done += 1
+            else:
+                errors.append(slug)
+        await asyncio.sleep(0.05)  # gentle rate limiting
+
+    # Chapters without embedding
+    ch_cursor = db.chapters.find(
+        {"embedding": {"$exists": False}, "content": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "id": 1, "title": 1, "content": 1},
+    ).limit(limit)
+    async for ch in ch_cursor:
+        ok = await _embed_and_store_chapter(ch.get("id", ""), ch.get("content", ""), ch.get("title", ""))
+        if ok:
+            chapters_done += 1
+        await asyncio.sleep(0.05)
+
+    logger.info(f"Batch embed complete: pages={pages_done}, chapters={chapters_done}, errors={len(errors)}")
+    return {
+        "success": True,
+        "pages_embedded": pages_done,
+        "chapters_embedded": chapters_done,
+        "errors": errors[:20],
+    }
+
+
+@api.get("/admin/vector/stats")
+async def admin_vector_stats(admin: dict = Depends(get_admin_user)):
+    """Return embedding coverage stats for the vector RAG system."""
+    total_pages    = await db.seo_pages.count_documents({"status": "published"})
+    embedded_pages = await db.seo_pages.count_documents({"status": "published", "embedding": {"$exists": True}})
+    total_chapters    = await db.chapters.count_documents({"content": {"$exists": True, "$ne": ""}})
+    embedded_chapters = await db.chapters.count_documents({
+        "content": {"$exists": True, "$ne": ""},
+        "embedding": {"$exists": True},
+    })
+    return {
+        "pages": {"total": total_pages, "embedded": embedded_pages,
+                  "coverage_pct": round(embedded_pages / max(total_pages, 1) * 100, 1)},
+        "chapters": {"total": total_chapters, "embedded": embedded_chapters,
+                     "coverage_pct": round(embedded_chapters / max(total_chapters, 1) * 100, 1)},
+    }
 
 
 app.include_router(api)

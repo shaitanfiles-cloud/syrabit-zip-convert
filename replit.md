@@ -139,8 +139,20 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 - **Databases**: PostgreSQL (users/auth), Supabase (mirror), MongoDB `test_database` (content/RAG)
 - **Auth**: `syrabit_session` httpOnly cookie OR Bearer token; admin uses `syrabit_admin_session`; admin credentials in `ADMIN_EMAILS`/`ADMIN_PASSWORDS`/`ADMIN_NAMES` env vars
 - **Caches**: `_user_cache` (120s), `_conv_cache` (60s), `_rag_cache` (600s), `_ai_response_cache` (1h), `_syllabus_cache` (30min)
-- **LLM SLM Pool (6 slots)**: Groq llama-3.3-70b (c8, PRIMARY), Groq llama-3.1-8b (c4), Gemini flash-lite (c10), Gemini flash (c5), Fireworks deepseek-v3p2 (c8), Bedrock nova-micro (c2)
-- **RAG**: 3-way parallel search; scoring: chunks +5/match, chapter keyword +3, subject keyword +1, exact name +8
+- **LLM SLM Pool (6 slots)**: gemini-2.5-flash-preview-05-20 (c6, PRIMARY), Gemini 2.0-flash (c6), Gemini flash-lite (c8), Groq llama-3.3-70b (c8), Groq llama-3.1-8b (c4), Fireworks deepseek-v3p2 (c8) — Bedrock skipped (no AWS creds)
+- **Temperature**: ALL providers locked at 0.05 (deterministic, grounding-only mode) — `_stream_gemini`, `_stream_xai`, `_stream_bedrock`, `_call_sarvam_llm`
+- **RAG**: 4-way parallel search — keyword chunks + chapter keyword + subject keyword + **vector cosine similarity** (`vector_rag_search`)
+  - Chunk scoring: +5/match, chapter keyword +3, subject keyword +1, exact name +8
+  - Vector tier: `embed_text(query, task_type="RETRIEVAL_QUERY")` → cosine similarity vs stored page/chapter embeddings → top-12 by score
+  - Grounding now includes `[PAGE: slug]` citation headers on each vector hit block
+- **Vector RAG pipeline**: `vector_rag_search()` in `server.py` — embeds query, fetches up to 200 seo_pages + 100 chapters with embeddings, ranks by `cosine_similarity`, returns top-12
+- **Embed-on-publish**: `_embed_and_store_page()` called as `asyncio.create_task()` (non-blocking) on every Studio publish — stores 768-dim `embedding` + `embedding_model: text-embedding-004` in seo_pages
+- **Admin vector endpoints**: `POST /admin/vector/batch-embed` (backfill all un-embedded pages+chapters), `GET /admin/vector/stats` (coverage %)
+- **Citation format**: Answers end with `Sources: [PAGE: slug1], [PAGE: slug2]` from grounding slugs; fallback: "Not found in Syrabit library. Based on standard curriculum:"
+- **Answer structure (prompts.py)**:
+  - Concise mode: Direct Answer → Key Points → Example → Sources
+  - Structured mode: Explanation → Key Points → Examples → PYQs Tip → Sources
+  - "Not found in Syrabit library" is the explicit fallback (no silent hallucination)
 - **Monetization**: Free (30 credits), Starter ₹99/US$1.99 (300 credits), Pro ₹999/US$12.99 (4000 credits) — Razorpay + Stripe dual gateway; webhook handlers at `/api/webhooks/razorpay` and `/api/webhooks/stripe`; credit top-up (100/500/1000); usage tracking at `/api/usage/me`
 - **Email**: Resend API for password reset; set `RESEND_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL` in env; falls back to log-only when key missing
 - **Security**: ASGI-native `SecurityHeadersMiddleware` (not BaseHTTPMiddleware); HSTS, CSP, X-Frame-Options headers
