@@ -272,6 +272,8 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
     setTimeout(() => { ta.focus(); ta.setSelectionRange(newCursor, newCursor); }, 0);
   }, [contentForm.content]);
 
+  const subjectData = subjects.find(s => s.id === selSubject);
+
   const handlePublishAsBlog = useCallback(async (subjectId, subjectName) => {
     if (!subjectId) return;
     setPublishingBlog(true);
@@ -359,7 +361,6 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
   const boardData = boards.find(b => b.id === selBoard);
   const classData = classes.find(c => c.id === selClass);
   const streamData = streams.find(s => s.id === selStream);
-  const subjectData = subjects.find(s => s.id === selSubject);
 
   const searchFiltered = searchQuery
     ? subjects.filter(s => s.name?.toLowerCase().includes(searchQuery.toLowerCase()) || s.description?.toLowerCase().includes(searchQuery.toLowerCase()))
