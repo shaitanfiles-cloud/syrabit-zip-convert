@@ -156,3 +156,84 @@ class RoadmapItemCreate(BaseModel):
     phase: Optional[str] = ""
     effort: Optional[str] = "medium"
     impact: Optional[str] = "medium"
+
+
+class BoardOut(BaseModel):
+    id: str
+    name: str
+    slug: Optional[str] = ""
+    description: Optional[str] = ""
+
+
+class ClassOut(BaseModel):
+    id: str
+    name: str
+    board_id: str
+    slug: Optional[str] = ""
+
+
+class StreamOut(BaseModel):
+    id: str
+    name: str
+    class_id: str
+    slug: Optional[str] = ""
+
+
+class SubjectOut(BaseModel):
+    id: str
+    name: str
+    stream_id: Optional[str] = ""
+    description: Optional[str] = ""
+    tags: Optional[str] = ""
+    status: Optional[str] = "published"
+    thumbnailUrl: Optional[str] = ""
+    thumbnail_url: Optional[str] = ""
+
+
+class LibraryBundleOut(BaseModel):
+    boards: List[dict]
+    classes: List[dict]
+    streams: List[dict]
+    subjects: List[dict]
+
+
+class ChatResponseOut(BaseModel):
+    answer: str
+    conversation_id: str
+    credits_remaining: int = 0
+    credits_used: int = 0
+    rag_source: str = "none"
+    rag_chunks_used: int = 0
+    sources: List[dict] = []
+
+
+class SearchResultOut(BaseModel):
+    query: str
+    results: List[dict]
+    count: int
+
+
+class HealthDependency(BaseModel):
+    status: str
+    latencyMs: Optional[int] = None
+
+
+class HealthOut(BaseModel):
+    status: str
+    version: str
+    service: str
+    workers: int
+    uptime_seconds: int
+    dependencies: dict
+
+
+class ReadyOut(BaseModel):
+    status: str
+    checks: dict
+
+
+class ErrorOut(BaseModel):
+    error: bool = True
+    status: int
+    detail: str
+    path: str

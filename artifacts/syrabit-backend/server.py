@@ -19,9 +19,76 @@ from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
-import os, uuid, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time
+import os, uuid, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
+
+
+# ─────────────────────────────────────────────
+# STRUCTURED JSON LOGGING
+# ─────────────────────────────────────────────
+class _JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_entry = {
+            "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0]:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        if hasattr(record, "request_id"):
+            log_entry["request_id"] = record.request_id
+        return json.dumps(log_entry, default=str)
+
+
+def _configure_logging():
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for h in root.handlers[:]:
+        root.removeHandler(h)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(_JSONFormatter())
+    root.addHandler(handler)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
+
+
+_configure_logging()
+
+
+# ─────────────────────────────────────────────
+# ENVIRONMENT VALIDATION (fail-fast)
+# ─────────────────────────────────────────────
+def _validate_env():
+    _required = {
+        "MONGO_URL": "MongoDB connection string (content/RAG database)",
+        "JWT_SECRET": "JWT signing secret for user auth tokens",
+        "ADMIN_JWT_SECRET": "JWT signing secret for admin auth tokens",
+        "ADMIN_PASSWORDS": "Comma-separated admin account passwords",
+    }
+    _recommended = {
+        "GROQ_API_KEY": "Groq LLM API key (primary AI provider)",
+        "SARVAM_API_KEY": "Sarvam AI API key (fallback LLM + translation)",
+    }
+    missing = []
+    for key, desc in _required.items():
+        val = os.environ.get(key, "").strip()
+        if not val or val.startswith("CHANGE_ME") or val.startswith("change-"):
+            missing.append(f"  - {key}: {desc}")
+    if missing:
+        _log = logging.getLogger("syrabit.startup")
+        _log.critical("STARTUP FAILED — missing required environment variables:\n" + "\n".join(missing))
+        sys.exit(1)
+    _log = logging.getLogger("syrabit.startup")
+    for key, desc in _recommended.items():
+        val = os.environ.get(key, "").strip()
+        if not val:
+            _log.warning(f"Recommended env var not set: {key} — {desc}")
+    _log.info("Environment validation passed")
+
+
+_validate_env()
 try:
     import asyncpg as _asyncpg
 except ImportError:
@@ -50,10 +117,12 @@ load_dotenv(ROOT_DIR / '.env')
 
 MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017').strip().strip('"').strip("'")
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
-JWT_SECRET   = os.environ.get('JWT_SECRET') or os.urandom(48).hex()  # Must be set in .env for production
+JWT_SECRET   = os.environ.get('JWT_SECRET') or os.urandom(48).hex()
 JWT_ALGORITHM    = 'HS256'
-JWT_EXPIRE_MINUTES = 60 * 24 * 30
-ADMIN_JWT_SECRET = os.environ.get('ADMIN_JWT_SECRET') or os.urandom(48).hex()  # Must be set in .env for production
+JWT_ACCESS_EXPIRE_MINUTES = int(os.environ.get('JWT_ACCESS_EXPIRE_MINUTES', '60'))
+JWT_REFRESH_EXPIRE_MINUTES = int(os.environ.get('JWT_REFRESH_EXPIRE_MINUTES', str(60 * 24 * 30)))
+JWT_EXPIRE_MINUTES = JWT_ACCESS_EXPIRE_MINUTES
+ADMIN_JWT_SECRET = os.environ.get('ADMIN_JWT_SECRET') or os.urandom(48).hex()
 
 # ── Email Configuration ───────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
@@ -169,56 +238,111 @@ def _rag_cache_key(query: str, subject_id: Optional[str], subject_name: Optional
 
 REDIS_AI_CACHE_TTL = 3600
 REDIS_CHAT_CACHE_TTL = 600
+REDIS_SEARCH_CACHE_TTL = 300
+REDIS_SESSION_CACHE_TTL = 1800
 REDIS_RATE_WINDOW = 60
 
+_redis_miss_count = 0
+_redis_hit_count = 0
+
 def _cache_key(query: str) -> str:
-    """Normalized query hash for caching."""
     normalized = query.lower().strip()
     return hashlib.md5(normalized.encode()).hexdigest()
 
-def _redis_get_ai_cache(key: str) -> Optional[str]:
+def _redis_get(prefix: str, key: str) -> Optional[str]:
+    global _redis_hit_count, _redis_miss_count
     if redis_client:
         try:
-            val = redis_client.get(f"ai_cache:{key}")
-            return val
-        except Exception:
-            pass
+            val = redis_client.get(f"{prefix}:{key}")
+            if val is not None:
+                _redis_hit_count += 1
+                return val
+            _redis_miss_count += 1
+        except Exception as e:
+            logger.debug(f"Redis GET {prefix}:{key} failed: {e}")
     return None
 
-def _redis_set_ai_cache(key: str, value: str):
+def _redis_set(prefix: str, key: str, value: str, ttl: int):
     if redis_client:
         try:
-            redis_client.set(f"ai_cache:{key}", value, ex=REDIS_AI_CACHE_TTL)
+            redis_client.set(f"{prefix}:{key}", value, ex=ttl)
+        except Exception as e:
+            logger.debug(f"Redis SET {prefix}:{key} failed: {e}")
+
+def _redis_del(prefix: str, key: str):
+    if redis_client:
+        try:
+            redis_client.delete(f"{prefix}:{key}")
         except Exception:
             pass
+
+def _redis_get_ai_cache(key: str) -> Optional[str]:
+    return _redis_get("ai_cache", key)
+
+def _redis_set_ai_cache(key: str, value: str):
+    _redis_set("ai_cache", key, value, REDIS_AI_CACHE_TTL)
 
 def _redis_cache_conversation(conv_id: str, user_id: str, conv_data: dict):
-    if redis_client:
-        try:
-            redis_client.set(
-                f"chat:{conv_id}:{user_id}",
-                json.dumps(conv_data, default=str),
-                ex=REDIS_CHAT_CACHE_TTL
-            )
-        except Exception:
-            pass
+    _redis_set("chat", f"{conv_id}:{user_id}", json.dumps(conv_data, default=str), REDIS_CHAT_CACHE_TTL)
 
 def _redis_get_conversation(conv_id: str, user_id: str) -> Optional[dict]:
-    if redis_client:
+    val = _redis_get("chat", f"{conv_id}:{user_id}")
+    if val:
         try:
-            val = redis_client.get(f"chat:{conv_id}:{user_id}")
-            if val:
-                return json.loads(val) if isinstance(val, str) else val
+            return json.loads(val) if isinstance(val, str) else val
         except Exception:
             pass
     return None
 
 def _redis_invalidate_conversation(conv_id: str, user_id: str):
-    if redis_client:
+    _redis_del("chat", f"{conv_id}:{user_id}")
+
+def _redis_cache_search(query_hash: str, results: list):
+    _redis_set("search", query_hash, json.dumps(results, default=str), REDIS_SEARCH_CACHE_TTL)
+
+def _redis_get_search(query_hash: str) -> Optional[list]:
+    val = _redis_get("search", query_hash)
+    if val:
         try:
-            redis_client.delete(f"chat:{conv_id}:{user_id}")
+            return json.loads(val) if isinstance(val, str) else val
         except Exception:
             pass
+    return None
+
+def _redis_cache_session(user_id: str, session_data: dict):
+    _redis_set("session", user_id, json.dumps(session_data, default=str), REDIS_SESSION_CACHE_TTL)
+
+def _redis_get_session(user_id: str) -> Optional[dict]:
+    val = _redis_get("session", user_id)
+    if val:
+        try:
+            return json.loads(val) if isinstance(val, str) else val
+        except Exception:
+            pass
+    return None
+
+def _redis_invalidate_session(user_id: str):
+    _redis_del("session", user_id)
+
+
+# ── Slow-query logging ────────────────────────────────────────────────────────
+SLOW_QUERY_THRESHOLD_MS = float(os.environ.get("SLOW_QUERY_THRESHOLD_MS", "200"))
+
+class _SlowQueryTimer:
+    __slots__ = ("_label", "_t0")
+    def __init__(self, label: str):
+        self._label = label
+        self._t0 = 0.0
+    async def __aenter__(self):
+        self._t0 = _time_mod.time()
+        return self
+    async def __aexit__(self, *exc):
+        elapsed_ms = (_time_mod.time() - self._t0) * 1000
+        if elapsed_ms > SLOW_QUERY_THRESHOLD_MS:
+            logger.warning(f"SLOW_QUERY {self._label} took {elapsed_ms:.0f}ms (threshold={SLOW_QUERY_THRESHOLD_MS}ms)")
+
+def _slow_query(label: str) -> _SlowQueryTimer:
+    return _SlowQueryTimer(label)
 
 # ── Supabase ──────────────────────────────────────────────────────────────────
 SUPABASE_URL         = os.environ.get('SUPABASE_URL', '')
@@ -467,7 +591,6 @@ else:
 pwd_ctx  = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 logger = logging.getLogger(__name__)
 
 _rate_cleanup_task = None
@@ -521,19 +644,40 @@ async def lifespan(app):
         await db.streams.create_index("class_id")
         await db.classes.create_index("board_id")
         await db.chunks.create_index("chapter_id")
-        # Text index for RAG keyword search — replaces slow $regex full-scan
         try:
             await db.chunks.create_index([("content", "text")], name="chunks_content_text")
         except Exception:
-            pass  # index may already exist with different name
-        # Analytics indexes
+            pass
+
         await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
         await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
         await db.analytics.create_index("user_id")
-        # Page-view indexes for visitor analytics
         await db.page_views.create_index([("date", 1), ("visitor_id", 1)])
         await db.page_views.create_index([("timestamp", -1)])
         await db.page_views.create_index("visitor_id")
+
+        await db.users.create_index("email", unique=True, sparse=True)
+        await db.users.create_index("id", unique=True)
+        await db.conversations.create_index([("user_id", 1), ("updated_at", -1)])
+        await db.conversations.create_index([("id", 1), ("user_id", 1)], unique=True)
+        await db.password_resets.create_index("token", unique=True)
+        await db.password_resets.create_index("expires_at", expireAfterSeconds=0)
+        await db.activity_log.create_index([("created_at", -1)])
+        await db.notifications.create_index([("created_at", -1)])
+        await db.settings.create_index("id", unique=True, sparse=True)
+
+        try:
+            await db.topics.create_index("chapter_id")
+            await db.topics.create_index("status")
+            await db.topics.create_index([("board_slug", 1), ("class_slug", 1), ("subject_slug", 1), ("slug", 1)])
+            await db.seo_pages.create_index([("topic_id", 1), ("page_type", 1)])
+            await db.seo_pages.create_index("status")
+            await db.seo_pages.create_index([("board_slug", 1), ("class_slug", 1), ("subject_slug", 1), ("topic_slug", 1), ("page_type", 1)])
+            await db.seo_pages.create_index([("generated_at", -1)])
+        except Exception:
+            pass
+
+        logger.info("MongoDB indexes ensured")
     except Exception as e:
         logger.warning(f"Seeding/indexing skipped (MongoDB may not be ready): {e}")
     # QA engine indexes (deferred import — qa_engine registered after this definition)
@@ -558,6 +702,83 @@ async def lifespan(app):
 
 app = FastAPI(title="Syrabit.ai API", version="2.0.0", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+# ─────────────────────────────────────────────
+# GLOBAL EXCEPTION HANDLER — consistent error shape
+# ─────────────────────────────────────────────
+from fastapi.responses import JSONResponse
+
+from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+@app.exception_handler(_StarletteHTTPException)
+async def _starlette_http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": True,
+            "status": exc.status_code,
+            "detail": exc.detail,
+            "path": str(request.url.path),
+        },
+    )
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": True,
+            "status": exc.status_code,
+            "detail": exc.detail,
+            "path": str(request.url.path),
+        },
+    )
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request, exc):
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {type(exc).__name__}: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": True,
+            "status": 500,
+            "detail": "Internal server error",
+            "path": str(request.url.path),
+        },
+    )
+
+from pydantic import ValidationError as _PydanticValidationError
+
+@app.exception_handler(_PydanticValidationError)
+async def _validation_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": True,
+            "status": 422,
+            "detail": "Validation error",
+            "errors": [{"field": ".".join(str(l) for l in e["loc"]), "message": e["msg"]} for e in exc.errors()],
+            "path": str(request.url.path),
+        },
+    )
+
+from fastapi.exceptions import RequestValidationError as _RequestValidationError
+
+@app.exception_handler(_RequestValidationError)
+async def _request_validation_handler(request, exc):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": True,
+            "status": 422,
+            "detail": "Request validation error",
+            "errors": [{"field": ".".join(str(l) for l in e["loc"]), "message": e["msg"]} for e in exc.errors()],
+            "path": str(request.url.path),
+        },
+    )
+
+
 api = APIRouter(prefix="/api")
 
 _content_cache: Dict[str, Any] = {}
@@ -594,9 +815,6 @@ def _invalidate_content_cache(prefix: str):
                 pass
     if redis_client:
         try:
-            for rk in redis_client.scan_iter(f"{REDIS_CONTENT_PREFIX}{prefix}:*"):
-                redis_client.delete(rk)
-            # Also always delete library-bundle from Redis
             redis_client.delete(f"{REDIS_CONTENT_PREFIX}library-bundle")
         except Exception:
             pass
@@ -614,12 +832,12 @@ def _set_content_cache(key: str, value):
 if supa:
     logger.info("Supabase client ready")
 else:
-    print("[WARN] Supabase not configured — using MongoDB for users")
+    logger.warning("Supabase not configured — using MongoDB for users")
 
 if redis_client:
     logger.info("Redis (Upstash) client ready")
 else:
-    print("[WARN] Redis not configured — using in-memory caching/rate-limiting")
+    logger.warning("Redis not configured — using in-memory caching/rate-limiting")
 
 def supa_table(table: str):
     """Return Supabase table builder, or raise if unavailable."""
@@ -666,6 +884,7 @@ from models import (
     ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
     DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
     UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
+    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
 
 
@@ -676,6 +895,12 @@ def create_token(data: dict, secret: str = JWT_SECRET, expires_delta: int = JWT_
     to_encode = data.copy()
     to_encode["exp"] = datetime.now(timezone.utc) + timedelta(minutes=expires_delta)
     return jwt.encode(to_encode, secret, algorithm=JWT_ALGORITHM)
+
+def create_access_token(user_id: str, role: str = "student") -> str:
+    return create_token({"sub": user_id, "role": role, "type": "access"}, expires_delta=JWT_ACCESS_EXPIRE_MINUTES)
+
+def create_refresh_token(user_id: str) -> str:
+    return create_token({"sub": user_id, "type": "refresh"}, expires_delta=JWT_REFRESH_EXPIRE_MINUTES)
 
 def decode_token(token: str, secret: str = JWT_SECRET) -> dict:
     try:
@@ -694,37 +919,59 @@ async def get_current_user(
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         payload = decode_token(token)
+        if payload.get("type") == "refresh":
+            raise HTTPException(status_code=401, detail="Refresh tokens cannot be used for API access")
         user_id = payload.get("sub")
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
-    user = await supa_get_user_by_id(user_id)
+    cached = _redis_get_session(user_id)
+    if cached:
+        user = cached
+    else:
+        user = await supa_get_user_by_id(user_id)
+        if user:
+            _redis_cache_session(user_id, user)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     if user.get("status") == "banned":
         raise HTTPException(status_code=403, detail="Account banned")
     if user.get("status") == "suspended":
         raise HTTPException(status_code=403, detail="Account suspended")
+    if "role" not in user:
+        user["role"] = "admin" if user.get("is_admin") else "student"
     return user
 
 async def get_current_user_optional(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
     syrabit_session: Optional[str] = Cookie(default=None),
 ):
-    """Get current user if authenticated, otherwise return None"""
     token = creds.credentials if creds else syrabit_session
     if not token:
         return None
     try:
         payload = decode_token(token)
+        if payload.get("type") == "refresh":
+            return None
         user_id = payload.get("sub")
         if not user_id:
             return None
-        user = await supa_get_user_by_id(user_id)
+        cached = _redis_get_session(user_id)
+        user = cached if cached else await supa_get_user_by_id(user_id)
+        if user and "role" not in user:
+            user["role"] = "admin" if user.get("is_admin") else "student"
         return user if user and user.get("status") not in ["banned", "suspended"] else None
     except:
         return None
+
+def require_role(*roles: str):
+    async def _checker(user: dict = Depends(get_current_user)):
+        user_role = user.get("role", "student")
+        if user_role not in roles:
+            raise HTTPException(status_code=403, detail=f"Requires one of: {', '.join(roles)}")
+        return user
+    return _checker
 
 async def get_admin_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
@@ -814,6 +1061,9 @@ class SecurityHeadersMiddleware:
                 headers.append("Referrer-Policy", "strict-origin-when-cross-origin")
                 headers.append("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
                 headers.append("X-XSS-Protection", "1; mode=block")
+                if SECURE_COOKIES:
+                    headers.append("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+                headers.append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'self'")
             await send(message)
 
         await self.app(scope, receive, send_with_security_headers)
@@ -1743,12 +1993,16 @@ async def syrabit_library_search(
     if not keywords:
         return []
 
+    search_hash = _cache_key(f"libsearch:{query}:{board_slug}:{class_slug}")
+    cached = _redis_get_search(search_hash)
+    if cached is not None:
+        return cached
+
     pattern = "|".join(re.escape(kw) for kw in keywords[:5])
     rx = {"$regex": pattern, "$options": "i"}
     results: list = []
     seen: set = set()
 
-    # ── 1. SEO pages (published topic pages) ──────────────────────────────────
     try:
         page_filter: dict = {
             "status": "published",
@@ -1763,11 +2017,12 @@ async def syrabit_library_search(
         if class_slug:
             page_filter["class_slug"] = class_slug
 
-        pages = await db.seo_pages.find(
-            page_filter,
-            {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1,
-             "topic_slug": 1, "topic_title": 1, "meta_description": 1, "subject_name": 1},
-        ).limit(4).to_list(4)
+        async with _slow_query(f"syrabit_library_search q={query[:30]}"):
+            pages = await db.seo_pages.find(
+                page_filter,
+                {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1,
+                 "topic_slug": 1, "topic_title": 1, "meta_description": 1, "subject_name": 1},
+            ).limit(4).to_list(4)
 
         for p in pages:
             url = (
@@ -1808,7 +2063,10 @@ async def syrabit_library_search(
         except Exception as exc:
             logger.debug(f"syrabit_library_search subjects error: {exc}")
 
-    return results[:4]
+    final = results[:4]
+    if final:
+        _redis_cache_search(search_hash, final)
+    return final
 
 
 async def resolve_rag_context(
@@ -3430,7 +3688,8 @@ async def signup(data: UserCreate, response: Response):
         "created_at": now,
     }
     await supa_insert_user(user)
-    token = create_token({"sub": user_id})
+    token = create_access_token(user_id, role="student")
+    refresh = create_refresh_token(user_id)
     user_out = UserOut(
         id=user_id, name=data.name, email=data.email.lower(),
         plan="free", credits_used=0, credits_limit=30,
@@ -3442,7 +3701,16 @@ async def signup(data: UserCreate, response: Response):
         httponly=True,
         secure=SECURE_COOKIES,
         samesite=COOKIE_SAMESITE,
-        max_age=JWT_EXPIRE_MINUTES * 60,
+        max_age=JWT_ACCESS_EXPIRE_MINUTES * 60,
+    )
+    response.set_cookie(
+        key="syrabit_refresh",
+        value=refresh,
+        httponly=True,
+        secure=SECURE_COOKIES,
+        samesite=COOKIE_SAMESITE,
+        path="/api/auth/refresh",
+        max_age=JWT_REFRESH_EXPIRE_MINUTES * 60,
     )
     return TokenOut(access_token=token, user=user_out)
 
@@ -3456,7 +3724,9 @@ async def login(data: UserLogin, response: Response):
         raise HTTPException(status_code=403, detail="Account banned")
 
     credits_info = await get_user_credits(user)
-    token = create_token({"sub": user["id"]})
+    role = "admin" if user.get("is_admin") else "student"
+    token = create_access_token(user["id"], role=role)
+    refresh = create_refresh_token(user["id"])
     user_out = UserOut(
         id=user["id"], name=user["name"], email=user["email"],
         plan=user.get("plan", "free"),
@@ -3473,7 +3743,16 @@ async def login(data: UserLogin, response: Response):
         httponly=True,
         secure=SECURE_COOKIES,
         samesite=COOKIE_SAMESITE,
-        max_age=JWT_EXPIRE_MINUTES * 60,
+        max_age=JWT_ACCESS_EXPIRE_MINUTES * 60,
+    )
+    response.set_cookie(
+        key="syrabit_refresh",
+        value=refresh,
+        httponly=True,
+        secure=SECURE_COOKIES,
+        samesite=COOKIE_SAMESITE,
+        path="/api/auth/refresh",
+        max_age=JWT_REFRESH_EXPIRE_MINUTES * 60,
     )
     return TokenOut(access_token=token, user=user_out)
 
@@ -3548,7 +3827,7 @@ async def get_me(user: dict = Depends(get_current_user)):
 # ─────────────────────────────────────────────
 # CONTENT ROUTES
 # ─────────────────────────────────────────────
-@api.get("/content/library-bundle")
+@api.get("/content/library-bundle", response_model=LibraryBundleOut)
 async def get_library_bundle(nocache: Optional[str] = None, response: Response = None):
     if not nocache:
         cached = _get_content_cache("library-bundle")
@@ -3560,10 +3839,11 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
     try:
         if not await is_mongo_available():
             return {"boards": [], "classes": [], "streams": [], "subjects": []}
-        boards_data = await db.boards.find({}, {"_id": 0}).to_list(100)
-        classes_data = await db.classes.find({}, {"_id": 0}).to_list(100)
-        streams_data = await db.streams.find({}, {"_id": 0}).to_list(100)
-        subjects_data = await db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500)
+        async with _slow_query("library_bundle"):
+            boards_data = await db.boards.find({}, {"_id": 0}).to_list(100)
+            classes_data = await db.classes.find({}, {"_id": 0}).to_list(100)
+            streams_data = await db.streams.find({}, {"_id": 0}).to_list(100)
+            subjects_data = await db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500)
         for s in subjects_data:
             if "thumbnail_url" in s and "thumbnailUrl" not in s:
                 s["thumbnailUrl"] = s.pop("thumbnail_url")
@@ -3855,15 +4135,22 @@ async def search_content(q: str):
     try:
         if not await is_mongo_available():
             return []
+        q_hash = _cache_key(q)
+        cached_redis = _redis_get_search(q_hash)
+        if cached_redis is not None:
+            return cached_redis
         ck = f"search:{q.lower().strip()}"
         cached = _get_content_cache(ck)
-        if cached: return cached
-        regex = re.compile(q, re.IGNORECASE)
-        subjects = await db.subjects.find(
-            {"$or": [{"name": regex}, {"description": regex}, {"tags": regex}], "status": "published"},
-            {"_id": 0}
-        ).to_list(20)
+        if cached:
+            return cached
+        async with _slow_query(f"content_search q={q[:30]}"):
+            regex = re.compile(q, re.IGNORECASE)
+            subjects = await db.subjects.find(
+                {"$or": [{"name": regex}, {"description": regex}, {"tags": regex}], "status": "published"},
+                {"_id": 0}
+            ).to_list(20)
         _set_content_cache(ck, subjects)
+        _redis_cache_search(q_hash, subjects)
         return subjects
     except Exception:
         return []
@@ -4477,6 +4764,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             yield f"data: {json.dumps({'content': cached_answer})}\n\n"
             full_response.append(cached_answer)
         else:
+            _bp_count = 0
             async for chunk in call_llm_api_stream(messages_payload, model=msg.model or LLM_MODEL, max_tokens=max_tokens):
                 if '"content"' in chunk:
                     try:
@@ -4485,6 +4773,9 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                     except:
                         pass
                 yield chunk
+                _bp_count += 1
+                if _bp_count % 20 == 0:
+                    await asyncio.sleep(0)
 
             if not is_casual and full_response:
                 answer_str = "".join(full_response)
@@ -4543,7 +4834,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 # ─────────────────────────────────────────────
 # PUBLIC SEARCH API  — /api/v1/search
 # ─────────────────────────────────────────────
-@api.get("/v1/search")
+@api.get("/v1/search", response_model=SearchResultOut)
 async def public_library_search(q: str = "", board: Optional[str] = None, class_num: Optional[str] = None):
     """Public search endpoint: returns matching syrabit.ai library pages.
     Example: GET /api/v1/search?q=limits+class+11+ahsec
@@ -4776,9 +5067,48 @@ async def admin_login(data: AdminLoginReq, response: Response):
         "name":         matched["name"],
     }
 
+@api.post("/auth/refresh")
+async def refresh_token(
+    response: Response,
+    syrabit_refresh: Optional[str] = Cookie(default=None),
+    creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
+):
+    token = creds.credentials if creds else syrabit_refresh
+    if not token:
+        raise HTTPException(status_code=401, detail="No refresh token provided")
+    try:
+        payload = decode_token(token)
+        if payload.get("type") != "refresh":
+            raise HTTPException(status_code=401, detail="Not a refresh token")
+        user_id = payload.get("sub")
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
+    user = await supa_get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if user.get("status") in ("banned", "suspended"):
+        raise HTTPException(status_code=403, detail=f"Account {user.get('status')}")
+    role = "admin" if user.get("is_admin") else "student"
+    new_access = create_access_token(user_id, role=role)
+    _redis_invalidate_session(user_id)
+    response.set_cookie(
+        key="syrabit_session",
+        value=new_access,
+        httponly=True,
+        secure=SECURE_COOKIES,
+        samesite=COOKIE_SAMESITE,
+        max_age=JWT_ACCESS_EXPIRE_MINUTES * 60,
+    )
+    return {"access_token": new_access, "token_type": "bearer"}
+
 @api.post("/auth/logout")
-async def logout(response: Response):
+async def logout(response: Response, user: dict = Depends(get_current_user_optional)):
+    if user:
+        _redis_invalidate_session(user.get("id", ""))
     response.delete_cookie(key="syrabit_session", samesite=COOKIE_SAMESITE, secure=SECURE_COOKIES)
+    response.delete_cookie(key="syrabit_refresh", samesite=COOKIE_SAMESITE, secure=SECURE_COOKIES, path="/api/auth/refresh")
     return {"message": "Logged out"}
 
 @api.post("/admin/logout")
@@ -5989,6 +6319,83 @@ async def admin_delete_notification(notif_id: str, admin: dict = Depends(get_adm
     return {"message": "Deleted"}
 
 # ─────────────────────────────────────────────
+# ADMIN EXPORT — CSV/JSON
+# ─────────────────────────────────────────────
+import csv
+import io as _io
+
+@api.get("/admin/export/users")
+async def admin_export_users(format: str = "json", admin: dict = Depends(get_admin_user)):
+    users = await supa_list_users()
+    if format == "csv":
+        if not users:
+            return Response(content="", media_type="text/csv")
+        output = _io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=[k for k in users[0].keys() if k != "password_hash"])
+        writer.writeheader()
+        for u in users:
+            row = {k: v for k, v in u.items() if k != "password_hash"}
+            writer.writerow(row)
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=users_export.csv"},
+        )
+    return [({k: v for k, v in u.items() if k != "password_hash"}) for u in users]
+
+@api.get("/admin/export/analytics")
+async def admin_export_analytics(format: str = "json", days: int = 30, admin: dict = Depends(get_admin_user)):
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    docs = await db.analytics.find({"timestamp": {"$gte": start}}, {"_id": 0}).sort("timestamp", -1).to_list(10000)
+    if format == "csv" and docs:
+        output = _io.StringIO()
+        all_keys = sorted(set().union(*(d.keys() for d in docs)))
+        writer = csv.DictWriter(output, fieldnames=all_keys)
+        writer.writeheader()
+        for d in docs:
+            writer.writerow({k: d.get(k, "") for k in all_keys})
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=analytics_export.csv"},
+        )
+    return docs
+
+@api.get("/admin/export/conversations")
+async def admin_export_conversations(format: str = "json", limit: int = 500, admin: dict = Depends(get_admin_user)):
+    convs = await supa_get_all_conversations(limit)
+    if format == "csv" and convs:
+        output = _io.StringIO()
+        keys = ["id", "user_id", "title", "subject_name", "created_at", "updated_at", "preview"]
+        writer = csv.DictWriter(output, fieldnames=keys)
+        writer.writeheader()
+        for c in convs:
+            writer.writerow({k: c.get(k, "") for k in keys})
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=conversations_export.csv"},
+        )
+    return convs
+
+
+# ─────────────────────────────────────────────
+# BULK SEO GENERATION PROGRESS TRACKING
+# ─────────────────────────────────────────────
+_seo_generation_progress: Dict[str, dict] = {}
+
+@api.get("/admin/seo/generation-progress")
+async def seo_generation_progress(admin: dict = Depends(get_admin_user)):
+    return _seo_generation_progress
+
+@api.get("/admin/seo/generation-progress/{job_id}")
+async def seo_generation_progress_detail(job_id: str, admin: dict = Depends(get_admin_user)):
+    if job_id not in _seo_generation_progress:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _seo_generation_progress[job_id]
+
+
+# ─────────────────────────────────────────────
 # RATE LIMIT POLICIES
 # ─────────────────────────────────────────────
 DEFAULT_RATE_POLICIES = {
@@ -6179,20 +6586,19 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         await db.payments.insert_one(payment_record)
 
         # Upgrade user in PostgreSQL
-        if _pg_pool:
-            async with _pg_pool.acquire() as conn:
+        if pg_pool:
+            async with pg_pool.acquire() as conn:
                 await conn.execute(
                     """UPDATE users
-                          SET plan=$1, credits=credits+$2, document_access=$3,
+                          SET plan=$1, credits_limit=credits_limit+$2, document_access=$3,
                               updated_at=$4
                         WHERE id=$5""",
                     plan, credits, doc_acc, now_iso, user_id,
                 )
-        # Also update in MongoDB users collection if present
         await db.users.update_one(
             {"id": str(user_id)},
             {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
-             "$inc": {"credits": credits}},
+             "$inc": {"credits_limit": credits}},
         )
         logger.info(f"Plan activated: user={user_id} plan={plan} credits+={credits}")
         return {
@@ -6204,6 +6610,259 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
     except Exception as e:
         logger.error(f"Plan activation error for user {user_id}: {e}")
         raise HTTPException(500, "Payment verified but plan activation failed. Contact admin@syrabit.ai.")
+
+# ─────────────────────────────────────────────
+# STRIPE PAYMENT (OPTIONAL — configurable via api-config)
+# ─────────────────────────────────────────────
+PLAN_PRICES_USD = {"starter": 199, "pro": 1299}
+
+async def _get_stripe_key() -> str:
+    cfg = await db.api_config.find_one({}, {"_id": 0})
+    if cfg:
+        sk = cfg.get("payment", {}).get("stripe_secret_key", "").strip()
+        if sk:
+            return sk
+    return os.environ.get("STRIPE_SECRET_KEY", "").strip()
+
+class StripeCheckoutRequest(BaseModel):
+    plan: str
+    success_url: str = ""
+    cancel_url: str = ""
+
+@api.post("/payments/stripe/create-checkout")
+async def stripe_create_checkout(body: StripeCheckoutRequest, user: dict = Depends(get_current_user)):
+    plan = body.plan.lower()
+    if plan not in PLAN_PRICES_USD:
+        raise HTTPException(400, f"Invalid plan '{plan}'.")
+    stripe_key = await _get_stripe_key()
+    if not stripe_key:
+        raise HTTPException(503, "Stripe not configured.")
+    try:
+        import stripe
+        stripe.api_key = stripe_key
+        session = stripe.checkout.Session.create(
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {"name": f"Syrabit.ai {plan.capitalize()} Plan"},
+                    "unit_amount": PLAN_PRICES_USD[plan],
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=body.success_url or f"{FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=body.cancel_url or f"{FRONTEND_URL}/payment/cancel",
+            metadata={"user_id": str(user["id"]), "plan": plan},
+        )
+        return {"checkout_url": session.url, "session_id": session.id}
+    except ImportError:
+        raise HTTPException(503, "Stripe SDK not installed.")
+    except Exception as e:
+        logger.error(f"Stripe checkout error: {e}")
+        raise HTTPException(502, "Failed to create Stripe checkout.")
+
+from starlette.requests import Request as StarletteRequest2
+
+@api.post("/webhooks/stripe")
+async def stripe_webhook(request: StarletteRequest2):
+    stripe_key = await _get_stripe_key()
+    webhook_secret = os.environ.get("STRIPE_WEBHOOK_SECRET", "").strip()
+    if not stripe_key:
+        raise HTTPException(503, "Stripe not configured")
+    if not webhook_secret:
+        logger.error("STRIPE_WEBHOOK_SECRET not set — rejecting webhook")
+        raise HTTPException(503, "Stripe webhook secret not configured")
+    try:
+        import stripe
+        stripe.api_key = stripe_key
+        payload = await request.body()
+        sig = request.headers.get("stripe-signature", "")
+        if not sig:
+            raise HTTPException(400, "Missing stripe-signature header")
+        event = stripe.Webhook.construct_event(payload, sig, webhook_secret)
+
+        if event.get("type") == "checkout.session.completed":
+            session = event["data"]["object"]
+            meta = session.get("metadata", {})
+            user_id = meta.get("user_id")
+            plan = meta.get("plan")
+            stripe_session_id = session.get("id", "")
+            if user_id and plan and plan in PLAN_CREDITS:
+                existing = await db.payments.find_one({"stripe_session_id": stripe_session_id})
+                if existing:
+                    logger.info(f"Stripe duplicate event ignored: session={stripe_session_id}")
+                    return {"received": True}
+                credits = PLAN_CREDITS[plan]
+                doc_acc = PLAN_DOC_ACCESS[plan]
+                now_iso = datetime.now(timezone.utc).isoformat()
+                await db.payments.insert_one({
+                    "user_id": user_id,
+                    "plan": plan,
+                    "provider": "stripe",
+                    "stripe_session_id": stripe_session_id,
+                    "amount_cents": session.get("amount_total", 0),
+                    "currency": session.get("currency", "usd"),
+                    "verified_at": now_iso,
+                })
+                await db.users.update_one(
+                    {"id": user_id},
+                    {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
+                     "$inc": {"credits_limit": credits}},
+                )
+                if pg_pool:
+                    async with pg_pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE users SET plan=$1, credits_limit=credits_limit+$2, document_access=$3, updated_at=$4 WHERE id=$5",
+                            plan, credits, doc_acc, now_iso, user_id,
+                        )
+                _redis_invalidate_session(user_id)
+                logger.info(f"Stripe payment: user={user_id} plan={plan} credits+={credits}")
+        return {"received": True}
+    except ImportError:
+        raise HTTPException(503, "Stripe SDK not installed.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Stripe webhook error: {e}")
+        raise HTTPException(400, f"Webhook error: {str(e)[:100]}")
+
+@api.post("/webhooks/razorpay")
+async def razorpay_webhook(request: StarletteRequest2):
+    _, key_secret = await _get_razorpay_keys()
+    if not key_secret:
+        raise HTTPException(503, "Razorpay not configured")
+    try:
+        raw_body = await request.body()
+        rp_signature = request.headers.get("x-razorpay-signature", "")
+        if not rp_signature:
+            raise HTTPException(400, "Missing x-razorpay-signature header")
+        expected_sig = hmac.new(
+            key_secret.encode(), raw_body, hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(expected_sig, rp_signature):
+            logger.warning("Razorpay webhook signature mismatch")
+            raise HTTPException(400, "Invalid webhook signature")
+
+        payload = json.loads(raw_body)
+        event = payload.get("event", "")
+        if event == "payment.captured":
+            entity = payload.get("payload", {}).get("payment", {}).get("entity", {})
+            notes = entity.get("notes", {})
+            user_id = notes.get("user_id")
+            plan = notes.get("plan")
+            rp_payment_id = entity.get("id", "")
+            if user_id and plan and plan in PLAN_CREDITS:
+                existing = await db.payments.find_one({"razorpay_payment_id": rp_payment_id})
+                if existing:
+                    logger.info(f"Razorpay duplicate event ignored: payment={rp_payment_id}")
+                    return {"received": True}
+                credits = PLAN_CREDITS[plan]
+                doc_acc = PLAN_DOC_ACCESS[plan]
+                now_iso = datetime.now(timezone.utc).isoformat()
+                await db.payments.insert_one({
+                    "user_id": user_id,
+                    "plan": plan,
+                    "provider": "razorpay",
+                    "razorpay_payment_id": rp_payment_id,
+                    "amount_paise": entity.get("amount", 0),
+                    "verified_at": now_iso,
+                })
+                await db.users.update_one(
+                    {"id": user_id},
+                    {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
+                     "$inc": {"credits_limit": credits}},
+                )
+                if pg_pool:
+                    async with pg_pool.acquire() as conn:
+                        await conn.execute(
+                            "UPDATE users SET plan=$1, credits_limit=credits_limit+$2, document_access=$3, updated_at=$4 WHERE id=$5",
+                            plan, credits, doc_acc, now_iso, user_id,
+                        )
+                _redis_invalidate_session(user_id)
+                logger.info(f"Razorpay webhook: user={user_id} plan={plan} credits+={credits}")
+        return {"received": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Razorpay webhook error: {e}")
+        raise HTTPException(400, "Webhook error")
+
+
+# ─────────────────────────────────────────────
+# CREDIT TOP-UP (returns order info — actual crediting via webhook)
+# ─────────────────────────────────────────────
+TOPUP_PRICES_INR = {100: 4900, 500: 19900, 1000: 34900}
+
+class CreditTopUpRequest(BaseModel):
+    credits: int
+    provider: str = "razorpay"
+
+@api.post("/payments/credit-topup")
+async def credit_topup(body: CreditTopUpRequest, user: dict = Depends(get_current_user)):
+    if user.get("plan", "free") == "free":
+        raise HTTPException(403, "Free plan users cannot top up credits. Upgrade first.")
+    if body.credits not in TOPUP_PRICES_INR:
+        raise HTTPException(400, "Top-up must be 100, 500, or 1000 credits.")
+    user_id = user["id"]
+    amount = TOPUP_PRICES_INR[body.credits]
+    if body.provider == "razorpay":
+        key_id, key_secret = await _get_razorpay_keys()
+        if not key_id or not key_secret:
+            raise HTTPException(503, "Razorpay not configured.")
+        try:
+            import razorpay
+            client = razorpay.Client(auth=(key_id, key_secret))
+            order = client.order.create({
+                "amount": amount,
+                "currency": "INR",
+                "receipt": f"topup_{user_id}_{body.credits}_{int(time.time())}",
+                "notes": {"user_id": str(user_id), "plan": "topup", "credits": str(body.credits)},
+            })
+            return {
+                "order_id": order["id"],
+                "amount": order["amount"],
+                "currency": order["currency"],
+                "key_id": key_id,
+                "credits": body.credits,
+            }
+        except Exception as e:
+            logger.error(f"Topup order error: {e}")
+            raise HTTPException(502, "Failed to create top-up order.")
+    raise HTTPException(400, "Unsupported provider. Use 'razorpay'.")
+
+
+# ─────────────────────────────────────────────
+# USAGE TRACKING
+# ─────────────────────────────────────────────
+@api.get("/usage/me")
+async def get_my_usage(user: dict = Depends(get_current_user)):
+    credits_info = await get_user_credits(user)
+    convs = await supa_get_conversations(user["id"])
+    return {
+        "user_id": user["id"],
+        "plan": user.get("plan", "free"),
+        "credits_used": credits_info["used"],
+        "credits_limit": credits_info["limit"],
+        "credits_remaining": credits_info["remaining"],
+        "conversations": len(convs) if convs else 0,
+    }
+
+@api.get("/admin/usage/summary")
+async def admin_usage_summary(admin: dict = Depends(get_admin_user)):
+    total_users = await supa_count_users()
+    total_convs = await supa_count_conversations()
+    payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(1000)
+    total_revenue_inr = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe")
+    total_revenue_usd = sum(p.get("amount_cents", 0) for p in payments if p.get("provider") == "stripe")
+    return {
+        "total_users": total_users,
+        "total_conversations": total_convs,
+        "total_payments": len(payments),
+        "revenue_inr_paise": total_revenue_inr,
+        "revenue_usd_cents": total_revenue_usd,
+        "recent_payments": payments[:20],
+    }
 
 @api.post("/admin/supabase/test")
 async def admin_test_supabase(data: dict, admin: dict = Depends(get_admin_user)):
@@ -6814,11 +7473,29 @@ def _start_metrics_collector():
 
 _start_metrics_collector()
 
-@api.get("/ready")
+@api.get("/ready", response_model=ReadyOut)
 async def readiness():
-    return {"status": "ok"}
+    checks = {"mongodb": False, "postgresql": False}
+    try:
+        if db is not None:
+            await db.command("ping")
+            checks["mongodb"] = True
+    except Exception:
+        pass
+    try:
+        if pg_pool:
+            async with pg_pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            checks["postgresql"] = True
+    except Exception:
+        pass
+    all_ok = all(checks.values())
+    return JSONResponse(
+        status_code=200 if all_ok else 503,
+        content={"status": "ready" if all_ok else "degraded", "checks": checks},
+    )
 
-@api.get("/health")
+@api.get("/health", response_model=HealthOut)
 async def health():
     kv_ok = await is_mongo_available()
     kv_latency = 0
@@ -6840,6 +7517,18 @@ async def health():
 
     mongo_status = "ok" if kv_ok else "unavailable"
 
+    pg_ok = False
+    pg_latency = 0
+    if pg_pool:
+        try:
+            t1 = _time_mod.time()
+            async with pg_pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+            pg_latency = int((_time_mod.time() - t1) * 1000)
+            pg_ok = True
+        except Exception:
+            pass
+
     return {
         "status": "ok",
         "version": "2.0.0",
@@ -6848,6 +7537,7 @@ async def health():
         "uptime_seconds": int(_time_mod.time() - _startup_time),
         "dependencies": {
             "mongodb": {"status": mongo_status, "latencyMs": kv_latency},
+            "postgresql": {"status": "ok" if pg_ok else "unavailable", "latencyMs": pg_latency},
             "redis": {"status": "ok" if redis_ok else "not_connected"},
             "llm": {
                 "status": "ok" if OPENAI_API_KEY else "not_configured",
@@ -6942,6 +7632,12 @@ async def prometheus_metrics():
         f'# HELP syrabit_redis_connected Redis connection status',
         f'# TYPE syrabit_redis_connected gauge',
         f'syrabit_redis_connected {1 if redis_client else 0}',
+        f'# HELP syrabit_redis_hits Redis cache hits',
+        f'# TYPE syrabit_redis_hits counter',
+        f'syrabit_redis_hits {_redis_hit_count}',
+        f'# HELP syrabit_redis_misses Redis cache misses',
+        f'# TYPE syrabit_redis_misses counter',
+        f'syrabit_redis_misses {_redis_miss_count}',
     ]
     batch_stats = _llm_batcher.stats
     lines.extend([
@@ -7199,9 +7895,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=_CORS_ALLOW_CREDENTIALS,
     allow_origins=CORS_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
+    max_age=600,
 )
 
 

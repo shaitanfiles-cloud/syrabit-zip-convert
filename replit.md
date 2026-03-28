@@ -107,12 +107,15 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 - **Caches**: `_user_cache` (120s), `_conv_cache` (60s), `_rag_cache` (600s), `_ai_response_cache` (1h), `_syllabus_cache` (30min)
 - **LLM SLM Pool (6 slots)**: Groq llama-3.3-70b (c8, PRIMARY), Groq llama-3.1-8b (c4), Gemini flash-lite (c10), Gemini flash (c5), Fireworks deepseek-v3p2 (c8), Bedrock nova-micro (c2)
 - **RAG**: 3-way parallel search; scoring: chunks +5/match, chapter keyword +3, subject keyword +1, exact name +8
-- **Monetization**: Free (30 credits), Starter ₹99 (500 credits), Pro ₹999 (unlimited) — Razorpay "Coming Soon", contact admin@syrabit.ai
+- **Monetization**: Free (30 credits), Starter ₹99/US$1.99 (300 credits), Pro ₹999/US$12.99 (4000 credits) — Razorpay + Stripe dual gateway; webhook handlers at `/api/webhooks/razorpay` and `/api/webhooks/stripe`; credit top-up (100/500/1000); usage tracking at `/api/usage/me`
 - **Email**: Resend API for password reset; set `RESEND_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL` in env; falls back to log-only when key missing
 - **Security**: ASGI-native `SecurityHeadersMiddleware` (not BaseHTTPMiddleware); HSTS, CSP, X-Frame-Options headers
 - **Admin**: `ADMIN_EMAILS=admin@syrabit.ai`; watchfiles watches `/artifacts/syrabit` — server.py edits require workflow restart
 - **Form accessibility**: All inputs have proper `autocomplete` attributes (email, current-password, new-password, name)
 - **SEO**: `seo_engine.py` handles SEO routes; 404s are expected until content is generated
+- **Testing**: pytest suite in `tests/` (17 tests: health, auth, API, security headers); run `cd artifacts/syrabit-backend && python3 -m pytest tests/ -v`
+- **Docker**: `Dockerfile` (Python 3.11-slim, non-root user, healthcheck) + `docker-compose.yml` with resource limits
+- **Endpoints**: 139 API endpoints total (as of Phase 8 completion)
 
 ### `scripts` (`@workspace/scripts`)
 
