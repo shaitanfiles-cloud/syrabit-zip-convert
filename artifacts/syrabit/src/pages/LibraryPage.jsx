@@ -4,9 +4,10 @@ import {
   Search, Bookmark, BookmarkCheck,
   BookOpen, Layers, ChevronRight, Sparkles,
   Share2, RefreshCw, ExternalLink, Globe as GlobeIcon, Lock,
-  FileText, Clock, ArrowRight, BookText, Loader2,
+  FileText, Clock, ArrowRight, BookText, Loader2, Sun, Moon,
 } from 'lucide-react';
 import { MasonryInfiniteGrid } from '@egjs/react-infinitegrid';
+import { useTheme } from 'next-themes';
 
 const CMS_API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -616,6 +617,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 export default function LibraryPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { theme, setTheme } = useTheme();
 
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
@@ -831,14 +833,24 @@ export default function LibraryPage() {
                   Browse {subjects.length} subjects · {allChapters.length} lessons
                 </p>
               </div>
-              <button
-                onClick={handleRefetchSubjects}
-                disabled={isFetching}
-                className="h-9 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-60 transition-all flex items-center gap-1.5 shrink-0 active:scale-95"
-              >
-                <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
-                {isFetching ? 'Updating…' : 'Refresh'}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                  title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                  aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+                  className="h-9 w-9 rounded-xl flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                >
+                  {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+                </button>
+                <button
+                  onClick={handleRefetchSubjects}
+                  disabled={isFetching}
+                  className="h-9 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-60 transition-all flex items-center gap-1.5 active:scale-95"
+                >
+                  <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
+                  {isFetching ? 'Updating…' : 'Refresh'}
+                </button>
+              </div>
             </div>
 
             {/* Search */}
