@@ -2066,7 +2066,7 @@ async def syrabit_library_search(
         except Exception as exc:
             logger.debug(f"syrabit_library_search subjects error: {exc}")
 
-    final = results[:4]
+    final = results[:1]
     if final:
         _redis_cache_search(search_hash, final)
     return final

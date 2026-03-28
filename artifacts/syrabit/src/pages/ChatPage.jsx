@@ -11,7 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   Send, Loader2, BookOpen, Zap, RefreshCw, Copy, Check,
-  AlertTriangle, Globe, Database, WifiOff, FileText, Sparkles, ChevronDown,
+  AlertTriangle, Globe, Database, WifiOff, FileText, Sparkles, ChevronDown, ExternalLink,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { getConversation, getSubject, getChapters } from '@/utils/api';
@@ -168,40 +168,28 @@ function RagBadge({ source, chunks, subjectId, subjectName }) {
   return null;
 }
 
-// ── Clickable library sources panel ──────────────────────────────────────────
+// ── Single clickable content-card source ─────────────────────────────────────
 function SourcesList({ sources }) {
   if (!sources || sources.length === 0) return null;
+  const src = sources[0];
   return (
-    <div className="mt-3 rounded-xl overflow-hidden border"
-      style={{ borderColor: 'rgba(124,58,237,0.2)', background: 'rgba(124,58,237,0.04)' }}>
-      <div className="flex items-center gap-1.5 px-3 py-2 border-b"
-        style={{ borderColor: 'rgba(124,58,237,0.12)', background: 'rgba(124,58,237,0.06)' }}>
-        <BookOpen size={11} className="text-violet-400 shrink-0" />
-        <span className="text-[11px] font-semibold text-violet-400 uppercase tracking-wide">
-          Sources from Syrabit Library
+    <div className="mt-3">
+      <a
+        href={src.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg transition-colors hover:brightness-110"
+        style={{
+          background: 'rgba(59,130,246,0.12)',
+          border: '1px solid rgba(59,130,246,0.3)',
+        }}
+      >
+        <BookOpen size={14} className="text-blue-400 shrink-0" />
+        <span className="text-[13px] font-medium text-blue-400">
+          {src.title}
         </span>
-      </div>
-      <div className="divide-y" style={{ borderColor: 'rgba(124,58,237,0.08)' }}>
-        {sources.map((src, i) => (
-          <a
-            key={i}
-            href={src.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-start gap-2.5 px-3 py-2.5 hover:bg-violet-500/10 transition-colors group"
-          >
-            <span className="shrink-0 mt-0.5 text-[11px] font-bold text-violet-400 w-4">[{i + 1}]</span>
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-white/80 group-hover:text-white transition-colors truncate">
-                📖 {src.title}
-              </p>
-              {src.snippet && (
-                <p className="text-[11px] text-white/40 mt-0.5 line-clamp-1">{src.snippet}</p>
-              )}
-            </div>
-          </a>
-        ))}
-      </div>
+        <ExternalLink size={12} className="text-blue-400/60 shrink-0" />
+      </a>
     </div>
   );
 }
