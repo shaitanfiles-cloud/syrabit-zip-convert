@@ -86,8 +86,10 @@ class SubjectCreate(BaseModel):
 class ChapterCreate(BaseModel):
     subject_id: str
     title: str
+    slug: Optional[str] = ""
     description: Optional[str] = ""
     content: Optional[str] = ""
+    content_type: Optional[str] = "notes"
     chapter_number: Optional[int] = 1
     order_index: Optional[int] = 0
     order: Optional[int] = 1
