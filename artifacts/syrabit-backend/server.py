@@ -323,6 +323,7 @@ def _redis_get_session(user_id: str) -> Optional[dict]:
 
 def _redis_invalidate_session(user_id: str):
     _redis_del("session", user_id)
+    _invalidate_user_cache(str(user_id))
 
 
 # ── Slow-query logging ────────────────────────────────────────────────────────
@@ -636,6 +637,29 @@ async def _migrate_supabase_users_to_pg():
     except Exception as e:
         logger.warning(f"[migration] Supabase→PG migration failed: {e}")
 
+async def _heal_credits_limit():
+    """Startup fix: correct credits_limit for users whose plan was upgraded but DB
+    column was never updated (free-plan default of 30 stuck on Starter/Pro users)."""
+    if not pg_pool:
+        return
+    await asyncio.sleep(8)  # run after the Supabase migration
+    try:
+        async with pg_pool.acquire() as conn:
+            r = await conn.execute(
+                """UPDATE users
+                      SET credits_limit = CASE plan
+                            WHEN 'pro'     THEN GREATEST(credits_limit, 4000)
+                            WHEN 'starter' THEN GREATEST(credits_limit, 300)
+                            ELSE credits_limit
+                          END
+                    WHERE (plan = 'pro'     AND credits_limit < 4000)
+                       OR (plan = 'starter' AND credits_limit < 300)"""
+            )
+        logger.info(f"[migration] credits_limit heal: {r}")
+    except Exception as e:
+        logger.warning(f"[migration] credits_limit heal failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app):
     global _rate_cleanup_task
@@ -694,6 +718,7 @@ async def lifespan(app):
         logger.warning(f"QA index creation skipped: {e}")
     _rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
     asyncio.create_task(_migrate_supabase_users_to_pg())
+    asyncio.create_task(_heal_credits_limit())
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
@@ -854,14 +879,18 @@ def supa_table(table: str):
 async def get_user_credits(user: dict) -> dict:
     """
     Lifetime credits — NO daily/monthly reset.
-    Uses the user's actual credits_limit from DB (includes top-ups and admin adjustments).
-    Falls back to PLAN_LIMITS only when credits_limit is not stored yet.
+    Uses the actual credits_limit from DB (includes top-ups and admin adjustments).
+    Always guarantees at least the plan's entitled minimum so stale DB rows never
+    under-report credits (e.g. a Pro user whose DB column wasn't updated yet).
     """
-    plan     = user.get("plan", "free")
-    plan_cfg = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-    db_limit = user.get("credits_limit")
-    limit    = db_limit if db_limit is not None else plan_cfg["lifetime_credits"]
-    used     = user.get("credits_used", 0) or 0
+    plan      = user.get("plan", "free")
+    plan_cfg  = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+    plan_min  = plan_cfg["lifetime_credits"]
+    db_limit  = user.get("credits_limit")
+    raw_limit = db_limit if db_limit is not None else plan_min
+    # Ensure Pro users always see at least 4000 even if DB column is stale
+    limit = max(raw_limit, plan_min)
+    used  = user.get("credits_used", 0) or 0
     return {
         "used": used,
         "limit": limit,
@@ -6986,6 +7015,12 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
             {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
              "$inc": {"credits_limit": credits}},
         )
+        # Mirror plan + new credits_limit to Supabase so all fallback paths agree
+        new_limit = (user.get("credits_limit") or 30) + credits
+        _supa_mirror(lambda: supa.table("users").update({
+            "plan": plan, "document_access": doc_acc,
+            "credits_limit": new_limit, "updated_at": now_iso,
+        }).eq("id", str(user_id)).execute())
         _redis_invalidate_session(user_id)
         logger.info(f"Plan activated: user={user_id} plan={plan} credits+={credits}")
         return {
