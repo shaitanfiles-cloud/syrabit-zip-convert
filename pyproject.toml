@@ -25,3 +25,7 @@ dependencies = [
     "upstash-redis>=1.0.0",
     "uvicorn[standard]==0.25.0",
 ]
+
+[tool.uv]
+python-downloads = "never"
+python-preference = "only-system"
