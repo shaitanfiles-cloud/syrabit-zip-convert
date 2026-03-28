@@ -252,6 +252,35 @@ async def _resolve_hierarchy(topic: dict) -> dict:
 
 # ─── ADMIN: Topic CRUD ──────────────────────────────────────────────────────
 
+@router.get("/topics/{board_slug}/{class_slug}/{subject_slug}")
+async def list_topics_public(board_slug: str, class_slug: str, subject_slug: str):
+    import re as _re
+    board = await _db.boards.find_one({"slug": board_slug}, {"_id": 0})
+    if not board: return []
+    cls = await _db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0})
+    if not cls: return []
+    streams = await _db.streams.find({"class_id": cls["id"]}, {"_id": 0}).to_list(100)
+    stream_ids = [s["id"] for s in streams]
+    subj = await _db.subjects.find_one({"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0})
+    if not subj: return []
+    chapters = await _db.chapters.find({"subject_id": subj["id"]}, {"_id": 0}).to_list(200)
+    ch_map = {}
+    for ch in chapters:
+        ch_slug = ch.get("slug") or _re.sub(r'[^a-z0-9]+', '-', ch.get("title", "").lower()).strip('-')
+        ch_map[ch["id"]] = {"slug": ch_slug, "title": ch.get("title", "")}
+    ch_ids = list(ch_map.keys())
+    if not ch_ids: return []
+    topics = await _db.topics.find({"chapter_id": {"$in": ch_ids}, "status": "published"}, {"_id": 0}).sort("order", 1).to_list(5000)
+    matched = []
+    for t in topics:
+        ch_info = ch_map.get(t.get("chapter_id"), {})
+        matched.append({
+            "id": t["id"], "title": t.get("title", ""), "topic_slug": t.get("slug", ""),
+            "chapter_slug": ch_info.get("slug", ""), "chapter_title": ch_info.get("title", ""),
+            "order": t.get("order", 0),
+        })
+    return matched
+
 @router.get("/topics")
 async def list_topics(chapter_id: Optional[str] = None, _admin: dict = Depends(_require_admin)):
     query = {"chapter_id": chapter_id} if chapter_id else {}

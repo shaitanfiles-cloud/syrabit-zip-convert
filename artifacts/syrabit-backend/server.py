@@ -4108,6 +4108,38 @@ async def resolve_subject(board_slug: str, class_slug: str, stream_slug: str, su
     if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
     return result
 
+@api.get("/content/resolve-subject/{board_slug}/{class_slug}/{subject_slug}")
+async def resolve_subject_no_stream(board_slug: str, class_slug: str, subject_slug: str, response: Response = None):
+    ck = f"resolve-ns:{board_slug}:{class_slug}:{subject_slug}"
+    cached = _get_content_cache(ck)
+    if cached:
+        if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return cached
+    await ensure_seeded()
+    if not await is_mongo_available():
+        raise HTTPException(503, "Content database unavailable")
+    board = await db.boards.find_one({"slug": board_slug}, {"_id": 0})
+    if not board: raise HTTPException(404, "Board not found")
+    cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0})
+    if not cls: raise HTTPException(404, "Class not found")
+    streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0}).to_list(100)
+    stream_ids = [s["id"] for s in streams]
+    subj = await db.subjects.find_one({"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0})
+    if not subj: raise HTTPException(404, "Subject not found")
+    stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
+    result = {
+        "id": subj["id"], "name": subj["name"], "description": subj.get("description", ""),
+        "icon": subj.get("icon", ""), "tags": subj.get("tags", []),
+        "board_name": board.get("name", ""), "class_name": cls.get("name", ""),
+        "stream_name": stream.get("name", "") if stream else "",
+        "board_slug": board_slug, "class_slug": class_slug,
+        "stream_slug": stream.get("slug", "") if stream else "",
+        "slug": subject_slug,
+    }
+    _set_content_cache(ck, result)
+    if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+    return result
+
 @api.get("/content/subjects/{subject_id}")
 async def get_subject(subject_id: str, response: Response = None):
     ck = f"subject:{subject_id}"
@@ -4249,11 +4281,68 @@ async def get_chapters(subject_id: str, response: Response = None):
         if not await is_mongo_available():
             return []
         chapters = await db.chapters.find({"subject_id": subject_id}, {"_id": 0}).sort("order_index", 1).to_list(100)
+        import re as _re
+        for ch in chapters:
+            if not ch.get("slug") and ch.get("title"):
+                ch["slug"] = _re.sub(r'[^a-z0-9]+', '-', ch["title"].lower()).strip('-')
         _set_content_cache(ck, chapters)
         if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
         return chapters
     except Exception:
         return []
+
+@api.get("/content/chapter-by-slug/{board_slug}/{class_slug}/{subject_slug}/{chapter_slug}")
+async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: str, chapter_slug: str, response: Response = None):
+    ck = f"ch-slug:{board_slug}:{class_slug}:{subject_slug}:{chapter_slug}"
+    cached = _get_content_cache(ck)
+    if cached:
+        if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return cached
+    await ensure_seeded()
+    if not await is_mongo_available():
+        raise HTTPException(503, "Content database unavailable")
+    board = await db.boards.find_one({"slug": board_slug}, {"_id": 0})
+    if not board: raise HTTPException(404, "Board not found")
+    cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0})
+    if not cls: raise HTTPException(404, "Class not found")
+    streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0}).to_list(100)
+    stream_ids = [s["id"] for s in streams]
+    subj = await db.subjects.find_one({"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0})
+    if not subj: raise HTTPException(404, "Subject not found")
+    chapter = await db.chapters.find_one({"slug": chapter_slug, "subject_id": subj["id"]}, {"_id": 0})
+    if not chapter:
+        import re as _re
+        all_chapters = await db.chapters.find({"subject_id": subj["id"]}, {"_id": 0}).to_list(200)
+        for c in all_chapters:
+            title = c.get("title", "")
+            auto_slug = _re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
+            if auto_slug == chapter_slug:
+                chapter = c
+                break
+    if not chapter: raise HTTPException(404, "Chapter not found")
+    chunks = await db.chunks.find({"chapter_id": chapter["id"]}, {"_id": 0}).sort("order_index", 1).to_list(200)
+    content_parts = []
+    for chunk in chunks:
+        if chunk.get("content"):
+            content_parts.append(chunk["content"])
+    content = "\n\n".join(content_parts) if content_parts else chapter.get("content", "")
+    word_count = len(content.split()) if content else 0
+    stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
+    result = {
+        "title": f"{chapter.get('title', chapter_slug)} — {subj['name']}",
+        "topic_title": chapter.get("title", chapter_slug),
+        "content": content or f"# {chapter.get('title', chapter_slug)}\n\nContent for this chapter is being prepared. Check back soon!",
+        "meta_description": chapter.get("description", f"{chapter.get('title', '')} notes for {subj['name']}"),
+        "board_name": board.get("name", ""), "class_name": cls.get("name", ""),
+        "subject_name": subj.get("name", ""), "chapter_title": chapter.get("title", ""),
+        "stream_name": stream.get("name", "") if stream else "",
+        "word_count": word_count, "generated_at": chapter.get("created_at", ""),
+        "updated_at": chapter.get("updated_at", ""),
+        "is_fallback": True,
+    }
+    _set_content_cache(ck, result)
+    if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+    return result
 
 @api.get("/content/chunks/{chapter_id}")
 async def get_chunks(chapter_id: str):

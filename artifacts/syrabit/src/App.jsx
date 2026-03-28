@@ -52,6 +52,7 @@ const AdminLoginPage     = lazy(() => import("@/pages/AdminLoginPage"));
 const AdminPage          = lazy(() => import("@/pages/AdminPage"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
 const SeoTopicPage       = lazy(() => import("@/pages/SeoTopicPage"));
+const SubjectLandingPage = lazy(() => import("@/pages/SubjectLandingPage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
 const PaymentCancelPage  = lazy(() => import("@/pages/PaymentCancelPage"));
@@ -187,6 +188,7 @@ function App() {
                   {/* ── Programmatic SEO routes: /{board}/{class-N}/{subject}/{topic}/{type?} ── */}
                   <Route path="/:board/:classSlug/:subjectSlug/:topicSlug/:pageType" element={<SeoTopicPage />} />
                   <Route path="/:board/:classSlug/:subjectSlug/:topicSlug" element={<SeoTopicPage />} />
+                  <Route path="/:board/:classSlug/:subjectSlug" element={<SubjectLandingPage />} />
 
                   {/* ── Protected routes (require login) ── */}
                   <Route path="/chat"              element={<AuthGuard><ChatPage /></AuthGuard>} />

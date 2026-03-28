@@ -120,6 +120,9 @@ export const getSeoPageTypes = (board, classSlug, subjectSlug, topicSlug) =>
 export const getSeoRelated = (topicSlug) =>
   axios.get(`${API_BASE}/seo/related/${topicSlug}`);
 
+export const getChapterBySlug = (board, classSlug, subjectSlug, chapterSlug) =>
+  axios.get(`${API_BASE}/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`);
+
 // ── Admin SEO management ──────────────────────────────────────────────────────
 
 export const adminSeoStats = (token) =>
