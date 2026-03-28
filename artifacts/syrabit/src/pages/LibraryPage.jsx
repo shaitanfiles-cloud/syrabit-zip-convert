@@ -559,25 +559,25 @@ export default function LibraryPage() {
       <div className="flex flex-col h-full w-full overflow-x-hidden">
         <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5 space-y-5">
 
-          <div className="flex items-start justify-between gap-4">
-            <div>
+          <div className="flex items-center justify-between gap-3">
+            <div className="min-w-0">
               <h1
                 className="text-foreground shimmer-text"
-                style={{ fontSize: '1.5rem', fontWeight: 700, lineHeight: 1.3 }}
+                style={{ fontSize: 'clamp(1.15rem, 4vw, 1.5rem)', fontWeight: 700, lineHeight: 1.3 }}
               >
                 Your Educational Browser
               </h1>
-              <p className="text-sm text-muted-foreground mt-1">
+              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                 Browse {subjects.length} subjects · {allChapters.length} lessons
               </p>
             </div>
 
             <button
               onClick={handleRefetchSubjects}
-              className="h-9 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center gap-1.5"
+              className="h-9 px-3 sm:px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center gap-1.5 shrink-0"
             >
               <Layers size={13} />
-              Refresh
+              <span className="hidden sm:inline">Refresh</span>
             </button>
           </div>
 
@@ -614,17 +614,16 @@ export default function LibraryPage() {
             )}
           </div>
 
-          <div className="flex gap-3 flex-wrap">
+          <div className="flex gap-2.5">
             <select
               value={selectedBoardSlug}
               onChange={(e) => { setSelectedBoardSlug(e.target.value); setSelectedClassSlug('all'); setActiveFilter('all'); }}
               aria-label="Filter by board"
-              className="h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20"
+              className="flex-1 h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20 min-w-0"
               style={{
                 background: 'var(--card)',
                 border: '1px solid rgba(139,92,246,0.15)',
                 color: 'hsl(var(--foreground))',
-                minWidth: 120,
               }}
             >
               <option value="all">All Boards</option>
@@ -636,12 +635,11 @@ export default function LibraryPage() {
               value={selectedClassSlug}
               onChange={(e) => { setSelectedClassSlug(e.target.value); setActiveFilter('all'); }}
               aria-label="Filter by class"
-              className="h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20"
+              className="flex-1 h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20 min-w-0"
               style={{
                 background: 'var(--card)',
                 border: '1px solid rgba(139,92,246,0.15)',
                 color: 'hsl(var(--foreground))',
-                minWidth: 120,
               }}
             >
               <option value="all">All Classes</option>

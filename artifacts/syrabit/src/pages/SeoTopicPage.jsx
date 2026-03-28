@@ -394,44 +394,47 @@ export default function SeoTopicPage() {
         style={{ background: 'rgba(10,10,26,0.95)', backdropFilter: 'blur(12px)' }}
       >
         <div className="max-w-6xl mx-auto px-4 py-4">
-          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-gray-400 mb-4 flex-wrap">
-            <Link to="/" className="hover:text-purple-400 transition-colors flex items-center gap-1">
-              <Home size={13} /> Home
+          <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-xs sm:text-sm text-gray-400 mb-3 sm:mb-4 flex-wrap">
+            <Link to="/" className="hover:text-purple-400 transition-colors flex items-center gap-0.5">
+              <Home size={12} /> <span className="hidden sm:inline">Home</span>
             </Link>
-            <ChevronRight size={11} className="text-gray-600" />
+            <ChevronRight size={10} className="text-gray-600" />
             <Link to="/library" className="hover:text-purple-400 transition-colors">Library</Link>
-            <ChevronRight size={11} className="text-gray-600" />
-            <Link to={subjectPath} className="hover:text-purple-400 transition-colors">{page.subject_name}</Link>
-            <ChevronRight size={11} className="text-gray-600" />
-            <span className="text-white/80 font-medium truncate max-w-[200px]">{page.topic_title}</span>
+            <ChevronRight size={10} className="text-gray-600" />
+            <Link to={subjectPath} className="hover:text-purple-400 transition-colors truncate max-w-[120px] sm:max-w-none">{page.subject_name}</Link>
+            <ChevronRight size={10} className="text-gray-600" />
+            <span className="text-white/80 font-medium truncate max-w-[130px] sm:max-w-[240px]">{page.topic_title}</span>
           </nav>
 
-          <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <div className="flex items-center gap-1.5 mb-2.5 flex-wrap">
             <Badge variant="outline" className="text-[11px] text-purple-400 border-purple-500/25 bg-purple-500/5">{page.board_name}</Badge>
             <Badge variant="outline" className="text-[11px] text-blue-400 border-blue-500/25 bg-blue-500/5">{page.class_name}</Badge>
             <Badge variant="outline" className="text-[11px] text-emerald-400 border-emerald-500/25 bg-emerald-500/5">{page.subject_name}</Badge>
           </div>
 
-          <h1 className="text-2xl md:text-3xl lg:text-4xl font-bold text-white leading-tight max-w-3xl">
+          <h1 className="text-xl sm:text-2xl md:text-3xl lg:text-4xl font-bold text-white leading-tight max-w-3xl">
             {page.topic_title}
           </h1>
 
-          <div className="flex items-center gap-3 mt-3 text-sm text-gray-400 flex-wrap">
+          <div className="flex items-center gap-2 mt-2.5 text-xs sm:text-sm text-gray-400 flex-wrap">
             <span className="flex items-center gap-1">
-              <Clock size={13} />
+              <Clock size={12} />
               {readTimeMin} min read
             </span>
-            <span className="text-gray-600">·</span>
-            <span>{page.word_count?.toLocaleString()} words</span>
-            <span className="text-gray-600">·</span>
-            <span>{pageTypeLabel}</span>
-            <span className="text-gray-600">·</span>
-            <span>{page.chapter_title}</span>
-            {page.updated_at && (
+            {page.word_count > 0 && (
               <>
                 <span className="text-gray-600">·</span>
-                <span>Updated {new Date(page.updated_at || page.generated_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}</span>
+                <span>{page.word_count?.toLocaleString()} words</span>
               </>
+            )}
+            <span className="text-gray-600">·</span>
+            <span>{pageTypeLabel}</span>
+            <span className="hidden sm:inline text-gray-600">·</span>
+            <span className="hidden sm:inline">{page.chapter_title}</span>
+            {page.updated_at && (
+              <span className="hidden md:inline text-gray-500">
+                · Updated {new Date(page.updated_at || page.generated_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}
+              </span>
             )}
           </div>
         </div>
@@ -553,31 +556,31 @@ export default function SeoTopicPage() {
 
             {/* Prev/Next navigation */}
             {(related.prev || related.next) && (
-              <div className="flex justify-between items-stretch mt-8 gap-4">
+              <div className="flex flex-col sm:flex-row justify-between items-stretch mt-8 gap-3">
                 {related.prev ? (
                   <Link
                     to={related.prev.seo_path || '#'}
-                    className="flex items-center gap-3 px-5 py-4 rounded-2xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.06] hover:border-purple-500/20 transition-all text-sm text-gray-300 hover:text-white group flex-1"
+                    className="flex items-center gap-3 px-4 sm:px-5 py-3.5 sm:py-4 rounded-2xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.06] hover:border-purple-500/20 transition-all text-sm text-gray-300 hover:text-white group flex-1"
                   >
-                    <ArrowLeft size={18} className="group-hover:-translate-x-1 transition-transform text-gray-500 shrink-0" />
+                    <ArrowLeft size={16} className="group-hover:-translate-x-1 transition-transform text-gray-500 shrink-0" />
                     <div className="text-left min-w-0">
                       <div className="text-[11px] text-gray-500 mb-0.5">Previous</div>
                       <div className="font-medium truncate">{related.prev.title}</div>
                     </div>
                   </Link>
-                ) : <div className="flex-1" />}
+                ) : <div className="hidden sm:flex flex-1" />}
                 {related.next ? (
                   <Link
                     to={related.next.seo_path || '#'}
-                    className="flex items-center gap-3 px-5 py-4 rounded-2xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.06] hover:border-purple-500/20 transition-all text-sm text-gray-300 hover:text-white group flex-1 text-right justify-end"
+                    className="flex items-center gap-3 px-4 sm:px-5 py-3.5 sm:py-4 rounded-2xl bg-white/[0.03] border border-white/5 hover:bg-white/[0.06] hover:border-purple-500/20 transition-all text-sm text-gray-300 hover:text-white group flex-1 sm:text-right sm:justify-end"
                   >
                     <div className="min-w-0">
                       <div className="text-[11px] text-gray-500 mb-0.5">Next</div>
                       <div className="font-medium truncate">{related.next.title}</div>
                     </div>
-                    <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform text-gray-500 shrink-0" />
+                    <ArrowRight size={16} className="group-hover:translate-x-1 transition-transform text-gray-500 shrink-0" />
                   </Link>
-                ) : <div className="flex-1" />}
+                ) : <div className="hidden sm:flex flex-1" />}
               </div>
             )}
 

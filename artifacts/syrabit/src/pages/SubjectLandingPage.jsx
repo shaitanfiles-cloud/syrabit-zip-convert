@@ -138,32 +138,32 @@ export default function SubjectLandingPage() {
             <span className="text-white/80 font-medium">{subjectName}</span>
           </nav>
 
-          <div className="flex items-start gap-4">
-            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shrink-0" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.15), rgba(139,92,246,0.08))', border: '1px solid rgba(139,92,246,0.2)' }}>
+          <div className="flex items-start gap-3 sm:gap-4">
+            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center text-xl sm:text-2xl shrink-0" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.15), rgba(139,92,246,0.08))', border: '1px solid rgba(139,92,246,0.2)' }}>
               {subject.icon || '📚'}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-2 flex-wrap">
+              <div className="flex items-center gap-1.5 mb-2 flex-wrap">
                 <Badge variant="outline" className="text-[11px] text-purple-400 border-purple-500/25 bg-purple-500/5">{boardName}</Badge>
                 <Badge variant="outline" className="text-[11px] text-blue-400 border-blue-500/25 bg-blue-500/5">{className}</Badge>
                 {streamName && <Badge variant="outline" className="text-[11px] text-emerald-400 border-emerald-500/25 bg-emerald-500/5">{streamName}</Badge>}
               </div>
-              <h1 className="text-2xl md:text-3xl font-bold text-white leading-tight">
+              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-white leading-tight">
                 {subjectName}
               </h1>
               {subject.description && (
-                <p className="text-gray-400 mt-2 text-sm leading-relaxed max-w-2xl">
+                <p className="text-gray-400 mt-1.5 text-sm leading-relaxed max-w-2xl line-clamp-2 sm:line-clamp-none">
                   {subject.description}
                 </p>
               )}
-              <div className="flex items-center gap-4 mt-3 text-sm text-gray-500">
+              <div className="flex items-center gap-3 mt-2.5 text-xs sm:text-sm text-gray-500">
                 <span className="flex items-center gap-1">
-                  <Layers size={13} />
+                  <Layers size={12} />
                   {chapters.length} chapters
                 </span>
                 {topics.length > 0 && (
                   <span className="flex items-center gap-1">
-                    <FileText size={13} />
+                    <FileText size={12} />
                     {topics.length} lessons
                   </span>
                 )}
@@ -192,16 +192,16 @@ export default function SubjectLandingPage() {
         {/* AI CTA bar */}
         <Link
           to={`/chat?subject=${subject.id || subject._id || ''}`}
-          className="flex items-center gap-3 mb-6 px-5 py-3.5 rounded-2xl transition-all hover:border-purple-500/30"
+          className="flex items-center gap-3 mb-6 px-4 sm:px-5 py-3.5 rounded-2xl transition-all hover:border-purple-500/30"
           style={{
             background: 'linear-gradient(135deg, rgba(124,58,237,0.08), rgba(139,92,246,0.04))',
             border: '1px solid rgba(139,92,246,0.15)',
           }}
         >
-          <Sparkles size={18} className="text-purple-400 shrink-0" />
+          <Sparkles size={16} className="text-purple-400 shrink-0" />
           <div className="flex-1 min-w-0">
             <span className="text-sm font-medium text-white">Ask AI about {subjectName}</span>
-            <span className="text-xs text-gray-500 ml-2">Get instant answers aligned with your syllabus</span>
+            <span className="hidden sm:inline text-xs text-gray-500 ml-2">Get instant answers aligned with your syllabus</span>
           </div>
           <ChevronRight size={16} className="text-gray-500 shrink-0" />
         </Link>
