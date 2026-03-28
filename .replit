@@ -14,6 +14,43 @@ env = { "CI" = "true" }
 [workflows]
 runButton = "Project"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Syrabit Frontend"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Syrabit Backend"
+
+[[workflows.workflow]]
+name = "Syrabit Frontend"
+author = "agent"
+
+[workflows.workflow.metadata]
+outputType = "webview"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/syrabit && pnpm exec vite --host 0.0.0.0"
+waitForPort = 5000
+
+[[workflows.workflow]]
+name = "Syrabit Backend"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd artifacts/syrabit-backend && python -m uvicorn server:app --host 0.0.0.0 --port 8000 --reload"
+waitForPort = 8000
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [agent]
 stack = "PNPM_WORKSPACE"
 expertMode = true
