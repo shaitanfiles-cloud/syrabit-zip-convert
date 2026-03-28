@@ -591,177 +591,197 @@ export default function LibraryPage() {
         description="Explore AHSEC Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
         url="https://syrabit.ai/library"
       />
-      <div className="flex flex-col h-full w-full overflow-x-hidden">
-        <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5 space-y-5">
+      <div className="flex flex-col h-full w-full overflow-hidden">
 
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <h1
-                className="text-foreground shimmer-text"
-                style={{ fontSize: 'clamp(1.15rem, 4vw, 1.5rem)', fontWeight: 700, lineHeight: 1.3 }}
+        {/* ── Sticky controls header ───────────────────────────────── */}
+        <div
+          className="shrink-0 w-full z-20"
+          style={{
+            background: 'var(--background)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            borderBottom: '1px solid rgba(139,92,246,0.08)',
+          }}
+        >
+          <div className="w-full max-w-6xl mx-auto px-4 md:px-6 pt-5 pb-3 space-y-3">
+
+            {/* Title + Refresh */}
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h1
+                  className="text-foreground shimmer-text"
+                  style={{ fontSize: 'clamp(1.15rem, 4vw, 1.5rem)', fontWeight: 700, lineHeight: 1.3 }}
+                >
+                  Your Educational Browser
+                </h1>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-1">
+                  Browse {subjects.length} subjects · {allChapters.length} lessons
+                </p>
+              </div>
+              <button
+                onClick={handleRefetchSubjects}
+                className="h-9 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center gap-1.5 shrink-0"
               >
-                Your Educational Browser
-              </h1>
-              <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                Browse {subjects.length} subjects · {allChapters.length} lessons
-              </p>
+                <Layers size={13} />
+                Refresh
+              </button>
             </div>
 
-            <button
-              onClick={handleRefetchSubjects}
-              className="h-9 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center gap-1.5 shrink-0"
-            >
-              <Layers size={13} />
-              Refresh
-            </button>
-          </div>
-
-          <div className="relative group/search">
-            <Search
-              className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none transition-colors text-muted-foreground group-focus-within/search:text-primary"
-              aria-hidden="true"
-            />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={handleSearchChange}
-              aria-label="Search subjects"
-              placeholder="Search subjects, topics, chapters..."
-              className="w-full h-11 pl-10 pr-4 rounded-xl text-sm text-foreground outline-none transition-all focus:ring-2 focus:ring-primary/20"
-              style={{
-                background: 'var(--card)',
-                backdropFilter: 'blur(20px)',
-                WebkitBackdropFilter: 'blur(20px)',
-                border: '1px solid rgba(139,92,246,0.15)',
-                color: 'hsl(var(--foreground))',
-              }}
-              data-testid="library-search-input"
-            />
-            {searchQuery && (
-              <button
-                onClick={handleSearchClear}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-foreground text-xs px-1.5 py-0.5 rounded transition-colors"
-                aria-label="Clear search"
-                data-testid="library-search-clear"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-
-          <div className="flex gap-2.5">
-            <select
-              value={selectedBoardSlug}
-              onChange={(e) => { setSelectedBoardSlug(e.target.value); setSelectedClassSlug('all'); setActiveFilter('all'); }}
-              aria-label="Filter by board"
-              className="flex-1 h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20 min-w-0"
-              style={{
-                background: 'var(--card)',
-                border: '1px solid rgba(139,92,246,0.15)',
-                color: 'hsl(var(--foreground))',
-              }}
-            >
-              <option value="all">All Boards</option>
-              {boards.map((b) => (
-                <option key={b.id} value={b.slug}>{b.name}</option>
-              ))}
-            </select>
-            <select
-              value={selectedClassSlug}
-              onChange={(e) => { setSelectedClassSlug(e.target.value); setActiveFilter('all'); }}
-              aria-label="Filter by class"
-              className="flex-1 h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20 min-w-0"
-              style={{
-                background: 'var(--card)',
-                border: '1px solid rgba(139,92,246,0.15)',
-                color: 'hsl(var(--foreground))',
-              }}
-            >
-              <option value="all">All Classes</option>
-              {classes
-                .filter((c) => selectedBoardSlug === 'all' || boards.find((b) => b.slug === selectedBoardSlug)?.id === c.board_id)
-                .map((c) => (
-                  <option key={c.id} value={c.slug}>{c.name}</option>
-                ))}
-            </select>
-          </div>
-
-          <div
-            role="group"
-            aria-label="Subject filters"
-            className="flex gap-2 overflow-x-auto pb-0.5 no-scrollbar"
-            data-testid="library-filter-chips"
-          >
-            {allFilterChips.map((chip) => (
-              <FilterChip
-                key={chip.id}
-                chip={chip}
-                isActive={chip.id === activeFilter}
-                onClick={() => handleFilterChange(chip.id)}
+            {/* Search */}
+            <div className="relative group/search">
+              <Search
+                className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 pointer-events-none transition-colors text-muted-foreground group-focus-within/search:text-primary"
+                aria-hidden="true"
               />
-            ))}
-          </div>
-
-          {filteredSubjects.length === 0 ? (
-            <div className="col-span-full flex flex-col items-center justify-center py-20 text-center">
-              <div
-                className="w-20 h-20 rounded-2xl flex items-center justify-center mb-5"
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={handleSearchChange}
+                aria-label="Search subjects"
+                placeholder="Search subjects, topics, chapters..."
+                className="w-full h-11 pl-10 pr-4 rounded-xl text-sm text-foreground outline-none transition-all focus:ring-2 focus:ring-primary/20"
                 style={{
-                  background: 'linear-gradient(135deg, rgba(124,58,237,0.08), rgba(139,92,246,0.04))',
-                  border: '1px solid rgba(139,92,246,0.12)',
+                  background: 'var(--card)',
+                  border: '1px solid rgba(139,92,246,0.15)',
+                  color: 'hsl(var(--foreground))',
                 }}
-              >
-                <BookOpen className="w-10 h-10" style={{ color: 'hsl(var(--muted-foreground) / 0.3)' }} />
-              </div>
-              <h3 className="text-foreground font-semibold text-lg">
-                {activeFilter === 'saved' && !user ? 'Sign in to save subjects' : 'No subjects found'}
-              </h3>
-              <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
-                {activeFilter === 'saved' && !user
-                  ? 'Create a free account to bookmark subjects and track your progress'
-                  : 'Try adjusting your search or filters to discover more subjects'}
-              </p>
-              {activeFilter === 'saved' && !user ? (
-                <Link
-                  to="/signup"
-                  className="mt-4 px-5 py-2 rounded-xl text-sm text-white font-medium transition-all duration-200 active:scale-95"
-                  style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 20px hsl(var(--primary)/0.3)' }}
-                >
-                  Sign up free
-                </Link>
-              ) : (searchQuery || activeFilter !== 'all') && (
+                data-testid="library-search-input"
+              />
+              {searchQuery && (
                 <button
-                  onClick={handleResetFilters}
-                  className="mt-4 px-4 py-2 rounded-xl text-sm text-primary hover:text-white transition-all duration-200 active:scale-95"
-                  style={{
-                    border: '1px solid rgba(139,92,246,0.25)',
-                    background: 'rgba(139,92,246,0.06)',
-                  }}
-                  data-testid="library-reset-filters-button"
+                  onClick={handleSearchClear}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/50 hover:text-foreground text-xs px-1.5 py-0.5 rounded transition-colors"
+                  aria-label="Clear search"
+                  data-testid="library-search-clear"
                 >
-                  Reset filters
+                  Clear
                 </button>
               )}
             </div>
-          ) : (
+
+            {/* Board / Class dropdowns */}
+            <div className="flex gap-2.5">
+              <select
+                value={selectedBoardSlug}
+                onChange={(e) => { setSelectedBoardSlug(e.target.value); setSelectedClassSlug('all'); setActiveFilter('all'); }}
+                aria-label="Filter by board"
+                className="flex-1 h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20 min-w-0"
+                style={{
+                  background: 'var(--card)',
+                  border: '1px solid rgba(139,92,246,0.15)',
+                  color: 'hsl(var(--foreground))',
+                }}
+              >
+                <option value="all">All Boards</option>
+                {boards.map((b) => (
+                  <option key={b.id} value={b.slug}>{b.name}</option>
+                ))}
+              </select>
+              <select
+                value={selectedClassSlug}
+                onChange={(e) => { setSelectedClassSlug(e.target.value); setActiveFilter('all'); }}
+                aria-label="Filter by class"
+                className="flex-1 h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20 min-w-0"
+                style={{
+                  background: 'var(--card)',
+                  border: '1px solid rgba(139,92,246,0.15)',
+                  color: 'hsl(var(--foreground))',
+                }}
+              >
+                <option value="all">All Classes</option>
+                {classes
+                  .filter((c) => selectedBoardSlug === 'all' || boards.find((b) => b.slug === selectedBoardSlug)?.id === c.board_id)
+                  .map((c) => (
+                    <option key={c.id} value={c.slug}>{c.name}</option>
+                  ))}
+              </select>
+            </div>
+
+            {/* Filter chips */}
             <div
-              className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
-              data-testid="library-subject-grid"
+              role="group"
+              aria-label="Subject filters"
+              className="flex gap-2 overflow-x-auto pb-0.5 no-scrollbar"
+              data-testid="library-filter-chips"
             >
-              {filteredSubjects.map((sub, index) => (
-                <SubjectCard
-                  key={sub.id}
-                  sub={sub}
-                  chapters={chaptersBySubject.get(sub.id) || []}
-                  isSaved={savedSubjects.includes(sub.id)}
-                  onToggleSave={(id) => toggleSaved.mutate(id)}
-                  onAskAI={handleAskAI}
-                  index={index}
+              {allFilterChips.map((chip) => (
+                <FilterChip
+                  key={chip.id}
+                  chip={chip}
+                  isActive={chip.id === activeFilter}
+                  onClick={() => handleFilterChange(chip.id)}
                 />
               ))}
             </div>
-          )}
+
+          </div>
         </div>
+
+        {/* ── Scrollable cards area ─────────────────────────────────── */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
+            {filteredSubjects.length === 0 ? (
+              <div className="col-span-full flex flex-col items-center justify-center py-20 text-center">
+                <div
+                  className="w-20 h-20 rounded-2xl flex items-center justify-center mb-5"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(124,58,237,0.08), rgba(139,92,246,0.04))',
+                    border: '1px solid rgba(139,92,246,0.12)',
+                  }}
+                >
+                  <BookOpen className="w-10 h-10" style={{ color: 'hsl(var(--muted-foreground) / 0.3)' }} />
+                </div>
+                <h3 className="text-foreground font-semibold text-lg">
+                  {activeFilter === 'saved' && !user ? 'Sign in to save subjects' : 'No subjects found'}
+                </h3>
+                <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
+                  {activeFilter === 'saved' && !user
+                    ? 'Create a free account to bookmark subjects and track your progress'
+                    : 'Try adjusting your search or filters to discover more subjects'}
+                </p>
+                {activeFilter === 'saved' && !user ? (
+                  <Link
+                    to="/signup"
+                    className="mt-4 px-5 py-2 rounded-xl text-sm text-white font-medium transition-all duration-200 active:scale-95"
+                    style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 20px hsl(var(--primary)/0.3)' }}
+                  >
+                    Sign up free
+                  </Link>
+                ) : (searchQuery || activeFilter !== 'all') && (
+                  <button
+                    onClick={handleResetFilters}
+                    className="mt-4 px-4 py-2 rounded-xl text-sm text-primary hover:text-white transition-all duration-200 active:scale-95"
+                    style={{
+                      border: '1px solid rgba(139,92,246,0.25)',
+                      background: 'rgba(139,92,246,0.06)',
+                    }}
+                    data-testid="library-reset-filters-button"
+                  >
+                    Reset filters
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div
+                className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
+                data-testid="library-subject-grid"
+              >
+                {filteredSubjects.map((sub, index) => (
+                  <SubjectCard
+                    key={sub.id}
+                    sub={sub}
+                    chapters={chaptersBySubject.get(sub.id) || []}
+                    isSaved={savedSubjects.includes(sub.id)}
+                    onToggleSave={(id) => toggleSaved.mutate(id)}
+                    onAskAI={handleAskAI}
+                    index={index}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
       </div>
     </AppLayout>
   );
