@@ -19,7 +19,7 @@ from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
-import os, uuid, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys
+import os, uuid, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys, html as _html_mod
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
 
@@ -353,13 +353,16 @@ SUPABASE_ANON_KEY    = os.environ.get('SUPABASE_ANON_KEY', '') or os.environ.get
 SECURE_COOKIES  = os.environ.get('SECURE_COOKIES', 'true').lower() not in ('false', '0', 'no')
 COOKIE_SAMESITE = "none" if SECURE_COOKIES else "lax"
 
-_cors_raw = os.environ.get('CORS_ORIGINS', '*').strip().strip('"').strip("'")
-if _cors_raw == '*':
-    CORS_ORIGINS = ["*"]
-    _CORS_ALLOW_CREDENTIALS = False
+_cors_raw = os.environ.get('CORS_ORIGINS', '').strip().strip('"').strip("'")
+if not _cors_raw or _cors_raw == '*':
+    CORS_ORIGINS = ["http://localhost", "http://localhost:80", "http://localhost:25144"]
+    for _rd in os.environ.get('REPLIT_DOMAINS', '').split(','):
+        _rd = _rd.strip()
+        if _rd:
+            CORS_ORIGINS.append(f"https://{_rd}")
+    _CORS_ALLOW_CREDENTIALS = True
 else:
     CORS_ORIGINS = [o.strip() for o in _cors_raw.split(',') if o.strip()]
-    # Auto-include Replit production/dev domains so deployed app is never CORS-blocked
     for _rd in os.environ.get('REPLIT_DOMAINS', '').split(','):
         _rd = _rd.strip()
         if _rd and f"https://{_rd}" not in CORS_ORIGINS:
@@ -7887,8 +7890,6 @@ async def sarvam_transliterate(data: dict):
         logger.error(f"Sarvam transliterate exception: {type(e).__name__} [{src}->{tgt}]")
         raise HTTPException(status_code=502, detail="Sarvam AI unreachable")
 
-app.include_router(api)
-
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
@@ -7929,6 +7930,461 @@ if FRONTEND_BUILD.is_dir():
             return FileResponse(str(file_path))
         return FileResponse(str(FRONTEND_BUILD / "index.html"),
                             headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
+
+# ─────────────────────────────────────────────
+# PHASE A: ENHANCED DASHBOARD METRICS
+# ─────────────────────────────────────────────
+@api.get("/admin/dashboard/metrics")
+async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
+    start = time.time()
+    health_data = {}
+    try:
+        h_resp = await asyncio.wait_for(_check_health_deps(), timeout=5)
+        health_data = h_resp if isinstance(h_resp, dict) else {}
+    except Exception:
+        pass
+
+    deps_status = {}
+    if isinstance(health_data, dict):
+        for k, v in health_data.items():
+            if isinstance(v, dict):
+                deps_status[k] = {
+                    "status": v.get("status", "unknown"),
+                    "latency_ms": v.get("latencyMs", 0),
+                }
+
+    users = await supa_list_users()
+    total_users = len(users)
+    paid_users = sum(1 for u in users if u.get("plan") in ("starter", "pro"))
+    free_users = total_users - paid_users
+
+    payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(500)
+    total_revenue_inr = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100
+    total_revenue_usd = sum(p.get("amount_cents", 0) for p in payments if p.get("provider") == "stripe") / 100
+
+    now = datetime.now(timezone.utc)
+    thirty_days_ago = (now - timedelta(days=30)).isoformat()
+    recent_payments = [p for p in payments if p.get("verified_at", "") >= thirty_days_ago]
+    mrr_inr = sum(p.get("amount_paise", 0) for p in recent_payments if p.get("provider") != "stripe") / 100
+
+    seo_count = await db.seo_topics.count_documents({}) if await is_mongo_available() else 0
+    seo_published = await db.seo_pages.count_documents({"status": "published"}) if await is_mongo_available() else 0
+
+    elapsed = round((time.time() - start) * 1000, 1)
+
+    return {
+        "dependencies": deps_status,
+        "response_time_ms": elapsed,
+        "users": {"total": total_users, "paid": paid_users, "free": free_users},
+        "revenue": {"total_inr": total_revenue_inr, "total_usd": total_revenue_usd, "mrr_inr": mrr_inr},
+        "seo": {"topics": seo_count, "published_pages": seo_published},
+        "payments_count": len(payments),
+    }
+
+async def _check_health_deps():
+    result = {}
+    try:
+        t0 = time.time()
+        await db.command("ping")
+        result["mongodb"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
+    except Exception:
+        result["mongodb"] = {"status": "error", "latencyMs": 0}
+    try:
+        if pg_pool:
+            t0 = time.time()
+            async with pg_pool.acquire() as conn:
+                await conn.execute("SELECT 1")
+            result["postgresql"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
+        else:
+            result["postgresql"] = {"status": "not_configured", "latencyMs": 0}
+    except Exception:
+        result["postgresql"] = {"status": "error", "latencyMs": 0}
+    try:
+        t0 = time.time()
+        _redis_get_search("__healthcheck__")
+        result["redis"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
+    except Exception:
+        result["redis"] = {"status": "error", "latencyMs": 0}
+    return result
+
+
+# ─────────────────────────────────────────────
+# PHASE B: AI CONTENT STUDIO
+# ─────────────────────────────────────────────
+class StudioParseRequest(BaseModel):
+    raw_text: str
+    subject: str = ""
+    chapter: str = ""
+
+@api.post("/admin/studio/parse")
+async def admin_studio_parse(body: StudioParseRequest, admin: dict = Depends(get_admin_user)):
+    if not body.raw_text.strip():
+        raise HTTPException(400, "Empty text")
+    prompt = f"""You are an educational content parser for AHSEC/Degree students in Assam.
+Analyze the following raw educational text and categorize it into structured blocks.
+Return a JSON array of blocks, each with: type (one of: "summary", "definition", "example", "pyq", "formula", "note"), title, content.
+
+Subject: {body.subject or 'General'}
+Chapter: {body.chapter or 'General'}
+
+Raw text:
+---
+{body.raw_text[:8000]}
+---
+
+Return ONLY valid JSON array. Example:
+[{{"type":"summary","title":"Chapter Overview","content":"..."}},{{"type":"definition","title":"Term Name","content":"..."}}]"""
+
+    try:
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4096)
+        json_match = re.search(r'\[.*\]', result, re.DOTALL)
+        if json_match:
+            blocks = json.loads(json_match.group())
+            return {"blocks": blocks, "raw_length": len(body.raw_text), "block_count": len(blocks)}
+        return {"blocks": [{"type": "note", "title": "Parsed Content", "content": result}], "raw_length": len(body.raw_text), "block_count": 1}
+    except Exception as e:
+        logger.error(f"Studio parse error: {e}")
+        raise HTTPException(500, "AI parsing failed")
+
+class StudioPublishRequest(BaseModel):
+    title: str
+    slug: str
+    blocks: list
+    subject_id: str = ""
+    board: str = "ahsec"
+    class_slug: str = "class-12"
+    subject_slug: str = ""
+    meta_description: str = ""
+    keywords: list = []
+
+@api.post("/admin/studio/publish")
+async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends(get_admin_user)):
+    now_iso = datetime.now(timezone.utc).isoformat()
+    html_parts = []
+    for block in body.blocks:
+        btype = re.sub(r'[^a-z]', '', block.get("type", "note"))
+        title = _html_mod.escape(str(block.get("title", "")))
+        content = _html_mod.escape(str(block.get("content", "")))
+        html_parts.append(f'<section class="content-block {btype}"><h3>{title}</h3><div>{content}</div></section>')
+
+    page_html = "\n".join(html_parts)
+    topic_doc = {
+        "title": body.title,
+        "slug": body.slug,
+        "board": body.board,
+        "class_slug": body.class_slug,
+        "subject_slug": body.subject_slug or body.slug.split("-")[0],
+        "meta_description": body.meta_description or body.title,
+        "keywords": body.keywords,
+        "status": "published",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        "source": "studio",
+    }
+    await db.seo_topics.update_one(
+        {"slug": body.slug},
+        {"$set": topic_doc},
+        upsert=True,
+    )
+    page_doc = {
+        "topic_slug": body.slug,
+        "board": body.board,
+        "class_slug": body.class_slug,
+        "subject_slug": body.subject_slug or body.slug.split("-")[0],
+        "html": page_html,
+        "blocks": body.blocks,
+        "status": "published",
+        "page_type": "notes",
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        "source": "studio",
+    }
+    await db.seo_pages.update_one(
+        {"topic_slug": body.slug, "page_type": "notes"},
+        {"$set": page_doc},
+        upsert=True,
+    )
+    logger.info(f"Studio published: {body.slug}")
+    return {"success": True, "slug": body.slug, "url": f"/ahsec/{body.class_slug}/{body.subject_slug or 'general'}/{body.slug}"}
+
+
+# ─────────────────────────────────────────────
+# PHASE C: ADVANCED ANALYTICS
+# ─────────────────────────────────────────────
+@api.get("/admin/analytics/funnel")
+async def admin_analytics_funnel(admin: dict = Depends(get_admin_user)):
+    users = await supa_list_users()
+    total = len(users)
+    chatted = 0
+    paid = 0
+    for u in users:
+        if u.get("credits_used", 0) > 0:
+            chatted += 1
+        if u.get("plan") in ("starter", "pro"):
+            paid += 1
+
+    payments = await db.payments.find({}, {"_id": 0}).to_list(5000)
+    total_revenue = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100
+
+    return {
+        "funnel": [
+            {"stage": "Signed Up", "count": total, "pct": 100},
+            {"stage": "Used Chat", "count": chatted, "pct": round(chatted / max(total, 1) * 100, 1)},
+            {"stage": "Paid User", "count": paid, "pct": round(paid / max(total, 1) * 100, 1)},
+        ],
+        "revenue_per_user": round(total_revenue / max(paid, 1), 2),
+        "conversion_rate": round(paid / max(total, 1) * 100, 2),
+    }
+
+@api.get("/admin/analytics/content-heatmap")
+async def admin_analytics_content_heatmap(admin: dict = Depends(get_admin_user)):
+    pipeline = [
+        {"$group": {"_id": "$subject_name", "views": {"$sum": 1}}},
+        {"$sort": {"views": -1}},
+        {"$limit": 30},
+    ]
+    try:
+        results = await db.analytics.aggregate(pipeline).to_list(30)
+    except Exception:
+        results = []
+
+    top_searches = []
+    try:
+        search_pipeline = [
+            {"$match": {"type": "search"}},
+            {"$group": {"_id": "$query", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 20},
+        ]
+        top_searches = await db.analytics.aggregate(search_pipeline).to_list(20)
+    except Exception:
+        pass
+
+    return {
+        "top_subjects": [{"name": r["_id"] or "Unknown", "views": r["views"]} for r in results if r["_id"]],
+        "top_searches": [{"query": r["_id"] or "Unknown", "count": r["count"]} for r in top_searches if r["_id"]],
+    }
+
+@api.get("/admin/analytics/revenue")
+async def admin_analytics_revenue(days: int = 30, admin: dict = Depends(get_admin_user)):
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    payments = await db.payments.find(
+        {"verified_at": {"$gte": cutoff}},
+        {"_id": 0}
+    ).sort("verified_at", 1).to_list(5000)
+
+    daily = {}
+    for p in payments:
+        day = p.get("verified_at", "")[:10]
+        if not day:
+            continue
+        if day not in daily:
+            daily[day] = {"date": day, "revenue_inr": 0, "count": 0}
+        daily[day]["revenue_inr"] += p.get("amount_paise", 0) / 100
+        daily[day]["count"] += 1
+
+    users = await supa_list_users()
+    cohorts = {"free": 0, "starter": 0, "pro": 0}
+    for u in users:
+        plan = u.get("plan", "free")
+        cohorts[plan] = cohorts.get(plan, 0) + 1
+
+    return {
+        "daily_revenue": sorted(daily.values(), key=lambda x: x["date"]),
+        "cohorts": cohorts,
+        "total_payments": len(payments),
+    }
+
+@api.get("/admin/analytics/predictor")
+async def admin_analytics_predictor(admin: dict = Depends(get_admin_user)):
+    now = datetime.now(timezone.utc)
+    thirty_ago = (now - timedelta(days=30)).isoformat()
+    sixty_ago = (now - timedelta(days=60)).isoformat()
+
+    recent = await db.payments.count_documents({"verified_at": {"$gte": thirty_ago}})
+    prior = await db.payments.count_documents({"verified_at": {"$gte": sixty_ago, "$lt": thirty_ago}})
+
+    recent_rev = 0
+    async for p in db.payments.find({"verified_at": {"$gte": thirty_ago}}, {"_id": 0}):
+        recent_rev += p.get("amount_paise", 0) / 100
+
+    growth_rate = ((recent - prior) / max(prior, 1)) if prior > 0 else 0
+    predicted_mrr = round(recent_rev * (1 + growth_rate * 0.5), 2)
+
+    users_this_month = await db.users.count_documents({"created_at": {"$gte": thirty_ago}})
+    users_last_month = await db.users.count_documents({"created_at": {"$gte": sixty_ago, "$lt": thirty_ago}})
+
+    return {
+        "current_mrr_inr": recent_rev,
+        "predicted_mrr_inr": predicted_mrr,
+        "growth_rate_pct": round(growth_rate * 100, 1),
+        "payments_this_month": recent,
+        "payments_last_month": prior,
+        "signups_this_month": users_this_month,
+        "signups_last_month": users_last_month,
+    }
+
+
+# ─────────────────────────────────────────────
+# PHASE D: AUTOMATION ENGINE
+# ─────────────────────────────────────────────
+@api.get("/admin/automation/insights")
+async def admin_automation_insights(admin: dict = Depends(get_admin_user)):
+    seo_topics = await db.seo_topics.find({}, {"_id": 0, "slug": 1, "title": 1, "status": 1}).to_list(5000)
+    published_slugs = {t["slug"] for t in seo_topics if t.get("status") == "published"}
+
+    chat_topics = []
+    try:
+        pipeline = [
+            {"$unwind": "$messages"},
+            {"$match": {"messages.role": "user"}},
+            {"$group": {"_id": "$messages.content", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 50},
+        ]
+        chat_topics = await db.conversations.aggregate(pipeline).to_list(50)
+    except Exception:
+        pass
+
+    content_gaps = []
+    for ct in chat_topics[:20]:
+        query = ct.get("_id", "")
+        if query and len(query) > 10:
+            slug_candidate = re.sub(r'[^a-z0-9]+', '-', query.lower().strip())[:60]
+            if slug_candidate not in published_slugs:
+                content_gaps.append({"query": query[:100], "count": ct["count"], "suggested_slug": slug_candidate})
+
+    low_content_subjects = []
+    try:
+        subjects = await db.subjects.find({}, {"_id": 0, "name": 1, "id": 1}).to_list(100)
+        for subj in subjects[:30]:
+            topic_count = await db.seo_topics.count_documents({"subject_slug": {"$regex": re.sub(r'[^a-z0-9]+', '-', subj.get("name", "").lower())}})
+            if topic_count < 3:
+                low_content_subjects.append({"name": subj.get("name", ""), "id": subj.get("id", ""), "seo_pages": topic_count})
+    except Exception:
+        pass
+
+    high_quality_chats = []
+    try:
+        qa_pipeline = [
+            {"$unwind": "$messages"},
+            {"$match": {"messages.role": "assistant"}},
+            {"$project": {"content": "$messages.content", "msg_id": "$messages.id", "conv_id": "$_id"}},
+            {"$match": {"content": {"$regex": ".{200,}"}}},
+            {"$limit": 10},
+        ]
+        high_quality_chats = await db.conversations.aggregate(qa_pipeline).to_list(10)
+    except Exception:
+        pass
+
+    return {
+        "content_gaps": content_gaps[:15],
+        "low_content_subjects": low_content_subjects[:10],
+        "promotable_chats": len(high_quality_chats),
+        "total_seo_topics": len(seo_topics),
+        "published_count": len(published_slugs),
+    }
+
+@api.post("/admin/automation/auto-generate")
+async def admin_automation_auto_generate(admin: dict = Depends(get_admin_user)):
+    insights = await admin_automation_insights(admin)
+    gaps = insights.get("content_gaps", [])[:5]
+    generated = []
+    for gap in gaps:
+        slug = gap["suggested_slug"]
+        title = gap["query"].title()
+        now_iso = datetime.now(timezone.utc).isoformat()
+        await db.seo_topics.update_one(
+            {"slug": slug},
+            {"$set": {
+                "title": title,
+                "slug": slug,
+                "status": "draft",
+                "source": "auto-generated",
+                "created_at": now_iso,
+            }},
+            upsert=True,
+        )
+        generated.append({"slug": slug, "title": title})
+    return {"generated": generated, "count": len(generated)}
+
+
+# ─────────────────────────────────────────────
+# PHASE E: MONETIZATION ANALYTICS
+# ─────────────────────────────────────────────
+@api.get("/admin/monetization/overview")
+async def admin_monetization_overview(admin: dict = Depends(get_admin_user)):
+    users = await supa_list_users()
+    payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(5000)
+
+    now = datetime.now(timezone.utc)
+    thirty_ago = (now - timedelta(days=30)).isoformat()
+    seven_ago = (now - timedelta(days=7)).isoformat()
+
+    revenue_30d = sum(p.get("amount_paise", 0) for p in payments if p.get("verified_at", "") >= thirty_ago and p.get("provider") != "stripe") / 100
+    revenue_7d = sum(p.get("amount_paise", 0) for p in payments if p.get("verified_at", "") >= seven_ago and p.get("provider") != "stripe") / 100
+
+    total_paid = sum(1 for u in users if u.get("plan") in ("starter", "pro"))
+    starter_count = sum(1 for u in users if u.get("plan") == "starter")
+    pro_count = sum(1 for u in users if u.get("plan") == "pro")
+
+    arpu = round(revenue_30d / max(total_paid, 1), 2)
+
+    recent_txns = []
+    for p in payments[:20]:
+        recent_txns.append({
+            "user_id": p.get("user_id", ""),
+            "plan": p.get("plan", ""),
+            "amount": p.get("amount_paise", 0) / 100 if p.get("provider") != "stripe" else p.get("amount_cents", 0) / 100,
+            "currency": "INR" if p.get("provider") != "stripe" else "USD",
+            "provider": p.get("provider", "razorpay"),
+            "date": p.get("verified_at", "")[:10],
+        })
+
+    return {
+        "revenue_30d_inr": revenue_30d,
+        "revenue_7d_inr": revenue_7d,
+        "arpu_inr": arpu,
+        "total_paid_users": total_paid,
+        "starter_users": starter_count,
+        "pro_users": pro_count,
+        "total_free_users": len(users) - total_paid,
+        "conversion_rate": round(total_paid / max(len(users), 1) * 100, 2),
+        "recent_transactions": recent_txns,
+        "total_lifetime_revenue_inr": sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100,
+    }
+
+@api.get("/admin/monetization/referrals")
+async def admin_monetization_referrals(admin: dict = Depends(get_admin_user)):
+    referrals = await db.referrals.find({}, {"_id": 0}).to_list(500)
+    return {
+        "total_referrals": len(referrals),
+        "successful_conversions": sum(1 for r in referrals if r.get("converted")),
+        "referrals": referrals[:50],
+    }
+
+class ReferralConfigUpdate(BaseModel):
+    enabled: bool = True
+    reward_credits: int = 10
+    referrer_credits: int = 10
+
+@api.put("/admin/monetization/referral-config")
+async def admin_update_referral_config(body: ReferralConfigUpdate, admin: dict = Depends(get_admin_user)):
+    await db.api_config.update_one(
+        {},
+        {"$set": {"referral": body.dict()}},
+        upsert=True,
+    )
+    return {"success": True}
+
+@api.get("/admin/monetization/referral-config")
+async def admin_get_referral_config(admin: dict = Depends(get_admin_user)):
+    cfg = await db.api_config.find_one({}, {"_id": 0})
+    return cfg.get("referral", {"enabled": False, "reward_credits": 10, "referrer_credits": 10}) if cfg else {"enabled": False, "reward_credits": 10, "referrer_credits": 10}
+
+
+app.include_router(api)
+
 
 # ─────────────────────────────────────────────
 # STANDALONE

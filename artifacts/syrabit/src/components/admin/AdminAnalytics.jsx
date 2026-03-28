@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Loader2, RefreshCw, Eye, Globe, TrendingUp, Users, Search, BookOpen, Bot,
-  FileText, ExternalLink, CheckCircle, AlertCircle, Copy, Check, BarChart2 } from 'lucide-react';
+  FileText, ExternalLink, CheckCircle, AlertCircle, Copy, Check, BarChart2, Flame, DollarSign } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, Legend,
+  ResponsiveContainer, BarChart, Bar, Legend, PieChart, Pie, Cell,
 } from 'recharts';
-import { adminGetAnalytics } from '@/utils/api';
+import axios from 'axios';
+import { adminGetAnalytics, API_BASE } from '@/utils/api';
 
 const TOOLTIP_STYLE = {
   contentStyle: {
@@ -76,19 +77,31 @@ function SetupStep({ num, title, done, children }) {
   );
 }
 
+const FUNNEL_COLORS = ['#3b82f6', '#8b5cf6', '#10b981'];
+
 export default function AdminAnalytics({ adminToken }) {
   const [data, setData] = useState(null);
+  const [funnel, setFunnel] = useState(null);
+  const [heatmap, setHeatmap] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [tab, setTab] = useState('overview');
 
+  const headers = { withCredentials: true };
+
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     else setRefreshing(true);
     try {
-      const res = await adminGetAnalytics(adminToken);
-      setData(res.data);
+      const [res, funnelRes, heatRes] = await Promise.allSettled([
+        adminGetAnalytics(adminToken),
+        axios.get(`${API_BASE}/admin/analytics/funnel`, headers),
+        axios.get(`${API_BASE}/admin/analytics/content-heatmap`, headers),
+      ]);
+      if (res.status === 'fulfilled') setData(res.value.data);
+      if (funnelRes.status === 'fulfilled') setFunnel(funnelRes.value.data);
+      if (heatRes.status === 'fulfilled') setHeatmap(heatRes.value.data);
       setLastRefresh(new Date());
     } catch {}
     finally {
@@ -134,6 +147,8 @@ export default function AdminAnalytics({ adminToken }) {
 
   const TABS = [
     { id: 'overview', label: 'Overview' },
+    { id: 'funnel',   label: 'Funnel' },
+    { id: 'heatmap',  label: 'Heatmap' },
     { id: 'seo',      label: 'SEO & Pages' },
     { id: 'library',  label: 'Library' },
     { id: 'setup',    label: '🔧 Setup Guide' },
@@ -240,6 +255,92 @@ export default function AdminAnalytics({ adminToken }) {
             </SectionCard>
           )}
         </>
+      )}
+
+      {/* ── FUNNEL TAB ── */}
+      {tab === 'funnel' && funnel && (
+        <div className="space-y-4">
+          <SectionCard title="Conversion Funnel">
+            <div className="space-y-3">
+              {funnel.funnel?.map((stage, i) => (
+                <div key={i}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-white text-sm font-medium">{stage.stage}</span>
+                    <span className="text-slate-400 text-sm">{stage.count} ({stage.pct}%)</span>
+                  </div>
+                  <div className="h-8 rounded-lg overflow-hidden bg-slate-800">
+                    <div
+                      className="h-full rounded-lg transition-all duration-500"
+                      style={{
+                        width: `${stage.pct}%`,
+                        background: `linear-gradient(90deg, ${FUNNEL_COLORS[i] || '#8b5cf6'}, ${FUNNEL_COLORS[i] || '#8b5cf6'}aa)`,
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+          <div className="grid grid-cols-2 gap-3">
+            <MiniStat icon={DollarSign} label="Revenue / Paid User" value={'₹' + (funnel.revenue_per_user || 0)} color="#10b981" />
+            <MiniStat icon={TrendingUp} label="Conversion Rate" value={(funnel.conversion_rate || 0) + '%'} color="#8b5cf6" />
+          </div>
+        </div>
+      )}
+      {tab === 'funnel' && !funnel && (
+        <SectionCard title="Conversion Funnel" empty emptyMsg="Funnel data is loading..." />
+      )}
+
+      {/* ── HEATMAP TAB ── */}
+      {tab === 'heatmap' && heatmap && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <SectionCard
+            title="Top Subjects by Activity"
+            empty={!heatmap.top_subjects?.length}
+            emptyMsg="No subject activity data yet"
+          >
+            {heatmap.top_subjects?.length > 0 && (
+              <div className="space-y-2">
+                {heatmap.top_subjects.map((subj, i) => {
+                  const maxViews = Math.max(...heatmap.top_subjects.map(s => s.views), 1);
+                  const pct = (subj.views / maxViews) * 100;
+                  const heat = pct > 70 ? '#ef4444' : pct > 40 ? '#f59e0b' : '#3b82f6';
+                  return (
+                    <div key={i} className="flex items-center gap-2">
+                      <Flame size={12} style={{ color: heat }} className="flex-shrink-0" />
+                      <span className="text-slate-300 text-sm flex-1 truncate">{subj.name}</span>
+                      <div className="w-20 h-2 rounded-full bg-slate-800 overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: heat }} />
+                      </div>
+                      <span className="text-slate-500 text-xs w-10 text-right">{subj.views}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </SectionCard>
+
+          <SectionCard
+            title="Top Search Queries"
+            empty={!heatmap.top_searches?.length}
+            emptyMsg="No search data yet"
+          >
+            {heatmap.top_searches?.length > 0 && (
+              <div className="space-y-2">
+                {heatmap.top_searches.map((s, i) => (
+                  <div key={i} className="flex items-center gap-2 p-1.5 hover:bg-slate-800/50 rounded-lg">
+                    <Search size={12} className="text-blue-400 flex-shrink-0" />
+                    <span className="text-slate-300 text-sm flex-1 truncate">{s.query}</span>
+                    <span className="text-slate-500 text-xs flex-shrink-0">{s.count}×</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </SectionCard>
+        </div>
+      )}
+      {tab === 'heatmap' && !heatmap && (
+        <SectionCard title="Content Heatmap" empty emptyMsg="Heatmap data is loading..." />
       )}
 
       {/* ── SEO & PAGES TAB ── */}

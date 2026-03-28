@@ -2,9 +2,11 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Users, MessageSquare, BookOpen, Zap, Loader2, Activity,
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
-  UserPlus, Globe, Search, Bot, BarChart2,
+  UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
+  CheckCircle, AlertCircle, Wifi, Database, DollarSign, Crown,
 } from 'lucide-react';
-import { adminGetDashboard } from '@/utils/api';
+import axios from 'axios';
+import { adminGetDashboard, API_BASE } from '@/utils/api';
 
 function StatCard({ label, value, icon: Icon, color, subLabel, subValue, pulse }) {
   return (
@@ -24,7 +26,7 @@ function StatCard({ label, value, icon: Icon, color, subLabel, subValue, pulse }
           <Icon size={16} style={{ color }} />
         </div>
       </div>
-      <p className="text-2xl font-bold text-white">{value?.toLocaleString() ?? 0}</p>
+      <p className="text-2xl font-bold text-white">{typeof value === 'number' ? value.toLocaleString() : (value ?? 0)}</p>
       {subLabel && (
         <p className="text-xs text-slate-500 mt-1">
           {subLabel}: <span className="text-slate-400 font-medium">{subValue?.toLocaleString() ?? 0}</span>
@@ -78,18 +80,58 @@ function ActivityItem({ event, idx }) {
   );
 }
 
+const DEP_ICONS = { mongodb: Database, postgresql: Database, redis: Server };
+const STATUS_COLORS = { ok: '#10b981', error: '#ef4444', not_configured: '#64748b', unknown: '#f59e0b' };
+
+function DepStatusCard({ name, status, latency }) {
+  const Icon = DEP_ICONS[name] || Server;
+  const color = STATUS_COLORS[status] || STATUS_COLORS.unknown;
+  return (
+    <div className="flex items-center gap-3 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}20` }}>
+        <Icon size={14} style={{ color }} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-white text-sm font-medium capitalize">{name}</p>
+        <p className="text-xs" style={{ color }}>{status === 'ok' ? 'Connected' : status}</p>
+      </div>
+      {status === 'ok' && (
+        <div className="text-right">
+          <p className="text-white text-sm font-bold">{latency}ms</p>
+          <div className="h-1.5 w-16 rounded-full bg-slate-700 overflow-hidden mt-1">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{
+                width: `${Math.min(100, (latency / 200) * 100)}%`,
+                background: latency < 50 ? '#10b981' : latency < 100 ? '#f59e0b' : '#ef4444',
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminDashboard({ adminToken, onNavigate }) {
   const [data, setData] = useState(null);
+  const [metrics, setMetrics] = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  const headers = { withCredentials: true };
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     else setRefreshing(true);
     try {
-      const res = await adminGetDashboard(adminToken);
-      setData(res.data);
+      const [dashRes, metricsRes] = await Promise.allSettled([
+        adminGetDashboard(adminToken),
+        axios.get(`${API_BASE}/admin/dashboard/metrics`, headers),
+      ]);
+      if (dashRes.status === 'fulfilled') setData(dashRes.value.data);
+      if (metricsRes.status === 'fulfilled') setMetrics(metricsRes.value.data);
       setLastRefresh(new Date());
     } catch {}
     finally {
@@ -114,21 +156,26 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
   const vs = data?.visitor_stats || {};
   const recentEvents = data?.recent_events || [];
+  const deps = metrics?.dependencies || {};
 
   const quickActions = [
     { id: 'users',     label: 'View Users',     icon: Users,    color: 'from-violet-600 to-violet-500' },
-    { id: 'content',   label: 'Content Editor', icon: PenTool,  color: 'from-blue-600 to-blue-500'    },
-    { id: 'analytics', label: 'Analytics',      icon: BarChart2, color: 'from-emerald-600 to-emerald-500' },
-    { id: 'settings',  label: 'Settings',       icon: Settings, color: 'from-slate-600 to-slate-500'  },
+    { id: 'studio',    label: 'Content Studio',  icon: PenTool,  color: 'from-blue-600 to-blue-500'    },
+    { id: 'analytics', label: 'Analytics',       icon: BarChart2, color: 'from-emerald-600 to-emerald-500' },
+    { id: 'monetization', label: 'Monetization', icon: Crown,    color: 'from-amber-600 to-amber-500'  },
   ];
 
   return (
     <div className="p-6 space-y-6">
 
-      {/* ── Refresh bar ── */}
       <div className="flex items-center justify-between">
         <h2 className="text-slate-200 font-semibold text-lg">Overview</h2>
         <div className="flex items-center gap-3">
+          {metrics?.response_time_ms && (
+            <span className="text-xs text-slate-600 flex items-center gap-1">
+              <Clock size={10} /> API: {metrics.response_time_ms}ms
+            </span>
+          )}
           {lastRefresh && (
             <p className="text-xs text-slate-600">
               Updated {formatTimeAgo(lastRefresh.toISOString())}
@@ -145,7 +192,38 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
       </div>
 
-      {/* ── Core stats row ── */}
+      {Object.keys(deps).length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Wifi size={14} className="text-violet-400" />
+            <h3 className="text-slate-400 text-sm font-medium">System Health</h3>
+            <div className="ml-auto flex items-center gap-1.5">
+              {Object.values(deps).every(d => d.status === 'ok') ? (
+                <>
+                  <CheckCircle size={12} className="text-emerald-400" />
+                  <span className="text-emerald-400 text-xs font-medium">All Systems Operational</span>
+                </>
+              ) : (
+                <>
+                  <AlertCircle size={12} className="text-amber-400" />
+                  <span className="text-amber-400 text-xs font-medium">Degraded</span>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {Object.entries(deps).map(([name, info]) => (
+              <DepStatusCard
+                key={name}
+                name={name}
+                status={info.status}
+                latency={info.latency_ms}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Total Users"     value={data?.total_users}          icon={Users}         color="#8b5cf6" />
         <StatCard label="Conversations"   value={data?.total_conversations}  icon={MessageSquare} color="#3b82f6" />
@@ -153,7 +231,23 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         <StatCard label="Subjects"        value={data?.total_subjects}       icon={BookOpen}      color="#f59e0b" />
       </div>
 
-      {/* ── Visitor analytics row ── */}
+      {metrics?.revenue && (
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <StatCard
+            label="Revenue (INR)"
+            value={'₹' + (metrics.revenue.total_inr || 0).toLocaleString()}
+            icon={DollarSign}
+            color="#10b981"
+            subLabel="MRR"
+            subValue={'₹' + (metrics.revenue.mrr_inr || 0)}
+          />
+          <StatCard label="Paid Users"      value={metrics.users?.paid || 0}     icon={Crown}  color="#f59e0b" />
+          <StatCard label="Free Users"      value={metrics.users?.free || 0}     icon={Users}  color="#64748b" />
+          <StatCard label="SEO Pages"       value={metrics.seo?.published_pages || 0} icon={Globe} color="#06b6d4"
+            subLabel="Topics" subValue={metrics.seo?.topics || 0} />
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Total Visitors"
@@ -164,36 +258,19 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           subValue={vs.visitors_today}
           pulse
         />
-        <StatCard
-          label="Visitors Today"
-          value={vs.visitors_today}
-          icon={TrendingUp}
-          color="#f97316"
-          pulse
-        />
-        <StatCard
-          label="Page Views Today"
-          value={vs.page_views_today}
-          icon={Eye}
-          color="#ec4899"
-          pulse
-        />
+        <StatCard label="Visitors Today"  value={vs.visitors_today}   icon={TrendingUp} color="#f97316" pulse />
+        <StatCard label="Page Views Today" value={vs.page_views_today} icon={Eye}        color="#ec4899" pulse />
         <StatCard
           label="Active Users"
           value={data?.plan_distribution
-            ? Object.values(data.plan_distribution).reduce((a, b) => a + b, 0)
-            : 0}
+            ? Object.values(data.plan_distribution).reduce((a, b) => a + b, 0) : 0}
           icon={Activity}
           color="#84cc16"
           subLabel="Paid"
-          subValue={
-            (data?.plan_distribution?.starter || 0) +
-            (data?.plan_distribution?.pro     || 0)
-          }
+          subValue={(data?.plan_distribution?.starter || 0) + (data?.plan_distribution?.pro || 0)}
         />
       </div>
 
-      {/* ── Plan Distribution ── */}
       {data?.plan_distribution && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
           <h3 className="text-slate-400 text-sm font-medium mb-4">Plan Distribution</h3>
@@ -221,7 +298,6 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
       )}
 
-      {/* ── Quick Actions ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {quickActions.map((action) => (
           <button
@@ -241,7 +317,6 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         ))}
       </div>
 
-      {/* ── Daily Visitor Trend (sparkline) ── */}
       {vs.daily_visitors?.length > 0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
           <div className="flex items-center justify-between mb-4">
@@ -285,7 +360,6 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
       )}
 
-      {/* ── Recent Activity ── */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6" data-testid="recent-activity">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">

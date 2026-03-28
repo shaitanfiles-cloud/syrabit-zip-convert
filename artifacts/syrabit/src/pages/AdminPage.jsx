@@ -10,6 +10,7 @@ import {
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, FileText, Globe,
+  Sparkles, Zap, Crown,
 } from 'lucide-react';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
@@ -32,6 +33,9 @@ import AdminActivityLog      from '@/components/admin/AdminActivityLog';
 import AdminHealth           from '@/components/admin/AdminHealth';
 import AdminSeoManager       from '@/components/admin/AdminSeoManager';
 import AdminQaManager        from '@/components/admin/AdminQaManager';
+import AdminContentStudio    from '@/components/admin/AdminContentStudio';
+import AdminAutomation       from '@/components/admin/AdminAutomation';
+import AdminMonetization     from '@/components/admin/AdminMonetization';
 
 // ── Section registry ──────────────────────────────────────────────────────────
 const SECTIONS = [
@@ -39,11 +43,14 @@ const SECTIONS = [
   { id: 'roadmap',       icon: GitBranch,       label: 'Roadmap',           group: 'main'     },
   { id: 'syllabus',      icon: FolderTree,      label: 'Syllabus',          group: 'content'  },
   { id: 'content',       icon: PenTool,         label: 'Content Editor',    group: 'content'  },
+  { id: 'studio',        icon: Sparkles,        label: 'Content Studio',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
   { id: 'qamanager',     icon: MessageSquare,   label: 'QA Review',         group: 'content'  },
+  { id: 'automation',    icon: Zap,             label: 'Automation',        group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
   { id: 'conversations', icon: MessageSquare,   label: 'Conversations',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
+  { id: 'monetization',  icon: Crown,           label: 'Monetization',      group: 'insights' },
   { id: 'plans',         icon: CreditCard,      label: 'Plans & Credits',   group: 'insights' },
   { id: 'notifications', icon: Bell,            label: 'Notifications',     group: 'comms'    },
   { id: 'apiconfig',     icon: Key,             label: 'API Config',        group: 'system'   },
@@ -70,11 +77,14 @@ const SECTION_COMPONENTS = {
   roadmap:       AdminRoadmap,
   syllabus:      AdminSyllabus,
   content:       AdminContentEditor,
+  studio:        AdminContentStudio,
   seomanager:    AdminSeoManager,
   qamanager:     AdminQaManager,
+  automation:    AdminAutomation,
   users:         AdminUsers,
   conversations: AdminConversations,
   analytics:     AdminAnalytics,
+  monetization:  AdminMonetization,
   plans:         AdminPlans,
   notifications: AdminNotifications,
   apiconfig:     AdminApiConfig,
