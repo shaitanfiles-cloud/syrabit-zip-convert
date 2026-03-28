@@ -1056,7 +1056,20 @@ def _check_rate_limit_memory(key: str, max_requests: int, window_seconds: int) -
     return True
 
 def check_rate_limit(key: str, max_requests: int = 100, window_seconds: int = 60) -> bool:
-    """Returns True if allowed, False if rate-limited. Uses in-memory for speed (per-worker)."""
+    """Returns True if allowed, False if rate-limited.
+    Uses Redis fixed-window counter when available (multi-worker safe), in-memory fallback otherwise.
+    """
+    if redis_client:
+        try:
+            redis_key = f"rl2:{key}:{int(time.time() // window_seconds)}"
+            count = redis_client.incr(redis_key)
+            if count == 1:
+                redis_client.expire(redis_key, window_seconds + 5)
+            if count > max_requests:
+                return False
+            return True
+        except Exception as e:
+            logger.debug(f"Redis rate limit failed, falling back to memory: {e}")
     return _check_rate_limit_memory(key, max_requests, window_seconds)
 
 async def rate_limit_user(user: dict = Depends(get_current_user)):
@@ -3517,6 +3530,52 @@ async def supa_update_user(uid: str, updates: dict):
     except Exception as e:
         logger.warning(f"All stores failed for update_user: {e}")
 
+async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) -> bool:
+    """Atomically deduct 1 credit only if credits_used < credits_limit.
+    Returns True on success, False if limit already reached (race condition guard).
+    Uses PG UPDATE...WHERE for atomic check+increment; falls back to Redis INCR/DECR
+    CAS pattern; last resort falls back to Supabase with explicit limit guard.
+    """
+    _invalidate_user_cache(uid)
+    # ── Primary: PostgreSQL atomic UPDATE (multi-worker safe) ──────────────
+    if pg_pool:
+        try:
+            async with pg_pool.acquire() as conn:
+                result = await conn.execute(
+                    """UPDATE users
+                          SET credits_used = credits_used + 1
+                        WHERE id = $1
+                          AND credits_used < credits_limit""",
+                    uid,
+                )
+            if result and result.split()[-1] != '0':
+                return True
+            return False
+        except Exception as e:
+            logger.warning(f"atomic_deduct_credit pg failed, falling back: {e}")
+    # ── Fallback: Redis INCR + rollback CAS (atomic per Redis INCR semantics) ──
+    if redis_client:
+        try:
+            redis_key = f"credits:{uid}"
+            # Seed the counter from the authoritative used value if missing
+            redis_client.set(redis_key, current_used, ex=86400, nx=True)
+            new_count = redis_client.incr(redis_key)
+            if new_count > current_limit:
+                # Over limit — roll back the increment
+                redis_client.decr(redis_key)
+                return False
+            # Propagate the new count to Supabase asynchronously (best-effort)
+            await supa_update_user(uid, {"credits_used": int(new_count)})
+            return True
+        except Exception as e:
+            logger.warning(f"atomic_deduct_credit redis failed, falling back: {e}")
+    # ── Last resort: Supabase with explicit limit guard ─────────────────────
+    if current_used >= current_limit:
+        return False
+    new_used = current_used + 1
+    await supa_update_user(uid, {"credits_used": new_used})
+    return True
+
 async def supa_list_users():
     """Return all non-admin users, merging PG + Supabase so no one is lost."""
     pg_users = []
@@ -4063,7 +4122,6 @@ async def supa_delete_notification(notif_id: str):
 # ─────────────────────────────────────────────
 @api.post("/auth/signup", response_model=TokenOut)
 async def signup(data: UserCreate, response: Response):
-    await ensure_seeded()
     existing = await supa_get_user(data.email.lower())
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -4122,7 +4180,6 @@ async def signup(data: UserCreate, response: Response):
 
 @api.post("/auth/login", response_model=TokenOut)
 async def login(data: UserLogin, response: Response):
-    await ensure_seeded()
     user = await supa_get_user(data.email.lower())
     if not user or not pwd_ctx.verify(data.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -4241,7 +4298,6 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
             if response:
                 response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
             return cached
-    await ensure_seeded()
     try:
         if not await is_mongo_available():
             return {"boards": [], "classes": [], "streams": [], "subjects": []}
@@ -4274,7 +4330,6 @@ async def get_boards(nocache: Optional[str] = None, response: Response = None):
         if cached:
             if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
             return cached
-    await ensure_seeded()
     try:
         if not await is_mongo_available():
             return []
@@ -4293,7 +4348,6 @@ async def get_classes(board_id: Optional[str] = None, nocache: Optional[str] = N
         if cached:
             if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
             return cached
-    await ensure_seeded()
     try:
         if not await is_mongo_available():
             return []
@@ -4313,7 +4367,6 @@ async def get_streams(class_id: Optional[str] = None, nocache: Optional[str] = N
         if cached:
             if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
             return cached
-    await ensure_seeded()
     try:
         if not await is_mongo_available():
             return []
@@ -4333,7 +4386,6 @@ async def get_subjects(stream_id: Optional[str] = None, class_id: Optional[str] 
         if cached:
             if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
             return cached
-    await ensure_seeded()
     try:
         if not await is_mongo_available():
             return []
@@ -4361,7 +4413,6 @@ async def resolve_subject(board_slug: str, class_slug: str, stream_slug: str, su
     if cached:
         if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
         return cached
-    await ensure_seeded()
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
     board = await db.boards.find_one({"slug": board_slug}, {"_id": 0})
@@ -4384,7 +4435,6 @@ async def resolve_subject_no_stream(board_slug: str, class_slug: str, subject_sl
     if cached:
         if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
         return cached
-    await ensure_seeded()
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
     board = await db.boards.find_one({"slug": board_slug}, {"_id": 0})
@@ -4416,7 +4466,6 @@ async def get_subject(subject_id: str, response: Response = None):
     if cached:
         if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
         return cached
-    await ensure_seeded()
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
     subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
@@ -4433,7 +4482,6 @@ async def get_subject(subject_id: str, response: Response = None):
 @api.get("/content/subjects/{subject_id}/document")
 async def get_subject_document(subject_id: str):
     """Return document/chapters for a subject - checks multiple sources"""
-    await ensure_seeded()
     
     # First check if subject has document_text (old direct upload)
     subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
@@ -4545,7 +4593,6 @@ async def get_chapters(subject_id: str, response: Response = None):
     if cached:
         if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
         return cached
-    await ensure_seeded()
     try:
         if not await is_mongo_available():
             return []
@@ -4567,7 +4614,6 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
     if cached:
         if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
         return cached
-    await ensure_seeded()
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
     board = await db.boards.find_one({"slug": board_slug}, {"_id": 0})
@@ -4618,7 +4664,6 @@ async def get_chunks(chapter_id: str):
     ck = f"chunks:{chapter_id}"
     cached = _get_content_cache(ck)
     if cached: return cached
-    await ensure_seeded()
     try:
         if not await is_mongo_available():
             return []
@@ -4630,7 +4675,6 @@ async def get_chunks(chapter_id: str):
 
 @api.get("/content/search")
 async def search_content(q: str):
-    await ensure_seeded()
     if len(q) < 2:
         return []
     try:
@@ -4669,7 +4713,6 @@ async def library_search(
     query: str = "",
 ):
     """Library-search API for RAG system. Returns structured content from MongoDB library_scrapes collection."""
-    await ensure_seeded()
     try:
         if not await is_mongo_available():
             return {"board": board, "class": class_, "subject": subject, "chapter": chapter, "pages": [], "source": "none"}
@@ -5121,7 +5164,6 @@ async def _resolve_subject_context(subject_id: str) -> dict:
         return {}
 @api.post("/ai/chat")
 async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
-    await ensure_seeded()
     credits_info = await get_user_credits(user)
     if credits_info["remaining"] <= 0:
         raise HTTPException(status_code=402, detail=f"Credit limit reached ({credits_info['limit']} lifetime credits). Upgrade your plan for more.")
@@ -5290,9 +5332,11 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             "tokens": len(answer.split()),
         })
 
-    # Deduct 1 credit (lifetime, no reset)
+    # Deduct 1 credit atomically (guards against parallel request exploitation)
+    deducted = await atomic_deduct_credit(user["id"], credits_info["used"], credits_info["limit"])
+    if not deducted:
+        raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
     new_used = credits_info["used"] + 1
-    await supa_update_user(user["id"], {"credits_used": new_used})
 
     # Fire-and-forget: log chat turn for QA curation
     asyncio.create_task(_log_chat_message(
@@ -5316,13 +5360,36 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         "sources": lib_sources,
     }
 
+async def _refund_credit(uid: str, credits_used: int) -> None:
+    """Refund 1 credit (decrement credits_used) when streaming fails/empty answer."""
+    try:
+        if pg_pool:
+            async with pg_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET credits_used = GREATEST(0, credits_used - 1) WHERE id = $1",
+                    uid,
+                )
+            return
+        if redis_client:
+            redis_key = f"credits:{uid}"
+            refunded_count = redis_client.decr(redis_key)
+            # Persist refunded count back to authoritative Supabase store (best-effort)
+            if refunded_count is not None and refunded_count >= 0:
+                await supa_update_user(uid, {"credits_used": int(refunded_count)})
+            return
+        if credits_used > 0:
+            await supa_update_user(uid, {"credits_used": credits_used - 1})
+    except Exception as e:
+        logger.warning(f"_refund_credit failed: {e}")
+
 async def _persist_chat_turn(
     conv_id: str, user_id: str,
     user_msg: str, answer: str,
     rag_source: str, rag_chunks: int,
     credits_used_before: int,
+    deduct_credit: bool = False,
 ):
-    """Background: save conversation messages + deduct 1 credit. Non-blocking."""
+    """Background: save conversation messages. Optionally deduct 1 credit. Non-blocking."""
     try:
         now = datetime.now(timezone.utc).isoformat()
         new_msgs = [
@@ -5343,16 +5410,21 @@ async def _persist_chat_turn(
                 "preview": answer[:100],
                 "tokens": len(answer.split()),
             })
-        await supa_update_user(user_id, {"credits_used": credits_used_before + 1})
+        if deduct_credit:
+            await atomic_deduct_credit(user_id, credits_used_before, 999999)
     except Exception as e:
         logger.warning(f"_persist_chat_turn failed: {e}")
 
 @api.post("/ai/chat/stream")
 async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
-    await ensure_seeded()
     credits_info = await get_user_credits(user)
     if credits_info["remaining"] <= 0:
         raise HTTPException(status_code=402, detail=f"Credit limit reached ({credits_info['limit']} lifetime credits). Upgrade your plan for more.")
+
+    # Atomically reserve 1 credit before streaming begins to prevent parallel bypass
+    deducted = await atomic_deduct_credit(user["id"], credits_info["used"], credits_info["limit"])
+    if not deducted:
+        raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
 
     plan = user.get("plan", "free")
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
@@ -5482,93 +5554,99 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     async def event_stream():
         nonlocal full_response
+        _credit_saved = False  # set True when answer is committed; controls refund in finally
         # Run library search immediately (before LLM, non-blocking)
         lib_sources_task = asyncio.create_task(syrabit_library_search(msg.message))
-
-        # Send RAG metadata with full quality info + subject link data + web search flag
-        yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'web_search_used': web_search_used})}\n\n"
-
-        # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
-        cache_key = _cache_key(msg.message)
-        is_casual = _classify_question(msg.message) == "casual"
-        cached_answer = None
-
-        if not is_casual:
-            cached_answer = _redis_get_ai_cache(cache_key)
-            if cached_answer:
-                logger.info(f"Redis cache HIT (STREAM): {cache_key}")
-            elif cache_key in _ai_response_cache:
-                cached_answer = _ai_response_cache[cache_key]
-                logger.info(f"Memory cache HIT (STREAM): {cache_key}")
-
-        if cached_answer:
-            yield f"data: {json.dumps({'content': cached_answer})}\n\n"
-            full_response.append(cached_answer)
-        else:
-            _bp_count = 0
-            async for chunk in call_llm_api_stream(messages_payload, model=msg.model or LLM_MODEL, max_tokens=max_tokens):
-                if '"content"' in chunk:
-                    try:
-                        data = json.loads(chunk[6:])
-                        full_response.append(data.get("content", ""))
-                    except:
-                        pass
-                yield chunk
-                _bp_count += 1
-                if _bp_count % 20 == 0:
-                    await asyncio.sleep(0)
-
-            if not is_casual and full_response:
-                answer_str = "".join(full_response)
-                if answer_str:
-                    _redis_set_ai_cache(cache_key, answer_str)
-                    _ai_response_cache[cache_key] = answer_str
-                    logger.info(f"Cache MISS → stored (STREAM): {cache_key}")
-
-        # Yield DONE immediately — DB writes happen in background
-        answer = "".join(full_response)
-        new_used_optimistic = credits_info["used"] + 1 if answer else credits_info["used"]
-
-        # Await the library search task (started at top of event_stream)
         try:
-            lib_sources = await lib_sources_task
-        except Exception:
-            lib_sources = []
+            # Send RAG metadata with full quality info + subject link data + web search flag
+            yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'web_search_used': web_search_used})}\n\n"
 
-        # ── syrabit_done event with credits metadata + library sources ────
-        done_payload = {
-            "event": "syrabit_done",
-            "conversation_id": conv_id,
-            "credits_used": 1,
-            "credits_used_total": new_used_optimistic,
-            "remaining_credits": max(0, credits_info["remaining"] - 1),
-            "rag_source": rag_source_saved,
-            "rag_chunks": rag_chunks_count,
-            "words": len(answer.split()) if answer else 0,
-            "sources": lib_sources,
-            "web_search_used": web_search_used,
-        }
-        yield f"data: {json.dumps(done_payload)}\n\n"
-        yield "data: [DONE]\n\n"
+            # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
+            cache_key = _cache_key(msg.message)
+            is_casual = _classify_question(msg.message) == "casual"
+            cached_answer = None
 
-        # Fire background: save messages + deduct credit (non-blocking)
-        if answer:
-            asyncio.create_task(_persist_chat_turn(
-                conv_id, user["id"],
-                user_msg_saved, answer,
-                rag_source_saved, rag_chunks_count,
-                credits_info["used"],
-            ))
-            asyncio.create_task(_log_chat_message(
-                user_id=user["id"],
-                question=user_msg_saved,
-                raw_ai_answer=answer,
-                subject_id=msg.subject_id,
-                subject_name=msg.subject_name,
-                board_name=ctx_board_name,
-                class_name=ctx_class_name,
-                conversation_id=conv_id,
-            ))
+            if not is_casual:
+                cached_answer = _redis_get_ai_cache(cache_key)
+                if cached_answer:
+                    logger.info(f"Redis cache HIT (STREAM): {cache_key}")
+                elif cache_key in _ai_response_cache:
+                    cached_answer = _ai_response_cache[cache_key]
+                    logger.info(f"Memory cache HIT (STREAM): {cache_key}")
+
+            if cached_answer:
+                yield f"data: {json.dumps({'content': cached_answer})}\n\n"
+                full_response.append(cached_answer)
+            else:
+                _bp_count = 0
+                async for chunk in call_llm_api_stream(messages_payload, model=msg.model or LLM_MODEL, max_tokens=max_tokens):
+                    if '"content"' in chunk:
+                        try:
+                            data = json.loads(chunk[6:])
+                            full_response.append(data.get("content", ""))
+                        except:
+                            pass
+                    yield chunk
+                    _bp_count += 1
+                    if _bp_count % 20 == 0:
+                        await asyncio.sleep(0)
+
+                if not is_casual and full_response:
+                    answer_str = "".join(full_response)
+                    if answer_str:
+                        _redis_set_ai_cache(cache_key, answer_str)
+                        _ai_response_cache[cache_key] = answer_str
+                        logger.info(f"Cache MISS → stored (STREAM): {cache_key}")
+
+            # Yield DONE immediately — DB writes happen in background
+            answer = "".join(full_response)
+            new_used_optimistic = credits_info["used"] + 1 if answer else credits_info["used"]
+
+            # Await the library search task (started at top of event_stream)
+            try:
+                lib_sources = await lib_sources_task
+            except Exception:
+                lib_sources = []
+
+            # ── syrabit_done event with credits metadata + library sources ────
+            done_payload = {
+                "event": "syrabit_done",
+                "conversation_id": conv_id,
+                "credits_used": 1,
+                "credits_used_total": new_used_optimistic,
+                "remaining_credits": max(0, credits_info["remaining"] - 1),
+                "rag_source": rag_source_saved,
+                "rag_chunks": rag_chunks_count,
+                "words": len(answer.split()) if answer else 0,
+                "sources": lib_sources,
+                "web_search_used": web_search_used,
+            }
+            yield f"data: {json.dumps(done_payload)}\n\n"
+            yield "data: [DONE]\n\n"
+
+            # Fire background: save messages (credit already deducted before stream started)
+            if answer:
+                _credit_saved = True  # mark credit as legitimately consumed
+                asyncio.create_task(_persist_chat_turn(
+                    conv_id, user["id"],
+                    user_msg_saved, answer,
+                    rag_source_saved, rag_chunks_count,
+                    credits_info["used"],
+                ))
+                asyncio.create_task(_log_chat_message(
+                    user_id=user["id"],
+                    question=user_msg_saved,
+                    raw_ai_answer=answer,
+                    subject_id=msg.subject_id,
+                    subject_name=msg.subject_name,
+                    board_name=ctx_board_name,
+                    class_name=ctx_class_name,
+                    conversation_id=conv_id,
+                ))
+        finally:
+            # Guaranteed refund if credit was pre-deducted but no answer was committed
+            if not _credit_saved:
+                asyncio.create_task(_refund_credit(user["id"], credits_info["used"] + 1))
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -5771,7 +5849,6 @@ async def cancel_delete_account(user: dict = Depends(get_current_user)):
 # ─────────────────────────────────────────────
 @api.post("/admin/login")
 async def admin_login(data: AdminLoginReq, response: Response):
-    await ensure_seeded()
 
     # Find the matching admin account across the array
     matched = next(
@@ -5867,7 +5944,6 @@ async def admin_verify(admin: dict = Depends(get_admin_user)):
 # ─────────────────────────────────────────────
 @api.get("/admin/dashboard")
 async def admin_dashboard(admin: dict = Depends(get_admin_user)):
-    await ensure_seeded()
     total_users = await supa_count_users()
     total_convs = await supa_count_conversations()
     all_convs = await supa_get_all_conversations(1000)
@@ -5964,7 +6040,6 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
     Query params:
     - days: Number of days to look back (default: 30)
     """
-    await ensure_seeded()
     users = await supa_list_users()
     
     # Daily signups
@@ -6247,7 +6322,6 @@ async def admin_create_subject(data: SubjectCreate, admin: dict = Depends(get_ad
     try:
         if not await is_mongo_available():
             raise HTTPException(status_code=503, detail="MongoDB unavailable - cannot create content")
-        await ensure_seeded()
         
         stream_name_val = ""
         board_id_val = ""

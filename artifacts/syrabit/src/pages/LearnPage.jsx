@@ -7,7 +7,7 @@ import {
   Globe, CheckCircle, GraduationCap, Layers,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import axios from 'axios';
+import { apiClient } from '@/utils/api';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -118,7 +118,7 @@ export default function LearnPage() {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    axios.get(`${API}/content/cms-documents/${slug}`)
+    apiClient().get(`/content/cms-documents/${slug}`)
       .then(r => setDoc(r.data))
       .catch(e => setError(e.response?.status === 404 ? 'not-found' : 'error'))
       .finally(() => setLoading(false));

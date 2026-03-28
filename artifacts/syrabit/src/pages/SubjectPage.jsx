@@ -12,11 +12,11 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { getSubject, getChapters, getChunks } from '@/utils/api';
+import { getChunks, apiClient } from '@/utils/api';
+import { useSubject, useChapters } from '@/hooks/useContent';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { toast } from 'sonner';
 
-const API_BASE = import.meta.env.VITE_BACKEND_URL || '';
 
 const CONTENT_TYPE_ICONS = {
   notes:   FileText,
@@ -59,9 +59,8 @@ function useCmsPost(subjectId, enabled) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`${API_BASE}/api/cms/post/${subjectId}`)
-      .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(d => { if (!cancelled) setPost(d); })
+    apiClient().get(`/cms/post/${subjectId}`)
+      .then(r => { if (!cancelled) setPost(r.data); })
       .catch(e => { if (!cancelled) setError(e); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -145,8 +144,7 @@ function BlogView({ subject, subjectId }) {
     if (!subjectId) return;
     setMerging(true);
     try {
-      const res = await fetch(`${API_BASE}/api/admin/cms/merge/${subjectId}`, { method: 'POST' });
-      if (!res.ok) throw new Error(res.status);
+      await apiClient().post(`/admin/cms/merge/${subjectId}`);
       toast.success('Merged & published — reload to see Blog View');
     } catch { toast.error('Merge failed (admin access needed)'); }
     finally { setMerging(false); }
@@ -326,23 +324,11 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
 
 export default function SubjectPage() {
   const { subjectId }          = useParams();
-  const [subject,   setSubject]  = useState(null);
-  const [chapters,  setChapters] = useState([]);
-  const [loading,   setLoading]  = useState(true);
   const [activeTab, setActiveTab] = useState('blog');
 
-  useEffect(() => {
-    let cancelled = false;
-    const load = async () => {
-      setLoading(true);
-      try {
-        const [subRes, chapRes] = await Promise.all([getSubject(subjectId), getChapters(subjectId)]);
-        if (!cancelled) { setSubject(subRes.data); setChapters(chapRes.data); }
-      } finally { if (!cancelled) setLoading(false); }
-    };
-    load();
-    return () => { cancelled = true; };
-  }, [subjectId]);
+  const { data: subject, isLoading: subjectLoading } = useSubject(subjectId);
+  const { data: chapters = [], isLoading: chaptersLoading } = useChapters(subjectId);
+  const loading = subjectLoading || chaptersLoading;
 
   if (loading) return (
     <AppLayout>

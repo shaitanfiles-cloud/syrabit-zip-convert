@@ -3,39 +3,35 @@
  * Mirrors the spec: useSubjects, useBoards, useClasses, useStreams, useSavedSubjects
  */
 import { useQuery } from '@tanstack/react-query';
-import axios from 'axios';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { apiClient } from '@/utils/api';
 
 // ── Raw fetchers ────────────────────────────────────────────────────────────
 const fetchBoards = () =>
-  axios.get(`${API_BASE}/content/boards`).then((r) => r.data);
+  apiClient().get('/content/boards').then((r) => r.data);
 
 const fetchClasses = () =>
-  axios.get(`${API_BASE}/content/classes`).then((r) => r.data);
+  apiClient().get('/content/classes').then((r) => r.data);
 
 const fetchStreams = () =>
-  axios.get(`${API_BASE}/content/streams`).then((r) => r.data);
+  apiClient().get('/content/streams').then((r) => r.data);
 
 const fetchSubjects = () =>
-  axios.get(`${API_BASE}/content/subjects`).then((r) => r.data);
+  apiClient().get('/content/subjects').then((r) => r.data);
 
 const fetchLibraryBundle = () =>
-  axios.get(`${API_BASE}/content/library-bundle`).then((r) => r.data);
+  apiClient().get('/content/library-bundle').then((r) => r.data);
 
 const fetchSubject = (id) =>
-  axios.get(`${API_BASE}/content/subjects/${id}`).then((r) => r.data);
+  apiClient().get(`/content/subjects/${id}`).then((r) => r.data);
 
 const fetchChapters = (subjectId) =>
-  axios.get(`${API_BASE}/content/chapters/${subjectId}`).then((r) => r.data);
+  apiClient().get(`/content/chapters/${subjectId}`).then((r) => r.data);
 
 const fetchChunks = (chapterId) =>
-  axios.get(`${API_BASE}/content/chunks/${chapterId}`).then((r) => r.data);
+  apiClient().get(`/content/chunks/${chapterId}`).then((r) => r.data);
 
 const fetchSavedSubjects = () =>
-  axios
-    .get(`${API_BASE}/user/profile`, { withCredentials: true })
-    .then((r) => r.data.saved_subjects || []);
+  apiClient().get('/user/profile').then((r) => r.data.saved_subjects || []);
 
 // ── Hooks ────────────────────────────────────────────────────────────────────
 

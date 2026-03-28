@@ -350,7 +350,7 @@ export default function ChatPage() {
   const [model, setModel]                 = useState('openai/gpt-oss-20b');
   const [subject, setSubject]             = useState(null);
   const [scopedChapters, setScopedChapters] = useState([]);
-  const [credits, setCredits]             = useState({ used: user?.credits_used || 0, limit: user?.credits_limit || 0 });
+  const [credits, setCredits]             = useState({ used: user?.credits_used || 0, limit: user?.credits_limit ?? null });
   const [syncState, setSyncState]         = useState('idle');
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
@@ -450,12 +450,14 @@ export default function ChatPage() {
   }, [subjectId, subject, scopedChapters, user]);
 
   // ── Derived state ─────────────────────────────────────────────────────────
-  const remaining    = Math.max(0, credits.limit - credits.used);
-  // NaN guard: free user has limit=0, so creditPercent would be NaN
-  const creditPercent = credits.limit > 0 ? Math.min(100, (credits.used / credits.limit) * 100) : 0;
-  // Free users (limit=0) are always "out of credits" — they need to upgrade
-  const isOutOfCredits = credits.limit === 0 || remaining <= 0;
-  const isLow = credits.limit > 0 && remaining > 0 && remaining <= 5;
+  // credits.limit is null until the auth context populates it (new users have 30, not 0)
+  const effectiveLimit = credits.limit ?? user?.credits_limit ?? null;
+  const remaining    = effectiveLimit !== null ? Math.max(0, effectiveLimit - credits.used) : null;
+  // NaN guard: only show progress bar once limit is known
+  const creditPercent = effectiveLimit != null && effectiveLimit > 0 ? Math.min(100, (credits.used / effectiveLimit) * 100) : 0;
+  // Only block if we know the limit AND credits are exhausted; never block while limit is unknown
+  const isOutOfCredits = effectiveLimit !== null && effectiveLimit !== undefined && remaining !== null && remaining <= 0;
+  const isLow = effectiveLimit !== null && effectiveLimit > 0 && remaining !== null && remaining > 0 && remaining <= 5;
 
   // ── Sync indicator ────────────────────────────────────────────────────────
   const SyncDot = () => {
@@ -601,12 +603,12 @@ export default function ChatPage() {
 
       setConversationId(newConvId);
       // Finalize: remove streaming flag, attach RAG metadata + library sources
+      // Note: credits are already updated by syrabit_done event; do not double-increment here
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
           ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, sources: libSources }
           : m
       ));
-      setCredits((c) => ({ ...c, used: c.used + 1 }));
       setSyncState('idle');
 
     } catch (err) {
