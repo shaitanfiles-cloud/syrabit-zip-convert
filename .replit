@@ -37,6 +37,7 @@ LLM_MODEL = "llama-3.3-70b-versatile"
 SECURE_COOKIES = "false"
 SUPABASE_URL = "https://czeznmqogtwecidhpysa.supabase.co"
 UPSTASH_REDIS_REST_URL = "https://tolerant-sawfish-67135.upstash.io"
+GOOGLE_OAUTH_CLIENT_ID = "562571664721-d4pji8dnp263qmafctfhdsts09u3h3jc.apps.googleusercontent.com"
 
 [userenv.development]
 UV_PROJECT_ENVIRONMENT = "/home/runner/workspace/.pythonlibs"
