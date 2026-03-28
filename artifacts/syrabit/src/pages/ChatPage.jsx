@@ -132,33 +132,58 @@ function SourcesList({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
     }
   };
 
+  const snippet = src?.snippet || null;
+  const contentCardName = ragSubjectName || null;
+  const showSubline = snippet || contentCardName || sourceLabel;
+
   return (
     <div className="mt-3">
       <button
         onClick={handleClick}
-        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg transition-colors hover:brightness-110 text-left cursor-pointer"
+        className="flex items-start gap-3 px-3.5 py-2.5 rounded-xl transition-all hover:brightness-110 text-left cursor-pointer max-w-sm"
         style={{
-          background: 'rgba(59,130,246,0.12)',
-          border: '1px solid rgba(59,130,246,0.3)',
+          background: 'rgba(59,130,246,0.10)',
+          border: '1px solid rgba(59,130,246,0.25)',
         }}
         title={url || title}
       >
-        <BookOpen size={14} className="text-blue-400 shrink-0" />
-        <span className="text-[13px] font-medium text-blue-400">
-          {title}
-        </span>
-        {sourceLabel && (
-          <span
-            className="text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0"
-            style={{
-              background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.15)',
-              color: ragSource === 'web' ? '#60a5fa' : '#34d399',
-            }}
-          >
-            {sourceLabel}
-          </span>
-        )}
-        {url && <ExternalLink size={12} className="text-blue-400/60 shrink-0" />}
+        <div
+          className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5"
+          style={{ background: 'rgba(59,130,246,0.15)' }}
+        >
+          <BookOpen size={16} className="text-blue-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] font-semibold text-blue-400/70 uppercase tracking-wide">
+              Syrabit.ai
+            </span>
+            {url && <ExternalLink size={10} className="text-blue-400/40 shrink-0" />}
+          </div>
+          <div className="text-[13px] font-semibold text-blue-300 leading-snug mt-0.5 line-clamp-2">
+            {title}
+          </div>
+          {showSubline && (
+            <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+              {contentCardName && contentCardName !== title && (
+                <span className="text-[10px] text-blue-400/60 truncate max-w-[140px]">
+                  {contentCardName}
+                </span>
+              )}
+              {sourceLabel && (
+                <span
+                  className="text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0"
+                  style={{
+                    background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.15)',
+                    color: ragSource === 'web' ? '#60a5fa' : '#34d399',
+                  }}
+                >
+                  {sourceLabel}
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </button>
     </div>
   );
