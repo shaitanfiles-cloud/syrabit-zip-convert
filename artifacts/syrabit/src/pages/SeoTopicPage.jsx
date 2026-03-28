@@ -123,43 +123,58 @@ export default function SeoTopicPage() {
       ],
     };
 
-    const schemas = [articleSchema, breadcrumbSchema];
+    // Course schema — signals educational content to Google
+    const courseSchema = {
+      '@type': 'Course',
+      name: `${page.topic_title || topicSlug} — ${page.class_name || ''} ${page.board_name || ''}`.trim(),
+      description: page.meta_description || page.summary || '',
+      provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
+      educationalLevel: `${page.class_name || ''} ${page.board_name || ''}`.trim(),
+      about: { '@type': 'Thing', name: page.topic_title || topicSlug },
+      url: pageUrl,
+      inLanguage: 'en-IN',
+    };
 
-    if (['important-questions', 'mcqs'].includes(currentType) && page.content) {
+    // FAQ — prefer curated qa_pairs, fall back to content parsing
+    let faqMainEntity = [];
+    if (Array.isArray(page.qa_pairs) && page.qa_pairs.length > 0) {
+      faqMainEntity = page.qa_pairs.map((q) => ({
+        '@type': 'Question',
+        name: q.question,
+        acceptedAnswer: { '@type': 'Answer', text: q.answer },
+      }));
+    } else if (['important-questions', 'mcqs'].includes(currentType) && page.content) {
       const lines = page.content.split('\n').filter(Boolean);
-      const questions = [];
       let currentQ = null;
       for (const line of lines) {
         const stripped = line.replace(/^#+\s*/, '').replace(/^\*\*/, '').replace(/\*\*$/, '').trim();
         if (line.match(/^[#*]/) && stripped.endsWith('?')) { currentQ = stripped; }
         else if (currentQ && stripped.length > 10) {
-          questions.push({ '@type': 'Question', name: currentQ, acceptedAnswer: { '@type': 'Answer', text: stripped } });
+          faqMainEntity.push({ '@type': 'Question', name: currentQ, acceptedAnswer: { '@type': 'Answer', text: stripped } });
           currentQ = null;
-          if (questions.length >= 10) break;
+          if (faqMainEntity.length >= 10) break;
         }
-      }
-      if (questions.length >= 3) {
-        schemas.push({ '@context': 'https://schema.org', '@type': 'FAQPage', mainEntity: questions });
       }
     }
 
-    ['seo-topic-jsonld', 'seo-topic-breadcrumb', 'seo-topic-faq'].forEach((id) => {
-      const el = document.getElementById(id);
-      if (el) el.remove();
-    });
-    const ids = ['seo-topic-jsonld', 'seo-topic-breadcrumb', 'seo-topic-faq'];
-    schemas.forEach((schema, i) => {
-      const s = document.createElement('script');
-      s.type = 'application/ld+json';
-      s.id = ids[i];
-      s.text = JSON.stringify(schema);
-      document.head.appendChild(s);
-    });
+    // Unified @graph block — one script tag, all schemas
+    const graphNodes = [articleSchema, breadcrumbSchema, courseSchema];
+    if (faqMainEntity.length >= 2) {
+      graphNodes.push({ '@type': 'FAQPage', mainEntity: faqMainEntity });
+    }
+    const ldJsonGraph = { '@context': 'https://schema.org', '@graph': graphNodes };
+
+    const existing = document.getElementById('seo-topic-graph');
+    if (existing) existing.remove();
+    const s = document.createElement('script');
+    s.type = 'application/ld+json';
+    s.id = 'seo-topic-graph';
+    s.text = JSON.stringify(ldJsonGraph);
+    document.head.appendChild(s);
+
     return () => {
-      ['seo-topic-jsonld', 'seo-topic-breadcrumb', 'seo-topic-faq'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.remove();
-      });
+      const el = document.getElementById('seo-topic-graph');
+      if (el) el.remove();
     };
   }, [page, board, classSlug, subjectSlug, topicSlug, currentType]);
 

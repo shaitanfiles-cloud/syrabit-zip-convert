@@ -722,6 +722,7 @@ CORE_URLS = [
     ("https://syrabit.ai/pricing", "monthly", "0.8"),
     ("https://syrabit.ai/signup", "monthly", "0.9"),
     ("https://syrabit.ai/library", "weekly", "0.9"),
+    ("https://syrabit.ai/curriculum", "weekly", "0.8"),
     ("https://syrabit.ai/exam-routine", "weekly", "0.8"),
     ("https://syrabit.ai/terms", "yearly", "0.3"),
     ("https://syrabit.ai/privacy", "yearly", "0.3"),

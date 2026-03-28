@@ -16,8 +16,7 @@ export const PublicNavbar = () => {
   }, []);
 
   const navLinks = [
-    { label: 'Features',     href: '/#features',    internal: false },
-    { label: 'How it works', href: '/#how-it-works',internal: false },
+    { label: 'Curriculum',   href: '/curriculum',   internal: true  },
     { label: 'Exam Routine', href: '/exam-routine', internal: true  },
     { label: 'Pricing',      href: '/pricing',      internal: true  },
   ];

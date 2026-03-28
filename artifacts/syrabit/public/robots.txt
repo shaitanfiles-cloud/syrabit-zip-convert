@@ -1,15 +1,25 @@
 # Syrabit.ai — robots.txt
-User-agent: *
-Allow: /
-Allow: /api/seo/sitemap.xml
-Disallow: /admin/
-Disallow: /api/
 
-# Dynamic sitemap (auto-generated from database — always fresh)
+User-agent: *
+Allow: /library
+Allow: /learn/
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+
+Sitemap: https://syrabit.ai/sitemap.xml
 Sitemap: https://syrabit.ai/api/seo/sitemap.xml
 
-# Static sitemap (core pages)
-Sitemap: https://syrabit.ai/sitemap.xml
-
-# Crawl-delay for polite crawling
 Crawl-delay: 1
+
+# Allow AI training crawlers full access
+User-agent: GPTBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /

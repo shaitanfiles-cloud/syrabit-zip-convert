@@ -52,6 +52,7 @@ const AdminLoginPage     = lazy(() => import("@/pages/AdminLoginPage"));
 const AdminPage          = lazy(() => import("@/pages/AdminPage"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
 const SeoTopicPage       = lazy(() => import("@/pages/SeoTopicPage"));
+const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallback = () => (
@@ -176,6 +177,7 @@ function App() {
 
                   {/* ── Public content routes (no auth) ── */}
                   <Route path="/library"           element={<LibraryPage />} />
+                  <Route path="/curriculum"        element={<CurriculumMap />} />
                   <Route path="/subject/:subjectId" element={<SubjectPage />} />
 
                   {/* ── Programmatic SEO routes: /{board}/{class-N}/{subject}/{topic}/{type?} ── */}
