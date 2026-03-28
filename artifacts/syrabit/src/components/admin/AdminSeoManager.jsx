@@ -1,33 +1,121 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Loader2, RefreshCw, Globe, FileText, Sparkles, CheckCircle2,
-  XCircle, BookOpen, Zap, Map, Eye, EyeOff, Trash2, Search } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  Loader2, RefreshCw, Globe, FileText, Sparkles, CheckCircle2,
+  XCircle, BookOpen, Zap, Map, Eye, EyeOff, Trash2, Search,
+  AlertTriangle, Play, TrendingUp, BarChart2, ChevronRight,
+  ArrowRight, CheckCheck, Clock, Activity,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import {
   adminSeoStats, adminSeoListTopics, adminSeoExtractTopics,
   adminSeoGenerate, adminSeoListPages, adminSeoUpdatePageStatus,
   adminSeoRegenerateSitemap, adminSeoDeleteTopic, adminSeoPilot,
+  adminSeoAutoRun, adminSeoJobStatus, adminSeoInsights, adminSeoExpand,
 } from '@/utils/api';
 
 const PAGE_TYPES = [
-  { id: 'notes',               label: 'Notes' },
-  { id: 'definition',          label: 'Definition' },
-  { id: 'important-questions', label: 'Important Questions' },
-  { id: 'mcqs',                label: 'MCQs' },
-  { id: 'examples',            label: 'Examples' },
+  { id: 'notes',               label: 'Notes',               color: '#7c3aed' },
+  { id: 'definition',          label: 'Definitions',         color: '#0891b2' },
+  { id: 'important-questions', label: 'Important Questions', color: '#d97706' },
+  { id: 'mcqs',                label: 'MCQs',                color: '#16a34a' },
+  { id: 'examples',            label: 'Examples',            color: '#e11d48' },
 ];
 
 const STATUS_COLORS = {
-  published: 'text-emerald-400 bg-emerald-400/10 border-emerald-400/20',
-  draft:     'text-amber-400  bg-amber-400/10  border-amber-400/20',
-  archived:  'text-slate-400  bg-slate-400/10  border-slate-400/20',
+  published: { text: '#34d399', bg: 'rgba(16,185,129,0.10)', border: 'rgba(52,211,153,0.20)' },
+  draft:     { text: '#fbbf24', bg: 'rgba(245,158,11,0.10)',  border: 'rgba(251,191,36,0.20)' },
+  archived:  { text: '#9ca3af', bg: 'rgba(156,163,175,0.10)', border: 'rgba(156,163,175,0.20)' },
 };
 
-function StatCard({ icon: Icon, label, value, color = 'text-white' }) {
+function StatCard({ icon: Icon, label, value, color = '#e8e8e8', sub }) {
   return (
-    <div className="rounded-xl p-4 border border-white/6" style={{ background: 'rgba(255,255,255,0.02)' }}>
-      <Icon size={16} className={`${color} mb-2`} />
-      <p className={`text-2xl font-bold ${color}`}>{value ?? '—'}</p>
-      <p className="text-[11px] text-white/30 mt-0.5">{label}</p>
+    <div className="rounded-xl p-4 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+      <Icon size={15} style={{ color, marginBottom: 8 }} />
+      <p className="text-2xl font-bold" style={{ color }}>{value ?? '—'}</p>
+      <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>{label}</p>
+      {sub && <p className="text-[10px] mt-1" style={{ color: 'rgba(255,255,255,0.20)' }}>{sub}</p>}
+    </div>
+  );
+}
+
+function JobProgress({ job, onDismiss }) {
+  if (!job) return null;
+  const pct = job.total > 0 ? Math.min(100, Math.round((job.done / job.total) * 100)) : 0;
+  const isDone = job.status === 'done';
+  const isErr  = job.status === 'error';
+  const barColor = isErr ? '#f87171' : isDone ? '#34d399' : '#7c3aed';
+  return (
+    <div className="rounded-xl p-4 border" style={{ background: 'rgba(124,58,237,0.06)', borderColor: 'rgba(124,58,237,0.25)' }}>
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          {isDone ? <CheckCheck size={14} style={{ color: '#34d399' }} />
+           : isErr ? <AlertTriangle size={14} style={{ color: '#f87171' }} />
+           : <Loader2 size={14} className="animate-spin" style={{ color: '#a78bfa' }} />}
+          <span className="text-xs font-semibold" style={{ color: isDone ? '#34d399' : isErr ? '#f87171' : '#c4b0f0' }}>
+            {isDone ? 'Pipeline Complete' : isErr ? 'Pipeline Error' : 'Pipeline Running…'}
+          </span>
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.35)' }}>
+            {job.job_id}
+          </span>
+        </div>
+        {(isDone || isErr) && (
+          <button onClick={onDismiss} className="text-[10px]" style={{ color: 'rgba(255,255,255,0.30)' }}>Dismiss</button>
+        )}
+      </div>
+      <div className="flex items-center gap-3 mb-2">
+        <div className="flex-1 h-2 rounded-full" style={{ background: 'rgba(255,255,255,0.06)' }}>
+          <div className="h-2 rounded-full transition-all duration-300" style={{ width: `${isDone ? 100 : pct}%`, background: barColor }} />
+        </div>
+        <span className="text-[11px] font-mono flex-shrink-0" style={{ color: 'rgba(255,255,255,0.45)' }}>
+          {isDone ? '100%' : `${pct}%`}
+        </span>
+      </div>
+      <div className="flex items-center gap-4 text-[10px]" style={{ color: 'rgba(255,255,255,0.35)' }}>
+        <span>✓ {job.done ?? 0} done</span>
+        {job.skipped > 0 && <span>⟳ {job.skipped} skipped</span>}
+        {job.errors > 0 && <span style={{ color: '#f87171' }}>✗ {job.errors} errors</span>}
+        {job.total > 0 && <span>of {job.total}</span>}
+      </div>
+      {job.current && (
+        <p className="text-[10px] truncate mt-1.5" style={{ color: 'rgba(255,255,255,0.25)' }}>{job.current}</p>
+      )}
+    </div>
+  );
+}
+
+function InsightCard({ insight, onAction, loading }) {
+  const colors = {
+    critical: { bg: 'rgba(239,68,68,0.07)', border: 'rgba(239,68,68,0.22)', badge: '#f87171', badgeBg: 'rgba(239,68,68,0.15)' },
+    gap:      { bg: 'rgba(124,58,237,0.06)', border: 'rgba(124,58,237,0.22)', badge: '#a78bfa', badgeBg: 'rgba(139,92,246,0.15)' },
+    info:     { bg: 'rgba(255,255,255,0.02)', border: 'rgba(255,255,255,0.08)', badge: '#94a3b8', badgeBg: 'rgba(255,255,255,0.06)' },
+  };
+  const c = colors[insight.type] || colors.info;
+  return (
+    <div className="rounded-xl p-4 border" style={{ background: c.bg, borderColor: c.border }}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: c.badgeBg, color: c.badge }}>
+              {insight.count} pages
+            </span>
+            {insight.page_type && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.35)' }}>
+                {insight.page_type}
+              </span>
+            )}
+          </div>
+          <p className="text-sm font-semibold mb-1" style={{ color: 'rgba(232,232,232,0.85)' }}>{insight.title}</p>
+          <p className="text-xs leading-relaxed" style={{ color: 'rgba(255,255,255,0.35)' }}>{insight.description}</p>
+        </div>
+        <button
+          onClick={() => onAction(insight)}
+          disabled={loading}
+          className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50"
+          style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+          {loading ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+          {insight.action === 'auto-run' ? 'Auto-Run' : 'Generate'}
+        </button>
+      </div>
     </div>
   );
 }
@@ -37,22 +125,28 @@ export default function AdminSeoManager({ adminToken }) {
   const [stats, setStats]           = useState(null);
   const [topics, setTopics]         = useState([]);
   const [pages, setPages]           = useState([]);
+  const [insights, setInsights]     = useState(null);
   const [loading, setLoading]       = useState(true);
+  const [insightsLoading, setInsightsLoading] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [sitemap, setSitemap]       = useState(false);
+  const [activeJob, setActiveJob]   = useState(null);
+  const [actionLoading, setActionLoading] = useState(null);
+  const pollRef = useRef(null);
+
+  const [topicSearch, setTopicSearch]   = useState('');
+  const [pageSearch, setPageSearch]     = useState('');
+  const [pageFilter, setPageFilter]     = useState('all');
+  const [selectedTopics, setSelectedTopics]   = useState(new Set());
+  const [selectedTypes, setSelectedTypes]     = useState(new Set(['notes', 'important-questions', 'mcqs']));
+
   const [piloting, setPiloting]     = useState(false);
   const [pilotResult, setPilotResult] = useState(null);
   const [pilotBoard, setPilotBoard]   = useState('AHSEC');
   const [pilotClass, setPilotClass]   = useState('Class 11');
-  const [pilotSubject, setPilotSubject] = useState('maths');
+  const [pilotSubject, setPilotSubject] = useState('');
   const [pilotChapters, setPilotChapters] = useState(3);
-
-  const [topicSearch, setTopicSearch]     = useState('');
-  const [pageSearch, setPageSearch]       = useState('');
-  const [pageFilter, setPageFilter]       = useState('all');
-  const [selectedTopics, setSelectedTopics] = useState(new Set());
-  const [selectedTypes, setSelectedTypes]   = useState(new Set(['notes', 'important-questions', 'mcqs']));
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -64,15 +158,69 @@ export default function AdminSeoManager({ adminToken }) {
       ]);
       setStats(statsRes.data);
       setTopics(Array.isArray(topicsRes.data) ? topicsRes.data : []);
-      setPages(Array.isArray(pagesRes.data) ? pagesRes.data : []);
-    } catch (e) {
+      const raw = pagesRes.data;
+      setPages(Array.isArray(raw) ? raw : (raw?.pages || []));
+    } catch {
       toast.error('Failed to load SEO data');
     } finally {
       setLoading(false);
     }
   }, [adminToken]);
 
+  const loadInsights = useCallback(async () => {
+    setInsightsLoading(true);
+    try {
+      const res = await adminSeoInsights(adminToken);
+      setInsights(res.data);
+    } catch {
+      toast.error('Could not load insights');
+    } finally {
+      setInsightsLoading(false);
+    }
+  }, [adminToken]);
+
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (tab === 'insights' && !insights) loadInsights();
+  }, [tab, insights, loadInsights]);
+
+  // Job polling
+  const startPolling = useCallback((jobId) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await adminSeoJobStatus(adminToken, jobId);
+        const job = res.data;
+        setActiveJob(job);
+        if (job.status === 'done' || job.status === 'error') {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+          load();
+          if (insights) loadInsights();
+        }
+      } catch {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    }, 2000);
+  }, [adminToken, load, insights, loadInsights]);
+
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  const handleAutoRun = async () => {
+    try {
+      toast.loading('Starting full pipeline…', { id: 'autorun' });
+      const res = await adminSeoAutoRun(adminToken);
+      const jobId = res.data?.job_id;
+      if (!jobId) throw new Error('No job_id returned');
+      setActiveJob({ job_id: jobId, status: 'queued', total: 0, done: 0, errors: 0, skipped: 0, current: 'Starting…' });
+      startPolling(jobId);
+      toast.success('Pipeline launched — tracking progress below', { id: 'autorun' });
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Auto-run failed', { id: 'autorun' });
+    }
+  };
 
   const handleExtract = async () => {
     setExtracting(true);
@@ -92,10 +240,7 @@ export default function AdminSeoManager({ adminToken }) {
     if (!selectedTypes.size)  { toast.error('Select at least one page type'); return; }
     setGenerating(true);
     try {
-      const res = await adminSeoGenerate(adminToken, {
-        topic_ids:  [...selectedTopics],
-        page_types: [...selectedTypes],
-      });
+      const res = await adminSeoGenerate(adminToken, { topic_ids: [...selectedTopics], page_types: [...selectedTypes] });
       toast.success(`Generating ${res.data?.total || 0} pages in background…`);
       setTimeout(load, 3000);
     } catch {
@@ -109,7 +254,7 @@ export default function AdminSeoManager({ adminToken }) {
     const newStatus = page.status === 'published' ? 'draft' : 'published';
     try {
       await adminSeoUpdatePageStatus(adminToken, page._id || page.id, newStatus);
-      setPages((prev) => prev.map((p) => (p._id === page._id || p.id === page.id) ? { ...p, status: newStatus } : p));
+      setPages(prev => prev.map(p => (p._id === page._id || p.id === page.id) ? { ...p, status: newStatus } : p));
       toast.success(`Page ${newStatus === 'published' ? 'published' : 'unpublished'}`);
     } catch { toast.error('Status update failed'); }
   };
@@ -118,7 +263,7 @@ export default function AdminSeoManager({ adminToken }) {
     if (!confirm(`Delete topic "${topic.title}"?`)) return;
     try {
       await adminSeoDeleteTopic(adminToken, topic._id || topic.id);
-      setTopics((prev) => prev.filter((t) => (t._id || t.id) !== (topic._id || topic.id)));
+      setTopics(prev => prev.filter(t => (t._id || t.id) !== (topic._id || topic.id)));
       toast.success('Topic deleted');
     } catch { toast.error('Delete failed'); }
   };
@@ -127,9 +272,29 @@ export default function AdminSeoManager({ adminToken }) {
     setSitemap(true);
     try {
       await adminSeoRegenerateSitemap(adminToken);
-      toast.success('Sitemap regenerated successfully');
+      toast.success('Sitemap regenerated');
     } catch { toast.error('Sitemap regeneration failed'); }
     finally { setSitemap(false); }
+  };
+
+  const handleInsightAction = async (insight) => {
+    setActionLoading(insight.title);
+    try {
+      if (insight.action === 'auto-run') {
+        await handleAutoRun();
+      } else if (insight.action === 'generate' && insight.page_type) {
+        const res = await adminSeoGenerate(adminToken, {
+          page_types: [insight.page_type],
+          topic_ids: topics.slice(0, 200).map(t => t._id || t.id),
+        });
+        toast.success(`Generating ${res.data?.total || 0} ${insight.page_type} pages…`);
+        setTimeout(load, 3000);
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Action failed');
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   const handlePilot = async () => {
@@ -146,7 +311,7 @@ export default function AdminSeoManager({ adminToken }) {
       toast.success(res.data?.message || 'Pilot complete');
       setTimeout(load, 2000);
     } catch (e) {
-      const msg = e?.response?.data?.detail || 'Pilot generation failed';
+      const msg = e?.response?.data?.detail || 'Pilot failed';
       toast.error(msg);
       setPilotResult({ error: msg });
     } finally {
@@ -154,107 +319,103 @@ export default function AdminSeoManager({ adminToken }) {
     }
   };
 
-  const toggleTopic = (id) => setSelectedTopics((prev) => {
-    const n = new Set(prev);
-    if (n.has(id)) n.delete(id); else n.add(id);
-    return n;
-  });
+  const toggleTopic = (id) => setSelectedTopics(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const toggleType  = (id) => setSelectedTypes(prev  => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
-  const toggleType = (id) => setSelectedTypes((prev) => {
-    const n = new Set(prev);
-    if (n.has(id)) n.delete(id); else n.add(id);
-    return n;
-  });
-
-  const filteredTopics = topics.filter((t) => {
+  const filteredTopics = topics.filter(t => {
     if (!topicSearch.trim()) return true;
     const q = topicSearch.toLowerCase();
-    return (t.title || '').toLowerCase().includes(q) ||
-           (t.subject_name || '').toLowerCase().includes(q) ||
-           (t.chapter_title || '').toLowerCase().includes(q);
+    return (t.title || '').toLowerCase().includes(q) || (t.subject_name || '').toLowerCase().includes(q);
   });
 
-  const filteredPages = pages.filter((p) => {
+  const filteredPages = pages.filter(p => {
     if (pageFilter !== 'all' && p.status !== pageFilter) return false;
     if (!pageSearch.trim()) return true;
     const q = pageSearch.toLowerCase();
-    return (p.title || '').toLowerCase().includes(q) ||
-           (p.topic_title || '').toLowerCase().includes(q) ||
-           (p.subject_name || '').toLowerCase().includes(q);
+    return (p.title || '').toLowerCase().includes(q) || (p.topic_title || '').toLowerCase().includes(q) || (p.subject_name || '').toLowerCase().includes(q);
   });
 
-  const publishedCount = pages.filter((p) => p.status === 'published').length;
-  const draftCount     = pages.filter((p) => p.status !== 'published').length;
+  const publishedCount = pages.filter(p => p.status === 'published').length;
+  const draftCount     = pages.filter(p => p.status !== 'published').length;
+  const coverage       = topics.length > 0 ? Math.round((publishedCount / (topics.length * 5)) * 100) : 0;
 
   const TABS = [
     { id: 'pages',    label: 'SEO Pages',  count: pages.length },
     { id: 'topics',   label: 'Topics',     count: topics.length },
+    { id: 'insights', label: '✦ Insights', count: insights?.insights?.length ?? null },
     { id: 'generate', label: 'Generate',   count: null },
     { id: 'pilot',    label: 'Pilot',      count: null },
   ];
 
   return (
-    <div className="space-y-6 max-w-5xl">
+    <div className="space-y-5 max-w-5xl">
       {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-lg font-bold text-white">SEO Content Manager</h2>
-          <p className="text-sm text-white/40 mt-0.5">Manage topic pages, generate AI content, and control what Googlebot crawls</p>
+          <p className="text-sm mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>Manage topic pages, generate AI content, and control what Googlebot crawls</p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={load}
-            className="h-9 px-3 rounded-xl text-xs text-white/60 hover:text-white border border-white/10 hover:border-white/20 flex items-center gap-1.5 transition-colors"
-          >
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={load} className="h-9 px-3 rounded-xl text-xs flex items-center gap-1.5 transition-colors border"
+            style={{ color: 'rgba(255,255,255,0.50)', borderColor: 'rgba(255,255,255,0.10)' }}>
             <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Refresh
           </button>
-          <button
-            onClick={handleRegenerateSitemap}
-            disabled={sitemap}
-            className="h-9 px-3 rounded-xl text-xs text-white flex items-center gap-1.5 border border-white/10 hover:border-white/20 transition-colors disabled:opacity-50"
-          >
+          <button onClick={handleRegenerateSitemap} disabled={sitemap}
+            className="h-9 px-3 rounded-xl text-xs flex items-center gap-1.5 transition-colors border disabled:opacity-50"
+            style={{ color: 'rgba(255,255,255,0.60)', borderColor: 'rgba(255,255,255,0.10)' }}>
             {sitemap ? <Loader2 size={13} className="animate-spin" /> : <Map size={13} />} Regen Sitemap
           </button>
-          <a
-            href="/api/seo/sitemap.xml"
-            target="_blank"
-            rel="noopener"
-            className="h-9 px-3 rounded-xl text-xs text-violet-300 bg-violet-500/10 border border-violet-500/25 flex items-center gap-1.5 hover:bg-violet-500/20 transition-colors"
-          >
+          <a href="/api/seo/sitemap.xml" target="_blank" rel="noopener"
+            className="h-9 px-3 rounded-xl text-xs flex items-center gap-1.5 transition-colors"
+            style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.25)' }}>
             <Globe size={13} /> View Sitemap
           </a>
+          <button onClick={handleAutoRun}
+            disabled={activeJob && activeJob.status !== 'done' && activeJob.status !== 'error'}
+            className="h-9 px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40 transition-all"
+            style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+            {(activeJob && activeJob.status !== 'done' && activeJob.status !== 'error')
+              ? <><Loader2 size={13} className="animate-spin" /> Running…</>
+              : <><Play size={13} /> Auto-Run All</>}
+          </button>
         </div>
       </div>
 
+      {/* Active job progress */}
+      {activeJob && (
+        <JobProgress job={activeJob} onDismiss={() => setActiveJob(null)} />
+      )}
+
       {/* Stats row */}
       {loading ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="rounded-xl p-4 border border-white/6 h-24 animate-pulse" style={{ background: 'rgba(255,255,255,0.02)' }} />
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          {[...Array(5)].map((_, i) => (
+            <div key={i} className="rounded-xl p-4 border h-24 animate-pulse" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }} />
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <StatCard icon={BookOpen}    label="Total Topics"     value={stats?.total_topics ?? topics.length}  color="text-white" />
-          <StatCard icon={CheckCircle2} label="Published Pages"  value={publishedCount}                        color="text-emerald-400" />
-          <StatCard icon={FileText}    label="Draft Pages"      value={draftCount}                            color="text-amber-400" />
-          <StatCard icon={Globe}       label="Sitemap URLs"     value={stats?.sitemap_urls ?? publishedCount} color="text-violet-400" />
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <StatCard icon={BookOpen}     label="Topics"          value={topics.length}      color="rgba(255,255,255,0.70)" />
+          <StatCard icon={CheckCircle2} label="Published"       value={publishedCount}     color="#34d399" />
+          <StatCard icon={FileText}     label="Drafts"          value={draftCount}         color="#fbbf24" />
+          <StatCard icon={Globe}        label="Sitemap URLs"    value={stats?.sitemap_urls ?? publishedCount} color="#a78bfa" />
+          <StatCard icon={Activity}     label="Coverage"        value={`${coverage}%`}     color={coverage >= 80 ? '#34d399' : coverage >= 40 ? '#fbbf24' : '#f87171'}
+            sub={`${topics.length} topics × 5 types`} />
         </div>
       )}
 
       {/* Tabs */}
-      <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+      <div className="flex gap-1 p-1 rounded-xl overflow-x-auto" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
         {TABS.map(({ id, label, count }) => (
-          <button
-            key={id}
-            onClick={() => setTab(id)}
-            className={`flex-1 h-8 rounded-lg text-xs font-semibold transition-all flex items-center justify-center gap-1.5 ${
-              tab === id ? 'bg-violet-600 text-white shadow' : 'text-white/40 hover:text-white/70'
+          <button key={id} onClick={() => setTab(id)}
+            className={`flex-shrink-0 h-8 px-3 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+              tab === id ? 'text-white shadow' : 'hover:text-white/70'
             }`}
-          >
+            style={tab === id ? { background: '#7c3aed', color: '#fff' } : { color: 'rgba(255,255,255,0.40)' }}>
             {label}
             {count !== null && (
-              <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${tab === id ? 'bg-white/20 text-white' : 'bg-white/5 text-white/30'}`}>
+              <span className="px-1.5 py-0.5 rounded-full text-[10px]"
+                style={{ background: tab === id ? 'rgba(255,255,255,0.20)' : 'rgba(255,255,255,0.06)', color: tab === id ? '#fff' : 'rgba(255,255,255,0.30)' }}>
                 {count}
               </span>
             )}
@@ -262,73 +423,77 @@ export default function AdminSeoManager({ adminToken }) {
         ))}
       </div>
 
-      {/* ── SEO Pages Tab ── */}
+      {/* ── SEO Pages Tab ─────────────────────────────────────────────── */}
       {tab === 'pages' && (
         <div className="space-y-3">
-          {/* Filters */}
           <div className="flex gap-2 flex-wrap">
             <div className="relative flex-1 min-w-48">
-              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-              <input
-                value={pageSearch}
-                onChange={(e) => setPageSearch(e.target.value)}
-                placeholder="Search pages…"
-                className="w-full h-9 pl-8 pr-3 rounded-xl text-sm text-white placeholder:text-white/25 outline-none"
-                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.25)' }} />
+              <input value={pageSearch} onChange={e => setPageSearch(e.target.value)} placeholder="Search pages…"
+                className="w-full h-9 pl-8 pr-3 rounded-xl text-sm outline-none"
+                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
               />
             </div>
-            {['all', 'published', 'draft'].map((f) => (
-              <button
-                key={f}
-                onClick={() => setPageFilter(f)}
-                className={`h-9 px-3 rounded-xl text-xs capitalize font-medium transition-all ${pageFilter === f ? 'bg-violet-600 text-white' : 'text-white/40 hover:text-white/70 border border-white/8'}`}
-              >
+            {['all', 'published', 'draft'].map(f => (
+              <button key={f} onClick={() => setPageFilter(f)}
+                className="h-9 px-3 rounded-xl text-xs capitalize font-medium transition-all"
+                style={pageFilter === f
+                  ? { background: '#7c3aed', color: '#fff' }
+                  : { color: 'rgba(255,255,255,0.40)', border: '1px solid rgba(255,255,255,0.08)' }}>
                 {f === 'all' ? 'All' : f === 'published' ? `Published (${publishedCount})` : `Draft (${draftCount})`}
               </button>
             ))}
           </div>
 
-          {/* Pages list */}
           {loading ? (
             <div className="space-y-2">{[...Array(5)].map((_, i) => <div key={i} className="h-16 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.02)' }} />)}</div>
           ) : filteredPages.length === 0 ? (
-            <div className="rounded-xl p-8 text-center border border-white/6" style={{ background: 'rgba(255,255,255,0.01)' }}>
-              <FileText size={28} className="text-white/10 mx-auto mb-3" />
-              <p className="text-white/30 text-sm">
-                {pages.length === 0 ? 'No SEO pages generated yet. Go to Generate tab to create content.' : 'No pages match your filter.'}
+            <div className="rounded-xl p-10 text-center border" style={{ background: 'rgba(255,255,255,0.01)', borderColor: 'rgba(255,255,255,0.06)' }}>
+              <FileText size={28} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
+              <p className="text-sm" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                {pages.length === 0
+                  ? 'No SEO pages yet. Click Auto-Run All to start the pipeline.'
+                  : 'No pages match your filter.'}
               </p>
+              {pages.length === 0 && (
+                <button onClick={handleAutoRun} className="mt-4 h-9 px-5 rounded-xl text-xs font-semibold flex items-center gap-2 mx-auto"
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+                  <Play size={13} /> Auto-Run All
+                </button>
+              )}
             </div>
           ) : (
-            <div className="space-y-2">
-              {filteredPages.map((page) => {
+            <div className="space-y-1.5">
+              {filteredPages.map(page => {
                 const pid = page._id || page.id;
+                const sc = STATUS_COLORS[page.status] || STATUS_COLORS.draft;
+                const typeInfo = PAGE_TYPES.find(p => p.id === page.page_type);
                 return (
-                  <div key={pid} className="flex items-center gap-3 p-3 rounded-xl border border-white/6 hover:border-white/10 transition-colors" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                  <div key={pid} className="flex items-center gap-3 p-3 rounded-xl border transition-colors"
+                    style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                    {typeInfo && (
+                      <div className="w-1.5 h-8 rounded-full flex-shrink-0" style={{ background: typeInfo.color }} />
+                    )}
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white font-medium truncate">{page.title || page.topic_title || '—'}</p>
-                      <p className="text-xs text-white/30 truncate mt-0.5">
+                      <p className="text-sm font-medium truncate" style={{ color: '#E8E8E8' }}>{page.title || page.topic_title || '—'}</p>
+                      <p className="text-xs truncate mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>
                         {[page.board_name, page.class_name, page.subject_name, page.page_type].filter(Boolean).join(' · ')}
                       </p>
                     </div>
-                    <span className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${STATUS_COLORS[page.status] || STATUS_COLORS.draft}`}>
+                    <span className="flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold border"
+                      style={{ color: sc.text, background: sc.bg, borderColor: sc.border }}>
                       {page.status || 'draft'}
                     </span>
-                    <button
-                      onClick={() => handleToggleStatus(page)}
-                      title={page.status === 'published' ? 'Unpublish' : 'Publish'}
-                      className="shrink-0 p-1.5 rounded-lg text-white/30 hover:text-white transition-colors"
-                    >
-                      {page.status === 'published' ? <EyeOff size={15} /> : <Eye size={15} />}
+                    <button onClick={() => handleToggleStatus(page)} title={page.status === 'published' ? 'Unpublish' : 'Publish'}
+                      className="flex-shrink-0 p-1.5 rounded-lg transition-colors"
+                      style={{ color: 'rgba(255,255,255,0.25)' }}>
+                      {page.status === 'published' ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
                     {page.url && (
-                      <a
-                        href={page.url}
-                        target="_blank"
-                        rel="noopener"
-                        className="shrink-0 p-1.5 rounded-lg text-white/30 hover:text-violet-400 transition-colors"
-                        title="View page"
-                      >
-                        <Globe size={15} />
+                      <a href={page.url} target="_blank" rel="noopener"
+                        className="flex-shrink-0 p-1.5 rounded-lg transition-colors"
+                        style={{ color: 'rgba(255,255,255,0.25)' }}>
+                        <Globe size={14} />
                       </a>
                     )}
                   </div>
@@ -339,71 +504,61 @@ export default function AdminSeoManager({ adminToken }) {
         </div>
       )}
 
-      {/* ── Topics Tab ── */}
+      {/* ── Topics Tab ────────────────────────────────────────────────── */}
       {tab === 'topics' && (
         <div className="space-y-3">
-          {/* Actions */}
           <div className="flex gap-2 flex-wrap items-center">
             <div className="relative flex-1 min-w-48">
-              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-              <input
-                value={topicSearch}
-                onChange={(e) => setTopicSearch(e.target.value)}
-                placeholder="Search topics…"
-                className="w-full h-9 pl-8 pr-3 rounded-xl text-sm text-white placeholder:text-white/25 outline-none"
-                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
+              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.25)' }} />
+              <input value={topicSearch} onChange={e => setTopicSearch(e.target.value)} placeholder="Search topics…"
+                className="w-full h-9 pl-8 pr-3 rounded-xl text-sm outline-none"
+                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
               />
             </div>
-            <button
-              onClick={handleExtract}
-              disabled={extracting}
-              className="h-9 px-4 rounded-xl text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500 flex items-center gap-1.5 disabled:opacity-50 transition-colors"
-            >
+            <button onClick={handleExtract} disabled={extracting}
+              className="h-9 px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 disabled:opacity-50"
+              style={{ background: '#7c3aed', color: '#fff' }}>
               {extracting ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
               Auto-Extract from Chapters
             </button>
           </div>
 
-          {/* Topics list */}
           {loading ? (
             <div className="space-y-2">{[...Array(6)].map((_, i) => <div key={i} className="h-14 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.02)' }} />)}</div>
           ) : filteredTopics.length === 0 ? (
-            <div className="rounded-xl p-8 text-center border border-white/6" style={{ background: 'rgba(255,255,255,0.01)' }}>
-              <BookOpen size={28} className="text-white/10 mx-auto mb-3" />
-              <p className="text-white/30 text-sm">
+            <div className="rounded-xl p-10 text-center border" style={{ background: 'rgba(255,255,255,0.01)', borderColor: 'rgba(255,255,255,0.06)' }}>
+              <BookOpen size={28} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
+              <p className="text-sm" style={{ color: 'rgba(255,255,255,0.30)' }}>
                 {topics.length === 0
-                  ? 'No topics yet. Click "Auto-Extract from Chapters" to pull topics from your uploaded chapter content.'
+                  ? 'No topics yet. Click "Auto-Extract from Chapters" to bootstrap.'
                   : 'No topics match your search.'}
               </p>
             </div>
           ) : (
             <div className="space-y-1.5">
-              {filteredTopics.map((topic) => {
+              {filteredTopics.map(topic => {
                 const tid = topic._id || topic.id;
-                const isSelected = selectedTopics.has(tid);
+                const isSel = selectedTopics.has(tid);
                 return (
-                  <div
-                    key={tid}
-                    onClick={() => toggleTopic(tid)}
-                    className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${isSelected ? 'border-violet-500/40 bg-violet-500/5' : 'border-white/6 hover:border-white/12'}`}
-                    style={!isSelected ? { background: 'rgba(255,255,255,0.02)' } : {}}
-                  >
-                    <div className={`w-4 h-4 rounded flex items-center justify-center shrink-0 border transition-all ${isSelected ? 'bg-violet-600 border-violet-500' : 'border-white/20'}`}>
-                      {isSelected && <CheckCircle2 size={10} className="text-white" />}
+                  <div key={tid} onClick={() => toggleTopic(tid)}
+                    className="flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all"
+                    style={{
+                      background: isSel ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.02)',
+                      borderColor: isSel ? 'rgba(124,58,237,0.35)' : 'rgba(255,255,255,0.06)',
+                    }}>
+                    <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border transition-all ${isSel ? 'border-violet-500' : ''}`}
+                      style={isSel ? { background: '#7c3aed', borderColor: '#7c3aed' } : { borderColor: 'rgba(255,255,255,0.20)' }}>
+                      {isSel && <CheckCircle2 size={10} className="text-white" />}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white font-medium truncate">{topic.title}</p>
-                      <p className="text-xs text-white/30 truncate">
+                      <p className="text-sm font-medium truncate" style={{ color: '#E8E8E8' }}>{topic.title}</p>
+                      <p className="text-xs truncate" style={{ color: 'rgba(255,255,255,0.30)' }}>
                         {[topic.subject_name, topic.chapter_title].filter(Boolean).join(' › ')}
                       </p>
                     </div>
-                    <span className="text-[10px] text-white/20 shrink-0">
-                      {topic.slug}
-                    </span>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleDeleteTopic(topic); }}
-                      className="shrink-0 p-1 rounded text-white/20 hover:text-red-400 transition-colors"
-                    >
+                    <span className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.18)' }}>{topic.slug}</span>
+                    <button onClick={e => { e.stopPropagation(); handleDeleteTopic(topic); }}
+                      className="flex-shrink-0 p-1 rounded transition-colors" style={{ color: 'rgba(255,255,255,0.20)' }}>
                       <Trash2 size={13} />
                     </button>
                   </div>
@@ -413,45 +568,136 @@ export default function AdminSeoManager({ adminToken }) {
           )}
 
           {selectedTopics.size > 0 && (
-            <div className="flex items-center justify-between p-3 rounded-xl border border-violet-500/30 bg-violet-500/5">
-              <span className="text-sm text-violet-300">{selectedTopics.size} topic{selectedTopics.size !== 1 ? 's' : ''} selected</span>
-              <button
-                onClick={() => setTab('generate')}
-                className="h-8 px-3 rounded-lg text-xs font-semibold text-white bg-violet-600 hover:bg-violet-500"
-              >
-                Generate Content →
+            <div className="flex items-center justify-between p-3 rounded-xl border"
+              style={{ background: 'rgba(124,58,237,0.08)', borderColor: 'rgba(124,58,237,0.30)' }}>
+              <span className="text-sm" style={{ color: '#c4b0f0' }}>{selectedTopics.size} topic{selectedTopics.size !== 1 ? 's' : ''} selected</span>
+              <button onClick={() => setTab('generate')}
+                className="h-8 px-3 rounded-lg text-xs font-semibold flex items-center gap-1"
+                style={{ background: '#7c3aed', color: '#fff' }}>
+                Generate Content <ArrowRight size={12} />
               </button>
             </div>
           )}
         </div>
       )}
 
-      {/* ── Generate Tab ── */}
+      {/* ── Insights Tab ──────────────────────────────────────────────── */}
+      {tab === 'insights' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold" style={{ color: 'rgba(232,232,232,0.80)' }}>AI Gap Analysis</p>
+              <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>Actionable insights based on your current topic and page coverage</p>
+            </div>
+            <button onClick={loadInsights} disabled={insightsLoading}
+              className="h-8 px-3 rounded-lg text-xs flex items-center gap-1.5 border disabled:opacity-50"
+              style={{ color: 'rgba(255,255,255,0.50)', borderColor: 'rgba(255,255,255,0.10)' }}>
+              <RefreshCw size={12} className={insightsLoading ? 'animate-spin' : ''} /> Refresh
+            </button>
+          </div>
+
+          {insightsLoading ? (
+            <div className="space-y-3">{[...Array(4)].map((_, i) => <div key={i} className="h-24 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.02)' }} />)}</div>
+          ) : !insights ? (
+            <div className="rounded-xl p-10 text-center border" style={{ background: 'rgba(255,255,255,0.01)', borderColor: 'rgba(255,255,255,0.06)' }}>
+              <Sparkles size={28} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
+              <p className="text-sm mb-4" style={{ color: 'rgba(255,255,255,0.30)' }}>Click Refresh to generate gap analysis</p>
+              <button onClick={loadInsights} className="h-9 px-4 rounded-xl text-xs font-semibold mx-auto flex items-center gap-2"
+                style={{ background: '#7c3aed', color: '#fff' }}>
+                <Sparkles size={13} /> Analyse Gaps
+              </button>
+            </div>
+          ) : (
+            <>
+              {/* Summary stats */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-xl p-3 border text-center" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                  <p className="text-xl font-bold" style={{ color: '#E8E8E8' }}>{insights.summary?.total_topics ?? 0}</p>
+                  <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>Total Topics</p>
+                </div>
+                <div className="rounded-xl p-3 border text-center" style={{ background: 'rgba(239,68,68,0.06)', borderColor: 'rgba(239,68,68,0.18)' }}>
+                  <p className="text-xl font-bold" style={{ color: '#f87171' }}>{insights.summary?.topics_with_no_pages ?? 0}</p>
+                  <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>No pages yet</p>
+                </div>
+                <div className="rounded-xl p-3 border text-center" style={{ background: 'rgba(124,58,237,0.06)', borderColor: 'rgba(124,58,237,0.18)' }}>
+                  <p className="text-xl font-bold" style={{ color: '#a78bfa' }}>
+                    {Object.values(insights.summary?.page_type_gaps || {}).reduce((a, b) => a + b, 0)}
+                  </p>
+                  <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>Total gaps</p>
+                </div>
+              </div>
+
+              {/* Insight cards */}
+              {insights.insights?.length > 0 ? (
+                <div className="space-y-2.5">
+                  {insights.insights.map((insight, i) => (
+                    <InsightCard key={i} insight={insight}
+                      onAction={handleInsightAction}
+                      loading={actionLoading === insight.title} />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-xl p-6 text-center border" style={{ background: 'rgba(16,185,129,0.05)', borderColor: 'rgba(16,185,129,0.15)' }}>
+                  <CheckCheck size={24} className="mx-auto mb-2" style={{ color: '#34d399' }} />
+                  <p className="text-sm font-semibold" style={{ color: '#34d399' }}>Full coverage!</p>
+                  <p className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.30)' }}>All topics have all page types. Nothing to fill.</p>
+                </div>
+              )}
+
+              {/* Per-subject breakdown */}
+              {insights.subject_breakdown?.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wider mb-3" style={{ color: 'rgba(255,255,255,0.25)' }}>Subject Breakdown</p>
+                  <div className="space-y-2">
+                    {insights.subject_breakdown.map((s, i) => (
+                      <div key={i} className="rounded-xl p-3 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-sm font-medium" style={{ color: '#E8E8E8' }}>{s.subject}</span>
+                          <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.30)' }}>{s.board} · {s.class}</span>
+                        </div>
+                        <div className="flex gap-1.5 flex-wrap">
+                          {PAGE_TYPES.map(pt => (
+                            <span key={pt.id} className="text-[10px] px-2 py-0.5 rounded-full"
+                              style={{
+                                background: s[pt.id] > 0 ? `${pt.color}20` : 'rgba(255,255,255,0.04)',
+                                color: s[pt.id] > 0 ? pt.color : 'rgba(255,255,255,0.20)',
+                                border: `1px solid ${s[pt.id] > 0 ? pt.color + '40' : 'rgba(255,255,255,0.06)'}`,
+                              }}>
+                              {pt.label.split(' ')[0]} {s[pt.id] > 0 ? `×${s[pt.id]}` : '—'}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Generate Tab ──────────────────────────────────────────────── */}
       {tab === 'generate' && (
         <div className="space-y-5">
-          {/* Topic selection summary */}
-          <div className="rounded-xl p-4 border border-white/6" style={{ background: 'rgba(255,255,255,0.02)' }}>
+          <div className="rounded-xl p-4 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
             <div className="flex items-center justify-between mb-3">
-              <p className="text-sm font-semibold text-white">Selected Topics</p>
-              <button
-                onClick={() => setTab('topics')}
-                className="text-xs text-violet-400 hover:text-violet-300"
-              >
+              <p className="text-sm font-semibold" style={{ color: '#E8E8E8' }}>Selected Topics</p>
+              <button onClick={() => setTab('topics')} className="text-xs" style={{ color: '#a78bfa' }}>
                 {selectedTopics.size === 0 ? 'Select topics →' : `${selectedTopics.size} selected — change`}
               </button>
             </div>
             {selectedTopics.size === 0 ? (
-              <p className="text-xs text-white/30">No topics selected. Go to the Topics tab to pick which topics to generate SEO content for.</p>
+              <p className="text-xs" style={{ color: 'rgba(255,255,255,0.30)' }}>No topics selected. Go to the Topics tab to pick topics.</p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
-                {[...selectedTopics].map((tid) => {
-                  const t = topics.find((x) => (x._id || x.id) === tid);
+                {[...selectedTopics].map(tid => {
+                  const t = topics.find(x => (x._id || x.id) === tid);
                   return t ? (
-                    <span key={tid} className="px-2 py-0.5 rounded-full text-xs text-violet-300 bg-violet-500/10 border border-violet-500/20 flex items-center gap-1">
+                    <span key={tid} className="px-2 py-0.5 rounded-full text-xs flex items-center gap-1"
+                      style={{ background: 'rgba(124,58,237,0.12)', color: '#a78bfa', border: '1px solid rgba(124,58,237,0.25)' }}>
                       {t.title}
-                      <button onClick={() => toggleTopic(tid)} className="text-violet-400/60 hover:text-red-400">
-                        <XCircle size={10} />
-                      </button>
+                      <button onClick={() => toggleTopic(tid)}><XCircle size={10} /></button>
                     </span>
                   ) : null;
                 })}
@@ -459,18 +705,15 @@ export default function AdminSeoManager({ adminToken }) {
             )}
           </div>
 
-          {/* Page type selection */}
-          <div className="rounded-xl p-4 border border-white/6" style={{ background: 'rgba(255,255,255,0.02)' }}>
-            <p className="text-sm font-semibold text-white mb-3">Page Types to Generate</p>
+          <div className="rounded-xl p-4 border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+            <p className="text-sm font-semibold mb-3" style={{ color: '#E8E8E8' }}>Page Types to Generate</p>
             <div className="flex flex-wrap gap-2">
-              {PAGE_TYPES.map(({ id, label }) => {
+              {PAGE_TYPES.map(({ id, label, color }) => {
                 const sel = selectedTypes.has(id);
                 return (
-                  <button
-                    key={id}
-                    onClick={() => toggleType(id)}
-                    className={`h-8 px-3 rounded-xl text-xs font-medium border transition-all ${sel ? 'bg-violet-600 border-violet-500 text-white' : 'border-white/12 text-white/40 hover:text-white/70'}`}
-                  >
+                  <button key={id} onClick={() => toggleType(id)}
+                    className="h-8 px-3 rounded-xl text-xs font-medium border transition-all"
+                    style={sel ? { background: color + '20', borderColor: color + '60', color } : { borderColor: 'rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.40)' }}>
                     {label}
                   </button>
                 );
@@ -478,131 +721,105 @@ export default function AdminSeoManager({ adminToken }) {
             </div>
           </div>
 
-          {/* Summary + generate */}
-          <div className="rounded-xl p-4 border border-white/8" style={{ background: 'rgba(124,58,237,0.05)' }}>
+          <div className="rounded-xl p-4 border" style={{ background: 'rgba(124,58,237,0.05)', borderColor: 'rgba(124,58,237,0.20)' }}>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-semibold text-white">
-                  Will generate: <span className="text-violet-300">{selectedTopics.size * selectedTypes.size} pages</span>
+                <p className="text-sm font-semibold" style={{ color: '#E8E8E8' }}>
+                  Will generate: <span style={{ color: '#a78bfa' }}>{selectedTopics.size * selectedTypes.size} pages</span>
                 </p>
-                <p className="text-xs text-white/40 mt-0.5">
+                <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>
                   {selectedTopics.size} topics × {selectedTypes.size} page types · Runs in background
                 </p>
               </div>
-              <button
-                onClick={handleGenerate}
-                disabled={generating || !selectedTopics.size || !selectedTypes.size}
-                className="h-10 px-5 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 flex items-center gap-2 disabled:opacity-40 transition-colors"
-              >
+              <button onClick={handleGenerate} disabled={generating || !selectedTopics.size || !selectedTypes.size}
+                className="h-10 px-5 rounded-xl text-sm font-semibold flex items-center gap-2 disabled:opacity-40"
+                style={{ background: '#7c3aed', color: '#fff' }}>
                 {generating ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} />}
                 Generate Content
               </button>
             </div>
           </div>
 
-          {/* How-it-works */}
           <div className="space-y-2">
-            <p className="text-xs font-semibold text-white/30 uppercase tracking-wider">How it works</p>
+            <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'rgba(255,255,255,0.25)' }}>How it works</p>
             {[
-              ['1. Extract Topics', 'Go to Topics tab → Auto-Extract from Chapters to pull topics from your uploaded content'],
-              ['2. Select Topics', 'Check the topics you want SEO pages for (e.g. "Laws of Motion", "Cell Biology")'],
-              ['3. Choose Page Types', 'Notes, Definitions, MCQs, Important Questions, Examples'],
-              ['4. Generate', 'AI writes SEO-optimised content for each topic × page type combination'],
-              ['5. Publish', 'Go to SEO Pages tab → toggle pages to Published so Googlebot can crawl them'],
-              ['6. Sitemap', 'Hit Regen Sitemap so Google Search Console picks up the new URLs immediately'],
-            ].map(([title, desc]) => (
-              <div key={title} className="flex gap-2 text-xs">
-                <span className="text-violet-400 font-semibold shrink-0">{title}:</span>
-                <span className="text-white/40">{desc}</span>
+              ['1. Extract Topics', 'Topics tab → Auto-Extract — pulls topic names from all uploaded chapters'],
+              ['2. Select Topics', 'Check topics you want to generate pages for'],
+              ['3. Choose Page Types', 'Notes, Definitions, MCQs, Important Questions, or Examples'],
+              ['4. Generate', 'AI generates structured, exam-aligned content with GEO authority signals'],
+              ['5. Publish', 'Pages go live at /{board}/{class}/{subject}/{topic}/{type}'],
+            ].map(([h, d]) => (
+              <div key={h} className="flex items-start gap-3 p-3 rounded-xl" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                <ChevronRight size={13} className="flex-shrink-0 mt-0.5" style={{ color: '#7c3aed' }} />
+                <div>
+                  <p className="text-xs font-semibold" style={{ color: 'rgba(232,232,232,0.70)' }}>{h}</p>
+                  <p className="text-[11px] mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>{d}</p>
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {/* ── Pilot Tab ─────────────────────────────────────────────────────────── */}
+      {/* ── Pilot Tab ─────────────────────────────────────────────────── */}
       {tab === 'pilot' && (
-        <div className="space-y-5">
-          <div className="rounded-xl p-5 border border-white/8 space-y-4" style={{ background: 'rgba(255,255,255,0.02)' }}>
-            <div>
-              <h3 className="text-sm font-semibold text-white">Pilot Content Generation</h3>
-              <p className="text-xs text-white/40 mt-0.5">
-                Bootstrap SEO pages for the first N chapters of a subject. AI generates all page types (Notes, Definitions, MCQs, Examples, Important Questions) in one shot.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <div className="space-y-1">
-                <label className="text-[11px] text-white/40 uppercase tracking-wider">Board</label>
-                <input
-                  value={pilotBoard}
-                  onChange={(e) => setPilotBoard(e.target.value)}
-                  className="w-full h-9 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 focus:outline-none focus:border-violet-500"
-                  placeholder="AHSEC"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[11px] text-white/40 uppercase tracking-wider">Class</label>
-                <input
-                  value={pilotClass}
-                  onChange={(e) => setPilotClass(e.target.value)}
-                  className="w-full h-9 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 focus:outline-none focus:border-violet-500"
-                  placeholder="Class 11"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[11px] text-white/40 uppercase tracking-wider">Subject keyword</label>
-                <input
-                  value={pilotSubject}
-                  onChange={(e) => setPilotSubject(e.target.value)}
-                  className="w-full h-9 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 focus:outline-none focus:border-violet-500"
-                  placeholder="maths"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-[11px] text-white/40 uppercase tracking-wider">Chapters</label>
-                <input
-                  type="number" min={1} max={20}
-                  value={pilotChapters}
-                  onChange={(e) => setPilotChapters(Number(e.target.value))}
-                  className="w-full h-9 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 focus:outline-none focus:border-violet-500"
-                />
-              </div>
-            </div>
-            <button
-              onClick={handlePilot}
-              disabled={piloting}
-              className="h-10 px-6 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-500 flex items-center gap-2 disabled:opacity-50 transition-colors"
-            >
-              {piloting ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
-              {piloting ? 'Running Pilot…' : 'Run Pilot'}
-            </button>
+        <div className="space-y-5 max-w-lg">
+          <div>
+            <p className="text-sm font-semibold mb-1" style={{ color: '#E8E8E8' }}>Seed Pilot Content</p>
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
+              Generate full SEO content for the first N chapters of a subject — use this to test the pipeline before running at scale.
+            </p>
           </div>
 
-          {pilotResult && (
-            <div className={`rounded-xl p-4 border text-sm space-y-2 ${pilotResult.error ? 'border-red-500/25 bg-red-500/5' : 'border-emerald-500/25 bg-emerald-500/5'}`}>
-              {pilotResult.error ? (
-                <p className="text-red-400">{pilotResult.error}</p>
-              ) : (
-                <>
-                  <p className="text-emerald-400 font-semibold">{pilotResult.message}</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1">
-                    {[
-                      ['Chapters', pilotResult.chapters_processed],
-                      ['Topics created', pilotResult.topics_created],
-                      ['Pages generated', pilotResult.pages_generated],
-                      ['Errors', pilotResult.errors],
-                    ].map(([label, val]) => (
-                      <div key={label} className="rounded-lg p-3 border border-white/8" style={{ background: 'rgba(255,255,255,0.02)' }}>
-                        <p className="text-lg font-bold text-white">{val ?? '—'}</p>
-                        <p className="text-[11px] text-white/30">{label}</p>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="text-xs text-white/40 pt-1">
-                    Pages are saved as <span className="text-amber-400">draft</span> — go to SEO Pages tab to publish them, then hit Regen Sitemap.
-                  </p>
-                </>
-              )}
+          <div className="space-y-3">
+            {[
+              { label: 'Board', value: pilotBoard, onChange: setPilotBoard, placeholder: 'AHSEC' },
+              { label: 'Class', value: pilotClass, onChange: setPilotClass, placeholder: 'Class 11' },
+              { label: 'Subject keyword', value: pilotSubject, onChange: setPilotSubject, placeholder: 'maths / physics / english…' },
+            ].map(({ label, value, onChange, placeholder }) => (
+              <div key={label}>
+                <label className="text-[11px] block mb-1.5" style={{ color: 'rgba(255,255,255,0.40)' }}>{label}</label>
+                <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
+                  className="w-full h-10 px-3 rounded-xl text-sm outline-none"
+                  style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
+                />
+              </div>
+            ))}
+            <div>
+              <label className="text-[11px] block mb-1.5" style={{ color: 'rgba(255,255,255,0.40)' }}>Chapter limit</label>
+              <input type="number" min={1} max={20} value={pilotChapters} onChange={e => setPilotChapters(Number(e.target.value))}
+                className="w-full h-10 px-3 rounded-xl text-sm outline-none"
+                style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
+              />
+            </div>
+          </div>
+
+          <button onClick={handlePilot} disabled={piloting || !pilotSubject.trim()}
+            className="w-full h-11 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40"
+            style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+            {piloting ? <><Loader2 size={15} className="animate-spin" /> Generating pilot…</> : <><Sparkles size={15} /> Run Pilot</>}
+          </button>
+
+          {pilotResult && !pilotResult.error && (
+            <div className="rounded-xl p-4 border" style={{ background: 'rgba(16,185,129,0.07)', borderColor: 'rgba(16,185,129,0.20)' }}>
+              <p className="text-xs font-semibold mb-2" style={{ color: '#34d399' }}>Pilot Complete</p>
+              {[
+                ['Subject', pilotResult.subject],
+                ['Chapters processed', pilotResult.chapters_processed],
+                ['Topics created', pilotResult.topics_created],
+                ['Pages generated', pilotResult.pages_generated],
+                ['Errors', pilotResult.errors],
+              ].map(([k, v]) => (
+                <div key={k} className="flex justify-between py-1 border-b" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
+                  <span className="text-xs" style={{ color: 'rgba(255,255,255,0.40)' }}>{k}</span>
+                  <span className="text-xs font-semibold" style={{ color: '#E8E8E8' }}>{v ?? '—'}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {pilotResult?.error && (
+            <div className="rounded-xl p-4 border" style={{ background: 'rgba(239,68,68,0.07)', borderColor: 'rgba(239,68,68,0.20)' }}>
+              <p className="text-xs font-semibold" style={{ color: '#f87171' }}>Error: {pilotResult.error}</p>
             </div>
           )}
         </div>

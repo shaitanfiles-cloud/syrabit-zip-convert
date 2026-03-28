@@ -166,6 +166,18 @@ export const adminSeoPilot = (token, params = {}) =>
     params,
   });
 
+export const adminSeoAutoRun = (token, pageTypes = null) =>
+  axios.post(`${API_BASE}/seo/auto-run`, pageTypes ? { page_types: pageTypes } : {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoJobStatus = (token, jobId) =>
+  axios.get(`${API_BASE}/seo/jobs/${jobId}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoInsights = (token) =>
+  axios.get(`${API_BASE}/seo/insights`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoExpand = (token, boardSlug, pageTypes = null) =>
+  axios.post(`${API_BASE}/seo/expand/${boardSlug}`, pageTypes ? { page_types: pageTypes } : {}, { headers: adminHeaders(token), withCredentials: true });
+
 // ── QA Engine ─────────────────────────────────────────────────────────────────
 export const getTopicQa = (board, classSlug, subjectSlug, topicSlug) =>
   axios.get(`${API_BASE}/seo/qa/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);

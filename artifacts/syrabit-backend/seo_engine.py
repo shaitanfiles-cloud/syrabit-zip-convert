@@ -1156,3 +1156,343 @@ async def generate_pilot_content(
         "errors": errors,
         "message": f"Pilot complete: {generated_pages} pages generated for {len(chapters)} chapters",
     }
+
+# ─── ADMIN: Job progress tracking (in-memory) ────────────────────────────────
+
+_seo_jobs: dict = {}  # job_id -> {status, total, done, errors, current, started_at, finished_at}
+
+
+def _job_update(jid: str, **kwargs):
+    if jid in _seo_jobs:
+        _seo_jobs[jid].update(kwargs)
+
+
+@router.get("/jobs/{job_id}")
+async def get_job_progress(job_id: str, _admin: dict = Depends(_require_admin)):
+    job = _seo_jobs.get(job_id)
+    if not job:
+        # Fall back to DB log
+        log = await _db.seo_generation_log.find_one({"job_id": job_id}, {"_id": 0})
+        if log:
+            return log
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+# ─── ADMIN: Full auto-run pipeline ──────────────────────────────────────────
+
+@router.post("/auto-run")
+async def auto_run_pipeline(
+    page_types: Optional[List[str]] = None,
+    background_tasks: BackgroundTasks = None,
+    _admin: dict = Depends(_require_admin),
+):
+    """One-click: extract all topics → generate all missing pages → regen sitemap."""
+    types_to_run = page_types or PAGE_TYPES
+    job_id = f"job-{uuid.uuid4().hex[:10]}"
+    _seo_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "total": 0,
+        "done": 0,
+        "errors": 0,
+        "skipped": 0,
+        "current": "Starting…",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "page_types": types_to_run,
+    }
+    background_tasks.add_task(_auto_run_bg, job_id, types_to_run)
+    return {"job_id": job_id, "message": "Pipeline started", "status": "queued"}
+
+
+async def _auto_run_bg(job_id: str, page_types: list):
+    try:
+        _job_update(job_id, status="extracting", current="Extracting topics from chapters…")
+
+        # Step 1: Extract topics from all chapters
+        chapters = await _db.chapters.find({}, {"_id": 0}).to_list(5000)
+        new_topics = 0
+        for ch in chapters:
+            existing = await _db.topics.count_documents({"chapter_id": ch["id"]})
+            if existing > 0:
+                continue
+            title = ch.get("title", "").strip()
+            if not title:
+                continue
+            topic = {
+                "id": f"topic-{uuid.uuid4().hex[:8]}",
+                "chapter_id": ch["id"],
+                "subject_id": ch.get("subject_id", ""),
+                "title": title,
+                "slug": _slug(title),
+                "definition": ch.get("description", ""),
+                "examples": "",
+                "order": ch.get("order_index", ch.get("chapter_number", 0)),
+                "status": "published",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await _db.topics.insert_one(topic)
+            new_topics += 1
+
+        # Step 2: Generate missing pages for all topics
+        all_topics = await _db.topics.find({"status": "published"}, {"_id": 0}).to_list(10000)
+        total_ops = len(all_topics) * len(page_types)
+        _job_update(job_id, status="generating", total=total_ops, current=f"Generating pages for {len(all_topics)} topics…")
+
+        done = 0
+        errors = 0
+        skipped = 0
+
+        for topic in all_topics:
+            _job_update(job_id, current=f"Processing: {topic.get('title', topic.get('id', ''))}")
+            try:
+                hierarchy = await _resolve_hierarchy(topic)
+                if not hierarchy:
+                    errors += len(page_types)
+                    done += len(page_types)
+                    _job_update(job_id, done=done, errors=errors)
+                    continue
+
+                for pt in page_types:
+                    existing = await _db.seo_pages.find_one(
+                        {"topic_id": topic["id"], "page_type": pt},
+                        {"_id": 0, "id": 1}
+                    )
+                    if existing:
+                        skipped += 1
+                        done += 1
+                        _job_update(job_id, done=done, skipped=skipped)
+                        continue
+                    try:
+                        page = await _generate_single_page(topic, pt, hierarchy)
+                        if page:
+                            done += 1
+                        else:
+                            errors += 1
+                            done += 1
+                    except Exception as e:
+                        logger.error(f"Auto-run gen error {topic.get('id')}/{pt}: {e}")
+                        errors += 1
+                        done += 1
+                    _job_update(job_id, done=done, errors=errors)
+
+            except Exception as e:
+                logger.error(f"Auto-run topic error {topic.get('id')}: {e}")
+                errors += len(page_types)
+                done += len(page_types)
+                _job_update(job_id, done=done, errors=errors)
+
+        # Step 3: Log to DB
+        now = datetime.now(timezone.utc).isoformat()
+        await _db.seo_generation_log.insert_one({
+            "job_id": job_id,
+            "total_generated": done - skipped - errors,
+            "skipped": skipped,
+            "errors": errors,
+            "new_topics": new_topics,
+            "completed_at": now,
+        })
+
+        _job_update(
+            job_id,
+            status="done",
+            current=f"Complete — {done - skipped - errors} pages generated, {skipped} skipped, {errors} errors",
+            finished_at=now,
+        )
+        logger.info(f"Auto-run {job_id} complete: done={done} skip={skipped} err={errors}")
+
+    except Exception as e:
+        logger.error(f"Auto-run pipeline error: {e}")
+        _job_update(job_id, status="error", current=f"Pipeline error: {str(e)[:120]}", finished_at=datetime.now(timezone.utc).isoformat())
+
+
+# ─── ADMIN: Gap-fill insights ────────────────────────────────────────────────
+
+@router.get("/insights")
+async def seo_insights(_admin: dict = Depends(_require_admin)):
+    """AI gap analysis — returns actionable insight cards per subject/type."""
+    # Aggregate: for each subject, count pages per page_type
+    all_topics = await _db.topics.find({"status": "published"}, {"_id": 0, "id": 1, "chapter_id": 1, "title": 1, "subject_id": 1}).to_list(10000)
+    topic_ids = [t["id"] for t in all_topics]
+
+    # Count pages per topic_id × page_type
+    page_docs = await _db.seo_pages.find(
+        {"topic_id": {"$in": topic_ids}},
+        {"_id": 0, "topic_id": 1, "page_type": 1, "subject_name": 1, "class_name": 1, "board_name": 1, "status": 1}
+    ).to_list(100000)
+
+    # Index existing pages
+    page_index: dict = {}  # topic_id -> set of page_types
+    subject_counts: dict = {}  # subject_name -> {page_type -> count, total_topics}
+    for p in page_docs:
+        tid = p["topic_id"]
+        pt = p["page_type"]
+        if tid not in page_index:
+            page_index[tid] = set()
+        page_index[tid].add(pt)
+
+        sname = p.get("subject_name", "Unknown")
+        if sname not in subject_counts:
+            subject_counts[sname] = {
+                "subject": sname,
+                "board": p.get("board_name", ""),
+                "class": p.get("class_name", ""),
+                **{pt: 0 for pt in PAGE_TYPES},
+                "published": 0,
+                "draft": 0,
+            }
+        subject_counts[sname][pt] = subject_counts[sname].get(pt, 0) + 1
+        if p.get("status") == "published":
+            subject_counts[sname]["published"] += 1
+        else:
+            subject_counts[sname]["draft"] += 1
+
+    # Topics with no pages at all
+    no_pages = [t for t in all_topics if t["id"] not in page_index]
+    # Topics missing specific page types
+    gaps: dict = {}  # page_type -> count missing
+    for t in all_topics:
+        covered = page_index.get(t["id"], set())
+        for pt in PAGE_TYPES:
+            if pt not in covered:
+                gaps[pt] = gaps.get(pt, 0) + 1
+
+    # Build insight cards
+    insights = []
+
+    if no_pages:
+        insights.append({
+            "type": "critical",
+            "icon": "alert",
+            "title": f"{len(no_pages)} topics have no SEO pages at all",
+            "description": f"Run Auto-Extract + Generate to create {len(no_pages) * len(PAGE_TYPES)} pages instantly.",
+            "action": "auto-run",
+            "count": len(no_pages),
+        })
+
+    for pt, missing_count in sorted(gaps.items(), key=lambda x: -x[1]):
+        if missing_count == 0:
+            continue
+        labels = {"notes": "Notes", "definition": "Definitions", "important-questions": "Important Questions", "mcqs": "MCQs", "examples": "Solved Examples"}
+        insights.append({
+            "type": "gap",
+            "icon": "generate",
+            "title": f"{missing_count} topics missing {labels.get(pt, pt)} pages",
+            "description": f"Generate {labels.get(pt, pt)} for all {missing_count} uncovered topics in one click.",
+            "action": "generate",
+            "page_type": pt,
+            "count": missing_count,
+        })
+
+    # Per-subject breakdown (top 8 by draft/missing)
+    subject_list = sorted(
+        subject_counts.values(),
+        key=lambda s: -(s.get("draft", 0))
+    )[:8]
+
+    return {
+        "insights": insights,
+        "subject_breakdown": subject_list,
+        "summary": {
+            "total_topics": len(all_topics),
+            "topics_with_no_pages": len(no_pages),
+            "page_type_gaps": gaps,
+        },
+    }
+
+
+# ─── ADMIN: Board-level gap expand ──────────────────────────────────────────
+
+@router.post("/expand/{board_slug}")
+async def expand_board_content(
+    board_slug: str,
+    page_types: Optional[List[str]] = None,
+    background_tasks: BackgroundTasks = None,
+    _admin: dict = Depends(_require_admin),
+):
+    """Generate all missing pages for a specific board (gap-fill only, skips existing)."""
+    board = await _db.boards.find_one({"slug": board_slug}, {"_id": 0})
+    if not board:
+        raise HTTPException(status_code=404, detail=f"Board '{board_slug}' not found")
+
+    types_to_run = page_types or PAGE_TYPES
+    job_id = f"expand-{board_slug}-{uuid.uuid4().hex[:8]}"
+
+    _seo_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "queued",
+        "board": board_slug,
+        "total": 0,
+        "done": 0,
+        "errors": 0,
+        "skipped": 0,
+        "current": f"Starting gap-fill for {board.get('name', board_slug)}…",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+    }
+    background_tasks.add_task(_expand_board_bg, job_id, board, types_to_run)
+    return {"job_id": job_id, "message": f"Gap-fill started for {board.get('name', board_slug)}", "status": "queued"}
+
+
+async def _expand_board_bg(job_id: str, board: dict, page_types: list):
+    try:
+        board_id = board["id"]
+        classes = await _db.classes.find({"board_id": board_id}, {"_id": 0}).to_list(50)
+        class_ids = [c["id"] for c in classes]
+        streams = await _db.streams.find({"class_id": {"$in": class_ids}}, {"_id": 0}).to_list(200)
+        stream_ids = [s["id"] for s in streams]
+        subjects = await _db.subjects.find({"stream_id": {"$in": stream_ids}}, {"_id": 0}).to_list(500)
+        subject_ids = [s["id"] for s in subjects]
+        chapters = await _db.chapters.find({"subject_id": {"$in": subject_ids}}, {"_id": 0}).to_list(5000)
+        ch_ids = [c["id"] for c in chapters]
+        topics = await _db.topics.find({"chapter_id": {"$in": ch_ids}, "status": "published"}, {"_id": 0}).to_list(10000)
+
+        total_ops = len(topics) * len(page_types)
+        _job_update(job_id, status="generating", total=total_ops, current=f"Processing {len(topics)} topics for {board.get('name', '')}…")
+
+        done = 0
+        errors = 0
+        skipped = 0
+
+        for topic in topics:
+            _job_update(job_id, current=f"{topic.get('title', topic.get('id', ''))}")
+            try:
+                hierarchy = await _resolve_hierarchy(topic)
+                if not hierarchy:
+                    errors += len(page_types)
+                    done += len(page_types)
+                    _job_update(job_id, done=done, errors=errors)
+                    continue
+                for pt in page_types:
+                    existing = await _db.seo_pages.find_one({"topic_id": topic["id"], "page_type": pt}, {"_id": 0, "id": 1})
+                    if existing:
+                        skipped += 1
+                        done += 1
+                        _job_update(job_id, done=done, skipped=skipped)
+                        continue
+                    try:
+                        page = await _generate_single_page(topic, pt, hierarchy)
+                        done += 1
+                        if not page:
+                            errors += 1
+                    except Exception as e:
+                        logger.error(f"Expand gen error {topic.get('id')}/{pt}: {e}")
+                        errors += 1
+                        done += 1
+                    _job_update(job_id, done=done, errors=errors)
+            except Exception as e:
+                logger.error(f"Expand topic error {topic.get('id')}: {e}")
+                errors += len(page_types)
+                done += len(page_types)
+                _job_update(job_id, done=done, errors=errors)
+
+        now = datetime.now(timezone.utc).isoformat()
+        _job_update(
+            job_id, status="done",
+            current=f"Done — {done - skipped - errors} new pages, {skipped} skipped, {errors} errors",
+            finished_at=now,
+        )
+    except Exception as e:
+        logger.error(f"Expand board error: {e}")
+        _job_update(job_id, status="error", current=str(e)[:200], finished_at=datetime.now(timezone.utc).isoformat())

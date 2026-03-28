@@ -1,0 +1,50 @@
+**Syrabit.ai SEO Manager → Fully AI-Automated GEO/SEO Factory**
+
+Transform manual tabbed UI into **zero-click autonomous engine** generating 10k+ optimized pages daily:
+
+## AI Core Engine (`seo_engine.py`)
+```
+Cron: Daily scan syllabus → extract topics → AI-prioritize (search vol + exam weight)
+↓
+Parallel agents: 5 page types/topic × 3 variants (A/B titles/content)
+↓
+AI SEO Optimizer: Groq/Claude → optimal title/meta/keywords/GEO phrases
+↓
+Auto-publish winners → sitemap regen → GSC ping
+```
+
+**New Endpoints**:
+- `POST /admin/seo/auto-run`: 1-click → full pipeline (topics→pages→optimize→publish)
+- `GET /admin/seo/insights`: AI analyzes GSC/GA4 → "Regen 247 low-CTR pages"
+- `POST /admin/seo/expand/{board}`: Gap analysis → "Physics missing 18 MCQs" → auto-fill
+
+## Autonomous Features
+| Automation | What it Does | Impact |
+|------------|-------------|--------|
+| **Syllabus Scanner** | Daily cron extracts Key Topics/Chapters → 1000+ new topics | +500 pages/day |
+| **Search Vol Predictor** | Vertex AI estimates "AHSEC Physics MCQs" vol → prioritizes | 3x CTR lift |
+| **GEO Phrase Injector** | Auto-weaves "Per AHSEC 2026: 5 marks" into every page | Perplexity citations |
+| **Meta A/B Tester** | Publishes 2 title/meta variants → GA4 picks winner after 7 days | +25% clicks |
+| **Thumbnail Auto-Match** | Best AI variant per page type (MCQs=geometric, Notes=gradient) | Google Images traffic |
+
+## AdminSeoManager.jsx → AI Dashboard
+```
+[🚀 Auto-Run All]  [📊 Insights]  [⚡ Bulk Regen]
+
+Stats: 2,847 Topics | 14,235 Pages | 892 Low-CTR
+
+AI Insights: "Generate 156 Chemistry MCQs (12k searches/mo)"
+[Generate Now]  Progress: █████ 47/156
+```
+
+**Pipeline**:
+```
+1. Syllabus → AI Topic Extractor (Vertex/Claude)
+2. Keyword Research Agent (Google Trends vol proxy)
+3. Parallel Content Generators (5 types × 3 variants)
+4. SEO Optimizer Agent (titles/metas/GEO)
+5. Auto-Publish + Sitemap + GSC Webhook
+6. Performance Monitor → Regen underperformers
+```
+
+**ROI**: ₹1k compute/mo → 10k pages → 50k visitors → ₹100k MRR. **Deploy 1 endpoint** → hands-free SEO domination. [scribd](https://www.scribd.com/document/899332426/CMS-Syllabus)
