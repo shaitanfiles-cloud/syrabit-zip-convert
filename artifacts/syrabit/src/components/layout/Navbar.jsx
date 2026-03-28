@@ -1,7 +1,7 @@
 import { useLocation } from 'react-router-dom';
 
 const PAGE_TITLES = {
-  '/library': 'Library',
+  '/library': 'Browser',
   '/chat':    'AI Chat',
   '/history': 'History',
   '/profile': 'Profile',

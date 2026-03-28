@@ -105,7 +105,7 @@ export default function SubjectLandingPage() {
           <p className="text-gray-400 mb-6">We couldn't find this subject. It may not be available yet.</p>
           <Link to="/library" className="inline-flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl text-white font-medium transition-colors">
             <ArrowLeft size={16} />
-            Back to Library
+            Back to Browser
           </Link>
         </div>
       </div>
@@ -133,7 +133,7 @@ export default function SubjectLandingPage() {
               <Home size={13} /> Home
             </Link>
             <ChevronRight size={11} className="text-gray-600" />
-            <Link to="/library" className="hover:text-purple-400 transition-colors">Library</Link>
+            <Link to="/library" className="hover:text-purple-400 transition-colors">Browser</Link>
             <ChevronRight size={11} className="text-gray-600" />
             <span className="text-white/80 font-medium">{subjectName}</span>
           </nav>
@@ -297,7 +297,7 @@ export default function SubjectLandingPage() {
         <nav className="mt-10 pt-6 border-t border-white/5" aria-label="Site navigation">
           <div className="flex flex-wrap gap-4 justify-center text-xs text-gray-500">
             <Link to="/" className="hover:text-purple-400 transition-colors">Home</Link>
-            <Link to="/library" className="hover:text-purple-400 transition-colors">Study Library</Link>
+            <Link to="/library" className="hover:text-purple-400 transition-colors">Browser</Link>
             <Link to="/pricing" className="hover:text-purple-400 transition-colors">Plans & Pricing</Link>
             <Link to="/chat" className="hover:text-purple-400 transition-colors">AI Tutor</Link>
           </div>

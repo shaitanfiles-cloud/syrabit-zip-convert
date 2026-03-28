@@ -44,7 +44,7 @@ export default function NotFoundPage() {
           <Link to={user ? '/library' : '/'}>
             <Button className="bg-primary hover:bg-primary/90 text-primary-foreground">
               {user ? (
-                <><BookOpen size={14} className="mr-1.5" /> Library</>
+                <><BookOpen size={14} className="mr-1.5" /> Browser</>
               ) : (
                 <><Home size={14} className="mr-1.5" /> Home</>
               )}

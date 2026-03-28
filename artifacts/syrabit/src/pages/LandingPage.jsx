@@ -203,7 +203,7 @@ const FEATURES = [
   },
   {
     icon: BookOpen,
-    title: 'Structured Subject Library',
+    title: 'Structured Subject Browser',
     desc: 'Every chapter of Class 11 & 12 organized by board, stream, and subject — so you always know where to start.',
     gradient: 'linear-gradient(135deg,#2563eb,#06b6d4)',
     glow: 'rgba(59,130,246,0.28)',
@@ -345,7 +345,7 @@ export default function LandingPage() {
           <div className="absolute bottom-0 left-0 h-0.5 bg-white/30 transition-all duration-1000"
             style={{ width: `${((4 - countdown) / 4) * 100}%` }} />
           <div className="flex items-center gap-2 text-white/90 text-xs sm:text-sm">
-            <span className="font-semibold text-white">Taking you to the Library</span>
+            <span className="font-semibold text-white">Taking you to the Browser</span>
             <span className="text-white/60">in {countdown}s…</span>
           </div>
           <div className="flex items-center gap-2 shrink-0">

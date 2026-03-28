@@ -119,7 +119,7 @@ export default function CurriculumMap() {
   return (
     <div className="min-h-screen text-white" style={{ background: '#06060e' }}>
       <PageMeta
-        title="Curriculum Map — AHSEC & Degree Study Library | Syrabit.ai"
+        title="Curriculum Map — AHSEC & Degree Subject Browser | Syrabit.ai"
         description="Browse the full Assam board curriculum: AHSEC Class 11-12 (PCM, PCB, Arts, Commerce) and Degree (B.Com, B.A, B.Sc) — all subjects and chapters in one place."
         canonical="https://syrabit.ai/curriculum"
         keywords="AHSEC syllabus, Assam board curriculum, Class 11 12 chapters, Degree syllabus Assam, SEBA curriculum map"

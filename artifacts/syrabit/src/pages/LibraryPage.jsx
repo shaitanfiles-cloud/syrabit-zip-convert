@@ -770,7 +770,7 @@ export default function LibraryPage() {
 
   const handleRefetchSubjects = useCallback(async () => {
     await refetchBundle();
-    toast.success('Library refreshed');
+    toast.success('Browser refreshed');
   }, [refetchBundle]);
 
   const handleSearchChange = useCallback((e) => {

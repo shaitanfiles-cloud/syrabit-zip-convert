@@ -415,7 +415,7 @@ export default function ExamRoutinePage() {
             to="/library"
             className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium transition-colors"
           >
-            Open Study Library
+            Open Browser
             <ChevronRight size={15} />
           </Link>
         </div>

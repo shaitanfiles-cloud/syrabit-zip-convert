@@ -276,7 +276,7 @@ export default function SeoTopicPage() {
         '@type': 'BreadcrumbList',
         itemListElement: [
           { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
-          { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
+          { '@type': 'ListItem', position: 2, name: 'Browser', item: 'https://syrabit.ai/library' },
           { '@type': 'ListItem', position: 3, name: page.subject_name || subjectSlug, item: `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}` },
           { '@type': 'ListItem', position: 4, name: page.topic_title || topicSlug, item: pageUrl },
         ],
@@ -360,7 +360,7 @@ export default function SeoTopicPage() {
           <p className="text-gray-400 mb-6">The study material you're looking for hasn't been generated yet.</p>
           <Link to="/library" className="inline-flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl text-white font-medium transition-colors">
             <BookOpen size={16} />
-            Browse Library
+            Browse
           </Link>
         </div>
       </div>
@@ -399,7 +399,7 @@ export default function SeoTopicPage() {
               <Home size={12} /> <span className="hidden sm:inline">Home</span>
             </Link>
             <ChevronRight size={10} className="text-gray-600" />
-            <Link to="/library" className="hover:text-purple-400 transition-colors">Library</Link>
+            <Link to="/library" className="hover:text-purple-400 transition-colors">Browser</Link>
             <ChevronRight size={10} className="text-gray-600" />
             <Link to={subjectPath} className="hover:text-purple-400 transition-colors truncate max-w-[120px] sm:max-w-none">{page.subject_name}</Link>
             <ChevronRight size={10} className="text-gray-600" />
@@ -646,7 +646,7 @@ export default function SeoTopicPage() {
             <nav className="mt-10 pt-6 border-t border-white/5" aria-label="Site navigation">
               <div className="flex flex-wrap gap-4 justify-center text-xs text-gray-500">
                 <Link to="/" className="hover:text-purple-400 transition-colors">Home</Link>
-                <Link to="/library" className="hover:text-purple-400 transition-colors">Study Library</Link>
+                <Link to="/library" className="hover:text-purple-400 transition-colors">Browser</Link>
                 <Link to="/pricing" className="hover:text-purple-400 transition-colors">Plans & Pricing</Link>
                 <Link to="/signup" className="hover:text-purple-400 transition-colors">Get Started Free</Link>
                 <Link to="/chat" className="hover:text-purple-400 transition-colors">AI Tutor</Link>

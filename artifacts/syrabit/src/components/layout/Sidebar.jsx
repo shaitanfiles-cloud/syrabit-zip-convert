@@ -8,7 +8,7 @@ import { Separator } from '@/components/ui/separator';
 import { LogoFull, LogoMark } from '@/components/Logo';
 
 const NAV_ITEMS = [
-  { to: '/library', icon: BookOpen,      label: 'Library'  },
+  { to: '/library', icon: BookOpen,      label: 'Browser'  },
   { to: '/chat',    icon: MessageSquare, label: 'Chat'     },
   { to: '/history', icon: Clock,         label: 'History'  },
   { to: '/profile', icon: User,          label: 'Profile'  },

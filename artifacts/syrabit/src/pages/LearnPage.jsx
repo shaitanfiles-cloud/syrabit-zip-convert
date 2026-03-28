@@ -47,7 +47,7 @@ function SchemaOrg({ doc }) {
     '@type': 'BreadcrumbList',
     itemListElement: [
       { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
-      { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
+      { '@type': 'ListItem', position: 2, name: 'Browser', item: 'https://syrabit.ai/library' },
       { '@type': 'ListItem', position: 3, name: doc.title, item: `https://syrabit.ai/learn/${doc.seo_slug}` },
     ],
   };
@@ -179,7 +179,7 @@ export default function LearnPage() {
           <h1 className="text-xl font-bold text-white">Page Not Found</h1>
           <p className="text-white/50 text-sm">This study resource doesn't exist or hasn't been published yet.</p>
           <Link to="/library" className="mt-2 h-9 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium flex items-center gap-2">
-            <ArrowLeft size={14} /> Back to Library
+            <ArrowLeft size={14} /> Back to Browser
           </Link>
         </div>
       </AppLayout>
@@ -228,7 +228,7 @@ export default function LearnPage() {
           <nav className="flex items-center gap-1 text-xs text-white/35 mb-6" aria-label="Breadcrumb">
             <Link to="/" className="hover:text-white/70 transition-colors">Home</Link>
             <ChevronRight size={11} className="flex-shrink-0" />
-            <Link to="/library" className="hover:text-white/70 transition-colors">Library</Link>
+            <Link to="/library" className="hover:text-white/70 transition-colors">Browser</Link>
             <ChevronRight size={11} className="flex-shrink-0" />
             <span className="text-white/55 truncate max-w-xs">{doc?.title}</span>
           </nav>

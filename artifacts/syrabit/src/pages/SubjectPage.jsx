@@ -351,7 +351,7 @@ export default function SubjectPage() {
     <AppLayout>
       <div className="p-6 text-center">
         <p className="text-muted-foreground">Subject not found</p>
-        <Link to="/library"><Button className="mt-4">Back to Library</Button></Link>
+        <Link to="/library"><Button className="mt-4">Back to Browser</Button></Link>
       </div>
     </AppLayout>
   );
@@ -374,7 +374,7 @@ export default function SubjectPage() {
       <div className="p-4 sm:p-6 space-y-6" data-testid="subject-detail">
         {/* Back */}
         <Link to="/library" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft size={14} /> Library
+          <ArrowLeft size={14} /> Browser
         </Link>
 
         {/* Header */}
