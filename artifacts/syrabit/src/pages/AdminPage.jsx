@@ -10,7 +10,7 @@ import {
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, FileText, Globe,
-  Sparkles, Zap, Crown,
+  Sparkles, Crown,
 } from 'lucide-react';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
@@ -32,9 +32,7 @@ import AdminRateLimits       from '@/components/admin/AdminRateLimits';
 import AdminActivityLog      from '@/components/admin/AdminActivityLog';
 import AdminHealth           from '@/components/admin/AdminHealth';
 import AdminSeoManager       from '@/components/admin/AdminSeoManager';
-import AdminQaManager        from '@/components/admin/AdminQaManager';
 import AdminContentStudio    from '@/components/admin/AdminContentStudio';
-import AdminAutomation       from '@/components/admin/AdminAutomation';
 import AdminMonetization     from '@/components/admin/AdminMonetization';
 import AdminCmsDocEditor     from '@/components/admin/AdminCmsDocEditor';
 
@@ -47,8 +45,6 @@ const SECTIONS = [
   { id: 'cms',           icon: FileText,        label: 'CMS Editor',        group: 'content'  },
   { id: 'studio',        icon: Sparkles,        label: 'Content Studio',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
-  { id: 'qamanager',     icon: MessageSquare,   label: 'QA Review',         group: 'content'  },
-  { id: 'automation',    icon: Zap,             label: 'Automation',        group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
   { id: 'conversations', icon: MessageSquare,   label: 'Conversations',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
@@ -82,8 +78,6 @@ const SECTION_COMPONENTS = {
   cms:           AdminCmsDocEditor,
   studio:        AdminContentStudio,
   seomanager:    AdminSeoManager,
-  qamanager:     AdminQaManager,
-  automation:    AdminAutomation,
   users:         AdminUsers,
   conversations: AdminConversations,
   analytics:     AdminAnalytics,
