@@ -873,43 +873,6 @@ export default function LibraryPage() {
               )}
             </div>
 
-            {/* Board / Class dropdowns */}
-            <div className="flex gap-2.5">
-              <select
-                value={selectedBoardSlug}
-                onChange={(e) => { setSelectedBoardSlug(e.target.value); setSelectedClassSlug('all'); setActiveFilter('all'); }}
-                aria-label="Filter by board"
-                className="flex-1 h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20 min-w-0"
-                style={{
-                  background: 'var(--card)',
-                  border: '1px solid rgba(139,92,246,0.15)',
-                  color: 'hsl(var(--foreground))',
-                }}
-              >
-                <option value="all">All Boards</option>
-                {boards.map((b) => (
-                  <option key={b.id} value={b.slug}>{b.name}</option>
-                ))}
-              </select>
-              <select
-                value={selectedClassSlug}
-                onChange={(e) => { setSelectedClassSlug(e.target.value); setActiveFilter('all'); }}
-                aria-label="Filter by class"
-                className="flex-1 h-9 px-3 rounded-xl text-sm outline-none transition-all focus:ring-2 focus:ring-primary/20 min-w-0"
-                style={{
-                  background: 'var(--card)',
-                  border: '1px solid rgba(139,92,246,0.15)',
-                  color: 'hsl(var(--foreground))',
-                }}
-              >
-                <option value="all">All Classes</option>
-                {classes
-                  .filter((c) => selectedBoardSlug === 'all' || boards.find((b) => b.slug === selectedBoardSlug)?.id === c.board_id)
-                  .map((c) => (
-                    <option key={c.id} value={c.slug}>{c.name}</option>
-                  ))}
-              </select>
-            </div>
 
             {/* Filter chips */}
             <div
