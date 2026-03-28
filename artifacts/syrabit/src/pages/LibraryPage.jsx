@@ -137,6 +137,12 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
     return `syrabit.ai/subject/${sub.id?.slice(0, 8)}`;
   }, [seoPath, sub.id]);
 
+  const whatsappShareUrl = useMemo(() => {
+    const fullUrl = `https://syrabit.ai${subjectLandingPath}`;
+    const text = `📚 Study ${sub.name} on Syrabit.ai — AI-powered notes & practice for AHSEC students!\n${fullUrl}`;
+    return `https://wa.me/?text=${encodeURIComponent(text)}`;
+  }, [sub.name, subjectLandingPath]);
+
   const visibleChapters = useMemo(() => chapters.slice(0, 6), [chapters]);
   const moreChapters = chapters.length - 6;
 
@@ -365,6 +371,18 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           <BookOpen size={12} />
           Browse
         </Link>
+
+        <a
+          href={whatsappShareUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label={`Share ${sub.name} on WhatsApp`}
+          className="flex items-center justify-center h-8 w-8 rounded-lg transition-all duration-200 active:scale-95 hover:bg-white/5 flex-shrink-0"
+          style={{ color: '#25D366', border: '1px solid rgba(37,211,102,0.20)' }}
+          data-testid="subject-whatsapp-share"
+        >
+          <Share2 size={13} />
+        </a>
       </div>
     </div>
   );
