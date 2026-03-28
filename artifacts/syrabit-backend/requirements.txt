@@ -30,9 +30,6 @@ cachetools>=5.3.3
 # HTTP
 httpx>=0.27.0
 
-# Web search (real results with URL/snippet, used for RAG Tier-3 fallback)
-duckduckgo-search>=6.0.0
-
 # Utilities
 python-dotenv==1.2.1
 groq>=0.4.0

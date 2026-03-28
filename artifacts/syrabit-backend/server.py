@@ -1115,11 +1115,10 @@ async def ensure_seeded():
 from prompts import build_system_prompt, _THINK_BRIEF, _classify_question
 
 # ─────────────────────────────────────────────
-# RAG SEARCH + WEB SEARCH FALLBACK
+# RAG SEARCH
 # Priority chain:
 #   Level 1 — Content chunks from DB (best — actual indexed syllabus text)
 #   Level 2 — Subject descriptions + tags + chapter titles (medium — metadata)
-#   Level 3 — DuckDuckGo web search (fallback — when DB has nothing useful)
 # ─────────────────────────────────────────────
 
 def _extract_keywords(query: str) -> list:
@@ -1729,200 +1728,6 @@ async def rag_search(
         return {"chunks": [], "chapters": [], "subjects": [], "source": "none", "quality": "none"}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# WEB SEARCH — Assam-Education Priority Scoring
-#
-# Trusted domain tiers (higher score = more trustworthy):
-#   Tier 1 (score +30): Official Assam boards — SEBA, AHSEC, Assam Govt
-#   Tier 2 (score +20): Assam universities — Gauhati, Dibrugarh, Cotton, etc.
-#   Tier 3 (score +10): National boards — NCERT, NIOS, CBSE academic
-#   Any Assam keyword in URL (+3) or body text (+1)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_ASSAM_TRUSTED_DOMAINS: dict[str, int] = {
-    # Tier 1 — Official Assam education boards / government
-    "sebaonline.org":          3,
-    "ahsec.assam.gov.in":      3,
-    "ahsec.nic.in":            3,
-    "assam.gov.in":            3,
-    "ssa.assam.gov.in":        3,
-    # Tier 2 — Assam universities
-    "gauhati.ac.in":           2,
-    "dibru.ac.in":             2,
-    "cottonuniversity.ac.in":  2,
-    "rnbguwahati.ac.in":       2,
-    "dispur.ac.in":            2,
-    "kkhsou.ac.in":            2,   # Krishna Kanta Handiqui State Open University
-    "aus.ac.in":               2,   # Assam University Silchar
-    # Tier 3 — National boards / syllabus portals
-    "ncert.nic.in":            1,
-    "ncert.gov.in":            1,
-    "nios.ac.in":              1,
-    "cbseacademic.nic.in":     1,
-    "cbse.gov.in":             1,
-}
-
-_ASSAM_BODY_KEYWORDS = {
-    'ahsec', 'seba', 'assam board', 'hs exam', 'hslc', 'gauhati university',
-    'dibrugarh university', 'assam higher secondary', 'hs 1st year', 'hs 2nd year',
-    'tdc', 'ba 1st semester', 'bcom 1st semester', 'bsc 1st semester',
-    'assam', 'guwahati', 'assamese',
-}
-
-
-def _score_web_result(url: str, title: str, body: str) -> int:
-    """Score a search result by Assam-education relevance and domain trust."""
-    url_lower  = url.lower()
-    text_lower = (title + " " + body).lower()
-    score = 0
-
-    # Domain trust tier score
-    for domain, tier in _ASSAM_TRUSTED_DOMAINS.items():
-        if domain in url_lower:
-            score += tier * 10
-            break
-
-    # Assam keywords in URL
-    for kw in ('assam', 'ahsec', 'seba', 'gauhati', 'dibrugarh', 'guwahati'):
-        if kw in url_lower:
-            score += 3
-
-    # Assam education keywords in body/title
-    for kw in _ASSAM_BODY_KEYWORDS:
-        if kw in text_lower:
-            score += 1
-
-    return score
-
-
-def _tier_label(score: int) -> str:
-    """Human-readable trust label for a result score."""
-    if score >= 30: return "Official Assam Board"
-    if score >= 20: return "Assam University"
-    if score >= 10: return "National Board"
-    if score >= 5:  return "Assam-related"
-    return "General"
-
-
-async def web_search_fallback(query: str) -> dict:
-    """
-    Level-3 fallback: DuckDuckGo full-text search (duckduckgo-search package).
-
-    Query is augmented with AHSEC/SEBA/Assam terms to bias results toward
-    Assam education sources. Results are scored and ranked by domain trust:
-
-      Tier 1 — SEBA, AHSEC, Assam Govt portals
-      Tier 2 — Gauhati, Dibrugarh, and other Assam universities
-      Tier 3 — NCERT, NIOS, CBSE national boards
-      General — any result mentioning Assam education keywords
-
-    Returns:
-      {"results": str, "source": "web", "web_sources": [...]}  on success
-      {"results": "", "source": "none"}                        on failure
-    """
-    from concurrent.futures import ThreadPoolExecutor
-
-    # Augment query with Assam board context to bias search ranking
-    augmented_query = f"{query} AHSEC SEBA Assam board exam"
-
-    def _run_ddgs_search() -> list:
-        try:
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                from duckduckgo_search import DDGS
-            with DDGS() as ddgs:
-                return list(ddgs.text(augmented_query, max_results=10))
-        except Exception as ddgs_err:
-            logger.warning(f"DDGS search error: {type(ddgs_err).__name__}: {str(ddgs_err)[:100]}")
-            return []
-
-    try:
-        loop = asyncio.get_event_loop()
-        results = await asyncio.wait_for(
-            loop.run_in_executor(_THREAD_POOL, _run_ddgs_search),
-            timeout=10.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(f"Web search (DDGS): Timeout for query: {augmented_query[:60]}")
-        return await _web_search_instant_fallback(query)
-    except Exception as e:
-        logger.warning(f"Web search (DDGS): Executor error: {type(e).__name__}: {str(e)[:100]}")
-        return await _web_search_instant_fallback(query)
-
-    if not results:
-        logger.info(f"Web search (DDGS): 0 results → trying instant-answer fallback")
-        return await _web_search_instant_fallback(query)
-
-    # Score and sort results by Assam-education relevance
-    scored = []
-    for r in results:
-        url   = r.get("href", r.get("url", ""))
-        title = r.get("title", "")
-        body  = r.get("body", r.get("snippet", ""))
-        if not body.strip():
-            continue
-        score = _score_web_result(url, title, body)
-        scored.append((score, url, title, body))
-
-    scored.sort(key=lambda x: -x[0])
-
-    # Format top 5 results with trust labels for the AI
-    parts   = []
-    sources = []
-    for score, url, title, body in scored[:5]:
-        label = _tier_label(score)
-        tag   = f"[Source: {label}]" if score >= 5 else ""
-        parts.append(f"{tag} {title}\n{body[:350]}".strip())
-        sources.append({"title": title, "url": url, "score": score, "tier": label})
-
-    if not parts:
-        return {"results": "", "source": "none"}
-
-    combined = "\n\n".join(parts)
-    top_score = scored[0][0] if scored else 0
-    logger.info(
-        f"Web search (DDGS): {len(parts)} results ranked | "
-        f"top tier: {_tier_label(top_score)} (score {top_score}) | "
-        f"query: {augmented_query[:50]}"
-    )
-    return {
-        "results":     combined[:2500],
-        "source":      "web",
-        "web_sources": sources,
-    }
-
-
-async def _web_search_instant_fallback(query: str) -> dict:
-    """
-    Legacy DuckDuckGo instant-answer API — used as fallback when DDGS fails.
-    Returns {"results": str, "source": "web"} or {"results": "", "source": "none"}.
-    """
-    try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
-            resp = await client.get(
-                "https://api.duckduckgo.com/",
-                params={"q": query, "format": "json", "no_html": "1", "skip_disambig": "1"},
-                headers={"User-Agent": "Syrabit.ai Educational Assistant 1.0"},
-            )
-            if resp.status_code != 200:
-                return {"results": "", "source": "none"}
-            data = resp.json()
-            parts = []
-            if data.get("AbstractText"):
-                parts.append(data["AbstractText"])
-            for topic in data.get("RelatedTopics", [])[:3]:
-                if isinstance(topic, dict) and topic.get("Text"):
-                    parts.append(topic["Text"])
-            if data.get("Answer"):
-                parts.append(data["Answer"])
-            if parts:
-                return {"results": "\n\n".join(parts)[:1800], "source": "web", "web_sources": []}
-            return {"results": "", "source": "none"}
-    except Exception:
-        return {"results": "", "source": "none"}
-
-
 
 async def syrabit_library_search(
     query: str,
@@ -2018,7 +1823,6 @@ async def resolve_rag_context(
       Tier 0 — Subject document (uploaded .txt file): ALWAYS wins when present
       Tier 1 — DB content chunks (indexed notes/formulas)
       Tier 2 — Subject metadata (descriptions, tags, chapter titles)
-      Tier 3 — DuckDuckGo web search (only when DB has nothing)
     """
     # ── Tier 0: Subject document (uploaded file) ─────────────────────────────
     # When a document is uploaded and the user asks AI from that card,
@@ -2067,50 +1871,13 @@ async def resolve_rag_context(
         logger.info(f"RAG resolve: HIGH-QUALITY database content found (chunks: {len(rag_ctx.get('chunks', []))}) | query: {query[:50]}")
         return rag_ctx
 
-    # Step 3: Medium/None — supplement with web search
-    # Skip web search for very short or conversational messages (greetings, etc.)
-    # to avoid injecting irrelevant web results (e.g. "hii" → H II regions in astronomy)
-    _conversational = {
-        'hi', 'hii', 'hiii', 'hello', 'hey', 'helo', 'hiya', 'howdy', 'greetings',
-        'thanks', 'thank you', 'ok', 'okay', 'bye', 'goodbye', 'good morning',
-        'good afternoon', 'good evening', 'good night', 'namaste', 'sup', 'yo',
-    }
-    query_clean = query.strip().lower().rstrip('!?.')
-    if len(query_clean) < 4 or query_clean in _conversational:
-        logger.info(f"RAG resolve: SKIPPING web search for short/conversational query: '{query[:30]}'")
-        return {"chunks": [], "chapters": [], "subjects": [], "source": "none", "quality": "none"}
+    # Step 3: Medium — curriculum metadata found (subjects/chapters, no full chunks)
+    if rag_ctx["quality"] == "medium":
+        logger.info(f"RAG resolve: MEDIUM database metadata only | query: {query[:50]}")
+        return rag_ctx
 
-    web_query = " ".join(filter(None, [subject_name, query]))
-    web_ctx   = await web_search_fallback(web_query)
-
-    has_rag = rag_ctx["quality"] == "medium"   # has subjects/chapters
-    has_web = web_ctx.get("source") == "web"
-
-    if has_rag and has_web:
-        # Merge both — best possible context; preserve web_sources for trust-label display
-        merged = {
-            **rag_ctx,
-            "web_results":  web_ctx["results"],
-            "web_sources":  web_ctx.get("web_sources", []),
-            "source":       "rag+web",
-            "quality":      "medium+web",
-        }
-        logger.info(f"RAG resolve: MERGED database + web search | query: {query[:50]}")
-        return merged
-
-    if has_rag and not has_web:
-        # Only curriculum metadata (no chunks, no web) — still useful
-        logger.info(f"RAG resolve: MEDIUM database metadata only (no web results) | query: {query[:50]}")
-        return {**rag_ctx, "quality": "medium"}
-
-    if not has_rag and has_web:
-        # Nothing in DB, web-only
-        final = {**rag_ctx, **web_ctx}   # overrides source → "web"
-        logger.info(f"RAG resolve: WEB-ONLY (no database matches) | query: {query[:50]}")
-        return final
-
-    # Both empty — AI will answer from training knowledge
-    logger.info(f"RAG resolve: NO CONTEXT (no database or web results, using AI training only) | query: {query[:50]}")
+    # Nothing in DB — AI answers from training knowledge
+    logger.info(f"RAG resolve: NO CONTEXT — AI uses training knowledge | query: {query[:50]}")
     return {"chunks": [], "chapters": [], "subjects": [], "source": "none", "quality": "none"}
 
 
@@ -2130,7 +1897,6 @@ def build_rag_system_prompt(
       Tier 0 — document (uploaded .txt file — absolute priority)
       Tier 1 — DB content chunks
       Tier 2 — Subject metadata (descriptions, tags, chapter titles)
-      Tier 3 — Web search (fallback)
     """
     base_prompt = build_system_prompt(context, user_info=user_info, query=query)
     source      = rag_context.get("source",  "none")
@@ -2138,7 +1904,6 @@ def build_rag_system_prompt(
     chunks      = rag_context.get("chunks",   [])
     chapters    = rag_context.get("chapters", [])
     subjects    = rag_context.get("subjects", [])
-    web_results = rag_context.get("results", "") or rag_context.get("web_results", "")
     document_text = rag_context.get("document_text", "")
 
     grounding = ""
@@ -2180,7 +1945,7 @@ def build_rag_system_prompt(
         return base_prompt + grounding
 
     # ── Tier 1/2: Curriculum DB context ──────────────────────────────────────
-    if source in ("rag", "rag+web") and (chunks or subjects or chapters):
+    if source == "rag" and (chunks or subjects or chapters):
 
         if quality == "high":
             # Tier 1 — Real chunks (perfect RAG)
@@ -2231,66 +1996,6 @@ def build_rag_system_prompt(
                 "\n---\n"
                 "*INSTRUCTION: Use the curriculum metadata above to keep your answer "
                 "syllabus-aligned. Draw on your training knowledge for the full answer.*"
-            )
-
-    # ── Tier 3: Web search context ────────────────────────────────────────────
-    if web_results:
-        # Build source-trust legend from web_sources if available
-        web_sources = rag_context.get("web_sources", [])
-        source_legend = ""
-        if web_sources:
-            lines = []
-            for s in web_sources[:5]:
-                tier  = s.get("tier", "General")
-                title = s.get("title", "")[:60]
-                url   = s.get("url", "")
-                lines.append(f"  • [{tier}] {title} — {url}")
-            source_legend = "\nSources retrieved (ranked by trust):\n" + "\n".join(lines) + "\n"
-
-        source_trust_instruction = (
-            "\n\nSOURCE TRUST HIERARCHY for this answer:\n"
-            "  1. [Official Assam Board] — SEBA / AHSEC / Assam Govt portals: HIGHEST trust. "
-            "Quote directly when available.\n"
-            "  2. [Assam University] — Gauhati University / Dibrugarh University / other Assam "
-            "universities: HIGH trust. Use as primary reference for Degree-level questions.\n"
-            "  3. [National Board] — NCERT / NIOS / CBSE: MEDIUM trust. Use only when no "
-            "Assam-specific source covers the topic.\n"
-            "  4. [General] — Other web sources: LOW trust. Use only to fill factual gaps; "
-            "always cross-check with syllabus knowledge.\n"
-            "\nIf results tagged [Official Assam Board] or [Assam University] are present, "
-            "base your answer primarily on those. Discard or downweight [General] results "
-            "if Assam-specific content is available."
-        )
-
-        if source == "rag+web":
-            grounding += (
-                "\n\n---\n"
-                "**SUPPLEMENTARY WEB CONTEXT (Assam-Education Priority Search):**\n"
-                "The following results were retrieved and ranked by relevance to SEBA / AHSEC / "
-                "Gauhati University / Dibrugarh University. Use to fill gaps in the syllabus content above.\n"
-                + source_legend
-                + "\n"
-                + web_results
-                + "\n\n---\n"
-                + source_trust_instruction
-                + "\n\n*INSTRUCTION: Prioritise the Tier 1/2 syllabus content above. "
-                "Use web context only to supplement where the syllabus blocks are incomplete.*"
-            )
-        else:
-            # Web-only (nothing in DB)
-            grounding += (
-                "\n\n---\n"
-                "**WEB SEARCH CONTEXT — Assam-Education Priority Search**\n"
-                "(No matching content found in the syllabus database. "
-                "Results below are ranked by Assam-board relevance.)\n"
-                + source_legend
-                + "\n"
-                + web_results
-                + "\n\n---\n"
-                + source_trust_instruction
-                + "\n\n*INSTRUCTION: Base your answer on [Official Assam Board] and "
-                "[Assam University] sources first. Supplement with training knowledge. "
-                "Mention if the information is not from the specific board syllabus.*"
             )
 
     return base_prompt + grounding if grounding else base_prompt
