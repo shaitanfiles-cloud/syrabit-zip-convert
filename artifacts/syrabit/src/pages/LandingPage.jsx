@@ -330,18 +330,6 @@ export default function LandingPage() {
           ══════════════════════════════════════════ */}
       <section className="relative min-h-screen flex items-center justify-center pt-16 overflow-hidden">
 
-        {/* ── Gradient mesh background ── */}
-        <div className="absolute inset-0 pointer-events-none">
-          <GlowOrb color="radial-gradient(circle,#7c3aed,transparent)" size={900} x="-15%" y="-25%" blur={130} opacity={0.26} animRange={45} duration={20} />
-          <GlowOrb color="radial-gradient(circle,#4f46e5,transparent)" size={650} x="58%" y="38%" blur={110} opacity={0.18} animRange={35} duration={15} />
-          <GlowOrb color="radial-gradient(circle,#8b5cf6,transparent)" size={500} x="28%" y="58%" blur={100} opacity={0.14} animRange={28} duration={22} />
-          <GlowOrb color="radial-gradient(circle,#2563eb,transparent)" size={400} x="82%" y="-15%" blur={90}  opacity={0.12} animRange={22} duration={17} />
-          <GlowOrb color="radial-gradient(circle,#6d28d9,transparent)" size={350} x="50%" y="80%" blur={80}   opacity={0.10} animRange={18} duration={25} />
-        </div>
-
-        {/* ── Floating particles ── */}
-        <FloatingParticles />
-
         {/* ── Grid overlay ── */}
         <div
           className="absolute inset-0 pointer-events-none"
