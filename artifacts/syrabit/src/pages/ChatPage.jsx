@@ -279,6 +279,14 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
     ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '';
 
+  // Strip trailing "Sources: [PAGE/CHAPTER: ...] ..." line the AI appends — shown separately below
+  const cleanContent = useMemo(() => {
+    if (!msg.content) return msg.content;
+    return msg.content
+      .replace(/\n*\n?Sources?:\s*((\[(PAGE|CHAPTER):[^\]]+\][,\s]*)+\.?\s*)$/gi, '')
+      .trim();
+  }, [msg.content]);
+
   return (
     <motion.div
       variants={bubbleVariants}
@@ -332,14 +340,24 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
 
             {msg.streaming && msg.content && (
               <div className="chat-blog-card">
-                <MarkdownContent content={msg.content} streaming={true} sources={msg.sources} />
+                <MarkdownContent content={cleanContent} streaming={true} sources={msg.sources} />
               </div>
             )}
 
             {!msg.streaming && msg.content && (
               <div className="chat-blog-card">
-                <MarkdownContent content={msg.content} streaming={false} sources={msg.sources} />
+                <MarkdownContent content={cleanContent} streaming={false} sources={msg.sources} />
               </div>
+            )}
+
+            {!msg.streaming && msg.content && (
+              <SourcesCard
+                sources={msg.sources}
+                ragSource={msg.rag_source}
+                ragChunks={msg.rag_chunks}
+                ragSubjectId={msg.rag_subject_id}
+                ragSubjectName={msg.rag_subject_name}
+              />
             )}
 
             {!msg.streaming && msg.content && (
