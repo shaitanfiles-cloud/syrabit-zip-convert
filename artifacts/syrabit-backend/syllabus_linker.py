@@ -143,22 +143,28 @@ class SyllabusLinker:
         created: list[str] = []
 
         # 1 — Board
-        board_id, board_name = await self._find_or_create_board(entry.board_name, created)
+        board_id, board_name, board_slug = await self._find_or_create_board(entry.board_name, created)
 
         # 2 — Class (semester)
-        class_id, class_name = await self._find_or_create_class(entry, board_id, created)
+        class_id, class_name, class_slug = await self._find_or_create_class(entry, board_id, created)
 
         # 3 — Streams (NEP type stream or discipline stream)
         stream_keys = _resolve_stream_keys(entry.stream_hint, entry.paper_type, board_id)
         linked_streams: list[dict] = []
         for sk in stream_keys:
-            sid, sname = await self._find_or_create_stream(class_id, sk, entry.paper_type, created)
-            linked_streams.append({"stream_id": sid, "stream_name": sname})
+            sid, sname, sslug = await self._find_or_create_stream(class_id, sk, entry.paper_type, created)
+            linked_streams.append({"stream_id": sid, "stream_name": sname, "stream_slug": sslug})
 
         # 4 + 5 — Subject + Chapters per stream
         subject_ids: list[str] = []
+        ctx = {
+            "board_id": board_id, "board_name": board_name, "board_slug": board_slug,
+            "class_id": class_id, "class_name": class_name, "class_slug": class_slug,
+        }
         for s in linked_streams:
-            subj_id = await self._find_or_create_subject(s["stream_id"], entry, created)
+            subj_id = await self._find_or_create_subject(
+                s["stream_id"], s["stream_slug"], entry, ctx, created
+            )
             subject_ids.append(subj_id)
             await self._upsert_chapters(subj_id, entry.chapters, created)
 
@@ -171,7 +177,7 @@ class SyllabusLinker:
 
     # ── Board ─────────────────────────────────────────────────────────────────
 
-    async def _find_or_create_board(self, board_name_raw: str, created: list) -> tuple[str, str]:
+    async def _find_or_create_board(self, board_name_raw: str, created: list) -> tuple[str, str, str]:
         board_key = _detect_board_key(board_name_raw)
         seed_map = {"degree": _DEGREE_BOARD, "ahsec": _AHSEC_BOARD, "seba": _SEBA_BOARD}
         seed = seed_map.get(board_key)
@@ -181,13 +187,13 @@ class SyllabusLinker:
             if not doc:
                 await self._db.boards.insert_one({**seed, "created_at": _NOW()})
                 created.append(f"Board: {seed['name']}")
-            return seed["id"], seed["name"]
+            return seed["id"], seed["name"], seed["slug"]
 
         # Unknown → create as custom autonomous-college board
         slug = _slugify(board_name_raw) or "unknown-board"
         doc = await self._db.boards.find_one({"slug": slug})
         if doc:
-            return doc["id"], doc["name"]
+            return doc["id"], doc["name"], doc.get("slug", slug)
         new_id = f"board_{slug[:20]}"
         new_board = {
             "id": new_id, "name": board_name_raw, "slug": slug,
@@ -197,13 +203,13 @@ class SyllabusLinker:
         }
         await self._db.boards.insert_one(new_board)
         created.append(f"Board: {board_name_raw}")
-        return new_id, board_name_raw
+        return new_id, board_name_raw, slug
 
     # ── Class ─────────────────────────────────────────────────────────────────
 
     async def _find_or_create_class(
         self, entry: SyllabusEntry, board_id: str, created: list
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str, str]:
         sem_num = _parse_semester_number(entry.semester or entry.class_year)
 
         if sem_num:
@@ -215,7 +221,7 @@ class SyllabusLinker:
 
         doc = await self._db.classes.find_one({"board_id": board_id, "slug": class_slug})
         if doc:
-            return doc["id"], doc["name"]
+            return doc["id"], doc["name"], doc.get("slug", class_slug)
 
         new_id = f"cls_{board_id}_{class_slug}"
         new_class = {
@@ -226,7 +232,7 @@ class SyllabusLinker:
         }
         await self._db.classes.insert_one(new_class)
         created.append(f"Class: {class_name}")
-        return new_id, class_name
+        return new_id, class_name, class_slug
 
     # ── Stream ────────────────────────────────────────────────────────────────
 
@@ -241,22 +247,33 @@ class SyllabusLinker:
 
         doc = await self._db.streams.find_one({"class_id": class_id, "slug": defn["slug"]})
         if doc:
-            return doc["id"], doc["name"]
+            return doc["id"], doc["name"], doc.get("slug", defn["slug"])
 
         new_id = f"strm_{class_id}_{defn['slug']}"
         new_stream = {"id": new_id, "class_id": class_id, **defn, "created_at": _NOW()}
         await self._db.streams.insert_one(new_stream)
         created.append(f"Stream: {defn['name']}")
-        return new_id, defn["name"]
+        return new_id, defn["name"], defn["slug"]
 
     # ── Subject ───────────────────────────────────────────────────────────────
 
     async def _find_or_create_subject(
-        self, stream_id: str, entry: SyllabusEntry, created: list
+        self, stream_id: str, stream_slug: str, entry: SyllabusEntry,
+        ctx: dict, created: list
     ) -> str:
         slug = _slugify(entry.subject_name)
         doc = await self._db.subjects.find_one({"stream_id": stream_id, "slug": slug})
         if doc:
+            # Patch missing navigation slugs on existing docs
+            missing = {}
+            if not doc.get("board_slug") and ctx.get("board_slug"):
+                missing["board_slug"] = ctx["board_slug"]
+            if not doc.get("class_slug") and ctx.get("class_slug"):
+                missing["class_slug"] = ctx["class_slug"]
+            if not doc.get("stream_slug") and stream_slug:
+                missing["stream_slug"] = stream_slug
+            if missing:
+                await self._db.subjects.update_one({"id": doc["id"]}, {"$set": missing})
             return doc["id"]
 
         icon_map = {
@@ -290,6 +307,15 @@ class SyllabusLinker:
             "status": "published",
             "source": "pdf_import",
             "nep": True,
+            # Navigation slugs for chapter deep-links
+            "board_slug": ctx.get("board_slug", ""),
+            "class_slug": ctx.get("class_slug", ""),
+            "stream_slug": stream_slug,
+            # Display context
+            "boardId": ctx.get("board_id", ""),
+            "boardName": ctx.get("board_name", ""),
+            "className": ctx.get("class_name", ""),
+            "streamName": entry.stream_hint or ctx.get("class_name", ""),
             "created_at": _NOW(),
         })
         created.append(f"Subject: {entry.subject_name}")
@@ -309,8 +335,14 @@ class SyllabusLinker:
                 "id": str(uuid.uuid4()),
                 "subject_id": subject_id,
                 "title": title, "slug": slug,
+                "description": f"Chapter {i}: {title}",
                 "chapter_number": i,
-                "content": "", "source": "pdf_import",
+                "order_index": i,
+                "order": i,
+                "content": "",
+                "content_type": "notes",
+                "status": "published",
+                "source": "pdf_import",
                 "created_at": _NOW(),
             })
             count += 1
