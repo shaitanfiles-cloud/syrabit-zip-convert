@@ -11884,17 +11884,24 @@ For EACH subject, return one JSON object in this exact schema:
   "credits": <integer credits, else 0>,
   "paper_type": "{paper_type}",
   "stream_target": "<Who this course is for — one of: 'All', 'Commerce', 'Arts', 'Science', 'Arts & Science', 'Commerce & Arts'>",
-  "chapters": ["<Unit I or Chapter 1 title>", "<Unit II title>", ...],
+  "chapters": [
+    {{
+      "title": "<Unit I or Chapter 1 exact title as printed>",
+      "description": "<Concise summary of all topics/subtopics listed under this unit — write as a flowing sentence or comma-separated list, max 3 sentences>",
+      "topics": ["<subtopic 1>", "<subtopic 2>", "<subtopic 3>"]
+    }}
+  ],
   "topics": ["<Key topic or subtopic 1>", "<Key topic 2>", ...],
   "guidelines": "<Course objectives / outcomes / learning goals as a single string, or ''>"
 }}
 
 Rules:
 - Extract EVERY subject/course in the PDF — do NOT skip any.
-- chapters = the numbered units or chapters listed in the detailed syllabus table.
-- topics = key terms, subtopics, or bullet points within the units (max 20 per subject).
+- chapters = the numbered units or chapters from the detailed syllabus table, each with its content description.
+- For each chapter, description must summarise exactly what topics appear under that unit in the PDF.
+- topics (top-level) = key terms across all units (max 20 per subject).
 - stream_target: if the PDF says "For all (Arts+Commerce+Science)" → "All"; "For Commerce" → "Commerce"; "For Arts & Science" → "Arts & Science".
-- If semester is not stated but semester number can be inferred from the course code (e.g. VAC-01012 → Semester 1), use it.
+- If semester is not stated but can be inferred from the course code (e.g. VAC-01012 → Semester 1), use it.
 - Return ONLY a valid JSON array. No markdown fences, no explanations.
 """.strip()
 
@@ -12039,18 +12046,38 @@ async def syllabus_import_pdf(
         if sem_num and not sem_raw:
             sem_raw = f"Semester {sem_num}"
 
+        # Normalise chapters: accept [{title, description, topics}] OR ["title"]
+        raw_chaps = entry_raw.get("chapters", [])
+        chapter_details: list[dict] = []
+        chapter_titles: list[str]   = []
+        for ch in raw_chaps:
+            if isinstance(ch, dict):
+                title = (ch.get("title") or ch.get("name") or "").strip()
+                if title:
+                    chapter_details.append({
+                        "title":       title,
+                        "description": (ch.get("description") or "").strip(),
+                        "topics":      [t for t in (ch.get("topics") or []) if isinstance(t, str)],
+                    })
+                    chapter_titles.append(title)
+            elif isinstance(ch, str) and ch.strip():
+                title = ch.strip()
+                chapter_titles.append(title)
+                chapter_details.append({"title": title, "description": "", "topics": []})
+
         entry = SyllabusEntry(
-            board_name   = (entry_raw.get("board") or "").strip(),
-            class_year   = (entry_raw.get("class_year") or "").strip(),
-            semester     = sem_raw.strip(),
-            subject_name = subject_name,
-            paper_type   = paper_type,
-            stream_hint  = (entry_raw.get("stream_target") or "All").strip(),
-            chapters     = [c for c in entry_raw.get("chapters", []) if isinstance(c, str)],
-            topics       = [t for t in entry_raw.get("topics", []) if isinstance(t, str)][:20],
-            guidelines   = (entry_raw.get("guidelines") or "").strip(),
-            course_code  = (entry_raw.get("course_code") or "").strip(),
-            credits      = int(entry_raw.get("credits") or 0),
+            board_name      = (entry_raw.get("board") or "").strip(),
+            class_year      = (entry_raw.get("class_year") or "").strip(),
+            semester        = sem_raw.strip(),
+            subject_name    = subject_name,
+            paper_type      = paper_type,
+            stream_hint     = (entry_raw.get("stream_target") or "All").strip(),
+            chapters        = chapter_titles,
+            chapter_details = chapter_details,
+            topics          = [t for t in entry_raw.get("topics", []) if isinstance(t, str)][:20],
+            guidelines      = (entry_raw.get("guidelines") or "").strip(),
+            course_code     = (entry_raw.get("course_code") or "").strip(),
+            credits         = int(entry_raw.get("credits") or 0),
         )
 
         try:
@@ -12072,6 +12099,7 @@ async def syllabus_import_pdf(
             "credits": entry.credits,
             "stream_target": entry.stream_hint,
             "chapters": entry.chapters,
+            "chapter_details": entry.chapter_details,
             "topics": entry.topics,
             "guidelines": entry.guidelines,
             # Resolved DB IDs
@@ -12257,18 +12285,38 @@ async def confirm_syllabus_import(
         if sem_num and not sem_raw:
             sem_raw = f"Semester {sem_num}"
 
+        # Normalise chapters: accept [{title, description, topics}] OR ["title"]
+        raw_chaps2 = entry_raw.get("chapters", [])
+        chapter_details2: list[dict] = []
+        chapter_titles2: list[str]   = []
+        for ch in raw_chaps2:
+            if isinstance(ch, dict):
+                title = (ch.get("title") or ch.get("name") or "").strip()
+                if title:
+                    chapter_details2.append({
+                        "title":       title,
+                        "description": (ch.get("description") or "").strip(),
+                        "topics":      [t for t in (ch.get("topics") or []) if isinstance(t, str)],
+                    })
+                    chapter_titles2.append(title)
+            elif isinstance(ch, str) and ch.strip():
+                title = ch.strip()
+                chapter_titles2.append(title)
+                chapter_details2.append({"title": title, "description": "", "topics": []})
+
         entry = SyllabusEntry(
-            board_name   = (entry_raw.get("board") or "").strip(),
-            class_year   = (entry_raw.get("class_year") or "").strip(),
-            semester     = sem_raw.strip(),
-            subject_name = subject_name,
-            paper_type   = paper_type,
-            stream_hint  = (entry_raw.get("stream_target") or "All").strip(),
-            chapters     = [c for c in entry_raw.get("chapters", []) if isinstance(c, str)],
-            topics       = [t for t in entry_raw.get("topics", []) if isinstance(t, str)][:20],
-            guidelines   = (entry_raw.get("guidelines") or "").strip(),
-            course_code  = (entry_raw.get("course_code") or "").strip(),
-            credits      = int(entry_raw.get("credits") or 0),
+            board_name      = (entry_raw.get("board") or "").strip(),
+            class_year      = (entry_raw.get("class_year") or "").strip(),
+            semester        = sem_raw.strip(),
+            subject_name    = subject_name,
+            paper_type      = paper_type,
+            stream_hint     = (entry_raw.get("stream_target") or "All").strip(),
+            chapters        = chapter_titles2,
+            chapter_details = chapter_details2,
+            topics          = [t for t in entry_raw.get("topics", []) if isinstance(t, str)][:20],
+            guidelines      = (entry_raw.get("guidelines") or "").strip(),
+            course_code     = (entry_raw.get("course_code") or "").strip(),
+            credits         = int(entry_raw.get("credits") or 0),
         )
         try:
             link = await linker.link(entry)
@@ -12282,7 +12330,8 @@ async def confirm_syllabus_import(
             "semester": entry.semester, "subject_name": subject_name,
             "course_code": entry.course_code, "credits": entry.credits,
             "stream_target": entry.stream_hint, "chapters": entry.chapters,
-            "topics": entry.topics, "guidelines": entry.guidelines,
+            "chapter_details": entry.chapter_details, "topics": entry.topics,
+            "guidelines": entry.guidelines,
             "linked_board_id":   link.board_id   if link else None,
             "linked_class_id":   link.class_id   if link else None,
             "linked_stream_ids": [s["stream_id"] for s in link.streams] if link else [],

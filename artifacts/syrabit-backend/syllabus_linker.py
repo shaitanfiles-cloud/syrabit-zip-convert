@@ -105,17 +105,18 @@ _NOW = lambda: datetime.now(timezone.utc).isoformat()
 @dataclass
 class SyllabusEntry:
     """One extracted subject from a PDF."""
-    board_name:   str
-    class_year:   str
-    semester:     str
-    subject_name: str
-    paper_type:   str      # aec | sec | mdc | vac | ge | cc | major | minor
-    stream_hint:  str      # "Commerce" / "Arts & Science" / "All" / …
-    chapters:     list[str] = field(default_factory=list)
-    topics:       list[str] = field(default_factory=list)
-    guidelines:   str = ""
-    course_code:  str = ""
-    credits:      int = 0
+    board_name:      str
+    class_year:      str
+    semester:        str
+    subject_name:    str
+    paper_type:      str      # aec | sec | mdc | vac | ge | cc | major | minor
+    stream_hint:     str      # "Commerce" / "Arts & Science" / "All" / …
+    chapters:        list[str] = field(default_factory=list)
+    chapter_details: list[dict] = field(default_factory=list)  # [{title, description, topics}]
+    topics:          list[str] = field(default_factory=list)
+    guidelines:      str = ""
+    course_code:     str = ""
+    credits:         int = 0
 
 
 @dataclass
@@ -165,7 +166,7 @@ class SyllabusLinker:
                 s["stream_id"], s["stream_slug"], entry, ctx, created
             )
             subject_ids.append(subj_id)
-            await self._upsert_chapters(subj_id, entry.chapters, created)
+            await self._upsert_chapters(subj_id, entry.chapters, created, entry.chapter_details)
 
         return LinkResult(
             board_id=board_id, board_name=board_name,
@@ -323,22 +324,53 @@ class SyllabusLinker:
     # ── Chapters ──────────────────────────────────────────────────────────────
 
     async def _upsert_chapters(
-        self, subject_id: str, chapter_titles: list[str], created: list
+        self, subject_id: str, chapter_titles: list[str], created: list,
+        chapter_details: list[dict] | None = None,
     ) -> None:
+        # Build a lookup by index so we can pull description + topics
+        details_map: dict[int, dict] = {}
+        if chapter_details:
+            for idx, det in enumerate(chapter_details):
+                details_map[idx] = det
+
         count = 0
         for i, title in enumerate(chapter_titles, 1):
             slug = _slugify(title)
-            if await self._db.chapters.find_one({"subject_id": subject_id, "slug": slug}):
+            det  = details_map.get(i - 1, {})
+            detail_desc  = (det.get("description") or "").strip()
+            detail_topics: list[str] = det.get("topics") or []
+
+            # Build a readable content markdown from the topics list
+            if detail_topics:
+                topics_md = "\n".join(f"- {t}" for t in detail_topics)
+                content_md = f"**{title}**\n\n{detail_desc}\n\n**Key Topics:**\n{topics_md}" if detail_desc else f"**{title}**\n\n**Key Topics:**\n{topics_md}"
+            elif detail_desc:
+                content_md = f"**{title}**\n\n{detail_desc}"
+            else:
+                content_md = f"**{title}**"
+
+            description = detail_desc or f"Chapter {i}: {title}"
+
+            existing = await self._db.chapters.find_one({"subject_id": subject_id, "slug": slug})
+            if existing:
+                # Update description/content if we now have richer data
+                if detail_desc and not existing.get("description", "").strip():
+                    await self._db.chapters.update_one(
+                        {"_id": existing["_id"]},
+                        {"$set": {"description": description, "content": content_md, "topics": detail_topics}},
+                    )
                 continue
+
             await self._db.chapters.insert_one({
                 "id": str(uuid.uuid4()),
                 "subject_id": subject_id,
                 "title": title, "slug": slug,
-                "description": f"Chapter {i}: {title}",
+                "description": description,
+                "content": content_md,
+                "topics": detail_topics,
                 "chapter_number": i,
                 "order_index": i,
                 "order": i,
-                "content": "",
                 "content_type": "notes",
                 "status": "published",
                 "source": "pdf_import",

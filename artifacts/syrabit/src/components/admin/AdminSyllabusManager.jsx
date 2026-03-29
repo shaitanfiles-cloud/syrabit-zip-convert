@@ -758,13 +758,26 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
                                   <Pencil size={10} /> Edit
                                 </button>
                               </div>
-                              <ol className="space-y-1 max-h-56 overflow-y-auto pr-1">
-                                {(imp.chapters || []).map((ch, ci) => (
-                                  <li key={ci} className="flex items-start gap-2 text-xs">
-                                    <span className="text-white/25 w-5 text-right flex-shrink-0">{ci + 1}.</span>
-                                    <span className="text-white/70">{ch}</span>
-                                  </li>
-                                ))}
+                              <ol className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                                {(imp.chapter_details || imp.chapters || []).map((ch, ci) => {
+                                  const title = typeof ch === 'string' ? ch : (ch.title || '');
+                                  const desc  = typeof ch === 'string' ? '' : (ch.description || '');
+                                  const topics = typeof ch === 'string' ? [] : (ch.topics || []);
+                                  return (
+                                    <li key={ci} className="flex items-start gap-2 text-xs">
+                                      <span className="text-white/25 w-5 text-right flex-shrink-0 mt-0.5">{ci + 1}.</span>
+                                      <div className="flex-1 min-w-0">
+                                        <span className="text-white/75 font-medium">{title}</span>
+                                        {desc && (
+                                          <p className="text-white/40 text-[10px] leading-relaxed mt-0.5">{desc}</p>
+                                        )}
+                                        {!desc && topics.length > 0 && (
+                                          <p className="text-white/35 text-[10px] mt-0.5">{topics.slice(0, 5).join(' · ')}</p>
+                                        )}
+                                      </div>
+                                    </li>
+                                  );
+                                })}
                               </ol>
                               {imp.guidelines && (
                                 <div className="pt-2 border-t" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
@@ -1211,24 +1224,41 @@ function PreviewEditPanel({
                   {/* Chapters */}
                   <div>
                     <label className="text-[9px] text-white/35 uppercase tracking-wide block mb-1">Chapters ({(sub.chapters || []).length})</label>
-                    <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
-                      {(sub.chapters || []).map((ch, ci) => (
-                        <div key={ci} className="flex items-center gap-1 group">
-                          <input
-                            className={inputCls + ' flex-1'}
-                            value={ch}
-                            onChange={e => {
-                              const chaps = [...(sub.chapters || [])];
-                              chaps[ci] = e.target.value;
-                              onUpdateSubject(idx, 'chapters', chaps);
-                            }}
-                          />
-                          <button onClick={() => onRemoveChapter(idx, ci)}
-                            className="text-red-400/40 hover:text-red-400 transition opacity-0 group-hover:opacity-100 flex-shrink-0">
-                            <Trash2 size={10} />
-                          </button>
-                        </div>
-                      ))}
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                      {(sub.chapters || []).map((ch, ci) => {
+                        const chTitle = typeof ch === 'string' ? ch : (ch.title || '');
+                        const chDesc  = typeof ch === 'string' ? '' : (ch.description || '');
+                        const chTopics = typeof ch === 'string' ? [] : (ch.topics || []);
+                        return (
+                          <div key={ci} className="group">
+                            <div className="flex items-center gap-1">
+                              <input
+                                className={inputCls + ' flex-1'}
+                                value={chTitle}
+                                onChange={e => {
+                                  const chaps = [...(sub.chapters || [])];
+                                  if (typeof chaps[ci] === 'string') {
+                                    chaps[ci] = e.target.value;
+                                  } else {
+                                    chaps[ci] = { ...chaps[ci], title: e.target.value };
+                                  }
+                                  onUpdateSubject(idx, 'chapters', chaps);
+                                }}
+                              />
+                              <button onClick={() => onRemoveChapter(idx, ci)}
+                                className="text-red-400/40 hover:text-red-400 transition opacity-0 group-hover:opacity-100 flex-shrink-0">
+                                <Trash2 size={10} />
+                              </button>
+                            </div>
+                            {chDesc && (
+                              <p className="text-[9px] text-white/35 leading-relaxed mt-0.5 ml-1 line-clamp-2">{chDesc}</p>
+                            )}
+                            {!chDesc && chTopics.length > 0 && (
+                              <p className="text-[9px] text-white/25 mt-0.5 ml-1 truncate">{chTopics.slice(0, 4).join(' · ')}</p>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                     {/* Add chapter */}
                     <div className="flex items-center gap-1 mt-1.5">
