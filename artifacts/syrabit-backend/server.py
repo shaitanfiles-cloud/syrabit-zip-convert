@@ -1694,6 +1694,7 @@ async def get_visitor_stats() -> dict:
         visitors_today_count = len(visitors_today)
 
         page_views_today = await db.page_views.count_documents({"date": today})
+        total_page_views = await db.page_views.count_documents({})
 
         # Daily visitors last 7 days
         daily_visitors = []
@@ -1707,11 +1708,12 @@ async def get_visitor_stats() -> dict:
             "total_visitors": total_visitors_count,
             "visitors_today": visitors_today_count,
             "page_views_today": page_views_today,
+            "total_page_views": total_page_views,
             "daily_visitors": daily_visitors,
         }
     except Exception as e:
         logger.error(f"get_visitor_stats error: {e}")
-        return {"total_visitors": 0, "visitors_today": 0, "page_views_today": 0, "daily_visitors": []}
+        return {"total_visitors": 0, "visitors_today": 0, "page_views_today": 0, "total_page_views": 0, "daily_visitors": []}
 
 
 async def get_recent_user_events(limit: int = 10) -> list:

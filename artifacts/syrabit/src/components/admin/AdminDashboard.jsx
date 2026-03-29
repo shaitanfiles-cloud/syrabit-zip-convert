@@ -420,13 +420,12 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         <StatCard label="Visitors Today"  value={vs.visitors_today}   icon={TrendingUp} color="#f97316" pulse />
         <StatCard label="Page Views Today" value={vs.page_views_today} icon={Eye}        color="#ec4899" pulse />
         <StatCard
-          label="Active Users"
-          value={data?.plan_distribution
-            ? Object.values(data.plan_distribution).reduce((a, b) => a + b, 0) : 0}
-          icon={Activity}
+          label="Total Page Views"
+          value={vs?.total_page_views ?? 0}
+          icon={BarChart2}
           color="#84cc16"
-          subLabel="Paid"
-          subValue={(data?.plan_distribution?.starter || 0) + (data?.plan_distribution?.pro || 0)}
+          subLabel="Today"
+          subValue={vs?.page_views_today ?? 0}
         />
       </div>
 
