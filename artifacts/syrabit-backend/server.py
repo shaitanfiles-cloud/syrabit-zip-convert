@@ -12497,6 +12497,9 @@ async def confirm_syllabus_import(
             "created_nodes": link.created_nodes if link else [],
         })
 
+    _invalidate_content_cache("boards")
+    _invalidate_content_cache("classes")
+    _invalidate_content_cache("streams")
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
     try:
@@ -12509,6 +12512,7 @@ async def confirm_syllabus_import(
         "import_id": import_id,
         "filename": filename,
         "paper_type": paper_type,
+        "subjects_saved": len(saved_subjects),
         "subjects_extracted": len(saved_subjects),
         "subjects": saved_subjects,
     }

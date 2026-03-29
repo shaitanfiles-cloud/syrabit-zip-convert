@@ -343,7 +343,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     } catch { toast.error('Failed to load content data'); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(true); }, [load]);
 
   // Pre-fill selectors from hub context (only if nothing selected yet and data is loaded)
   useEffect(() => {
