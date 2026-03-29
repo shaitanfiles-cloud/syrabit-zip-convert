@@ -67,12 +67,24 @@ class SyllabusEmbedder:
     # ──────────────────────────────────────────────────────────────────────────
 
     async def ensure_seeded(self) -> int:
-        """Seed embeddings for all chapters that don't yet have one. Returns count inserted."""
+        """Seed embeddings for all chapters that don't yet have one. Skips if already seeded."""
         if self._col is None:
             return 0
         async with self._seed_lock:
             if self._seeded:
                 return 0
+            inserted = await self._seed_chapters()
+            self._seeded = True
+            return inserted
+
+    async def reseed(self) -> int:
+        """Force re-seed — embed any chapters not yet in syllabus_embeddings. Called after PDF import."""
+        if self._col is None:
+            return 0
+        async with self._seed_lock:
+            self._seeded = False       # allow _seed_chapters to run again
+            self._cache = []           # clear in-memory cache so new chapters are picked up
+            self._cache_loaded_at = 0.0
             inserted = await self._seed_chapters()
             self._seeded = True
             return inserted

@@ -792,7 +792,7 @@ app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 async def _seed_syllabus_embeddings():
-    """Background task: embed all SEED_DATA chapters into MongoDB on first run."""
+    """Background task: embed all chapters on first startup (skips if already seeded)."""
     global _syllabus_embedder
     if _syllabus_embedder is None:
         return
@@ -802,6 +802,19 @@ async def _seed_syllabus_embeddings():
             logger.info(f"SyllabusEmbedder: seeded {inserted} chapter embeddings in background")
     except Exception as exc:
         logger.warning(f"SyllabusEmbedder background seed failed: {exc}")
+
+
+async def _reseed_syllabus_embeddings():
+    """Background task: force re-embed all chapters (called after PDF import creates new chapters)."""
+    global _syllabus_embedder
+    if _syllabus_embedder is None:
+        return
+    try:
+        inserted = await _syllabus_embedder.reseed()
+        if inserted > 0:
+            logger.info(f"SyllabusEmbedder: re-seeded {inserted} new chapter embeddings after PDF import")
+    except Exception as exc:
+        logger.warning(f"SyllabusEmbedder re-seed failed: {exc}")
 
 
 # ─────────────────────────────────────────────
@@ -11957,8 +11970,7 @@ async def syllabus_import_pdf(
                 prompt + "\n\nSYLLABUS TEXT:\n" + pages_text[:12000] +
                 "\n\nReturn ONLY valid JSON array."
             )
-            # Use server's SLM pool
-            from server import slm_pool  # type: ignore[import]
+            # Use server's SLM pool (module-level, no circular import)
             raw_slm = await slm_pool.generate(slm_prompt, max_tokens=4096, temperature=0.1)
             cleaned = (raw_slm or "").strip().lstrip("```json").lstrip("```").rstrip("```").strip()
             extracted = json.loads(cleaned)
@@ -12062,9 +12074,16 @@ async def syllabus_import_pdf(
     except Exception:
         pass
 
-    # Re-seed new chapter embeddings in the background
+    # Invalidate content caches so new boards/classes/streams/subjects are visible immediately
+    _invalidate_content_cache("boards")
+    _invalidate_content_cache("classes")
+    _invalidate_content_cache("streams")
+    _invalidate_content_cache("subjects")
+    _invalidate_content_cache("chapters")
+
+    # Re-embed new chapters in background (force re-seed even if already seeded once)
     if _syllabus_embedder is not None:
-        asyncio.create_task(_seed_syllabus_embeddings())
+        asyncio.create_task(_reseed_syllabus_embeddings())
 
     return {
         "success": True,
