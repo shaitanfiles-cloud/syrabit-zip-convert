@@ -1280,148 +1280,12 @@ SEED_DATA = {
         # SEBA Class 10 streams
         {"id": "s22", "class_id": "c6", "name": "General", "slug": "general", "description": "General stream — SEBA Class 10", "icon": "📚", "created_at": "2024-01-01T00:00:00Z"},
     ],
-    "subjects": [
-        # ── AHSEC HS 1st Year – Science (PCM) ────────────────────────────────
-        {"id": "sub1",  "stream_id": "s13", "name": "Physics",      "slug": "physics",      "description": "Mechanics, Thermodynamics, Waves, Optics — AHSEC Class 11",             "tags": ["Mechanics", "Waves", "Thermodynamics"],   "icon": "⚡", "gradient": "physics",  "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub2",  "stream_id": "s13", "name": "Chemistry",    "slug": "chemistry",    "description": "Atomic Structure, Chemical Bonding, Thermodynamics — AHSEC Class 11",   "tags": ["Atomic", "Bonding", "Organic"],           "icon": "🧪", "gradient": "chemistry","chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub3",  "stream_id": "s13", "name": "Mathematics",  "slug": "mathematics",  "description": "Sets, Trigonometry, Algebra, Calculus Intro — AHSEC Class 11",          "tags": ["Sets", "Trigonometry", "Calculus"],       "icon": "📐", "gradient": "math",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── AHSEC HS 1st Year – Science (PCB) ────────────────────────────────
-        {"id": "sub4",  "stream_id": "s14", "name": "Physics",      "slug": "physics",      "description": "Mechanics, Thermodynamics, Waves, Optics — AHSEC Class 11",             "tags": ["Mechanics", "Waves", "Thermodynamics"],   "icon": "⚡", "gradient": "physics",  "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub5",  "stream_id": "s14", "name": "Chemistry",    "slug": "chemistry",    "description": "Atomic Structure, Chemical Bonding, Thermodynamics — AHSEC Class 11",   "tags": ["Atomic", "Bonding", "Organic"],           "icon": "🧪", "gradient": "chemistry","chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub6",  "stream_id": "s14", "name": "Biology",      "slug": "biology",      "description": "Cell Biology, Plant Physiology, Human Physiology, Genetics — Class 11", "tags": ["Cell", "Physiology", "Genetics"],         "icon": "🌿", "gradient": "chemistry","chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── AHSEC HS 1st Year – Arts ──────────────────────────────────────────
-        {"id": "sub7",  "stream_id": "s15", "name": "Political Science", "slug": "political-science", "description": "Political Theory, Indian Constitution, Electoral System — Class 11",  "tags": ["Constitution", "Theory", "Elections"],    "icon": "🏛️", "gradient": "arts",    "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub8",  "stream_id": "s15", "name": "History",      "slug": "history",      "description": "Ancient Civilisations, Medieval India, Rise of Modern World — Class 11", "tags": ["Ancient", "Medieval", "Modern"],          "icon": "🏺", "gradient": "arts",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub9",  "stream_id": "s15", "name": "Economics",    "slug": "economics",    "description": "Introduction to Economics, Consumer Behaviour, Market Forms — Class 11", "tags": ["Micro", "Macro", "Market"],               "icon": "📊", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub10", "stream_id": "s15", "name": "Geography",    "slug": "geography",    "description": "Physical Geography, Atmosphere, Landforms, Climate — AHSEC Class 11",   "tags": ["Physical", "Climate", "Landforms"],       "icon": "🌍", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── AHSEC HS 1st Year – Commerce ─────────────────────────────────────
-        {"id": "sub11", "stream_id": "s16", "name": "Accountancy",       "slug": "accountancy",       "description": "Journal, Ledger, Trial Balance, Final Accounts — AHSEC Class 11",  "tags": ["Journal", "Ledger", "Final Accounts"],    "icon": "💰", "gradient": "arts",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub12", "stream_id": "s16", "name": "Business Studies",  "slug": "business-studies",  "description": "Nature of Business, Forms of Organisation, Business Finance — Class 11", "tags": ["Business", "Organisation", "Finance"],    "icon": "🏢", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub13", "stream_id": "s16", "name": "Economics",         "slug": "economics",         "description": "Introduction to Economics, Consumer Behaviour, Market Forms — Class 11", "tags": ["Micro", "Macro", "Statistics"],            "icon": "📈", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── AHSEC HS 2nd Year – Science (PCM) ───────────────────────────────
-        {"id": "sub43", "stream_id": "s17", "name": "Physics",      "slug": "physics",      "description": "Electrodynamics, Optics, Modern Physics, Semiconductors — AHSEC Class 12","tags": ["Electrodynamics", "Optics", "Modern"],    "icon": "⚡", "gradient": "physics",  "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub44", "stream_id": "s17", "name": "Chemistry",    "slug": "chemistry",    "description": "Electrochemistry, Chemical Kinetics, Coordination Compounds — Class 12", "tags": ["Electrochemistry", "Kinetics", "Organic"],"icon": "🧪", "gradient": "chemistry","chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub45", "stream_id": "s17", "name": "Mathematics",  "slug": "mathematics",  "description": "Calculus, Vectors, 3D Geometry, Linear Programming — AHSEC Class 12",   "tags": ["Calculus", "Vectors", "Probability"],    "icon": "📐", "gradient": "math",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── AHSEC HS 2nd Year – Science (PCB) ───────────────────────────────
-        {"id": "sub46", "stream_id": "s18", "name": "Physics",      "slug": "physics",      "description": "Electrodynamics, Optics, Modern Physics, Semiconductors — AHSEC Class 12","tags": ["Electrodynamics", "Optics", "Modern"],    "icon": "⚡", "gradient": "physics",  "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub47", "stream_id": "s18", "name": "Chemistry",    "slug": "chemistry",    "description": "Electrochemistry, Chemical Kinetics, Coordination Compounds — Class 12", "tags": ["Electrochemistry", "Kinetics", "Organic"],"icon": "🧪", "gradient": "chemistry","chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub48", "stream_id": "s18", "name": "Biology",      "slug": "biology",      "description": "Reproduction, Genetics, Evolution, Biotechnology, Ecology — AHSEC Class 12","tags": ["Genetics", "Evolution", "Biotechnology"],"icon": "🌿", "gradient": "chemistry","chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── AHSEC HS 2nd Year – Arts ─────────────────────────────────────────
-        {"id": "sub49", "stream_id": "s19", "name": "Political Science", "slug": "political-science", "description": "Indian Constitution, Federalism, International Relations — Class 12", "tags": ["Constitution", "Federalism", "IR"],       "icon": "🏛️", "gradient": "arts",    "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub50", "stream_id": "s19", "name": "History",      "slug": "history",      "description": "Mughal Era, Colonial India, Freedom Struggle, Post-Independence — Class 12","tags": ["Colonial", "Freedom Struggle", "Modern"], "icon": "🏺", "gradient": "arts",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub51", "stream_id": "s19", "name": "Economics",    "slug": "economics",    "description": "Indian Economic Development, Macroeconomics, Money & Banking — Class 12", "tags": ["Indian Economy", "Macro", "Banking"],     "icon": "📊", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub52", "stream_id": "s19", "name": "Geography",    "slug": "geography",    "description": "Human Geography, Population, Resources, Economic Geography — Class 12",   "tags": ["Human", "Population", "Resources"],       "icon": "🌍", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── AHSEC HS 2nd Year – Commerce ────────────────────────────────────
-        {"id": "sub53", "stream_id": "s20", "name": "Accountancy",      "slug": "accountancy",      "description": "Partnership Accounts, Company Accounts, Cash Flow Statement — Class 12", "tags": ["Partnership", "Company", "Cash Flow"],    "icon": "💰", "gradient": "arts",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub54", "stream_id": "s20", "name": "Business Studies", "slug": "business-studies", "description": "Management, Marketing, Consumer Protection, Entrepreneurship — Class 12","tags": ["Management", "Marketing", "Finance"],     "icon": "🏢", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub55", "stream_id": "s20", "name": "Economics",        "slug": "economics",        "description": "Macroeconomics, Indian Economy, Money & Banking — AHSEC Class 12",  "tags": ["Macro", "Indian Economy", "Banking"],     "icon": "📈", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── DEGREE 2nd Sem – B.Com ────────────────────────────────────────────
-        {"id": "sub19", "stream_id": "s7", "name": "Business Economics",          "slug": "business-economics",    "description": "Micro & Macro Economics for Commerce, Demand, Supply, Market Structures", "tags": ["Micro", "Macro", "Market"],                 "icon": "📈", "gradient": "arts",     "chapter_count": 8,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub20", "stream_id": "s7", "name": "Financial Accounting",        "slug": "financial-accounting",  "description": "Journal Entries, Ledger, Trial Balance, Final Accounts, Bank Reconciliation", "tags": ["Accounts", "Journal", "Balance Sheet"],     "icon": "💰", "gradient": "arts",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub21", "stream_id": "s7", "name": "Business Mathematics",        "slug": "business-mathematics",  "description": "Arithmetic, Algebra, Matrices, Statistics for Commerce",                    "tags": ["Algebra", "Statistics", "Matrices"],        "icon": "📐", "gradient": "math",     "chapter_count": 7,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub22", "stream_id": "s7", "name": "Business Communication",      "slug": "business-communication","description": "Communication Skills, Business Letters, Reports, Presentations",              "tags": ["Communication", "Writing", "Soft Skills"],  "icon": "📝", "gradient": "arts",     "chapter_count": 6,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── DEGREE 2nd Sem – B.A ─────────────────────────────────────────────
-        {"id": "sub23", "stream_id": "s8", "name": "English Literature",          "slug": "english-literature",    "description": "Prose, Poetry, Drama — British and Indian Literature",                      "tags": ["Prose", "Poetry", "Drama"],                 "icon": "📚", "gradient": "arts",     "chapter_count": 8,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub24", "stream_id": "s8", "name": "Political Science",           "slug": "political-science",     "description": "Political Theory, Indian Constitution, Comparative Politics",                "tags": ["Constitution", "Political Theory"],         "icon": "🏛️", "gradient": "arts",    "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub25", "stream_id": "s8", "name": "History",                     "slug": "history",               "description": "Ancient, Medieval and Modern History; World History",                       "tags": ["Ancient", "Medieval", "World"],              "icon": "🏺", "gradient": "arts",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub26", "stream_id": "s8", "name": "Economics",                   "slug": "economics",             "description": "Introduction to Micro & Macro Economics, Indian Economic Development",      "tags": ["Micro", "Macro", "Development"],            "icon": "📊", "gradient": "arts",     "chapter_count": 8,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── DEGREE 2nd Sem – B.Sc ────────────────────────────────────────────
-        {"id": "sub27", "stream_id": "s9", "name": "Physics",                     "slug": "physics",               "description": "Mechanics, Waves, Thermodynamics, Optics at Degree Level",                  "tags": ["Mechanics", "Waves", "Optics"],             "icon": "⚡", "gradient": "physics",  "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub28", "stream_id": "s9", "name": "Chemistry",                   "slug": "chemistry",             "description": "Physical, Organic and Inorganic Chemistry at Degree Level",                 "tags": ["Organic", "Inorganic", "Physical"],         "icon": "🧪", "gradient": "chemistry","chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub29", "stream_id": "s9", "name": "Mathematics",                 "slug": "mathematics",           "description": "Calculus, Linear Algebra, Differential Equations at Degree Level",          "tags": ["Calculus", "Algebra", "Differential Eq"],  "icon": "📐", "gradient": "math",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub30", "stream_id": "s9", "name": "Computer Science",            "slug": "computer-science",      "description": "C Programming, Data Structures, DBMS, Operating Systems",                   "tags": ["Programming", "Data Structures", "DBMS"],  "icon": "💻", "gradient": "physics",  "chapter_count": 8,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-
-        # ── DEGREE 4th Sem – B.Com ────────────────────────────────────────────
-        {"id": "sub31", "stream_id": "s10","name": "Cost Accounting",             "slug": "cost-accounting",       "description": "Cost Concepts, Job Costing, Process Costing, Standard Costing, Marginal Costing", "tags": ["Costing", "Marginal", "Standard"],          "icon": "💰", "gradient": "arts",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub32", "stream_id": "s10","name": "Income Tax",                  "slug": "income-tax",            "description": "Income Tax Act, Heads of Income, Deductions, Assessment, Tax Computation",    "tags": ["Tax", "Income", "Deductions"],              "icon": "📋", "gradient": "arts",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub33", "stream_id": "s10","name": "Business Law",                "slug": "business-law",          "description": "Indian Contract Act, Sale of Goods Act, Company Law, Consumer Protection",    "tags": ["Contract Law", "Company Law", "Legal"],     "icon": "⚖️", "gradient": "arts",     "chapter_count": 8,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub34", "stream_id": "s10","name": "Principles of Management",    "slug": "management",            "description": "Functions of Management, Planning, Organising, Leading, Controlling",        "tags": ["Planning", "Organising", "Leadership"],     "icon": "🏢", "gradient": "arts",     "chapter_count": 8,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── DEGREE 4th Sem – B.A ─────────────────────────────────────────────
-        {"id": "sub35", "stream_id": "s11","name": "English Communication",       "slug": "english-communication", "description": "Advanced Writing, Comprehension, Communication for BA Final Year",           "tags": ["Writing", "Communication", "Grammar"],      "icon": "📝", "gradient": "arts",     "chapter_count": 7,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub36", "stream_id": "s11","name": "Indian Government & Politics","slug": "indian-politics",       "description": "Federal System, Parliament, Judiciary, Election Commission, Local Governance", "tags": ["Parliament", "Judiciary", "Federalism"],    "icon": "🗳️", "gradient": "arts",    "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub37", "stream_id": "s11","name": "Modern Indian History",       "slug": "modern-history",        "description": "Freedom Struggle, Partition, Post-Independence India, Economic Development",   "tags": ["Freedom Struggle", "Partition", "Modern"],  "icon": "🏺", "gradient": "arts",     "chapter_count": 10, "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub38", "stream_id": "s11","name": "Indian Economy",              "slug": "indian-economy",        "description": "Five-Year Plans, Economic Reforms 1991, Poverty, Agriculture, Industry",     "tags": ["Economy", "Reforms", "Development"],        "icon": "🇮🇳", "gradient": "arts",    "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        # ── DEGREE 4th Sem – B.Sc ────────────────────────────────────────────
-        {"id": "sub39", "stream_id": "s12","name": "Physics",                     "slug": "physics",               "description": "Electrodynamics, Quantum Mechanics, Nuclear Physics, Solid State Physics",   "tags": ["Quantum", "Nuclear", "Electrodynamics"],   "icon": "⚡", "gradient": "physics",  "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub40", "stream_id": "s12","name": "Chemistry",                   "slug": "chemistry",             "description": "Organic Synthesis, Coordination Chemistry, Thermodynamics, Spectroscopy",    "tags": ["Synthesis", "Coordination", "Thermo"],     "icon": "🧪", "gradient": "chemistry","chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub41", "stream_id": "s12","name": "Mathematics",                 "slug": "mathematics",           "description": "Abstract Algebra, Complex Analysis, Numerical Methods, Statistics",           "tags": ["Abstract Algebra", "Analysis", "Stats"],   "icon": "📐", "gradient": "math",     "chapter_count": 9,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "sub42", "stream_id": "s12","name": "Computer Science",            "slug": "computer-science",      "description": "Java Programming, Web Technology, Computer Networks, Software Engineering",   "tags": ["Java", "Networking", "Web"],               "icon": "💻", "gradient": "physics",  "chapter_count": 8,  "status": "published", "created_at": "2024-01-01T00:00:00Z"},
-    ],
+    "subjects": [],
     "chapters": [],
 }
 
 def _generate_chapters():
-    _CH = {
-        # ── AHSEC HS 1st Year ─────────────────────────────────────────────────
-        "sub1":  ["Physical World and Measurement","Kinematics","Laws of Motion","Work Energy and Power","Motion of System of Particles and Rigid Body","Gravitation","Properties of Bulk Matter","Thermodynamics","Behaviour of Perfect Gas and Kinetic Theory"],
-        "sub2":  ["Some Basic Concepts of Chemistry","Structure of Atom","Classification of Elements and Periodicity","Chemical Bonding and Molecular Structure","States of Matter","Thermodynamics","Equilibrium","Redox Reactions","Hydrogen","s-Block Elements","Organic Chemistry — Basic Principles"],
-        "sub3":  ["Sets","Relations and Functions","Trigonometric Functions","Principle of Mathematical Induction","Complex Numbers and Quadratic Equations","Linear Inequalities","Permutations and Combinations","Binomial Theorem","Sequences and Series","Straight Lines","Conic Sections"],
-        "sub4":  ["Physical World and Measurement","Kinematics","Laws of Motion","Work Energy and Power","Motion of System of Particles and Rigid Body","Gravitation","Properties of Bulk Matter","Thermodynamics","Behaviour of Perfect Gas and Kinetic Theory"],
-        "sub5":  ["Some Basic Concepts of Chemistry","Structure of Atom","Classification of Elements and Periodicity","Chemical Bonding and Molecular Structure","States of Matter","Thermodynamics","Equilibrium","Redox Reactions","Hydrogen","s-Block Elements","Organic Chemistry — Basic Principles"],
-        "sub6":  ["The Living World","Biological Classification","Plant Kingdom","Animal Kingdom","Morphology of Flowering Plants","Cell — The Unit of Life","Biomolecules","Cell Division","Transport in Plants","Mineral Nutrition"],
-        "sub7":  ["Political Theory — An Introduction","Freedom","Equality","Social Justice","Rights","Citizenship","Nationalism","Secularism","Peace","Development"],
-        "sub8":  ["Introduction to World History","Writing and City Life — Mesopotamia","An Empire Across Three Continents","The Central Islamic Lands","Nomadic Empires","The Three Orders","Changing Cultural Traditions","Confrontation of Cultures","The Industrial Revolution","Displacing Indigenous Peoples"],
-        "sub9":  ["Introduction — Indian Economy on the Eve of Independence","Indian Economy 1950–90","Liberation Privatisation Globalisation","Poverty","Human Capital Formation","Rural Development","Employment","Infrastructure","Environment and Sustainable Development"],
-        "sub10": ["Geography as a Discipline","The Earth","Interior of the Earth","Distribution of Oceans and Continents","Landforms and Their Evolution","Atmosphere — Composition and Structure","Solar Radiation Heat Balance and Temperature","Atmospheric Circulation and Weather Systems","Water in the Atmosphere","World Climate and Climate Change"],
-        "sub11": ["Introduction to Accounting","Theory Base of Accounting","Recording of Transactions — I Journal","Recording of Transactions — II Ledger","Bank Reconciliation Statement","Trial Balance and Rectification of Errors","Depreciation Provisions and Reserves","Bill of Exchange","Financial Statements — I","Financial Statements — II"],
-        "sub12": ["Business Trade and Commerce","Forms of Business Organisation","Private Public and Global Enterprises","Business Services","Emerging Modes of Business","Social Responsibilities of Business","Formation of a Company","Sources of Business Finance","Small Business","Internal Trade"],
-        "sub13": ["Introduction to Statistics for Economics","Collection of Data","Organisation of Data","Presentation of Data","Measures of Central Tendency","Measures of Dispersion","Correlation","Index Numbers","Use of Statistical Tools","Introduction to Microeconomics"],
-        # ── AHSEC HS 2nd Year ─────────────────────────────────────────────────
-        "sub43": ["Electric Charges and Fields","Electrostatic Potential and Capacitance","Current Electricity","Moving Charges and Magnetism","Magnetism and Matter","Electromagnetic Induction","Alternating Current","Electromagnetic Waves","Ray Optics","Wave Optics","Dual Nature of Radiation","Atoms","Nuclei","Semiconductor Electronics"],
-        "sub44": ["The Solid State","Solutions","Electrochemistry","Chemical Kinetics","Surface Chemistry","General Principles of Isolation of Elements","The p-Block Elements","The d and f Block Elements","Coordination Compounds","Haloalkanes and Haloarenes","Alcohols Phenols and Ethers","Aldehydes Ketones and Carboxylic Acids","Amines","Biomolecules"],
-        "sub45": ["Relations and Functions","Inverse Trigonometric Functions","Matrices","Determinants","Continuity and Differentiability","Application of Derivatives","Integrals","Application of Integrals","Differential Equations","Vector Algebra","Three Dimensional Geometry","Linear Programming","Probability"],
-        "sub46": ["Electric Charges and Fields","Electrostatic Potential and Capacitance","Current Electricity","Moving Charges and Magnetism","Magnetism and Matter","Electromagnetic Induction","Alternating Current","Electromagnetic Waves","Ray Optics","Wave Optics","Dual Nature of Radiation","Atoms","Nuclei","Semiconductor Electronics"],
-        "sub47": ["The Solid State","Solutions","Electrochemistry","Chemical Kinetics","Surface Chemistry","General Principles of Isolation of Elements","The p-Block Elements","The d and f Block Elements","Coordination Compounds","Haloalkanes and Haloarenes","Alcohols Phenols and Ethers","Aldehydes Ketones and Carboxylic Acids","Amines","Biomolecules"],
-        "sub48": ["Reproduction in Organisms","Sexual Reproduction in Flowering Plants","Human Reproduction","Reproductive Health","Principles of Inheritance and Variation","Molecular Basis of Inheritance","Evolution","Human Health and Disease","Strategies for Enhancement in Food Production","Microbes in Human Welfare","Biotechnology — Principles and Processes","Organisms and Populations","Ecosystem"],
-        "sub49": ["The Cold War Era","The End of Bipolarity","US Hegemony in World Politics","Alternative Centres of Power","Contemporary South Asia","International Organisations","Security in the Contemporary World","Environment and Natural Resources","Globalisation","Challenges of Nation Building"],
-        "sub50": ["Bricks Beads and Bones — Harappan Civilisation","Kings Farmers and Towns","Kinship Caste and Class","Thinkers Beliefs and Buildings","Through the Eyes of Travellers","Bhakti Sufi Traditions","An Imperial Capital Vijayanagara","Peasants Zamindars and the State","The Mughal Court","Colonialism and the Countryside","Rebels and the Raj","Colonial Cities","Mahatma Gandhi and the Nationalist Movement","Understanding Partition","Framing the Constitution"],
-        "sub51": ["Introduction to Macroeconomics","National Income Accounting","Money and Banking","Determination of Income and Employment","Government Budget and the Economy","Open Economy Macroeconomics","Indian Economy on the Eve of Independence","Indian Economy 1950–90","Liberalisation Privatisation and Globalisation","Poverty","Human Capital Formation","Rural Development"],
-        "sub52": ["Human Geography — Nature and Scope","The World Population Distribution Density and Growth","Population Composition","Human Development","Primary Activities","Secondary Activities","Tertiary and Quaternary Activities","Transport and Communication","International Trade","Human Settlements — Rural and Urban"],
-        "sub53": ["Accounting for Partnership — Basic Concepts","Change in Profit Sharing Ratio","Admission of a Partner","Retirement and Death of a Partner","Dissolution of Partnership Firm","Accounting for Share Capital","Issue and Redemption of Debentures","Financial Statements of a Company","Analysis of Financial Statements","Cash Flow Statement"],
-        "sub54": ["Nature and Significance of Management","Principles of Management","Business Environment","Planning","Organising","Staffing","Directing","Controlling","Financial Management","Financial Markets","Marketing Management","Consumer Protection","Entrepreneurship Development"],
-        "sub55": ["Introduction to Macroeconomics","National Income Accounting","Money and Banking","Determination of Income and Employment","Government Budget and the Economy","Open Economy Macroeconomics","Indian Economy — Overview","Economic Reforms Since 1991","Current Challenges Facing the Indian Economy","Development Experience of India"],
-        # ── DEGREE 2nd Sem ─────────────────────────────────────────────────────
-        "sub19": ["Nature and Scope of Business Economics","Theory of Demand","Elasticity of Demand","Theory of Production","Theory of Costs","Market Structures","Pricing Under Different Markets","National Income"],
-        "sub20": ["Introduction to Accounting","Journal Entries","Ledger","Trial Balance","Final Accounts of Sole Trader","Depreciation","Bank Reconciliation Statement","Rectification of Errors","Consignment Accounts","Joint Venture"],
-        "sub21": ["Ratio and Proportion","Arithmetic Progressions","Simple and Compound Interest","Matrices","Set Theory","Probability","Statistics"],
-        "sub22": ["Introduction to Business Communication","Business Letters","Report Writing","Presentation Skills","Meetings and Minutes","Non-Verbal Communication"],
-        "sub23": ["Prose — Selected Essays","Poetry — Romantic to Modern","Drama — Shakespeare","Indian Literature in English","Literary Criticism Basics","Grammar and Composition","Comprehension and Précis","Creative Writing"],
-        "sub24": ["Political Theory","Indian Constitution","Fundamental Rights and Duties","Union Government","State Government","Local Self-Government","Electoral System","Political Parties","Comparative Politics"],
-        "sub25": ["Indus Valley Civilisation","Vedic Age","Mauryan Empire","Gupta Empire","Medieval India — Delhi Sultanate","Medieval India — Mughal Empire","Modern India — Company Rule","Indian National Movement","Post-Independence India","World History — French Revolution"],
-        "sub26": ["Introduction to Economics","Theory of Demand and Supply","Consumer Behaviour","Production and Costs","Market Forms","National Income Accounting","Money and Banking","Indian Economy"],
-        "sub27": ["Mechanics","Properties of Matter","Heat and Thermodynamics","Waves and Oscillations","Optics","Electrostatics","Current Electricity","Magnetism","Modern Physics"],
-        "sub28": ["Atomic Structure","Chemical Bonding","Thermodynamics","Solutions","Chemical Equilibrium","Electrochemistry","Organic Chemistry Fundamentals","Coordination Chemistry","Spectroscopy"],
-        "sub29": ["Differential Calculus","Integral Calculus","Differential Equations","Linear Algebra","Analytical Geometry","Vector Analysis","Sequences and Series","Complex Numbers","Numerical Methods"],
-        "sub30": ["Introduction to C Programming","Control Structures","Functions and Recursion","Arrays and Strings","Pointers","Structures and Unions","File Handling","Data Structures"],
-        "sub31": ["Introduction to Cost Accounting","Material Cost","Labour Cost","Overheads","Job Costing","Process Costing","Marginal Costing","Standard Costing","Budget and Budgetary Control","Cost Audit"],
-        "sub32": ["Basic Concepts of Income Tax","Residential Status","Income from Salary","Income from House Property","Profits and Gains of Business","Capital Gains","Income from Other Sources","Deductions","Assessment of Individuals"],
-        "sub33": ["Indian Contract Act 1872","Special Contracts","Sale of Goods Act 1930","Companies Act","Partnership Act","Consumer Protection Act","Negotiable Instruments Act","Arbitration and Conciliation"],
-        "sub34": ["Nature and Significance of Management","Planning","Organising","Staffing","Directing","Controlling","Financial Management","Marketing Management"],
-        "sub35": ["Communication Theory","Business Correspondence","Report Writing","Comprehension Skills","Grammar and Usage","Technical Writing","Presentation Skills"],
-        "sub36": ["Indian Constitution","Parliament","Executive","Judiciary","Federalism","Local Government","Election Commission","Political Parties","Social Movements"],
-        "sub37": ["Revolt of 1857","Social Reform Movements","Indian National Congress","Gandhian Era","Subhas Chandra Bose","Partition of India","Making of the Constitution","Nehru Era","Economic Development Post-1947","India After 1991"],
-        "sub38": ["Indian Economy Overview","Five-Year Plans","Agriculture Sector","Industrial Development","Economic Reforms 1991","Poverty and Unemployment","Human Development","Foreign Trade","Sustainable Development"],
-        "sub39": ["Electrostatics","Current and Electricity","Electrodynamics","Optics","Quantum Mechanics","Nuclear Physics","Solid State Physics","Statistical Mechanics","Electronics"],
-        "sub40": ["Organic Reaction Mechanisms","Stereochemistry","Coordination Chemistry","Thermodynamics","Electrochemistry","Spectroscopy","Polymer Chemistry","Environmental Chemistry","Analytical Chemistry"],
-        "sub41": ["Abstract Algebra — Groups","Abstract Algebra — Rings","Real Analysis","Complex Analysis","Topology Basics","Numerical Methods","Linear Programming","Statistics","Probability Theory"],
-        "sub42": ["Java Programming Fundamentals","Object-Oriented Programming","Web Technology — HTML/CSS/JS","Database Management Systems","Computer Networks","Software Engineering","Operating Systems","Data Structures and Algorithms"],
-    }
-    # AHSEC subjects use 'ach_' prefix (5000+) to avoid collisions with DEGREE 'ch_' IDs
-    _AHSEC_SUBS = {"sub1","sub2","sub3","sub4","sub5","sub6","sub7","sub8","sub9","sub10",
-                   "sub11","sub12","sub13","sub43","sub44","sub45","sub46","sub47","sub48",
-                   "sub49","sub50","sub51","sub52","sub53","sub54","sub55"}
-    chapters = []
-    ch_id  = 1     # DEGREE counter
-    ach_id = 5000  # AHSEC counter
-    for subj_id, titles in _CH.items():
-        is_ahsec = subj_id in _AHSEC_SUBS
-        for idx, title in enumerate(titles, 1):
-            if is_ahsec:
-                cid = f"ach_{ach_id}"; ach_id += 1
-            else:
-                cid = f"ch_{ch_id}";  ch_id  += 1
-            chapters.append({"id": cid, "subject_id": subj_id, "title": title, "chapter_number": idx, "order_index": idx, "status": "published", "created_at": "2024-01-01T00:00:00Z"})
-    return chapters
+    return []  # Chapters cleared — upload new syllabus via Admin panel
 
 SEED_DATA["chapters"] = _generate_chapters()
 
@@ -1466,18 +1330,18 @@ async def ensure_seeded():
     except Exception as e:
         logger.warning(f"Database not available for seeding: {e}")
         return
-    logger.info("Seeding content data...")
+    logger.info("Seeding structural data (boards/classes/streams only — subjects/chapters managed via Admin)...")
     from pymongo import ReplaceOne
-    # Enforce AssamBoard whitelist — prune any non-canonical boards and their hierarchy
+    # Enforce structural skeleton — boards/classes/streams only
+    # Subjects and chapters are managed entirely via Admin panel uploads
     canonical_board_ids  = {b["id"] for b in SEED_DATA["boards"]}
     canonical_class_ids  = {c["id"] for c in SEED_DATA["classes"]}
     canonical_stream_ids = {s["id"] for s in SEED_DATA["streams"]}
-    canonical_subject_ids = {s["id"] for s in SEED_DATA["subjects"]}
+    # Only prune boards/classes/streams that aren't in the canonical set
     await db.boards.delete_many({"id": {"$nin": list(canonical_board_ids)}})
     await db.classes.delete_many({"board_id": {"$nin": list(canonical_board_ids)}})
     await db.streams.delete_many({"class_id": {"$nin": list(canonical_class_ids)}})
-    await db.subjects.delete_many({"stream_id": {"$nin": list(canonical_stream_ids)}})
-    await db.chapters.delete_many({"subject_id": {"$nin": list(canonical_subject_ids)}})
+    # NOTE: Do NOT delete subjects or chapters here — they are user-managed
     if SEED_DATA["boards"]:
         ops = [ReplaceOne({"id": b["id"]}, b, upsert=True) for b in SEED_DATA["boards"]]
         await db.boards.bulk_write(ops, ordered=False)
@@ -1487,12 +1351,6 @@ async def ensure_seeded():
     if SEED_DATA["streams"]:
         ops = [ReplaceOne({"id": s["id"]}, s, upsert=True) for s in SEED_DATA["streams"]]
         await db.streams.bulk_write(ops, ordered=False)
-    if SEED_DATA["subjects"]:
-        ops = [ReplaceOne({"id": s["id"]}, s, upsert=True) for s in SEED_DATA["subjects"]]
-        await db.subjects.bulk_write(ops, ordered=False)
-    if SEED_DATA["chapters"]:
-        ops = [ReplaceOne({"id": c["id"]}, c, upsert=True) for c in SEED_DATA["chapters"]]
-        await db.chapters.bulk_write(ops, ordered=False)
     # Ensure admin user exists for each admin account in ADMIN_ACCOUNTS
     for admin_acc in ADMIN_ACCOUNTS:
         existing = await supa_get_user(admin_acc["email"])
@@ -11256,6 +11114,19 @@ async def vertex_extract_document(
         raise HTTPException(status_code=400, detail="PDF too large — max 20MB")
     result = await vertex_services.extract_from_document(pdf_bytes, task=task)
     return result
+
+
+@api.delete("/admin/syllabus/reset-all")
+async def admin_syllabus_reset_all(admin: dict = Depends(get_admin_user)):
+    """Wipe all subjects and chapters so a fresh syllabus can be uploaded."""
+    sub_result = await db.subjects.delete_many({})
+    ch_result  = await db.chapters.delete_many({})
+    logger.info(f"Syllabus reset by {admin.get('email','?')} — deleted {sub_result.deleted_count} subjects, {ch_result.deleted_count} chapters")
+    return {
+        "deleted_subjects": sub_result.deleted_count,
+        "deleted_chapters":  ch_result.deleted_count,
+        "message": "All subjects and chapters cleared. Upload new syllabus via Admin → Syllabus Manager.",
+    }
 
 
 @api.post("/admin/vertex/ocr")

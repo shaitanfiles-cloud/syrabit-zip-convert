@@ -187,7 +187,6 @@ function Reveal({ children, delay = 0, className = '' }) {
    ───────────────────────────────────────────── */
 const STATS = [
   { value: '3',    label: 'AssamBoard Divisions', icon: BookOpen   },
-  { value: '42',   label: 'Subjects',              icon: Layers     },
   { value: '500+', label: 'Students',              icon: Users      },
   { value: '3',    label: 'Plans',                 icon: TrendingUp },
 ];
@@ -243,14 +242,6 @@ const FEATURES = [
   },
 ];
 
-const SUBJECTS = [
-  { emoji: '∑',  name: 'Mathematics',   classLabel: 'Class 11 · PCM',  chapters: 16, gradient: 'linear-gradient(135deg,rgba(124,58,237,0.18),rgba(139,92,246,0.08))',  border: 'rgba(139,92,246,0.22)' },
-  { emoji: '⚡', name: 'Physics',       classLabel: 'Class 12 · PCM',  chapters: 14, gradient: 'linear-gradient(135deg,rgba(37,99,235,0.18),rgba(6,182,212,0.08))',    border: 'rgba(59,130,246,0.22)' },
-  { emoji: '⚗️', name: 'Chemistry',     classLabel: 'Class 11 · PCM',  chapters: 14, gradient: 'linear-gradient(135deg,rgba(5,150,105,0.18),rgba(34,197,94,0.08))',    border: 'rgba(16,185,129,0.22)' },
-  { emoji: '🧬', name: 'Biology',       classLabel: 'Class 12 · PCB',  chapters: 16, gradient: 'linear-gradient(135deg,rgba(22,163,74,0.18),rgba(20,184,166,0.08))',   border: 'rgba(34,197,94,0.22)'  },
-  { emoji: '📚', name: 'English Lit.',  classLabel: 'Class 12 · Arts', chapters: 12, gradient: 'linear-gradient(135deg,rgba(217,119,6,0.18),rgba(249,115,22,0.08))',   border: 'rgba(245,158,11,0.22)' },
-  { emoji: '🏛️', name: 'History',       classLabel: 'Class 12 · Arts', chapters: 10, gradient: 'linear-gradient(135deg,rgba(190,18,60,0.18),rgba(236,72,153,0.08))',   border: 'rgba(244,63,94,0.22)'  },
-];
 
 const STEPS = [
   { num: '01', title: 'Create your free account',   desc: 'Sign up in under 30 seconds with email — no credit card needed. Get Starter (300 credits) for ₹99 or Pro (4000 credits) for ₹999.', icon: GraduationCap },
@@ -637,67 +628,6 @@ export default function LandingPage() {
             </motion.div>
           ))}
         </motion.div>
-      </section>
-
-      {/* ══════════════════════════════════════════
-          SECTION 4 — SUBJECTS PREVIEW
-          ══════════════════════════════════════════ */}
-      <section className="py-20 relative overflow-hidden" style={{ background: 'rgba(255,255,255,0.015)' }}>
-        {/* Background orbs */}
-        <div className="absolute inset-0 pointer-events-none">
-          <GlowOrb color="radial-gradient(circle,#4f46e5,transparent)" size={500} x="70%" y="20%" blur={120} opacity={0.08} animRange={20} duration={18} />
-        </div>
-
-        <div className="max-w-6xl mx-auto px-5 relative z-10">
-          <Reveal className="text-center mb-10">
-            <h2 className="text-white mb-3" style={{ fontSize: 'clamp(1.6rem,4vw,2.4rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
-              Content covering every subject
-            </h2>
-            <p style={{ color: 'rgba(255,255,255,0.40)' }}>AssamBoard · AHSEC (Class 11 &amp; 12) · DEGREE · SEBA</p>
-          </Reveal>
-
-          <motion.div
-            initial="hidden"
-            whileInView="visible"
-            viewport={{ once: true, margin: '-60px' }}
-            variants={staggerContainer}
-            className="grid grid-cols-2 md:grid-cols-3 gap-4"
-          >
-            {SUBJECTS.map((s) => (
-              <motion.div
-                key={s.name}
-                variants={fadeUp()}
-                whileHover={{ y: -5, boxShadow: '0 12px 32px rgba(139,92,246,0.18)' }}
-                className="relative p-5 rounded-2xl cursor-pointer group transition-shadow duration-300"
-                style={{ background: s.gradient, border: `1px solid ${s.border}` }}
-              >
-                <div className="text-3xl mb-3">{s.emoji}</div>
-                <p className="text-white mb-1" style={{ fontWeight: 700 }}>{s.name}</p>
-                <p className="text-xs mb-2" style={{ color: 'rgba(255,255,255,0.50)' }}>{s.classLabel}</p>
-                <div className="flex items-center gap-1">
-                  <Hash size={12} style={{ color: 'rgba(255,255,255,0.30)' }} />
-                  <span className="text-xs" style={{ color: 'rgba(255,255,255,0.40)' }}>{s.chapters} chapters</span>
-                </div>
-                <ChevronRight
-                  size={16}
-                  className="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity duration-200"
-                  style={{ color: 'rgba(255,255,255,0.50)' }}
-                />
-              </motion.div>
-            ))}
-          </motion.div>
-
-          <div className="text-center mt-8">
-            <Link
-              to="/signup"
-              className="inline-flex items-center gap-1.5 text-sm font-semibold hover:opacity-80 transition-opacity"
-              style={{ color: '#a78bfa' }}
-            >
-              View all subjects after sign up
-              <ArrowRight size={16} />
-            </Link>
-          </div>
-        </div>
       </section>
 
       {/* ══════════════════════════════════════════
