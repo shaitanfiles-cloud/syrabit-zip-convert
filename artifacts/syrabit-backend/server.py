@@ -2655,15 +2655,30 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
     the prompt (no mismatch from a separate async library search).
 
     Returns a list of dicts with keys: slug, title, url (compatible with the
-    frontend sources format).
+    frontend sources format). URLs are auto-built as /learn/{slug} for SEO pages
+    so the frontend can render clickable blue links for [PAGE: X] citations.
     """
     seen = set()
     sources = []
 
+    def _build_url(slug: str, provided_url: str) -> str:
+        """Return the best available URL for a source."""
+        if provided_url:
+            return provided_url
+        # SEO page slugs (topic_slug) map to /learn/{slug}
+        # Chapter slugs formatted as "chapter/{id}" don't have a direct route
+        if slug and not slug.startswith("chapter/"):
+            return f"/learn/{slug}"
+        return ""
+
     def _add(slug: str, title: str, url: str = ""):
         if slug and slug not in seen:
             seen.add(slug)
-            sources.append({"slug": slug, "title": title or slug, "url": url})
+            sources.append({
+                "slug":  slug,
+                "title": title or slug,
+                "url":   _build_url(slug, url),
+            })
 
     for hit in rag_ctx.get("vector_hits", []):
         _add(hit.get("slug", ""), hit.get("title", ""), hit.get("url", ""))

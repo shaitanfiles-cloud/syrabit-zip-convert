@@ -99,89 +99,132 @@ const bubbleVariants = {
     transition: { duration: 0.22, ease: [0.25, 0.1, 0.25, 1] } },
 };
 
-// ── Single clickable source card (merges library + RAG info) ─────────────────
+// ── Clickable source chips — one per RAG source page ─────────────────────────
 function SourcesList({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectName }) {
   const navigate = useNavigate();
 
-  const hasSrc = sources && sources.length > 0;
-  const hasRag = ragSource && ragSource !== 'none';
+  const hasSrc   = sources && sources.length > 0;
+  const hasRag   = ragSource && ragSource !== 'none';
 
   if (!hasSrc && !hasRag) return null;
 
-  const src = hasSrc ? sources[0] : null;
-
-  const sourceLabel = (() => {
-    if (ragSource === 'document') return 'Document';
+  const ragLabel = (() => {
+    if (ragSource === 'document')               return 'Document';
     if (ragSource === 'rag' || ragSource === 'rag+web') return `Syllabus${ragChunks ? ` · ${ragChunks} blocks` : ''}`;
-    if (ragSource === 'web') return 'Web search';
+    if (ragSource === 'web')                    return 'Web search';
     return null;
   })();
 
-  const url = (ragSubjectId ? `/subject/${ragSubjectId}` : null) || src?.url || null;
-  const isExternal = url && url.startsWith('http');
-
-  const handleClick = () => {
+  const handleNav = (url) => {
     if (!url) return;
-    if (isExternal) {
-      window.open(url, '_blank', 'noopener,noreferrer');
-    } else {
-      navigate(url);
-    }
+    if (url.startsWith('http')) window.open(url, '_blank', 'noopener,noreferrer');
+    else navigate(url);
   };
 
-  const displayTitle = ragSubjectName || src?.title || 'Syrabit Library';
-
-  const Tag = url ? 'button' : 'div';
-  const ariaLabel = url
-    ? `${displayTitle}${isExternal ? ' — opens in new tab' : ''}`
-    : undefined;
+  // Sources with real URLs get individual chips; fall back to subject card
+  const visibleSources = hasSrc ? sources.filter(s => s.url || s.slug) : [];
+  const subjectUrl     = ragSubjectId ? `/subject/${ragSubjectId}` : null;
 
   return (
-    <div className="mt-3">
-      <Tag
-        {...(url ? { onClick: handleClick, 'aria-label': ariaLabel } : {})}
-        className={`flex items-center gap-2.5 px-3 py-1.5 rounded-xl transition-all text-left w-full max-w-md ${url ? 'cursor-pointer hover:brightness-110' : ''}`}
-        style={{
-          background: 'rgba(59,130,246,0.10)',
-          border: '1px solid rgba(59,130,246,0.25)',
-        }}
-        title={url || displayTitle}
-      >
-        <div
-          className="w-6 h-6 rounded-md flex items-center justify-center shrink-0"
-          style={{ background: 'rgba(59,130,246,0.15)' }}
-        >
-          <BookOpen size={13} className="text-blue-400" />
-        </div>
-        <span className="text-[10px] font-semibold text-blue-400/50 uppercase tracking-wide shrink-0">
-          Syrabit
-        </span>
-        <span className="text-[12.5px] font-semibold text-blue-300 truncate min-w-0">
-          {displayTitle}
-        </span>
-        {sourceLabel && (
-          <span
-            className="text-[9.5px] font-medium px-1.5 py-0.5 rounded-full shrink-0 whitespace-nowrap"
-            style={{
-              background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.15)',
-              color: ragSource === 'web' ? '#60a5fa' : '#34d399',
-            }}
-          >
-            {sourceLabel}
-          </span>
-        )}
-        {url && <ExternalLink size={10} className="text-blue-400/40 shrink-0" />}
-      </Tag>
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {visibleSources.length > 0
+        ? visibleSources.map((src, i) => {
+            const url        = src.url || '';
+            const isExternal = url.startsWith('http');
+            const Tag        = url ? 'button' : 'div';
+            return (
+              <Tag
+                key={i}
+                onClick={url ? () => handleNav(url) : undefined}
+                aria-label={url ? `${src.title}${isExternal ? ' — opens in new tab' : ''}` : undefined}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-left transition-all ${url ? 'cursor-pointer hover:brightness-110' : ''}`}
+                style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.20)' }}
+                title={url || src.title}
+              >
+                <BookOpen size={11} className="text-blue-400 shrink-0" />
+                <span className="text-[11px] font-medium text-blue-300 max-w-[240px] truncate">
+                  {src.title || src.slug}
+                </span>
+                {i === 0 && ragLabel && (
+                  <span
+                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full shrink-0"
+                    style={{
+                      background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.12)',
+                      color:      ragSource === 'web' ? '#60a5fa'               : '#34d399',
+                    }}
+                  >
+                    {ragLabel}
+                  </span>
+                )}
+                {url && <ExternalLink size={9} className="text-blue-400/30 shrink-0" />}
+              </Tag>
+            );
+          })
+        : /* Fallback — subject-level navigation card */
+          (() => {
+            const url          = subjectUrl || '';
+            const displayTitle = ragSubjectName || 'Syrabit Library';
+            const Tag          = url ? 'button' : 'div';
+            return (
+              <Tag
+                onClick={url ? () => handleNav(url) : undefined}
+                aria-label={url ? displayTitle : undefined}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all text-left ${url ? 'cursor-pointer hover:brightness-110' : ''}`}
+                style={{ background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.25)' }}
+                title={url || displayTitle}
+              >
+                <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: 'rgba(59,130,246,0.15)' }}>
+                  <BookOpen size={11} className="text-blue-400" />
+                </div>
+                <span className="text-[10px] font-semibold text-blue-400/50 uppercase tracking-wide shrink-0">Syrabit</span>
+                <span className="text-[12px] font-semibold text-blue-300 truncate">{displayTitle}</span>
+                {ragLabel && (
+                  <span
+                    className="text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0"
+                    style={{
+                      background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.12)',
+                      color:      ragSource === 'web' ? '#60a5fa'               : '#34d399',
+                    }}
+                  >
+                    {ragLabel}
+                  </span>
+                )}
+                {url && <ExternalLink size={9} className="text-blue-400/30 shrink-0" />}
+              </Tag>
+            );
+          })()
+      }
     </div>
   );
 }
 
 // ── Markdown renderer for AI answers ─────────────────────────────────────────
-function MarkdownContent({ content, streaming }) {
+function MarkdownContent({ content, streaming, sources }) {
+  // Build lookup: title/slug → url from RAG sources so [PAGE: X] becomes a link
+  const processed = useMemo(() => {
+    if (!content) return content;
+    // Build map: lowercased title → url, lowercased slug → url
+    const urlMap = new Map();
+    for (const s of (sources || [])) {
+      const url = s.url || '';
+      if (s.title) urlMap.set(s.title.trim().toLowerCase(), url);
+      if (s.slug)  urlMap.set(s.slug.trim().toLowerCase(),  url || `/learn/${s.slug}`);
+    }
+    // Replace [PAGE: Title] with [Title](url) markdown links
+    return content.replace(/\[PAGE:\s*([^\]]+)\]/g, (_, rawTitle) => {
+      const title  = rawTitle.trim();
+      const key    = title.toLowerCase();
+      // Try exact title match, then slug-style key
+      const slugKey = key.replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+      const url = urlMap.get(key) || urlMap.get(slugKey) || '';
+      return url ? `[${title}](${url})` : `**${title}**`;
+    });
+  }, [content, sources]);
+
   return (
     <div className="md-content-light" style={{ fontSize: '0.9375rem' }}>
       <ReactMarkdown remarkPlugins={[remarkGfm]}>
-        {content}
+        {processed}
       </ReactMarkdown>
       {streaming && (
         <motion.span
@@ -282,11 +325,11 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
             {msg.streaming && !msg.content && <ThinkingIndicator />}
 
             {msg.streaming && msg.content && (
-              <MarkdownContent content={msg.content} streaming={true} />
+              <MarkdownContent content={msg.content} streaming={true} sources={msg.sources} />
             )}
 
             {!msg.streaming && msg.content && (
-              <MarkdownContent content={msg.content} streaming={false} />
+              <MarkdownContent content={msg.content} streaming={false} sources={msg.sources} />
             )}
 
             {!msg.streaming && msg.content && (
