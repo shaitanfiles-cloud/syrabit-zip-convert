@@ -504,8 +504,8 @@ function StatusHeader({ token }) {
           <Cpu size={18} color="#8b5cf6" />
         </div>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: '#e8e8e8' }}>Vertex AI / Gemini Services</div>
-          <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)' }}>Powered by GEMINI_API_KEY · text-embedding-004 · gemini-2.0-flash · gemini-1.5-pro</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: '#e8e8e8' }}>Vertex AI Studio</div>
+          <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)' }}>Powered by GEMINI_API_KEY · text-embedding-004 · gemini-2.5-flash-preview-05-20</div>
         </div>
         {loading ? <Loader2 size={16} className="animate-spin ml-auto" color="#8b5cf6" /> : (
           <div className="ml-auto flex items-center gap-2">
@@ -527,7 +527,7 @@ function StatusHeader({ token }) {
       )}
       {status && !status.ok && (
         <div style={{ marginTop: 10, padding: 10, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, fontSize: 12, color: '#fca5a5' }}>
-          GEMINI_API_KEY is missing or invalid. Add it via Replit Secrets to activate all AI features.
+          GEMINI_API_KEY is missing or invalid. Add it via Replit Secrets to activate Vertex AI Studio features.
         </div>
       )}
     </div>

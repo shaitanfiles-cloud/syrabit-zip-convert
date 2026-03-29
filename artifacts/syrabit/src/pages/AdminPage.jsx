@@ -46,7 +46,7 @@ const SECTIONS = [
   { id: 'cms',           icon: FileText,        label: 'CMS Editor',        group: 'content'  },
   { id: 'studio',        icon: Sparkles,        label: 'Content Studio',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
-  { id: 'vertex',        icon: Cpu,             label: 'Gemini AI Studio',  group: 'content'  },
+  { id: 'vertex',        icon: Cpu,             label: 'Vertex AI Studio',  group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
   { id: 'conversations', icon: MessageSquare,   label: 'Conversations',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
