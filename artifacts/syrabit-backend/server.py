@@ -11851,51 +11851,187 @@ async def delete_notification_trigger(trigger_id: str, admin: dict = Depends(get
 
 # ── T005: PDF-to-Syllabus Importer ───────────────────────────────────────────
 
+_VALID_PAPER_TYPES = {"major", "minor", "mdc", "vac"}
+
+_SYLLABUS_EXTRACT_PROMPT = """
+You are parsing an official university/board syllabus PDF for AssamBoard students in Assam, India.
+
+The PDF may contain ONE or MULTIPLE subjects. For EACH subject you find, return a JSON object.
+
+Paper type for ALL subjects in this PDF: {paper_type}
+
+Extract and return a JSON ARRAY where each element is:
+{{
+  "board": "<board or university name, e.g. Gauhati University, Dibrugarh University, AHSEC, SEBA>",
+  "class_year": "<e.g. 1st Year, 2nd Year, HS 1st Year, Class 10>",
+  "semester": "<e.g. Semester 1, Semester 2, or empty string if annual>",
+  "subject_name": "<exact subject name>",
+  "paper_type": "{paper_type}",
+  "chapters": ["<Chapter 1 title>", "<Chapter 2 title>", ...],
+  "topics": ["<key topic 1>", "<key topic 2>", ...],
+  "guidelines": "<any learning objectives or exam guidelines found, or empty string>"
+}}
+
+Rules:
+- If the board/university name is not stated, infer it from context (Assam universities: Gauhati University, Dibrugarh University, Bodoland University; or AHSEC, SEBA).
+- Chapters = numbered units or chapters listed in the syllabus.
+- Topics = key learning outcomes or subtopics within chapters.
+- Return ONLY valid JSON. No markdown, no explanations.
+""".strip()
+
+
 @api.post("/admin/syllabus/import-pdf")
 async def syllabus_import_pdf(
     file: UploadFile = File(...),
-    board: str = Form("AHSEC"),
-    class_name: str = Form("HS 1st Year"),
+    paper_type: str = Form("major"),       # major | minor | mdc | vac
+    board_id: str = Form(""),              # optional — links to existing board
+    class_id: str = Form(""),              # optional — links to existing class
+    stream_id: str = Form(""),             # optional — links to existing stream
     admin: dict = Depends(get_admin_user),
 ):
-    """Extract syllabus structure from a PDF using Gemini 1.5 Pro."""
+    """
+    Extract per-subject syllabus from a PDF.
+    One PDF → multiple subjects, all sharing the same paper_type.
+    Gemini reads the PDF and returns structured data per subject.
+    """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files supported")
+    paper_type = paper_type.lower().strip()
+    if paper_type not in _VALID_PAPER_TYPES:
+        raise HTTPException(status_code=400, detail=f"paper_type must be one of: {', '.join(sorted(_VALID_PAPER_TYPES))}")
     pdf_bytes = await file.read()
     if len(pdf_bytes) > 20 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="PDF too large (max 20MB)")
 
+    import base64 as _b64, httpx as _httpx
+    import vertex_services
+
+    b64_pdf = _b64.b64encode(pdf_bytes).decode()
+    prompt = _SYLLABUS_EXTRACT_PROMPT.format(paper_type=paper_type)
+
+    # ── Try Gemini Vision first (PDF inline_data) ─────────────────────────────
+    extracted: list = []
     try:
-        import vertex_services
-        result = await vertex_services.extract_from_document(pdf_bytes, task="extract_topics")
-        topics_data = result.get("result", [])
-
-        subjects_created = []
-        for chapter_entry in (topics_data if isinstance(topics_data, list) else []):
-            chapter_name = chapter_entry.get("chapter", "")
-            topics = chapter_entry.get("topics", [])
-            if not chapter_name:
-                continue
-            subject_slug = re.sub(r"[^a-z0-9]+", "-", chapter_name.lower().strip())
-            existing = await db.subjects.find_one({"slug": subject_slug})
-            if not existing:
-                await db.subjects.insert_one({
-                    "id": str(uuid.uuid4()), "name": chapter_name,
-                    "slug": subject_slug, "board": board, "class_name": class_name,
-                    "topics": topics, "source": "pdf_import",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                })
-                subjects_created.append(chapter_name)
-
-        return {
-            "success": True,
-            "chapters_found": len(topics_data if isinstance(topics_data, list) else []),
-            "subjects_created": subjects_created,
-            "board": board,
-            "class_name": class_name,
+        url = vertex_services._gen_url(vertex_services._PRO_MODEL)
+        headers = await vertex_services._auth_headers()
+        body = {
+            "contents": [{"parts": [
+                {"text": prompt + "\n\nReturn ONLY valid JSON array."},
+                {"inline_data": {"mime_type": "application/pdf", "data": b64_pdf}},
+            ]}],
+            "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.1},
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF extraction failed: {e}")
+        async with _httpx.AsyncClient(timeout=120) as c:
+            r = await c.post(url, json=body, headers=headers)
+            if r.status_code == 403:
+                vertex_services._mark_forbidden()
+                raise ValueError("Gemini Vision 403 — falling back to text extraction")
+            r.raise_for_status()
+            raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+            cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            extracted = json.loads(cleaned)
+            if not isinstance(extracted, list):
+                extracted = [extracted]
+    except Exception as gemini_err:
+        logger.warning(f"Gemini Vision PDF extract failed: {gemini_err}")
+        # ── Fallback: extract raw text via PyPDF2, send as plain text to SLM ─
+        try:
+            import io
+            try:
+                from pypdf import PdfReader as _PdfReader
+            except ImportError:
+                from PyPDF2 import PdfReader as _PdfReader
+            reader = _PdfReader(io.BytesIO(pdf_bytes))
+            pages_text = "\n".join(
+                (p.extract_text() or "") for p in reader.pages[:40]
+            )
+            if not pages_text.strip():
+                raise ValueError("Could not extract text from PDF")
+            slm_prompt = (
+                prompt + "\n\nSYLLABUS TEXT:\n" + pages_text[:12000] +
+                "\n\nReturn ONLY valid JSON array."
+            )
+            # Use server's SLM pool
+            from server import slm_pool  # type: ignore[import]
+            raw_slm = await slm_pool.generate(slm_prompt, max_tokens=4096, temperature=0.1)
+            cleaned = (raw_slm or "").strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            extracted = json.loads(cleaned)
+            if not isinstance(extracted, list):
+                extracted = [extracted]
+        except Exception as fallback_err:
+            raise HTTPException(status_code=500, detail=f"PDF extraction failed: {fallback_err}")
+
+    if not extracted:
+        raise HTTPException(status_code=422, detail="No syllabus subjects found in PDF — check PDF content")
+
+    # ── Persist each extracted subject to syllabus_pdf_imports collection ─────
+    now_iso = datetime.now(timezone.utc).isoformat()
+    import_id = str(uuid.uuid4())
+    saved_subjects = []
+
+    for entry in extracted:
+        if not isinstance(entry, dict):
+            continue
+        subject_name = (entry.get("subject_name") or entry.get("subject") or "").strip()
+        if not subject_name:
+            continue
+
+        doc = {
+            "import_id": import_id,
+            "filename": file.filename,
+            "paper_type": paper_type,
+            "board_name": entry.get("board", "").strip(),
+            "class_year": entry.get("class_year", "").strip(),
+            "semester": entry.get("semester", "").strip(),
+            "subject_name": subject_name,
+            "chapters": entry.get("chapters", []),
+            "topics": entry.get("topics", []),
+            "guidelines": entry.get("guidelines", "").strip(),
+            # Optional DB links when admin passes them
+            "board_id": board_id or None,
+            "class_id": class_id or None,
+            "stream_id": stream_id or None,
+            "status": "imported",
+            "source": "pdf_import",
+            "created_at": now_iso,
+        }
+        await db.syllabus_pdf_imports.insert_one(doc)
+        saved_subjects.append({
+            "subject_name": subject_name,
+            "board_name": doc["board_name"],
+            "class_year": doc["class_year"],
+            "semester": doc["semester"],
+            "paper_type": paper_type,
+            "chapters_count": len(doc["chapters"]),
+            "topics_count": len(doc["topics"]),
+        })
+
+    # Ensure index for fast lookup
+    await db.syllabus_pdf_imports.create_index([("import_id", 1), ("paper_type", 1)])
+    await db.syllabus_pdf_imports.create_index("subject_name")
+
+    return {
+        "success": True,
+        "import_id": import_id,
+        "paper_type": paper_type,
+        "filename": file.filename,
+        "subjects_extracted": len(saved_subjects),
+        "subjects": saved_subjects,
+    }
+
+
+@api.get("/admin/syllabus/pdf-imports")
+async def list_pdf_imports(
+    paper_type: str = "",
+    admin: dict = Depends(get_admin_user),
+):
+    """List all PDF-imported syllabus entries, optionally filtered by paper_type."""
+    q = {}
+    if paper_type:
+        q["paper_type"] = paper_type.lower()
+    cursor = db.syllabus_pdf_imports.find(q, {"_id": 0}).sort("created_at", -1)
+    entries = await cursor.to_list(length=500)
+    return {"imports": entries, "total": len(entries)}
 
 
 # ── T007: Inline AI Writing — CMS suggest ────────────────────────────────────

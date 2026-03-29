@@ -21,7 +21,15 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   const [publishedSlug, setPublishedSlug] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfResult, setPdfResult] = useState(null);
+  const [paperType, setPaperType] = useState('major');
   const pdfRef = useRef(null);
+
+  const PAPER_TYPES = [
+    { value: 'major', label: 'Major', desc: 'Core discipline paper' },
+    { value: 'minor', label: 'Minor', desc: 'Minor elective paper' },
+    { value: 'mdc',   label: 'MDC',   desc: 'Multi-Disciplinary Course' },
+    { value: 'vac',   label: 'VAC',   desc: 'Value-Added Course' },
+  ];
 
   const [selectedBoardId, setSelectedBoardId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
@@ -176,32 +184,19 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
 
   const handlePdfImport = async (file) => {
     if (!file) return;
-    if (!selectedBoardId || !selectedClassId) {
-      toast.error('Select Board and Class before importing a PDF');
-      return;
-    }
     setPdfLoading(true);
     setPdfResult(null);
     try {
       const fd = new FormData();
       fd.append('file', file);
-      fd.append('board_id', selectedBoardId);
-      fd.append('class_id', selectedClassId);
+      fd.append('paper_type', paperType);
+      if (selectedBoardId) fd.append('board_id', selectedBoardId);
+      if (selectedClassId) fd.append('class_id', selectedClassId);
       if (selectedStreamId) fd.append('stream_id', selectedStreamId);
-      if (selectedSubjectId) fd.append('subject_id', selectedSubjectId);
       const res = await syllabusImportPdf(adminToken, fd);
       setPdfResult(res.data);
-      if (res.data?.syllabus) {
-        const s = res.data.syllabus;
-        setFormData(f => ({
-          ...f,
-          content:  s.content  || f.content,
-          chapters: s.chapters?.length ? s.chapters : f.chapters,
-          topics:   s.topics?.length   ? s.topics   : f.topics,
-          guidelines: s.guidelines || f.guidelines,
-        }));
-        toast.success(`PDF imported — ${s.chapters?.length || 0} chapters, ${s.topics?.length || 0} topics extracted`);
-      }
+      const count = res.data?.subjects_extracted || 0;
+      toast.success(`PDF imported — ${count} subject${count !== 1 ? 's' : ''} extracted as ${paperType.toUpperCase()}`);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'PDF import failed');
     } finally {
@@ -271,28 +266,78 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       </div>
 
       {/* PDF Import Panel */}
-      <div className="rounded-xl border p-4 space-y-3" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.20)' }}>
-        <div className="flex items-center justify-between">
+      <div className="rounded-xl border p-4 space-y-4" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.20)' }}>
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-white flex items-center gap-2">
               <FileUp size={14} className="text-violet-400" /> PDF-to-Syllabus Importer
             </p>
-            <p className="text-xs mt-0.5 text-white/40">Upload an official syllabus PDF — Gemini extracts chapters, topics, and guidelines automatically</p>
+            <p className="text-xs mt-0.5 text-white/40">Upload an official syllabus PDF — Gemini auto-extracts all subjects, chapters, and topics</p>
           </div>
           <input ref={pdfRef} type="file" accept=".pdf" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) handlePdfImport(f); }} />
-          <button onClick={() => pdfRef.current?.click()} disabled={pdfLoading || !canLoad}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+          <button onClick={() => pdfRef.current?.click()} disabled={pdfLoading}
+            className="flex-shrink-0 flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
             style={{ background: 'rgba(139,92,246,0.20)', border: '1px solid rgba(139,92,246,0.35)', color: '#c4b0f0' }}>
             {pdfLoading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
             {pdfLoading ? 'Importing…' : 'Import PDF'}
           </button>
         </div>
-        {!canLoad && <p className="text-[11px] text-amber-400/70">Select Board and Class above first</p>}
-        {pdfResult && (
-          <div className="rounded-lg p-3 border text-xs space-y-1" style={{ background: 'rgba(52,211,153,0.06)', borderColor: 'rgba(52,211,153,0.20)' }}>
-            <p className="font-semibold text-emerald-400">Import Complete</p>
-            <p className="text-white/50">{pdfResult.pages_processed || 0} pages processed · {pdfResult.syllabus?.chapters?.length || 0} chapters · {pdfResult.syllabus?.topics?.length || 0} topics</p>
+
+        {/* Paper Type Selector */}
+        <div>
+          <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wide mb-2">Paper Type <span className="text-violet-400">*</span></p>
+          <div className="grid grid-cols-4 gap-2">
+            {PAPER_TYPES.map(pt => (
+              <button
+                key={pt.value}
+                onClick={() => setPaperType(pt.value)}
+                className="rounded-lg p-2.5 text-left border transition-all"
+                style={paperType === pt.value ? {
+                  background: 'rgba(139,92,246,0.25)',
+                  borderColor: 'rgba(139,92,246,0.70)',
+                  color: '#d8b4fe',
+                } : {
+                  background: 'rgba(255,255,255,0.04)',
+                  borderColor: 'rgba(255,255,255,0.10)',
+                  color: 'rgba(255,255,255,0.50)',
+                }}>
+                <p className="text-xs font-bold">{pt.label}</p>
+                <p className="text-[10px] mt-0.5 leading-tight opacity-75">{pt.desc}</p>
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] mt-2 text-white/35">
+            The PDF may contain multiple subjects — all will be tagged as <span className="text-violet-300 font-semibold">{paperType.toUpperCase()}</span>. Board and class are auto-detected from the PDF.
+          </p>
+        </div>
+
+        {/* Results */}
+        {pdfResult && pdfResult.success && (
+          <div className="rounded-lg border text-xs space-y-2" style={{ background: 'rgba(52,211,153,0.06)', borderColor: 'rgba(52,211,153,0.20)' }}>
+            <div className="p-3 border-b" style={{ borderColor: 'rgba(52,211,153,0.15)' }}>
+              <p className="font-semibold text-emerald-400">
+                ✓ {pdfResult.subjects_extracted} subject{pdfResult.subjects_extracted !== 1 ? 's' : ''} extracted as {pdfResult.paper_type?.toUpperCase()}
+              </p>
+              <p className="text-white/40 mt-0.5 font-mono text-[10px]">{pdfResult.filename} · import #{pdfResult.import_id?.slice(-6)}</p>
+            </div>
+            <div className="px-3 pb-3 space-y-1.5">
+              {(pdfResult.subjects || []).map((s, i) => (
+                <div key={i} className="flex items-start justify-between gap-3 py-1 border-b last:border-0" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                  <div>
+                    <p className="font-semibold text-white">{s.subject_name}</p>
+                    <p className="text-white/40 text-[10px]">
+                      {[s.board_name, s.class_year, s.semester].filter(Boolean).join(' · ')}
+                    </p>
+                  </div>
+                  <div className="text-right text-white/40 text-[10px] flex-shrink-0">
+                    <p>{s.chapters_count} ch.</p>
+                    <p>{s.topics_count} topics</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
