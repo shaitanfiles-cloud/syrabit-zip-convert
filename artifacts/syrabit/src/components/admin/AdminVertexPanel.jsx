@@ -526,8 +526,11 @@ function StatusHeader({ token }) {
         </div>
       )}
       {status && !status.ok && (
-        <div style={{ marginTop: 10, padding: 10, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, fontSize: 12, color: '#fca5a5' }}>
-          GEMINI_API_KEY is missing or invalid. Add it via Replit Secrets to activate Vertex AI Studio features.
+        <div style={{ marginTop: 10, padding: 12, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, fontSize: 12, color: '#fca5a5', lineHeight: 1.7 }}>
+          <strong style={{ color: '#f87171', display: 'block', marginBottom: 4 }}>⚠ GEMINI_API_KEY is missing or invalid</strong>
+          This requires a <strong>Google AI Studio API key</strong> (starts with <code style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 4 }}>AIza...</code>), not a Vertex AI service account key.
+          <br />
+          Get yours free at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#818cf8', textDecoration: 'underline' }}>aistudio.google.com/app/apikey</a>, then add it to Replit Secrets as <code style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 4 }}>GEMINI_API_KEY</code> and restart the API.
         </div>
       )}
     </div>
