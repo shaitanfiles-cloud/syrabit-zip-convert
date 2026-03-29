@@ -7138,6 +7138,83 @@ def _generate_abstract_variant(colors: list, variant: int, size=(400, 600)) -> s
     return f'data:image/png;base64,{b64}'
 
 
+@api.post("/admin/thumbnail/generate-cms")
+async def generate_cms_thumbnails(
+    doc_id: str = Form(...),
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Upload a cover image → Groq Vision color-DNA analysis → 3 abstract copyright-safe variants.
+    Works with CMS documents (doc_id) instead of subject_id.
+    Returns: {original_url, variants:[v1,v2,v3], analysis:{colors,style,mood}}
+    """
+    img_bytes = await file.read()
+    mime_type = file.content_type or "image/png"
+
+    if len(img_bytes) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Image must be under 3 MB")
+
+    # ── Resize for Vision ───────────────────────────────────────────────────
+    from PIL import Image as _PILImage
+    import io as _io
+    try:
+        src_img = _PILImage.open(_io.BytesIO(img_bytes)).convert('RGB')
+        src_img.thumbnail((400, 600), _PILImage.LANCZOS)
+        buf = _io.BytesIO()
+        src_img.save(buf, format='PNG')
+        buf.seek(0)
+        img_bytes_resized = buf.read()
+    except Exception as _pe:
+        logger.warning(f"PIL resize failed: {_pe}")
+        img_bytes_resized = img_bytes
+
+    b64_src = base64.b64encode(img_bytes_resized).decode()
+    original_url = f"data:image/png;base64,{b64_src}"
+
+    # ── Vision analysis + PIL fallback ──────────────────────────────────────
+    analysis = await _analyze_with_groq_vision(b64_src, "image/png")
+    pil_colors = _extract_dominant_colors(img_bytes_resized)
+
+    if analysis.get("dominant_colors"):
+        colors = analysis["dominant_colors"][:3] + analysis.get("secondary_colors", [])[:2]
+        colors = (colors + pil_colors)[:5]
+    else:
+        colors = pil_colors[:5]
+        analysis = {"dominant_colors": colors, "style": "educational", "mood": "academic"}
+
+    # ── Generate 3 abstract variants in parallel ────────────────────────────
+    loop = asyncio.get_event_loop()
+    variants = await asyncio.gather(
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 0),
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 1),
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 2),
+    )
+
+    # ── Persist thumbnail_variants to cms_documents ─────────────────────────
+    await db.cms_documents.update_one(
+        {"id": doc_id},
+        {"$set": {
+            "thumbnail_variants": {
+                "original_url":  original_url,
+                "variant1_url":  variants[0],
+                "variant2_url":  variants[1],
+                "variant3_url":  variants[2],
+                "analysis":      analysis,
+                "generated_at":  datetime.now(timezone.utc).isoformat(),
+            },
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    logger.info(f"CMS thumbnail variants generated for doc {doc_id}: {len(colors)} colors")
+    return {
+        "original_url":  original_url,
+        "variants":      list(variants),
+        "analysis":      analysis,
+        "auto_selected": 0,
+    }
+
+
 @api.post("/admin/thumbnail/generate")
 async def generate_ai_thumbnails(
     subject_id: str = Form(...),

@@ -1040,6 +1040,186 @@ function TagChips({ value, onChange, placeholder }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Thumbnail Uploader — upload cover → color DNA → 3 abstract variants
+// ─────────────────────────────────────────────────────────────────────────────
+const VARIANT_LABELS = ['Gradient Wash', 'Geometric', 'Abstract Circles'];
+
+function ThumbnailUploader({ docId, value, onChange, altText, onAltChange, adminToken }) {
+  const [loading, setLoading]   = useState(false);
+  const [original, setOriginal] = useState(null);
+  const [variants, setVariants] = useState(null);
+  const [analysis, setAnalysis] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const inputRef = useRef(null);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/jpg'].includes(file.type)) {
+      toast.error('PNG, JPG or WebP only'); return;
+    }
+    if (file.size > 2 * 1024 * 1024) { toast.error('Max file size is 2 MB'); return; }
+    if (!docId) { toast.error('Complete Step 1 first to create a document'); return; }
+    setLoading(true);
+    try {
+      const form = new FormData();
+      form.append('doc_id', docId);
+      form.append('file', file);
+      const { data } = await axios.post(`${API}/admin/thumbnail/generate-cms`, form, {
+        ...authHeaders(adminToken),
+        headers: { ...authHeaders(adminToken).headers, 'Content-Type': 'multipart/form-data' },
+      });
+      setOriginal(data.original_url);
+      setVariants(data.variants);
+      setAnalysis(data.analysis);
+      setSelected(0);
+      onChange(data.variants[0]);
+      toast.success('Color DNA extracted — 3 abstract variants ready');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Cover analysis failed');
+    } finally {
+      setLoading(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer?.files?.[0];
+    if (file) handleFile(file);
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Upload zone — shown when no variants yet */}
+      {!variants && (
+        <div
+          onDrop={handleDrop}
+          onDragOver={e => e.preventDefault()}
+          className="relative w-full rounded-xl border-2 border-dashed transition cursor-pointer"
+          style={{ borderColor: loading ? 'rgba(139,92,246,0.50)' : 'rgba(255,255,255,0.10)' }}
+          onClick={() => !loading && inputRef.current?.click()}
+        >
+          <input ref={inputRef} type="file" accept=".png,.jpg,.jpeg,.webp"
+            className="hidden" onChange={e => handleFile(e.target.files?.[0])} />
+          <div className="flex flex-col items-center justify-center py-6 gap-2">
+            {loading
+              ? <>
+                  <Loader2 size={24} className="text-violet-400 animate-spin" />
+                  <p className="text-xs text-violet-300 font-medium">Analyzing cover & extracting color DNA…</p>
+                  <p className="text-[10px] text-white/30">Generating 3 abstract variants</p>
+                </>
+              : <>
+                  <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-1"
+                    style={{ background: 'rgba(139,92,246,0.15)' }}>
+                    <FileUp size={18} className="text-violet-400" />
+                  </div>
+                  <p className="text-sm font-semibold text-white/70">Upload a book cover</p>
+                  <p className="text-[11px] text-white/35 text-center max-w-xs">
+                    PNG, JPG, WebP — max 2 MB. The AI will extract its color DNA and generate 3 copyright-safe abstract variants.
+                  </p>
+                  {!docId && (
+                    <p className="text-[10px] text-amber-400 mt-1">Complete Step 1 first to enable upload</p>
+                  )}
+                </>
+            }
+          </div>
+        </div>
+      )}
+
+      {/* Results panel */}
+      {variants && original && (
+        <div>
+          {/* Color DNA strip */}
+          {analysis?.dominant_colors?.length > 0 && (
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-white/30">Color DNA</span>
+              {analysis.dominant_colors.slice(0, 5).map((c, i) => (
+                <div key={i} title={c}
+                  className="w-5 h-5 rounded-full border-2 border-white/10 flex-shrink-0"
+                  style={{ background: c }} />
+              ))}
+              {analysis.style && (
+                <span className="text-[10px] text-white/30 italic">
+                  {analysis.style}{analysis.mood ? ` · ${analysis.mood}` : ''}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Original + 3 variants grid */}
+          <div className="grid grid-cols-4 gap-2">
+            {/* Original upload */}
+            <div className="space-y-1.5">
+              <p className="text-[10px] font-semibold text-white/30 text-center uppercase tracking-wider">Original</p>
+              <div className="relative rounded-xl overflow-hidden border border-white/10"
+                style={{ aspectRatio: '2/3', background: 'rgba(255,255,255,0.03)' }}>
+                <img src={original} alt="original cover" className="w-full h-full object-cover" />
+              </div>
+            </div>
+
+            {/* 3 AI variants */}
+            {variants.map((v, i) => (
+              <div key={i} className="space-y-1.5">
+                <p className="text-[10px] font-semibold text-center uppercase tracking-wider"
+                  style={{ color: selected === i ? '#a78bfa' : 'rgba(255,255,255,0.30)' }}>
+                  {VARIANT_LABELS[i]}
+                </p>
+                <button
+                  onClick={() => { setSelected(i); onChange(v); }}
+                  className="relative w-full rounded-xl overflow-hidden border-2 transition"
+                  style={{
+                    borderColor: selected === i ? '#7c3aed' : 'rgba(255,255,255,0.08)',
+                    aspectRatio: '2/3',
+                    display: 'block',
+                  }}
+                >
+                  <img src={v} alt={`variant ${i + 1}`} className="w-full h-full object-cover" />
+                  {selected === i && (
+                    <div className="absolute inset-0 flex items-center justify-center"
+                      style={{ background: 'rgba(124,58,237,0.28)' }}>
+                      <div className="w-7 h-7 rounded-full bg-violet-600 flex items-center justify-center shadow-lg">
+                        <Check size={14} className="text-white" />
+                      </div>
+                    </div>
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {/* Footer actions */}
+          <div className="mt-2 flex items-center justify-between">
+            <button
+              onClick={() => { setVariants(null); setOriginal(null); setSelected(null); onChange(''); }}
+              className="flex items-center gap-1.5 text-[11px] text-white/30 hover:text-white/60 transition"
+            >
+              <RefreshCw size={10} /> Upload different cover
+            </button>
+            {value && (
+              <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold">
+                <Check size={11} /> Variant {selected + 1} selected
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Alt text — always visible */}
+      <div>
+        <label className="text-xs font-semibold text-white/50 mb-1 block">Alt Text</label>
+        <input
+          className="w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 transition"
+          placeholder="Descriptive alt text for accessibility and SEO"
+          value={altText}
+          onChange={e => onAltChange(e.target.value)}
+        />
+      </div>
+    </div>
+  );
+}
+
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Step 4 — SEO & GEO Metadata
 // ─────────────────────────────────────────────────────────────────────────────
 function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
@@ -1215,22 +1395,17 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
           </select>
         </div>
 
-        {/* Thumbnail + Alt */}
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={lbl}>Thumbnail URL</label>
-            <input className={inp(false)}
-              placeholder="https://…/image.jpg"
-              value={state.thumbnailUrl}
-              onChange={e => set({ thumbnailUrl: e.target.value })} />
-          </div>
-          <div>
-            <label className={lbl}>Alt Text</label>
-            <input className={inp(false)}
-              placeholder="Descriptive alt text"
-              value={state.altText}
-              onChange={e => set({ altText: e.target.value })} />
-          </div>
+        {/* Thumbnail Cover Uploader */}
+        <div>
+          <label className={lbl}>Cover Thumbnail</label>
+          <ThumbnailUploader
+            docId={state.docId}
+            value={state.thumbnailUrl}
+            onChange={url => set({ thumbnailUrl: url })}
+            altText={state.altText}
+            onAltChange={alt => set({ altText: alt })}
+            adminToken={adminToken}
+          />
         </div>
 
         {/* Canonical URL (read-only) */}
