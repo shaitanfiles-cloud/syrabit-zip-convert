@@ -768,6 +768,7 @@ async def lifespan(app):
     _rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
     asyncio.create_task(_migrate_supabase_users_to_pg())
     asyncio.create_task(_heal_credits_limit())
+    asyncio.create_task(_bg_health_loop())   # warm health-check cache every 25 s
 
     # Initialise SyllabusEmbedder and kick off background chapter seeding
     global _syllabus_embedder
@@ -9635,6 +9636,14 @@ from collections import defaultdict as _defaultdict
 
 _startup_time = _time_mod.time()
 
+# ── Background health-check cache ─────────────────────────────────────────────
+# _check_health_deps() costs ~500 ms per call (Supabase round-trip).
+# A background task runs it every 25 s and stores the result here so the
+# admin dashboard always reads from cache (~0 ms).
+_health_deps_cache: dict = {}
+_health_deps_cache_at: float = 0.0
+_HEALTH_CACHE_TTL_S: float = 30.0      # max age before falling back to live call
+
 class _MetricsStore:
     def __init__(self):
         self._lock = _threading.Lock()
@@ -10315,7 +10324,14 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
     start = time.time()
     health_data = {}
     try:
-        h_resp = await asyncio.wait_for(_check_health_deps(), timeout=5)
+        # Use the background-warmed cache if it is fresh (≤ 30 s old).
+        # This avoids the 500 ms+ Supabase round-trip on every dashboard load.
+        cache_age = time.time() - _health_deps_cache_at
+        if _health_deps_cache and cache_age < _HEALTH_CACHE_TTL_S:
+            h_resp = _health_deps_cache
+        else:
+            # Cache is cold (first load or stale) — fetch live with a 5 s guard
+            h_resp = await asyncio.wait_for(_check_health_deps(), timeout=5)
         health_data = h_resp if isinstance(h_resp, dict) else {}
     except Exception:
         pass
@@ -10382,15 +10398,39 @@ async def _check_health_deps():
     except Exception:
         result["redis"] = {"status": "error", "latencyMs": 0}
     try:
-        if supa:
+        if supa and SUPABASE_URL:
+            # Use a direct HTTP GET to the Supabase REST health endpoint —
+            # no SQL round-trip, just TLS + HTTP keep-alive: much faster than a table query.
+            _supa_health_url = SUPABASE_URL.rstrip("/") + "/rest/v1/"
+            _supa_headers    = {"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"}
             t0 = time.time()
-            await _supa(lambda: supa.table("users").select("id").limit(1).execute())
+            async with httpx.AsyncClient(
+                http2=True,
+                timeout=httpx.Timeout(connect=2.0, read=4.0, write=2.0, pool=1.0),
+                limits=httpx.Limits(max_keepalive_connections=5, max_connections=10, keepalive_expiry=60),
+            ) as _hc:
+                _r = await _hc.get(_supa_health_url, headers=_supa_headers)
+                _r.raise_for_status()
             result["supabase"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
         else:
             result["supabase"] = {"status": "not_configured", "latencyMs": 0}
     except Exception:
         result["supabase"] = {"status": "error", "latencyMs": 0}
     return result
+
+
+async def _bg_health_loop():
+    """Warm the health-deps cache every 25 s so dashboard reads are near-instant."""
+    global _health_deps_cache, _health_deps_cache_at
+    await asyncio.sleep(8)                  # let startup settle first
+    while True:
+        try:
+            fresh = await asyncio.wait_for(_check_health_deps(), timeout=10)
+            _health_deps_cache    = fresh
+            _health_deps_cache_at = time.time()
+        except Exception as _e:
+            logger.debug(f"Health bg loop: {_e}")
+        await asyncio.sleep(25)
 
 
 # ─────────────────────────────────────────────
