@@ -505,7 +505,7 @@ export default function LandingPage() {
                   className="flex-1 mx-4 h-6 rounded-lg flex items-center px-3"
                   style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                 >
-                  <span className="text-xs" style={{ color: 'rgba(255,255,255,0.30)' }}>syrabit.ai/chat</span>
+                  <span className="text-xs" style={{ color: 'rgba(255,255,255,0.30)' }}>{window.location.hostname}/chat</span>
                 </div>
               </div>
 
