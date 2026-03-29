@@ -11851,7 +11851,7 @@ async def delete_notification_trigger(trigger_id: str, admin: dict = Depends(get
 
 # ── T005: PDF-to-Syllabus Importer ───────────────────────────────────────────
 
-_VALID_PAPER_TYPES = {"major", "minor", "mdc", "vac"}
+_VALID_PAPER_TYPES = {"major", "minor", "mdc", "vac", "aec", "sec"}
 
 _SYLLABUS_EXTRACT_PROMPT = """
 You are parsing an official university/board syllabus PDF for students in Assam, India.

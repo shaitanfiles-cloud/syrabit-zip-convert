@@ -29,6 +29,8 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
     { value: 'minor', label: 'Minor', desc: 'Minor elective paper' },
     { value: 'mdc',   label: 'MDC',   desc: 'Multi-Disciplinary Course' },
     { value: 'vac',   label: 'VAC',   desc: 'Value-Added Course' },
+    { value: 'aec',   label: 'AEC',   desc: 'Ability Enhancement Course' },
+    { value: 'sec',   label: 'SEC',   desc: 'Skill Enhancement Course' },
   ];
 
   const [selectedBoardId, setSelectedBoardId] = useState('');
@@ -288,7 +290,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         {/* Paper Type Selector */}
         <div>
           <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wide mb-2">Paper Type <span className="text-violet-400">*</span></p>
-          <div className="grid grid-cols-4 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {PAPER_TYPES.map(pt => (
               <button
                 key={pt.value}
