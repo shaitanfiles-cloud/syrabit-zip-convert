@@ -19,7 +19,7 @@ from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
-import os, uuid, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys, html as _html_mod
+import os, uuid, base64, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys, html as _html_mod
 import mistune as _mistune
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
@@ -12969,9 +12969,114 @@ async def admin_content_coverage(admin: dict = Depends(get_admin_user)):
 app.include_router(api)
 
 
-# ─────────────────────────────────────────────
-# STANDALONE
-# ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  PYQ — Previous Year Questions Upload & Management
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/admin/pyq/upload")
+async def admin_pyq_upload(
+    files: List[UploadFile] = File(...),
+    paper_type:  str = Form("major"),
+    exam_year:   int = Form(...),
+    exam_title:  str = Form(""),
+    board_id:    str = Form(""),
+    class_id:    str = Form(""),
+    stream_id:   str = Form(""),
+    subject_id:  str = Form(""),
+    admin: dict = Depends(get_admin_user),
+):
+    """Store PYQ images/PDFs (base64) in MongoDB pyq_uploads collection."""
+    if not files:
+        raise HTTPException(400, "No files provided")
+
+    MAX_FILE_BYTES = 8 * 1024 * 1024  # 8 MB per file
+
+    # Resolve display names
+    subject_name = board_name = class_name = stream_name = ""
+    db = _get_db()
+    try:
+        if subject_id:
+            s = db["subjects"].find_one({"id": subject_id}) or db["subjects"].find_one({"_id": subject_id})
+            subject_name = (s or {}).get("name") or (s or {}).get("title") or ""
+        if board_id:
+            b = db["boards"].find_one({"id": board_id}) or db["boards"].find_one({"_id": board_id})
+            board_name = (b or {}).get("name") or ""
+        if class_id:
+            c = db["classes"].find_one({"id": class_id}) or db["classes"].find_one({"_id": class_id})
+            class_name = (c or {}).get("name") or ""
+        if stream_id:
+            st = db["streams"].find_one({"id": stream_id}) or db["streams"].find_one({"_id": stream_id})
+            stream_name = (st or {}).get("name") or ""
+    except Exception:
+        pass
+
+    saved_ids = []
+    for upload in files:
+        raw = await upload.read()
+        if len(raw) > MAX_FILE_BYTES:
+            raise HTTPException(413, f"{upload.filename} exceeds 8 MB limit")
+
+        mime = upload.content_type or "application/octet-stream"
+        b64  = base64.b64encode(raw).decode()
+        data_url = f"data:{mime};base64,{b64}"
+
+        # For PDFs we don't have an image preview
+        is_image = mime.startswith("image/")
+
+        doc_id = str(uuid.uuid4())
+        doc = {
+            "id":           doc_id,
+            "filename":     upload.filename or "upload",
+            "mime_type":    mime,
+            "exam_title":   exam_title or f"{paper_type.upper()} {exam_year}",
+            "exam_year":    exam_year,
+            "paper_type":   paper_type,
+            "board_id":     board_id,
+            "board_name":   board_name,
+            "class_id":     class_id,
+            "class_name":   class_name,
+            "stream_id":    stream_id,
+            "stream_name":  stream_name,
+            "subject_id":   subject_id,
+            "subject_name": subject_name,
+            "pages":        [{"data_url": data_url, "filename": upload.filename}] if is_image else [],
+            "pdf_data_url": data_url if not is_image else None,
+            "status":       "uploaded",
+            "created_at":   datetime.utcnow().isoformat(),
+            "created_by":   admin.get("username", "admin"),
+        }
+        db["pyq_uploads"].insert_one(doc)
+        saved_ids.append(doc_id)
+
+    return {"status": "ok", "uploaded": len(saved_ids), "ids": saved_ids}
+
+
+@app.get("/api/admin/pyq/list")
+async def admin_pyq_list(
+    subject_id: str = "",
+    board_id:   str = "",
+    exam_year:  int = 0,
+    admin: dict = Depends(get_admin_user),
+):
+    db = _get_db()
+    filt: dict = {}
+    if subject_id: filt["subject_id"] = subject_id
+    if board_id:   filt["board_id"]   = board_id
+    if exam_year:  filt["exam_year"]  = exam_year
+
+    docs = list(db["pyq_uploads"].find(filt, {"_id": 0}).sort("created_at", -1).limit(200))
+    return {"pyqs": docs}
+
+
+@app.delete("/api/admin/pyq/{pyq_id}")
+async def admin_pyq_delete(pyq_id: str, admin: dict = Depends(get_admin_user)):
+    db = _get_db()
+    res = db["pyq_uploads"].delete_one({"id": pyq_id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "PYQ not found")
+    return {"status": "deleted", "id": pyq_id}
+
+
 if __name__ == "__main__":
     import uvicorn
     PORT = int(os.getenv("PORT", 5000))

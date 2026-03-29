@@ -4,7 +4,7 @@
  * Shared context: onNavigate(tab) lets any tab deep-link into another.
  */
 import { useState, useEffect } from 'react';
-import { FolderTree, PenTool, Sparkles, FileText, ArrowRight, Loader2 } from 'lucide-react';
+import { FolderTree, PenTool, Sparkles, FileText, ArrowRight, Loader2, BookMarked } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -12,14 +12,16 @@ import AdminSyllabusManager  from './AdminSyllabusManager';
 import AdminContentEditor    from './AdminContentEditor';
 import AdminCmsDocEditor     from './AdminCmsDocEditor';
 import AdminContentStudio    from './AdminContentStudio';
+import AdminPYQManager       from './AdminPYQManager';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 const TABS = [
-  { id: 'syllabus', label: 'Syllabus',        icon: FolderTree, color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
-  { id: 'editor',   label: 'Content Editor',  icon: PenTool,    color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
-  { id: 'studio',   label: 'AI Studio',       icon: Sparkles,   color: 'amber',   desc: 'Generate structured content blocks with AI' },
-  { id: 'cms',      label: 'CMS / Docs',      icon: FileText,   color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
+  { id: 'syllabus', label: 'Syllabus',        icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
+  { id: 'pyq',      label: 'PYQ',             icon: BookMarked,  color: 'amber',   desc: 'Upload & manage previous year question papers' },
+  { id: 'editor',   label: 'Content Editor',  icon: PenTool,     color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
+  { id: 'studio',   label: 'AI Studio',       icon: Sparkles,    color: 'rose',    desc: 'Generate structured content blocks with AI' },
+  { id: 'cms',      label: 'CMS / Docs',      icon: FileText,    color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
 ];
 
 const FLOW = [
@@ -34,6 +36,7 @@ const COLOR_MAP = {
   violet:  { active: 'border-violet-500 text-violet-400',  dot: 'bg-violet-500', badge: 'bg-violet-500/20 text-violet-300' },
   amber:   { active: 'border-amber-500 text-amber-400',    dot: 'bg-amber-500',  badge: 'bg-amber-500/20 text-amber-300'  },
   emerald: { active: 'border-emerald-500 text-emerald-400',dot: 'bg-emerald-500',badge: 'bg-emerald-500/20 text-emerald-300'},
+  rose:    { active: 'border-rose-500 text-rose-400',      dot: 'bg-rose-500',   badge: 'bg-rose-500/20 text-rose-300'    },
 };
 
 export default function AdminContentHub({ adminToken }) {
@@ -135,6 +138,22 @@ export default function AdminContentHub({ adminToken }) {
                 streams={streams}
                 subjects={subjects}
               />
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'pyq' && (
+          <div className="h-full overflow-y-auto">
+            <div className="p-6 max-w-4xl mx-auto w-full">
+              <div className="flex items-center justify-between mb-5">
+                <div>
+                  <h2 className="text-base font-bold text-white">PYQ Manager</h2>
+                  <p className="text-xs text-white/35 mt-0.5">
+                    Upload previous year question papers — images or PDFs, linked to subjects
+                  </p>
+                </div>
+              </div>
+              <AdminPYQManager adminToken={adminToken} />
             </div>
           </div>
         )}
