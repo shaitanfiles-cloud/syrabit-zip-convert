@@ -9208,6 +9208,25 @@ class CMSDocument(BaseModel):
     schema_type: Optional[str] = "Article"  # Article, FAQPage, HowTo
     status: str = "draft"
 
+class CMSDocumentUpdate(BaseModel):
+    """Partial-update model for PATCH — all fields optional."""
+    title: Optional[str] = None
+    content: Optional[str] = None
+    content_html: Optional[str] = None
+    meta_description: Optional[str] = None
+    description: Optional[str] = None
+    seo_tags: Optional[str] = None
+    primary_keyword: Optional[str] = None
+    seo_slug: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    alt_text: Optional[str] = None
+    category: Optional[str] = None
+    headings: Optional[str] = None
+    geo_tags: Optional[str] = None
+    schema_type: Optional[str] = None
+    status: Optional[str] = None
+    is_published: Optional[bool] = None
+
 @api.get("/admin/content/cms-documents")
 async def get_cms_documents(admin: dict = Depends(get_admin_user)):
     """Get all CMS documents for admin"""
@@ -9259,38 +9278,48 @@ async def create_cms_document(doc: CMSDocument, admin: dict = Depends(get_admin_
     return doc_data
 
 @api.patch("/admin/content/cms-documents/{doc_id}")
-async def update_cms_document(doc_id: str, doc: CMSDocument, admin: dict = Depends(get_admin_user)):
-    """Update existing CMS document — auto re-processes markdown → HTML"""
-    raw_md = doc.content or ""
-    content_html = doc.content_html or _md_to_html(raw_md)
-    headings_json = doc.headings or _extract_headings_json(raw_md)
-    word_count = len(re.sub(r'<[^>]+>', '', content_html).split())
-    updates = {
-        "title": doc.title,
-        "content": raw_md,
-        "content_html": content_html,
-        "meta_description": doc.meta_description,
-        "description": doc.description,
-        "seo_tags": doc.seo_tags,
-        "geo_tags": doc.geo_tags,
-        "primary_keyword": doc.primary_keyword,
-        "seo_slug": doc.seo_slug,
-        "thumbnail_url": doc.thumbnail_url,
-        "alt_text": doc.alt_text,
-        "category": doc.category,
-        "headings": headings_json,
-        "schema_type": doc.schema_type,
-        "status": doc.status,
-        "word_count": word_count,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-    
-    result = await db.cms_documents.update_one({"id": doc_id}, {"$set": updates})
-    if result.matched_count == 0:
+async def update_cms_document(doc_id: str, doc: CMSDocumentUpdate, admin: dict = Depends(get_admin_user)):
+    """Partial update of a CMS document — only non-None fields are written."""
+    # Fetch existing doc to preserve fields not supplied in this request
+    existing = await db.cms_documents.find_one({"id": doc_id}, {"_id": 0})
+    if not existing:
         raise HTTPException(status_code=404, detail="Document not found")
-    
+
+    updates: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+
+    # Apply only the fields explicitly provided in the request body
+    patch = doc.model_dump(exclude_none=True)
+
+    # Content-derived fields (re-process if content is being updated)
+    if "content" in patch:
+        raw_md = patch["content"]
+        updates["content"] = raw_md
+        updates["content_html"] = patch.pop("content_html", None) or _md_to_html(raw_md)
+        updates["headings"] = patch.pop("headings", None) or _extract_headings_json(raw_md)
+        content_html_for_wc = updates["content_html"]
+        updates["word_count"] = len(re.sub(r'<[^>]+>', '', content_html_for_wc).split())
+    elif "content_html" in patch:
+        updates["content_html"] = patch.pop("content_html")
+    if "headings" in patch:
+        updates["headings"] = patch.pop("headings")
+
+    # Handle is_published → status mapping
+    if "is_published" in patch:
+        updates["status"] = "published" if patch.pop("is_published") else "draft"
+
+    # Copy all remaining patch fields directly
+    for k, v in patch.items():
+        updates[k] = v
+
+    await db.cms_documents.update_one({"id": doc_id}, {"$set": updates})
     updated = await db.cms_documents.find_one({"id": doc_id}, {"_id": 0})
     return updated
+
+
+@api.put("/admin/content/cms-documents/{doc_id}")
+async def put_cms_document(doc_id: str, doc: CMSDocumentUpdate, admin: dict = Depends(get_admin_user)):
+    """PUT alias for PATCH /admin/content/cms-documents/{doc_id} — partial update."""
+    return await update_cms_document(doc_id, doc, admin)
 
 
 @api.post("/admin/content/cms-documents/{doc_id}/publish")
@@ -9328,14 +9357,18 @@ async def link_cms_syllabus(doc_id: str, data: dict = Body(...), admin: dict = D
     canonical = f"/{_slugify(board_name)}/{_slugify(class_name)}/{_slugify(subject_name)}"
     geo_phrase = ", ".join(filter(None, [class_name, board_name, stream_name]))
     updates = {
-        "linked_subject_id": subject_id,
-        "linked_board_id":   board_id,
-        "linked_class_id":   class_id,
-        "linked_stream_id":  stream_id,
-        "linked_scope":      f"{board_id}/{class_id}/{stream_id}/{subject_id}",
-        "canonical_url":     canonical,
-        "geo_tags":          geo_phrase,
-        "updated_at":        datetime.now(timezone.utc).isoformat(),
+        "linked_subject_id":   subject_id,
+        "linked_board_id":     board_id,
+        "linked_class_id":     class_id,
+        "linked_stream_id":    stream_id,
+        "linked_subject_name": subject_name,
+        "linked_board_name":   board_name,
+        "linked_class_name":   class_name,
+        "linked_stream_name":  stream_name,
+        "linked_scope":        f"{board_id}/{class_id}/{stream_id}/{subject_id}",
+        "canonical_url":       canonical,
+        "geo_tags":            geo_phrase,
+        "updated_at":          datetime.now(timezone.utc).isoformat(),
     }
     await db.cms_documents.update_one({"id": doc_id}, {"$set": updates})
     logger.info(f"CMS doc {doc_id} linked to scope {board_id}/{class_id}/{stream_id}/{subject_id}")
