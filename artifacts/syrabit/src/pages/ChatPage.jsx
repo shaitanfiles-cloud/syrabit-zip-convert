@@ -331,11 +331,15 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
             {msg.streaming && !msg.content && <ThinkingIndicator />}
 
             {msg.streaming && msg.content && (
-              <MarkdownContent content={msg.content} streaming={true} sources={msg.sources} />
+              <div className="chat-blog-card">
+                <MarkdownContent content={msg.content} streaming={true} sources={msg.sources} />
+              </div>
             )}
 
             {!msg.streaming && msg.content && (
-              <MarkdownContent content={msg.content} streaming={false} sources={msg.sources} />
+              <div className="chat-blog-card">
+                <MarkdownContent content={msg.content} streaming={false} sources={msg.sources} />
+              </div>
             )}
 
             {!msg.streaming && msg.content && (
