@@ -938,3 +938,39 @@
 .cms-editor-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
 .cms-editor-content th { background: rgba(0,0,0,0.04); font-weight: 600; padding: 0.45rem 0.7rem; border: 1px solid rgba(0,0,0,0.09); color: #111827 !important; }
 .cms-editor-content td { padding: 0.4rem 0.7rem; border: 1px solid rgba(0,0,0,0.07); color: #374151 !important; }
+
+/* ── Mobile viewport & layout helpers ─────────────────────────────────────── */
+/* AppLayout main: adds bottom clearance above the fixed BottomNav (64px) plus
+   iOS safe-area-inset-bottom for devices with home indicators.               */
+.app-main-scroll {
+  padding-bottom: max(4rem, calc(4rem + env(safe-area-inset-bottom, 0px)));
+}
+@media (min-width: 768px) {
+  .app-main-scroll {
+    padding-bottom: 0;
+  }
+}
+
+/* Chat page viewport: accounts for navbar (56px) + bottom nav (64px) on mobile,
+   plus iOS safe-area inset; uses svh for iOS Safari dynamic toolbar handling  */
+.chat-viewport-height {
+  height: calc(100vh - 120px - env(safe-area-inset-bottom, 0px));
+  height: calc(100svh - 120px - env(safe-area-inset-bottom, 0px));
+}
+@media (min-width: 768px) {
+  .chat-viewport-height {
+    height: calc(100vh - 56px);
+    height: calc(100svh - 56px);
+  }
+}
+
+/* Masonry grid: always 1 column on mobile, 2 on sm, 3 on lg */
+.cms-posts-masonry .igItemWrapper { min-width: 280px; }
+@media (max-width: 639px) {
+  .cms-posts-masonry .igItemWrapper { min-width: unset; width: 100% !important; }
+}
+
+/* Ensure touch targets are large enough on mobile */
+@media (max-width: 767px) {
+  .bottom-nav-item { min-width: 44px; min-height: 44px; }
+}

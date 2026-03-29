@@ -171,6 +171,14 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 - **Form accessibility**: All inputs have proper `autocomplete` attributes (email, current-password, new-password, name)
 - **SEO & GEO**: `seo_engine.py` handles SEO routes; bot-readable HTML endpoints at `/api/seo/html/{board}/{class}/{subject}/{topic}` serve pre-rendered HTML with JSON-LD (Article, Course, BreadcrumbList, FAQPage), Dublin Core, and citation meta tags; `robots.txt` allows all major AI crawlers; sitemap includes both SPA and HTML bot URLs; `llms.txt` endpoint at `/api/llms.txt` describes site structure for LLM crawlers
 - **GEO (Generative Engine Optimization)**: Syllabi have `geo_phrases` field (authority phrases injected into AI answers); SEO prompts include FAQ sections, AHSEC exam year citations, and NCERT/SCERT references; automation auto-generate attaches `geo_meta` with suggested GEO sections; studio/parse prompt generates FAQ blocks and board exam frequency citations; chunks store `syllabus_id` and `geo_tags` metadata
+- **Mobile Responsiveness (COMPLETE)**: Full mobile-first responsive layout across all breakpoints:
+  - `AppLayout` main uses `.app-main-scroll` CSS class — adds `max(4rem, calc(4rem + env(safe-area-inset-bottom, 0px)))` bottom padding on mobile (0 on md+)
+  - `BottomNav` has `paddingBottom: env(safe-area-inset-bottom, 0px)` for iPhone home-indicator clearance
+  - `ChatPage` uses `.chat-viewport-height` CSS class with `100svh` (dynamic viewport units for iOS Safari toolbar) and safe-area inset bottom
+  - `HistoryPage` `⋯` action button: `opacity-100 md:opacity-0 md:group-hover:opacity-100` — always visible on touch, hover-only on desktop
+  - `SubjectPage` article padding: `clamp(1.25rem, 5vw, 2.5rem)` — responsive, not hardcoded
+  - `LibraryPage` masonry helper `.masonry-grid-mobile` added to `index.css`; card grid already responsive
+  - CSS helpers in `src/index.css`: `.app-main-scroll`, `.chat-viewport-height` use `@media` breakpoints + CSS env() for iOS safe area
 - **Library Page**: Browser-window style subject cards with colored dots + monospace URL bar, always-visible chapter lesson links (up to 6), Ask AI / Save / Browse action buttons, 3-column grid; Board/Class dropdown filters + dynamic stream chips; search autocomplete across name/tags/class/stream/board
 - **Subject Landing Page**: `/:board/:classSlug/:subjectSlug` shows all chapters with search, topic chips, AI CTA; uses `resolve-subject` endpoint (no stream_slug needed)
 - **Lesson Pages (SeoTopicPage)**: Blog-style layout with reading progress bar, sticky sidebar TOC on xl screens (IntersectionObserver active-heading tracking), mobile collapsible TOC, improved typography (`text-[15px] leading-[1.8]`); breadcrumb, content type tabs, related topics, prev/next navigation; fallback to chapter content when no SEO page exists

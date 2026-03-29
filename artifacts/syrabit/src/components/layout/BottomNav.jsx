@@ -32,6 +32,7 @@ export function BottomNav() {
         WebkitBackdropFilter: 'blur(28px) saturate(1.6)',
         borderTop: '1px solid rgba(139,92,246,0.12)',
         boxShadow: '0 -4px 24px rgba(0,0,0,0.25)',
+        paddingBottom: 'env(safe-area-inset-bottom, 0px)',
       }}
       data-testid="app-bottom-nav"
     >

@@ -17,7 +17,7 @@ export function AppLayout(props) {
         <main
           id="main-content"
           role="main"
-          className="flex-1 overflow-y-auto pb-16 md:pb-0"
+          className="flex-1 overflow-y-auto app-main-scroll"
           tabIndex={-1}
         >
           {children ? children : <Outlet />}

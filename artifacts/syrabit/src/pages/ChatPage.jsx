@@ -793,7 +793,7 @@ export default function ChatPage() {
     }>
       <Toaster richColors position="top-right" />
 
-      <div className="flex flex-col h-[calc(100vh-120px)] md:h-[calc(100vh-56px)]">
+      <div className="flex flex-col chat-viewport-height">
 
         {/* ── Out-of-credits / upgrade banner ────────────────────────────── */}
         {isOutOfCredits && (

@@ -184,10 +184,10 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
           <button
             onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
             className={cn(
-              'w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-150',
+              'w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150',
               'text-muted-foreground hover:text-foreground hover:bg-primary/10',
-              'opacity-0 group-hover:opacity-100 focus:opacity-100',
-              menuOpen && 'opacity-100 bg-primary/10 text-foreground'
+              'opacity-100 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100',
+              menuOpen && 'bg-primary/10 text-foreground'
             )}
             aria-label="Conversation actions"
             aria-haspopup="menu"

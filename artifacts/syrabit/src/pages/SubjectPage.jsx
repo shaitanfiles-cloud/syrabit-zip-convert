@@ -212,12 +212,12 @@ function BlogView({ subject, subjectId }) {
           {htmlContent ? (
             <div
               className="learn-article"
-              style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '16px', lineHeight: '1.7', padding: '2rem 2.5rem 2.5rem', boxShadow: '0 1px 12px rgba(0,0,0,0.09)', borderRadius: '0 0 4px 4px', maxWidth: 'none' }}
+              style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '16px', lineHeight: '1.7', padding: 'clamp(1.25rem, 5vw, 2.5rem) clamp(1rem, 5vw, 2.5rem) 2.5rem', boxShadow: '0 1px 12px rgba(0,0,0,0.09)', borderRadius: '0 0 4px 4px', maxWidth: 'none' }}
               dangerouslySetInnerHTML={{ __html: htmlContent }}
             />
           ) : (
             <div className="learn-article"
-              style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '16px', lineHeight: '1.7', padding: '2rem 2.5rem 2.5rem', boxShadow: '0 1px 12px rgba(0,0,0,0.09)', borderRadius: '0 0 4px 4px', maxWidth: 'none' }}>
+              style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '16px', lineHeight: '1.7', padding: 'clamp(1.25rem, 5vw, 2.5rem) clamp(1rem, 5vw, 2.5rem) 2.5rem', boxShadow: '0 1px 12px rgba(0,0,0,0.09)', borderRadius: '0 0 4px 4px', maxWidth: 'none' }}>
               <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>
                 {post.merged_md || ''}
               </ReactMarkdown>
