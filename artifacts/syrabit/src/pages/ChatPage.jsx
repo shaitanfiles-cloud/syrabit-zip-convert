@@ -11,16 +11,14 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   Send, Loader2, BookOpen, Zap, RefreshCw, Copy, Check,
-  AlertTriangle, Globe, Database, WifiOff, FileText, Sparkles, ChevronDown, ExternalLink,
+  AlertTriangle, Globe, Database, WifiOff, FileText, Sparkles, ChevronDown, ExternalLink, Square, Plus,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { getConversation, getSubject, getChapters } from '@/utils/api';
+import { getConversation, getSubject, getChapters, API_BASE, apiClient } from '@/utils/api';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import '@/styles/perplexity-chat.css';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 // ── Models ────────────────────────────────────────────────────────────────────
 const MODELS = [
@@ -337,7 +335,7 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
 export default function ChatPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const convId     = searchParams.get('id');
   const subjectId  = searchParams.get('subject');
   const documentId = searchParams.get('document_id'); // Tier 0 RAG when present
@@ -359,6 +357,7 @@ export default function ChatPage() {
   const messagesEndRef    = useRef(null);
   const textareaRef       = useRef(null);
   const abortControllerRef = useRef(null);
+  const modelMenuRef      = useRef(null);
 
   // ── Auto-scroll (smooth yet responsive) ──────────────────────────────────
   const scrollTimeoutRef = useRef(null);
@@ -369,6 +368,20 @@ export default function ChatPage() {
     }, 0);
     return () => { if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current); };
   }, [messages]);
+
+  // ── Fetch fresh credits on mount / user change ─────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    apiClient().get('/user/profile')
+      .then((res) => {
+        const p = res.data;
+        setCredits({
+          used:  p.credits_used  ?? 0,
+          limit: p.credits_limit ?? null,
+        });
+      })
+      .catch(() => {});
+  }, [user]);
 
   // ── Load subject context ───────────────────────────────────────────────────
   useEffect(() => {
@@ -410,6 +423,18 @@ export default function ChatPage() {
     document.addEventListener('visibilitychange', check);
     return () => document.removeEventListener('visibilitychange', check);
   }, []);
+
+  // ── Close model dropdown on outside click ─────────────────────────────────
+  useEffect(() => {
+    if (!showModelMenu) return;
+    const handler = (e) => {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(e.target)) {
+        setShowModelMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showModelMenu]);
 
   // ── Auto-grow textarea ────────────────────────────────────────────────────
   const adjustTextarea = useCallback(() => {
@@ -465,6 +490,30 @@ export default function ChatPage() {
     if (syncState === 'offline') return <WifiOff size={12} className="text-amber-400" />;
     return <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />;
   };
+
+  // ── New Chat — reset state ────────────────────────────────────────────────
+  const handleNewChat = useCallback(() => {
+    setMessages([]);
+    setConversationId(null);
+    setInput('');
+    navigate('/chat', { replace: true });
+  }, [navigate]);
+
+  // ── Stop streaming ─────────────────────────────────────────────────────────
+  const handleStop = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    setIsLoading(false);
+    // Mark last AI message as non-streaming to keep partial text
+    setMessages((prev) =>
+      prev.map((m, i) =>
+        i === prev.length - 1 && m.role === 'assistant'
+          ? { ...m, streaming: false }
+          : m
+      )
+    );
+  }, []);
 
   // ── Send message ──────────────────────────────────────────────────────────
   const sendMsg = async (text) => {
@@ -531,6 +580,7 @@ export default function ChatPage() {
       let ragSubjectId = null;
       let ragSubjectName = null;
       let libSources = [];
+      let hasError = false;
 
       // RAF-based batching: accumulate chunks between animation frames
       // so React re-renders at most 60×/sec instead of on every token
@@ -563,13 +613,16 @@ export default function ChatPage() {
             if (parsed.rag_subject_id) ragSubjectId = parsed.rag_subject_id;
             if (parsed.rag_subject_name) ragSubjectName = parsed.rag_subject_name;
             if (parsed.error) {
+              hasError = true;
               toast.error(parsed.error || 'AI service error — please try again.');
               setMessages((prev) => prev.map((m) =>
                 m.id === aiMsgId
                   ? { ...m, content: 'Sorry, something went wrong. Please try again.', streaming: false }
                   : m
               ));
+              continue;
             }
+            if (hasError) continue;
             if (parsed.content) {
               pendingChunk += parsed.content;
               if (!fullContent && !rafId) {
@@ -601,7 +654,18 @@ export default function ChatPage() {
       if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
       if (pendingChunk) { fullContent += pendingChunk; pendingChunk = ''; }
 
-      setConversationId(newConvId);
+      // Update URL with conversation ID after first message
+      if (newConvId && newConvId !== conversationId) {
+        setConversationId(newConvId);
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('id', newConvId);
+          return next;
+        }, { replace: true });
+      } else {
+        setConversationId(newConvId);
+      }
+
       // Finalize: remove streaming flag, attach RAG metadata + library sources
       // Note: credits are already updated by syrabit_done event; do not double-increment here
       setMessages((prev) => prev.map((m) =>
@@ -649,7 +713,7 @@ export default function ChatPage() {
 
   return (
     <AppLayout pageTitle={
-      <div className="relative">
+      <div className="relative flex items-center gap-2" ref={modelMenuRef}>
         <button
           onClick={() => setShowModelMenu((v) => !v)}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold text-foreground hover:text-primary transition-all border border-border/50 hover:border-primary/30 hover:shadow-[0_0_12px_rgba(139,92,246,0.1)]"
@@ -709,6 +773,17 @@ export default function ChatPage() {
             ))}
           </div>
         )}
+
+        {/* New Chat button in header */}
+        <button
+          onClick={handleNewChat}
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground border border-border/40 hover:border-primary/30 transition-all"
+          title="New chat"
+          aria-label="Start new chat"
+        >
+          <Plus size={13} />
+          <span className="hidden sm:inline">New Chat</span>
+        </button>
       </div>
     }>
       <Toaster richColors position="top-right" />
@@ -889,26 +964,74 @@ export default function ChatPage() {
               />
               <div className="flex items-center gap-2 flex-shrink-0">
                 <span className="text-xs text-muted-foreground hidden sm:inline">↵ Enter</span>
-                <button
-                  onClick={() => sendMsg(input)}
-                  disabled={!input.trim() || isLoading || isOutOfCredits}
-                  className="w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
-                  style={
-                    input.trim() && !isLoading && !isOutOfCredits
-                      ? {
-                          background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
-                          color: '#fff',
-                          boxShadow: '0 4px 15px rgba(139,92,246,0.4)',
-                        }
-                      : { background: 'hsl(var(--muted))', color: 'hsl(var(--muted-foreground))' }
-                  }
-                  data-testid="chat-send-button"
-                  aria-label={isLoading ? 'Sending…' : 'Send message'}
-                >
-                  {isLoading ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Send size={16} aria-hidden="true" />}
-                </button>
+                {isLoading ? (
+                  <button
+                    onClick={handleStop}
+                    className="w-9 h-9 rounded-xl flex items-center justify-center transition-all"
+                    style={{
+                      background: 'rgba(239,68,68,0.15)',
+                      border: '1px solid rgba(239,68,68,0.30)',
+                      color: '#f87171',
+                    }}
+                    aria-label="Stop generating"
+                    title="Stop"
+                    data-testid="chat-stop-button"
+                  >
+                    <Square size={14} aria-hidden="true" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => sendMsg(input)}
+                    disabled={!input.trim() || isOutOfCredits}
+                    className="w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
+                    style={
+                      input.trim() && !isOutOfCredits
+                        ? {
+                            background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
+                            color: '#fff',
+                            boxShadow: '0 4px 15px rgba(139,92,246,0.4)',
+                          }
+                        : { background: 'hsl(var(--muted))', color: 'hsl(var(--muted-foreground))' }
+                    }
+                    data-testid="chat-send-button"
+                    aria-label="Send message"
+                  >
+                    <Send size={16} aria-hidden="true" />
+                  </button>
+                )}
               </div>
             </div>
+
+            {/* ── Credit progress bar ────────────────────────────────────── */}
+            {effectiveLimit !== null && effectiveLimit > 0 && (
+              <div className="mt-2 px-1 flex items-center gap-2">
+                <div
+                  className="flex-1 h-1 rounded-full overflow-hidden"
+                  style={{ background: 'rgba(139,92,246,0.10)' }}
+                  role="progressbar"
+                  aria-valuenow={creditPercent}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label="Credit usage"
+                >
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${creditPercent}%`,
+                      background: isLow || isOutOfCredits
+                        ? 'linear-gradient(90deg,#ef4444,#f87171)'
+                        : 'linear-gradient(90deg,#7c3aed,#a78bfa)',
+                    }}
+                  />
+                </div>
+                <span
+                  className="text-[10px] font-medium shrink-0"
+                  style={{ color: isLow || isOutOfCredits ? '#f87171' : 'hsl(var(--muted-foreground))' }}
+                >
+                  {remaining !== null ? `${remaining} left` : ''}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>

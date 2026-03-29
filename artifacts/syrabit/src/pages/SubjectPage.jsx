@@ -117,9 +117,10 @@ function BlogView({ subject, subjectId }) {
     try { return JSON.parse(post.headings); } catch { return []; }
   }, [post]);
 
+  const _siteOrigin = import.meta.env.VITE_SITE_URL || window.location.origin;
   const subjectUrl = subject?.board_slug && subject?.class_slug && subject?.stream_slug && subject?.slug
-    ? `https://syrabit.ai/${subject.board_slug}/${subject.class_slug}/${subject.stream_slug}/${subject.slug}`
-    : `https://syrabit.ai/subject/${subjectId}`;
+    ? `${_siteOrigin}/${subject.board_slug}/${subject.class_slug}/${subject.stream_slug}/${subject.slug}`
+    : `${_siteOrigin}/subject/${subjectId}`;
 
   const readMins = post?.word_count ? Math.max(1, Math.ceil(post.word_count / 200)) : null;
 
@@ -349,9 +350,10 @@ export default function SubjectPage() {
     </AppLayout>
   );
 
+  const SITE_ORIGIN = import.meta.env.VITE_SITE_URL || window.location.origin;
   const subjectUrl  = subject.board_slug && subject.class_slug && subject.stream_slug && subject.slug
-    ? `https://syrabit.ai/${subject.board_slug}/${subject.class_slug}/${subject.stream_slug}/${subject.slug}`
-    : `https://syrabit.ai/subject/${subjectId}`;
+    ? `${SITE_ORIGIN}/${subject.board_slug}/${subject.class_slug}/${subject.stream_slug}/${subject.slug}`
+    : `${SITE_ORIGIN}/subject/${subjectId}`;
   const subjectTitle = (subject.name + ' Notes — ' + (subject.class_name || 'AHSEC') + ' ' + (subject.stream_name || '')).trim();
   const subjectDesc  = subject.description
     || ('Complete ' + subject.name + ' notes, chapters, and AI explanations for ' + (subject.class_name || 'AHSEC') + ' ' + (subject.stream_name || '') + ' students.');

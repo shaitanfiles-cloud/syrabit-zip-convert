@@ -26,6 +26,12 @@ import { toast } from 'sonner';
 function loadRazorpay() {
   return new Promise((resolve) => {
     if (window.Razorpay) { resolve(true); return; }
+    const existing = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
+    if (existing) {
+      existing.onload = () => resolve(true);
+      existing.onerror = () => resolve(false);
+      return;
+    }
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
     script.onload  = () => resolve(true);
@@ -160,8 +166,8 @@ export default function ProfilePage() {
   const creditsRemaining = Math.max(0, profile?.credits_remaining ?? 0);
   const docAccess        = profile?.document_access || PLANS[plan]?.docAccess || 'zero';
   const docCfg           = DOC_ACCESS_CONFIG[docAccess] || DOC_ACCESS_CONFIG.zero;
-  // Guard against NaN when free plan (0/0)
-  const creditPercent = creditsLimit > 0 ? Math.min(100, (creditsUsed / creditsLimit) * 100) : 100;
+  // Guard against NaN when free plan (0/0); creditsLimit === 0 → 0% (empty bar)
+  const creditPercent = creditsLimit > 0 ? Math.min(100, (creditsUsed / creditsLimit) * 100) : 0;
   const isLowCredits  = creditsLimit > 0 && creditsRemaining <= 5;
 
   // Deletion hours remaining

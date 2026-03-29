@@ -652,16 +652,25 @@ export default function LibraryPage() {
   const toggleSaved = useToggleSavedSubject();
 
   // Run the onboarding auto-filter exactly once when streams first load
+  // Prefer user object from auth context; fall back to localStorage
   const onboardingApplied = useRef(false);
   useEffect(() => {
     if (onboardingApplied.current || !streams.length) return;
     onboardingApplied.current = true;
+
+    // Try user object first (most up-to-date)
+    if (user?.stream_id) {
+      const stream = streams.find((s) => s.id === user.stream_id);
+      if (stream?.slug) { setActiveFilter(stream.slug); return; }
+    }
+
+    // Fall back to localStorage
     const profile = getOnboardingProfile();
     if (profile?.stream_id) {
       const stream = streams.find((s) => s.id === profile.stream_id);
       if (stream?.slug) setActiveFilter(stream.slug);
     }
-  }, [streams]);
+  }, [streams, user]);
 
   useEffect(() => {
     const handleContentUploaded = () => {

@@ -1,8 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
-const API = `${BACKEND_URL}/api`;
+import { API_BASE } from '@/utils/api';
 
 const AuthContext = createContext(null);
 
@@ -12,7 +10,7 @@ export const AuthProvider = ({ children }) => {
 
   const fetchMe = useCallback(async () => {
     try {
-      const res = await axios.get(`${API}/auth/me`, { withCredentials: true });
+      const res = await axios.get(`${API_BASE}/auth/me`, { withCredentials: true });
       setUser(res.data);
     } catch {
       setUser(null);
@@ -28,7 +26,7 @@ export const AuthProvider = ({ children }) => {
   }, [fetchMe]);
 
   const login = async (email, password) => {
-    const res = await axios.post(`${API}/auth/login`, { email, password }, { withCredentials: true });
+    const res = await axios.post(`${API_BASE}/auth/login`, { email, password }, { withCredentials: true });
     const { user: userData } = res.data;
     setUser(userData);
     try {
@@ -39,7 +37,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   const signup = async (name, email, password) => {
-    const res = await axios.post(`${API}/auth/signup`, { name, email, password }, { withCredentials: true });
+    const res = await axios.post(`${API_BASE}/auth/signup`, { name, email, password }, { withCredentials: true });
     const { user: userData } = res.data;
     setUser(userData);
     try {
@@ -51,7 +49,7 @@ export const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      await axios.post(`${API}/auth/logout`, {}, { withCredentials: true });
+      await axios.post(`${API_BASE}/auth/logout`, {}, { withCredentials: true });
     } catch {}
     localStorage.removeItem('syrabit:onboarding');
     setUser(null);
@@ -74,7 +72,7 @@ export const AuthProvider = ({ children }) => {
       logout,
       refreshUser,
       authHeader: {},
-      API,
+      API: API_BASE,
     }}>
       {children}
     </AuthContext.Provider>
