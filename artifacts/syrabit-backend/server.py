@@ -11910,6 +11910,7 @@ For EACH subject, return one JSON object in this exact schema:
 Rules:
 - Extract EVERY subject/course in the PDF — do NOT skip any.
 - chapters = the numbered units or chapters from the detailed syllabus table, each with its content description.
+- For EACH chapter, "title" MUST NOT be empty — use the exact unit/chapter heading as printed; if no heading is visible, use "Unit 1", "Unit 2" etc.
 - For each chapter, description must summarise exactly what topics appear under that unit in the PDF.
 - topics (top-level) = key terms across all units (max 20 per subject).
 - stream_target: if the PDF says "For all (Arts+Commerce+Science)" → "All"; "For Commerce" → "Commerce"; "For Arts & Science" → "Arts & Science".
@@ -12141,6 +12142,27 @@ async def syllabus_import_pdf(
     new_count  = sum(1 for e in extracted if isinstance(e, dict) and not e.get("_is_duplicate"))
     dup_count  = len(extracted) - new_count
 
+    # ── Normalise chapter titles in extracted data (for both dry-run and live) ─
+    def _norm_chapters(raw_chaps: list) -> list:
+        out = []
+        for idx, ch in enumerate(raw_chaps):
+            if isinstance(ch, dict):
+                title = (ch.get("title") or ch.get("name") or "").strip()
+                desc  = (ch.get("description") or "").strip()
+                if not title and desc:
+                    first_sentence = desc.split('.')[0].strip()
+                    title = (first_sentence[:70] + '…') if len(first_sentence) > 70 else first_sentence
+                if not title:
+                    title = f"Unit {idx + 1}"
+                out.append({**ch, "title": title, "description": desc})
+            elif isinstance(ch, str) and ch.strip():
+                out.append({"title": ch.strip(), "description": "", "topics": []})
+        return out
+
+    for entry in extracted:
+        if isinstance(entry, dict) and "chapters" in entry:
+            entry["chapters"] = _norm_chapters(entry["chapters"])
+
     # ── Dry-run: return extracted JSON (with dup flags) for preview ─────────────
     if dry_run:
         return {
@@ -12192,13 +12214,19 @@ async def syllabus_import_pdf(
         for ch in raw_chaps:
             if isinstance(ch, dict):
                 title = (ch.get("title") or ch.get("name") or "").strip()
-                if title:
-                    chapter_details.append({
-                        "title":       title,
-                        "description": (ch.get("description") or "").strip(),
-                        "topics":      [t for t in (ch.get("topics") or []) if isinstance(t, str)],
-                    })
-                    chapter_titles.append(title)
+                desc  = (ch.get("description") or "").strip()
+                if not title and desc:
+                    # Derive title from first sentence of description (max 70 chars)
+                    first_sentence = desc.split('.')[0].strip()
+                    title = (first_sentence[:70] + '…') if len(first_sentence) > 70 else first_sentence
+                if not title:
+                    title = f"Unit {len(chapter_titles) + 1}"
+                chapter_details.append({
+                    "title":       title,
+                    "description": desc,
+                    "topics":      [t for t in (ch.get("topics") or []) if isinstance(t, str)],
+                })
+                chapter_titles.append(title)
             elif isinstance(ch, str) and ch.strip():
                 title = ch.strip()
                 chapter_titles.append(title)
