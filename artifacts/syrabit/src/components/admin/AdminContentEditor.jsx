@@ -154,6 +154,8 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [thumbVariants, setThumbVariants]       = useState([]);
   const [thumbAnalysis, setThumbAnalysis]       = useState(null);
   const [selectedThumbVariant, setSelectedThumbVariant] = useState(0);
+  const [generatingNotes, setGeneratingNotes] = useState(new Set());
+  const [bulkGenerating, setBulkGenerating] = useState(false);
   const fileInputRef = useRef(null);
   const thumbnailInputRef = useRef(null);
   const contentTextareaRef = useRef(null);
@@ -569,6 +571,42 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       setChapters(p => p.filter(c => c.id !== id));
       toast.success('Chapter deleted');
     } catch { toast.error('Failed to delete'); }
+  };
+
+  const handleGenerateNotes = async (chapterId, chapterTitle) => {
+    setGeneratingNotes(prev => new Set([...prev, chapterId]));
+    try {
+      const res = await axios.post(`${API}/admin/content/chapters/${chapterId}/generate-notes`, {}, authHeaders(adminToken));
+      const generated = res.data?.content;
+      if (generated) {
+        setChapters(prev => prev.map(ch => ch.id === chapterId ? { ...ch, content: generated, content_type: 'notes', notes_generated: true } : ch));
+        toast.success(`Notes generated for "${chapterTitle}"`);
+      }
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || `Failed to generate notes for "${chapterTitle}"`);
+    } finally {
+      setGeneratingNotes(prev => { const next = new Set(prev); next.delete(chapterId); return next; });
+    }
+  };
+
+  const handleGenerateAllNotes = async () => {
+    if (!selSubject) return;
+    const subjectName = subjects.find(s => s.id === selSubject)?.name || selSubject;
+    if (!confirm(`Generate AI notes for all ${chapters.length} chapters in "${subjectName}"? This may take a moment.`)) return;
+    setBulkGenerating(true);
+    try {
+      const res = await axios.post(`${API}/admin/subjects/${selSubject}/generate-notes-bulk`, {}, authHeaders(adminToken));
+      const data = res.data;
+      const ok = data?.generated || 0;
+      toast.success(`Generated notes for ${ok} of ${data?.total || chapters.length} chapters`);
+      // Refresh chapters to pull updated content
+      const freshRes = await axios.get(`${API}/content/chapters?subject_id=${selSubject}`, authHeaders(adminToken));
+      if (freshRes.data?.chapters) setChapters(freshRes.data.chapters);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Bulk note generation failed');
+    } finally {
+      setBulkGenerating(false);
+    }
   };
 
   const breadcrumb = [];
@@ -1188,14 +1226,28 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <p className="text-sm font-semibold text-white">Chapters ({chapters.length})</p>
-                        {chapters.length > 0 && (
-                          <button
-                            onClick={() => setSelectedChapters(prev => prev.size === chapters.length ? new Set() : new Set(chapters.map(c => c.id)))}
-                            className="text-[10px] text-white/30 hover:text-white transition-colors"
-                          >
-                            {selectedChapters.size === chapters.length ? 'Deselect all' : 'Select all'}
-                          </button>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {chapters.length > 0 && (
+                            <button
+                              onClick={() => setSelectedChapters(prev => prev.size === chapters.length ? new Set() : new Set(chapters.map(c => c.id)))}
+                              className="text-[10px] text-white/30 hover:text-white transition-colors"
+                            >
+                              {selectedChapters.size === chapters.length ? 'Deselect all' : 'Select all'}
+                            </button>
+                          )}
+                          {chapters.length > 0 && (
+                            <button
+                              onClick={handleGenerateAllNotes}
+                              disabled={bulkGenerating}
+                              className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-medium transition-colors disabled:opacity-40"
+                              style={{ background: 'rgba(149,117,224,0.18)', color: '#c4b0f0' }}
+                              title="Generate AI notes for all chapters"
+                            >
+                              {bulkGenerating ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
+                              {bulkGenerating ? 'Generating…' : 'Gen All Notes'}
+                            </button>
+                          )}
+                        </div>
                       </div>
 
                       {/* Bulk action bar */}
@@ -1251,6 +1303,14 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                             </div>
                           </div>
                           <div className="flex gap-0.5 flex-shrink-0">
+                            <button
+                              onClick={() => handleGenerateNotes(ch.id, ch.title)}
+                              disabled={generatingNotes.has(ch.id) || bulkGenerating}
+                              className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400 disabled:opacity-40 transition-colors"
+                              title="Generate AI notes for this chapter"
+                            >
+                              {generatingNotes.has(ch.id) ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                            </button>
                             <button onClick={() => setViewerItem(ch)} className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-white/30 hover:text-emerald-400" title="Preview" data-testid={`open-chapter-${ch.id}`}><Eye size={14} /></button>
                             <button onClick={() => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1 }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
                               className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400"><Edit2 size={14} /></button>

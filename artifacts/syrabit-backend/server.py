@@ -7762,6 +7762,193 @@ async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depend
     _invalidate_content_cache("subjects")
     return {"message": "Chapter updated", **chunks_info}
 
+@api.post("/admin/content/chapters/{chapter_id}/generate-notes")
+async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(get_admin_user)):
+    """
+    Use AI to generate topic-wise summary notes for a chapter.
+    Reads: title, description, topics from the chapter + subject context.
+    Writes rich markdown notes back to chapter.content and re-chunks.
+    """
+    chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    subject = await db.subjects.find_one({"id": chapter.get("subject_id", "")}, {"_id": 0}) or {}
+    subject_name = subject.get("name", "")
+    paper_type   = subject.get("paper_type", "")
+    class_name   = subject.get("className", "")
+
+    title       = chapter.get("title", "").strip()
+    description = (chapter.get("description") or "").strip()
+    topics      = chapter.get("topics") or []
+
+    if not title:
+        raise HTTPException(status_code=400, detail="Chapter has no title")
+
+    # Build the educational prompt
+    topic_block = ""
+    if topics:
+        topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
+    elif description:
+        topic_block = f"  (Use the following description as the basis: {description})"
+    else:
+        topic_block = "  (Generate general summary notes for this chapter)"
+
+    prompt = f"""You are an expert academic content writer for Indian university degree students (NEP/FYUGP curriculum).
+
+Generate **detailed, topic-wise summary notes** for the following chapter. These notes will be the primary study material for students.
+
+**Chapter:** {title}
+**Subject:** {subject_name or "Degree Course"} ({(paper_type or "").upper()} — {class_name or "FYUGP"})
+**Description:** {description or "No additional description provided."}
+
+**Syllabus Topics to cover:**
+{topic_block}
+
+---
+
+**INSTRUCTIONS:**
+- Write a brief **introduction** (2-3 sentences) about the chapter as a whole.
+- For EACH topic listed above, write a dedicated section with:
+  - A clear **heading** (use ## for the topic name)
+  - A concise explanation of the topic (3-6 sentences) in simple academic language
+  - **Key Points** in bullet form (4-6 bullets) covering definitions, significance, and important facts
+  - Use **bold** to highlight key terms/definitions
+- End with a brief **Summary** section recapping the chapter's main takeaways.
+- Use markdown formatting (##, ###, **, -, etc.)
+- Write for degree-level students — clear, precise, and educational
+- Do NOT add any disclaimers or preamble. Start directly with the introduction.
+- Target length: ~400-700 words total across all topics.
+"""
+
+    try:
+        generated = await call_llm_api(
+            [{"role": "user", "content": prompt}],
+            max_tokens=2048
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI generation failed: {e}")
+
+    if not generated or len(generated.strip()) < 50:
+        raise HTTPException(status_code=502, detail="AI returned empty or too-short content")
+
+    # Save generated notes
+    await db.chapters.update_one(
+        {"id": chapter_id},
+        {"$set": {
+            "content":      generated.strip(),
+            "content_type": "notes",
+            "notes_generated": True,
+            "notes_generated_at": datetime.now(timezone.utc).isoformat(),
+        }}
+    )
+    _invalidate_content_cache("chapters")
+
+    # Re-chunk for RAG search
+    try:
+        await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"))
+    except Exception:
+        pass
+
+    return {
+        "chapter_id": chapter_id,
+        "title": title,
+        "content": generated.strip(),
+        "word_count": len(generated.split()),
+        "message": "Notes generated successfully",
+    }
+
+
+@api.post("/admin/subjects/{subject_id}/generate-notes-bulk")
+async def admin_generate_subject_notes_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """
+    Generate AI topic-wise notes for ALL chapters of a subject.
+    Runs sequentially to avoid rate-limiting. Returns per-chapter results.
+    """
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).sort("order_index", 1).to_list(100)
+
+    if not chapters:
+        return {"subject_id": subject_id, "results": [], "message": "No chapters found"}
+
+    subject_name = subject.get("name", "")
+    paper_type   = subject.get("paper_type", "")
+    class_name   = subject.get("className", "")
+
+    results = []
+    for chapter in chapters:
+        chapter_id  = chapter.get("id", "")
+        title       = (chapter.get("title") or "").strip()
+        description = (chapter.get("description") or "").strip()
+        topics      = chapter.get("topics") or []
+
+        if not title:
+            results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
+            continue
+
+        topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else f"  (Based on: {description})" if description else "  (Generate general notes)"
+
+        prompt = f"""You are an expert academic content writer for Indian university degree students (NEP/FYUGP curriculum).
+
+Generate **detailed, topic-wise summary notes** for the following chapter. These notes will be the primary study material for students.
+
+**Chapter:** {title}
+**Subject:** {subject_name or "Degree Course"} ({(paper_type or "").upper()} — {class_name or "FYUGP"})
+**Description:** {description or "No additional description provided."}
+
+**Syllabus Topics to cover:**
+{topic_block}
+
+---
+
+**INSTRUCTIONS:**
+- Write a brief **introduction** (2-3 sentences) about the chapter.
+- For EACH topic listed, write:
+  - A **## Heading** for the topic
+  - 3-5 sentence explanation in simple academic language
+  - **Key Points** in 4-6 bullets with definitions/significance/**bold key terms**
+- End with a **Summary** section.
+- Use markdown. Do NOT add disclaimers. Start directly with the introduction.
+- Target: ~400-700 words.
+"""
+        try:
+            generated = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
+            if generated and len(generated.strip()) > 50:
+                await db.chapters.update_one(
+                    {"id": chapter_id},
+                    {"$set": {
+                        "content": generated.strip(),
+                        "content_type": "notes",
+                        "notes_generated": True,
+                        "notes_generated_at": datetime.now(timezone.utc).isoformat(),
+                    }}
+                )
+                try:
+                    await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=subject_id)
+                except Exception:
+                    pass
+                results.append({"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": len(generated.split())})
+            else:
+                results.append({"chapter_id": chapter_id, "title": title, "status": "error", "reason": "empty response"})
+        except Exception as e:
+            results.append({"chapter_id": chapter_id, "title": title, "status": "error", "reason": str(e)})
+
+    _invalidate_content_cache("chapters")
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    return {
+        "subject_id": subject_id,
+        "subject_name": subject_name,
+        "total": len(chapters),
+        "generated": ok_count,
+        "results": results,
+    }
+
+
 @api.post("/admin/content/chapters/{chapter_id}/rechunk")
 async def admin_rechunk_chapter(chapter_id: str, admin: dict = Depends(get_admin_user)):
     """
@@ -12750,6 +12937,90 @@ async def confirm_syllabus_import(
         asyncio.create_task(_reseed_syllabus_embeddings())
     except Exception:
         pass
+
+    # ── Auto-generate topic-wise notes for all imported chapters in background ──
+    all_subject_ids = []
+    for ss in saved_subjects:
+        # Collect subject IDs from the link result stored in saved_subjects
+        pass
+    # Re-collect from raw saved data
+    imported_subject_ids: list[str] = []
+    for entry_raw in extracted:
+        subject_name_raw = (entry_raw.get("subject_name") or entry_raw.get("subject") or "").strip()
+        if subject_name_raw:
+            subj_doc = await db.subjects.find_one(
+                {"name": subject_name_raw, "source": "pdf_import"},
+                {"_id": 0, "id": 1}
+            )
+            if subj_doc:
+                imported_subject_ids.append(subj_doc["id"])
+
+    async def _bg_generate_notes(subject_ids: list[str]):
+        """Background task: generate AI notes for all chapters of imported subjects."""
+        for sid in subject_ids:
+            try:
+                chapters_to_gen = await db.chapters.find(
+                    {"subject_id": sid}, {"_id": 0, "id": 1, "title": 1, "description": 1, "topics": 1}
+                ).to_list(100)
+                subject_doc = await db.subjects.find_one({"id": sid}, {"_id": 0}) or {}
+                s_name  = subject_doc.get("name", "")
+                s_pt    = subject_doc.get("paper_type", "")
+                s_cls   = subject_doc.get("className", "")
+
+                for ch in chapters_to_gen:
+                    cid    = ch.get("id", "")
+                    ctitle = (ch.get("title") or "").strip()
+                    cdesc  = (ch.get("description") or "").strip()
+                    ctopics = ch.get("topics") or []
+                    if not ctitle:
+                        continue
+                    topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(ctopics)) if ctopics else (f"  (Based on: {cdesc})" if cdesc else "  (Generate general notes)")
+                    prompt = f"""You are an expert academic content writer for Indian university degree students (NEP/FYUGP curriculum).
+
+Generate **detailed, topic-wise summary notes** for the following chapter. These notes will be the primary study material for students.
+
+**Chapter:** {ctitle}
+**Subject:** {s_name or "Degree Course"} ({(s_pt or "").upper()} — {s_cls or "FYUGP"})
+**Description:** {cdesc or "No additional description provided."}
+
+**Syllabus Topics to cover:**
+{topic_block}
+
+---
+
+**INSTRUCTIONS:**
+- Write a brief **introduction** (2-3 sentences) about the chapter.
+- For EACH topic listed, write a **## Heading** for the topic, a 3-5 sentence explanation, and 4-6 **Key Points** bullets with **bold key terms**.
+- End with a **Summary** section.
+- Use markdown. Do NOT add disclaimers. Start directly with the introduction.
+- Target: ~400-700 words.
+"""
+                    try:
+                        generated = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
+                        if generated and len(generated.strip()) > 50:
+                            await db.chapters.update_one(
+                                {"id": cid},
+                                {"$set": {"content": generated.strip(), "content_type": "notes",
+                                          "notes_generated": True,
+                                          "notes_generated_at": datetime.now(timezone.utc).isoformat()}}
+                            )
+                            try:
+                                await auto_chunk_content(chapter_id=cid, content=generated.strip(), subject_id=sid)
+                            except Exception:
+                                pass
+                            logger.info(f"[notes-bg] Generated notes for chapter '{ctitle}' ({cid})")
+                    except Exception as eg:
+                        logger.warning(f"[notes-bg] Failed to generate notes for chapter {cid}: {eg}")
+            except Exception as es:
+                logger.warning(f"[notes-bg] Error processing subject {sid}: {es}")
+        _invalidate_content_cache("chapters")
+        logger.info(f"[notes-bg] Auto-note generation complete for {len(subject_ids)} subjects")
+
+    if imported_subject_ids:
+        try:
+            asyncio.create_task(_bg_generate_notes(imported_subject_ids))
+        except Exception:
+            pass
 
     return {
         "success": True,
