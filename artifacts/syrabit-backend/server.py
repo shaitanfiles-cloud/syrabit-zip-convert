@@ -10399,10 +10399,11 @@ async def _check_health_deps():
         result["redis"] = {"status": "error", "latencyMs": 0}
     try:
         if supa and SUPABASE_URL:
-            # Use a direct HTTP GET to the Supabase REST health endpoint —
-            # no SQL round-trip, just TLS + HTTP keep-alive: much faster than a table query.
+            # Use the best available key: service key → anon key.
+            # Direct HTTP GET to /rest/v1/ — no SQL round-trip, just TLS keep-alive.
+            _supa_key        = SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY
             _supa_health_url = SUPABASE_URL.rstrip("/") + "/rest/v1/"
-            _supa_headers    = {"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"}
+            _supa_headers    = {"apikey": _supa_key, "Authorization": f"Bearer {_supa_key}"}
             t0 = time.time()
             async with httpx.AsyncClient(
                 http2=True,
@@ -10414,7 +10415,8 @@ async def _check_health_deps():
             result["supabase"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
         else:
             result["supabase"] = {"status": "not_configured", "latencyMs": 0}
-    except Exception:
+    except Exception as _se:
+        logger.debug(f"Supabase health check failed: {_se}")
         result["supabase"] = {"status": "error", "latencyMs": 0}
     return result
 
