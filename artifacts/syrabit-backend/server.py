@@ -12973,6 +12973,21 @@ app.include_router(api)
 #  PYQ — Previous Year Questions Upload & Management
 # ══════════════════════════════════════════════════════════════════════════════
 
+_PYQ_BUCKET   = "study-materials"
+_PYQ_PREFIX   = "pyqs"
+_PYQ_MAX_MB   = 50  # MB per file — stored in Supabase, not MongoDB
+
+def _pyq_supabase_upload(raw: bytes, storage_path: str, mime: str) -> str:
+    """Upload bytes to Supabase storage and return the public URL.
+    Raises on failure so caller can fall back to base64."""
+    supa.storage.from_(_PYQ_BUCKET).upload(
+        path=storage_path,
+        file=raw,
+        file_options={"content-type": mime, "upsert": "true"},
+    )
+    return supa.storage.from_(_PYQ_BUCKET).get_public_url(storage_path)
+
+
 @app.post("/api/admin/pyq/upload")
 async def admin_pyq_upload(
     files: List[UploadFile] = File(...),
@@ -12985,13 +13000,13 @@ async def admin_pyq_upload(
     subject_id:  str = Form(""),
     admin: dict = Depends(get_admin_user),
 ):
-    """Store PYQ images/PDFs (base64) in MongoDB pyq_uploads collection."""
+    """Upload PYQ files to Supabase Storage; store only metadata + URL in MongoDB."""
     if not files:
         raise HTTPException(400, "No files provided")
 
-    MAX_FILE_BYTES = 8 * 1024 * 1024  # 8 MB per file
+    max_bytes = _PYQ_MAX_MB * 1024 * 1024
 
-    # Resolve display names
+    # Resolve display names from MongoDB
     subject_name = board_name = class_name = stream_name = ""
     db = _get_db()
     try:
@@ -13011,44 +13026,75 @@ async def admin_pyq_upload(
         pass
 
     saved_ids = []
+    use_supabase = bool(supa)
+
     for upload in files:
         raw = await upload.read()
-        if len(raw) > MAX_FILE_BYTES:
-            raise HTTPException(413, f"{upload.filename} exceeds 8 MB limit")
+        if len(raw) > max_bytes:
+            raise HTTPException(413, f"{upload.filename} exceeds {_PYQ_MAX_MB} MB limit")
 
-        mime = upload.content_type or "application/octet-stream"
-        b64  = base64.b64encode(raw).decode()
-        data_url = f"data:{mime};base64,{b64}"
+        mime      = upload.content_type or "application/octet-stream"
+        is_image  = mime.startswith("image/")
+        is_pdf    = mime == "application/pdf" or (upload.filename or "").lower().endswith(".pdf")
+        doc_id    = str(uuid.uuid4())
+        safe_name = (upload.filename or "file").replace(" ", "_")
 
-        # For PDFs we don't have an image preview
-        is_image = mime.startswith("image/")
+        # ── Try Supabase storage first ────────────────────────────────────────
+        file_url: str = ""
+        storage_path  = f"{_PYQ_PREFIX}/{doc_id}/{safe_name}"
 
-        doc_id = str(uuid.uuid4())
+        if use_supabase:
+            try:
+                file_url = await asyncio.get_event_loop().run_in_executor(
+                    _THREAD_POOL,
+                    lambda p=storage_path, r=raw, m=mime: _pyq_supabase_upload(r, p, m),
+                )
+                logger.info(f"PYQ uploaded to Supabase: {storage_path}")
+            except Exception as e:
+                logger.warning(f"Supabase PYQ upload failed, falling back to base64: {e}")
+                file_url = ""
+
+        # ── Fallback: base64 data-URL (images) or skip large PDFs ────────────
+        if not file_url:
+            if is_image:
+                file_url = f"data:{mime};base64,{base64.b64encode(raw).decode()}"
+            else:
+                # For PDFs without Supabase we store an empty URL — warn admin
+                file_url = ""
+                logger.warning(f"PYQ PDF stored without file content (Supabase unavailable): {safe_name}")
+
+        # ── Build MongoDB document ────────────────────────────────────────────
         doc = {
-            "id":           doc_id,
-            "filename":     upload.filename or "upload",
-            "mime_type":    mime,
-            "exam_title":   exam_title or f"{paper_type.upper()} {exam_year}",
-            "exam_year":    exam_year,
-            "paper_type":   paper_type,
-            "board_id":     board_id,
-            "board_name":   board_name,
-            "class_id":     class_id,
-            "class_name":   class_name,
-            "stream_id":    stream_id,
-            "stream_name":  stream_name,
-            "subject_id":   subject_id,
-            "subject_name": subject_name,
-            "pages":        [{"data_url": data_url, "filename": upload.filename}] if is_image else [],
-            "pdf_data_url": data_url if not is_image else None,
-            "status":       "uploaded",
-            "created_at":   datetime.utcnow().isoformat(),
-            "created_by":   admin.get("username", "admin"),
+            "id":            doc_id,
+            "filename":      upload.filename or "upload",
+            "mime_type":     mime,
+            "exam_title":    exam_title or f"{paper_type.upper()} {exam_year}",
+            "exam_year":     exam_year,
+            "paper_type":    paper_type,
+            "board_id":      board_id,
+            "board_name":    board_name,
+            "class_id":      class_id,
+            "class_name":    class_name,
+            "stream_id":     stream_id,
+            "stream_name":   stream_name,
+            "subject_id":    subject_id,
+            "subject_name":  subject_name,
+            "file_url":      file_url,          # Supabase public URL or data-URL for images
+            "storage_path":  storage_path if use_supabase and file_url and not file_url.startswith("data:") else "",
+            "storage":       "supabase" if (use_supabase and file_url and not file_url.startswith("data:")) else "base64",
+            "is_image":      is_image,
+            "is_pdf":        is_pdf,
+            # pages array — for images keep one entry; frontend uses file_url
+            "pages": [{"file_url": file_url, "filename": upload.filename}] if is_image else [],
+            "status":        "uploaded",
+            "created_at":    datetime.utcnow().isoformat(),
+            "created_by":    admin.get("username", "admin"),
         }
         db["pyq_uploads"].insert_one(doc)
         saved_ids.append(doc_id)
 
-    return {"status": "ok", "uploaded": len(saved_ids), "ids": saved_ids}
+    return {"status": "ok", "uploaded": len(saved_ids), "ids": saved_ids,
+            "storage": "supabase" if use_supabase else "base64"}
 
 
 @app.get("/api/admin/pyq/list")
@@ -13071,9 +13117,21 @@ async def admin_pyq_list(
 @app.delete("/api/admin/pyq/{pyq_id}")
 async def admin_pyq_delete(pyq_id: str, admin: dict = Depends(get_admin_user)):
     db = _get_db()
-    res = db["pyq_uploads"].delete_one({"id": pyq_id})
-    if res.deleted_count == 0:
+    doc = db["pyq_uploads"].find_one({"id": pyq_id}, {"_id": 0, "storage_path": 1, "storage": 1})
+    if not doc:
         raise HTTPException(404, "PYQ not found")
+
+    # Delete from Supabase storage if applicable
+    if supa and doc.get("storage") == "supabase" and doc.get("storage_path"):
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                _THREAD_POOL,
+                lambda: supa.storage.from_(_PYQ_BUCKET).remove([doc["storage_path"]]),
+            )
+        except Exception as e:
+            logger.warning(f"Supabase PYQ delete failed (continuing): {e}")
+
+    db["pyq_uploads"].delete_one({"id": pyq_id})
     return {"status": "deleted", "id": pyq_id}
 
 

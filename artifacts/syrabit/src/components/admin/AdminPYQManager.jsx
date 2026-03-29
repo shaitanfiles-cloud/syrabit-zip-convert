@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Trash2, Eye, Loader2, BookOpen, Calendar, Tag, X, ChevronDown, ImagePlus, FileImage, CheckCircle2, ZoomIn } from 'lucide-react';
+import { Upload, Trash2, Loader2, BookOpen, Calendar, X, ChevronDown, ImagePlus, FileImage, ZoomIn, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { API_BASE } from '../../utils/api';
@@ -159,7 +159,7 @@ export default function AdminPYQManager({ adminToken }) {
           <p className="text-sm font-semibold text-white flex items-center gap-2">
             <ImagePlus size={14} className="text-amber-400" /> Upload Previous Year Questions
           </p>
-          <p className="text-xs mt-0.5 text-white/40">Upload scanned PYQ images or PDFs — link to subject, year, and course type</p>
+          <p className="text-xs mt-0.5 text-white/40">Upload scanned PYQ images or PDFs — stored in Supabase, linked to subject, year, and course type</p>
         </div>
 
         {/* Hierarchy selectors */}
@@ -242,7 +242,7 @@ export default function AdminPYQManager({ adminToken }) {
             onChange={e => addFiles(e.target.files)} />
           <Upload size={22} className="mx-auto mb-2 text-white/30" />
           <p className="text-sm text-white/50">Drop PYQ images or PDFs here, or <span className="text-amber-400">click to browse</span></p>
-          <p className="text-[11px] text-white/25 mt-1">JPG · PNG · WEBP · PDF — multiple files allowed</p>
+          <p className="text-[11px] text-white/25 mt-1">JPG · PNG · WEBP · PDF — multiple files allowed · up to 50 MB each</p>
         </div>
 
         {/* Staged file previews */}
@@ -326,7 +326,12 @@ export default function AdminPYQManager({ adminToken }) {
 
 function PYQCard({ pyq, onDelete, onPreview }) {
   const [expanded, setExpanded] = useState(false);
-  const thumbUrl = pyq.pages?.[0]?.data_url || null;
+
+  // Resolve image URL — prefer Supabase URL, fall back to data_url (legacy)
+  const thumbUrl = pyq.pages?.[0]?.file_url || pyq.pages?.[0]?.data_url || null;
+  const isPdf    = pyq.is_pdf || pyq.mime_type === 'application/pdf';
+  const fileUrl  = pyq.file_url || '';
+  const hasFile  = Boolean(fileUrl);
 
   return (
     <div className="rounded-xl border overflow-hidden transition-all"
@@ -334,12 +339,16 @@ function PYQCard({ pyq, onDelete, onPreview }) {
 
       {/* Header row */}
       <div className="flex items-center gap-3 px-4 py-3">
-        {/* Thumbnail */}
+        {/* Thumbnail / PDF icon */}
         <div className="flex-shrink-0 w-10 h-10 rounded-lg overflow-hidden border border-white/10 flex items-center justify-center"
-          style={{ background: 'rgba(245,158,11,0.08)' }}>
-          {thumbUrl ? (
+          style={{ background: isPdf ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.08)' }}>
+          {!isPdf && thumbUrl ? (
             <img src={thumbUrl} alt="" className="w-full h-full object-cover cursor-pointer"
               onClick={() => onPreview(thumbUrl)} />
+          ) : isPdf ? (
+            <a href={fileUrl} target="_blank" rel="noopener noreferrer" title="Open PDF">
+              <FileImage size={16} className="text-red-400/70 hover:text-red-400 transition-colors" />
+            </a>
           ) : (
             <FileImage size={16} className="text-amber-400/50" />
           )}
@@ -347,11 +356,18 @@ function PYQCard({ pyq, onDelete, onPreview }) {
 
         {/* Info */}
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white/85 truncate">{pyq.exam_title}</p>
-          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-            {pyq.subject_name && (
-              <span className="text-[10px] text-white/40">{pyq.subject_name}</span>
+          <div className="flex items-center gap-1.5">
+            <p className="text-sm font-semibold text-white/85 truncate">{pyq.exam_title}</p>
+            {isPdf && hasFile && (
+              <a href={fileUrl} target="_blank" rel="noopener noreferrer"
+                className="flex-shrink-0 text-white/25 hover:text-amber-400 transition-colors" title="Open PDF">
+                <ExternalLink size={11} />
+              </a>
             )}
+          </div>
+          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+            {pyq.subject_name && <span className="text-[10px] text-white/40">{pyq.subject_name}</span>}
+            {pyq.board_name  && <span className="text-[10px] text-white/30">{pyq.board_name}</span>}
             <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold uppercase"
               style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24' }}>
               {pyq.paper_type}
@@ -359,6 +375,14 @@ function PYQCard({ pyq, onDelete, onPreview }) {
             <span className="text-[10px] text-white/35 flex items-center gap-0.5">
               <Calendar size={9} /> {pyq.exam_year}
             </span>
+            <span className="text-[10px] px-1 rounded font-mono"
+              style={{ background: isPdf ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.10)',
+                       color: isPdf ? '#f87171' : '#fbbf24' }}>
+              {isPdf ? 'PDF' : 'IMG'}
+            </span>
+            {pyq.storage === 'supabase' && (
+              <span className="text-[9px] text-emerald-400/50">☁ Supabase</span>
+            )}
             {pyq.pages?.length > 0 && (
               <span className="text-[10px] text-white/30">{pyq.pages.length} page{pyq.pages.length > 1 ? 's' : ''}</span>
             )}
@@ -367,7 +391,7 @@ function PYQCard({ pyq, onDelete, onPreview }) {
 
         {/* Actions */}
         <div className="flex items-center gap-1 flex-shrink-0">
-          {pyq.pages?.length > 0 && (
+          {pyq.pages?.length > 1 && (
             <button onClick={() => setExpanded(p => !p)}
               className="p-1.5 rounded-lg text-white/30 hover:text-white/70 transition-colors">
               <ChevronDown size={14} className={`transition-transform ${expanded ? 'rotate-180' : ''}`} />
@@ -380,23 +404,26 @@ function PYQCard({ pyq, onDelete, onPreview }) {
         </div>
       </div>
 
-      {/* Expanded page thumbnails */}
-      {expanded && pyq.pages?.length > 0 && (
+      {/* Expanded page thumbnails (images only) */}
+      {expanded && pyq.pages?.length > 1 && (
         <div className="px-4 pb-4 border-t border-white/6 pt-3">
           <p className="text-[10px] text-white/35 mb-2 uppercase tracking-wide">Pages</p>
           <div className="grid grid-cols-4 gap-2">
-            {pyq.pages.map((pg, i) => (
-              <div key={i} className="relative group rounded-lg overflow-hidden border border-white/10 cursor-pointer"
-                onClick={() => onPreview(pg.data_url)}>
-                <img src={pg.data_url} alt={`Page ${i + 1}`} className="w-full h-20 object-cover" />
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
-                  <ZoomIn size={14} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+            {pyq.pages.map((pg, i) => {
+              const pgUrl = pg.file_url || pg.data_url || '';
+              return (
+                <div key={i} className="relative group rounded-lg overflow-hidden border border-white/10 cursor-pointer"
+                  onClick={() => pgUrl && onPreview(pgUrl)}>
+                  <img src={pgUrl} alt={`Page ${i + 1}`} className="w-full h-20 object-cover" />
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                    <ZoomIn size={14} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </div>
+                  <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
+                    <p className="text-[8px] text-white/50">pg {i + 1}</p>
+                  </div>
                 </div>
-                <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
-                  <p className="text-[8px] text-white/50">pg {i + 1}</p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
