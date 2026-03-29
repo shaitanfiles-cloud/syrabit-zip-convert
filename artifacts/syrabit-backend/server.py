@@ -12305,12 +12305,51 @@ async def list_pdf_imports(
     paper_type: str = "",
     admin: dict = Depends(get_admin_user),
 ):
-    """List all PDF-imported syllabus entries, optionally filtered by paper_type."""
-    q = {}
+    """List all PDF-imported syllabus entries, grouped by import_id to avoid duplicate keys."""
+    q: dict = {}
     if paper_type:
         q["paper_type"] = paper_type.lower()
-    cursor = db.syllabus_pdf_imports.find(q, {"_id": 0}).sort("created_at", -1)
-    entries = await cursor.to_list(length=500)
+
+    pipeline = [
+        {"$match": q},
+        {"$sort": {"created_at": -1}},
+        {"$group": {
+            "_id":             "$import_id",
+            "import_id":       {"$first": "$import_id"},
+            "filename":        {"$first": "$filename"},
+            "paper_type":      {"$first": "$paper_type"},
+            "board_name":      {"$first": "$board_name"},
+            "class_name":      {"$first": "$class_name"},
+            "class_year":      {"$first": "$class_year"},
+            "semester":        {"$first": "$semester"},
+            "course_code":     {"$first": "$course_code"},
+            "credits":         {"$first": "$credits"},
+            "created_at":      {"$first": "$created_at"},
+            "status":          {"$first": "$status"},
+            "chapters":        {"$first": "$chapters"},
+            "guidelines":      {"$first": "$guidelines"},
+            "topics":          {"$first": "$topics"},
+            "linked_board_id": {"$first": "$linked_board_id"},
+            "linked_class_id": {"$first": "$linked_class_id"},
+            "subject_names":   {"$push": "$subject_name"},
+            "all_subject_ids": {"$push": "$linked_subject_ids"},
+        }},
+        {"$addFields": {
+            "subject_name":   {"$arrayElemAt": ["$subject_names", 0]},
+            "subjects_count": {"$size": "$subject_names"},
+            "linked_subject_ids": {
+                "$reduce": {
+                    "input": "$all_subject_ids",
+                    "initialValue": [],
+                    "in": {"$concatArrays": ["$$value", {"$ifNull": ["$$this", []]}]},
+                }
+            },
+        }},
+        {"$sort": {"created_at": -1}},
+        {"$project": {"_id": 0, "all_subject_ids": 0}},
+    ]
+
+    entries = await db.syllabus_pdf_imports.aggregate(pipeline).to_list(500)
     return {"imports": entries, "total": len(entries)}
 
 
@@ -12320,20 +12359,24 @@ async def delete_pdf_import(
     remove_content: bool = False,
     admin: dict = Depends(get_admin_user),
 ):
-    """Delete a PDF import record. If remove_content=true, also deletes linked subjects + chapters."""
-    doc = await db.syllabus_pdf_imports.find_one({"import_id": import_id}, {"_id": 0})
-    if not doc:
+    """Delete ALL import records for an import_id (one per subject). If remove_content=true, also deletes linked subjects + chapters."""
+    docs = await db.syllabus_pdf_imports.find(
+        {"import_id": import_id}, {"_id": 0, "linked_subject_ids": 1}
+    ).to_list(500)
+    if not docs:
         raise HTTPException(status_code=404, detail="Import not found")
 
     if remove_content:
-        subject_ids = doc.get("linked_subject_ids", [])
-        if subject_ids:
-            await db.chapters.delete_many({"subject_id": {"$in": subject_ids}})
-            await db.subjects.delete_many({"id": {"$in": subject_ids}})
+        all_subject_ids: list = []
+        for doc in docs:
+            all_subject_ids.extend(doc.get("linked_subject_ids") or [])
+        if all_subject_ids:
+            await db.chapters.delete_many({"subject_id": {"$in": all_subject_ids}})
+            await db.subjects.delete_many({"id": {"$in": all_subject_ids}})
             _invalidate_content_cache("subjects")
             _invalidate_content_cache("chapters")
 
-    await db.syllabus_pdf_imports.delete_one({"import_id": import_id})
+    await db.syllabus_pdf_imports.delete_many({"import_id": import_id})
     return {"success": True, "import_id": import_id, "content_removed": remove_content}
 
 

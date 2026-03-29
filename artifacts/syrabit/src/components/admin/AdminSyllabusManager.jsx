@@ -630,7 +630,9 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-[10px]">{PAPER_ICONS[imp.paper_type] || '📄'}</span>
-                            <span className="text-sm font-semibold text-white truncate">{imp.subject_name}</span>
+                            <span className="text-sm font-semibold text-white truncate">
+                              {imp.subject_name}{imp.subjects_count > 1 ? ` +${imp.subjects_count - 1} more` : ''}
+                            </span>
                             <span className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase"
                               style={{ background: 'rgba(99,102,241,0.18)', color: '#a5b4fc' }}>
                               {imp.paper_type}
@@ -677,7 +679,9 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
                       {isDeleting && (
                         <div className="mx-4 mb-3 p-3 rounded-xl border text-xs space-y-2"
                           style={{ background: 'rgba(244,63,94,0.07)', borderColor: 'rgba(244,63,94,0.25)' }}>
-                          <p className="font-semibold text-rose-300">Delete "{imp.subject_name}"?</p>
+                          <p className="font-semibold text-rose-300">
+                            Delete {imp.subjects_count > 1 ? `${imp.subjects_count} subjects from this import` : `"${imp.subject_name}"`}?
+                          </p>
                           <p className="text-white/50">Choose what to remove:</p>
                           <div className="flex gap-2 flex-wrap">
                             <button onClick={() => confirmDeleteImport(imp.import_id, false)}
