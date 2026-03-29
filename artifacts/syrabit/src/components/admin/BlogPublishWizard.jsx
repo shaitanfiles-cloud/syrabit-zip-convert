@@ -160,8 +160,65 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
   const [docs, setDocs] = useState([]);
   const [docsLoading, setDocsLoading] = useState(false);
 
+  // Auto-flow flag — set when arriving from Content Editor handoff
+  const autoFlowRef = useRef(false);
+  const [autoFlow, setAutoFlow] = useState(false);
+
   // Save state to localStorage whenever it changes
   useEffect(() => { saveState(state); }, [state]);
+
+  // ── Content Editor handoff: read syrabit_blog_prefill on mount ───────────────
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('syrabit_blog_prefill');
+      if (!raw) return;
+      const pf = JSON.parse(raw);
+      if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) {
+        localStorage.removeItem('syrabit_blog_prefill');
+        return;
+      }
+      localStorage.removeItem('syrabit_blog_prefill');
+      if (!pf.subjectId) return;
+      autoFlowRef.current = !!pf.autoFlow;
+      if (pf.autoFlow) setAutoFlow(true);
+      dispatch({ type: 'SET', payload: {
+        subjectId:      pf.subjectId      || '',
+        subjectName:    pf.subjectName    || '',
+        workingTitle:   pf.workingTitle   || '',
+        primaryKeyword: pf.primaryKeyword || '',
+        draftContent:   pf.draftContent   || '',
+        // Reset doc/steps so wizard starts fresh for this subject
+        docId:    null,
+        step:     1,
+        unlocked: [1],
+        enrichedBlocks: null,
+        enrichedContent: '',
+        enrichmentAccepted: false,
+        seoSlug: '', seoTitle: '', metaDescription: '',
+        seoTags: '', geoTags: '',
+        publishedStatus: 'draft',
+      }});
+      toast.success('Content Editor handoff — scope & draft pre-filled!');
+    } catch { /* ignore */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Resolve full hierarchy IDs once data is loaded ───────────────────────────
+  // When prefill only has subjectId, look up board/class/stream IDs from loaded lists
+  useEffect(() => {
+    if (!state.subjectId || state.boardId) return;   // already resolved or nothing to resolve
+    if (!subjects.length || !streams.length) return; // data not yet loaded
+    const subj    = subjects.find(s => s.id === state.subjectId);
+    if (!subj) return;
+    const stream  = streams.find(s => s.id === subj.stream_id);
+    const cls     = stream ? classes.find(c => c.id === stream.class_id) : null;
+    const board   = cls    ? boards.find(b => b.id === cls.board_id)     : null;
+    dispatch({ type: 'SET', payload: {
+      boardId:   board?.id   || '',  boardName:  board?.name  || '',
+      classId:   cls?.id     || '',  className:  cls?.name    || '',
+      streamId:  stream?.id  || '',  streamName: stream?.name || '',
+    }});
+  }, [state.subjectId, subjects, streams, classes, boards]);
 
   // ── Hub context IN: pre-fill scope from other Content Hub tabs ──────────────
   // Fires when the user switches to Blog Publisher from Syllabus / Editor / PYQ
@@ -368,6 +425,21 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
         </div>
       </div>
 
+      {/* ── Auto-flow banner ──────────────────────────────────────────── */}
+      {autoFlow && (
+        <div className="flex-shrink-0 flex items-center gap-2 px-4 py-2"
+          style={{ background: 'rgba(139,92,246,0.10)', borderBottom: '1px solid rgba(139,92,246,0.18)' }}>
+          <Sparkles size={12} className="text-violet-400 flex-shrink-0" />
+          <span className="text-[11px] text-violet-300 font-medium">
+            Auto-flow active — scope & draft pre-filled from Content Editor. AI steps will run automatically.
+          </span>
+          <button onClick={() => setAutoFlow(false)}
+            className="ml-auto text-white/30 hover:text-white/60 transition flex-shrink-0">
+            <X size={11} />
+          </button>
+        </div>
+      )}
+
       {/* ── Step Content ──────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
         {state.step === 1 && (
@@ -388,12 +460,14 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
           <Step3AiEnrichment
             state={state} set={set} goNext={goNext} goPrev={goPrev}
             adminToken={adminToken}
+            autoRun={autoFlow}
           />
         )}
         {state.step === 4 && (
           <Step4SeoMeta
             state={state} set={set} goNext={goNext} goPrev={goPrev}
             adminToken={adminToken}
+            autoRun={autoFlow}
           />
         )}
         {state.step === 5 && (
@@ -780,11 +854,12 @@ function Step2DraftContent({ state, set, goNext, goPrev, adminToken }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 3 — AI Enrichment
 // ─────────────────────────────────────────────────────────────────────────────
-function Step3AiEnrichment({ state, set, goNext, goPrev, adminToken }) {
+function Step3AiEnrichment({ state, set, goNext, goPrev, adminToken, autoRun }) {
   const [enriching, setEnriching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(false);
   const [localBlocks, setLocalBlocks] = useState(state.enrichedBlocks || null);
+  const autoRunFired3 = useRef(false);
 
   const handleEnrich = async () => {
     if (!state.draftContent.trim()) { toast.error('No draft content to enrich'); return; }
@@ -829,6 +904,15 @@ function Step3AiEnrichment({ state, set, goNext, goPrev, adminToken }) {
     const updated = localBlocks.filter((_, i) => i !== idx);
     setLocalBlocks(updated);
   };
+
+  // Auto-trigger when arriving from Content Editor handoff
+  useEffect(() => {
+    if (!autoRun || autoRunFired3.current || localBlocks || !state.draftContent) return;
+    autoRunFired3.current = true;
+    const t = setTimeout(() => handleEnrich(), 400);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -958,10 +1042,11 @@ function TagChips({ value, onChange, placeholder }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 4 — SEO & GEO Metadata
 // ─────────────────────────────────────────────────────────────────────────────
-function Step4SeoMeta({ state, set, goNext, goPrev, adminToken }) {
+function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
   const [generating, setGenerating] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  const autoRunFired4 = useRef(false);
 
   const metaLen = (state.metaDescription || '').length;
   const metaValid = metaLen >= 148 && metaLen <= 158;
@@ -1025,6 +1110,15 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken }) {
       setSaveError(true);
     } finally { setSaving(false); }
   };
+
+  // Auto-trigger SEO generation when arriving from Content Editor handoff
+  useEffect(() => {
+    if (!autoRun || autoRunFired4.current || state.seoTitle || !state.enrichedContent) return;
+    autoRunFired4.current = true;
+    const t = setTimeout(() => handleAutoFill(), 400);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const inp = (err) => `w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border outline-none focus:border-violet-500 transition ${err ? 'border-red-500/50' : 'border-white/10'}`;
   const lbl = 'text-xs font-semibold text-white/50 mb-1 block';

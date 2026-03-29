@@ -319,7 +319,20 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const resolvedTitle = res.data?.title || subjectName || subjectId;
       const richTitle = [resolvedTitle, className].filter(Boolean).join(' — ');
 
-      const prefill = {
+      // Blog Publisher prefill — full autoFlow handoff
+      const autoKeyword = `${toSlug(resolvedTitle).replace(/-/g, ' ')}${className ? ` ${className.toLowerCase()}` : ' ahsec'} notes`;
+      const blogPrefill = {
+        subjectId,
+        subjectName:    resolvedTitle,
+        workingTitle:   richTitle,
+        primaryKeyword: autoKeyword,
+        draftContent:   mergedMd,
+        autoFlow:       true,
+        timestamp:      Date.now(),
+      };
+      localStorage.setItem('syrabit_blog_prefill', JSON.stringify(blogPrefill));
+      // Also keep CMS prefill for anyone still using the CMS tab directly
+      const cmsPrefill = {
         subjectId,
         title:            richTitle,
         content:          mergedMd,
@@ -327,10 +340,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
         meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`,
         timestamp:        Date.now(),
       };
-      localStorage.setItem('syrabit_cms_prefill', JSON.stringify(prefill));
+      localStorage.setItem('syrabit_cms_prefill', JSON.stringify(cmsPrefill));
       setMergedSubjectIds(s => new Set([...s, subjectId]));
-      toast.success(`"${subjectName}" merged — opening CMS Editor`);
-      onNavigate?.('cms');
+      toast.success(`"${subjectName}" merged — opening Blog Publisher`);
+      onNavigate?.('blog');
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Merge failed');
     } finally {
