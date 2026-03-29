@@ -99,20 +99,20 @@ const bubbleVariants = {
     transition: { duration: 0.22, ease: [0.25, 0.1, 0.25, 1] } },
 };
 
-// ── Clickable source chips — one per RAG source page ─────────────────────────
-function SourcesList({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectName }) {
+// ── Unified source card — watermark + all page links + footer stats ───────────
+function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectName }) {
   const navigate = useNavigate();
 
-  const hasSrc   = sources && sources.length > 0;
-  const hasRag   = ragSource && ragSource !== 'none';
+  const hasSrc = sources && sources.length > 0;
+  const hasRag = ragSource && ragSource !== 'none';
 
   if (!hasSrc && !hasRag) return null;
 
-  const ragLabel = (() => {
-    if (ragSource === 'document')               return 'Document';
-    if (ragSource === 'rag' || ragSource === 'rag+web') return `Syllabus${ragChunks ? ` · ${ragChunks} blocks` : ''}`;
-    if (ragSource === 'web')                    return 'Web search';
-    return null;
+  const boardLabel = (() => {
+    if (ragSource === 'document')                       return 'Document';
+    if (ragSource === 'rag' || ragSource === 'rag+web') return 'AssamBoard Curriculum';
+    if (ragSource === 'web')                            return 'Web Search';
+    return 'Syrabit Library';
   })();
 
   const handleNav = (url) => {
@@ -121,84 +121,77 @@ function SourcesList({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
     else navigate(url);
   };
 
-  // Sources with real URLs get individual chips; fall back to subject card
   const visibleSources = hasSrc ? sources.filter(s => s.url || s.slug) : [];
   const subjectUrl     = ragSubjectId ? `/subject/${ragSubjectId}` : null;
+  const displayTitle   = ragSubjectName || 'Syrabit Library';
 
   return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
-      {visibleSources.length > 0
-        ? visibleSources.map((src, i) => {
-            const url        = src.url || '';
-            const isExternal = url.startsWith('http');
-            const Tag        = url ? 'button' : 'div';
-            return (
-              <Tag
+    <div className="source-card">
+      {/* Watermark header */}
+      <div className="source-watermark">
+        <BookOpen size={13} className="shrink-0" style={{ color: '#60a5fa' }} />
+        <span>Syrabit.ai · {boardLabel}</span>
+        {ragChunks > 0 && (
+          <span className="source-chunk-badge">{ragChunks} blocks</span>
+        )}
+      </div>
+
+      {/* Page links */}
+      <div className="source-pages">
+        {visibleSources.length > 0
+          ? visibleSources.map((src, i) => (
+              <button
                 key={i}
-                onClick={url ? () => handleNav(url) : undefined}
-                aria-label={url ? `${src.title}${isExternal ? ' — opens in new tab' : ''}` : undefined}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-left transition-all ${url ? 'cursor-pointer hover:brightness-110' : ''}`}
-                style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.20)' }}
-                title={url || src.title}
+                onClick={() => handleNav(src.url || '')}
+                className="source-link"
+                title={src.url || src.title}
+                disabled={!src.url}
               >
-                <BookOpen size={11} className="text-blue-400 shrink-0" />
-                <span className="text-[11px] font-medium text-blue-300 max-w-[240px] truncate">
-                  {src.title || src.slug}
-                </span>
-                {i === 0 && ragLabel && (
-                  <span
-                    className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full shrink-0"
-                    style={{
-                      background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.12)',
-                      color:      ragSource === 'web' ? '#60a5fa'               : '#34d399',
-                    }}
-                  >
-                    {ragLabel}
-                  </span>
-                )}
-                {url && <ExternalLink size={9} className="text-blue-400/30 shrink-0" />}
-              </Tag>
-            );
-          })
-        : /* Fallback — subject-level navigation card */
-          (() => {
-            const url          = subjectUrl || '';
-            const displayTitle = ragSubjectName || 'Syrabit Library';
-            const Tag          = url ? 'button' : 'div';
-            return (
-              <Tag
-                onClick={url ? () => handleNav(url) : undefined}
-                aria-label={url ? displayTitle : undefined}
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl transition-all text-left ${url ? 'cursor-pointer hover:brightness-110' : ''}`}
-                style={{ background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.25)' }}
-                title={url || displayTitle}
-              >
-                <div className="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style={{ background: 'rgba(59,130,246,0.15)' }}>
-                  <BookOpen size={11} className="text-blue-400" />
-                </div>
-                <span className="text-[10px] font-semibold text-blue-400/50 uppercase tracking-wide shrink-0">Syrabit</span>
-                <span className="text-[12px] font-semibold text-blue-300 truncate">{displayTitle}</span>
-                {ragLabel && (
-                  <span
-                    className="text-[9px] font-medium px-1.5 py-0.5 rounded-full shrink-0"
-                    style={{
-                      background: ragSource === 'web' ? 'rgba(59,130,246,0.15)' : 'rgba(16,185,129,0.12)',
-                      color:      ragSource === 'web' ? '#60a5fa'               : '#34d399',
-                    }}
-                  >
-                    {ragLabel}
-                  </span>
-                )}
-                {url && <ExternalLink size={9} className="text-blue-400/30 shrink-0" />}
-              </Tag>
-            );
-          })()
-      }
+                <span className="source-link-icon">📖</span>
+                <span className="truncate">{src.title || src.slug}</span>
+                {src.url && <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />}
+              </button>
+            ))
+          : (subjectUrl
+              ? (
+                <button onClick={() => handleNav(subjectUrl)} className="source-link">
+                  <span className="source-link-icon">📖</span>
+                  <span className="truncate">{displayTitle}</span>
+                  <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />
+                </button>
+              )
+              : null
+            )
+        }
+      </div>
+
+      {/* Footer stats */}
+      <div className="source-stats">
+        {ragChunks > 0 ? `${ragChunks} chunks` : 'Syrabit Library'}
+        {(ragSource === 'rag' || ragSource === 'rag+web') && ' · AssamBoard Curriculum'}
+        {ragSource === 'web' && ' · Web search'}
+        {ragSource === 'document' && ' · Uploaded document'}
+      </div>
     </div>
   );
 }
 
 // ── Markdown renderer for AI answers ─────────────────────────────────────────
+// Stable link renderer — no hooks, defined once at module level
+const MD_LINK_COMPONENTS = {
+  a: ({ href, children }) => {
+    if (!href) return <span>{children}</span>;
+    if (href.startsWith('http')) {
+      return <a href={href} target="_blank" rel="noopener noreferrer" className="inline-source-link">{children}</a>;
+    }
+    return (
+      <button onClick={() => { window.location.href = href; }} className="inline-source-link">
+        {children}
+      </button>
+    );
+  },
+};
+
 function MarkdownContent({ content, streaming, sources }) {
   // Build lookup: title/slug → url from RAG sources so [PAGE: X] becomes a link
   const processed = useMemo(() => {
@@ -223,7 +216,7 @@ function MarkdownContent({ content, streaming, sources }) {
 
   return (
     <div className="md-content-light" style={{ fontSize: '0.9375rem' }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_LINK_COMPONENTS}>
         {processed}
       </ReactMarkdown>
       {streaming && (
@@ -333,7 +326,7 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
             )}
 
             {!msg.streaming && msg.content && (
-              <SourcesList
+              <SourcesCard
                 sources={msg.sources}
                 ragSource={msg.rag_source}
                 ragChunks={msg.rag_chunks}
