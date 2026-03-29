@@ -2362,8 +2362,26 @@ async def rag_search(
                     deduped.append(s)
             subjects_found = deduped[:3]
 
-            # ── chapters_found: keyword-matching chapters scoped to top subjects ──
+            # ── Filter chunks to the dominant subject only ─────────────────────
+            # Prevents unrelated subjects (e.g. Indian Constitution appearing when
+            # the user asks about Business Studies) from contaminating the answer.
             top_subject_ids = [s["id"] for s in subjects_found]
+            if subjects_found and chunk_parent_chapters:
+                dominant_sid = subjects_found[0].get("id", "")
+                if dominant_sid:
+                    dominant_chapter_ids = {
+                        cc["id"] for cc in chunk_parent_chapters
+                        if cc.get("subject_id") == dominant_sid
+                    }
+                    filtered_chunks = [c for c in chunks if c.get("chapter_id") in dominant_chapter_ids]
+                    if filtered_chunks:  # Only narrow if chunks remain
+                        chunks = filtered_chunks
+                        chunk_parent_chapters = [
+                            cc for cc in chunk_parent_chapters
+                            if cc.get("subject_id") == dominant_sid
+                        ]
+
+            # ── chapters_found: keyword-matching chapters scoped to top subjects ──
             if top_subject_ids:
                 chapters_found = [c for c in chapters_by_title if c.get("subject_id") in top_subject_ids][:5]
                 if not chapters_found:
