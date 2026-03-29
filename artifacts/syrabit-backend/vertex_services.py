@@ -1,6 +1,11 @@
 """
 Vertex AI / Gemini-powered services for Syrabit.ai
-All features driven by GEMINI_API_KEY (Google AI Studio key).
+
+Supports TWO authentication modes detected automatically from GEMINI_API_KEY:
+  A) Simple API key (AIza...)  — Google AI Studio / Vertex Express
+     → generativelanguage.googleapis.com
+  B) Service-account JSON      — full Vertex AI
+     → {region}-aiplatform.googleapis.com (OAuth2 Bearer)
 
 Services:
   1. Text Embeddings    — semantic search across topics & pages
@@ -11,11 +16,12 @@ Services:
   6. Topic Suggester    — fill syllabus gaps with AI suggestions
   7. SEO Meta Generator — title, description, keywords from content
   8. Content Gap Finder — find missing high-value topics
-  9. Long Doc Reader    — summarise / extract from textbook PDFs (Gemini 1.5 Pro 1M)
+  9. Long Doc Reader    — summarise / extract from textbook PDFs
 """
 
 import os
 import json
+import asyncio
 import logging
 import base64
 from typing import Optional, List, Dict, Any
@@ -24,19 +30,62 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-GEMINI_KEY   = os.getenv("GEMINI_API_KEY", "").strip()
-_BASE        = "https://generativelanguage.googleapis.com/v1beta"
-_BASE_V1     = "https://generativelanguage.googleapis.com/v1"
-_EMBED_MODEL = "text-embedding-004"
-_GEN_MODEL   = "gemini-2.5-flash-preview-05-20"   # highest accuracy Gemini flash
-_PRO_MODEL   = "gemini-2.5-flash-preview-05-20"  # long-doc: 1M ctx same model
-_VISION_MODEL = "gemini-2.5-flash-preview-05-20"  # multimodal
+# ── Model names ───────────────────────────────────────────────────────────────
+_EMBED_MODEL  = "text-embedding-004"
+_GEN_MODEL    = "gemini-2.5-flash-preview-05-20"
+_PRO_MODEL    = "gemini-2.5-flash-preview-05-20"
+_VISION_MODEL = "gemini-2.5-flash-preview-05-20"
 
-_GEMINI_FORBIDDEN = False  # set True on 403 — stops all further Gemini calls for session
+# ── Auth: detect key type at import time ──────────────────────────────────────
+_KEY_RAW = os.getenv("GEMINI_API_KEY", "").strip()
+
+# Mode A: simple API key
+_API_KEY: str = ""
+
+# Mode B: Vertex AI service account
+_SA_CREDS         = None   # google.oauth2.service_account.Credentials | None
+_VERTEX_PROJECT   = ""
+_VERTEX_LOCATION  = "us-central1"
+_VERTEX_BASE      = ""
+
+# Shared endpoints (used in API-key mode)
+_BASE    = "https://generativelanguage.googleapis.com/v1beta"
+_BASE_V1 = "https://generativelanguage.googleapis.com/v1"
+
+# Legacy export kept for any callers outside this module
+GEMINI_KEY = _KEY_RAW
+
+if _KEY_RAW.startswith("{"):
+    # Service-account JSON — Vertex AI mode
+    try:
+        from google.oauth2 import service_account as _sa_mod
+        _sa_info        = json.loads(_KEY_RAW)
+        _VERTEX_PROJECT = _sa_info.get("project_id", "")
+        _VERTEX_BASE    = (
+            f"https://{_VERTEX_LOCATION}-aiplatform.googleapis.com/v1"
+            f"/projects/{_VERTEX_PROJECT}/locations/{_VERTEX_LOCATION}"
+            f"/publishers/google/models"
+        )
+        _SA_CREDS = _sa_mod.Credentials.from_service_account_info(
+            _sa_info,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        logger.info(
+            f"vertex_services: Vertex AI service-account mode (project={_VERTEX_PROJECT})"
+        )
+    except Exception as _sa_err:
+        logger.error(f"vertex_services: Failed to parse service-account JSON — {_sa_err}")
+        _SA_CREDS = None
+else:
+    _API_KEY = _KEY_RAW
+    if _API_KEY:
+        logger.info("vertex_services: Google AI Studio API-key mode")
+
+_GEMINI_FORBIDDEN = False  # set True on permanent 403
 
 
 def _ok() -> bool:
-    return bool(GEMINI_KEY) and not _GEMINI_FORBIDDEN
+    return (bool(_API_KEY) or _SA_CREDS is not None) and not _GEMINI_FORBIDDEN
 
 
 def _mark_forbidden():
@@ -44,14 +93,42 @@ def _mark_forbidden():
     if not _GEMINI_FORBIDDEN:
         _GEMINI_FORBIDDEN = True
         logger.error(
-            "Gemini API returned 403 Forbidden — GEMINI_API_KEY is invalid or the model is not "
-            "accessible with this key. Disabling all Gemini calls for this session. "
+            "Gemini API returned 403 Forbidden — key is invalid or the model is not "
+            "accessible. Disabling all Gemini calls for this session. "
             "Check GEMINI_API_KEY in your environment secrets."
         )
 
 
+async def _auth_headers() -> dict:
+    """Return HTTP headers for the active auth mode."""
+    if _SA_CREDS is not None:
+        from google.auth.transport.requests import Request as _GReq
+        def _refresh():
+            if not _SA_CREDS.valid:
+                _SA_CREDS.refresh(_GReq())
+            return _SA_CREDS.token
+        token = await asyncio.get_event_loop().run_in_executor(None, _refresh)
+        return {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
+    return {"Content-Type": "application/json", "x-goog-api-key": _API_KEY}
+
+
+def _gen_url(model: str) -> str:
+    """Resolve generateContent URL for the active auth mode."""
+    if _SA_CREDS is not None:
+        return f"{_VERTEX_BASE}/{model}:generateContent"
+    return f"{_BASE}/models/{model}:generateContent"
+
+
+def _embed_url() -> str:
+    """Resolve embedding URL for the active auth mode."""
+    if _SA_CREDS is not None:
+        return f"{_VERTEX_BASE}/{_EMBED_MODEL}:predict"
+    return f"{_BASE}/models/{_EMBED_MODEL}:embedContent"
+
+
+# Kept for any legacy sync callers (API-key mode only)
 def _headers() -> dict:
-    return {"Content-Type": "application/json", "x-goog-api-key": GEMINI_KEY}
+    return {"Content-Type": "application/json", "x-goog-api-key": _API_KEY}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -62,20 +139,31 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
     """Return 768-dim embedding vector for text. Returns None on failure."""
     if not _ok() or not text:
         return None
-    url = f"{_BASE}/models/{_EMBED_MODEL}:embedContent"
-    body = {
-        "model": f"models/{_EMBED_MODEL}",
-        "content": {"parts": [{"text": text[:8000]}]},
-        "taskType": task_type,
-    }
+    url = _embed_url()
+    headers = await _auth_headers()
+    # Request body differs by mode
+    if _SA_CREDS is not None:
+        # Vertex AI predict format
+        body = {"instances": [{"content": text[:8000], "task_type": task_type}]}
+    else:
+        # Google AI Studio embedContent format
+        body = {
+            "model": f"models/{_EMBED_MODEL}",
+            "content": {"parts": [{"text": text[:8000]}]},
+            "taskType": task_type,
+        }
     try:
         async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(url, json=body, headers=_headers())
+            r = await c.post(url, json=body, headers=headers)
             if r.status_code == 403:
                 _mark_forbidden()
                 return None
             r.raise_for_status()
-            return r.json()["embedding"]["values"]
+            data = r.json()
+            # Response format differs by mode
+            if _SA_CREDS is not None:
+                return data["predictions"][0]["embeddings"]["values"]
+            return data["embedding"]["values"]
     except Exception as e:
         logger.warning(f"embed_text failed: {e}")
         return None
@@ -172,7 +260,8 @@ async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg",
     if not _ok():
         return None
     b64 = base64.b64encode(image_bytes).decode()
-    url = f"{_BASE}/models/{_VISION_MODEL}:generateContent"
+    url = _gen_url(_VISION_MODEL)
+    headers = await _auth_headers()
     body = {
         "contents": [{"parts": [
             {"text": prompt},
@@ -182,7 +271,7 @@ async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg",
     }
     try:
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(url, json=body, headers=_headers())
+            r = await c.post(url, json=body, headers=headers)
             if r.status_code == 403:
                 _mark_forbidden()
                 return None
@@ -401,7 +490,8 @@ async def extract_from_document(pdf_bytes: bytes, task: str = "extract_mcqs") ->
     }
 
     prompt = task_prompts.get(task, task_prompts["summarise"])
-    url = f"{_BASE}/models/{_PRO_MODEL}:generateContent"
+    url = _gen_url(_PRO_MODEL)
+    headers = await _auth_headers()
     body = {
         "contents": [{"parts": [
             {"text": prompt + "\n\nReturn ONLY valid JSON."},
@@ -411,7 +501,7 @@ async def extract_from_document(pdf_bytes: bytes, task: str = "extract_mcqs") ->
     }
     try:
         async with httpx.AsyncClient(timeout=120) as c:
-            r = await c.post(url, json=body, headers=_headers())
+            r = await c.post(url, json=body, headers=headers)
             if r.status_code == 403:
                 _mark_forbidden()
                 return {"error": "Gemini Vision is not configured — check GEMINI_API_KEY"}
@@ -432,7 +522,8 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
                     max_tokens: int = 2048, temperature: float = 0.3) -> Optional[str]:
     if not _ok():
         return None
-    url = f"{_BASE}/models/{model}:generateContent"
+    url = _gen_url(model)
+    headers = await _auth_headers()
     body = {
         "contents": [{"parts": [{"text": prompt}]}],
         "generationConfig": {
@@ -442,7 +533,7 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
     }
     try:
         async with httpx.AsyncClient(timeout=45) as c:
-            r = await c.post(url, json=body, headers=_headers())
+            r = await c.post(url, json=body, headers=headers)
             if r.status_code == 403:
                 _mark_forbidden()
                 return None
@@ -460,11 +551,15 @@ async def _generate(prompt: str, model: str = _GEN_MODEL,
 async def health_check() -> dict:
     """Quick connectivity check — returns service status for all features."""
     if not _ok():
-        return {"ok": False, "reason": "GEMINI_API_KEY not set"}
+        reason = "GEMINI_API_KEY not set or failed to parse"
+        return {"ok": False, "reason": reason}
+    auth_mode = "vertex_ai_service_account" if _SA_CREDS is not None else "google_ai_studio_api_key"
     test = await embed_text("test", task_type="SEMANTIC_SIMILARITY")
     gen_test = await _generate("Reply with just the word: OK", max_tokens=5)
     return {
         "ok": True,
+        "auth_mode": auth_mode,
+        "project": _VERTEX_PROJECT or None,
         "embeddings": test is not None,
         "generation": gen_test is not None and "OK" in (gen_test or ""),
         "models": {
