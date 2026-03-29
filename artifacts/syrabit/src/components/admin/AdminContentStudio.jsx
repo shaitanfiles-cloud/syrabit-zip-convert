@@ -163,7 +163,7 @@ const selStyle = {
   padding: '6px 10px', fontSize: 12, outline: 'none', width: '100%',
 };
 
-export default function AdminContentStudio({ adminToken, onNavigate }) {
+export default function AdminContentStudio({ adminToken, onNavigate, hubContext, onHubContext }) {
   const [rawText, setRawText]       = useState('');
   const [subject, setSubject]       = useState('');
   const [subjectId, setSubjectId]   = useState('');
@@ -220,6 +220,44 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
   useEffect(() => {
     axios.get(`${API}/content/boards`).then(r => setBoards(r.data || [])).catch(() => {});
   }, []);
+
+  // ── Read Editor→Studio prefill ────────────────────────────────────────────
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('syrabit_studio_prefill');
+      if (!raw) return;
+      const pf = JSON.parse(raw);
+      if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) {
+        localStorage.removeItem('syrabit_studio_prefill');
+        return;
+      }
+      localStorage.removeItem('syrabit_studio_prefill');
+      if (pf.subject)   setSubject(pf.subject);
+      if (pf.subjectId) setSubjectId(pf.subjectId);
+      if (pf.chapter)   setChapter(pf.chapter);
+      if (pf.rawText)   setRawText(pf.rawText);
+      if (pf.boardId)   setSelectedBoardId(pf.boardId);
+      if (pf.classId)   setSelectedClassId(pf.classId);
+      if (pf.streamId)  setSelectedStreamId(pf.streamId);
+      if (pf.subject)   toast.success(`Pre-filled with "${pf.subject}" chapter content — review and generate`);
+    } catch {}
+  }, []);
+
+  // ── Pre-fill from hub context ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!hubContext?.subjectName || subject) return;
+    if (hubContext.subjectName) setSubject(hubContext.subjectName);
+    if (hubContext.subjectId)   setSubjectId(hubContext.subjectId);
+    if (hubContext.boardId)     setSelectedBoardId(hubContext.boardId);
+    if (hubContext.classId)     setSelectedClassId(hubContext.classId);
+    if (hubContext.streamId)    setSelectedStreamId(hubContext.streamId);
+  }, [hubContext?.subjectId]);
+
+  // ── Broadcast subject selection back to hub ───────────────────────────────
+  useEffect(() => {
+    if (!onHubContext || !subjectId) return;
+    onHubContext(ctx => ({ ...ctx, subjectId, subjectName: subject }));
+  }, [subjectId]);
 
   useEffect(() => {
     if (!selectedBoardId) { setClasses([]); setSelectedClassId(''); return; }

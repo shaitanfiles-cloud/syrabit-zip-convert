@@ -91,7 +91,7 @@ function MdxToolbar({ onAiParse, aiParsing }) {
   );
 }
 
-export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
+export default function AdminCmsDocEditor({ adminToken, onNavigate, hubContext }) {
   const [docs, setDocs]               = useState([]);
   const [loading, setLoading]         = useState(true);
   const [editDoc, setEditDoc]         = useState(null);
@@ -173,6 +173,15 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
   useEffect(() => {
     axios.get(`${API}/content/boards`).then(r => setSpBoards(r.data || [])).catch(() => {});
   }, []);
+
+  // ── Pre-fill scope picker from hub context ────────────────────────────────
+  useEffect(() => {
+    if (!hubContext?.subjectId) return;
+    if (hubContext.boardId   && !spBoard)   setSpBoard(hubContext.boardId);
+    if (hubContext.classId   && !spClass)   setSpClass(hubContext.classId);
+    if (hubContext.streamId  && !spStream)  setSpStream(hubContext.streamId);
+    if (hubContext.subjectId && !spSubject) setSpSubject(hubContext.subjectId);
+  }, [hubContext?.subjectId]);
 
   useEffect(() => {
     if (!spBoard) { setSpClasses([]); setSpClass(''); return; }

@@ -18,7 +18,7 @@ const PAPER_TYPES = [
 const CURRENT_YEAR = new Date().getFullYear();
 const YEARS = Array.from({ length: 10 }, (_, i) => CURRENT_YEAR - i);
 
-export default function AdminPYQManager({ adminToken }) {
+export default function AdminPYQManager({ adminToken, hubContext, onNavigate }) {
   const fileRef = useRef(null);
 
   // Hierarchy selectors
@@ -52,6 +52,27 @@ export default function AdminPYQManager({ adminToken }) {
     axios.get(`${API_BASE}/content/boards`).then(r => setBoards(r.data || [])).catch(() => {});
     loadPyqList();
   }, []);
+
+  // ── Pre-fill from hub context ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!hubContext?.boardId) return;
+    setSelectedBoard(hubContext.boardId);
+  }, [hubContext?.boardId]);
+
+  useEffect(() => {
+    if (!hubContext?.classId) return;
+    setSelectedClass(hubContext.classId);
+  }, [hubContext?.classId]);
+
+  useEffect(() => {
+    if (!hubContext?.streamId) return;
+    setSelectedStream(hubContext.streamId);
+  }, [hubContext?.streamId]);
+
+  useEffect(() => {
+    if (!hubContext?.subjectId) return;
+    setSelectedSubject(hubContext.subjectId);
+  }, [hubContext?.subjectId]);
 
   useEffect(() => {
     setClasses([]); setStreams([]); setSubjects([]);
@@ -277,6 +298,25 @@ export default function AdminPYQManager({ adminToken }) {
               style={{ background: 'rgba(245,158,11,0.20)', border: '1px solid rgba(245,158,11,0.40)', color: '#fcd34d' }}>
               {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
               {uploading ? 'Uploading…' : `Upload ${files.length} File${files.length > 1 ? 's' : ''}`}
+            </button>
+          </div>
+        )}
+
+        {/* Quick action when subject selected */}
+        {selectedSubject && onNavigate && (
+          <div className="flex items-center gap-2 pt-1">
+            <span className="text-[10px] text-white/25 font-semibold uppercase tracking-widest">Next step:</span>
+            <button
+              onClick={() => onNavigate('editor')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
+              style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.30)' }}>
+              Write Content →
+            </button>
+            <button
+              onClick={() => onNavigate('studio')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
+              style={{ background: 'rgba(244,63,94,0.15)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.30)' }}>
+              Generate AI Content →
             </button>
           </div>
         )}

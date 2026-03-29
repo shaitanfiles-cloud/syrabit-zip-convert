@@ -14,7 +14,7 @@ function authHeaders(token) {
 
 const EMPTY_FORM = { content: '', chapters: [], topics: [], guidelines: '', geo_phrases: [] };
 
-export default function AdminSyllabusManager({ adminToken, boards = [], classes = [], streams = [], subjects = [] }) {
+export default function AdminSyllabusManager({ adminToken, boards = [], classes = [], streams = [], subjects = [], onNavigate, onHubContext }) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -92,6 +92,21 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedStreamId, setSelectedStreamId] = useState('');
   const [selectedSubjectId, setSelectedSubjectId] = useState('');
+
+  // Broadcast to hub whenever selection changes
+  useEffect(() => {
+    if (!onHubContext) return;
+    onHubContext({
+      boardId:     selectedBoardId,
+      boardName:   boards.find(b => b.id === selectedBoardId)?.name  || '',
+      classId:     selectedClassId,
+      className:   classes.find(c => c.id === selectedClassId)?.name || '',
+      streamId:    selectedStreamId,
+      streamName:  streams.find(s => s.id === selectedStreamId)?.name || '',
+      subjectId:   selectedSubjectId,
+      subjectName: subjects.find(s => s.id === selectedSubjectId)?.name || '',
+    });
+  }, [selectedBoardId, selectedClassId, selectedStreamId, selectedSubjectId]);
 
   const [editingSyllabus, setEditingSyllabus] = useState(null);
   const [isFallback, setIsFallback] = useState(false);
@@ -894,6 +909,31 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
               : <>This is a <span className="text-indigo-300 font-medium">general syllabus</span> for <span className="text-white/70">{scopeLabel}</span>. The AI uses it as a fallback when no stream- or subject-specific syllabus exists.</>
             }
           </p>
+        </div>
+      )}
+
+      {/* ── Quick actions when subject is selected ─────────────────── */}
+      {selectedSubjectId && onNavigate && (
+        <div className="flex items-center gap-2 flex-wrap py-1">
+          <span className="text-[10px] text-white/25 font-semibold uppercase tracking-widest">Next step:</span>
+          <button
+            onClick={() => onNavigate('editor')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
+            style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.30)' }}>
+            Write Content →
+          </button>
+          <button
+            onClick={() => onNavigate('pyq')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
+            style={{ background: 'rgba(245,158,11,0.15)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.30)' }}>
+            Upload PYQ →
+          </button>
+          <button
+            onClick={() => onNavigate('studio')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
+            style={{ background: 'rgba(244,63,94,0.15)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.30)' }}>
+            Generate AI Content →
+          </button>
         </div>
       )}
 

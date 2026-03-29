@@ -1,10 +1,25 @@
 /**
  * AdminContentHub — Centralized content workflow
- * Tabs: Syllabus → Content Editor → AI Studio → CMS
- * Shared context: onNavigate(tab) lets any tab deep-link into another.
+ * Tabs: Syllabus → PYQ → Content Editor → AI Studio → CMS/Docs
+ *
+ * Shared hubContext propagates Board/Class/Stream/Subject selection across
+ * all five tabs so the user never has to re-pick the same hierarchy.
+ *
+ * Cross-tab wiring:
+ *   Syllabus  →  Editor  : hubContext + onNavigate('editor')
+ *   Syllabus  →  PYQ     : hubContext + onNavigate('pyq')
+ *   Syllabus  →  Studio  : hubContext + onNavigate('studio')
+ *   PYQ       →  Editor  : hubContext + onNavigate('editor')
+ *   Editor    →  Studio  : localStorage(syrabit_studio_prefill) + onNavigate('studio')
+ *   Editor    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')   [existing]
+ *   Studio    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')   [existing]
+ *   CMS       →  Editor  : localStorage(syrabit_content_prefill)+ onNavigate('editor')[existing]
  */
-import { useState, useEffect } from 'react';
-import { FolderTree, PenTool, Sparkles, FileText, ArrowRight, Loader2, BookMarked } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import {
+  FolderTree, PenTool, Sparkles, FileText, ArrowRight,
+  Loader2, BookMarked, ChevronDown,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -17,18 +32,19 @@ import AdminPYQManager       from './AdminPYQManager';
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 const TABS = [
-  { id: 'syllabus', label: 'Syllabus',        icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
-  { id: 'pyq',      label: 'PYQ',             icon: BookMarked,  color: 'amber',   desc: 'Upload & manage previous year question papers' },
-  { id: 'editor',   label: 'Content Editor',  icon: PenTool,     color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
-  { id: 'studio',   label: 'AI Studio',       icon: Sparkles,    color: 'rose',    desc: 'Generate structured content blocks with AI' },
-  { id: 'cms',      label: 'CMS / Docs',      icon: FileText,    color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
+  { id: 'syllabus', label: 'Syllabus',       icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
+  { id: 'pyq',      label: 'PYQ',            icon: BookMarked,  color: 'amber',   desc: 'Upload & manage previous year question papers' },
+  { id: 'editor',   label: 'Content Editor', icon: PenTool,     color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
+  { id: 'studio',   label: 'AI Studio',      icon: Sparkles,    color: 'rose',    desc: 'Generate structured content blocks with AI' },
+  { id: 'cms',      label: 'CMS / Docs',     icon: FileText,    color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
 ];
 
 const FLOW = [
-  { label: 'Syllabus',  sub: 'Import structure', tab: 'syllabus', arrow: true },
-  { label: 'Editor',    sub: 'Write content',    tab: 'editor',   arrow: true },
-  { label: 'AI Studio', sub: 'Generate & enrich', tab: 'studio',  arrow: true },
-  { label: 'CMS',       sub: 'Publish & ship',   tab: 'cms',      arrow: false },
+  { label: 'Syllabus',  sub: 'Import structure',   tab: 'syllabus', arrow: true  },
+  { label: 'PYQ',       sub: 'Upload questions',   tab: 'pyq',      arrow: true  },
+  { label: 'Editor',    sub: 'Write content',      tab: 'editor',   arrow: true  },
+  { label: 'AI Studio', sub: 'Generate & enrich',  tab: 'studio',   arrow: true  },
+  { label: 'CMS',       sub: 'Publish & ship',     tab: 'cms',      arrow: false },
 ];
 
 const COLOR_MAP = {
@@ -39,13 +55,53 @@ const COLOR_MAP = {
   rose:    { active: 'border-rose-500 text-rose-400',      dot: 'bg-rose-500',   badge: 'bg-rose-500/20 text-rose-300'    },
 };
 
+const EMPTY_CTX = {
+  boardId: '', boardName: '',
+  classId: '', className: '',
+  streamId: '', streamName: '',
+  subjectId: '', subjectName: '',
+};
+
+const HUB_CTX_KEY = 'syrabit_hub_ctx';
+
+function loadPersistedCtx() {
+  try {
+    const raw = localStorage.getItem(HUB_CTX_KEY);
+    if (!raw) return EMPTY_CTX;
+    const parsed = JSON.parse(raw);
+    if (Date.now() - (parsed._ts || 0) > 2 * 60 * 60 * 1000) {
+      localStorage.removeItem(HUB_CTX_KEY);
+      return EMPTY_CTX;
+    }
+    const { _ts, ...ctx } = parsed;
+    return ctx;
+  } catch { return EMPTY_CTX; }
+}
+
 export default function AdminContentHub({ adminToken }) {
-  const [activeTab, setActiveTab]   = useState('syllabus');
-  const [boards, setBoards]         = useState([]);
-  const [classes, setClasses]       = useState([]);
-  const [streams, setStreams]       = useState([]);
-  const [subjects, setSubjects]     = useState([]);
-  const [loading, setLoading]       = useState(true);
+  const [activeTab, setActiveTab] = useState('syllabus');
+  const [boards, setBoards]       = useState([]);
+  const [classes, setClasses]     = useState([]);
+  const [streams, setStreams]     = useState([]);
+  const [subjects, setSubjects]   = useState([]);
+  const [loading, setLoading]     = useState(true);
+
+  const [hubContext, setHubContextRaw] = useState(loadPersistedCtx);
+
+  const setHubContext = useCallback((ctxOrFn) => {
+    setHubContextRaw(prev => {
+      const next = typeof ctxOrFn === 'function'
+        ? { ...EMPTY_CTX, ...prev, ...ctxOrFn(prev) }
+        : { ...EMPTY_CTX, ...prev, ...ctxOrFn };
+      try { localStorage.setItem(HUB_CTX_KEY, JSON.stringify({ ...next, _ts: Date.now() })); } catch {}
+      return next;
+    });
+  }, []);
+
+  const navigate = useCallback((tab, ctxPatch) => {
+    if (ctxPatch) setHubContext(ctxPatch);
+    setActiveTab(tab);
+  }, [setHubContext]);
 
   useEffect(() => {
     const nc = `?_=${Date.now()}`;
@@ -71,7 +127,7 @@ export default function AdminContentHub({ adminToken }) {
     <div className="h-full flex flex-col" style={{ background: '#06060e' }}>
 
       {/* ── Delegated workflow banner ─────────────────────────────────── */}
-      <div className="border-b px-6 py-2 flex items-center gap-1 flex-wrap"
+      <div className="border-b px-4 py-1.5 flex items-center gap-1 flex-wrap"
         style={{ background: 'rgba(255,255,255,0.015)', borderColor: 'rgba(255,255,255,0.07)' }}>
         <span className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mr-2">Workflow</span>
         {FLOW.map((step, i) => (
@@ -84,12 +140,28 @@ export default function AdminContentHub({ adminToken }) {
                   : 'text-white/30 hover:text-white/60'
               }`}
             >
-              <span>{step.label}</span>
+              {step.label}
             </button>
             {step.arrow && <ArrowRight size={10} className="text-white/15 flex-shrink-0" />}
           </span>
         ))}
-        <span className="ml-auto text-[10px] text-white/20">{boards.length} boards · {subjects.length} subjects</span>
+
+        {/* Hub context pill — shows currently active subject */}
+        {hubContext.subjectName && (
+          <span className="ml-auto flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]"
+            style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
+            <span className="text-white/25">subject:</span>
+            <span className="font-semibold truncate max-w-[120px]">{hubContext.subjectName}</span>
+            <button
+              onClick={() => setHubContext(EMPTY_CTX)}
+              className="text-white/30 hover:text-white/70 ml-0.5"
+              title="Clear context"
+            >×</button>
+          </span>
+        )}
+        {!hubContext.subjectName && (
+          <span className="ml-auto text-[10px] text-white/20">{boards.length} boards · {subjects.length} subjects</span>
+        )}
       </div>
 
       {/* ── Tab bar ──────────────────────────────────────────────────── */}
@@ -130,13 +202,15 @@ export default function AdminContentHub({ adminToken }) {
         {activeTab === 'syllabus' && (
           <div className="h-full overflow-y-auto">
             <div className="p-6 max-w-4xl mx-auto w-full">
-              <SyllabusTabHeader onNavigate={setActiveTab} />
+              <SyllabusTabHeader onNavigate={navigate} hubContext={hubContext} />
               <AdminSyllabusManager
                 adminToken={adminToken}
                 boards={boards}
                 classes={classes}
                 streams={streams}
                 subjects={subjects}
+                onNavigate={navigate}
+                onHubContext={setHubContext}
               />
             </div>
           </div>
@@ -145,15 +219,12 @@ export default function AdminContentHub({ adminToken }) {
         {activeTab === 'pyq' && (
           <div className="h-full overflow-y-auto">
             <div className="p-6 max-w-4xl mx-auto w-full">
-              <div className="flex items-center justify-between mb-5">
-                <div>
-                  <h2 className="text-base font-bold text-white">PYQ Manager</h2>
-                  <p className="text-xs text-white/35 mt-0.5">
-                    Upload previous year question papers — images or PDFs, linked to subjects
-                  </p>
-                </div>
-              </div>
-              <AdminPYQManager adminToken={adminToken} />
+              <PYQTabHeader onNavigate={navigate} hubContext={hubContext} />
+              <AdminPYQManager
+                adminToken={adminToken}
+                hubContext={hubContext}
+                onNavigate={navigate}
+              />
             </div>
           </div>
         )}
@@ -162,7 +233,9 @@ export default function AdminContentHub({ adminToken }) {
           <div className="h-full overflow-hidden">
             <AdminContentEditor
               adminToken={adminToken}
-              onNavigate={setActiveTab}
+              onNavigate={navigate}
+              hubContext={hubContext}
+              onHubContext={setHubContext}
             />
           </div>
         )}
@@ -171,7 +244,9 @@ export default function AdminContentHub({ adminToken }) {
           <div className="h-full overflow-y-auto">
             <AdminContentStudio
               adminToken={adminToken}
-              onNavigate={setActiveTab}
+              onNavigate={navigate}
+              hubContext={hubContext}
+              onHubContext={setHubContext}
             />
           </div>
         )}
@@ -180,7 +255,8 @@ export default function AdminContentHub({ adminToken }) {
           <div className="h-full overflow-hidden">
             <AdminCmsDocEditor
               adminToken={adminToken}
-              onNavigate={setActiveTab}
+              onNavigate={navigate}
+              hubContext={hubContext}
             />
           </div>
         )}
@@ -189,23 +265,85 @@ export default function AdminContentHub({ adminToken }) {
   );
 }
 
-/* Cross-tab navigation hint shown at top of Syllabus tab */
-function SyllabusTabHeader({ onNavigate }) {
+/* ── Tab header components ─────────────────────────────────────────── */
+
+function SyllabusTabHeader({ onNavigate, hubContext }) {
   return (
-    <div className="flex items-center justify-between mb-5">
+    <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
       <div>
         <h2 className="text-base font-bold text-white">Syllabus Manager</h2>
         <p className="text-xs text-white/35 mt-0.5">
           Import PDFs, manage board → class → stream → subject hierarchy
         </p>
       </div>
-      <button
-        onClick={() => onNavigate('editor')}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition"
-        style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}
-      >
-        Write content <ArrowRight size={12} />
-      </button>
+      <div className="flex items-center gap-2 flex-wrap">
+        {hubContext?.subjectName && (
+          <>
+            <QuickActionBtn
+              label="Write Content"
+              color="#8b5cf6"
+              onClick={() => onNavigate('editor')}
+            />
+            <QuickActionBtn
+              label="Upload PYQ"
+              color="#f59e0b"
+              onClick={() => onNavigate('pyq')}
+            />
+            <QuickActionBtn
+              label="Generate AI"
+              color="#f43f5e"
+              onClick={() => onNavigate('studio')}
+            />
+          </>
+        )}
+        {!hubContext?.subjectName && (
+          <button
+            onClick={() => onNavigate('editor')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition"
+            style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}
+          >
+            Write content <ArrowRight size={12} />
+          </button>
+        )}
+      </div>
     </div>
+  );
+}
+
+function PYQTabHeader({ onNavigate, hubContext }) {
+  return (
+    <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
+      <div>
+        <h2 className="text-base font-bold text-white">PYQ Manager</h2>
+        <p className="text-xs text-white/35 mt-0.5">
+          Upload previous year question papers — images or PDFs, linked to subjects
+          {hubContext?.subjectName && (
+            <span className="ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
+              style={{ background: 'rgba(245,158,11,0.18)', color: '#fcd34d' }}>
+              {hubContext.subjectName}
+            </span>
+          )}
+        </p>
+      </div>
+      {hubContext?.subjectName && (
+        <QuickActionBtn
+          label="Write Content"
+          color="#8b5cf6"
+          onClick={() => onNavigate('editor')}
+        />
+      )}
+    </div>
+  );
+}
+
+function QuickActionBtn({ label, color, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
+      style={{ background: `${color}22`, color, border: `1px solid ${color}44` }}
+    >
+      {label} <ArrowRight size={11} />
+    </button>
   );
 }

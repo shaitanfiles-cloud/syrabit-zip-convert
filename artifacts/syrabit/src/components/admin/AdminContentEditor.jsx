@@ -126,7 +126,7 @@ function InlineCreator({ placeholder, onCreate, icon: Icon, color = 'violet' }) 
   );
 }
 
-export default function AdminContentEditor({ adminToken, onNavigate }) {
+export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext }) {
   const [boards, setBoards] = useState([]);
   const [classes, setClasses] = useState([]);
   const [streams, setStreams] = useState([]);
@@ -344,6 +344,32 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Pre-fill selectors from hub context (only if nothing selected yet and data is loaded)
+  useEffect(() => {
+    if (!hubContext?.subjectId || !subjects.length || selSubject) return;
+    const sub = subjects.find(s => s.id === hubContext.subjectId);
+    if (!sub) return;
+    setSelBoard(hubContext.boardId   || null);
+    setSelClass(hubContext.classId   || null);
+    setSelStream(hubContext.streamId || null);
+    setSelSubject(sub.id);
+  }, [hubContext?.subjectId, subjects]);
+
+  // Broadcast subject context back to hub when user picks a subject
+  useEffect(() => {
+    if (!onHubContext || !selSubject) return;
+    const sub  = subjects.find(s => s.id === selSubject);
+    const str  = streams.find(s => s.id === selStream);
+    const cls  = classes.find(c => c.id === selClass);
+    const brd  = boards.find(b => b.id === selBoard);
+    onHubContext({
+      boardId: selBoard || '', boardName: brd?.name || '',
+      classId: selClass || '', className: cls?.name || '',
+      streamId: selStream || '', streamName: str?.name || '',
+      subjectId: selSubject, subjectName: sub?.name || '',
+    });
+  }, [selSubject]);
 
   const refreshChapters = (subjectId) => {
     axios.get(`${API}/admin/content/chapters/${subjectId}`, authHeaders(adminToken))
@@ -924,7 +950,34 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
                         <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />
                         <span>Published</span>
                       </div>
-                      <div className="ml-auto">
+                      <div className="ml-auto flex items-center gap-2">
+                        {onNavigate && (
+                          <button
+                            onClick={() => {
+                              const sub = subjectData;
+                              const ch  = editTarget ? chapters.find(c => c.id === editTarget) : null;
+                              try {
+                                localStorage.setItem('syrabit_studio_prefill', JSON.stringify({
+                                  subject:    sub?.name || '',
+                                  subjectId:  selSubject,
+                                  boardId:    selBoard  || '',
+                                  classId:    selClass  || '',
+                                  streamId:   selStream || '',
+                                  chapter:    ch?.title || contentForm.title || '',
+                                  rawText:    contentForm.content || '',
+                                  timestamp:  Date.now(),
+                                }));
+                              } catch {}
+                              onNavigate('studio');
+                            }}
+                            disabled={!contentForm.content.trim()}
+                            className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
+                            style={{ background: 'rgba(244,63,94,0.15)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.30)' }}
+                            title="Send chapter content to AI Studio for structured block generation"
+                          >
+                            <Sparkles size={11} /> Send to AI Studio
+                          </button>
+                        )}
                         <button
                           onClick={() => handlePublishAsBlog(selSubject, subjectData?.name || selSubject)}
                           disabled={publishingBlog || chapters.length === 0}
