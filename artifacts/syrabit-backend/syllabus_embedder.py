@@ -182,7 +182,12 @@ class SyllabusEmbedder:
         return entries
 
     async def _seed_chapters(self) -> int:
-        """Embed every chapter from SEED_DATA that isn't already in the collection."""
+        """
+        Embed every chapter that isn't already in syllabus_embeddings.
+        Sources:
+          1. SEED_DATA chapters (static AHSEC/SEBA hardcoded data)
+          2. MongoDB `chapters` collection (from PDF imports)
+        """
         try:
             from server import SEED_DATA           # type: ignore
             from vertex_services import embed_text  # type: ignore
@@ -203,6 +208,8 @@ class SyllabusEmbedder:
                 existing_ids.add(doc["chapter_id"])
 
         inserted = 0
+
+        # ── 1. Seed SEED_DATA chapters ─────────────────────────────────────────
         for chapter in SEED_DATA.get("chapters", []):
             ch_id   = chapter["id"]
             subj_id = chapter["subject_id"]
@@ -214,13 +221,12 @@ class SyllabusEmbedder:
             cls    = classes_.get(stream.get("class_id", ""), {})
             board  = boards.get(cls.get("board_id", ""), {})
 
-            board_name  = board.get("name", "AHSEC")
-            class_name  = cls.get("name", "")
-            stream_name = stream.get("name", "")
-            subject_name = subj.get("name", "")
+            board_name    = board.get("name", "AHSEC")
+            class_name    = cls.get("name", "")
+            stream_name   = stream.get("name", "")
+            subject_name  = subj.get("name", "")
             chapter_title = chapter.get("title", "")
 
-            # Text to embed: subject + chapter title (rich but concise)
             embed_text_input = (
                 f"{board_name} {class_name} {stream_name} "
                 f"{subject_name} — {chapter_title}"
@@ -256,6 +262,88 @@ class SyllabusEmbedder:
             inserted += 1
             if inserted % 20 == 0:
                 logger.info(f"SyllabusEmbedder: {inserted} chapters embedded so far…")
+
+        # ── 2. Seed MongoDB chapters (PDF imports) ─────────────────────────────
+        # Query chapters collection for any chapter not yet embedded.
+        # Subjects from the linker carry boardName / className / streamName.
+        try:
+            db = self._db
+
+            # Build subject lookup from MongoDB (only what we need)
+            mongo_subjects: dict = {}
+            async for s in db.subjects.find({}, {
+                "id": 1, "title": 1, "name": 1,
+                "boardName": 1, "className": 1, "streamName": 1,
+            }):
+                sid = s.get("id") or str(s.get("_id", ""))
+                mongo_subjects[sid] = s
+
+            # Collect unembedded MongoDB chapters
+            async for chapter in db.chapters.find({}):
+                ch_id   = chapter.get("id") or str(chapter.get("_id", ""))
+                if ch_id in existing_ids:
+                    continue
+
+                subj_id = chapter.get("subject_id", "")
+                subj    = mongo_subjects.get(subj_id, {})
+
+                board_name    = subj.get("boardName", "")
+                class_name    = subj.get("className", "")
+                stream_name   = subj.get("streamName", "")
+                subject_name  = subj.get("title") or subj.get("name", "")
+                chapter_title = chapter.get("title", "")
+                description   = (chapter.get("description") or "").strip()
+                topics: list  = chapter.get("topics") or []
+
+                # Build a richer embed text using the lesson description
+                parts = [board_name, class_name, stream_name, subject_name]
+                context = " ".join(p for p in parts if p)
+                if description and not description.lower().startswith("chapter "):
+                    # Real description from PDF extraction
+                    embed_text_input = f"{context} — {chapter_title}: {description}"
+                elif topics:
+                    embed_text_input = f"{context} — {chapter_title}: {', '.join(topics[:8])}"
+                else:
+                    embed_text_input = f"{context} — {chapter_title}"
+
+                try:
+                    vec = await asyncio.wait_for(
+                        embed_text(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
+                        timeout=5.0,
+                    )
+                except Exception as exc:
+                    logger.warning(f"Embed (mongo) failed for {chapter_title[:40]}: {exc}")
+                    vec = None
+
+                doc = {
+                    "chapter_id":     ch_id,
+                    "subject_id":     subj_id,
+                    "board":          board_name,
+                    "class_name":     class_name,
+                    "stream":         stream_name,
+                    "subject_name":   subject_name,
+                    "chapter_title":  chapter_title,
+                    "chapter_number": chapter.get("chapter_number", 0),
+                    "embed_text":     embed_text_input,
+                    "embedding":      vec,
+                    "description":    description,
+                    "topics":         topics,
+                    "status":         "active",
+                    "source":         "pdf_import",
+                    "created_at":     __import__("datetime").datetime.utcnow().isoformat(),
+                }
+                await self._col.update_one(
+                    {"chapter_id": ch_id},
+                    {"$set": doc},
+                    upsert=True,
+                )
+                existing_ids.add(ch_id)
+                inserted += 1
+                if inserted % 10 == 0:
+                    logger.info(f"SyllabusEmbedder: {inserted} chapters embedded so far (incl. PDF imports)…")
+
+        except Exception as mongo_err:
+            logger.warning(f"SyllabusEmbedder: MongoDB chapter seeding failed: {mongo_err}")
 
         # Create indexes — guard against duplicate-key / race on multi-worker startup
         try:
