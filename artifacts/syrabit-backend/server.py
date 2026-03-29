@@ -232,6 +232,13 @@ _rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=600)
 # Vector RAG cache — 300-second TTL (Gemini embed API calls are expensive to re-run)
 _vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=300)
 
+# Content card cache — 180-second TTL (avoids duplicate seo_pages + chapters queries)
+_content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=180)
+
+def _content_card_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str]) -> str:
+    raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}"
+    return _hashlib.md5(raw.encode()).hexdigest()
+
 # Syllabus cache — 30-minute TTL; syllabi almost never change between requests
 _syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=1800)
 
@@ -1472,7 +1479,7 @@ def _extract_keywords(query: str) -> list:
         "let", "define", "describe", "state", "write", "list",
     }
     raw = [w.strip('?.,!;:()[]"\'').lower() for w in query.split()]
-    return [w for w in raw if len(w) >= 3 and w not in stop_words][:6]
+    return [w for w in raw if len(w) >= 3 and w not in stop_words][:8]
 
 
 # ─────────────────────────────────────────────
@@ -1898,11 +1905,21 @@ async def rechunk_chapter(chapter_id: str) -> dict:
     }
 
 
-async def _fetch_content_card(query: str, subject_id: Optional[str] = None, subject_name: Optional[str] = None) -> Optional[str]:
+async def _fetch_content_card(
+    query: str,
+    subject_id: Optional[str] = None,
+    subject_name: Optional[str] = None,
+) -> Optional[tuple]:
     """
-    Search seo_pages for the content card (full page content) most relevant to the query.
-    Returns the full page content text if found, else None.
+    Search seo_pages + chapters for the most relevant content card.
+    Returns (card_text: str, card_slugs: set[str]) if found, else None.
+    Card slugs are used by the grounding builder to deduplicate vector hits.
     """
+    _ck = _content_card_cache_key(query, subject_id, subject_name)
+    if _ck in _content_card_cache:
+        logger.info(f"Content card cache hit: query='{query[:40]}'")
+        return _content_card_cache[_ck]
+
     try:
         if not await is_mongo_available():
             return None
@@ -1976,31 +1993,39 @@ async def _fetch_content_card(query: str, subject_id: Optional[str] = None, subj
 
         cards = []
 
-        # Priority: notes pages first, then any seo_page
-        notes_pages = [p for p in pages if p.get("page_type") == "notes"]
-        ordered_pages = notes_pages + [p for p in pages if p not in notes_pages]
+        # Priority: notes → pyq → mcq → everything else (textScore already pre-sorts)
+        def _page_priority(p: dict) -> int:
+            pt = p.get("page_type", "")
+            return 0 if pt == "notes" else (1 if pt == "pyq" else (2 if pt == "mcq" else 3))
+
+        ordered_pages = sorted(pages, key=_page_priority)
+        card_slugs: set = set()
         for p in ordered_pages[:3]:
             content = p.get("content", "")
             if not content:
                 continue
+            slug = p.get("slug") or p.get("topic_title", "")
+            card_slugs.add(slug)
             topic_title = p.get("topic_title") or p.get("chapter_title") or ""
             header = f"[Content: {topic_title}]" if topic_title else "[Content Page]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=3500)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=2000)
             cards.append(f"{header}\n{relevant}")
 
-        # Append chapter blog content
+        # Append chapter content (trimmed for Flash Lite token budget)
         for ch in chapter_pages[:2]:
             content = ch.get("content", "")
             if not content:
                 continue
             header = f"[Chapter: {ch.get('title', '')}]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=2000)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=1200)
             cards.append(f"{header}\n{relevant}")
 
         if not cards:
             return None
 
-        return "\n\n---\n\n".join(cards)
+        result = ("\n\n---\n\n".join(cards), card_slugs)
+        _content_card_cache[_ck] = result
+        return result
 
     except Exception as e:
         logger.error(f"Content card fetch error: {e}")
@@ -2496,31 +2521,37 @@ async def resolve_rag_context(
             "source":  "document",
             "quality": "tier0",
         }
-    cached_rag, content_card_text, vector_hits = await asyncio.gather(
+    cached_rag, _card_result, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
-        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name),
-        vector_rag_search(query, subject_id=subject_id, top_k=12),
+        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name),  # returns (text, slug_set) or None
+        vector_rag_search(query, subject_id=subject_id, top_k=8),
     )
 
     rag_ctx = dict(cached_rag)
 
-    if content_card_text:
+    # Unpack content card tuple → (text, slug_set used for dedup)
+    content_card_text: Optional[str] = None
+    content_card_slugs: set = set()
+    if _card_result:
+        content_card_text, content_card_slugs = _card_result
         rag_ctx["content_card"] = content_card_text
+        rag_ctx["content_card_slugs"] = content_card_slugs
         if rag_ctx["quality"] == "none":
             rag_ctx["quality"] = "high"
             rag_ctx["source"] = "rag"
-        logger.info(f"RAG resolve: content card found ({len(content_card_text)} chars) | query: {query[:50]}")
+        logger.info(f"RAG resolve: content card found ({len(content_card_text)} chars, {len(content_card_slugs)} slugs) | query: {query[:50]}")
 
-    # Vector hits: inject as high-quality grounding with [PAGE: slug] citations
+    # Vector hits: deduplicate against content card slugs before injecting
     if vector_hits:
-        rag_ctx["vector_hits"] = vector_hits
+        deduped = [h for h in vector_hits if h.get("slug") not in content_card_slugs]
+        rag_ctx["vector_hits"] = deduped
         if rag_ctx["quality"] == "none":
             rag_ctx["quality"] = "high"
             rag_ctx["source"] = "rag"
-        logger.info(f"RAG resolve: vector hits={len(vector_hits)} (best_sim={vector_hits[0]['score']:.3f}) | query: {query[:50]}")
+        logger.info(f"RAG resolve: vector hits={len(deduped)} (deduped from {len(vector_hits)}, best_sim={deduped[0]['score']:.3f}) | query: {query[:50]}" if deduped else f"RAG resolve: vector hits=0 (all deduped by content card)")
 
     if rag_ctx["quality"] == "high":
-        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(vector_hits)}, card: {'yes' if content_card_text else 'no'}) | query: {query[:50]}")
+        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(rag_ctx.get('vector_hits', []))}, card: {'yes' if content_card_text else 'no'}) | query: {query[:50]}")
         return rag_ctx
 
     if rag_ctx["quality"] == "medium":
