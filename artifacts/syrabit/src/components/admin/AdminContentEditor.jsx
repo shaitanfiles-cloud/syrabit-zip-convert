@@ -345,6 +345,27 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
   useEffect(() => { load(true); }, [load]);
 
+  // Read CMS → Editor handoff prefill on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('syrabit_editor_prefill');
+      if (!raw) return;
+      const pf = JSON.parse(raw);
+      if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) {
+        localStorage.removeItem('syrabit_editor_prefill');
+        return;
+      }
+      localStorage.removeItem('syrabit_editor_prefill');
+      setContentForm(f => ({
+        ...f,
+        title:   pf.title || f.title || '',
+        content: pf.content || f.content || '',
+      }));
+      setEditView('new-chapter');
+      toast.success(`Pre-filled from CMS Doc "${pf.title || 'Untitled'}" — select a subject and save`);
+    } catch {}
+  }, []);
+
   // Pre-fill selectors from hub context (only if nothing selected yet and data is loaded)
   useEffect(() => {
     if (!hubContext?.subjectId || !subjects.length || selSubject) return;

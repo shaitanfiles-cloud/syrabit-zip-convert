@@ -421,13 +421,13 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate, hubContext }
   const handleHandOff = () => {
     const liveContent = editorRef.current?.getMarkdown() || form.content;
     if (!liveContent.trim()) { toast.error('No content to hand off'); return; }
-    localStorage.setItem('syrabit_content_prefill', JSON.stringify({
+    localStorage.setItem('syrabit_editor_prefill', JSON.stringify({
       title:     form.title,
       content:   liveContent,
       timestamp: Date.now(),
     }));
     toast.success('Content handed off to Content Editor');
-    onNavigate?.('content');
+    onNavigate?.('editor');
   };
 
   const handleLinkSyllabus = async () => {
