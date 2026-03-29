@@ -395,10 +395,8 @@ export default function LandingPage() {
               backgroundClip: 'text',
               filter: 'drop-shadow(0 0 30px rgba(139,92,246,0.30))',
             }}>
-              AssamBoard
+              AssamBoard Students
             </span>
-            <br />
-            <span className="text-white">Students</span>
           </motion.h1>
 
           {/* Subheadline */}
