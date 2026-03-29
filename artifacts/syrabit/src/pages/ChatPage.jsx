@@ -123,22 +123,59 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
 
   const visibleSources = hasSrc ? sources.filter(s => s.url || s.slug) : [];
   const subjectUrl     = ragSubjectId ? `/subject/${ragSubjectId}` : null;
+  const fallbackUrl    = subjectUrl || '/library';
   const displayTitle   = ragSubjectName || 'Syrabit Library';
 
+  const footerText = [
+    ragChunks > 0 ? `${ragChunks} chunks` : null,
+    (ragSource === 'rag' || ragSource === 'rag+web') ? 'AssamBoard Curriculum' : null,
+    ragSource === 'web' ? 'Web search' : null,
+    ragSource === 'document' ? 'Uploaded document' : null,
+  ].filter(Boolean).join(' · ');
+
+  // No individual page sources — make entire card a single clickable link
+  if (visibleSources.length === 0) {
+    return (
+      <button
+        onClick={() => handleNav(fallbackUrl)}
+        className="source-card source-card-clickable w-full text-left"
+        title={`View ${displayTitle}`}
+      >
+        <div className="source-watermark">
+          <BookOpen size={13} className="shrink-0" style={{ color: '#60a5fa' }} />
+          <span>Syrabit.ai · {boardLabel}</span>
+          {ragChunks > 0 && <span className="source-chunk-badge">{ragChunks} blocks</span>}
+          <ExternalLink size={10} className="ml-auto shrink-0 opacity-40" style={{ color: '#60a5fa' }} />
+        </div>
+        <div className="source-pages">
+          <div className="source-link" style={{ pointerEvents: 'none' }}>
+            <span className="source-link-icon">📖</span>
+            <span className="truncate">{displayTitle}</span>
+          </div>
+        </div>
+        {footerText && <div className="source-stats">{footerText}</div>}
+      </button>
+    );
+  }
+
+  // Individual source pages — watermark header links to subject, each page is its own link
   return (
     <div className="source-card">
-      {/* Watermark header */}
-      <div className="source-watermark">
+      {/* Watermark header — always links to subject */}
+      <button
+        onClick={() => handleNav(fallbackUrl)}
+        className="source-watermark source-watermark-btn w-full text-left"
+        title={`View ${displayTitle}`}
+      >
         <BookOpen size={13} className="shrink-0" style={{ color: '#60a5fa' }} />
         <span>Syrabit.ai · {boardLabel}</span>
-        {ragChunks > 0 && (
-          <span className="source-chunk-badge">{ragChunks} blocks</span>
-        )}
-      </div>
+        {ragChunks > 0 && <span className="source-chunk-badge">{ragChunks} blocks</span>}
+        <ExternalLink size={10} className="ml-auto shrink-0 opacity-40" style={{ color: '#60a5fa' }} />
+      </button>
 
-      {/* Subject name label before source pages */}
-      {displayTitle && visibleSources.length > 0 && (
-        <div className="flex items-center gap-1.5 mb-2 px-1">
+      {/* Subject label */}
+      {displayTitle && (
+        <div className="flex items-center gap-1.5 mb-2 px-1 mt-1">
           <span className="text-[10px] font-semibold text-white/25 uppercase tracking-widest">From</span>
           <span
             className="text-[11px] font-semibold px-2 py-0.5 rounded-md"
@@ -149,42 +186,24 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
         </div>
       )}
 
-      {/* Page links */}
+      {/* Individual page links */}
       <div className="source-pages">
-        {visibleSources.length > 0
-          ? visibleSources.map((src, i) => (
-              <button
-                key={i}
-                onClick={() => handleNav(src.url || '')}
-                className="source-link"
-                title={src.url || src.title}
-                disabled={!src.url}
-              >
-                <span className="source-link-icon">📖</span>
-                <span className="truncate">{src.title || src.slug}</span>
-                {src.url && <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />}
-              </button>
-            ))
-          : (subjectUrl
-              ? (
-                <button onClick={() => handleNav(subjectUrl)} className="source-link">
-                  <span className="source-link-icon">📖</span>
-                  <span className="truncate">{displayTitle}</span>
-                  <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />
-                </button>
-              )
-              : null
-            )
-        }
+        {visibleSources.map((src, i) => (
+          <button
+            key={i}
+            onClick={() => handleNav(src.url || '')}
+            className="source-link"
+            title={src.url || src.title}
+            disabled={!src.url}
+          >
+            <span className="source-link-icon">📖</span>
+            <span className="truncate">{src.title || src.slug}</span>
+            {src.url && <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />}
+          </button>
+        ))}
       </div>
 
-      {/* Footer stats */}
-      <div className="source-stats">
-        {ragChunks > 0 ? `${ragChunks} chunks` : 'Syrabit Library'}
-        {(ragSource === 'rag' || ragSource === 'rag+web') && ' · AssamBoard Curriculum'}
-        {ragSource === 'web' && ' · Web search'}
-        {ragSource === 'document' && ' · Uploaded document'}
-      </div>
+      {footerText && <div className="source-stats">{footerText}</div>}
     </div>
   );
 }

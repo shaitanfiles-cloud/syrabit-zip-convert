@@ -795,6 +795,30 @@
   backdrop-filter: blur(8px);
 }
 
+/* When whole card is a button */
+.source-card-clickable {
+  cursor: pointer;
+  transition: background 0.18s ease, border-color 0.18s ease, transform 0.15s ease;
+  display: block;
+}
+.source-card-clickable:hover {
+  background: linear-gradient(135deg, rgba(59,130,246,0.12) 0%, rgba(99,102,241,0.12) 100%);
+  border-color: rgba(59,130,246,0.35);
+  transform: translateY(-1px);
+}
+
+/* Watermark row as a button (when pages exist) */
+.source-watermark-btn {
+  cursor: pointer;
+  transition: background 0.15s ease;
+  border-radius: 8px;
+  margin-bottom: 0;
+  padding: 5px 9px;
+}
+.source-watermark-btn:hover {
+  background: rgba(59,130,246,0.16);
+}
+
 .source-watermark {
   display: flex;
   align-items: center;
