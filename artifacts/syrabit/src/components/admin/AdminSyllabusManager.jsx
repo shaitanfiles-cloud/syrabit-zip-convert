@@ -1193,9 +1193,21 @@ function PreviewEditPanel({
           <p className="text-[11px] font-semibold text-violet-300">
             Review extracted syllabus — {previewData.subjects_count} subject{previewData.subjects_count !== 1 ? 's' : ''} from &ldquo;{previewData.filename}&rdquo;
           </p>
-          <p className="text-[10px] text-white/35 mt-0.5">
-            Edit any field or remove subjects before saving. Chapters and topics guide AI answers.
-          </p>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {previewData.new_count > 0 && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
+                style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399' }}>
+                ✓ {previewData.new_count} new
+              </span>
+            )}
+            {previewData.duplicate_count > 0 && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
+                style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
+                ⟳ {previewData.duplicate_count} already active — will be skipped
+              </span>
+            )}
+            <p className="text-[10px] text-white/35">Edit or remove subjects before saving.</p>
+          </div>
         </div>
         <button onClick={onDiscard} className="text-white/30 hover:text-white/70 transition text-[10px] ml-3">discard</button>
       </div>
@@ -1209,11 +1221,20 @@ function PreviewEditPanel({
               {/* Card header / toggle */}
               <div
                 className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/[0.03] transition"
+                style={sub._is_duplicate ? { opacity: 0.55 } : {}}
                 onClick={() => setExpandedIdx(isOpen ? null : idx)}
               >
                 <span className="text-[10px] text-white/30 w-5 text-center">{idx + 1}</span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[11px] font-semibold text-white truncate">{sub.subject_name || '(unnamed)'}</p>
+                  <div className="flex items-center gap-1.5">
+                    <p className="text-[11px] font-semibold text-white truncate">{sub.subject_name || '(unnamed)'}</p>
+                    {sub._is_duplicate && (
+                      <span className="flex-shrink-0 text-[8px] px-1 py-0.5 rounded font-bold uppercase tracking-wide"
+                        style={{ background: 'rgba(251,191,36,0.18)', color: '#fbbf24' }}>
+                        already active
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[9px] text-white/35 truncate">
                     {[sub.semester, sub.course_code, sub.credits ? `${sub.credits} cr` : ''].filter(Boolean).join(' · ')}
                     {' · '}{(sub.chapters || []).length} chapters

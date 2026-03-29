@@ -12106,7 +12106,42 @@ async def syllabus_import_pdf(
     if not extracted:
         raise HTTPException(status_code=422, detail="No syllabus subjects found in PDF — check PDF content")
 
-    # ── Dry-run: return extracted JSON for preview/editing, do NOT save ────────
+    # ── Build duplicate fingerprint set from published subjects + prior imports ─
+    def _subj_key(name: str, semester: str) -> tuple:
+        return (name.lower().strip(), semester.lower().strip())
+
+    existing_published = await db.subjects.find(
+        {"status": "published"},
+        {"name": 1, "semester": 1, "_id": 0}
+    ).to_list(5000)
+    dup_keys: set = {
+        _subj_key(s.get("name", ""), s.get("semester", ""))
+        for s in existing_published
+        if s.get("name")
+    }
+    # Also include prior successful imports so re-uploading same PDF is safe
+    prior_imports = await db.syllabus_pdf_imports.find(
+        {"status": {"$in": ["linked", "imported"]}},
+        {"subject_name": 1, "semester": 1, "_id": 0}
+    ).to_list(5000)
+    for pi in prior_imports:
+        if pi.get("subject_name"):
+            dup_keys.add(_subj_key(pi["subject_name"], pi.get("semester", "")))
+
+    # Annotate each extracted entry with duplicate flag
+    for entry in extracted:
+        if isinstance(entry, dict):
+            sname = (entry.get("subject_name") or entry.get("subject") or "").strip()
+            sem   = (entry.get("semester") or "").strip()
+            sem_n = entry.get("semester_number", 0) or 0
+            if sem_n and not sem:
+                sem = f"Semester {sem_n}"
+            entry["_is_duplicate"] = _subj_key(sname, sem) in dup_keys
+
+    new_count  = sum(1 for e in extracted if isinstance(e, dict) and not e.get("_is_duplicate"))
+    dup_count  = len(extracted) - new_count
+
+    # ── Dry-run: return extracted JSON (with dup flags) for preview ─────────────
     if dry_run:
         return {
             "preview": True,
@@ -12114,6 +12149,8 @@ async def syllabus_import_pdf(
             "paper_type": paper_type,
             "filename": file.filename,
             "subjects_count": len(extracted),
+            "new_count": new_count,
+            "duplicate_count": dup_count,
         }
 
     # ── Auto-link each subject into the board/class/stream/subject hierarchy ──
@@ -12123,6 +12160,7 @@ async def syllabus_import_pdf(
     now_iso = datetime.now(timezone.utc).isoformat()
     import_id = str(uuid.uuid4())
     saved_subjects = []
+    skipped_duplicates = []
 
     for entry_raw in extracted:
         if not isinstance(entry_raw, dict):
@@ -12136,6 +12174,16 @@ async def syllabus_import_pdf(
         sem_num = entry_raw.get("semester_number", 0) or 0
         if sem_num and not sem_raw:
             sem_raw = f"Semester {sem_num}"
+
+        # ── Skip subjects already published or previously imported ────────────
+        if _subj_key(subject_name, sem_raw) in dup_keys:
+            skipped_duplicates.append({
+                "subject_name": subject_name,
+                "semester": sem_raw,
+                "reason": "already_active",
+            })
+            logger.info(f"[pdf_import] SKIP duplicate: {subject_name!r} {sem_raw!r}")
+            continue
 
         # Normalise chapters: accept [{title, description, topics}] OR ["title"]
         raw_chaps = entry_raw.get("chapters", [])
@@ -12245,8 +12293,10 @@ async def syllabus_import_pdf(
         "import_id": import_id,
         "paper_type": paper_type,
         "filename": file.filename,
-        "subjects_extracted": len(saved_subjects),
+        "subjects_saved": len(saved_subjects),
+        "subjects_skipped_duplicates": len(skipped_duplicates),
         "subjects": saved_subjects,
+        "skipped": skipped_duplicates,
     }
 
 
