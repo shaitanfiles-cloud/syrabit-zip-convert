@@ -2658,17 +2658,34 @@ async def _ddg_news_search(query: str, num_results: int) -> list:
         return []
 
 
-async def web_search_with_fallback(query: str, num_results: int = 8) -> list:
+async def web_search_with_fallback(
+    query: str,
+    num_results: int = 8,
+    board_name: str = "",
+    class_name: str = "",
+    subject_name: str = "",
+) -> list:
     """
     Parallel dual-source web search:
-      Layer 1 — DuckDuckGo text search (browser-style, base layer)
-      Layer 2 — DuckDuckGo news search (open web, polish layer)
-    Both run simultaneously. Results are returned as a combined list
-    with each entry tagged with its layer so the prompt can instruct
-    the LLM to treat them appropriately.
+      Base layer  — DuckDuckGo text search with curriculum-scoped query
+                    (e.g. "AHSEC Class 12 Business Studies <query>")
+                    targets formatted syllabus/educational pages.
+      Polish layer — DuckDuckGo news search with the raw user query
+                     for open-web enrichment, current examples, reasoning.
+    Both run simultaneously. Results tagged with _layer for prompt routing.
     """
+    # Build curriculum-scoped query for the base layer
+    _ctx_parts = []
+    if board_name:
+        _ctx_parts.append(board_name.strip())
+    if class_name:
+        _ctx_parts.append(class_name.strip())
+    if subject_name:
+        _ctx_parts.append(subject_name.strip())
+    curriculum_query = " ".join(_ctx_parts + [query]) if _ctx_parts else query
+
     text_results, news_results = await asyncio.gather(
-        _ddg_text_search(query, num_results),
+        _ddg_text_search(curriculum_query, num_results),
         _ddg_news_search(query, max(num_results - 2, 4)),
     )
     for r in text_results:
@@ -2676,7 +2693,10 @@ async def web_search_with_fallback(query: str, num_results: int = 8) -> list:
     for r in news_results:
         r["_layer"] = "polish"
     combined = text_results + news_results
-    logger.info(f"Dual web search: {len(text_results)} base + {len(news_results)} polish | query: {query[:60]}")
+    logger.info(
+        f"Dual web search: {len(text_results)} base (curriculum-scoped) + "
+        f"{len(news_results)} polish (open) | query: {query[:60]}"
+    )
     return combined
 
 
@@ -5561,7 +5581,12 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
-        web_results = await web_search_with_fallback(msg.message, num_results=8)
+        web_results = await web_search_with_fallback(
+            msg.message, num_results=8,
+            board_name=ctx_board_name,
+            class_name=ctx_class_name,
+            subject_name=msg.subject_name or "",
+        )
         if web_results:
             logger.info(f"[NON-STREAM] Web primary: {len(web_results)} results | RAG skipped")
             rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
@@ -5841,9 +5866,14 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
-        # Step 1: web search (DDG text → DDG news) + history in parallel
+        # Step 1: curriculum-scoped base + open-web polish, alongside history
         web_results, raw_conv = await asyncio.gather(
-            web_search_with_fallback(msg.message, num_results=8),
+            web_search_with_fallback(
+                msg.message, num_results=8,
+                board_name=ctx_board_name,
+                class_name=ctx_class_name,
+                subject_name=msg.subject_name or "",
+            ),
             _fetch_history(),
         )
         # Step 2: MongoDB RAG only when BOTH web tiers returned nothing
