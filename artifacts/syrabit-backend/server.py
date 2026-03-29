@@ -2481,6 +2481,63 @@ async def web_search_fallback(query: str, num_results: int = 5) -> list:
         return []
 
 
+_HISTORY_TOKEN_BUDGET = 3000  # max estimated tokens kept in conversation history
+_HISTORY_MAX_TURNS = 20       # max message pairs regardless of token budget
+
+
+def _trim_history(messages: list, token_budget: int = _HISTORY_TOKEN_BUDGET, max_turns: int = _HISTORY_MAX_TURNS) -> list:
+    """
+    Return the most recent portion of a conversation history that fits within
+    the token budget and max-turn limit.  Oldest turns are dropped first.
+    Estimation: 1 token ≈ 4 chars (conservative English approximation).
+    """
+    # Keep only alternating user/assistant pairs (already filtered upstream)
+    # Cap by hard turn limit first
+    capped = messages[-(max_turns * 2):]
+
+    # Trim from the front until estimated token count is within budget
+    while capped:
+        total_chars = sum(len(m.get("content", "")) for m in capped)
+        if total_chars // 4 <= token_budget:
+            break
+        # Drop the two oldest messages (one turn)
+        capped = capped[2:]
+
+    return capped
+
+
+def _sources_from_rag_ctx(rag_ctx: dict) -> list:
+    """
+    Build a sources list directly from the RAG context that was sent to the LLM.
+    This ensures the displayed sources always match the grounding context used in
+    the prompt (no mismatch from a separate async library search).
+
+    Returns a list of dicts with keys: slug, title, url (compatible with the
+    frontend sources format).
+    """
+    seen = set()
+    sources = []
+
+    def _add(slug: str, title: str, url: str = ""):
+        if slug and slug not in seen:
+            seen.add(slug)
+            sources.append({"slug": slug, "title": title or slug, "url": url})
+
+    for hit in rag_ctx.get("vector_hits", []):
+        _add(hit.get("slug", ""), hit.get("title", ""), hit.get("url", ""))
+
+    for chunk in rag_ctx.get("chunks", []):
+        _add(chunk.get("slug", ""), chunk.get("title", chunk.get("content_type", "")), chunk.get("url", ""))
+
+    for subj in rag_ctx.get("subjects", []):
+        _add(subj.get("slug", ""), subj.get("name", ""), subj.get("url", ""))
+
+    for ch in rag_ctx.get("chapters", []):
+        _add(ch.get("slug", ""), ch.get("title", ""), ch.get("url", ""))
+
+    return sources
+
+
 def build_rag_system_prompt(
     context: dict,
     rag_context: dict,
@@ -2525,11 +2582,6 @@ def build_rag_system_prompt(
         )
         if syllabus_topics:
             grounding += f"**Key topics:** {syllabus_topics}\n\n"
-        if geo_phrases:
-            grounding += "**GEO Authority Phrases (weave naturally into answers):**\n"
-            for gp in geo_phrases[:8]:
-                grounding += f"- {gp}\n"
-            grounding += "\n"
         grounding += (
             "---\n"
             "*INSTRUCTION: Keep your answer within the scope of this curriculum. "
@@ -2537,6 +2589,15 @@ def build_rag_system_prompt(
             "Prioritize accuracy over breadth. "
             "When relevant, cite specific board exam stats, PYQ frequency data, and authoritative syllabus references.*\n"
         )
+        if geo_phrases:
+            grounding += (
+                "\n**NOTE:** After delivering your factual answer, you may append a brief "
+                "closing phrase from the list below — only if it fits naturally and does NOT "
+                "alter or qualify any factual statement in your answer:\n"
+            )
+            for gp in geo_phrases[:5]:
+                grounding += f"- {gp}\n"
+            grounding += "\n"
 
     # ── Tier 0: Uploaded subject document ────────────────────────────────────
     if source == "document" and document_text:
@@ -5255,11 +5316,12 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     if conv_id:
         conv = await supa_get_conversation(conv_id, user["id"])
         if conv:
-            for m in conv.get("messages", [])[-6:]:
-                role = m.get("role", "")
-                content = m.get("content") or ""
-                if role in ("user", "assistant") and content.strip():
-                    history_messages.append({"role": role, "content": content})
+            raw_history = [
+                {"role": m.get("role", ""), "content": m.get("content") or ""}
+                for m in conv.get("messages", [])
+                if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
+            ]
+            history_messages = _trim_history(raw_history)
     else:
         conv_id = str(uuid.uuid4())
         title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
@@ -5292,12 +5354,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     if answer is None:
         try:
-            # Run LLM + library search in parallel to minimise latency
-            answer, lib_sources = await asyncio.gather(
-                call_llm_api(messages, model=msg.model or LLM_MODEL, max_tokens=max_tokens),
-                syrabit_library_search(msg.message, board_slug=None, class_slug=None),
-                return_exceptions=False,
-            )
+            answer = await call_llm_api(messages, model=msg.model or LLM_MODEL, max_tokens=max_tokens)
             if not is_casual:
                 _redis_set_ai_cache(cache_key, answer)
                 _ai_response_cache[cache_key] = answer
@@ -5307,8 +5364,9 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         except Exception as e:
             logger.error(f"AI chat error: {e}")
             raise HTTPException(status_code=503, detail="AI service temporarily unavailable")
-    else:
-        lib_sources = await syrabit_library_search(msg.message)
+
+    # Derive sources from the same RAG context sent to the LLM (no mismatch)
+    lib_sources = _sources_from_rag_ctx(rag_ctx)
 
     now = datetime.now(timezone.utc).isoformat()
     new_messages = [
@@ -5518,11 +5576,12 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     history_messages = []
 
     if conv_id and raw_conv:
-        for m in raw_conv.get("messages", [])[-6:]:
-            role = m.get("role", "")
-            content = m.get("content") or ""
-            if role in ("user", "assistant") and content.strip():
-                history_messages.append({"role": role, "content": content})
+        raw_history = [
+            {"role": m.get("role", ""), "content": m.get("content") or ""}
+            for m in raw_conv.get("messages", [])
+            if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
+        ]
+        history_messages = _trim_history(raw_history)
     elif not conv_id:
         conv_id = str(uuid.uuid4())
         title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
@@ -5552,11 +5611,12 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     rag_subject_name = (_rag_subjs[0].get("name") if _rag_subjs else None) or msg.subject_name or None
     full_response = []
 
+    # Derive sources from the same RAG context sent to the LLM (no mismatch)
+    rag_sources = _sources_from_rag_ctx(rag_ctx)
+
     async def event_stream():
         nonlocal full_response
         _credit_saved = False  # set True when answer is committed; controls refund in finally
-        # Run library search immediately (before LLM, non-blocking)
-        lib_sources_task = asyncio.create_task(syrabit_library_search(msg.message))
         try:
             # Send RAG metadata with full quality info + subject link data + web search flag
             yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'web_search_used': web_search_used})}\n\n"
@@ -5602,13 +5662,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             answer = "".join(full_response)
             new_used_optimistic = credits_info["used"] + 1 if answer else credits_info["used"]
 
-            # Await the library search task (started at top of event_stream)
-            try:
-                lib_sources = await lib_sources_task
-            except Exception:
-                lib_sources = []
-
-            # ── syrabit_done event with credits metadata + library sources ────
+            # ── syrabit_done event with credits metadata + RAG-derived sources ────
             done_payload = {
                 "event": "syrabit_done",
                 "conversation_id": conv_id,
@@ -5618,7 +5672,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 "rag_source": rag_source_saved,
                 "rag_chunks": rag_chunks_count,
                 "words": len(answer.split()) if answer else 0,
-                "sources": lib_sources,
+                "sources": rag_sources,
                 "web_search_used": web_search_used,
             }
             yield f"data: {json.dumps(done_payload)}\n\n"
