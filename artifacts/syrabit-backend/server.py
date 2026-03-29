@@ -768,6 +768,13 @@ async def lifespan(app):
     _rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
     asyncio.create_task(_migrate_supabase_users_to_pg())
     asyncio.create_task(_heal_credits_limit())
+
+    # Initialise SyllabusEmbedder and kick off background chapter seeding
+    global _syllabus_embedder
+    if db is not None:
+        _syllabus_embedder = SyllabusEmbedder(db)
+        asyncio.create_task(_seed_syllabus_embeddings())
+
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
@@ -782,6 +789,19 @@ async def lifespan(app):
 
 app = FastAPI(title="Syrabit.ai API", version="2.0.0", lifespan=lifespan)
 app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+async def _seed_syllabus_embeddings():
+    """Background task: embed all SEED_DATA chapters into MongoDB on first run."""
+    global _syllabus_embedder
+    if _syllabus_embedder is None:
+        return
+    try:
+        inserted = await _syllabus_embedder.ensure_seeded()
+        if inserted > 0:
+            logger.info(f"SyllabusEmbedder: seeded {inserted} chapter embeddings in background")
+    except Exception as exc:
+        logger.warning(f"SyllabusEmbedder background seed failed: {exc}")
 
 
 # ─────────────────────────────────────────────
@@ -1487,6 +1507,10 @@ async def ensure_seeded():
 # ADAPTIVE SYSTEM PROMPT  (defined in prompts.py)
 # ─────────────────────────────────────────────────────────────────────────────
 from prompts import build_system_prompt, _classify_question
+from subject_router import build_search_scope
+from syllabus_embedder import SyllabusEmbedder
+
+_syllabus_embedder: Optional[SyllabusEmbedder] = None
 
 # ─────────────────────────────────────────────
 # RAG SEARCH
@@ -2664,25 +2688,22 @@ async def web_search_with_fallback(
     board_name: str = "",
     class_name: str = "",
     subject_name: str = "",
+    scoped_query: str = "",   # Pre-built by SubjectRouter (preferred over manual parts)
 ) -> list:
     """
     Parallel dual-source web search:
-      Base layer  — DuckDuckGo text search with curriculum-scoped query
-                    (e.g. "AHSEC Class 12 Business Studies <query>")
-                    targets formatted syllabus/educational pages.
+      Base layer  — DuckDuckGo text search with curriculum-scoped query.
+                    Uses `scoped_query` when provided (from SubjectRouter Tier 0-3),
+                    otherwise builds it from board_name / class_name / subject_name.
       Polish layer — DuckDuckGo news search with the raw user query
                      for open-web enrichment, current examples, reasoning.
     Both run simultaneously. Results tagged with _layer for prompt routing.
     """
-    # Build curriculum-scoped query for the base layer
-    _ctx_parts = []
-    if board_name:
-        _ctx_parts.append(board_name.strip())
-    if class_name:
-        _ctx_parts.append(class_name.strip())
-    if subject_name:
-        _ctx_parts.append(subject_name.strip())
-    curriculum_query = " ".join(_ctx_parts + [query]) if _ctx_parts else query
+    if scoped_query:
+        curriculum_query = scoped_query
+    else:
+        _ctx_parts = [p.strip() for p in [board_name, class_name, subject_name] if p]
+        curriculum_query = " ".join(_ctx_parts + [query]) if _ctx_parts else query
 
     text_results, news_results = await asyncio.gather(
         _ddg_text_search(curriculum_query, num_results),
@@ -2694,8 +2715,8 @@ async def web_search_with_fallback(
         r["_layer"] = "polish"
     combined = text_results + news_results
     logger.info(
-        f"Dual web search: {len(text_results)} base (curriculum-scoped) + "
-        f"{len(news_results)} polish (open) | query: {query[:60]}"
+        f"Dual web search: {len(text_results)} base (scoped: {curriculum_query[:60]!r}) + "
+        f"{len(news_results)} polish (open) | raw: {query[:50]}"
     )
     return combined
 
@@ -5485,6 +5506,34 @@ async def publish_syllabus_as_card(
 
 
 # ─────────────────────────────────────────────
+# SYLLABUS EMBEDDER — admin endpoints
+# ─────────────────────────────────────────────
+
+@api.post("/admin/syllabus/seed-embeddings")
+async def admin_seed_syllabus_embeddings(admin: dict = Depends(get_admin_user)):
+    """
+    Force a full re-embed of all SEED_DATA chapters into the `syllabus_embeddings`
+    collection. Safe to run multiple times — drops existing and re-seeds.
+    On first run after deployment this happens automatically in the background;
+    call this endpoint to trigger it manually or force a refresh.
+    """
+    global _syllabus_embedder
+    if _syllabus_embedder is None:
+        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
+    result = await _syllabus_embedder.reseed()
+    return result
+
+
+@api.get("/admin/syllabus/embedding-stats")
+async def admin_syllabus_embedding_stats(admin: dict = Depends(get_admin_user)):
+    """Return counts for the syllabus_embeddings collection and in-memory cache."""
+    global _syllabus_embedder
+    if _syllabus_embedder is None:
+        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
+    return await _syllabus_embedder.stats()
+
+
+# ─────────────────────────────────────────────
 # AI CHAT ROUTES
 # ─────────────────────────────────────────────
 
@@ -5578,14 +5627,24 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     if _is_casual_sync:
         web_results = []
+        _ns_route = None
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
+        # Run SubjectRouter to get a curriculum-scoped query for web search
+        _ns_scoped_query, _ns_route = await build_search_scope(
+            msg.message,
+            board_name=ctx_board_name,
+            class_name=ctx_class_name,
+            subject_name=msg.subject_name or "",
+            embedder=_syllabus_embedder,
+        )
         web_results = await web_search_with_fallback(
             msg.message, num_results=8,
             board_name=ctx_board_name,
             class_name=ctx_class_name,
             subject_name=msg.subject_name or "",
+            scoped_query=_ns_scoped_query,
         )
         if web_results:
             logger.info(f"[NON-STREAM] Web primary: {len(web_results)} results | RAG skipped")
@@ -5862,10 +5921,19 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     if _is_casual:
         # Casual chat: no web search, no RAG — just history
         web_results = []
+        _sr_route = None
         raw_conv = await _fetch_history()
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
+        # Step 0: SubjectRouter — get curriculum-scoped query (Tier 0-3) + fetch history
+        _sr_scoped_query, _sr_route = await build_search_scope(
+            msg.message,
+            board_name=ctx_board_name,
+            class_name=ctx_class_name,
+            subject_name=msg.subject_name or "",
+            embedder=_syllabus_embedder,
+        )
         # Step 1: curriculum-scoped base + open-web polish, alongside history
         web_results, raw_conv = await asyncio.gather(
             web_search_with_fallback(
@@ -5873,6 +5941,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 board_name=ctx_board_name,
                 class_name=ctx_class_name,
                 subject_name=msg.subject_name or "",
+                scoped_query=_sr_scoped_query,
             ),
             _fetch_history(),
         )
@@ -5951,6 +6020,16 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     rag_chapter_name = (_rag_chaps[0].get("title", "") if _rag_chaps else None) or msg.chapter_name or None
     full_response = []
 
+    # Pull router classification for metadata (prefer router chapter over RAG chapter)
+    _router_subject = getattr(_sr_route, "subject", None) if _sr_route else None
+    _router_chapter = getattr(_sr_route, "chapter_hint", None) if _sr_route else None
+    _router_board   = getattr(_sr_route, "board", None) if _sr_route else None
+    # Use router chapter as rag_chapter_name when RAG was not the source
+    if _router_chapter and not rag_chapter_name:
+        rag_chapter_name = _router_chapter
+    if _router_subject and not rag_subject_name:
+        rag_subject_name = _router_subject
+
     # Derive sources from the same RAG context sent to the LLM (no mismatch)
     rag_sources = _sources_from_rag_ctx(rag_ctx)
 
@@ -5959,7 +6038,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
             # Send RAG metadata with full quality info + subject link data + web search flag
-            yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'web_search_used': web_search_used})}\n\n"
+            yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used})}\n\n"
 
             # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
             cache_key = _cache_key(msg.message)
