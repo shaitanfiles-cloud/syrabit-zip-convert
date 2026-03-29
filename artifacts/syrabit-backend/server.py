@@ -12497,7 +12497,8 @@ async def confirm_syllabus_import(
             "created_nodes": link.created_nodes if link else [],
         })
 
-    _invalidate_content_cache()
+    _invalidate_content_cache("subjects")
+    _invalidate_content_cache("chapters")
     try:
         asyncio.create_task(_reseed_syllabus_embeddings())
     except Exception:
