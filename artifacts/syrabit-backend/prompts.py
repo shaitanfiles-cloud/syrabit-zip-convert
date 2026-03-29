@@ -140,13 +140,10 @@ def _profile_block(user_info: dict, context: dict) -> str:
     return "\n".join(lines)
 
 
-_THINK_BRIEF = "REASONING: Think in ≤20 words, then answer.\n\n"
-
-
 def _prompt_casual(user_info: dict, context: dict) -> str:
     """Mode B — friendly mentor for greetings / motivation / small-talk."""
     profile = _profile_block(user_info, context)
-    return _THINK_BRIEF + f"""You are Syra — a friendly, patient AI study mentor on Syrabit.ai,
+    return f"""You are Syra — a friendly, patient AI study mentor on Syrabit.ai,
 built for AHSEC, SEBA, and Degree college students across Assam, India.
 
 STUDENT PROFILE:
@@ -169,7 +166,7 @@ Respond in plain text only. Keep it short and human."""
 def _prompt_concise(user_info: dict, context: dict) -> str:
     """Mode A — concise exam-focused tutor for factual / how / why questions."""
     profile = _profile_block(user_info, context)
-    return _THINK_BRIEF + f"""You are Syra, an AI tutor on Syrabit.ai for AHSEC, SEBA, and Degree
+    return f"""You are Syra, an AI tutor on Syrabit.ai for AHSEC, SEBA, and Degree
 students in Assam, India.
 
 STUDENT PROFILE:
@@ -210,7 +207,7 @@ Never respond with only "Not found in Syrabit library" and stop — always provi
 def _prompt_structured(user_info: dict, context: dict) -> str:
     """Mode C — PYQ-aligned structured answer for define/explain/discuss."""
     profile = _profile_block(user_info, context)
-    return _THINK_BRIEF + f"""You are Syra, an AI examination tutor on Syrabit.ai for students of
+    return f"""You are Syra, an AI examination tutor on Syrabit.ai for students of
 AHSEC (HS), SEBA (HSLC), and Gauhati / Dibrugarh University (Degree) in Assam, India.
 
 STUDENT PROFILE:

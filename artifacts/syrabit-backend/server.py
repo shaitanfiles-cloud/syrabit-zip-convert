@@ -2488,8 +2488,9 @@ async def web_search_fallback(query: str, num_results: int = 5) -> list:
     Perform a DuckDuckGo web search and return top result snippets.
     Returns a list of dicts with keys: title, url, snippet.
     Falls back gracefully to an empty list on any error.
+    Runs the blocking DuckDuckGo I/O in a thread pool with a 3-second timeout.
     """
-    try:
+    def _blocking_search():
         from duckduckgo_search import DDGS
         results = []
         with DDGS() as ddgs:
@@ -2499,15 +2500,26 @@ async def web_search_fallback(query: str, num_results: int = 5) -> list:
                     "url":     r.get("href", ""),
                     "snippet": r.get("body", ""),
                 })
+        return results
+
+    try:
+        loop = asyncio.get_running_loop()
+        results = await asyncio.wait_for(
+            loop.run_in_executor(None, _blocking_search),
+            timeout=3.0,
+        )
         logger.info(f"Web search fallback: {len(results)} results for query: {query[:60]}")
         return results
+    except asyncio.TimeoutError:
+        logger.warning(f"Web search fallback timed out for query: {query[:60]}")
+        return []
     except Exception as exc:
         logger.warning(f"Web search fallback failed: {exc}")
         return []
 
 
-_HISTORY_TOKEN_BUDGET = 3000  # max estimated tokens kept in conversation history
-_HISTORY_MAX_TURNS = 20       # max message pairs regardless of token budget
+_HISTORY_TOKEN_BUDGET = 1500  # max estimated tokens kept in conversation history
+_HISTORY_MAX_TURNS = 8        # max message pairs regardless of token budget
 
 
 def _trim_history(messages: list, token_budget: int = _HISTORY_TOKEN_BUDGET, max_turns: int = _HISTORY_MAX_TURNS) -> list:
