@@ -229,6 +229,9 @@ def _invalidate_conv_cache(conv_id: str, uid: str):
 import hashlib as _hashlib
 _rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=600)
 
+# Vector RAG cache — 300-second TTL (Gemini embed API calls are expensive to re-run)
+_vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=300)
+
 # Syllabus cache — 30-minute TTL; syllabi almost never change between requests
 _syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=1800)
 
@@ -237,6 +240,10 @@ def _syllabus_cache_key(board_id: str, class_id: str, stream_id: Optional[str], 
 
 def _rag_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str]) -> str:
     raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}"
+    return _hashlib.md5(raw.encode()).hexdigest()
+
+def _vector_rag_cache_key(query: str, subject_id: Optional[str], top_k: int) -> str:
+    raw = f"{query.strip().lower()}|{subject_id or ''}|{top_k}"
     return _hashlib.md5(raw.encode()).hexdigest()
 
 REDIS_AI_CACHE_TTL = 3600
@@ -707,6 +714,17 @@ async def lifespan(app):
             await db.seo_pages.create_index("status")
             await db.seo_pages.create_index([("board_slug", 1), ("class_slug", 1), ("subject_slug", 1), ("topic_slug", 1), ("page_type", 1)])
             await db.seo_pages.create_index([("generated_at", -1)])
+            # Full-text indexes — replace slow $regex content scans with scored $text queries
+            await db.seo_pages.create_index(
+                [("content", "text"), ("topic_title", "text"), ("title", "text")],
+                name="seo_pages_content_text",
+                weights={"topic_title": 10, "title": 8, "content": 1},
+            )
+            await db.chapters.create_index(
+                [("title", "text"), ("content", "text")],
+                name="chapters_content_text",
+                weights={"title": 10, "content": 1},
+            )
         except Exception:
             pass
 
@@ -1904,34 +1922,54 @@ async def _fetch_content_card(query: str, subject_id: Optional[str] = None, subj
         if not subject_id and subject_name:
             match_filter["subject_name"] = {"$regex": re.escape(subject_name), "$options": "i"}
 
-        match_filter["$or"] = [
-            {"content": {"$regex": kw_regex, "$options": "i"}},
-            {"topic_title": {"$regex": kw_regex, "$options": "i"}},
-            {"title": {"$regex": kw_regex, "$options": "i"}},
-        ]
-
-        # Fetch from seo_pages AND chapters (blog pages) in parallel for full coverage
+        # $text search — uses full-text index (weighted: topic_title×10, title×8, content×1)
+        # Falls back to $regex if text index not yet available on this collection
+        search_str = " ".join(keywords)
+        match_filter["$text"] = {"$search": search_str}
+        _text_proj = {
+            "_id": 0, "content": 1, "topic_title": 1, "subject_name": 1,
+            "chapter_title": 1, "page_type": 1, "slug": 1,
+            "score": {"$meta": "textScore"},
+        }
         seo_task = db.seo_pages.find(
-            match_filter,
-            {"_id": 0, "content": 1, "topic_title": 1, "subject_name": 1, "chapter_title": 1, "page_type": 1, "slug": 1},
-        ).limit(6).to_list(6)
+            match_filter, _text_proj,
+        ).sort([("score", {"$meta": "textScore"})]).limit(6).to_list(6)
 
-        # Also check published chapter blog pages for this subject
-        ch_filter: dict = {}
+        ch_filter: dict = {"content": {"$exists": True, "$ne": ""}}
         if subject_id:
             ch_filter["subject_id"] = subject_id
-        if keywords:
-            ch_filter["$or"] = [
+        ch_filter["$text"] = {"$search": search_str}
+        _ch_proj = {
+            "_id": 0, "title": 1, "content": 1, "subject_id": 1,
+            "score": {"$meta": "textScore"},
+        }
+        ch_task = db.chapters.find(
+            ch_filter, _ch_proj,
+        ).sort([("score", {"$meta": "textScore"})]).limit(4).to_list(4)
+
+        try:
+            pages, chapter_pages = await asyncio.gather(seo_task, ch_task)
+        except Exception:
+            # Text index not ready yet — fall back to $regex for this request
+            del match_filter["$text"]
+            match_filter["$or"] = [
+                {"content":     {"$regex": "|".join(keywords), "$options": "i"}},
+                {"topic_title": {"$regex": "|".join(keywords), "$options": "i"}},
+                {"title":       {"$regex": "|".join(keywords), "$options": "i"}},
+            ]
+            regex_proj = {"_id": 0, "content": 1, "topic_title": 1, "subject_name": 1,
+                          "chapter_title": 1, "page_type": 1, "slug": 1}
+            ch_filter_fb: dict = {"content": {"$exists": True, "$ne": ""}}
+            if subject_id:
+                ch_filter_fb["subject_id"] = subject_id
+            ch_filter_fb["$or"] = [
                 {"content": {"$regex": "|".join(keywords), "$options": "i"}},
                 {"title":   {"$regex": "|".join(keywords), "$options": "i"}},
             ]
-        ch_filter["content"] = {"$exists": True, "$ne": ""}
-        ch_task = db.chapters.find(
-            ch_filter,
-            {"_id": 0, "title": 1, "content": 1, "subject_id": 1},
-        ).limit(4).to_list(4)
-
-        pages, chapter_pages = await asyncio.gather(seo_task, ch_task)
+            pages, chapter_pages = await asyncio.gather(
+                db.seo_pages.find(match_filter, regex_proj).limit(6).to_list(6),
+                db.chapters.find(ch_filter_fb, {"_id": 0, "title": 1, "content": 1, "subject_id": 1}).limit(4).to_list(4),
+            )
 
         if not pages and not chapter_pages:
             return None
@@ -2047,7 +2085,14 @@ async def vector_rag_search(
     Returns top-k results sorted by cosine similarity with [PAGE: slug] metadata.
 
     Falls back to empty list if embedding fails or no vectors exist yet.
+    Caches results for 300 seconds — Gemini embed calls are expensive.
     """
+    # Fast path: in-memory cache (skips Gemini API call + 300-doc MongoDB fetch)
+    _vk = _vector_rag_cache_key(query, subject_id, top_k)
+    if _vk in _vector_rag_cache:
+        logger.info(f"Vector RAG cache hit: query='{query[:40]}'")
+        return _vector_rag_cache[_vk]
+
     try:
         query_vec = await vertex_services.embed_text(query, task_type="RETRIEVAL_QUERY")
         if not query_vec:
@@ -2106,12 +2151,15 @@ async def vector_rag_search(
                 })
 
         scored.sort(key=lambda x: -x["score"])
-        top = scored[:top_k]
+        # 0.25 cosine threshold — filter out low-relevance noise before sending to AI
+        top = [r for r in scored if r["score"] >= 0.25][:top_k]
         logger.info(
             f"Vector RAG: query='{query[:40]}' → {len(top)} results "
-            f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}])" if top else
-            f"Vector RAG: query='{query[:40]}' → no results"
+            f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}], threshold=0.25)" if top else
+            f"Vector RAG: query='{query[:40]}' → no results above threshold (0.25)"
         )
+        # Store in cache — future identical/similar queries skip the embed API call
+        _vector_rag_cache[_vk] = top
         return top
     except Exception as e:
         logger.error(f"vector_rag_search failed: {e}")
