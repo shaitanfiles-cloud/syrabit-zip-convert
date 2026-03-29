@@ -711,6 +711,27 @@ async def lifespan(app):
             pass
 
         logger.info("MongoDB indexes ensured")
+
+        # Seed Day-to-Day Analytics roadmap item if it doesn't exist
+        try:
+            existing = await db.roadmap.find_one({"title": "Day-to-Day Analytics"})
+            if not existing:
+                await db.roadmap.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "title": "Day-to-Day Analytics",
+                    "description": "Per-day admin analytics panel with date-range picker, metric summary cards (visitors, page views, signups, messages, AI interactions, bounce rate, avg session duration), and multi-series line/bar charts.",
+                    "phase": "Analytics & Growth",
+                    "status": "in-progress",
+                    "effort": "medium",
+                    "impact": "high",
+                    "priority": "high",
+                    "category": "analytics",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                })
+                logger.info("Roadmap: seeded 'Day-to-Day Analytics' item")
+        except Exception as _re:
+            logger.warning(f"Roadmap seed skipped: {_re}")
+
     except Exception as e:
         logger.warning(f"Seeding/indexing skipped (MongoDB may not be ready): {e}")
     # QA engine indexes (deferred import — qa_engine registered after this definition)
@@ -10259,6 +10280,163 @@ async def admin_analytics_predictor(admin: dict = Depends(get_admin_user)):
         "signups_this_month": users_this_month,
         "signups_last_month": users_last_month,
     }
+
+
+@api.get("/admin/analytics/daily")
+async def admin_analytics_daily(
+    days: int = 30,
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Per-day analytics for the Daily Analytics panel.
+    Returns visitors, page_views, signups, messages, and AI interactions
+    for each day in the requested range (default: last 30 days).
+    Prefers GA4 for visitor/page-view data and falls back to MongoDB.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Build a lookup dict indexed by YYYY-MM-DD for easy merging
+    day_keys = [(now - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d") for i in range(days)]
+    daily: dict[str, dict] = {
+        d: {
+            "date": d,
+            "visitors": 0,
+            "page_views": 0,
+            "signups": 0,
+            "messages": 0,
+            "ai_interactions": 0,
+            "sessions": 0,
+            "bounce_rate": None,
+            "avg_session_duration": None,
+        }
+        for d in day_keys
+    }
+
+    # ── 1. Visitor / page-view data ──────────────────────────────────────────
+    # Try GA4 first
+    try:
+        ga4_resp = await ga4_client.run_report(
+            dimensions=["date"],
+            metrics=["activeUsers", "screenPageViews", "sessions", "bounceRate", "averageSessionDuration"],
+            date_ranges=[{"startDate": f"{days}daysAgo", "endDate": "today"}],
+            order_bys=[{"dimension": {"dimensionName": "date"}}],
+            limit=days + 1,
+        )
+        if ga4_resp and ga4_resp.get("rows"):
+            for row in ga4_resp["rows"]:
+                raw_date = row["dimensionValues"][0]["value"]
+                d = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
+                if d in daily:
+                    mv = row["metricValues"]
+                    daily[d]["visitors"] = int(mv[0]["value"]) if mv[0]["value"] else 0
+                    daily[d]["page_views"] = int(mv[1]["value"]) if mv[1]["value"] else 0
+                    daily[d]["sessions"] = int(mv[2]["value"]) if mv[2]["value"] else 0
+                    try:
+                        daily[d]["bounce_rate"] = round(float(mv[3]["value"]) * 100, 1)
+                    except Exception:
+                        pass
+                    try:
+                        daily[d]["avg_session_duration"] = round(float(mv[4]["value"]), 1)
+                    except Exception:
+                        pass
+    except Exception:
+        # Fall back to MongoDB page_views collection
+        try:
+            cutoff_str = day_keys[0]
+            pipeline = [
+                {"$match": {"date": {"$gte": cutoff_str}}},
+                {
+                    "$group": {
+                        "_id": "$date",
+                        "visitors": {"$addToSet": "$visitor_id"},
+                        "page_views": {"$sum": 1},
+                    }
+                },
+            ]
+            rows = await db.page_views.aggregate(pipeline).to_list(days + 5)
+            for row in rows:
+                d = row["_id"]
+                if d in daily:
+                    daily[d]["visitors"] = len(row["visitors"])
+                    daily[d]["page_views"] = row["page_views"]
+        except Exception:
+            pass
+
+    # ── 2. Signups (Supabase users by created_at date) ───────────────────────
+    try:
+        users = await supa_list_users()
+        for u in users:
+            d = (u.get("created_at") or "")[:10]
+            if d in daily:
+                daily[d]["signups"] += 1
+    except Exception:
+        pass
+
+    # ── 3. Messages (conversations collection) ──────────────────────────────
+    try:
+        cutoff_dt = (now - timedelta(days=days)).isoformat()
+        pipeline_msgs = [
+            {"$match": {"created_at": {"$gte": cutoff_dt}}},
+            {"$group": {"_id": {"$substr": ["$created_at", 0, 10]}, "count": {"$sum": "$message_count"}}},
+        ]
+        msg_rows = await db.conversations.aggregate(pipeline_msgs).to_list(days + 5)
+        for row in msg_rows:
+            d = row["_id"]
+            if d in daily:
+                daily[d]["messages"] = row["count"] or 0
+    except Exception:
+        pass
+
+    # ── 4. AI interactions (analytics events of type ask_ai_click) ───────────
+    try:
+        cutoff_dt = (now - timedelta(days=days)).isoformat()
+        pipeline_ai = [
+            {"$match": {"type": "ask_ai_click", "created_at": {"$gte": cutoff_dt}}},
+            {"$group": {"_id": {"$substr": ["$created_at", 0, 10]}, "count": {"$sum": 1}}},
+        ]
+        ai_rows = await db.analytics.aggregate(pipeline_ai).to_list(days + 5)
+        for row in ai_rows:
+            d = row["_id"]
+            if d in daily:
+                daily[d]["ai_interactions"] = row["count"]
+    except Exception:
+        pass
+
+    result = sorted(daily.values(), key=lambda x: x["date"])
+
+    # Compute day-over-day deltas for summary cards (last day vs second-to-last)
+    def pct_change(a, b):
+        if b == 0:
+            return None
+        return round((a - b) / b * 100, 1)
+
+    today_data = result[-1] if result else {}
+    prev_data = result[-2] if len(result) >= 2 else {}
+
+    summary = {
+        "visitors": {
+            "today": today_data.get("visitors", 0),
+            "change_pct": pct_change(today_data.get("visitors", 0), prev_data.get("visitors", 0)),
+        },
+        "page_views": {
+            "today": today_data.get("page_views", 0),
+            "change_pct": pct_change(today_data.get("page_views", 0), prev_data.get("page_views", 0)),
+        },
+        "signups": {
+            "today": today_data.get("signups", 0),
+            "change_pct": pct_change(today_data.get("signups", 0), prev_data.get("signups", 0)),
+        },
+        "messages": {
+            "today": today_data.get("messages", 0),
+            "change_pct": pct_change(today_data.get("messages", 0), prev_data.get("messages", 0)),
+        },
+        "ai_interactions": {
+            "today": today_data.get("ai_interactions", 0),
+            "change_pct": pct_change(today_data.get("ai_interactions", 0), prev_data.get("ai_interactions", 0)),
+        },
+    }
+
+    return {"daily": result, "summary": summary, "days": days}
 
 
 # ─────────────────────────────────────────────
