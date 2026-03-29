@@ -18,7 +18,6 @@ import { toast } from 'sonner';
 // ── Section components ────────────────────────────────────────────────────────
 import AdminDashboard        from '@/components/admin/AdminDashboard';
 import AdminRoadmap          from '@/components/admin/AdminRoadmap';
-import BlogPublishWizard     from '@/components/admin/BlogPublishWizard';
 import AdminContentHub       from '@/components/admin/AdminContentHub';
 import AdminUsers            from '@/components/admin/AdminUsers';
 import AdminConversations    from '@/components/admin/AdminConversations';
@@ -39,7 +38,6 @@ import AdminVertexPanel      from '@/components/admin/AdminVertexPanel';
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
   { id: 'roadmap',       icon: GitBranch,       label: 'Roadmap',           group: 'main'     },
-  { id: 'content',       icon: BookOpen,        label: 'Blog Publisher',    group: 'content'  },
   { id: 'contenthub',    icon: Layers,          label: 'Content Editor',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
   { id: 'vertex',        icon: Cpu,             label: 'Vertex AI Studio',  group: 'content'  },
@@ -71,7 +69,6 @@ const GROUPS = ['main', 'content', 'audience', 'insights', 'comms', 'system'];
 const SECTION_COMPONENTS = {
   dashboard:     AdminDashboard,
   roadmap:       AdminRoadmap,
-  content:       BlogPublishWizard,
   contenthub:    AdminContentHub,
   seomanager:    AdminSeoManager,
   users:         AdminUsers,
@@ -318,7 +315,7 @@ export default function AdminPage() {
         </header>
 
         {/* Section content */}
-        <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'content' || activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
+        <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
           <ActiveComponent
             adminToken={adminToken}
             adminName={adminName}

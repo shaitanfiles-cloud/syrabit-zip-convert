@@ -18,7 +18,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   FolderTree, PenTool, Sparkles, FileText, ArrowRight,
-  Loader2, BookMarked, ChevronDown,
+  Loader2, BookMarked, ChevronDown, Globe,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -28,23 +28,25 @@ import AdminContentEditor    from './AdminContentEditor';
 import AdminCmsDocEditor     from './AdminCmsDocEditor';
 import AdminContentStudio    from './AdminContentStudio';
 import AdminPYQManager       from './AdminPYQManager';
+import BlogPublishWizard     from './BlogPublishWizard';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 const TABS = [
-  { id: 'syllabus', label: 'Syllabus',       icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
-  { id: 'pyq',      label: 'PYQ',            icon: BookMarked,  color: 'amber',   desc: 'Upload & manage previous year question papers' },
-  { id: 'editor',   label: 'Content Editor', icon: PenTool,     color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
-  { id: 'studio',   label: 'AI Studio',      icon: Sparkles,    color: 'rose',    desc: 'Generate structured content blocks with AI' },
-  { id: 'cms',      label: 'CMS / Docs',     icon: FileText,    color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
+  { id: 'syllabus', label: 'Syllabus',        icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
+  { id: 'pyq',      label: 'PYQ',             icon: BookMarked,  color: 'amber',   desc: 'Upload & manage previous year question papers' },
+  { id: 'editor',   label: 'Content Editor',  icon: PenTool,     color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
+  { id: 'studio',   label: 'AI Studio',       icon: Sparkles,    color: 'rose',    desc: 'Generate structured content blocks with AI' },
+  { id: 'cms',      label: 'CMS / Docs',      icon: FileText,    color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
+  { id: 'blog',     label: 'Blog Publisher',  icon: Globe,       color: 'sky',     desc: 'SEO & GEO-rich 5-step blog publish wizard' },
 ];
 
 const FLOW = [
-  { label: 'Syllabus',  sub: 'Import structure',   tab: 'syllabus', arrow: true  },
-  { label: 'PYQ',       sub: 'Upload questions',   tab: 'pyq',      arrow: true  },
-  { label: 'Editor',    sub: 'Write content',      tab: 'editor',   arrow: true  },
-  { label: 'AI Studio', sub: 'Generate & enrich',  tab: 'studio',   arrow: true  },
-  { label: 'CMS',       sub: 'Publish & ship',     tab: 'cms',      arrow: false },
+  { label: 'Syllabus',      sub: 'Import structure',   tab: 'syllabus', arrow: true  },
+  { label: 'PYQ',           sub: 'Upload questions',   tab: 'pyq',      arrow: true  },
+  { label: 'Editor',        sub: 'Write content',      tab: 'editor',   arrow: true  },
+  { label: 'AI Studio',     sub: 'Generate & enrich',  tab: 'studio',   arrow: true  },
+  { label: 'Blog Publisher', sub: 'SEO & publish',     tab: 'blog',     arrow: false },
 ];
 
 const COLOR_MAP = {
@@ -53,6 +55,7 @@ const COLOR_MAP = {
   amber:   { active: 'border-amber-500 text-amber-400',    dot: 'bg-amber-500',  badge: 'bg-amber-500/20 text-amber-300'  },
   emerald: { active: 'border-emerald-500 text-emerald-400',dot: 'bg-emerald-500',badge: 'bg-emerald-500/20 text-emerald-300'},
   rose:    { active: 'border-rose-500 text-rose-400',      dot: 'bg-rose-500',   badge: 'bg-rose-500/20 text-rose-300'    },
+  sky:     { active: 'border-sky-500 text-sky-400',        dot: 'bg-sky-500',    badge: 'bg-sky-500/20 text-sky-300'      },
 };
 
 const EMPTY_CTX = {
@@ -254,6 +257,16 @@ export default function AdminContentHub({ adminToken }) {
         {activeTab === 'cms' && (
           <div className="h-full overflow-hidden">
             <AdminCmsDocEditor
+              adminToken={adminToken}
+              onNavigate={navigate}
+              hubContext={hubContext}
+            />
+          </div>
+        )}
+
+        {activeTab === 'blog' && (
+          <div className="h-full overflow-y-auto">
+            <BlogPublishWizard
               adminToken={adminToken}
               onNavigate={navigate}
               hubContext={hubContext}
