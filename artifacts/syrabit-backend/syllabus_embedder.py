@@ -241,10 +241,32 @@ class SyllabusEmbedder:
             if inserted % 20 == 0:
                 logger.info(f"SyllabusEmbedder: {inserted} chapters embedded so far…")
 
-        # Create index for fast lookup by subject/chapter
-        await self._col.create_index("subject_id")
-        await self._col.create_index("chapter_id", unique=True)
-        await self._col.create_index("board")
+        # Create indexes — guard against duplicate-key / race on multi-worker startup
+        try:
+            await self._col.create_index("subject_id")
+            await self._col.create_index("board")
+        except Exception as ie:
+            logger.debug(f"SyllabusEmbedder: index (non-unique) error (ignored): {ie}")
+
+        try:
+            await self._col.create_index("chapter_id", unique=True)
+        except Exception as ie:
+            # Unique index failed — likely duplicate chapter_ids from previous run.
+            # Remove duplicates, keeping only the latest doc for each chapter_id.
+            logger.warning(f"SyllabusEmbedder: unique index failed ({ie}); deduplicating…")
+            try:
+                pipeline = [
+                    {"$group": {"_id": "$chapter_id", "ids": {"$push": "$_id"}, "count": {"$sum": 1}}},
+                    {"$match": {"count": {"$gt": 1}}},
+                ]
+                async for group in self._col.aggregate(pipeline):
+                    # Keep the first, delete the rest
+                    to_delete = group["ids"][1:]
+                    await self._col.delete_many({"_id": {"$in": to_delete}})
+                # Retry index creation
+                await self._col.create_index("chapter_id", unique=True)
+            except Exception as dedup_err:
+                logger.warning(f"SyllabusEmbedder: dedup fallback failed: {dedup_err}")
 
         logger.info(f"SyllabusEmbedder: seeding complete — {inserted} new chapters embedded")
         return inserted

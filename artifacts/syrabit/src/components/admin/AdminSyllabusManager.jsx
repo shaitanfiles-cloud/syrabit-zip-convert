@@ -315,26 +315,52 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
 
         {/* Results */}
         {pdfResult && pdfResult.success && (
-          <div className="rounded-lg border text-xs space-y-2" style={{ background: 'rgba(52,211,153,0.06)', borderColor: 'rgba(52,211,153,0.20)' }}>
+          <div className="rounded-lg border text-xs" style={{ background: 'rgba(52,211,153,0.06)', borderColor: 'rgba(52,211,153,0.20)' }}>
+            {/* Summary header */}
             <div className="p-3 border-b" style={{ borderColor: 'rgba(52,211,153,0.15)' }}>
               <p className="font-semibold text-emerald-400">
-                ✓ {pdfResult.subjects_extracted} subject{pdfResult.subjects_extracted !== 1 ? 's' : ''} extracted as {pdfResult.paper_type?.toUpperCase()}
+                ✓ {pdfResult.subjects_extracted} subject{pdfResult.subjects_extracted !== 1 ? 's' : ''} linked as {pdfResult.paper_type?.toUpperCase()}
               </p>
-              <p className="text-white/40 mt-0.5 font-mono text-[10px]">{pdfResult.filename} · import #{pdfResult.import_id?.slice(-6)}</p>
+              <p className="text-white/40 mt-0.5 font-mono text-[10px]">
+                {pdfResult.filename} · import #{pdfResult.import_id?.slice(-6)}
+              </p>
             </div>
-            <div className="px-3 pb-3 space-y-1.5">
+            {/* Per-subject rows */}
+            <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
               {(pdfResult.subjects || []).map((s, i) => (
-                <div key={i} className="flex items-start justify-between gap-3 py-1 border-b last:border-0" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-                  <div>
-                    <p className="font-semibold text-white">{s.subject_name}</p>
-                    <p className="text-white/40 text-[10px]">
-                      {[s.board_name, s.class_year, s.semester].filter(Boolean).join(' · ')}
+                <div key={i} className="p-3 space-y-1.5">
+                  {/* Top row */}
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-white text-[11px]">{s.subject_name}</p>
+                      <p className="text-white/40 text-[10px] mt-0.5">
+                        {[s.board_name, s.class_name, s.semester].filter(Boolean).join(' · ')}
+                        {s.course_code ? ` · ${s.course_code}` : ''}
+                        {s.credits ? ` · ${s.credits} cr` : ''}
+                      </p>
+                    </div>
+                    <div className="text-right text-white/40 text-[10px] flex-shrink-0">
+                      <p>{s.chapters_count} chapters</p>
+                      <p>{s.topics_count} topics</p>
+                    </div>
+                  </div>
+                  {/* Streams auto-linked */}
+                  {s.streams?.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {s.streams.map((st, j) => (
+                        <span key={j} className="px-1.5 py-0.5 rounded text-[9px] font-semibold"
+                          style={{ background: 'rgba(99,102,241,0.20)', color: '#a5b4fc' }}>
+                          {st.stream_name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {/* Created nodes */}
+                  {s.created_nodes?.length > 0 && (
+                    <p className="text-emerald-400/70 text-[9px]">
+                      + {s.created_nodes.join(', ')}
                     </p>
-                  </div>
-                  <div className="text-right text-white/40 text-[10px] flex-shrink-0">
-                    <p>{s.chapters_count} ch.</p>
-                    <p>{s.topics_count} topics</p>
-                  </div>
+                  )}
                 </div>
               ))}
             </div>

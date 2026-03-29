@@ -11854,29 +11854,35 @@ async def delete_notification_trigger(trigger_id: str, admin: dict = Depends(get
 _VALID_PAPER_TYPES = {"major", "minor", "mdc", "vac"}
 
 _SYLLABUS_EXTRACT_PROMPT = """
-You are parsing an official university/board syllabus PDF for AssamBoard students in Assam, India.
+You are parsing an official university/board syllabus PDF for students in Assam, India.
 
-The PDF may contain ONE or MULTIPLE subjects. For EACH subject you find, return a JSON object.
+The PDF may contain ONE or MULTIPLE subjects (one subject per page/section). Extract EVERY subject found.
 
 Paper type for ALL subjects in this PDF: {paper_type}
 
-Extract and return a JSON ARRAY where each element is:
+For EACH subject, return one JSON object in this exact schema:
 {{
-  "board": "<board or university name, e.g. Gauhati University, Dibrugarh University, AHSEC, SEBA>",
-  "class_year": "<e.g. 1st Year, 2nd Year, HS 1st Year, Class 10>",
-  "semester": "<e.g. Semester 1, Semester 2, or empty string if annual>",
-  "subject_name": "<exact subject name>",
+  "board": "<College / University / Board name exactly as stated, e.g. 'Darrang College (Autonomous)', 'Gauhati University', 'AHSEC'>",
+  "class_year": "<Year of study — e.g. '1st Year', '2nd Year', 'HS 1st Year', 'Class 10'>",
+  "semester": "<Semester label — e.g. 'Semester 1', 'Semester 2', '' if annual/not stated>",
+  "semester_number": <integer 1-8 if stated, else 0>,
+  "subject_name": "<Exact subject/course name as printed>",
+  "course_code": "<Course code if printed, e.g. 'VAC-01012', else ''>",
+  "credits": <integer credits, else 0>,
   "paper_type": "{paper_type}",
-  "chapters": ["<Chapter 1 title>", "<Chapter 2 title>", ...],
-  "topics": ["<key topic 1>", "<key topic 2>", ...],
-  "guidelines": "<any learning objectives or exam guidelines found, or empty string>"
+  "stream_target": "<Who this course is for — one of: 'All', 'Commerce', 'Arts', 'Science', 'Arts & Science', 'Commerce & Arts'>",
+  "chapters": ["<Unit I or Chapter 1 title>", "<Unit II title>", ...],
+  "topics": ["<Key topic or subtopic 1>", "<Key topic 2>", ...],
+  "guidelines": "<Course objectives / outcomes / learning goals as a single string, or ''>"
 }}
 
 Rules:
-- If the board/university name is not stated, infer it from context (Assam universities: Gauhati University, Dibrugarh University, Bodoland University; or AHSEC, SEBA).
-- Chapters = numbered units or chapters listed in the syllabus.
-- Topics = key learning outcomes or subtopics within chapters.
-- Return ONLY valid JSON. No markdown, no explanations.
+- Extract EVERY subject/course in the PDF — do NOT skip any.
+- chapters = the numbered units or chapters listed in the detailed syllabus table.
+- topics = key terms, subtopics, or bullet points within the units (max 20 per subject).
+- stream_target: if the PDF says "For all (Arts+Commerce+Science)" → "All"; "For Commerce" → "Commerce"; "For Arts & Science" → "Arts & Science".
+- If semester is not stated but semester number can be inferred from the course code (e.g. VAC-01012 → Semester 1), use it.
+- Return ONLY a valid JSON array. No markdown fences, no explanations.
 """.strip()
 
 
@@ -11964,51 +11970,101 @@ async def syllabus_import_pdf(
     if not extracted:
         raise HTTPException(status_code=422, detail="No syllabus subjects found in PDF — check PDF content")
 
-    # ── Persist each extracted subject to syllabus_pdf_imports collection ─────
+    # ── Auto-link each subject into the board/class/stream/subject hierarchy ──
+    from syllabus_linker import SyllabusLinker, SyllabusEntry  # type: ignore
+    linker = SyllabusLinker(db)
+
     now_iso = datetime.now(timezone.utc).isoformat()
     import_id = str(uuid.uuid4())
     saved_subjects = []
 
-    for entry in extracted:
-        if not isinstance(entry, dict):
+    for entry_raw in extracted:
+        if not isinstance(entry_raw, dict):
             continue
-        subject_name = (entry.get("subject_name") or entry.get("subject") or "").strip()
+        subject_name = (entry_raw.get("subject_name") or entry_raw.get("subject") or "").strip()
         if not subject_name:
             continue
 
-        doc = {
+        sem_raw = entry_raw.get("semester", "") or ""
+        # Prefer explicit semester_number from Gemini if semester string is missing
+        sem_num = entry_raw.get("semester_number", 0) or 0
+        if sem_num and not sem_raw:
+            sem_raw = f"Semester {sem_num}"
+
+        entry = SyllabusEntry(
+            board_name   = (entry_raw.get("board") or "").strip(),
+            class_year   = (entry_raw.get("class_year") or "").strip(),
+            semester     = sem_raw.strip(),
+            subject_name = subject_name,
+            paper_type   = paper_type,
+            stream_hint  = (entry_raw.get("stream_target") or "All").strip(),
+            chapters     = [c for c in entry_raw.get("chapters", []) if isinstance(c, str)],
+            topics       = [t for t in entry_raw.get("topics", []) if isinstance(t, str)][:20],
+            guidelines   = (entry_raw.get("guidelines") or "").strip(),
+            course_code  = (entry_raw.get("course_code") or "").strip(),
+            credits      = int(entry_raw.get("credits") or 0),
+        )
+
+        try:
+            link = await linker.link(entry)
+        except Exception as link_err:
+            logger.warning(f"SyllabusLinker failed for {subject_name}: {link_err}")
+            link = None
+
+        # Also save raw import record for auditability
+        raw_doc = {
             "import_id": import_id,
             "filename": file.filename,
             "paper_type": paper_type,
-            "board_name": entry.get("board", "").strip(),
-            "class_year": entry.get("class_year", "").strip(),
-            "semester": entry.get("semester", "").strip(),
+            "board_name": entry.board_name,
+            "class_year": entry.class_year,
+            "semester": entry.semester,
             "subject_name": subject_name,
-            "chapters": entry.get("chapters", []),
-            "topics": entry.get("topics", []),
-            "guidelines": entry.get("guidelines", "").strip(),
-            # Optional DB links when admin passes them
-            "board_id": board_id or None,
-            "class_id": class_id or None,
-            "stream_id": stream_id or None,
-            "status": "imported",
+            "course_code": entry.course_code,
+            "credits": entry.credits,
+            "stream_target": entry.stream_hint,
+            "chapters": entry.chapters,
+            "topics": entry.topics,
+            "guidelines": entry.guidelines,
+            # Resolved DB IDs
+            "linked_board_id":   link.board_id   if link else (board_id or None),
+            "linked_class_id":   link.class_id   if link else (class_id or None),
+            "linked_stream_ids": [s["stream_id"] for s in link.streams] if link else [],
+            "linked_subject_ids": link.subject_ids if link else [],
+            "created_nodes":     link.created_nodes if link else [],
+            "status": "linked" if link else "imported",
             "source": "pdf_import",
             "created_at": now_iso,
         }
-        await db.syllabus_pdf_imports.insert_one(doc)
+        await db.syllabus_pdf_imports.insert_one(raw_doc)
+
         saved_subjects.append({
             "subject_name": subject_name,
-            "board_name": doc["board_name"],
-            "class_year": doc["class_year"],
-            "semester": doc["semester"],
+            "board_name": link.board_name if link else entry.board_name,
+            "class_name": link.class_name if link else entry.class_year,
+            "semester": entry.semester,
+            "stream_target": entry.stream_hint,
             "paper_type": paper_type,
-            "chapters_count": len(doc["chapters"]),
-            "topics_count": len(doc["topics"]),
+            "credits": entry.credits,
+            "course_code": entry.course_code,
+            "chapters_count": len(entry.chapters),
+            "topics_count": len(entry.topics),
+            "streams": link.streams if link else [],
+            "subject_ids": link.subject_ids if link else [],
+            "created_nodes": link.created_nodes if link else [],
         })
 
-    # Ensure index for fast lookup
-    await db.syllabus_pdf_imports.create_index([("import_id", 1), ("paper_type", 1)])
-    await db.syllabus_pdf_imports.create_index("subject_name")
+    # Ensure indexes
+    try:
+        await db.syllabus_pdf_imports.create_index([("import_id", 1), ("paper_type", 1)])
+        await db.syllabus_pdf_imports.create_index("subject_name")
+        await db.syllabus_pdf_imports.create_index("linked_board_id")
+    except Exception:
+        pass
+
+    # Re-seed new chapter embeddings in the background
+    if _syllabus_embedder is not None:
+        asyncio.create_task(_seed_syllabus_embeddings())
 
     return {
         "success": True,
