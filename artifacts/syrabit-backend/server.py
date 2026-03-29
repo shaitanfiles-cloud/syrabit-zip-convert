@@ -11928,11 +11928,14 @@ async def syllabus_import_pdf(
     b64_pdf = _b64.b64encode(pdf_bytes).decode()
     prompt = _SYLLABUS_EXTRACT_PROMPT.format(paper_type=paper_type)
 
+    logger.info(f"[pdf_import] START paper_type={paper_type} size={len(pdf_bytes)}B gemini_ok={vertex_services._ok()}")
+
     # ── Try Gemini Vision first (PDF inline_data) ─────────────────────────────
     extracted: list = []
     _used_gemini = False
     try:
         if not vertex_services._ok():
+            logger.warning("[pdf_import] Gemini not available — going straight to text fallback")
             raise ValueError("Gemini unavailable — skipping to text extraction fallback")
         url = vertex_services._gen_url(vertex_services._PRO_MODEL)
         headers = await vertex_services._auth_headers()
@@ -11956,8 +11959,9 @@ async def syllabus_import_pdf(
             if not isinstance(extracted, list):
                 extracted = [extracted]
             _used_gemini = True
+            logger.info(f"[pdf_import] Gemini Vision OK — extracted {len(extracted)} subjects")
     except Exception as gemini_err:
-        logger.warning(f"Gemini Vision PDF extract failed: {gemini_err}")
+        logger.warning(f"[pdf_import] Gemini Vision failed: {gemini_err}")
         # ── Fallback: extract raw text via PyPDF2, send to LLM pool ──────────
         try:
             import io
@@ -11969,6 +11973,7 @@ async def syllabus_import_pdf(
             pages_text = "\n".join(
                 (p.extract_text() or "") for p in reader.pages[:40]
             )
+            logger.info(f"[pdf_import] PyPDF2 extracted {len(pages_text)} chars from {len(reader.pages)} pages")
             if not pages_text.strip():
                 raise ValueError(
                     "Could not extract text from PDF — the file may be a scanned image. "
@@ -11978,18 +11983,22 @@ async def syllabus_import_pdf(
                 prompt + "\n\nSYLLABUS TEXT:\n" + pages_text[:12000] +
                 "\n\nReturn ONLY valid JSON array."
             )
+            logger.info("[pdf_import] Sending to LLM fallback (Groq/Fireworks)…")
             raw_slm = await _call_llm_raw(
                 [{"role": "user", "content": slm_prompt}],
                 max_tokens=4096,
             )
+            logger.info(f"[pdf_import] LLM raw response length={len(raw_slm or '')}")
             cleaned = re.sub(r'^```(?:json)?\s*', '', (raw_slm or "").strip())
             cleaned = re.sub(r'\s*```$', '', cleaned).strip()
             extracted = json.loads(cleaned)
             if not isinstance(extracted, list):
                 extracted = [extracted]
+            logger.info(f"[pdf_import] LLM fallback OK — extracted {len(extracted)} subjects")
         except HTTPException:
             raise
         except Exception as fallback_err:
+            logger.error(f"[pdf_import] Fallback also failed: {fallback_err}", exc_info=True)
             raise HTTPException(
                 status_code=500,
                 detail=f"PDF extraction failed: {fallback_err}"
