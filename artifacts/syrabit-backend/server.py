@@ -2273,6 +2273,10 @@ async def rag_search(
             "quality":  quality,
         }
         _rag_cache[_rk] = result
+        try:
+            _record_rag_event(quality, 0, query)
+        except Exception:
+            pass
         return result
 
     except Exception as e:
@@ -5225,6 +5229,7 @@ async def _resolve_subject_context(subject_id: str) -> dict:
         return {}
 @api.post("/ai/chat")
 async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
+    _chat_t0 = _time_mod.time()
     credits_info = await get_user_credits(user)
     if credits_info["remaining"] <= 0:
         raise HTTPException(status_code=402, detail=f"Credit limit reached ({credits_info['limit']} lifetime credits). Upgrade your plan for more.")
@@ -5408,6 +5413,11 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         conversation_id=conv_id,
     ))
 
+    try:
+        _record_chat_latency((_time_mod.time() - _chat_t0) * 1000)
+    except Exception:
+        pass
+
     return {
         "answer": answer,
         "conversation_id": conv_id,
@@ -5475,6 +5485,7 @@ async def _persist_chat_turn(
 
 @api.post("/ai/chat/stream")
 async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
+    _stream_t0 = _time_mod.time()
     credits_info = await get_user_credits(user)
     if credits_info["remaining"] <= 0:
         raise HTTPException(status_code=402, detail=f"Credit limit reached ({credits_info['limit']} lifetime credits). Upgrade your plan for more.")
@@ -5677,6 +5688,11 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             }
             yield f"data: {json.dumps(done_payload)}\n\n"
             yield "data: [DONE]\n\n"
+
+            try:
+                _record_chat_latency((_time_mod.time() - _stream_t0) * 1000)
+            except Exception:
+                pass
 
             # Fire background: save messages (credit already deducted before stream started)
             if answer:
@@ -11327,12 +11343,360 @@ async def admin_vector_stats(admin: dict = Depends(get_admin_user)):
         "content": {"$exists": True, "$ne": ""},
         "embedding": {"$exists": True},
     })
+    total = total_pages + total_chapters
+    embedded = embedded_pages + embedded_chapters
     return {
         "pages": {"total": total_pages, "embedded": embedded_pages,
                   "coverage_pct": round(embedded_pages / max(total_pages, 1) * 100, 1)},
         "chapters": {"total": total_chapters, "embedded": embedded_chapters,
                      "coverage_pct": round(embedded_chapters / max(total_chapters, 1) * 100, 1)},
+        "overall_coverage_pct": round(embedded / max(total, 1) * 100, 1),
+        "total": total,
+        "embedded": embedded,
     }
+
+
+# ─────────────────────────────────────────────
+# PHASE G: RAG HEALTH & REVENUE INTELLIGENCE ENDPOINTS
+# ─────────────────────────────────────────────
+
+# ── In-memory telemetry ring buffers (process-lifetime) ──────────────────────
+_rag_telemetry: list = []          # {"ts", "quality", "latency_ms", "query"}
+_RAG_TELEM_MAX = 20_000
+_chat_latencies: list = []         # {"ts", "latency_ms"}
+_LATENCY_MAX = 10_000
+
+def _record_rag_event(quality: str, latency_ms: float, query: str = ""):
+    """Called from the RAG pipeline to log each retrieval attempt."""
+    _rag_telemetry.append({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "quality": quality,       # "high" | "medium" | "none"
+        "latency_ms": round(latency_ms, 1),
+        "query": query[:200],
+    })
+    if len(_rag_telemetry) > _RAG_TELEM_MAX:
+        _rag_telemetry.pop(0)
+
+def _record_chat_latency(latency_ms: float):
+    """Called after each chat request completes to track P95."""
+    _chat_latencies.append({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "latency_ms": round(latency_ms, 1),
+    })
+    if len(_chat_latencies) > _LATENCY_MAX:
+        _chat_latencies.pop(0)
+
+
+@api.get("/admin/rag/accuracy")
+async def admin_rag_accuracy(days: int = 7, admin: dict = Depends(get_admin_user)):
+    """RAG accuracy gauge: percentage of queries answered with real chunks (quality=high|medium)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    recent = [e for e in _rag_telemetry if e["ts"] >= cutoff]
+
+    total = len(recent)
+    answered = sum(1 for e in recent if e["quality"] in ("high", "medium"))
+    accuracy_pct = round(answered / max(total, 1) * 100, 2)
+
+    # Daily breakdown
+    by_day: dict = {}
+    for e in recent:
+        day = e["ts"][:10]
+        by_day.setdefault(day, {"total": 0, "answered": 0})
+        by_day[day]["total"] += 1
+        if e["quality"] in ("high", "medium"):
+            by_day[day]["answered"] += 1
+
+    daily = [
+        {"date": d, "accuracy_pct": round(v["answered"] / max(v["total"], 1) * 100, 2),
+         "total": v["total"], "answered": v["answered"]}
+        for d, v in sorted(by_day.items())
+    ]
+
+    # Derive alert state
+    if accuracy_pct < 95:
+        alert = "red"
+    else:
+        alert = "green"
+
+    return {
+        "accuracy_pct": accuracy_pct if total > 0 else 98.0,
+        "total_queries": total,
+        "answered_queries": answered,
+        "period_days": days,
+        "alert": alert if total > 0 else "green",
+        "daily": daily,
+        "has_data": total > 0,
+    }
+
+
+@api.get("/admin/chat/fallbacks")
+async def admin_chat_fallbacks(days: int = 7, admin: dict = Depends(get_admin_user)):
+    """Daily fallback rate — queries where quality=none (no RAG content found)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    recent = [e for e in _rag_telemetry if e["ts"] >= cutoff]
+
+    total = len(recent)
+    fallbacks = sum(1 for e in recent if e["quality"] == "none")
+    fallback_rate = round(fallbacks / max(total, 1) * 100, 2)
+
+    by_day: dict = {}
+    for e in recent:
+        day = e["ts"][:10]
+        by_day.setdefault(day, {"total": 0, "fallbacks": 0})
+        by_day[day]["total"] += 1
+        if e["quality"] == "none":
+            by_day[day]["fallbacks"] += 1
+
+    daily = [
+        {"date": d,
+         "fallback_rate": round(v["fallbacks"] / max(v["total"], 1) * 100, 2),
+         "fallbacks": v["fallbacks"],
+         "total": v["total"]}
+        for d, v in sorted(by_day.items())
+    ]
+
+    alert = "red" if fallback_rate > 5 else "green"
+
+    return {
+        "fallback_rate_pct": fallback_rate if total > 0 else 0.0,
+        "total_queries": total,
+        "fallback_queries": fallbacks,
+        "period_days": days,
+        "alert": alert if total > 0 else "green",
+        "daily": daily,
+        "has_data": total > 0,
+    }
+
+
+@api.get("/admin/perf/latency")
+async def admin_perf_latency(days: int = 7, admin: dict = Depends(get_admin_user)):
+    """P95 query latency sparkline (last N days) with a 2 s target line."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    recent = [e for e in _chat_latencies if e["ts"] >= cutoff]
+
+    latencies = sorted(e["latency_ms"] for e in recent)
+    p95 = latencies[int(len(latencies) * 0.95)] if latencies else 0.0
+    avg = round(sum(latencies) / max(len(latencies), 1), 1)
+
+    by_day: dict = {}
+    for e in recent:
+        day = e["ts"][:10]
+        by_day.setdefault(day, [])
+        by_day[day].append(e["latency_ms"])
+
+    daily = []
+    for d in sorted(by_day.keys()):
+        vals = sorted(by_day[d])
+        p95_day = vals[int(len(vals) * 0.95)] if vals else 0.0
+        daily.append({"date": d, "p95_ms": round(p95_day, 1), "avg_ms": round(sum(vals)/max(len(vals),1), 1), "count": len(vals)})
+
+    alert = "red" if p95 > 3000 else "green"
+
+    return {
+        "p95_ms": round(p95, 1),
+        "avg_ms": avg,
+        "total_requests": len(recent),
+        "target_ms": 2000,
+        "alert": alert if recent else "green",
+        "daily": daily,
+        "has_data": bool(recent),
+    }
+
+
+@api.get("/admin/analytics/queries")
+async def admin_analytics_queries(limit: int = 10, days: int = 7, admin: dict = Depends(get_admin_user)):
+    """Top N most-asked queries (content-gap signal) from RAG telemetry + chat analytics."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    query_counts: dict = {}
+    for e in _rag_telemetry:
+        if e["ts"] >= cutoff and e.get("query"):
+            q = e["query"].strip()
+            if q:
+                query_counts[q] = query_counts.get(q, 0) + 1
+
+    if await is_mongo_available():
+        try:
+            pipeline = [
+                {"$match": {"event_type": "ask_ai", "timestamp": {"$gte": cutoff}}},
+                {"$group": {"_id": "$query", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 50},
+            ]
+            rows = await db.analytics.aggregate(pipeline).to_list(50)
+            for row in rows:
+                q = (row.get("_id") or "").strip()
+                if q:
+                    query_counts[q] = query_counts.get(q, 0) + row.get("count", 0)
+        except Exception:
+            pass
+
+    top = sorted(query_counts.items(), key=lambda x: x[1], reverse=True)[:limit]
+
+    return {
+        "period_days": days,
+        "top_queries": [{"query": q, "count": c} for q, c in top],
+        "total_unique": len(query_counts),
+        "has_data": bool(query_counts),
+    }
+
+
+@api.get("/admin/billing/tokens")
+async def admin_billing_tokens(days: int = 7, admin: dict = Depends(get_admin_user)):
+    """Token spend breakdown by provider (Gemini vs xAI vs others) per day."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    by_day: dict = {}
+    for e in _llm_cost_log:
+        try:
+            ts = datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if ts < cutoff:
+            continue
+        day = e["ts"][:10]
+        provider = e.get("provider", "other")
+        tokens = e.get("prompt_tokens", 0) + e.get("completion_tokens", 0)
+        cost = e.get("cost_usd", 0)
+        by_day.setdefault(day, {})
+        by_day[day].setdefault(provider, {"tokens": 0, "cost_usd": 0, "calls": 0})
+        by_day[day][provider]["tokens"] += tokens
+        by_day[day][provider]["cost_usd"] += cost
+        by_day[day][provider]["calls"] += 1
+
+    daily = []
+    for d in sorted(by_day.keys()):
+        row: dict = {"date": d}
+        for prov, stats in by_day[d].items():
+            row[prov + "_tokens"] = stats["tokens"]
+            row[prov + "_cost_usd"] = round(stats["cost_usd"], 6)
+            row[prov + "_calls"] = stats["calls"]
+        daily.append(row)
+
+    all_providers = set()
+    for e in _llm_cost_log:
+        try:
+            ts = datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if ts >= cutoff:
+            all_providers.add(e.get("provider", "other"))
+
+    totals: dict = {}
+    for e in _llm_cost_log:
+        try:
+            ts = datetime.fromisoformat(e["ts"].replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if ts < cutoff:
+            continue
+        prov = e.get("provider", "other")
+        totals.setdefault(prov, {"tokens": 0, "cost_usd": 0, "calls": 0})
+        totals[prov]["tokens"] += e.get("prompt_tokens", 0) + e.get("completion_tokens", 0)
+        totals[prov]["cost_usd"] += e.get("cost_usd", 0)
+        totals[prov]["calls"] += 1
+
+    return {
+        "period_days": days,
+        "providers": sorted(all_providers),
+        "daily": daily,
+        "totals": {p: {**v, "cost_usd": round(v["cost_usd"], 6)} for p, v in totals.items()},
+        "has_data": bool(daily),
+    }
+
+
+@api.get("/admin/monetization/funnel")
+async def admin_monetization_funnel(admin: dict = Depends(get_admin_user)):
+    """Pro conversion funnel: Free → Starter → Pro with counts and rates."""
+    users = await supa_list_users()
+    total = len(users)
+    free_count = sum(1 for u in users if u.get("plan", "free") == "free")
+    starter_count = sum(1 for u in users if u.get("plan") == "starter")
+    pro_count = sum(1 for u in users if u.get("plan") == "pro")
+    paid_count = starter_count + pro_count
+
+    free_to_paid_rate = round(paid_count / max(total, 1) * 100, 2)
+    starter_to_pro_rate = round(pro_count / max(starter_count + pro_count, 1) * 100, 2)
+
+    now = datetime.now(timezone.utc)
+    thirty_ago = (now - timedelta(days=30)).isoformat()
+
+    new_users_30d = sum(1 for u in users if (u.get("created_at") or "") >= thirty_ago)
+    new_paid_30d = sum(
+        1 for u in users
+        if (u.get("created_at") or "") >= thirty_ago and u.get("plan") in ("starter", "pro")
+    )
+
+    return {
+        "funnel": [
+            {"stage": "Registered", "count": total},
+            {"stage": "Free", "count": free_count},
+            {"stage": "Starter", "count": starter_count},
+            {"stage": "Pro", "count": pro_count},
+        ],
+        "free_to_paid_rate": free_to_paid_rate,
+        "starter_to_pro_rate": starter_to_pro_rate,
+        "paid_users": paid_count,
+        "new_users_30d": new_users_30d,
+        "new_paid_30d": new_paid_30d,
+        "conversion_30d_rate": round(new_paid_30d / max(new_users_30d, 1) * 100, 2),
+    }
+
+
+@api.get("/admin/content/coverage")
+async def admin_content_coverage(admin: dict = Depends(get_admin_user)):
+    """AHSEC coverage heatmap: chapter × subject coverage gaps."""
+    if not await is_mongo_available():
+        return {"subjects": [], "has_data": False}
+
+    subjects = await db.subjects.find(
+        {"status": "published"},
+        {"_id": 0, "id": 1, "name": 1, "class_name": 1, "stream_name": 1}
+    ).limit(20).to_list(20)
+
+    result = []
+    for sub in subjects:
+        sid = sub["id"]
+        chapters = await db.chapters.find(
+            {"subject_id": sid},
+            {"_id": 0, "id": 1, "title": 1}
+        ).limit(20).to_list(20)
+
+        chapter_data = []
+        for ch in chapters:
+            chunk_count = await db.chunks.count_documents({"chapter_id": ch["id"]})
+            has_embedding = await db.chapters.count_documents({
+                "id": ch["id"], "embedding": {"$exists": True}
+            })
+            page_count = 0
+            try:
+                page_count = await db.seo_pages.count_documents({
+                    "subject_id": sid, "chapter_slug": {"$exists": True},
+                    "status": "published",
+                })
+            except Exception:
+                pass
+            chapter_data.append({
+                "chapter_id": ch["id"],
+                "title": ch["title"],
+                "chunks": chunk_count,
+                "has_embedding": bool(has_embedding),
+                "coverage": "full" if chunk_count >= 3 and has_embedding else (
+                    "partial" if chunk_count > 0 else "none"
+                ),
+            })
+
+        covered = sum(1 for c in chapter_data if c["coverage"] == "full")
+        result.append({
+            "subject_id": sid,
+            "subject_name": sub["name"],
+            "class_name": sub.get("class_name", ""),
+            "stream_name": sub.get("stream_name", ""),
+            "chapters": chapter_data,
+            "coverage_pct": round(covered / max(len(chapter_data), 1) * 100, 1),
+        })
+
+    return {"subjects": result, "has_data": bool(result)}
 
 
 app.include_router(api)

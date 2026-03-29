@@ -4,10 +4,14 @@ import {
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, Wifi, Database, DollarSign, Crown,
-  Layers, Link2, Code2, FileCheck,
+  Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck,
 } from 'lucide-react';
 import axios from 'axios';
 import { adminGetDashboard, seoPipelineStatus, API_BASE } from '@/utils/api';
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
+} from 'recharts';
 
 function StatCard({ label, value, icon: Icon, color, subLabel, subValue, pulse }) {
   return (
@@ -160,6 +164,53 @@ function PipelineWidget({ token }) {
   );
 }
 
+function alertColor(alert) {
+  if (alert === 'red') return '#ef4444';
+  if (alert === 'yellow') return '#f59e0b';
+  return '#10b981';
+}
+
+function AlertBadge({ alert }) {
+  const color = alertColor(alert);
+  const label = alert === 'red' ? 'RED' : alert === 'yellow' ? 'YELLOW' : 'GREEN';
+  return (
+    <span
+      className="text-xs font-bold px-2 py-0.5 rounded-full"
+      style={{ background: `${color}20`, color, border: `1px solid ${color}40` }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function RagAccuracyGauge({ accuracy }) {
+  const pct = Math.min(100, Math.max(0, accuracy));
+  const alert = pct < 95 ? 'red' : 'green';
+  const color = alertColor(alert);
+  const circumference = 2 * Math.PI * 40;
+  const offset = circumference - (pct / 100) * circumference;
+  return (
+    <div className="flex flex-col items-center justify-center gap-2">
+      <svg width="100" height="100" viewBox="0 0 100 100">
+        <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" strokeWidth="10" />
+        <circle
+          cx="50" cy="50" r="40"
+          fill="none"
+          stroke={color}
+          strokeWidth="10"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          transform="rotate(-90 50 50)"
+          style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+        />
+        <text x="50" y="53" textAnchor="middle" fontSize="16" fontWeight="bold" fill="white">{pct.toFixed(1)}%</text>
+        <text x="50" y="67" textAnchor="middle" fontSize="8" fill="#64748b">Target: 98%</text>
+      </svg>
+    </div>
+  );
+}
+
 export default function AdminDashboard({ adminToken, onNavigate }) {
   const [data, setData] = useState(null);
   const [metrics, setMetrics] = useState(null);
@@ -167,18 +218,51 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [ragAccuracy, setRagAccuracy] = useState(null);
+  const [chatFallbacks, setChatFallbacks] = useState(null);
+  const [vectorStats, setVectorStats] = useState(null);
+  const [latency, setLatency] = useState(null);
+  const [topQueries, setTopQueries] = useState(null);
+  const [tokenSpend, setTokenSpend] = useState(null);
+  const [funnel, setFunnel] = useState(null);
+  const [coverage, setCoverage] = useState(null);
+
   const headers = { withCredentials: true };
+  const adminHdr = (token) => {
+    const isJwt = token && typeof token === 'string' && token.split('.').length === 3;
+    return isJwt ? { headers: { Authorization: `Bearer ${token}` }, withCredentials: true } : { withCredentials: true };
+  };
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     else setRefreshing(true);
     try {
-      const [dashRes, metricsRes] = await Promise.allSettled([
+      const [
+        dashRes, metricsRes,
+        ragAccRes, fallbackRes, vectorRes, latencyRes,
+        queriesRes, tokenRes, funnelRes, coverageRes,
+      ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
         axios.get(`${API_BASE}/admin/dashboard/metrics`, headers),
+        axios.get(`${API_BASE}/admin/rag/accuracy`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/chat/fallbacks`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/vector/stats`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/perf/latency`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/analytics/queries`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/billing/tokens`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/monetization/funnel`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/content/coverage`, adminHdr(adminToken)),
       ]);
       if (dashRes.status === 'fulfilled') setData(dashRes.value.data);
       if (metricsRes.status === 'fulfilled') setMetrics(metricsRes.value.data);
+      if (ragAccRes.status === 'fulfilled') setRagAccuracy(ragAccRes.value.data);
+      if (fallbackRes.status === 'fulfilled') setChatFallbacks(fallbackRes.value.data);
+      if (vectorRes.status === 'fulfilled') setVectorStats(vectorRes.value.data);
+      if (latencyRes.status === 'fulfilled') setLatency(latencyRes.value.data);
+      if (queriesRes.status === 'fulfilled') setTopQueries(queriesRes.value.data);
+      if (tokenRes.status === 'fulfilled') setTokenSpend(tokenRes.value.data);
+      if (funnelRes.status === 'fulfilled') setFunnel(funnelRes.value.data);
+      if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data);
       setLastRefresh(new Date());
     } catch {}
     finally {
@@ -204,6 +288,13 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const vs = data?.visitor_stats || {};
   const recentEvents = data?.recent_events || [];
   const deps = metrics?.dependencies || {};
+
+  const ragAlert = ragAccuracy?.alert || 'green';
+  const fallbackAlert = chatFallbacks?.alert || 'green';
+  const latencyAlert = latency?.alert || 'green';
+  const vectorAlert = (vectorStats?.overall_coverage_pct ?? 100) < 90 ? 'yellow' : 'green';
+
+  const hasRagIssue = ragAlert === 'red' || latencyAlert === 'red';
 
   const quickActions = [
     { id: 'users',     label: 'View Users',     icon: Users,    color: 'from-violet-600 to-violet-500' },
@@ -245,7 +336,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             <Wifi size={14} className="text-violet-400" />
             <h3 className="text-slate-400 text-sm font-medium">System Health</h3>
             <div className="ml-auto flex items-center gap-1.5">
-              {Object.values(deps).every(d => d.status === 'ok') ? (
+              {Object.values(deps).every(d => d.status === 'ok') && !hasRagIssue ? (
                 <>
                   <CheckCircle size={12} className="text-emerald-400" />
                   <span className="text-emerald-400 text-xs font-medium">All Systems Operational</span>
@@ -253,7 +344,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               ) : (
                 <>
                   <AlertCircle size={12} className="text-amber-400" />
-                  <span className="text-amber-400 text-xs font-medium">Degraded</span>
+                  <span className="text-amber-400 text-xs font-medium">
+                    {hasRagIssue ? 'RAG/Latency Issue Detected' : 'Degraded'}
+                  </span>
                 </>
               )}
             </div>
@@ -316,6 +409,331 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           subLabel="Paid"
           subValue={(data?.plan_distribution?.starter || 0) + (data?.plan_distribution?.pro || 0)}
         />
+      </div>
+
+      {/* ── AI HEALTH SECTION ─────────────────────────────────────────────── */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <div className="flex items-center gap-2 mb-5">
+          <ShieldCheck size={16} className="text-violet-400" />
+          <h3 className="text-slate-300 font-semibold">AI Health</h3>
+          <div className="ml-auto flex items-center gap-2">
+            <AlertBadge alert={ragAlert} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+          {/* Widget 1: RAG Accuracy Gauge */}
+          <div className="bg-slate-800/60 rounded-xl p-4 flex flex-col items-center gap-2">
+            <div className="flex items-center justify-between w-full mb-1">
+              <span className="text-slate-400 text-xs font-medium flex items-center gap-1">
+                <Target size={11} /> RAG Accuracy
+              </span>
+              <AlertBadge alert={ragAlert} />
+            </div>
+            <RagAccuracyGauge
+              accuracy={ragAccuracy?.accuracy_pct ?? 98}
+            />
+            <p className="text-xs text-slate-500 text-center">
+              {ragAccuracy?.has_data
+                ? `${ragAccuracy.answered_queries} / ${ragAccuracy.total_queries} queries answered`
+                : 'No queries yet — showing default'}
+            </p>
+          </div>
+
+          {/* Widget 2: Fallback Rate Line Chart */}
+          <div className="bg-slate-800/60 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-slate-400 text-xs font-medium flex items-center gap-1">
+                <Activity size={11} /> Daily Fallback Rate
+              </span>
+              <AlertBadge alert={fallbackAlert} />
+            </div>
+            {chatFallbacks?.has_data && chatFallbacks.daily.length > 0 ? (
+              <ResponsiveContainer width="100%" height={90}>
+                <LineChart data={chatFallbacks.daily}>
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={d => d.slice(5)} />
+                  <YAxis tick={{ fontSize: 9, fill: '#64748b' }} domain={[0, 'auto']} />
+                  <Tooltip
+                    contentStyle={{ background: '#1e293b', border: 'none', fontSize: 11 }}
+                    formatter={v => [`${v}%`, 'Fallback Rate']}
+                  />
+                  <ReferenceLine y={5} stroke="#ef4444" strokeDasharray="3 3" label={{ value: '5% max', fill: '#ef4444', fontSize: 9 }} />
+                  <Line type="monotone" dataKey="fallback_rate" stroke="#f59e0b" strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-[90px] text-slate-600 text-xs gap-1">
+                <Activity size={20} className="opacity-40" />
+                <span>No fallback data yet</span>
+                <span className="text-emerald-500 text-xs font-medium">
+                  {chatFallbacks?.fallback_rate_pct ?? 0}% fallback rate
+                </span>
+              </div>
+            )}
+            <p className="text-xs text-slate-500 mt-1">
+              Target: &lt;5% fallback rate
+            </p>
+          </div>
+
+          {/* Widget 3: Vector Coverage Progress Bar */}
+          <div className="bg-slate-800/60 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-slate-400 text-xs font-medium flex items-center gap-1">
+                <Database size={11} /> Vector Coverage
+              </span>
+              <AlertBadge alert={vectorAlert} />
+            </div>
+            {vectorStats ? (
+              <div className="space-y-3">
+                {[
+                  { label: 'SEO Pages', pct: vectorStats.pages?.coverage_pct ?? 0, color: '#8b5cf6' },
+                  { label: 'Chapters', pct: vectorStats.chapters?.coverage_pct ?? 0, color: '#3b82f6' },
+                  { label: 'Overall', pct: vectorStats.overall_coverage_pct ?? 0, color: '#10b981' },
+                ].map(({ label, pct, color }) => (
+                  <div key={label}>
+                    <div className="flex justify-between mb-1">
+                      <span className="text-xs text-slate-500">{label}</span>
+                      <span className="text-xs font-mono" style={{ color }}>{pct}%</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${pct}%`, background: pct >= 90 ? color : '#f59e0b' }}
+                      />
+                    </div>
+                  </div>
+                ))}
+                <p className="text-xs text-slate-500 pt-1">
+                  {vectorStats.embedded ?? 0} / {vectorStats.total ?? 0} items embedded
+                </p>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center h-20 text-slate-600 text-xs">
+                No vector data
+              </div>
+            )}
+            <p className="text-xs text-slate-500 mt-1">Target: ≥90%</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── PERFORMANCE & QUERIES ─────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Widget 4: P95 Latency Sparkline */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <Clock size={14} className="text-violet-400" />
+              <h3 className="text-slate-300 font-semibold text-sm">Query Latency P95</h3>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-500">P95: <span className="text-white font-medium">{latency?.p95_ms ?? 0}ms</span></span>
+              <AlertBadge alert={latencyAlert} />
+            </div>
+          </div>
+          {latency?.has_data && latency.daily.length > 0 ? (
+            <ResponsiveContainer width="100%" height={110}>
+              <LineChart data={latency.daily}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={d => d.slice(5)} />
+                <YAxis tick={{ fontSize: 9, fill: '#64748b' }} domain={[0, 'auto']} />
+                <Tooltip
+                  contentStyle={{ background: '#1e293b', border: 'none', fontSize: 11 }}
+                  formatter={v => [`${v}ms`, 'P95']}
+                />
+                <ReferenceLine y={2000} stroke="#ef4444" strokeDasharray="4 4" label={{ value: '2s target', fill: '#ef4444', fontSize: 9 }} />
+                <Line type="monotone" dataKey="p95_ms" stroke="#7c3aed" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-[110px] text-slate-600 text-xs gap-1">
+              <Cpu size={20} className="opacity-40" />
+              <span>No latency data yet</span>
+              <span className="text-xs text-slate-500">Data recorded after first chat</span>
+            </div>
+          )}
+          <p className="text-xs text-slate-500 mt-1">Target: P95 &lt;2 s · Avg: {latency?.avg_ms ?? 0}ms</p>
+        </div>
+
+        {/* Widget 5: Top 10 Queries Leaderboard */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Search size={14} className="text-violet-400" />
+            <h3 className="text-slate-300 font-semibold text-sm">Top Queries</h3>
+            <span className="text-xs text-slate-600">content gap signal</span>
+          </div>
+          {topQueries?.has_data && topQueries.top_queries.length > 0 ? (
+            <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-1">
+              {topQueries.top_queries.map((q, i) => {
+                const maxCount = topQueries.top_queries[0]?.count || 1;
+                const pct = Math.round((q.count / maxCount) * 100);
+                return (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-slate-600 text-xs w-4 flex-shrink-0">{i + 1}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between mb-0.5">
+                        <span className="text-xs text-slate-300 truncate">{q.query}</span>
+                        <span className="text-xs text-violet-400 font-mono ml-2 flex-shrink-0">{q.count}</span>
+                      </div>
+                      <div className="h-1 rounded-full bg-slate-800 overflow-hidden">
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: '#7c3aed' }} />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-[100px] text-slate-600 text-xs gap-1">
+              <Search size={20} className="opacity-40" />
+              <span>No query data yet</span>
+              <span className="text-xs text-slate-500">Populates after user chats</span>
+            </div>
+          )}
+          <p className="text-xs text-slate-500 mt-2">
+            {topQueries?.total_unique ?? 0} unique queries in last 7 days
+          </p>
+        </div>
+      </div>
+
+      {/* ── REVENUE INTELLIGENCE ─────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {/* Widget 6: Token Spend Bar Chart */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Cpu size={14} className="text-violet-400" />
+            <h3 className="text-slate-300 font-semibold text-sm">Token Spend</h3>
+          </div>
+          {tokenSpend?.has_data && tokenSpend.daily.length > 0 ? (
+            <ResponsiveContainer width="100%" height={130}>
+              <BarChart data={tokenSpend.daily} barSize={8}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="date" tick={{ fontSize: 8, fill: '#64748b' }} tickFormatter={d => d.slice(5)} />
+                <YAxis tick={{ fontSize: 8, fill: '#64748b' }} />
+                <Tooltip contentStyle={{ background: '#1e293b', border: 'none', fontSize: 10 }} />
+                <Legend wrapperStyle={{ fontSize: 9 }} />
+                <Bar dataKey="gemini_tokens" fill="#8b5cf6" name="Gemini" />
+                <Bar dataKey="xai_tokens" fill="#06b6d4" name="xAI" />
+                <Bar dataKey="groq_tokens" fill="#10b981" name="Groq" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-[130px] text-slate-600 text-xs gap-1">
+              <BarChart2 size={20} className="opacity-40" />
+              <span>No token data yet</span>
+              <span className="text-xs text-slate-500">Grows with AI usage</span>
+            </div>
+          )}
+          {tokenSpend && Object.keys(tokenSpend.totals || {}).length > 0 && (
+            <div className="flex gap-3 mt-2 flex-wrap">
+              {Object.entries(tokenSpend.totals).map(([p, v]) => (
+                <span key={p} className="text-xs text-slate-500">
+                  {p}: <span className="text-slate-300">{(v.tokens || 0).toLocaleString()}</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Widget 7: Pro Conversion Funnel */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <TrendingUp size={14} className="text-violet-400" />
+            <h3 className="text-slate-300 font-semibold text-sm">Conversion Funnel</h3>
+          </div>
+          {funnel ? (
+            <div className="space-y-2">
+              {(funnel.funnel || []).map((step, i) => {
+                const maxCount = funnel.funnel[0]?.count || 1;
+                const pct = Math.round((step.count / maxCount) * 100);
+                const colors = ['#64748b', '#8b5cf6', '#f59e0b', '#10b981'];
+                return (
+                  <div key={step.stage}>
+                    <div className="flex justify-between mb-0.5">
+                      <span className="text-xs text-slate-400">{step.stage}</span>
+                      <span className="text-xs font-mono text-white">{step.count.toLocaleString()}</span>
+                    </div>
+                    <div className="h-2.5 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${pct}%`, background: colors[i] || '#7c3aed' }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="pt-2 border-t border-slate-800 grid grid-cols-2 gap-2">
+                <div className="text-center">
+                  <p className="text-lg font-bold text-emerald-400">{funnel.free_to_paid_rate}%</p>
+                  <p className="text-xs text-slate-500">Free→Paid</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-bold text-amber-400">{funnel.starter_to_pro_rate}%</p>
+                  <p className="text-xs text-slate-500">Starter→Pro</p>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-[130px] text-slate-600 text-xs">
+              Loading funnel…
+            </div>
+          )}
+        </div>
+
+        {/* Widget 8: AHSEC Coverage Heatmap */}
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <FileCheck size={14} className="text-violet-400" />
+            <h3 className="text-slate-300 font-semibold text-sm">AHSEC Coverage</h3>
+            <span className="text-xs text-slate-600">chapter × subject</span>
+          </div>
+          {coverage?.has_data && coverage.subjects.length > 0 ? (
+            <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
+              {coverage.subjects.map(sub => (
+                <div key={sub.subject_id}>
+                  <div className="flex justify-between mb-1">
+                    <span className="text-xs text-slate-300 truncate">{sub.subject_name}</span>
+                    <span
+                      className="text-xs font-mono ml-2 flex-shrink-0"
+                      style={{ color: sub.coverage_pct >= 80 ? '#10b981' : sub.coverage_pct >= 50 ? '#f59e0b' : '#ef4444' }}
+                    >
+                      {sub.coverage_pct}%
+                    </span>
+                  </div>
+                  <div className="flex gap-0.5 flex-wrap">
+                    {(sub.chapters || []).map(ch => (
+                      <div
+                        key={ch.chapter_id}
+                        title={`${ch.title}: ${ch.coverage}`}
+                        className="w-3 h-3 rounded-sm"
+                        style={{
+                          background: ch.coverage === 'full' ? '#10b981'
+                            : ch.coverage === 'partial' ? '#f59e0b'
+                            : '#1e293b',
+                          border: '1px solid rgba(255,255,255,0.05)',
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-[130px] text-slate-600 text-xs gap-1">
+              <BookOpen size={20} className="opacity-40" />
+              <span>No subjects found</span>
+              <span className="text-xs text-slate-500">Add subjects to see coverage</span>
+            </div>
+          )}
+          <div className="flex items-center gap-3 mt-2 pt-2 border-t border-slate-800">
+            {[['#10b981', 'Full'], ['#f59e0b', 'Partial'], ['#1e293b', 'None']].map(([c, label]) => (
+              <div key={label} className="flex items-center gap-1">
+                <div className="w-2.5 h-2.5 rounded-sm" style={{ background: c, border: '1px solid rgba(255,255,255,0.1)' }} />
+                <span className="text-xs text-slate-500">{label}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
 
       {data?.plan_distribution && (
