@@ -11950,36 +11950,75 @@ async def syllabus_import_pdf(
 
     logger.info(f"[pdf_import] START paper_type={paper_type} size={len(pdf_bytes)}B gemini_ok={vertex_services._ok()}")
 
-    # ── Try Gemini Vision first (PDF inline_data) ─────────────────────────────
+    # ── Helper: recover as many complete JSON objects as possible ─────────────
+    def _recover_json(text: str) -> list:
+        try:
+            result = json.loads(text)
+            return result if isinstance(result, list) else [result]
+        except json.JSONDecodeError:
+            pass
+        # Trim to last complete `}` and close the array
+        last_brace = text.rfind('}')
+        if last_brace > 0:
+            partial = text[:last_brace + 1]
+            candidate = (partial + ']') if partial.lstrip().startswith('[') else ('[' + partial + ']')
+            try:
+                result = json.loads(candidate)
+                return result if isinstance(result, list) else [result]
+            except json.JSONDecodeError:
+                pass
+        # Last resort: extract each `{…}` object individually
+        objects, decoder, idx = [], json.JSONDecoder(), text.find('{')
+        while 0 <= idx < len(text):
+            try:
+                obj, end = decoder.raw_decode(text, idx)
+                objects.append(obj)
+                idx = text.find('{', end)
+            except json.JSONDecodeError:
+                idx = text.find('{', idx + 1)
+        return objects
+
+    # ── Try Gemini Vision first — try multiple model versions before giving up ─
     extracted: list = []
     _used_gemini = False
+    _GEMINI_PDF_MODELS = [
+        vertex_services._PRO_MODEL,   # gemini-2.5-flash-preview-05-20
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
+    ]
     try:
         if not vertex_services._ok():
             logger.warning("[pdf_import] Gemini not available — going straight to text fallback")
             raise ValueError("Gemini unavailable — skipping to text extraction fallback")
-        url = vertex_services._gen_url(vertex_services._PRO_MODEL)
         headers = await vertex_services._auth_headers()
         body = {
             "contents": [{"parts": [
-                {"text": prompt + "\n\nReturn ONLY valid JSON array."},
+                {"text": prompt + "\n\nReturn ONLY valid JSON array. No markdown fences."},
                 {"inline_data": {"mime_type": "application/pdf", "data": b64_pdf}},
             ]}],
             "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.1},
         }
-        async with _httpx.AsyncClient(timeout=120) as c:
-            r = await c.post(url, json=body, headers=headers)
+        gemini_resp = None
+        for _gmodel in _GEMINI_PDF_MODELS:
+            url = vertex_services._gen_url(_gmodel)
+            async with _httpx.AsyncClient(timeout=120) as c:
+                r = await c.post(url, json=body, headers=headers)
             if r.status_code == 403:
-                vertex_services._mark_forbidden()
-                raise ValueError("Gemini Vision 403 — falling back to text extraction")
+                logger.warning(f"[pdf_import] Gemini model {_gmodel} → 403, trying next model…")
+                continue
             r.raise_for_status()
-            raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            cleaned = re.sub(r'^```(?:json)?\s*', '', raw.strip())
-            cleaned = re.sub(r'\s*```$', '', cleaned).strip()
-            extracted = json.loads(cleaned)
-            if not isinstance(extracted, list):
-                extracted = [extracted]
-            _used_gemini = True
-            logger.info(f"[pdf_import] Gemini Vision OK — extracted {len(extracted)} subjects")
+            gemini_resp = r
+            logger.info(f"[pdf_import] Gemini Vision using model: {_gmodel}")
+            break
+        if gemini_resp is None:
+            vertex_services._mark_forbidden()
+            raise ValueError("All Gemini models returned 403 — check GEMINI_API_KEY")
+        raw = gemini_resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+        cleaned = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+        cleaned = re.sub(r'\s*```$', '', cleaned).strip()
+        extracted = _recover_json(cleaned)
+        _used_gemini = True
+        logger.info(f"[pdf_import] Gemini Vision OK — extracted {len(extracted)} subjects")
     except Exception as gemini_err:
         logger.warning(f"[pdf_import] Gemini Vision failed: {gemini_err}")
         # ── Fallback: extract raw text via PyPDF2, send to LLM pool ──────────
@@ -11991,7 +12030,7 @@ async def syllabus_import_pdf(
                 from PyPDF2 import PdfReader as _PdfReader  # type: ignore
             reader = _PdfReader(io.BytesIO(pdf_bytes))
             pages_text = "\n".join(
-                (p.extract_text() or "") for p in reader.pages[:40]
+                (p.extract_text() or "") for p in reader.pages[:50]
             )
             logger.info(f"[pdf_import] PyPDF2 extracted {len(pages_text)} chars from {len(reader.pages)} pages")
             if not pages_text.strip():
@@ -11999,21 +12038,20 @@ async def syllabus_import_pdf(
                     "Could not extract text from PDF — the file may be a scanned image. "
                     "Please upload a text-based PDF."
                 )
+            # Keep input concise so the LLM can fit the full response in 8192 tokens
             slm_prompt = (
-                prompt + "\n\nSYLLABUS TEXT:\n" + pages_text[:12000] +
-                "\n\nReturn ONLY valid JSON array."
+                prompt + "\n\nSYLLABUS TEXT:\n" + pages_text[:8000] +
+                "\n\nReturn ONLY a valid JSON array. No markdown fences. Be concise."
             )
             logger.info("[pdf_import] Sending to LLM fallback (Groq/Fireworks)…")
             raw_slm = await _call_llm_raw(
                 [{"role": "user", "content": slm_prompt}],
-                max_tokens=4096,
+                max_tokens=8192,
             )
             logger.info(f"[pdf_import] LLM raw response length={len(raw_slm or '')}")
             cleaned = re.sub(r'^```(?:json)?\s*', '', (raw_slm or "").strip())
             cleaned = re.sub(r'\s*```$', '', cleaned).strip()
-            extracted = json.loads(cleaned)
-            if not isinstance(extracted, list):
-                extracted = [extracted]
+            extracted = _recover_json(cleaned)
             logger.info(f"[pdf_import] LLM fallback OK — extracted {len(extracted)} subjects")
         except HTTPException:
             raise
