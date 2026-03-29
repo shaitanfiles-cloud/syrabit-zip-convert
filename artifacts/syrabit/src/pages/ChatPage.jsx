@@ -266,6 +266,7 @@ function MarkdownContent({ content, streaming, sources }) {
 // ── Message bubble ────────────────────────────────────────────────────────────
 const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast }) {
   const [copied, setCopied] = useState(false);
+  const navigate = useNavigate();
   const isUser = msg.role === 'user';
 
   const handleCopy = async () => {
