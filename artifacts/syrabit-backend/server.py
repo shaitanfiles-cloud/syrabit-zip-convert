@@ -9829,6 +9829,15 @@ async def _check_health_deps():
         result["redis"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
     except Exception:
         result["redis"] = {"status": "error", "latencyMs": 0}
+    try:
+        if supa:
+            t0 = time.time()
+            await _supa(lambda: supa.table("users").select("id").limit(1).execute())
+            result["supabase"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
+        else:
+            result["supabase"] = {"status": "not_configured", "latencyMs": 0}
+    except Exception:
+        result["supabase"] = {"status": "error", "latencyMs": 0}
     return result
 
 

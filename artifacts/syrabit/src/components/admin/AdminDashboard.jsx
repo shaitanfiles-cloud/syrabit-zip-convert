@@ -85,7 +85,7 @@ function ActivityItem({ event, idx }) {
   );
 }
 
-const DEP_ICONS = { mongodb: Database, postgresql: Database, redis: Server };
+const DEP_ICONS = { mongodb: Database, postgresql: Database, redis: Server, supabase: Database };
 const STATUS_COLORS = { ok: '#10b981', error: '#ef4444', not_configured: '#64748b', unknown: '#f59e0b' };
 
 function DepStatusCard({ name, status, latency }) {
@@ -351,7 +351,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               )}
             </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             {Object.entries(deps).map(([name, info]) => (
               <DepStatusCard
                 key={name}
