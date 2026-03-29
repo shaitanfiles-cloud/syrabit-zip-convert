@@ -3183,13 +3183,13 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     if not primary_key and not _LLM_PROVIDERS:
         raise HTTPException(status_code=503, detail="LLM API key not configured")
 
-    tried = set()
+    tried: set = set()  # tracks (provider, model) tuples — allows multiple models per provider
     last_err = None
 
     provider, key = primary_provider, primary_key
     try_model = use_model
     try:
-        tried.add(provider)
+        tried.add((provider, try_model))
         logger.info(f"LLM call: provider={provider}, model={try_model}")
         return await _call_single_provider(messages, provider, key, try_model, max_tokens)
     except Exception as e:
@@ -3197,10 +3197,10 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
         logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
 
     for fallback in _LLM_PROVIDERS:
-        if fallback["provider"] in tried:
-            continue
-        tried.add(fallback["provider"])
         fb_model = fallback["default_model"]
+        if (fallback["provider"], fb_model) in tried:
+            continue
+        tried.add((fallback["provider"], fb_model))
         logger.info(f"LLM fallback: provider={fallback['provider']}, model={fb_model}")
         try:
             return await _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens)
