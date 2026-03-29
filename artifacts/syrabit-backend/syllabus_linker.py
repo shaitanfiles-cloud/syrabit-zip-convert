@@ -73,27 +73,26 @@ _SEM_CLASS_NAMES = {
 # When paper_type is one of these, the stream IS the course type (not the discipline).
 # All student streams (B.Com/B.A/B.Sc) share one stream node per semester.
 NEP_COURSE_STREAMS: dict[str, dict] = {
-    "aec": {"name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠"},
-    "sec": {"name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡"},
-    "mdc": {"name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐"},
-    "vac": {"name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                   "icon": "✨"},
-    "ge":  {"name": "GE",    "slug": "ge",    "description": "Generic Elective",                     "icon": "🔄"},
-    "cc":  {"name": "CC",    "slug": "cc",    "description": "Core Course",                          "icon": "⭐"},
+    "major": {"name": "Major",  "slug": "major", "description": "Major Discipline Course",              "icon": "🎯"},
+    "minor": {"name": "Minor",  "slug": "minor", "description": "Minor Elective Course",               "icon": "📘"},
+    "aec":   {"name": "AEC",    "slug": "aec",   "description": "Ability Enhancement Compulsory Course","icon": "🧠"},
+    "sec":   {"name": "SEC",    "slug": "sec",   "description": "Skill Enhancement Course",             "icon": "⚡"},
+    "mdc":   {"name": "MDC",    "slug": "mdc",   "description": "Multidisciplinary Course",             "icon": "🌐"},
+    "vac":   {"name": "VAC",    "slug": "vac",   "description": "Value-Added Course",                   "icon": "✨"},
+    "ge":    {"name": "GE",     "slug": "ge",    "description": "Generic Elective",                     "icon": "🔄"},
+    "cc":    {"name": "CC",     "slug": "cc",    "description": "Core Course",                          "icon": "⭐"},
 }
 
-# Discipline-based paper types — stream determined by stream_target (B.Com / B.A / B.Sc)
-DISCIPLINE_PAPER_TYPES = {"major", "minor"}
+# Discipline-based streams (kept for AHSEC only — not used for DEGREE/NEP)
+DISCIPLINE_PAPER_TYPES: set = set()   # No longer used; all types now in NEP_COURSE_STREAMS
 
-# Discipline stream definitions (used when paper_type is major/minor)
+# Discipline stream definitions (AHSEC fallback only — degree PDFs all use NEP_COURSE_STREAMS)
 _DISCIPLINE_STREAMS: dict[str, dict] = {
-    "bcom":    {"name": "B.Com",   "slug": "bcom",    "description": "Bachelor of Commerce", "icon": "💼"},
-    "ba":      {"name": "B.A",     "slug": "ba",      "description": "Bachelor of Arts",     "icon": "📖"},
-    "bsc":     {"name": "B.Sc",    "slug": "bsc",     "description": "Bachelor of Science",  "icon": "🔬"},
-    "general": {"name": "General", "slug": "general", "description": "General / All streams","icon": "📚"},
+    "general": {"name": "General", "slug": "general", "description": "General / All streams", "icon": "📚"},
     # AHSEC
-    "commerce": {"name": "Commerce",    "slug": "commerce",    "description": "Commerce stream", "icon": "💼"},
-    "arts":     {"name": "Arts",        "slug": "arts",        "description": "Arts stream",     "icon": "📖"},
-    "science":  {"name": "Science",     "slug": "science",     "description": "Science stream",  "icon": "⚗️"},
+    "commerce": {"name": "Commerce", "slug": "commerce", "description": "Commerce stream", "icon": "💼"},
+    "arts":     {"name": "Arts",     "slug": "arts",     "description": "Arts stream",     "icon": "📖"},
+    "science":  {"name": "Science",  "slug": "science",  "description": "Science stream",  "icon": "⚗️"},
 }
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat()
@@ -367,27 +366,28 @@ def _detect_board_key(board_name: str) -> str:
 def _resolve_stream_keys(stream_hint: str, paper_type: str, board_id: str) -> list[str]:
     """
     Determine stream key(s) for this entry.
-    NEP cross-stream types (AEC/SEC/MDC/VAC/GE/CC) → stream = paper_type key
-    Discipline types (Major/Minor) → stream determined by stream_hint (B.Com/B.A/B.Sc)
+    All NEP course types (Major/Minor/AEC/SEC/MDC/VAC/GE/CC) → stream = paper_type key.
+    Hierarchy: Board → Semester (Class) → Course Type (Stream) → Subject.
+    AHSEC subjects without a recognised paper_type fall back to discipline streams.
     """
     pt = (paper_type or "").lower().strip()
     h  = (stream_hint or "").lower().strip()
 
-    # NEP cross-stream: the paper_type IS the stream
+    # All recognised course types map directly to their own stream node
     if pt in NEP_COURSE_STREAMS:
         return [pt]
 
-    # Discipline courses (Major / Minor) — use stream_hint to pick discipline
+    # AHSEC fallback — use stream_hint to pick discipline
     if not h or "all" in h or "general" in h:
         return ["general"]
 
     keys = []
-    if "commerce" in h or "b.com" in h:
-        keys.append("bcom")
-    if "art" in h or "b.a" in h:
-        keys.append("ba")
-    if "science" in h or "b.sc" in h:
-        keys.append("bsc")
+    if "commerce" in h:
+        keys.append("commerce")
+    if "art" in h:
+        keys.append("arts")
+    if "science" in h:
+        keys.append("science")
     return keys or ["general"]
 
 
