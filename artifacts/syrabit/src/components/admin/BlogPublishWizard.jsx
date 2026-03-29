@@ -142,7 +142,7 @@ const BLOCK_ICONS = {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-export default function BlogPublishWizard({ adminToken }) {
+export default function BlogPublishWizard({ adminToken, hubContext, onHubContext }) {
   const [state, dispatch] = useReducer(reducer, null, () => {
     const saved = loadState();
     return saved ? { ...INITIAL_STATE, ...saved } : INITIAL_STATE;
@@ -162,6 +162,44 @@ export default function BlogPublishWizard({ adminToken }) {
 
   // Save state to localStorage whenever it changes
   useEffect(() => { saveState(state); }, [state]);
+
+  // ── Hub context IN: pre-fill scope from other Content Hub tabs ──────────────
+  // Fires when the user switches to Blog Publisher from Syllabus / Editor / PYQ
+  // tabs that already have a subject selected. Only applies when the wizard has
+  // no scope of its own so we never stomp over the user's in-progress work.
+  useEffect(() => {
+    if (!hubContext?.subjectId) return;
+    if (state.subjectId) return; // wizard already has a scope — leave it alone
+    dispatch({ type: 'SET', payload: {
+      boardId:     hubContext.boardId    || '',
+      boardName:   hubContext.boardName  || '',
+      classId:     hubContext.classId    || '',
+      className:   hubContext.className  || '',
+      streamId:    hubContext.streamId   || '',
+      streamName:  hubContext.streamName || '',
+      subjectId:   hubContext.subjectId  || '',
+      subjectName: hubContext.subjectName|| '',
+    }});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hubContext?.subjectId]);
+
+  // ── Hub context OUT: broadcast scope back to other tabs ─────────────────────
+  // When the user picks a subject inside the wizard, update hub context so that
+  // switching to Editor / AI Studio / PYQ reflects the same subject.
+  useEffect(() => {
+    if (!onHubContext || !state.subjectId) return;
+    onHubContext({
+      boardId:     state.boardId,
+      boardName:   state.boardName,
+      classId:     state.classId,
+      className:   state.className,
+      streamId:    state.streamId,
+      streamName:  state.streamName,
+      subjectId:   state.subjectId,
+      subjectName: state.subjectName,
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.subjectId]);
 
   // Load hierarchy data
   useEffect(() => {

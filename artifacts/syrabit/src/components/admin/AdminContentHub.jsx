@@ -270,6 +270,7 @@ export default function AdminContentHub({ adminToken }) {
               adminToken={adminToken}
               onNavigate={navigate}
               hubContext={hubContext}
+              onHubContext={setHubContext}
             />
           </div>
         )}
