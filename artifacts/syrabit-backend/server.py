@@ -12145,6 +12145,82 @@ async def list_pdf_imports(
     return {"imports": entries, "total": len(entries)}
 
 
+@api.delete("/admin/syllabus/pdf-imports/{import_id}")
+async def delete_pdf_import(
+    import_id: str,
+    remove_content: bool = False,
+    admin: dict = Depends(get_admin_user),
+):
+    """Delete a PDF import record. If remove_content=true, also deletes linked subjects + chapters."""
+    doc = await db.syllabus_pdf_imports.find_one({"import_id": import_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    if remove_content:
+        subject_ids = doc.get("linked_subject_ids", [])
+        if subject_ids:
+            await db.chapters.delete_many({"subject_id": {"$in": subject_ids}})
+            await db.subjects.delete_many({"id": {"$in": subject_ids}})
+            _invalidate_content_cache("subjects")
+            _invalidate_content_cache("chapters")
+
+    await db.syllabus_pdf_imports.delete_one({"import_id": import_id})
+    return {"success": True, "import_id": import_id, "content_removed": remove_content}
+
+
+@api.put("/admin/syllabus/pdf-imports/{import_id}")
+async def update_pdf_import(
+    import_id: str,
+    body: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Update chapters/topics on an existing PDF import and sync to linked subjects/chapters."""
+    doc = await db.syllabus_pdf_imports.find_one({"import_id": import_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Import not found")
+
+    chapters   = body.get("chapters")
+    topics     = body.get("topics")
+    guidelines = body.get("guidelines")
+
+    update_fields: dict = {"updated_at": datetime.now(timezone.utc).isoformat()}
+    if chapters  is not None: update_fields["chapters"]   = chapters
+    if topics    is not None: update_fields["topics"]     = topics
+    if guidelines is not None: update_fields["guidelines"] = guidelines
+
+    await db.syllabus_pdf_imports.update_one({"import_id": import_id}, {"$set": update_fields})
+
+    # Sync chapter titles to linked subjects
+    if chapters is not None:
+        subject_ids = doc.get("linked_subject_ids", [])
+        for subject_id in subject_ids:
+            existing_slugs = {
+                c["slug"] for c in
+                await db.chapters.find({"subject_id": subject_id}, {"slug": 1}).to_list(200)
+            }
+            for i, title in enumerate(chapters, 1):
+                slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+                if slug not in existing_slugs:
+                    await db.chapters.insert_one({
+                        "id": str(uuid.uuid4()),
+                        "subject_id": subject_id,
+                        "title": title, "slug": slug,
+                        "description": f"Chapter {i}: {title}",
+                        "chapter_number": i,
+                        "order_index": i, "order": i,
+                        "content": "", "content_type": "notes",
+                        "status": "published", "source": "pdf_import",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    })
+            # Update chapter_count
+            new_count = await db.chapters.count_documents({"subject_id": subject_id})
+            await db.subjects.update_one({"id": subject_id}, {"$set": {"chapter_count": new_count}})
+        _invalidate_content_cache("chapters")
+        _invalidate_content_cache("subjects")
+
+    return {"success": True, "import_id": import_id}
+
+
 @api.post("/admin/syllabus/confirm-import")
 async def confirm_syllabus_import(
     body: dict = Body(...),

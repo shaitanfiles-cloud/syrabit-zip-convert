@@ -344,6 +344,15 @@ export const syllabusExtractPdf = (token, formData) => {
 export const syllabusConfirmImport = (token, payload) =>
   axios.post(`${API_BASE}/admin/syllabus/confirm-import`, payload, { headers: adminHeaders(token), withCredentials: true });
 
+export const syllabusGetImports = (token, paper_type = '') =>
+  axios.get(`${API_BASE}/admin/syllabus/pdf-imports`, { headers: adminHeaders(token), withCredentials: true, params: paper_type ? { paper_type } : {} });
+
+export const syllabusDeleteImport = (token, import_id, remove_content = false) =>
+  axios.delete(`${API_BASE}/admin/syllabus/pdf-imports/${import_id}`, { headers: adminHeaders(token), withCredentials: true, params: { remove_content } });
+
+export const syllabusUpdateImport = (token, import_id, payload) =>
+  axios.put(`${API_BASE}/admin/syllabus/pdf-imports/${import_id}`, payload, { headers: adminHeaders(token), withCredentials: true });
+
 export const cmsAiSuggest = (token, text, action, subject = '', topic = '') =>
   axios.post(`${API_BASE}/admin/cms/ai-suggest`, { text, action, subject, topic }, { headers: adminHeaders(token), withCredentials: true });
 
