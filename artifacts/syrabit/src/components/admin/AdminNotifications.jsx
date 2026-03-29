@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Bell, Send, Clock, Trash2, Users, Loader2, Info, CheckCircle2, AlertTriangle, XCircle, Zap, Plus, ToggleLeft, ToggleRight } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { getNotificationTriggers, createNotificationTrigger, updateNotificationTrigger, deleteNotificationTrigger } from '@/utils/api';
@@ -39,7 +40,7 @@ const AUDIENCES = [
   { id: 'pro',     label: 'Pro Plan',     icon: Bell  },
 ];
 
-export default function AdminNotifications({ adminToken }) {
+export default function AdminNotifications({ adminToken, onNavigate }) {
   const [notifs, setNotifs]     = useState([]);
   const [title, setTitle]       = useState('');
   const [message, setMessage]   = useState('');
@@ -371,6 +372,7 @@ export default function AdminNotifications({ adminToken }) {
       </div>
     </div>
       )}
+      <AdminQuickLinks links={['users','conversations','settings','activitylog']} onNavigate={onNavigate} />
     </div>
   );
 }

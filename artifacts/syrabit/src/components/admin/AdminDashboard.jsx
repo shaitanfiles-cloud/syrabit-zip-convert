@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import AdminQuickLinks from './AdminQuickLinks';
 import {
   Users, MessageSquare, BookOpen, Zap, Loader2, Activity,
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
@@ -898,6 +899,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         )}
       </div>
+      <AdminQuickLinks links={['content','seomanager','analytics','users','conversations','vertex','monetization']} onNavigate={onNavigate} />
     </div>
   );
 }

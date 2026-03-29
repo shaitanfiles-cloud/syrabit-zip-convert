@@ -3,6 +3,7 @@ import {
   Loader2, MessageSquare, BookOpen, Search, Mail, User,
   ChevronRight, Crown, X, Clock, ArrowLeft, Sparkles, SmilePlus, Frown, Meh, TrendingUp,
 } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { adminGetConversations, extractFaqs, conversationsSentiment } from '@/utils/api';
 import { toast } from 'sonner';
 import { formatDistanceToNow, format } from 'date-fns';
@@ -55,7 +56,7 @@ function SentimentBar({ data }) {
   );
 }
 
-export default function AdminConversations({ adminToken }) {
+export default function AdminConversations({ adminToken, onNavigate }) {
   const [conversations, setConversations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(null);
@@ -357,6 +358,7 @@ export default function AdminConversations({ adminToken }) {
       </div>
       </div>
       )}
+      <AdminQuickLinks links={['users','analytics','dashboard','vertex']} onNavigate={onNavigate} />
     </div>
   );
 }

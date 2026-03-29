@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2 } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
 import axios from 'axios';
 import { llmCosts } from '@/utils/api';
@@ -48,7 +49,7 @@ function CustomTooltip({ active, payload, label }) {
   );
 }
 
-export default function AdminHealth({ adminToken }) {
+export default function AdminHealth({ adminToken, onNavigate }) {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -419,6 +420,7 @@ export default function AdminHealth({ adminToken }) {
         </ol>
       </div>
       </>)}
+      <AdminQuickLinks links={['apiconfig','settings','dashboard','ratelimits']} onNavigate={onNavigate} />
     </div>
   );
 }

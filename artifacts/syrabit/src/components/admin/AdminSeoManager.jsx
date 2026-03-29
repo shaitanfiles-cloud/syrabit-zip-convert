@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import AdminQuickLinks from './AdminQuickLinks';
 import {
   Loader2, RefreshCw, Globe, FileText, Sparkles, CheckCircle2,
   XCircle, BookOpen, Zap, Map, Eye, EyeOff, Trash2, Search,
@@ -1193,6 +1194,7 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
           </div>
         </div>
       )}
+      <AdminQuickLinks links={['content','vertex','analytics','dashboard','editor']} onNavigate={onNavigate} />
     </div>
   );
 }

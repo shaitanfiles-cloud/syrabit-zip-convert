@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Edit2, X, CheckCircle2, Cpu, Zap, Globe, AlertTriangle } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import axios from 'axios';
 
@@ -59,7 +60,7 @@ function TierCard({ tier, policy, onSave }) {
   );
 }
 
-export default function AdminRateLimits({ adminToken }) {
+export default function AdminRateLimits({ adminToken, onNavigate }) {
   const [policies, setPolicies] = useState(DEFAULT_POLICIES);
   const [stats, setStats]       = useState({ active_requests: 0, tokens_today: 0, daily_budget: 2000000, cost_degraded: false });
   const [loading, setLoading]   = useState(true);
@@ -122,6 +123,7 @@ export default function AdminRateLimits({ adminToken }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {TIERS.map(({id}) => <TierCard key={id} tier={id} policy={policies[id] || DEFAULT_POLICIES[id]} onSave={handleSave} />)}
       </div>
+      <AdminQuickLinks links={['health','apiconfig','activitylog','settings']} onNavigate={onNavigate} />
     </div>
   );
 }

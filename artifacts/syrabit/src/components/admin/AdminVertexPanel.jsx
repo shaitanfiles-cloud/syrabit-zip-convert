@@ -16,6 +16,7 @@ import {
 } from '@/utils/api';
 import axios from 'axios';
 import { adminSeoExtractTopics, adminSeoCreateTopic } from '@/utils/api';
+import AdminQuickLinks from './AdminQuickLinks';
 
 // ── Hub context reader ────────────────────────────────────────────────────────
 function readHubCtx() {
@@ -723,6 +724,7 @@ export default function AdminVertexPanel({ token, adminToken, onNavigate }) {
           • <strong style={{ color: '#e8e8e8' }}>Document Upload</strong> — Extract topics/MCQs from AHSEC PDFs
         </div>
       </div>
+      <AdminQuickLinks links={['seomanager','content','analytics','dashboard']} onNavigate={onNavigate} />
     </div>
   );
 }

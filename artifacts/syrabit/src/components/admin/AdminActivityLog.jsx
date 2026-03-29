@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Activity, Trash2, RefreshCw, Download, Search, Info, AlertTriangle, AlertOctagon } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import { adminGetActivityLog } from '@/utils/api';
 import axios from 'axios';
@@ -30,7 +31,7 @@ function groupByDate(logs) {
   return groups;
 }
 
-export default function AdminActivityLog({ adminToken }) {
+export default function AdminActivityLog({ adminToken, onNavigate }) {
   const [logs, setLogs]     = useState([]);
   const [search, setSearch] = useState('');
   const [level, setLevel]   = useState('all');
@@ -195,6 +196,7 @@ export default function AdminActivityLog({ adminToken }) {
           </div>
         ))
       )}
+      <AdminQuickLinks links={['users','conversations','dashboard','ratelimits']} onNavigate={onNavigate} />
     </div>
   );
 }

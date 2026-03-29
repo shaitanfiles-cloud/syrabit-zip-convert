@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Save, Loader2, Settings } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -7,7 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { adminGetSettings, adminUpdateSettings } from '@/utils/api';
 import { toast } from 'sonner';
 
-export default function AdminSettings({ adminToken }) {
+export default function AdminSettings({ adminToken, onNavigate }) {
   const [settings, setSettings] = useState({
     registrations_open: true,
     maintenance_mode: false,
@@ -92,6 +93,7 @@ export default function AdminSettings({ adminToken }) {
         {saving ? <Loader2 size={16} className="animate-spin mr-2" /> : <Save size={16} className="mr-2" />}
         Save Settings
       </Button>
+      <AdminQuickLinks links={['apiconfig','googleauth','health','ratelimits']} onNavigate={onNavigate} />
     </div>
   );
 }

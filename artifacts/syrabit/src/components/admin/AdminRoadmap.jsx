@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ChevronDown, ChevronUp, Plus, Trash2, X } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import { adminGetRoadmap, adminCreateRoadmapItem, adminDeleteRoadmapItem, adminUpdateRoadmapItem } from '@/utils/api';
 
@@ -189,7 +190,7 @@ function AddItemForm({ adminToken, onRefresh, onClose }) {
   );
 }
 
-export default function AdminRoadmap({ adminToken }) {
+export default function AdminRoadmap({ adminToken, onNavigate }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
@@ -279,6 +280,7 @@ export default function AdminRoadmap({ adminToken }) {
           );
         })
       )}
+      <AdminQuickLinks links={['dashboard','content','analytics']} onNavigate={onNavigate} />
     </div>
   );
 }

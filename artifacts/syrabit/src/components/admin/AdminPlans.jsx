@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Zap, Crown, Sparkles, Edit2, X, CheckCircle2, Loader2 } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import { adminGetDashboard, adminGetPlanConfig, adminUpdatePlanConfig } from '@/utils/api';
 
@@ -75,7 +76,7 @@ function PlanCard({ planKey, ui, config, dist, onSave, saving }) {
   );
 }
 
-export default function AdminPlans({ adminToken }) {
+export default function AdminPlans({ adminToken, onNavigate }) {
   const [dist, setDist] = useState({ free: 0, starter: 0, pro: 0 });
   const [planConfig, setPlanConfig] = useState({
     free:    { price: 0,   credits: 30,   validity: 'monthly' },
@@ -158,6 +159,7 @@ export default function AdminPlans({ adminToken }) {
         <p className="text-sm text-violet-300 font-medium">💳 Enable live payments</p>
         <p className="text-xs text-white/50 mt-1">Configure Razorpay or Stripe credentials in the API Config section to activate real payment checkout and automatic plan upgrades.</p>
       </div>
+      <AdminQuickLinks links={['monetization','analytics','users','apiconfig']} onNavigate={onNavigate} />
     </div>
   );
 }

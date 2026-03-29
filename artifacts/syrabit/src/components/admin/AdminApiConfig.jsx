@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Key, Zap, CreditCard, Mail, Bell, BarChart3, Shield, CheckCircle2, Eye, EyeOff, TestTube2, Loader2, Database } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import { adminGetApiConfig, adminUpdateApiConfig } from '@/utils/api';
 import axios from 'axios';
@@ -44,7 +45,7 @@ function SecretInput({ value, onChange, placeholder }) {
   );
 }
 
-export default function AdminApiConfig({ adminToken }) {
+export default function AdminApiConfig({ adminToken, onNavigate }) {
   const [active, setActive] = useState('groq');
   const [creds, setCreds] = useState({ groqKey: '', supabaseUrl: '', supabaseServiceKey: '', supabaseAnonKey: '', razorpayKeyId: '', razorpayKeySecret: '', razorpayWebhookSecret: '', resendKey: '', oneSignalKey: '', posthogKey: '', googleClientId: '', googleClientSecret: '' });
   const [testing, setTesting] = useState(false);
@@ -255,6 +256,7 @@ export default function AdminApiConfig({ adminToken }) {
           )}
         </div>
       </div>
+      <AdminQuickLinks links={['vertex','health','settings','googleauth','ratelimits']} onNavigate={onNavigate} />
     </div>
   );
 }

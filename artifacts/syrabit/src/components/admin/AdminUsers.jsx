@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Loader2, Search, Ban, CheckCircle, Crown, ChevronDown, AlertTriangle, RefreshCw, TrendingDown, Activity, CreditCard, Plus, Minus, X } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -130,7 +131,7 @@ function CreditsModal({ user, adminToken, onClose, onUpdated }) {
   );
 }
 
-export default function AdminUsers({ adminToken, navContext }) {
+export default function AdminUsers({ adminToken, navContext, onNavigate }) {
   const [users, setUsers]             = useState([]);
   const [loading, setLoading]         = useState(true);
   const [search, setSearch]           = useState('');
@@ -373,6 +374,7 @@ export default function AdminUsers({ adminToken, navContext }) {
           </div>
         )}
       </div>
+      <AdminQuickLinks links={['conversations','analytics','notifications','monetization']} onNavigate={onNavigate} />
     </div>
   );
 }

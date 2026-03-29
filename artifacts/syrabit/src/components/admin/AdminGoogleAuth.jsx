@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { CheckCircle2, Eye, EyeOff, TestTube2, Loader2 } from 'lucide-react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import { adminGetApiConfig, adminUpdateApiConfig } from '@/utils/api';
 import axios from 'axios';
 
-export default function AdminGoogleAuth({ adminToken }) {
+export default function AdminGoogleAuth({ adminToken, onNavigate }) {
   const [clientId, setClientId]     = useState('');
   const [clientSecret, setSecret]   = useState('');
   const [showSecret, setShowSecret] = useState(false);
@@ -141,6 +142,7 @@ export default function AdminGoogleAuth({ adminToken }) {
           </div>
         )}
       </div>
+      <AdminQuickLinks links={['settings','apiconfig','users']} onNavigate={onNavigate} />
     </div>
   );
 }

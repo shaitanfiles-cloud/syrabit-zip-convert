@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import AdminQuickLinks from './AdminQuickLinks';
 import { Loader2, RefreshCw, Eye, Globe, TrendingUp, Users, Search, BookOpen, Bot,
   FileText, ExternalLink, BarChart2, Flame, DollarSign, Zap, Target, ArrowUpRight, ArrowDownRight,
   CheckCircle, AlertCircle, AlertTriangle, Link as LinkIcon, Calendar, MessageSquare } from 'lucide-react';
@@ -916,7 +917,7 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
           )}
         </div>
       )}
-
+      <AdminQuickLinks links={['seomanager','users','conversations','monetization','dashboard']} onNavigate={onNavigate} />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import AdminQuickLinks from './AdminQuickLinks';
 import {
   Loader2, DollarSign, Users, TrendingUp, CreditCard,
   RefreshCw, ArrowUp, ArrowDown, Gift, Percent,
@@ -463,6 +464,7 @@ export default function AdminMonetization({ adminToken, onNavigate }) {
           </div>
         </div>
       )}
+      <AdminQuickLinks links={['plans','analytics','users','dashboard']} onNavigate={onNavigate} />
     </div>
   );
 }
