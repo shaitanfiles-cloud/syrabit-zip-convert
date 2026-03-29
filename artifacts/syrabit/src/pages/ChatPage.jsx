@@ -365,41 +365,60 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
               <MarkdownContent content={cleanContent} streaming={false} sources={msg.sources} />
             )}
 
-            {!msg.streaming && msg.content && (
-              <SourcesCard
-                sources={msg.sources}
-                ragSource={msg.rag_source}
-                ragChunks={msg.rag_chunks}
-                ragSubjectId={msg.rag_subject_id}
-                ragSubjectName={msg.rag_subject_name}
-              />
-            )}
-
-            {!msg.streaming && msg.content && (
-              <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                {timeStr && (
-                  <span className="text-[11px] text-muted-foreground">{timeStr}</span>
-                )}
-                <button
-                  onClick={handleCopy}
-                  className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
-                  title="Copy"
-                  aria-label={copied ? 'Copied' : 'Copy'}
-                >
-                  {copied ? <Check size={14} style={{ color: '#34d399' }} /> : <Copy size={14} />}
-                </button>
-                {isLast && onRegenerate && (
-                  <button
-                    onClick={onRegenerate}
-                    className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
-                    title="Regenerate"
-                    aria-label="Regenerate"
-                  >
-                    <RefreshCw size={14} />
-                  </button>
-                )}
-              </div>
-            )}
+            {!msg.streaming && msg.content && (() => {
+              const hasSrc = msg.rag_source && msg.rag_source !== 'none';
+              const pillName = msg.rag_subject_name
+                || (msg.rag_source === 'document' ? 'Document' : null)
+                || (msg.rag_source === 'web' ? 'Web Search' : null)
+                || (hasSrc ? 'AssamBoard Curriculum' : null);
+              const pillUrl = msg.rag_subject_id
+                ? `/subject/${msg.rag_subject_id}`
+                : (msg.sources && msg.sources[0]?.url) || null;
+              const handlePillNav = (url) => {
+                if (!url) return;
+                if (url.startsWith('http')) window.open(url, '_blank', 'noopener,noreferrer');
+                else navigate(url);
+              };
+              return (
+                <div className="flex items-center gap-1.5 mt-1.5">
+                  {pillName && (
+                    <button
+                      onClick={() => handlePillNav(pillUrl)}
+                      className="source-mini-pill"
+                      title={pillUrl ? `View ${pillName}` : pillName}
+                      disabled={!pillUrl}
+                    >
+                      <BookOpen size={10} className="shrink-0" />
+                      <span className="truncate">{pillName}</span>
+                      {pillUrl && <ExternalLink size={8} className="shrink-0 opacity-50" />}
+                    </button>
+                  )}
+                  <div className="flex items-center gap-1.5 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+                    {timeStr && (
+                      <span className="text-[11px] text-muted-foreground">{timeStr}</span>
+                    )}
+                    <button
+                      onClick={handleCopy}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                      title="Copy"
+                      aria-label={copied ? 'Copied' : 'Copy'}
+                    >
+                      {copied ? <Check size={14} style={{ color: '#34d399' }} /> : <Copy size={14} />}
+                    </button>
+                    {isLast && onRegenerate && (
+                      <button
+                        onClick={onRegenerate}
+                        className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                        title="Regenerate"
+                        aria-label="Regenerate"
+                      >
+                        <RefreshCw size={14} />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
