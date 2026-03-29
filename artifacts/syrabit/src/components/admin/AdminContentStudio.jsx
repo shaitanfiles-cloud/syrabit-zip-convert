@@ -6,6 +6,7 @@ import {
   Globe, Zap, AlertTriangle, GitBranch, Save,
   ChevronDown, ChevronRight, Square, CheckSquare,
   ArrowRightLeft, Link2, ExternalLink, List,
+  ArrowRight, X, CheckCheck,
 } from 'lucide-react';
 import axios from 'axios';
 import { API_BASE, vertexQualityScore } from '@/utils/api';
@@ -207,6 +208,8 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [bulkProgress, setBulkProgress]   = useState({ done: 0, total: 0 });
   const [mergingToCms, setMergingToCms]   = useState({});
+  const [fromEditor, setFromEditor]       = useState(false);
+  const [nextStepsDismissed, setNextStepsDismissed] = useState(false);
 
   const headers = { withCredentials: true };
 
@@ -239,6 +242,8 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
       if (pf.boardId)   setSelectedBoardId(pf.boardId);
       if (pf.classId)   setSelectedClassId(pf.classId);
       if (pf.streamId)  setSelectedStreamId(pf.streamId);
+      setFromEditor(true);
+      setNextStepsDismissed(false);
       if (pf.subject)   toast.success(`Pre-filled with "${pf.subject}" chapter content — review and generate`);
     } catch {}
   }, []);
@@ -752,6 +757,96 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
           )}
         </div>
       )}
+
+      {/* ══════════════════════════════════════════════════════════════
+          NEXT STEPS GUIDE (from Content Editor)
+      ══════════════════════════════════════════════════════════════ */}
+      {fromEditor && !nextStepsDismissed && view !== 'gaps' && (() => {
+        const steps = [
+          {
+            num: 1,
+            label: 'Content Ready',
+            sub: 'Chapter loaded from Editor',
+            done: !!(chapter.trim() || rawText.trim()),
+          },
+          {
+            num: 2,
+            label: 'Parse with AI',
+            sub: 'Click "Parse with AI" below',
+            done: blocks.length > 0,
+          },
+          {
+            num: 3,
+            label: 'SEO & Title',
+            sub: 'Generate metadata for ranking',
+            done: !!(title.trim() && metaDescription.trim()),
+          },
+          {
+            num: 4,
+            label: 'Publish Page',
+            sub: 'Go live on Syrabit.ai',
+            done: !!published,
+          },
+        ];
+        const activeIdx = steps.findIndex(s => !s.done);
+        const allDone = activeIdx === -1;
+
+        return (
+          <div className="rounded-xl border overflow-hidden"
+            style={{ background: 'rgba(124,58,237,0.06)', borderColor: 'rgba(124,58,237,0.22)' }}>
+            <div className="flex items-center justify-between px-4 py-2.5 border-b" style={{ borderColor: 'rgba(124,58,237,0.15)', background: 'rgba(124,58,237,0.09)' }}>
+              <div className="flex items-center gap-2">
+                {allDone
+                  ? <CheckCheck size={13} style={{ color: '#34d399' }} />
+                  : <Sparkles size={13} style={{ color: '#a78bfa' }} />}
+                <span className="text-xs font-semibold" style={{ color: allDone ? '#34d399' : '#c4b0f0' }}>
+                  {allDone ? 'All steps complete — page is live!' : 'Next Steps in AI Studio'}
+                </span>
+                {!allDone && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium"
+                    style={{ background: 'rgba(124,58,237,0.20)', color: '#a78bfa' }}>
+                    Step {(activeIdx + 1)} of {steps.length}
+                  </span>
+                )}
+              </div>
+              <button onClick={() => setNextStepsDismissed(true)}
+                className="w-5 h-5 rounded flex items-center justify-center hover:bg-white/10 transition-colors"
+                style={{ color: 'rgba(255,255,255,0.30)' }}>
+                <X size={11} />
+              </button>
+            </div>
+            <div className="flex items-stretch divide-x" style={{ divideColor: 'rgba(124,58,237,0.15)' }}>
+              {steps.map((step, i) => {
+                const isActive = i === activeIdx;
+                const isFuture = !step.done && i > activeIdx;
+                return (
+                  <div key={step.num} className="flex-1 flex items-start gap-2 px-3 py-3 min-w-0"
+                    style={{ borderRight: i < steps.length - 1 ? '1px solid rgba(124,58,237,0.13)' : 'none' }}>
+                    <div className="w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5 text-[10px] font-bold transition-all"
+                      style={step.done
+                        ? { background: 'rgba(52,211,153,0.20)', color: '#34d399' }
+                        : isActive
+                          ? { background: 'rgba(124,58,237,0.35)', color: '#c4b0f0', boxShadow: '0 0 0 2px rgba(124,58,237,0.25)' }
+                          : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.25)' }}>
+                      {step.done ? <CheckCircle size={11} /> : step.num}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold truncate leading-tight"
+                        style={{ color: step.done ? '#34d399' : isActive ? '#e0d4ff' : 'rgba(255,255,255,0.30)' }}>
+                        {step.label}
+                      </p>
+                      <p className="text-[10px] leading-tight mt-0.5 truncate"
+                        style={{ color: step.done ? 'rgba(52,211,153,0.60)' : isActive ? 'rgba(196,176,240,0.60)' : 'rgba(255,255,255,0.18)' }}>
+                        {step.sub}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ══════════════════════════════════════════════════════════════
           EDITOR + PREVIEW TABS
