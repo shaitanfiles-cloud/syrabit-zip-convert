@@ -367,32 +367,39 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
             )}
 
             {!msg.streaming && msg.content && (() => {
-              const hasSrc = msg.rag_source && msg.rag_source !== 'none';
-              const firstSrc = msg.sources && msg.sources[0];
-              const pillName = msg.rag_subject_name
-                || firstSrc?.title
-                || (msg.rag_source === 'document' ? 'Document' : null)
-                || (msg.rag_source === 'web' ? 'Web Search' : null)
-                || (hasSrc ? 'AssamBoard Curriculum' : null);
+              const subjectLabel = msg.rag_subject_name || msg.ctx_subject_name || null;
+              const chapterLabel = msg.rag_chapter_name || null;
               const pillUrl = msg.rag_subject_id
                 ? `/subject/${msg.rag_subject_id}`
-                : firstSrc?.url
-                || '/library';
+                : msg.sources?.[0]?.url || '/library';
               const handlePillNav = (url) => {
                 if (!url) return;
                 if (url.startsWith('http')) window.open(url, '_blank', 'noopener,noreferrer');
                 else navigate(url);
               };
+              const showPill = subjectLabel || chapterLabel || (msg.rag_source && msg.rag_source !== 'none');
               return (
                 <div className="flex items-center gap-1.5 mt-1.5">
-                  {pillName && (
+                  {showPill && (
                     <button
                       onClick={() => handlePillNav(pillUrl)}
                       className="source-mini-pill"
-                      title={`View ${pillName}`}
+                      title="View source"
                     >
                       <BookOpen size={10} className="shrink-0" />
-                      <span className="truncate">{pillName}</span>
+                      <span className="pill-seg pill-brand">AssamBoard Curriculum</span>
+                      {subjectLabel && (
+                        <>
+                          <span className="pill-dot">·</span>
+                          <span className="pill-seg truncate">{subjectLabel}</span>
+                        </>
+                      )}
+                      {chapterLabel && (
+                        <>
+                          <span className="pill-dot">·</span>
+                          <span className="pill-seg truncate">{chapterLabel}</span>
+                        </>
+                      )}
                       <ExternalLink size={8} className="shrink-0 opacity-50" />
                     </button>
                   )}
@@ -716,6 +723,7 @@ export default function ChatPage() {
             if (parsed.rag_chunks !== undefined) ragChunks = parsed.rag_chunks;
             if (parsed.rag_subject_id) ragSubjectId = parsed.rag_subject_id;
             if (parsed.rag_subject_name) ragSubjectName = parsed.rag_subject_name;
+            if (parsed.rag_chapter_name) ragChapterName = parsed.rag_chapter_name;
             if (parsed.error) {
               hasError = true;
               toast.error(parsed.error || 'AI service error — please try again.');
@@ -774,7 +782,7 @@ export default function ChatPage() {
       // Note: credits are already updated by syrabit_done event; do not double-increment here
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
-          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, sources: libSources }
+          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, ctx_subject_name: subject?.name || null, sources: libSources }
           : m
       ));
       setSyncState('idle');
