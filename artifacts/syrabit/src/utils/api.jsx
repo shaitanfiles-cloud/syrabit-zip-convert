@@ -1,9 +1,26 @@
 import axios from 'axios';
+import { toast } from 'sonner';
 
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 export const API_BASE = `${BACKEND_URL}/api`;
 
 const authConfig = () => ({ withCredentials: true });
+
+// Global 401 interceptor — redirect admin to login on session expiry
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      const isAdminRoute = window.location.pathname.startsWith('/admin') &&
+        !window.location.pathname.startsWith('/admin/login');
+      if (isAdminRoute) {
+        toast.error('Session expired. Please log in again.');
+        window.location.href = '/admin/login';
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 export const apiClient = () =>
   axios.create({ baseURL: API_BASE, withCredentials: true });
@@ -51,8 +68,8 @@ export const adminLogout = () =>
 export const adminGetDashboard = (token) =>
   axios.get(`${API_BASE}/admin/dashboard`, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminGetUsers = (token) =>
-  axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true });
+export const adminGetUsers = (token, params = {}) =>
+  axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true, params });
 
 export const adminUpdateUserStatus = (token, userId, status) =>
   axios.patch(`${API_BASE}/admin/users/${userId}/status`, { status }, { headers: adminHeaders(token), withCredentials: true });
@@ -321,3 +338,15 @@ export const syllabusImportPdf = (token, formData) =>
 
 export const cmsAiSuggest = (token, text, action, subject = '', topic = '') =>
   axios.post(`${API_BASE}/admin/cms/ai-suggest`, { text, action, subject, topic }, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminUpdateUserCredits = (token, userId, data) =>
+  axios.patch(`${API_BASE}/admin/users/${userId}/credits`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSearchUsers = (token, params = {}) =>
+  axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true, params });
+
+export const adminGetPlanTiers = (token) =>
+  axios.get(`${API_BASE}/admin/plan-config`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminUpdatePlanTier = (token, plan, data) =>
+  axios.patch(`${API_BASE}/admin/plan-config/${plan}`, data, { headers: adminHeaders(token), withCredentials: true });

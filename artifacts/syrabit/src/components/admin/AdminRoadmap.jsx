@@ -32,7 +32,7 @@ function StepCard({ step, adminToken, onRefresh }) {
 
   const handleDelete = async (e) => {
     e.stopPropagation();
-    if (!window.confirm(`Delete "${step.title}"?`)) return;
+    if (!confirm(`Delete "${step.title}"?`)) return;
     setDeleting(true);
     try {
       await adminDeleteRoadmapItem(adminToken, step.id || step._id);

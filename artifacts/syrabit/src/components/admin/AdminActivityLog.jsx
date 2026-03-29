@@ -56,7 +56,7 @@ export default function AdminActivityLog({ adminToken }) {
   useEffect(() => { load(); }, [load]);
 
   const handleClear = async () => {
-    if (!window.confirm('Clear activity log?')) return;
+    if (!confirm('Clear activity log?')) return;
     try {
       await axios.delete(`${API_BASE}/admin/activity-log`, {
         headers: adminHeaders(adminToken),

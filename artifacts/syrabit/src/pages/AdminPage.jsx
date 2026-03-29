@@ -99,6 +99,7 @@ const SECTION_COMPONENTS = {
 export default function AdminPage() {
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('dashboard');
+  const [navContext, setNavContext]        = useState(null);
   const [collapsed, setCollapsed]         = useState(false);
   const [verifying, setVerifying]         = useState(true);
   const [sysStatus, setSysStatus]         = useState('ok'); // ok | warn | maintenance
@@ -324,7 +325,12 @@ export default function AdminPage() {
 
         {/* Section content */}
         <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6">
-          <ActiveComponent adminToken={adminToken} adminName={adminName} onNavigate={setActiveSection} />
+          <ActiveComponent
+            adminToken={adminToken}
+            adminName={adminName}
+            onNavigate={(section, ctx = null) => { setNavContext(ctx); setActiveSection(section); }}
+            navContext={activeSection === 'users' ? navContext : null}
+          />
         </main>
       </div>
     </div>

@@ -290,7 +290,7 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate }) {
 
   const handleDelete = async (id, e) => {
     e.stopPropagation();
-    if (!window.confirm('Delete this document permanently?')) return;
+    if (!confirm('Delete this document permanently?')) return;
     try {
       await axios.delete(`${API}/admin/content/cms-documents/${id}`, authHeaders(adminToken));
       if (editDoc?.id === id) { setEditDoc(null); setForm(EMPTY_DOC); }

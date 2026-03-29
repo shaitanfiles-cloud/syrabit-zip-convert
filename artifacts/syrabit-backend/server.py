@@ -6078,14 +6078,24 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
     }
 
 @api.get("/admin/users")
-async def admin_get_users(admin: dict = Depends(get_admin_user)):
+async def admin_get_users(
+    search: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    admin: dict = Depends(get_admin_user),
+):
     users = await supa_list_users()
+    if search:
+        q = search.lower()
+        users = [u for u in users if q in u.get("email", "").lower() or q in u.get("name", "").lower()]
+    total = len(users)
+    users = users[offset: offset + limit]
     result = []
     for u in users:
         u.pop("password_hash", None)
         credits_info = await get_user_credits(u)
         result.append({**u, "credits_used": credits_info["used"], "credits_limit": credits_info["limit"]})
-    return result
+    return {"users": result, "total": total, "limit": limit, "offset": offset}
 
 @api.patch("/admin/users/{user_id}/status")
 async def admin_update_user_status(user_id: str, data: UserStatusUpdate, admin: dict = Depends(get_admin_user)):
@@ -6111,9 +6121,23 @@ async def admin_update_user_credits(user_id: str, data: UserCreditsUpdate, admin
     user = await supa_get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    new_credits = user.get("credits_used", 0) + data.credits_delta
-    await supa_update_user(user_id, {"credits_used": max(0, new_credits)})
-    return {"message": "Credits updated"}
+    if data.action not in ("add", "deduct", "reset"):
+        raise HTTPException(status_code=400, detail="action must be one of: add, deduct, reset")
+    if data.action != "reset" and (data.amount is None or data.amount < 0):
+        raise HTTPException(status_code=400, detail="amount must be a non-negative integer for add/deduct actions")
+    credits_used = user.get("credits_used", 0)
+    credits_limit = user.get("credits_limit", 0)
+    action = data.action
+    amount = data.amount if data.amount is not None else 0
+    update = {}
+    if action == "reset":
+        update["credits_used"] = 0
+    elif action == "deduct":
+        update["credits_used"] = min(credits_limit, credits_used + amount)
+    else:
+        update["credits_limit"] = credits_limit + amount
+    await supa_update_user(user_id, update)
+    return {"message": "Credits updated", **update}
 
 @api.get("/admin/conversations")
 async def admin_get_conversations(admin: dict = Depends(get_admin_user)):
@@ -7806,6 +7830,17 @@ async def admin_get_plan_config(admin: dict = Depends(get_admin_user)):
 async def admin_update_plan_config(data: dict, admin: dict = Depends(get_admin_user)):
     await db.plan_config.replace_one({}, data, upsert=True)
     return {"message": "Plan config updated"}
+
+@api.patch("/admin/plan-config/{plan}")
+async def admin_patch_plan_tier(plan: str, data: dict, admin: dict = Depends(get_admin_user)):
+    """Safely update a single plan tier without touching other tiers."""
+    if plan not in ("free", "starter", "pro"):
+        raise HTTPException(status_code=400, detail="Unknown plan key")
+    existing = await db.plan_config.find_one({}, {"_id": 0}) or DEFAULT_PLAN_CONFIG.copy()
+    tier = {**existing.get(plan, {}), **data}
+    existing[plan] = tier
+    await db.plan_config.replace_one({}, existing, upsert=True)
+    return {"message": f"{plan} plan updated", "tier": tier}
 
 # ─────────────────────────────────────────────
 # API CONFIG
@@ -9578,6 +9613,35 @@ async def sarvam_status():
         "enabled": sarvam_client is not None,
         "supported_languages": sorted(_SARVAM_LANG_CODES),
     }
+
+_LANG_LABELS = {
+    "as": "Assamese (অসমীয়া)", "as-IN": "Assamese (অসমীয়া)",
+    "bn": "Bengali (বাংলা)", "bn-IN": "Bengali (বাংলা)",
+    "en": "English", "en-IN": "English (India)",
+    "gu": "Gujarati (ગુજરાતી)", "gu-IN": "Gujarati (ગુજરાતી)",
+    "hi": "Hindi (हिन्दी)", "hi-IN": "Hindi (हिन्दी)",
+    "kn": "Kannada (ಕನ್ನಡ)", "kn-IN": "Kannada (ಕನ್ನಡ)",
+    "ml": "Malayalam (മലയാളം)", "ml-IN": "Malayalam (മലയാളം)",
+    "mr": "Marathi (मराठी)", "mr-IN": "Marathi (मराठी)",
+    "od": "Odia (ଓଡ଼ିଆ)", "od-IN": "Odia (ଓଡ଼ିଆ)",
+    "pa": "Punjabi (ਪੰਜਾਬੀ)", "pa-IN": "Punjabi (ਪੰਜਾਬੀ)",
+    "ta": "Tamil (தமிழ்)", "ta-IN": "Tamil (தமிழ்)",
+    "te": "Telugu (తెలుగు)", "te-IN": "Telugu (తెలుగు)",
+}
+
+@api.get("/admin/translation/languages")
+async def admin_translation_languages(admin: dict = Depends(get_admin_user)):
+    """Return supported translation languages as {code, label} list."""
+    seen_base = set()
+    result = []
+    for code in sorted(_SARVAM_LANG_CODES):
+        base = code.split("-")[0]
+        if base in seen_base:
+            continue
+        seen_base.add(base)
+        label = _LANG_LABELS.get(code) or _LANG_LABELS.get(base) or code
+        result.append({"code": base, "label": label})
+    return result
 
 @api.post("/sarvam/translate")
 async def sarvam_translate(data: dict):

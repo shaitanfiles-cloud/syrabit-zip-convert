@@ -139,7 +139,9 @@ class UserPlanUpdate(BaseModel):
 
 
 class UserCreditsUpdate(BaseModel):
-    credits_delta: int
+    action: str = "add"
+    amount: Optional[int] = None
+    reason: Optional[str] = None
 
 
 class SettingsUpdate(BaseModel):

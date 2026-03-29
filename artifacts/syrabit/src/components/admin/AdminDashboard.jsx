@@ -3,7 +3,7 @@ import {
   Users, MessageSquare, BookOpen, Zap, Loader2, Activity,
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
-  CheckCircle, AlertCircle, Wifi, Database, DollarSign, Crown,
+  CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck,
 } from 'lucide-react';
 import axios from 'axios';
@@ -226,6 +226,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [tokenSpend, setTokenSpend] = useState(null);
   const [funnel, setFunnel] = useState(null);
   const [coverage, setCoverage] = useState(null);
+  const [failedSections, setFailedSections] = useState([]);
 
   const headers = { withCredentials: true };
   const adminHdr = (token) => {
@@ -253,18 +254,23 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         axios.get(`${API_BASE}/admin/monetization/funnel`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/content/coverage`, adminHdr(adminToken)),
       ]);
-      if (dashRes.status === 'fulfilled') setData(dashRes.value.data);
-      if (metricsRes.status === 'fulfilled') setMetrics(metricsRes.value.data);
-      if (ragAccRes.status === 'fulfilled') setRagAccuracy(ragAccRes.value.data);
-      if (fallbackRes.status === 'fulfilled') setChatFallbacks(fallbackRes.value.data);
-      if (vectorRes.status === 'fulfilled') setVectorStats(vectorRes.value.data);
-      if (latencyRes.status === 'fulfilled') setLatency(latencyRes.value.data);
-      if (queriesRes.status === 'fulfilled') setTopQueries(queriesRes.value.data);
-      if (tokenRes.status === 'fulfilled') setTokenSpend(tokenRes.value.data);
-      if (funnelRes.status === 'fulfilled') setFunnel(funnelRes.value.data);
-      if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data);
+      const failed = [];
+      if (dashRes.status === 'fulfilled') setData(dashRes.value.data); else { failed.push('overview'); setData(null); }
+      if (metricsRes.status === 'fulfilled') setMetrics(metricsRes.value.data); else { failed.push('metrics'); setMetrics(null); }
+      if (ragAccRes.status === 'fulfilled') setRagAccuracy(ragAccRes.value.data); else { failed.push('rag'); setRagAccuracy(null); }
+      if (fallbackRes.status === 'fulfilled') setChatFallbacks(fallbackRes.value.data); else { failed.push('fallbacks'); setChatFallbacks(null); }
+      if (vectorRes.status === 'fulfilled') setVectorStats(vectorRes.value.data); else { failed.push('vector'); setVectorStats(null); }
+      if (latencyRes.status === 'fulfilled') setLatency(latencyRes.value.data); else { failed.push('latency'); setLatency(null); }
+      if (queriesRes.status === 'fulfilled') setTopQueries(queriesRes.value.data); else { failed.push('queries'); setTopQueries(null); }
+      if (tokenRes.status === 'fulfilled') setTokenSpend(tokenRes.value.data); else { failed.push('tokens'); setTokenSpend(null); }
+      if (funnelRes.status === 'fulfilled') setFunnel(funnelRes.value.data); else { failed.push('funnel'); setFunnel(null); }
+      if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data); else { failed.push('coverage'); setCoverage(null); }
+      setFailedSections(failed);
       setLastRefresh(new Date());
-    } catch {}
+    } catch (e) {
+      console.error('Dashboard load error:', e);
+      setFailedSections(['overview', 'metrics', 'rag', 'fallbacks', 'vector', 'latency', 'queries', 'tokens', 'funnel', 'coverage']);
+    }
     finally {
       setLoading(false);
       setRefreshing(false);
@@ -305,6 +311,18 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
   return (
     <div className="p-6 space-y-6">
+
+      {failedSections.length > 0 && (
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+          <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
+          <p className="text-xs text-amber-300 flex-1">
+            Some widgets failed to load ({failedSections.join(', ')}). Metrics may be stale.
+          </p>
+          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <h2 className="text-slate-200 font-semibold text-lg">Overview</h2>

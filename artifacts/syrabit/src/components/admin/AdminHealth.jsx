@@ -351,42 +351,51 @@ export default function AdminHealth({ adminToken }) {
       </div>
 
       <div className="space-y-3">
-        {[
-          { key: 'mongodb',  icon: Database,   label: 'Syrabit DB (MongoDB)', desc: 'User data, sessions, content, rate limits' },
-          { key: 'redis',    icon: Wifi,        label: 'Redis Cache (Upstash)', desc: 'Shared content cache & session store' },
-          { key: 'llm',      icon: Zap,         label: 'AI Provider (Groq)',    desc: 'LLM inference — llama-3.1-8b-instant' },
-          { key: 'supabase', icon: Database,    label: 'Supabase',              desc: 'Auth, user profiles, persistent storage' },
-        ].map(({key, icon: Icon, label, desc}) => {
-          const dep = deps[key] || {};
-          const isOk = dep.status === 'ok';
-          const isNotConfigured = dep.status === 'not_configured';
-          const isError = dep.status === 'error';
-          return (
-            <div key={key} className="rounded-xl border border-white/6 p-4 flex items-center gap-3" style={{ background: 'rgba(255,255,255,0.02)' }} data-testid={`dep-${key}`}>
-              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                isOk ? 'bg-emerald-500/10' : isNotConfigured ? 'bg-zinc-500/10' : isError ? 'bg-red-500/10' : 'bg-amber-500/10'
-              }`}>
-                <Icon size={18} className={isOk ? 'text-emerald-400' : isNotConfigured ? 'text-zinc-400' : isError ? 'text-red-400' : 'text-amber-400'} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-white">{label}</p>
-                <p className="text-xs text-white/40">{desc}</p>
-                {dep.error && <p className="text-xs text-red-400 mt-0.5">{dep.error}</p>}
-              </div>
-              <div className="flex items-center gap-2">
-                <LatencyBadge ms={dep.latencyMs} />
-                <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                  isOk ? 'bg-emerald-500/10 text-emerald-400' :
-                  isNotConfigured ? 'bg-zinc-500/10 text-zinc-400' :
-                  isError ? 'bg-red-500/10 text-red-400' :
-                  'bg-amber-500/10 text-amber-400 animate-pulse'
+        {(() => {
+          const KNOWN_SERVICES = [
+            { key: 'mongodb',  icon: Database, label: 'Syrabit DB (MongoDB)', desc: 'User data, sessions, content, rate limits' },
+            { key: 'redis',    icon: Wifi,     label: 'Redis Cache (Upstash)', desc: 'Shared content cache & session store' },
+            { key: 'llm',      icon: Zap,      label: 'AI Provider (Groq)',    desc: 'LLM inference — llama-3.1-8b-instant' },
+            { key: 'supabase', icon: Database, label: 'Supabase',              desc: 'Auth, user profiles, persistent storage' },
+          ];
+          const knownKeys = new Set(KNOWN_SERVICES.map(s => s.key));
+          const extraKeys = Object.keys(deps).filter(k => !knownKeys.has(k));
+          const allServices = [
+            ...KNOWN_SERVICES,
+            ...extraKeys.map(k => ({ key: k, icon: Activity, label: k.charAt(0).toUpperCase() + k.slice(1), desc: '' })),
+          ];
+          return allServices.map(({ key, icon: Icon, label, desc }) => {
+            const dep = deps[key] || {};
+            const isOk = dep.status === 'ok';
+            const isNotConfigured = dep.status === 'not_configured';
+            const isError = dep.status === 'error';
+            return (
+              <div key={key} className="rounded-xl border border-white/6 p-4 flex items-center gap-3" style={{ background: 'rgba(255,255,255,0.02)' }} data-testid={`dep-${key}`}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                  isOk ? 'bg-emerald-500/10' : isNotConfigured ? 'bg-zinc-500/10' : isError ? 'bg-red-500/10' : 'bg-amber-500/10'
                 }`}>
-                  {loading ? 'PROBING...' : dep.status?.toUpperCase().replace('_',' ') || 'UNKNOWN'}
-                </span>
+                  <Icon size={18} className={isOk ? 'text-emerald-400' : isNotConfigured ? 'text-zinc-400' : isError ? 'text-red-400' : 'text-amber-400'} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white">{label}</p>
+                  {desc && <p className="text-xs text-white/40">{desc}</p>}
+                  {dep.error && <p className="text-xs text-red-400 mt-0.5">{dep.error}</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <LatencyBadge ms={dep.latencyMs} />
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
+                    isOk ? 'bg-emerald-500/10 text-emerald-400' :
+                    isNotConfigured ? 'bg-zinc-500/10 text-zinc-400' :
+                    isError ? 'bg-red-500/10 text-red-400' :
+                    'bg-amber-500/10 text-amber-400 animate-pulse'
+                  }`}>
+                    {loading ? 'PROBING...' : dep.status?.toUpperCase().replace('_', ' ') || 'UNKNOWN'}
+                  </span>
+                </div>
               </div>
-            </div>
-          );
-        })}
+            );
+          });
+        })()}
       </div>
 
       <div className="rounded-xl border border-white/6 p-4" style={{ background: 'rgba(255,255,255,0.02)' }}>

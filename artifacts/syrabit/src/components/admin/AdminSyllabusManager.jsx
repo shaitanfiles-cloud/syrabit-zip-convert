@@ -135,7 +135,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   };
 
   const deleteSyllabus = async () => {
-    if (!window.confirm('Delete this syllabus? This cannot be undone.')) return;
+    if (!confirm('Delete this syllabus? This cannot be undone.')) return;
     try {
       setSaving(true);
       await axios.delete(adminSyllabusEndpoint(), authHeaders(adminToken));

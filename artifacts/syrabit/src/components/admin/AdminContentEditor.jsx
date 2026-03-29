@@ -400,7 +400,7 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
   };
 
   const handleDelete = async (type, id) => {
-    if (!window.confirm(`Delete this ${type}?`)) return;
+    if (!confirm(`Delete this ${type}?`)) return;
     try {
       await axios.delete(`${API}/admin/content/${type}s/${id}`, authHeaders(adminToken));
       if (type === 'board' && selBoard === id) { setSelBoard(null); setSelClass(null); setSelStream(null); setSelSubject(null); }
@@ -519,7 +519,7 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
   };
 
   const handleDeleteChapter = async (id) => {
-    if (!window.confirm('Delete this chapter?')) return;
+    if (!confirm('Delete this chapter?')) return;
     try {
       await axios.delete(`${API}/admin/content/chapters/${id}`, authHeaders(adminToken));
       setChapters(p => p.filter(c => c.id !== id));

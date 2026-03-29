@@ -39,7 +39,7 @@ export default function AdminContent({ adminToken }) {
   };
 
   const handleDeleteSubject = async (subjectId) => {
-    if (!window.confirm('Delete this subject and all its chapters?')) return;
+    if (!confirm('Delete this subject and all its chapters?')) return;
     try {
       await adminDeleteSubject(adminToken, subjectId);
       setSubjects((prev) => prev.filter((s) => s.id !== subjectId));

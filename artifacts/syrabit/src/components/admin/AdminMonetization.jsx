@@ -2,14 +2,15 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Loader2, DollarSign, Users, TrendingUp, CreditCard,
   RefreshCw, ArrowUp, ArrowDown, Gift, Percent,
-  BarChart2, Wallet, Crown, Star,
+  BarChart2, Wallet, Crown, Star, Edit2, Check, X,
 } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell,
 } from 'recharts';
 import axios from 'axios';
-import { API_BASE } from '@/utils/api';
+import { API_BASE, adminGetPlanConfig } from '@/utils/api';
+import { toast } from 'sonner';
 
 const TOOLTIP_STYLE = {
   contentStyle: {
@@ -43,13 +44,18 @@ function MetricCard({ icon: Icon, label, value, change, color, prefix = '' }) {
   );
 }
 
-export default function AdminMonetization({ adminToken }) {
+export default function AdminMonetization({ adminToken, onNavigate }) {
   const [overview, setOverview] = useState(null);
   const [revenue, setRevenue] = useState(null);
   const [funnel, setFunnel] = useState(null);
   const [predictor, setPredictor] = useState(null);
   const [referralCfg, setReferralCfg] = useState(null);
+  const [planTiers, setPlanTiers] = useState(null);
+  const [editingTier, setEditingTier] = useState(null);
+  const [tierEdits, setTierEdits] = useState({});
+  const [savingTier, setSavingTier] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [tab, setTab] = useState('overview');
   const [savingRef, setSavingRef] = useState(false);
 
@@ -57,22 +63,30 @@ export default function AdminMonetization({ adminToken }) {
 
   const load = useCallback(async () => {
     setLoading(true);
+    setLoadError(false);
     try {
-      const [ovRes, revRes, funRes, predRes, refRes] = await Promise.allSettled([
+      const [ovRes, revRes, funRes, predRes, refRes, tiersRes] = await Promise.allSettled([
         axios.get(`${API_BASE}/admin/monetization/overview`, headers),
         axios.get(`${API_BASE}/admin/analytics/revenue?days=30`, headers),
         axios.get(`${API_BASE}/admin/analytics/funnel`, headers),
         axios.get(`${API_BASE}/admin/analytics/predictor`, headers),
         axios.get(`${API_BASE}/admin/monetization/referral-config`, headers),
+        adminGetPlanConfig(adminToken),
       ]);
       if (ovRes.status === 'fulfilled') setOverview(ovRes.value.data);
+      else { setLoadError(true); toast.error('Failed to load monetization overview'); }
       if (revRes.status === 'fulfilled') setRevenue(revRes.value.data);
       if (funRes.status === 'fulfilled') setFunnel(funRes.value.data);
       if (predRes.status === 'fulfilled') setPredictor(predRes.value.data);
       if (refRes.status === 'fulfilled') setReferralCfg(refRes.value.data);
-    } catch {}
+      if (tiersRes.status === 'fulfilled') setPlanTiers(tiersRes.value.data);
+      else toast.error('Failed to load pricing tiers');
+    } catch (e) {
+      setLoadError(true);
+      toast.error('Monetization data failed to load');
+    }
     finally { setLoading(false); }
-  }, []);
+  }, [adminToken]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -80,13 +94,44 @@ export default function AdminMonetization({ adminToken }) {
     setSavingRef(true);
     try {
       await axios.put(`${API_BASE}/admin/monetization/referral-config`, referralCfg, headers);
-    } catch {}
+      toast.success('Referral config saved');
+    } catch {
+      toast.error('Failed to save referral config');
+    }
     finally { setSavingRef(false); }
+  };
+
+  const startEditTier = (planKey, tierData) => {
+    setEditingTier(planKey);
+    setTierEdits({ price: tierData.price ?? '', credits: tierData.credits ?? '' });
+  };
+
+  const saveTier = async (planKey) => {
+    setSavingTier(true);
+    try {
+      const payload = {
+        price: parseInt(tierEdits.price, 10) || 0,
+        credits: parseInt(tierEdits.credits, 10) || 0,
+      };
+      await axios.patch(`${API_BASE}/admin/plan-config/${planKey}`, payload, { withCredentials: true });
+      setPlanTiers(prev => ({ ...prev, [planKey]: { ...(prev?.[planKey] || {}), ...payload } }));
+      setEditingTier(null);
+      toast.success(`${planKey} tier saved`);
+    } catch {
+      toast.error('Failed to save tier');
+    } finally { setSavingTier(false); }
   };
 
   if (loading) return (
     <div className="flex justify-center p-10">
       <Loader2 size={24} className="animate-spin text-slate-400" />
+    </div>
+  );
+
+  if (loadError && !overview) return (
+    <div className="p-6 text-center">
+      <p className="text-slate-400 text-sm mb-3">Failed to load monetization data. Check backend connectivity.</p>
+      <button onClick={load} className="px-4 py-2 rounded-lg text-sm bg-violet-600 hover:bg-violet-500 text-white">Retry</button>
     </div>
   );
 
@@ -151,10 +196,15 @@ export default function AdminMonetization({ adminToken }) {
 
           {overview.recent_transactions?.length > 0 && (
             <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-              <h3 className="text-slate-400 text-sm font-medium mb-4">Recent Transactions</h3>
+              <h3 className="text-slate-400 text-sm font-medium mb-4">Recent Transactions <span className="text-slate-600 font-normal">(click to view user)</span></h3>
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {overview.recent_transactions.map((txn, i) => (
-                  <div key={i} className="flex items-center gap-3 p-2.5 bg-slate-800/50 rounded-lg">
+                  <button
+                    key={i}
+                    onClick={() => onNavigate?.('users', { search: txn.user_email || txn.user_id || '' })}
+                    className="w-full flex items-center gap-3 p-2.5 bg-slate-800/50 hover:bg-slate-700/60 rounded-lg text-left transition-colors cursor-pointer"
+                    title={txn.user_email ? `View user ${txn.user_email}` : 'View user'}
+                  >
                     <DollarSign size={14} className="text-emerald-400 flex-shrink-0" />
                     <span className="text-slate-300 text-xs font-mono flex-shrink-0">{txn.user_id?.slice(0, 8)}...</span>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -166,7 +216,7 @@ export default function AdminMonetization({ adminToken }) {
                       {txn.currency === 'INR' ? '₹' : '$'}{txn.amount}
                     </span>
                     <span className="text-slate-600 text-xs">{txn.date}</span>
-                  </div>
+                  </button>
                 ))}
               </div>
             </div>
@@ -354,16 +404,61 @@ export default function AdminMonetization({ adminToken }) {
             <h3 className="text-white font-semibold text-sm mb-3">Pricing Tiers</h3>
             <div className="grid grid-cols-3 gap-3">
               {[
-                { plan: 'Free', price: '₹0', credits: '30', color: '#64748b' },
-                { plan: 'Starter', price: '₹99', credits: '300', color: '#8b5cf6' },
-                { plan: 'Pro', price: '₹999', credits: '4,000', color: '#f59e0b' },
-              ].map(tier => (
-                <div key={tier.plan} className="p-4 bg-slate-800/50 rounded-xl text-center">
-                  <p className="font-bold text-lg" style={{ color: tier.color }}>{tier.plan}</p>
-                  <p className="text-white text-xl font-bold mt-1">{tier.price}</p>
-                  <p className="text-slate-500 text-xs mt-1">{tier.credits} credits</p>
-                </div>
-              ))}
+                { key: 'free',    label: 'Free',    color: '#64748b', defaultPrice: 0,   defaultCredits: 30   },
+                { key: 'starter', label: 'Starter', color: '#8b5cf6', defaultPrice: 99,  defaultCredits: 300  },
+                { key: 'pro',     label: 'Pro',     color: '#f59e0b', defaultPrice: 999, defaultCredits: 4000 },
+              ].map(({ key, label, color, defaultPrice, defaultCredits }) => {
+                const tierData = planTiers?.[key] || {};
+                const price = tierData.price ?? defaultPrice;
+                const credits = tierData.credits ?? defaultCredits;
+                const isEditing = editingTier === key;
+                return (
+                  <div key={key} className="p-4 bg-slate-800/50 rounded-xl">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-bold text-sm" style={{ color }}>{label}</p>
+                      {key !== 'free' && !isEditing && (
+                        <button onClick={() => startEditTier(key, { price, credits })}
+                          className="p-1 rounded-lg hover:bg-slate-700 text-slate-500 hover:text-slate-300 transition-colors">
+                          <Edit2 size={12} />
+                        </button>
+                      )}
+                      {isEditing && (
+                        <div className="flex gap-1">
+                          <button onClick={() => saveTier(key)} disabled={savingTier}
+                            className="p-1 rounded-lg bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 transition-colors">
+                            <Check size={12} />
+                          </button>
+                          <button onClick={() => setEditingTier(null)} disabled={savingTier}
+                            className="p-1 rounded-lg bg-red-500/20 text-red-400 hover:bg-red-500/30 transition-colors">
+                            <X size={12} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {isEditing ? (
+                      <div className="space-y-2">
+                        <div>
+                          <label className="text-[10px] text-slate-500">Price (₹)</label>
+                          <input type="number" value={tierEdits.price}
+                            onChange={e => setTierEdits(p => ({ ...p, price: e.target.value }))}
+                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-2 py-1.5 text-sm text-white focus:border-violet-500 outline-none mt-0.5" />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-slate-500">Credits</label>
+                          <input type="number" value={tierEdits.credits}
+                            onChange={e => setTierEdits(p => ({ ...p, credits: e.target.value }))}
+                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-2 py-1.5 text-sm text-white focus:border-violet-500 outline-none mt-0.5" />
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-white text-xl font-bold">₹{price.toLocaleString()}</p>
+                        <p className="text-slate-500 text-xs mt-1">{credits.toLocaleString()} credits</p>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

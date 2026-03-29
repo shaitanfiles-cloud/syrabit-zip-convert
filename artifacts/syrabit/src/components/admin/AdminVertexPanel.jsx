@@ -2,7 +2,7 @@
  * AdminVertexPanel — Vertex AI / Gemini AI Services Hub
  * 9 integrated AI capabilities powered by GEMINI_API_KEY
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   Cpu, Search, Languages, Zap, BarChart2, Lightbulb, FileSearch,
   AlertTriangle, CheckCircle, Loader2, Copy, ChevronDown, ChevronUp,
@@ -12,7 +12,9 @@ import { toast } from 'sonner';
 import {
   vertexHealth, vertexSemanticSearch, vertexTranslate,
   vertexQualityScore, vertexSuggestTopics, vertexSeoMeta, vertexContentGaps,
+  getAllSubjects, getClasses, API_BASE,
 } from '@/utils/api';
+import axios from 'axios';
 
 const card = {
   background: 'rgba(255,255,255,0.03)',
@@ -121,11 +123,28 @@ function SemanticSearchCard({ token }) {
   );
 }
 
+const FALLBACK_LANGS = [
+  { code: 'as', label: 'Assamese (অসমীয়া)' },
+  { code: 'hi', label: 'Hindi (हिन्दी)' },
+  { code: 'bn', label: 'Bengali (বাংলা)' },
+  { code: 'bho', label: 'Bodo (बड़ो)' },
+];
+
 function TranslationCard({ token }) {
   const [text, setText] = useState('');
   const [lang, setLang] = useState('as');
   const [result, setResult] = useState('');
   const [loading, setLoading] = useState(false);
+  const [langs, setLangs] = useState(FALLBACK_LANGS);
+
+  useEffect(() => {
+    axios.get(`${API_BASE}/admin/translation/languages`, { withCredentials: true })
+      .then(r => {
+        const list = (r.data || []).filter(l => l.code && l.label);
+        if (list.length > 0) setLangs(list);
+      })
+      .catch(() => {});
+  }, []);
 
   async function run() {
     if (!text.trim()) return;
@@ -134,17 +153,10 @@ function TranslationCard({ token }) {
       const r = await vertexTranslate(token, text.trim(), lang);
       setResult(r.data.translated || '');
       toast.success('Translation complete');
-    } catch {
-      toast.error('Translation failed');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Translation failed');
     } finally { setLoading(false); }
   }
-
-  const LANGS = [
-    { code: 'as', label: 'Assamese (অসমীয়া)' },
-    { code: 'hi', label: 'Hindi (हिन्दी)' },
-    { code: 'bn', label: 'Bengali (বাংলা)' },
-    { code: 'bho', label: 'Bodo (बड़ो)' },
-  ];
 
   return (
     <div style={card}>
@@ -159,7 +171,7 @@ function TranslationCard({ token }) {
       <div className="flex gap-2 mb-3">
         <select value={lang} onChange={e => setLang(e.target.value)}
           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px', color: '#e8e8e8', fontSize: 13 }}>
-          {LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+          {langs.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
         </select>
         <button onClick={run} disabled={loading || !text.trim()} style={btn('#10b981')}>
           {loading ? <Loader2 size={13} className="animate-spin" /> : <Languages size={13} />}
@@ -270,11 +282,38 @@ function QualityScoreCard({ token }) {
   );
 }
 
+const FALLBACK_SUBJECTS = ['Physics', 'Chemistry', 'Mathematics', 'Biology', 'English', 'Accountancy', 'Business Studies', 'Economics', 'History', 'Political Science', 'Geography'];
+const FALLBACK_CLASSES = ['Class 11', 'Class 12', 'Degree 1st Year', 'Degree 2nd Year', 'Degree 3rd Year'];
+
 function TopicSuggesterCard({ token }) {
+  const [subjects, setSubjects] = useState(FALLBACK_SUBJECTS);
+  const [classes, setClasses] = useState(FALLBACK_CLASSES);
   const [subject, setSubject] = useState('Physics');
   const [classN, setClassN] = useState('Class 11');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [optionsError, setOptionsError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.allSettled([
+      getAllSubjects(),
+      getClasses(),
+    ]).then(([subRes, clsRes]) => {
+      if (cancelled) return;
+      if (subRes.status === 'fulfilled') {
+        const list = (subRes.value.data || []).map(s => s.name || s.title || s).filter(Boolean);
+        if (list.length > 0) { setSubjects(list); setSubject(list[0]); }
+      } else {
+        setOptionsError(true);
+      }
+      if (clsRes.status === 'fulfilled') {
+        const list = (clsRes.value.data || []).map(c => c.name || c.title || c).filter(Boolean);
+        if (list.length > 0) { setClasses(list); setClassN(list[0]); }
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   async function run() {
     setLoading(true);
@@ -282,13 +321,10 @@ function TopicSuggesterCard({ token }) {
       const r = await vertexSuggestTopics(token, subject, classN);
       setResults(r.data.suggestions || []);
       toast.success(`${r.data.suggestions?.length || 0} topic suggestions ready`);
-    } catch {
-      toast.error('Topic suggestion failed');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Topic suggestion failed');
     } finally { setLoading(false); }
   }
-
-  const SUBJECTS = ['Physics', 'Chemistry', 'Mathematics', 'Biology', 'English', 'Accountancy', 'Business Studies', 'Economics', 'History', 'Political Science', 'Geography'];
-  const CLASSES = ['Class 11', 'Class 12', 'Degree 1st Year', 'Degree 2nd Year', 'Degree 3rd Year'];
 
   return (
     <div style={card}>
@@ -297,17 +333,22 @@ function TopicSuggesterCard({ token }) {
         <span style={{ fontWeight: 700, color: '#e8e8e8' }}>Topic Suggester</span>
         <Badge label="Gap Analysis" color="#a855f7" />
       </div>
-      <p style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', marginBottom: 12 }}>
+      <p style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', marginBottom: optionsError ? 8 : 12 }}>
         AI finds high-search-volume topics you haven't covered yet. Add them to your SEO pipeline.
       </p>
+      {optionsError && (
+        <p style={{ fontSize: 11, color: '#f59e0b', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: 6, padding: '4px 10px', marginBottom: 10 }}>
+          Could not load subjects from API — using defaults. Check backend connection.
+        </p>
+      )}
       <div className="flex gap-2 mb-4">
         <select value={subject} onChange={e => setSubject(e.target.value)}
           style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px', color: '#e8e8e8', fontSize: 13 }}>
-          {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+          {subjects.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
         <select value={classN} onChange={e => setClassN(e.target.value)}
           style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px', color: '#e8e8e8', fontSize: 13 }}>
-          {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
+          {classes.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <button onClick={run} disabled={loading} style={btn('#a855f7')}>
           {loading ? <Loader2 size={13} className="animate-spin" /> : <Lightbulb size={13} />}

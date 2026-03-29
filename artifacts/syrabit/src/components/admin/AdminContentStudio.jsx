@@ -18,8 +18,36 @@ function authHeaders(token) {
   return { headers: isRealJwt ? { Authorization: `Bearer ${token}` } : {}, withCredentials: true };
 }
 
+const TRANSLITERATION_MAP = {
+  'अ':'a','आ':'a','इ':'i','ई':'i','उ':'u','ऊ':'u','ए':'e','ऐ':'ai','ओ':'o','औ':'au',
+  'क':'k','ख':'kh','ग':'g','घ':'gh','च':'ch','छ':'chh','ज':'j','झ':'jh',
+  'ट':'t','ठ':'th','ड':'d','ढ':'dh','ण':'n','त':'t','थ':'th','द':'d','ध':'dh',
+  'न':'n','प':'p','फ':'ph','ब':'b','भ':'bh','म':'m','य':'y','र':'r','ल':'l',
+  'व':'v','श':'sh','ष':'sh','स':'s','ह':'h','ं':'n','ः':'h','ा':'a','ि':'i',
+  'ी':'i','ु':'u','ू':'u','े':'e','ै':'ai','ो':'o','ौ':'au','्':'',
+  // Bengali/Assamese vowels
+  'অ':'a','আ':'a','ই':'i','ঈ':'i','উ':'u','ঊ':'u','এ':'e','ঐ':'ai','ও':'o','ঔ':'au',
+  // Bengali/Assamese consonants
+  'ক':'k','খ':'kh','গ':'g','ঘ':'gh','ঙ':'ng',
+  'চ':'ch','ছ':'chh','জ':'j','ঝ':'jh','ঞ':'n',
+  'ট':'t','ঠ':'th','ড':'d','ঢ':'dh','ণ':'n',
+  'ত':'t','থ':'th','দ':'d','ধ':'dh','ন':'n',
+  'প':'p','ফ':'ph','ব':'b','ভ':'bh','ম':'m',
+  'য':'y','র':'r','ল':'l','শ':'sh','ষ':'sh','স':'s','হ':'h','ৱ':'v','ড়':'r','ঢ়':'rh',
+  // Bengali/Assamese matras / diacritics
+  'া':'a','ি':'i','ী':'i','ু':'u','ূ':'u','ে':'e','ৈ':'ai','ো':'o','ৌ':'au','্':'','ং':'ng','ঃ':'h','ঁ':'n',
+};
+
 function slugify(text) {
-  return (text || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  const transliterated = (text || '').split('').map(ch => TRANSLITERATION_MAP[ch] ?? ch).join('');
+  const cleaned = transliterated
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return cleaned || 'content';
 }
 
 const BLOCK_ICONS = {
@@ -182,10 +210,10 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
 
   const headers = { withCredentials: true };
 
-  const selectedBoard = boards.find(b => b.id === selectedBoardId);
-  const selectedClass = classes.find(c => c.id === selectedClassId);
-  const boardSlug  = selectedBoard?.slug || slugify(selectedBoard?.name || 'ahsec') || 'ahsec';
-  const classSlug  = selectedClass?.slug || slugify(selectedClass?.name || 'class-12') || 'class-12';
+  const selectedBoard = boards.find(b => b.id === selectedBoardId) || boards[0];
+  const selectedClass = classes.find(c => c.id === selectedClassId) || classes[0];
+  const boardSlug  = selectedBoard?.slug || slugify(selectedBoard?.name || '') || '';
+  const classSlug  = selectedClass?.slug || slugify(selectedClass?.name || '') || '';
   const subjectSlug = slugify(subject || 'subject');
   const publishPath = `/${boardSlug}/${classSlug}/${subjectSlug}/${slug || 'chapter-slug'}`;
 
@@ -290,7 +318,10 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
         const summaryBlock = parsed.find(b => b.type === 'summary' || b.type === 'note');
         if (summaryBlock) setMetaDescription(summaryBlock.content.slice(0, 160));
       }
-    } catch { toast.error('AI parse failed'); }
+    } catch (e) {
+      setBlocks([]);
+      toast.error(e.response?.data?.detail || 'AI parse failed — previous content cleared');
+    }
     finally { setParsing(false); }
   }, [rawText, subject, chapter, title, slug, metaDescription]);
 

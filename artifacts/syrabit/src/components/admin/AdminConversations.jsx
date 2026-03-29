@@ -71,15 +71,8 @@ export default function AdminConversations({ adminToken }) {
       .then((res) => setConversations(res.data))
       .catch(() => toast.error('Failed to load conversations'))
       .finally(() => setLoading(false));
-    // Load sentiment on mount
     conversationsSentiment(adminToken).then(r => setSentiment(r.data)).catch(() => {});
   }, [adminToken]);
-
-  useEffect(() => {
-    if (selected && chatEndRef.current) {
-      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [selected]);
 
   const handleExtractFaqs = async () => {
     setFaqLoading(true);
@@ -107,6 +100,12 @@ export default function AdminConversations({ adminToken }) {
   }, [conversations, search]);
 
   const selectedConv = useMemo(() => conversations.find(c => c.id === selected), [conversations, selected]);
+
+  useEffect(() => {
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [selected, selectedConv?.messages?.length]);
 
   if (loading) return <div className="flex justify-center p-10"><Loader2 size={24} className="animate-spin text-slate-400" /></div>;
 
@@ -310,8 +309,13 @@ export default function AdminConversations({ adminToken }) {
                     {msg.role === 'user' ? (
                       <UserAvatar name={selectedConv.user_name} avatar={selectedConv.user_avatar} size={28} />
                     ) : (
-                      <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0">
-                        <img src="/logo.png" alt="Syra" className="w-full h-full object-cover" />
+                      <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-violet-600 flex items-center justify-center">
+                        <img
+                          src={`${import.meta.env.BASE_URL}logo.png`}
+                          alt="Syra"
+                          className="w-full h-full object-cover"
+                          onError={e => { e.currentTarget.style.display = 'none'; }}
+                        />
                       </div>
                     )}
                   </div>

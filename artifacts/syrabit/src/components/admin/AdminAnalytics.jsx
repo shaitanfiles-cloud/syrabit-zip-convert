@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Loader2, RefreshCw, Eye, Globe, TrendingUp, Users, Search, BookOpen, Bot,
   FileText, ExternalLink, BarChart2, Flame, DollarSign, Zap, Target, ArrowUpRight, ArrowDownRight,
-  CheckCircle, AlertCircle, Link as LinkIcon, Calendar, MessageSquare } from 'lucide-react';
+  CheckCircle, AlertCircle, AlertTriangle, Link as LinkIcon, Calendar, MessageSquare } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line, PieChart, Pie, Cell,
@@ -10,6 +10,7 @@ import axios from 'axios';
 import { adminGetAnalytics, adminGetRevenue, adminGetPredictor,
   adminGetGA4Status, adminGetGA4AuthUrl, adminTestGA4, API_BASE,
   pageConversions, adminGetDailyAnalytics } from '@/utils/api';
+import { toast } from 'sonner';
 
 const TT = {
   contentStyle: {
@@ -21,16 +22,30 @@ const TT = {
 const PLAN_COLORS = { free: '#475569', starter: '#7c3aed', pro: '#10b981' };
 const FUNNEL_COLORS = ['#3b82f6', '#8b5cf6', '#10b981'];
 
-function Card({ title, children, empty, emptyMsg, action }) {
+function Card({ title, children, empty, emptyMsg, action, error, onRetry }) {
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-slate-400 text-sm font-medium">{title}</h3>
-        {action}
+        <div className="flex items-center gap-2">
+          {error && onRetry && (
+            <button onClick={onRetry} className="text-xs text-amber-400 hover:text-white px-2 py-0.5 rounded bg-amber-500/10 hover:bg-amber-500/20 transition-colors flex items-center gap-1">
+              <RefreshCw size={10} /> Retry
+            </button>
+          )}
+          {action}
+        </div>
       </div>
-      {empty
-        ? <p className="text-slate-600 text-sm text-center py-6">{emptyMsg || 'No data yet'}</p>
-        : children}
+      {error
+        ? (
+          <div className="flex items-center gap-2 py-6 justify-center">
+            <AlertTriangle size={14} className="text-amber-400" />
+            <p className="text-amber-400 text-sm">Failed to load — data unavailable</p>
+          </div>
+        )
+        : empty
+          ? <p className="text-slate-600 text-sm text-center py-6">{emptyMsg || 'No data yet'}</p>
+          : children}
     </div>
   );
 }
@@ -94,29 +109,31 @@ export default function AdminAnalytics({ adminToken }) {
   const [dailyData, setDailyData] = useState(null);
   const [dailyLoading, setDailyLoading] = useState(false);
   const [dailyDays, setDailyDays] = useState(30);
+  const [widgetErrors, setWidgetErrors] = useState({});
 
   const h = { withCredentials: true };
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
-    try {
-      const [r1, r2, r3, r4, r5, r6] = await Promise.allSettled([
-        adminGetAnalytics(adminToken),
-        axios.get(`${API_BASE}/admin/analytics/funnel`, h),
-        axios.get(`${API_BASE}/admin/analytics/content-heatmap`, h),
-        adminGetRevenue(adminToken, 30),
-        adminGetPredictor(adminToken),
-        adminGetGA4Status(adminToken),
-      ]);
-      if (r1.status === 'fulfilled') setData(r1.value.data);
-      if (r2.status === 'fulfilled') setFunnel(r2.value.data);
-      if (r3.status === 'fulfilled') setHeatmap(r3.value.data);
-      if (r4.status === 'fulfilled') setRevenue(r4.value.data);
-      if (r5.status === 'fulfilled') setPredict(r5.value.data);
-      if (r6.status === 'fulfilled') setGa4Status(r6.value.data);
-      setLastRefresh(new Date());
-    } catch {}
-    finally { setLoading(false); setRefreshing(false); }
+    const [r1, r2, r3, r4, r5, r6] = await Promise.allSettled([
+      adminGetAnalytics(adminToken),
+      axios.get(`${API_BASE}/admin/analytics/funnel`, h),
+      axios.get(`${API_BASE}/admin/analytics/content-heatmap`, h),
+      adminGetRevenue(adminToken, 30),
+      adminGetPredictor(adminToken),
+      adminGetGA4Status(adminToken),
+    ]);
+    const errs = {};
+    if (r1.status === 'fulfilled') setData(r1.value.data); else { errs.overview = true; setData(null); }
+    if (r2.status === 'fulfilled') setFunnel(r2.value.data); else { errs.funnel = true; setFunnel(null); }
+    if (r3.status === 'fulfilled') setHeatmap(r3.value.data); else { errs.heatmap = true; setHeatmap(null); }
+    if (r4.status === 'fulfilled') setRevenue(r4.value.data); else { errs.revenue = true; setRevenue(null); }
+    if (r5.status === 'fulfilled') setPredict(r5.value.data); else { errs.predictions = true; setPredict(null); }
+    if (r6.status === 'fulfilled') setGa4Status(r6.value.data); else errs.ga4 = true;
+    setWidgetErrors(errs);
+    setLastRefresh(new Date());
+    setLoading(false);
+    setRefreshing(false);
   }, [adminToken]);
 
   const handleGA4Connect = async () => {
@@ -125,7 +142,7 @@ export default function AdminAnalytics({ adminToken }) {
       const r = await adminGetGA4AuthUrl(adminToken, redirectUri);
       window.open(r.data.url, '_blank', 'width=600,height=700');
     } catch (e) {
-      alert('Failed to get GA4 auth URL');
+      toast.error('Failed to get GA4 auth URL');
     }
   };
 
@@ -146,7 +163,8 @@ export default function AdminAnalytics({ adminToken }) {
     try {
       const r = await pageConversions(adminToken, 30);
       setPageConvData(r.data);
-    } catch {} finally { setPageConvLoading(false); }
+    } catch { toast.error('Failed to load page conversions'); }
+    finally { setPageConvLoading(false); }
   }, [adminToken]);
 
   const loadDailyAnalytics = useCallback(async (days = dailyDays) => {
@@ -154,7 +172,8 @@ export default function AdminAnalytics({ adminToken }) {
     try {
       const r = await adminGetDailyAnalytics(adminToken, days);
       setDailyData(r.data);
-    } catch {} finally { setDailyLoading(false); }
+    } catch { toast.error('Failed to load daily analytics'); }
+    finally { setDailyLoading(false); }
   }, [adminToken, dailyDays]);
 
   useEffect(() => {
@@ -257,11 +276,18 @@ export default function AdminAnalytics({ adminToken }) {
       {/* ── OVERVIEW ── */}
       {tab === 'overview' && (
         <>
+          {widgetErrors.overview && (
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
+              <p className="text-xs text-amber-300 flex-1">Overview data failed to load — some metrics unavailable.</p>
+              <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">Retry</button>
+            </div>
+          )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <Stat icon={Globe}      label="Total Visitors"   value={vs.total_visitors?.toLocaleString()} color="#06b6d4" />
             <Stat icon={TrendingUp} label="Visitors Today"   value={vs.visitors_today}   color="#f97316" />
             <Stat icon={Eye}        label="Page Views Today" value={vs.page_views_today} color="#ec4899" />
-            <Stat icon={Users}      label="Active Users"     value={data.active_users}   color="#10b981" />
+            <Stat icon={Users}      label="Active Users"     value={data?.active_users}  color="#10b981" />
           </div>
 
           {mrr > 0 && (
@@ -507,7 +533,8 @@ export default function AdminAnalytics({ adminToken }) {
             </div>
           </div>
         ) : (
-          <Card title="Conversion Funnel" empty emptyMsg="Funnel data loading…" />
+          <Card title="Conversion Funnel" error={!!widgetErrors.funnel} onRetry={() => load(true)}
+            empty={!widgetErrors.funnel} emptyMsg="Funnel data loading…" />
         )
       )}
 
@@ -554,7 +581,8 @@ export default function AdminAnalytics({ adminToken }) {
             </div>
           </div>
         ) : (
-          <Card title="Content Heatmap" empty emptyMsg="Heatmap data loading…" />
+          <Card title="Content Heatmap" error={!!widgetErrors.heatmap} onRetry={() => load(true)}
+            empty={!widgetErrors.heatmap} emptyMsg="Heatmap data loading…" />
         )
       )}
 
@@ -664,6 +692,13 @@ export default function AdminAnalytics({ adminToken }) {
       {/* ── REVENUE ── */}
       {tab === 'revenue' && (
         <div className="space-y-4">
+          {widgetErrors.revenue && (
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
+              <p className="text-xs text-amber-300 flex-1">Revenue data failed to load.</p>
+              <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">Retry</button>
+            </div>
+          )}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <Stat icon={DollarSign} label="MRR (30d)"     value={fmtInr(mrr)}       color="#10b981" trend={growth} />
             <Stat icon={TrendingUp} label="Predicted MRR" value={fmtInr(predicted)} color="#7c3aed"
@@ -729,6 +764,13 @@ export default function AdminAnalytics({ adminToken }) {
       {/* ── PREDICTIONS ── */}
       {tab === 'predict' && (
         <div className="space-y-4">
+          {widgetErrors.predictions && (
+            <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+              <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
+              <p className="text-xs text-amber-300 flex-1">Predictions data failed to load — showing estimates only.</p>
+              <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">Retry</button>
+            </div>
+          )}
 
           {/* MRR Trajectory */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
