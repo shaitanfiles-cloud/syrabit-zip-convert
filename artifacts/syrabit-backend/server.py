@@ -9601,7 +9601,18 @@ async def admin_merge_subject(subject_id: str, admin: dict = Depends(get_admin_u
         upsert=True
     )
     headings = json.loads(headings_json) if headings_json else []
-    return {"subject_id": subject_id, "word_count": word_count, "headings": headings, "slug": post_data["slug"]}
+    return {
+        "subject_id":  subject_id,
+        "word_count":  word_count,
+        "headings":    headings,
+        "slug":        post_data["slug"],
+        "title":       post_data["title"],
+        "board_slug":  subject.get("board_slug", "")   if subject else "",
+        "class_slug":  subject.get("class_slug", "")   if subject else "",
+        "class_name":  subject.get("class_name", "")   if subject else "",
+        "stream_name": subject.get("stream_name", "")  if subject else "",
+        "stream_slug": subject.get("stream_slug", "")  if subject else "",
+    }
 
 
 @api.get("/cms/posts")

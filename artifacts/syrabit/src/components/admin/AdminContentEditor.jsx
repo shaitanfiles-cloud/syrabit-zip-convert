@@ -305,13 +305,27 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const res = await axios.post(`${API}/admin/cms/merge/${subjectId}`, {}, authHeaders(adminToken));
       const mergedMd = res.data?.merged_md || res.data?.content || '';
+
+      // Build slug dynamically from subject + class context returned by merge endpoint
+      const toSlug = str => (str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const subjectSlug = res.data?.slug || toSlug(subjectName || subjectId);
+      const classSlug   = res.data?.class_slug || '';
+      // Compose: subject-class (e.g. "mathematics-sem-1", "political-science-sem-3")
+      const slugParts = [subjectSlug, classSlug].filter(Boolean);
+      const autoSeoSlug = slugParts.join('-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+
+      // Rich title: "Mathematics — Semester 1"
+      const className     = res.data?.class_name || '';
+      const resolvedTitle = res.data?.title || subjectName || subjectId;
+      const richTitle = [resolvedTitle, className].filter(Boolean).join(' — ');
+
       const prefill = {
         subjectId,
-        title: subjectName || res.data?.title || subjectId,
-        content: mergedMd,
-        seo_slug: (subjectName || subjectId).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-'),
-        meta_description: `Complete ${subjectName || subjectId} notes, chapters, and PYQ for AssamBoard students on Syrabit.`,
-        timestamp: Date.now(),
+        title:            richTitle,
+        content:          mergedMd,
+        seo_slug:         autoSeoSlug || toSlug(subjectName || subjectId),
+        meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`,
+        timestamp:        Date.now(),
       };
       localStorage.setItem('syrabit_cms_prefill', JSON.stringify(prefill));
       setMergedSubjectIds(s => new Set([...s, subjectId]));
@@ -330,13 +344,19 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const res = await axios.post(`${API}/admin/cms/merge/${selSubject}`, {}, authHeaders(adminToken));
       const mergedMd = res.data?.merged_md || res.data?.content || '';
-      const name = subjectData?.name || selSubject;
+      const toSlug = str => (str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const subjectSlug  = res.data?.slug       || toSlug(subjectData?.name || selSubject);
+      const classSlug    = res.data?.class_slug  || '';
+      const autoSeoSlug  = [subjectSlug, classSlug].filter(Boolean).join('-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      const resolvedTitle = res.data?.title || subjectData?.name || selSubject;
+      const className    = res.data?.class_name || '';
+      const richTitle    = [resolvedTitle, className].filter(Boolean).join(' — ');
       const prefill = {
         subjectId: selSubject,
-        title: name,
-        content: mergedMd,
-        seo_slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-'),
-        meta_description: `Complete ${name} notes, chapters, and PYQ for AssamBoard students on Syrabit.`,
+        title:     richTitle,
+        content:   mergedMd,
+        seo_slug:  autoSeoSlug || toSlug(subjectData?.name || selSubject),
+        meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`,
         timestamp: Date.now(),
       };
       localStorage.setItem('syrabit_cms_prefill', JSON.stringify(prefill));
