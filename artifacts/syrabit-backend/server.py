@@ -9896,6 +9896,94 @@ async def sarvam_transliterate(data: dict):
         logger.error(f"Sarvam transliterate exception: {type(e).__name__} [{src}->{tgt}]")
         raise HTTPException(status_code=502, detail="Sarvam AI unreachable")
 
+# ─────────────────────────────────────────────
+# BOT RENDER MIDDLEWARE (production SSR for AI crawlers)
+# ─────────────────────────────────────────────
+_BOT_UA_RE = re.compile(
+    r"googlebot|bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|"
+    r"facebookexternalhit|twitterbot|linkedinbot|telegrambot|whatsapp|applebot|"
+    r"ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|gptbot|oai-searchbot|"
+    r"chatgpt-user|claudebot|anthropic-ai|perplexitybot|google-extended|"
+    r"facebookbot|meta-externalagent|cohere-ai|bytespider|ccbot|applebot-extended",
+    re.IGNORECASE,
+)
+
+_BOT_SKIP_PREFIXES = (
+    "/api/", "/admin", "/chat", "/history", "/profile", "/static/",
+    "/health", "/docs", "/openapi.json", "/assets/", "/icons/",
+    "/fonts/", "/robots.txt", "/sitemap",
+)
+
+_VALID_PAGE_TYPES = {"notes", "definition", "important-questions", "mcqs", "examples"}
+
+_bot_html_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=3600)
+
+
+class BotRenderMiddleware(BaseHTTPMiddleware):
+    """Intercept SEO route requests from bot user-agents and return pre-rendered HTML."""
+
+    async def dispatch(self, request: StarletteRequest, call_next):
+        ua = request.headers.get("user-agent", "")
+        if not _BOT_UA_RE.search(ua):
+            return await call_next(request)
+
+        path = request.url.path
+        for prefix in _BOT_SKIP_PREFIXES:
+            if path.startswith(prefix):
+                return await call_next(request)
+
+        if "." in path.split("/")[-1]:
+            return await call_next(request)
+
+        parts = [p for p in path.split("/") if p]
+        if len(parts) not in (4, 5):
+            return await call_next(request)
+
+        board, class_slug, subject_slug, topic_slug = parts[0], parts[1], parts[2], parts[3]
+        page_type_part = parts[4] if len(parts) == 5 else None
+        if page_type_part and page_type_part not in _VALID_PAGE_TYPES:
+            return await call_next(request)
+        current_type = page_type_part or "notes"
+
+        cache_key = f"{board}/{class_slug}/{subject_slug}/{topic_slug}/{current_type}"
+        cached_html = _bot_html_cache.get(cache_key)
+        if cached_html:
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(
+                content=cached_html,
+                status_code=200,
+                headers={
+                    "Cache-Control": "public, max-age=3600, s-maxage=86400",
+                    "X-Bot-Rendered": "1",
+                },
+            )
+
+        try:
+            _seo_port = int(os.environ.get("PORT", "8000"))
+            api_base = f"http://localhost:{_seo_port}/api/seo"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                html_resp = await client.get(
+                    f"{api_base}/html/{board}/{class_slug}/{subject_slug}/{topic_slug}/{current_type}"
+                )
+            if html_resp.status_code != 200:
+                return await call_next(request)
+            html_content = html_resp.text
+            _bot_html_cache[cache_key] = html_content
+            from fastapi.responses import HTMLResponse
+            return HTMLResponse(
+                content=html_content,
+                status_code=200,
+                headers={
+                    "Cache-Control": "public, max-age=3600, s-maxage=86400",
+                    "X-Bot-Rendered": "1",
+                },
+            )
+        except Exception as _bot_err:
+            logger.debug(f"BotRenderMiddleware fallthrough: {_bot_err}")
+            return await call_next(request)
+
+
+app.add_middleware(BotRenderMiddleware)
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(

@@ -15,55 +15,119 @@ Crawl-delay: 1
 # OpenAI (ChatGPT web search + training)
 User-agent: GPTBot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 User-agent: OAI-SearchBot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 User-agent: ChatGPT-User
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 # Google (Gemini AI + Search)
 User-agent: Google-Extended
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 User-agent: Googlebot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 # Perplexity AI
 User-agent: PerplexityBot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 # Anthropic (Claude)
 User-agent: ClaudeBot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 User-agent: anthropic-ai
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 # Meta AI
 User-agent: FacebookBot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 User-agent: meta-externalagent
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 # Microsoft (Copilot / Bing)
 User-agent: Bingbot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 # Apple (Siri / Spotlight)
 User-agent: Applebot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 User-agent: Applebot-Extended
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 # Other AI crawlers
 User-agent: cohere-ai
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 User-agent: Bytespider
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
 
 User-agent: CCBot
 Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
