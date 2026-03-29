@@ -178,8 +178,12 @@ export const adminSeoUpdateTopic = (token, topicId, data) =>
 export const adminSeoDeleteTopic = (token, topicId) =>
   axios.delete(`${API_BASE}/seo/topics/${topicId}`, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminSeoExtractTopics = (token, subjectId) =>
-  axios.post(`${API_BASE}/seo/extract-topics`, subjectId ? { subject_id: subjectId } : {}, { headers: adminHeaders(token), withCredentials: true });
+export const adminSeoExtractTopics = (token, subjectId, force = false) => {
+  const params = {};
+  if (subjectId) params.subject_id = subjectId;
+  if (force) params.force = true;
+  return axios.post(`${API_BASE}/seo/extract-topics`, {}, { headers: adminHeaders(token), withCredentials: true, params });
+};
 
 export const adminSeoGenerate = (token, data) =>
   axios.post(`${API_BASE}/seo/generate`, data, { headers: adminHeaders(token), withCredentials: true });

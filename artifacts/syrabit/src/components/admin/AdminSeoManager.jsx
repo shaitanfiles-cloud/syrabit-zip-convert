@@ -123,6 +123,18 @@ function InsightCard({ insight, onAction, loading }) {
   );
 }
 
+// ── Read hub context from localStorage ───────────────────────────────────────
+const HUB_CTX_KEY = 'syrabit_hub_ctx';
+function readHubCtx() {
+  try {
+    const raw = localStorage.getItem(HUB_CTX_KEY);
+    if (!raw) return null;
+    const ctx = JSON.parse(raw);
+    if (Date.now() - (ctx._ts || 0) > 2 * 60 * 60 * 1000) return null;
+    return ctx;
+  } catch { return null; }
+}
+
 export default function AdminSeoManager({ adminToken }) {
   const [tab, setTab]               = useState('pages');
   const [stats, setStats]           = useState(null);
@@ -151,6 +163,16 @@ export default function AdminSeoManager({ adminToken }) {
   const [pilotClass, setPilotClass]   = useState('Class 11');
   const [pilotSubject, setPilotSubject] = useState('');
   const [pilotChapters, setPilotChapters] = useState(3);
+
+  // ── Hub context (active subject from Content Hub) ─────────────────────────
+  const [hubCtx, setHubCtx] = useState(readHubCtx);
+  // Refresh hub context whenever the tab is focused
+  useEffect(() => {
+    const onFocus = () => setHubCtx(readHubCtx());
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+  const [scopeSubjectOnly, setScopeSubjectOnly] = useState(false);
 
   // Internal Links
   const [linksData, setLinksData]     = useState(null);
@@ -239,14 +261,27 @@ export default function AdminSeoManager({ adminToken }) {
     }
   };
 
-  const handleExtract = async () => {
+  const handleExtract = async (force = false) => {
+    const sid = hubCtx?.subjectId || null;
+    const label = sid && hubCtx?.subjectName ? ` for "${hubCtx.subjectName}"` : '';
     setExtracting(true);
+    toast.loading(`Extracting topics${label} using AI…`, { id: 'extract' });
     try {
-      const res = await adminSeoExtractTopics(adminToken, null);
-      toast.success(`Extracted ${res.data?.created || 0} new topics`);
+      // Pass subject_id + force as query params (API already supports both)
+      const params = new URLSearchParams();
+      if (sid) params.set('subject_id', sid);
+      if (force) params.set('force', 'true');
+      const res = await adminSeoExtractTopics(adminToken, sid, force);
+      const d = res.data || {};
+      toast.success(
+        `Created ${d.created || 0} topics${label}` +
+        (d.skipped ? ` · ${d.skipped} already existed` : '') +
+        (d.errors   ? ` · ${d.errors} AI errors` : ''),
+        { id: 'extract' }
+      );
       load();
     } catch {
-      toast.error('Topic extraction failed');
+      toast.error('Topic extraction failed', { id: 'extract' });
     } finally {
       setExtracting(false);
     }
@@ -400,9 +435,12 @@ export default function AdminSeoManager({ adminToken }) {
   const toggleType  = (id) => setSelectedTypes(prev  => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   const filteredTopics = topics.filter(t => {
+    if (scopeSubjectOnly && hubCtx?.subjectId && t.subject_id !== hubCtx.subjectId) return false;
     if (!topicSearch.trim()) return true;
     const q = topicSearch.toLowerCase();
-    return (t.title || '').toLowerCase().includes(q) || (t.subject_name || '').toLowerCase().includes(q);
+    return (t.title || '').toLowerCase().includes(q)
+      || (t.subject_name || '').toLowerCase().includes(q)
+      || (t.chapter_title || '').toLowerCase().includes(q);
   });
 
   const filteredPages = pages.filter(p => {
@@ -595,6 +633,38 @@ export default function AdminSeoManager({ adminToken }) {
       {/* ── Topics Tab ────────────────────────────────────────────────── */}
       {tab === 'topics' && (
         <div className="space-y-3">
+
+          {/* ── Hub context banner ──────────────────────────────────────── */}
+          {hubCtx?.subjectId && (
+            <div className="flex items-center justify-between px-4 py-2.5 rounded-xl"
+              style={{ background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.22)' }}>
+              <div className="flex items-center gap-2">
+                <BookOpen size={13} style={{ color: '#a78bfa' }} />
+                <span className="text-xs font-semibold" style={{ color: '#c4b5fd' }}>
+                  Active subject:
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                  style={{ background: 'rgba(139,92,246,0.20)', color: '#ddd6fe' }}>
+                  {[hubCtx.boardName, hubCtx.className, hubCtx.streamName, hubCtx.subjectName]
+                    .filter(Boolean).join(' › ')}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={scopeSubjectOnly}
+                    onChange={e => setScopeSubjectOnly(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span className="text-[11px]" style={{ color: 'rgba(255,255,255,0.45)' }}>
+                    Show this subject only
+                  </span>
+                </label>
+              </div>
+            </div>
+          )}
+
           <div className="flex gap-2 flex-wrap items-center">
             <div className="relative flex-1 min-w-48">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.25)' }} />
@@ -603,12 +673,23 @@ export default function AdminSeoManager({ adminToken }) {
                 style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
               />
             </div>
-            <button onClick={handleExtract} disabled={extracting}
+            <button onClick={() => handleExtract(false)} disabled={extracting}
               className="h-9 px-4 rounded-xl text-xs font-semibold flex items-center gap-1.5 disabled:opacity-50"
               style={{ background: '#7c3aed', color: '#fff' }}>
               {extracting ? <Loader2 size={13} className="animate-spin" /> : <Zap size={13} />}
-              Auto-Extract from Chapters
+              {hubCtx?.subjectName
+                ? `Auto-Extract from ${hubCtx.subjectName}`
+                : 'Auto-Extract from Chapters'}
             </button>
+            {hubCtx?.subjectId && (
+              <button onClick={() => handleExtract(true)} disabled={extracting}
+                title="Re-extract and replace existing topics"
+                className="h-9 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5 disabled:opacity-50"
+                style={{ background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.25)' }}>
+                <RefreshCw size={12} />
+                Re-extract
+              </button>
+            )}
           </div>
 
           {loading ? (

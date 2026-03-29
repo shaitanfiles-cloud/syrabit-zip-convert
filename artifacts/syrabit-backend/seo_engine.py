@@ -339,39 +339,123 @@ async def delete_topic(topic_id: str, _admin: dict = Depends(_require_admin)):
     return {"message": "Deleted"}
 
 
-# ─── ADMIN: Auto-extract topics from chapters ───────────────────────────────
+# ─── ADMIN: Auto-extract topics from chapters (AI-powered) ──────────────────
 
 @router.post("/extract-topics")
-async def extract_topics_from_chapters(subject_id: Optional[str] = None, _admin: dict = Depends(_require_admin)):
+async def extract_topics_from_chapters(
+    subject_id: Optional[str] = None,
+    force: bool = False,
+    _admin: dict = Depends(_require_admin),
+):
+    """
+    AI-powered topic extraction pipeline.
+
+    For each chapter that has content text the LLM reads the content and
+    returns 3-10 granular study topics (the real sub-headings students search
+    for, NOT just the chapter title). For chapters with no content the chapter
+    title is stored as a single fallback topic.
+
+    subject_id — scope to one subject; omit to process everything.
+    force      — re-extract even if topics already exist for a chapter.
+    """
     query = {"subject_id": subject_id} if subject_id else {}
     chapters = await _db.chapters.find(query, {"_id": 0}).to_list(500)
 
     created = 0
+    skipped = 0
+    errors  = 0
+
     for ch in chapters:
         existing = await _db.topics.count_documents({"chapter_id": ch["id"]})
-        if existing > 0:
+        if existing > 0 and not force:
+            skipped += 1
             continue
 
-        title = ch.get("title", "")
+        title   = ch.get("title", "")
+        content = ch.get("content", "") or ""
         if not title:
             continue
 
-        topic = {
-            "id": f"topic-{uuid.uuid4().hex[:8]}",
-            "chapter_id": ch["id"],
-            "subject_id": ch.get("subject_id", ""),
-            "title": title,
-            "slug": _slug(title),
-            "definition": ch.get("description", ""),
-            "examples": "",
-            "order": ch.get("order_index", ch.get("chapter_number", 0)),
-            "status": "published",
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await _db.topics.insert_one(topic)
-        created += 1
+        # ── AI extraction from chapter content ───────────────────────────
+        topic_titles: list[str] = []
 
-    return {"message": f"Extracted {created} topics from {len(chapters)} chapters", "created": created}
+        if _call_llm and len(content.strip()) > 150:
+            try:
+                messages = [
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are an expert educational curriculum analyst. "
+                            "Given a chapter title and its text content, extract a list of "
+                            "granular study topics that a student would search for. "
+                            "Each topic must be a clear, concise term (2-7 words). "
+                            "Do NOT include the chapter title itself as a topic. "
+                            "Return ONLY a valid JSON array of strings, e.g.: "
+                            '["Topic One", "Topic Two", "Topic Three"]. '
+                            "Aim for 4-10 distinct topics."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Chapter: {title}\n\n"
+                            f"Content (first 4000 chars):\n{content[:4000]}"
+                        ),
+                    },
+                ]
+                raw = await asyncio.wait_for(
+                    _call_llm(messages, max_tokens=512), timeout=30
+                )
+                match = re.search(r"\[.*?\]", raw, re.DOTALL)
+                if match:
+                    parsed = json.loads(match.group())
+                    if isinstance(parsed, list):
+                        topic_titles = [
+                            str(t).strip() for t in parsed if str(t).strip()
+                        ]
+            except Exception as exc:
+                logger.warning(
+                    f"AI topic extraction failed for chapter '{title}': {exc}"
+                )
+                errors += 1
+
+        # ── Fallback: chapter title as single topic ───────────────────────
+        if not topic_titles:
+            topic_titles = [title]
+
+        # ── Delete old topics if re-extracting ───────────────────────────
+        if force and existing:
+            await _db.topics.delete_many({"chapter_id": ch["id"]})
+
+        # ── Persist each extracted topic ──────────────────────────────────
+        base_order = ch.get("order_index", ch.get("chapter_number", 0))
+        for idx, topic_title in enumerate(topic_titles):
+            topic = {
+                "id":            f"topic-{uuid.uuid4().hex[:8]}",
+                "chapter_id":    ch["id"],
+                "subject_id":    ch.get("subject_id", ""),
+                "chapter_title": title,
+                "title":         topic_title,
+                "slug":          _slug(topic_title),
+                "definition":    "",
+                "examples":      "",
+                "order":         base_order * 100 + idx,
+                "status":        "published",
+                "created_at":    datetime.now(timezone.utc).isoformat(),
+            }
+            await _db.topics.insert_one(topic)
+            created += 1
+
+    return {
+        "message": (
+            f"Extracted {created} topics from {len(chapters)} chapters "
+            f"({skipped} already had topics, {errors} AI errors)"
+        ),
+        "created": created,
+        "skipped": skipped,
+        "errors":  errors,
+        "chapters": len(chapters),
+    }
 
 
 # ─── ADMIN: AI Content Generation ───────────────────────────────────────────
