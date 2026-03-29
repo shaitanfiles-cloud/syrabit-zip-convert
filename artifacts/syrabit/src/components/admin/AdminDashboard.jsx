@@ -709,19 +709,29 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           )}
         </div>
 
-        {/* Widget 8: AHSEC Coverage Heatmap */}
+        {/* Widget 8: AssamBoard Coverage Heatmap */}
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
           <div className="flex items-center gap-2 mb-3">
             <FileCheck size={14} className="text-violet-400" />
-            <h3 className="text-slate-300 font-semibold text-sm">AHSEC Coverage</h3>
+            <h3 className="text-slate-300 font-semibold text-sm">AssamBoard Coverage</h3>
             <span className="text-xs text-slate-600">chapter × subject</span>
+            {coverage?.has_data && coverage.subjects.length > 0 && (
+              <span className="ml-auto text-xs text-slate-500">{coverage.subjects.length} subjects</span>
+            )}
           </div>
           {coverage?.has_data && coverage.subjects.length > 0 ? (
-            <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
               {coverage.subjects.map(sub => (
                 <div key={sub.subject_id}>
                   <div className="flex justify-between mb-1">
-                    <span className="text-xs text-slate-300 truncate">{sub.subject_name}</span>
+                    <span className="text-xs text-slate-300 truncate flex items-center gap-1.5">
+                      {sub.subject_name}
+                      {(sub.class_name || sub.stream_name) && (
+                        <span className="text-[10px] text-slate-600 font-normal shrink-0">
+                          {[sub.class_name, sub.stream_name].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
+                    </span>
                     <span
                       className="text-xs font-mono ml-2 flex-shrink-0"
                       style={{ color: sub.coverage_pct >= 80 ? '#10b981' : sub.coverage_pct >= 50 ? '#f59e0b' : '#ef4444' }}

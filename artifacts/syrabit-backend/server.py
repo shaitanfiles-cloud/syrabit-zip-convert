@@ -12978,14 +12978,14 @@ async def admin_monetization_funnel(admin: dict = Depends(get_admin_user)):
 
 @api.get("/admin/content/coverage")
 async def admin_content_coverage(admin: dict = Depends(get_admin_user)):
-    """AHSEC coverage heatmap: chapter × subject coverage gaps."""
+    """AssamBoard coverage heatmap: chapter × subject coverage gaps."""
     if not await is_mongo_available():
         return {"subjects": [], "has_data": False}
 
     subjects = await db.subjects.find(
         {"status": "published"},
         {"_id": 0, "id": 1, "name": 1, "class_name": 1, "stream_name": 1}
-    ).limit(20).to_list(20)
+    ).sort("name", 1).to_list(None)
 
     result = []
     for sub in subjects:
@@ -12993,7 +12993,7 @@ async def admin_content_coverage(admin: dict = Depends(get_admin_user)):
         chapters = await db.chapters.find(
             {"subject_id": sid},
             {"_id": 0, "id": 1, "title": 1}
-        ).limit(20).to_list(20)
+        ).sort("order", 1).to_list(None)
 
         chapter_data = []
         for ch in chapters:
