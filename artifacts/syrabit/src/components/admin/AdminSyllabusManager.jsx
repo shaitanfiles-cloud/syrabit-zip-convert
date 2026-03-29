@@ -25,13 +25,17 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   const pdfRef = useRef(null);
 
   const PAPER_TYPES = [
-    { value: 'major', label: 'Major', desc: 'Core discipline paper' },
-    { value: 'minor', label: 'Minor', desc: 'Minor elective paper' },
-    { value: 'mdc',   label: 'MDC',   desc: 'Multi-Disciplinary Course' },
-    { value: 'vac',   label: 'VAC',   desc: 'Value-Added Course' },
-    { value: 'aec',   label: 'AEC',   desc: 'Ability Enhancement Course' },
-    { value: 'sec',   label: 'SEC',   desc: 'Skill Enhancement Course' },
+    { value: 'major', label: 'Major', desc: 'Core discipline', icon: '🎯' },
+    { value: 'minor', label: 'Minor', desc: 'Minor elective',  icon: '📘' },
+    { value: 'mdc',   label: 'MDC',   desc: 'Multidisciplinary', icon: '🌐' },
+    { value: 'vac',   label: 'VAC',   desc: 'Value-Added', icon: '✨' },
+    { value: 'aec',   label: 'AEC',   desc: 'Ability Enhancement', icon: '🧠' },
+    { value: 'sec',   label: 'SEC',   desc: 'Skill Enhancement', icon: '⚡' },
+    { value: 'ge',    label: 'GE',    desc: 'Generic Elective', icon: '🔄' },
+    { value: 'cc',    label: 'CC',    desc: 'Core Course', icon: '⭐' },
   ];
+
+  const [nepStats, setNepStats] = useState(null);
 
   const [selectedBoardId, setSelectedBoardId] = useState('');
   const [selectedClassId, setSelectedClassId] = useState('');
@@ -44,6 +48,12 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   const [newChapter, setNewChapter] = useState('');
   const [newTopic, setNewTopic] = useState('');
   const [newGeoPhrase, setNewGeoPhrase] = useState('');
+
+  useEffect(() => {
+    axios.get(`${API}/admin/syllabus/nep-stats`, { withCredentials: true })
+      .then(r => setNepStats(r.data))
+      .catch(() => {});
+  }, [pdfResult]);
 
   const filteredClasses = classes.filter(c => c.board_id === selectedBoardId);
   const filteredStreams = streams.filter(s => s.class_id === selectedClassId);
@@ -267,26 +277,47 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         </div>
       </div>
 
-      {/* Production-Ready Status Banner */}
-      <div className="rounded-xl border px-4 py-3 flex items-center gap-3"
+      {/* NEP FYUGP Live Banner */}
+      <div className="rounded-xl border px-4 py-3 space-y-2"
         style={{ background: 'rgba(52,211,153,0.07)', borderColor: 'rgba(52,211,153,0.22)' }}>
-        <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-base"
-          style={{ background: 'rgba(52,211,153,0.15)' }}>🚀</div>
-        <div className="min-w-0">
-          <p className="text-xs font-bold text-emerald-400 leading-tight">
-            Syrabit.ai Subject Router — Production Ready
-          </p>
-          <p className="text-[11px] text-white/50 mt-0.5 leading-snug">
-            Syllabus auto-embed active &nbsp;·&nbsp; 98% plain-query accuracy &nbsp;·&nbsp; zero manual work
-          </p>
-        </div>
-        <div className="flex-shrink-0 ml-auto">
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
+        {/* Top row */}
+        <div className="flex items-center gap-3">
+          <div className="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm"
+            style={{ background: 'rgba(52,211,153,0.15)' }}>🚀</div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-bold text-emerald-400 leading-tight">
+              Syrabit.ai Subject Router — NEP FYUGP Live
+            </p>
+            <p className="text-[11px] text-white/50 mt-0.5">
+              Syllabus auto-embed active &nbsp;·&nbsp; 98% plain-query accuracy &nbsp;·&nbsp; zero manual work
+            </p>
+          </div>
+          <span className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
             style={{ background: 'rgba(52,211,153,0.18)', color: '#6ee7b7' }}>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
             LIVE
           </span>
         </div>
+        {/* Stats row */}
+        {nepStats && (
+          <div className="flex flex-wrap gap-2 pt-1 border-t" style={{ borderColor: 'rgba(52,211,153,0.12)' }}>
+            {['aec','sec','mdc','vac','ge','cc','major','minor'].map(t => {
+              const count = nepStats.by_type?.[t] || 0;
+              if (!count) return null;
+              const icons = { aec:'🧠', sec:'⚡', mdc:'🌐', vac:'✨', ge:'🔄', cc:'⭐', major:'🎯', minor:'📘' };
+              return (
+                <span key={t} className="text-[10px] font-semibold px-1.5 py-0.5 rounded"
+                  style={{ background: 'rgba(52,211,153,0.10)', color: '#6ee7b7' }}>
+                  {icons[t]} {t.toUpperCase()}: {count}
+                </span>
+              );
+            })}
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded ml-auto"
+              style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc' }}>
+              📚 {nepStats.total_subjects} subjects · {nepStats.total_embedded_chapters} embedded
+            </span>
+          </div>
+        )}
       </div>
 
       {/* PDF Import Panel */}
@@ -312,7 +343,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         {/* Paper Type Selector */}
         <div>
           <p className="text-[10px] font-semibold text-white/50 uppercase tracking-wide mb-2">Paper Type <span className="text-violet-400">*</span></p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-4 gap-2">
             {PAPER_TYPES.map(pt => (
               <button
                 key={pt.value}
@@ -327,7 +358,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
                   borderColor: 'rgba(255,255,255,0.10)',
                   color: 'rgba(255,255,255,0.50)',
                 }}>
-                <p className="text-xs font-bold">{pt.label}</p>
+                <p className="text-xs font-bold">{pt.icon} {pt.label}</p>
                 <p className="text-[10px] mt-0.5 leading-tight opacity-75">{pt.desc}</p>
               </button>
             ))}

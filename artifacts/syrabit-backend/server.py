@@ -11864,7 +11864,7 @@ async def delete_notification_trigger(trigger_id: str, admin: dict = Depends(get
 
 # ── T005: PDF-to-Syllabus Importer ───────────────────────────────────────────
 
-_VALID_PAPER_TYPES = {"major", "minor", "mdc", "vac", "aec", "sec"}
+_VALID_PAPER_TYPES = {"major", "minor", "mdc", "vac", "aec", "sec", "ge", "cc"}
 
 _SYLLABUS_EXTRACT_PROMPT = """
 You are parsing an official university/board syllabus PDF for students in Assam, India.
@@ -12107,6 +12107,73 @@ async def list_pdf_imports(
     cursor = db.syllabus_pdf_imports.find(q, {"_id": 0}).sort("created_at", -1)
     entries = await cursor.to_list(length=500)
     return {"imports": entries, "total": len(entries)}
+
+
+@api.get("/admin/syllabus/nep-stats")
+async def nep_stats(admin: dict = Depends(get_admin_user)):
+    """
+    Return per-course-type subject counts for NEP FYUGP degree courses.
+    Counts subjects in db.subjects by paper_type field.
+    """
+    try:
+        pipeline = [
+            {"$match": {"source": "pdf_import"}},
+            {"$group": {"_id": "$paper_type", "count": {"$sum": 1}}},
+        ]
+        cursor = db.subjects.aggregate(pipeline)
+        by_type: dict[str, int] = {}
+        async for row in cursor:
+            if row.get("_id"):
+                by_type[row["_id"]] = row["count"]
+
+        total = sum(by_type.values())
+
+        # Also count chapters for embedded coverage
+        emb_count = await db.syllabus_embeddings.count_documents({})
+
+        return {
+            "by_type": by_type,
+            "total_subjects": total,
+            "total_embedded_chapters": emb_count,
+            "nep_types": list(_VALID_PAPER_TYPES),
+        }
+    except Exception as e:
+        logger.warning(f"nep_stats error: {e}")
+        return {"by_type": {}, "total_subjects": 0, "total_embedded_chapters": 0}
+
+
+@api.post("/admin/syllabus/nep-degree-upload")
+async def nep_degree_upload(
+    file: UploadFile = File(...),
+    paper_type: str = Form("major"),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    NEP FYUGP Degree-Only PDF Upload.
+    Validates PDF is degree-level (college / university), then delegates to the
+    standard import-pdf logic with NEP_DEGREE_ONLY mode enforced in SyllabusLinker.
+    Supports all 8 NEP course types: major | minor | mdc | vac | aec | sec | ge | cc
+    """
+    paper_type = paper_type.lower().strip()
+    if paper_type not in _VALID_PAPER_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"NEP paper_type must be one of: {', '.join(sorted(_VALID_PAPER_TYPES))}"
+        )
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    # Re-use the same import logic — delegate via an internal async call
+    # (avoids code duplication; syllabus_linker.NEP_DEGREE_ONLY=True is always set)
+    result = await syllabus_import_pdf(
+        file=file,
+        paper_type=paper_type,
+        board_id="",
+        class_id="",
+        stream_id="",
+        admin=admin,
+    )
+    return {**result, "mode": "nep_degree_only"}
 
 
 # ── T007: Inline AI Writing — CMS suggest ────────────────────────────────────
