@@ -682,6 +682,7 @@ export default function ChatPage() {
       let ragChunks = 0;
       let ragSubjectId = null;
       let ragSubjectName = null;
+      let ragChapterName = null;
       let libSources = [];
       let hasError = false;
 

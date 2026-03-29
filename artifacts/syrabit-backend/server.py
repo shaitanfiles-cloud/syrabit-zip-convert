@@ -5887,6 +5887,8 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     _rag_subjs = rag_ctx.get("subjects", [])
     rag_subject_id   = (_rag_subjs[0].get("id")   if _rag_subjs else None) or msg.subject_id   or None
     rag_subject_name = (_rag_subjs[0].get("name") if _rag_subjs else None) or msg.subject_name or None
+    _rag_chaps       = rag_ctx.get("chunk_chapters") or rag_ctx.get("chapters", [])
+    rag_chapter_name = (_rag_chaps[0].get("title", "") if _rag_chaps else None) or msg.chapter_name or None
     full_response = []
 
     # Derive sources from the same RAG context sent to the LLM (no mismatch)
@@ -5897,7 +5899,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
             # Send RAG metadata with full quality info + subject link data + web search flag
-            yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'web_search_used': web_search_used})}\n\n"
+            yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'web_search_used': web_search_used})}\n\n"
 
             # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
             cache_key = _cache_key(msg.message)
