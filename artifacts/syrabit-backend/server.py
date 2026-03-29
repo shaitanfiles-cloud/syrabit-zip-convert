@@ -2295,7 +2295,7 @@ async def rag_search(
             chunk_parent_chapters: list = []
             if chunk_chapter_ids:
                 chunk_parent_chapters = await db.chapters.find(
-                    {"id": {"$in": chunk_chapter_ids}}, {"_id": 0, "id": 1, "subject_id": 1}
+                    {"id": {"$in": chunk_chapter_ids}}, {"_id": 0, "id": 1, "subject_id": 1, "title": 1}
                 ).to_list(10)
 
             # Collect all subject IDs reached via chapters and chunks
@@ -2386,11 +2386,12 @@ async def rag_search(
             logger.info(f"RAG [NONE]: nothing found | query: {query[:50]}")
 
         result = {
-            "chunks":   chunks,
-            "chapters": chapters_found,
-            "subjects": subjects_found,
-            "source":   source,
-            "quality":  quality,
+            "chunks":         chunks,
+            "chapters":       chapters_found,
+            "chunk_chapters": chunk_parent_chapters,
+            "subjects":       subjects_found,
+            "source":         source,
+            "quality":        quality,
         }
         _rag_cache[_rk] = result
         try:
@@ -2661,36 +2662,55 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
     seen = set()
     sources = []
 
-    def _build_url(slug: str, provided_url: str) -> str:
+    def _build_url(slug: str, provided_url: str, subject_id: str = "") -> str:
         """Return the best available URL for a source."""
         if provided_url:
             return provided_url
-        # SEO page slugs (topic_slug) map to /learn/{slug}
-        # Chapter slugs formatted as "chapter/{id}" don't have a direct route
+        # SEO page slugs map to /learn/{slug}
         if slug and not slug.startswith("chapter/"):
             return f"/learn/{slug}"
+        # Chapter slugs: link to subject page so the student can browse
+        if slug and slug.startswith("chapter/") and subject_id:
+            return f"/subject/{subject_id}"
         return ""
 
-    def _add(slug: str, title: str, url: str = ""):
+    def _add(slug: str, title: str, url: str = "", subject_id: str = ""):
         if slug and slug not in seen:
             seen.add(slug)
             sources.append({
                 "slug":  slug,
                 "title": title or slug,
-                "url":   _build_url(slug, url),
+                "url":   _build_url(slug, url, subject_id),
             })
 
+    # Build a lookup: chapter_id → chapter info (title, subject_id) from chunk_chapters
+    chunk_chapter_map: dict = {}
+    for cc in rag_ctx.get("chunk_chapters", []):
+        cid = cc.get("id", "")
+        if cid:
+            chunk_chapter_map[cid] = cc
+
+    # SEO vector hits (have real topic slugs → /learn/...)
     for hit in rag_ctx.get("vector_hits", []):
         _add(hit.get("slug", ""), hit.get("title", ""), hit.get("url", ""))
 
+    # Chunks — group by parent chapter so 15 chunks from 3 chapters show 3 source entries
     for chunk in rag_ctx.get("chunks", []):
-        _add(chunk.get("slug", ""), chunk.get("title", chunk.get("content_type", "")), chunk.get("url", ""))
+        ch_id = chunk.get("chapter_id", "")
+        cc = chunk_chapter_map.get(ch_id, {})
+        slug = chunk.get("slug", "") or (f"chapter/{ch_id}" if ch_id else "")
+        title = chunk.get("title", "") or cc.get("title", chunk.get("content_type", "Study Material"))
+        url = chunk.get("url", "")
+        _add(slug, title, url, cc.get("subject_id", ""))
+
+    # Keyword-matched chapters (may add extras not covered by chunks above)
+    for ch in rag_ctx.get("chapters", []):
+        ch_id = ch.get("id", "")
+        slug = ch.get("slug", "") or (f"chapter/{ch_id}" if ch_id else "")
+        _add(slug, ch.get("title", ""), ch.get("url", ""), ch.get("subject_id", ""))
 
     for subj in rag_ctx.get("subjects", []):
         _add(subj.get("slug", ""), subj.get("name", ""), subj.get("url", ""))
-
-    for ch in rag_ctx.get("chapters", []):
-        _add(ch.get("slug", ""), ch.get("title", ""), ch.get("url", ""))
 
     return sources
 
