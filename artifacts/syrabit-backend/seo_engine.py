@@ -27,14 +27,38 @@ router = APIRouter(prefix="/seo", tags=["SEO Engine"])
 _db: Optional[AsyncIOMotorDatabase] = None
 _call_llm: Optional[Callable[..., Coroutine[Any, Any, str]]] = None
 _get_admin_fn: Optional[Callable[..., Coroutine[Any, Any, dict]]] = None
+_log_activity: Optional[Callable[..., Coroutine[Any, Any, None]]] = None
 _security = HTTPBearer(auto_error=False)
 
 
-def init_seo_engine(db: AsyncIOMotorDatabase, call_llm_api: Callable, get_admin_user_fn: Callable):
-    global _db, _call_llm, _get_admin_fn
+def init_seo_engine(
+    db: AsyncIOMotorDatabase,
+    call_llm_api: Callable,
+    get_admin_user_fn: Callable,
+    log_activity_fn: Optional[Callable] = None,
+):
+    global _db, _call_llm, _get_admin_fn, _log_activity
     _db = db
     _call_llm = call_llm_api
     _get_admin_fn = get_admin_user_fn
+    _log_activity = log_activity_fn
+
+
+async def _seo_log(action: str, details: str, level: str = "info"):
+    """Non-blocking activity log helper — fires-and-forgets."""
+    if _log_activity is None:
+        return
+    try:
+        await _log_activity({
+            "id":         f"seo-{uuid.uuid4().hex[:8]}",
+            "action":     action,
+            "details":    details,
+            "level":      level,
+            "admin_name": "SEO Engine",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        logger.warning(f"_seo_log failed: {exc}")
 
 
 async def _require_admin(
@@ -446,6 +470,22 @@ async def extract_topics_from_chapters(
             await _db.topics.insert_one(topic)
             created += 1
 
+    subject_label = ""
+    if subject_id:
+        sub = await _db.subjects.find_one({"id": subject_id}, {"_id": 0, "name": 1})
+        subject_label = f" for {sub['name']}" if sub else f" for subject {subject_id[:8]}"
+
+    asyncio.create_task(_seo_log(
+        action  = "seo:topics_extracted",
+        details = (
+            f"AI extracted {created} topics from {len(chapters)} chapters"
+            f"{subject_label}"
+            + (f" · {skipped} already existed" if skipped else "")
+            + (f" · {errors} AI errors" if errors else "")
+        ),
+        level = "info" if errors == 0 else "warn",
+    ))
+
     return {
         "message": (
             f"Extracted {created} topics from {len(chapters)} chapters "
@@ -586,6 +626,10 @@ async def generate_seo_content(data: GenerateRequest, background_tasks: Backgrou
         if page:
             results.append({"page_type": pt, "word_count": page["word_count"], "id": page["id"]})
 
+    asyncio.create_task(_seo_log(
+        action  = "seo:pages_generated",
+        details = f"Generated {len(results)} SEO pages for topic '{topic.get('title', topic['id'])}': {', '.join(p['page_type'] for p in results)}",
+    ))
     return {"message": f"Generated {len(results)} pages", "pages": results}
 
 
@@ -622,6 +666,12 @@ async def _batch_generate(topics: list, page_types: list):
         "errors": errors,
         "completed_at": datetime.now(timezone.utc).isoformat(),
     })
+    await _seo_log(
+        action  = "seo:batch_complete",
+        details = f"Batch SEO generation complete — {total} pages created across {len(topics)} topics" +
+                  (f" · {errors} errors" if errors else ""),
+        level   = "info" if errors == 0 else "warn",
+    )
 
 
 # ─── ADMIN: Stats ───────────────────────────────────────────────────────────

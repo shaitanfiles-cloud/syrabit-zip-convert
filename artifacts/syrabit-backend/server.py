@@ -9999,7 +9999,7 @@ async def metrics_history(minutes: int = 60, admin: dict = Depends(get_admin_use
 # APP SETUP
 # ─────────────────────────────────────────────
 from seo_engine import router as seo_router, init_seo_engine
-init_seo_engine(db, call_llm_api, get_admin_user)
+init_seo_engine(db, call_llm_api, get_admin_user, log_activity_fn=supa_insert_activity_log)
 api.include_router(seo_router)
 
 from qa_engine import public_router as qa_public_router, admin_router as qa_admin_router, init_qa_engine, ensure_qa_indexes, log_chat_message as _log_chat_message

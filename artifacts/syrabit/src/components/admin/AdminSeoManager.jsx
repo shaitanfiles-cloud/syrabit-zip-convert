@@ -135,7 +135,7 @@ function readHubCtx() {
   } catch { return null; }
 }
 
-export default function AdminSeoManager({ adminToken }) {
+export default function AdminSeoManager({ adminToken, onNavigate }) {
   const [tab, setTab]               = useState('pages');
   const [stats, setStats]           = useState(null);
   const [topics, setTopics]         = useState([]);
@@ -725,7 +725,29 @@ export default function AdminSeoManager({ adminToken }) {
                         {[topic.subject_name, topic.chapter_title].filter(Boolean).join(' › ')}
                       </p>
                     </div>
-                    <span className="text-[10px] font-mono" style={{ color: 'rgba(255,255,255,0.18)' }}>{topic.slug}</span>
+                    <span className="text-[10px] font-mono hidden sm:inline" style={{ color: 'rgba(255,255,255,0.18)' }}>{topic.slug}</span>
+                    {onNavigate && (
+                      <button
+                        onClick={e => {
+                          e.stopPropagation();
+                          try {
+                            localStorage.setItem('syrabit_cms_prefill', JSON.stringify({
+                              subjectId:  topic.subject_id  || '',
+                              chapterId:  topic.chapter_id  || '',
+                              topicTitle: topic.title       || '',
+                              topicSlug:  topic.slug        || '',
+                              timestamp:  Date.now(),
+                            }));
+                          } catch {}
+                          onNavigate('editor');
+                        }}
+                        className="flex-shrink-0 flex items-center gap-1 h-6 px-2 rounded text-[10px] font-semibold transition-all hover:opacity-80"
+                        style={{ background: 'rgba(6,182,212,0.12)', color: '#67e8f9', border: '1px solid rgba(6,182,212,0.22)' }}
+                        title="Open in Content Editor"
+                      >
+                        Write →
+                      </button>
+                    )}
                     <button onClick={e => { e.stopPropagation(); handleDeleteTopic(topic); }}
                       className="flex-shrink-0 p-1 rounded transition-colors" style={{ color: 'rgba(255,255,255,0.20)' }}>
                       <Trash2 size={13} />

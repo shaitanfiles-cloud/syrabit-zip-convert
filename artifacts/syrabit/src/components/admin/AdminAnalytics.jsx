@@ -91,7 +91,7 @@ function InsightBar({ label, value, max, color }) {
 const fmt = (d) => d?.slice(5) ?? d;
 const fmtInr = (n) => n >= 100000 ? `₹${(n / 100000).toFixed(1)}L` : n >= 1000 ? `₹${(n / 1000).toFixed(1)}k` : `₹${n}`;
 
-export default function AdminAnalytics({ adminToken }) {
+export default function AdminAnalytics({ adminToken, onNavigate }) {
   const [data, setData]         = useState(null);
   const [funnel, setFunnel]     = useState(null);
   const [heatmap, setHeatmap]   = useState(null);
@@ -589,6 +589,17 @@ export default function AdminAnalytics({ adminToken }) {
       {/* ── SEO & PAGES ── */}
       {tab === 'seo' && (
         <>
+          {onNavigate && (
+            <div className="flex justify-end mb-3">
+              <button
+                onClick={() => onNavigate('seomanager')}
+                className="flex items-center gap-1.5 h-8 px-4 rounded-lg text-xs font-semibold transition-all hover:opacity-80"
+                style={{ background: 'rgba(6,182,212,0.12)', color: '#67e8f9', border: '1px solid rgba(6,182,212,0.28)' }}
+              >
+                <Globe size={12} /> Go to SEO Manager →
+              </button>
+            </div>
+          )}
           {/* GA4 Connection Card */}
           <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
             <div className="flex items-center gap-3 mb-4">

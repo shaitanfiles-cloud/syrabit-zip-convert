@@ -15,6 +15,18 @@ import {
   getAllSubjects, getClasses, API_BASE,
 } from '@/utils/api';
 import axios from 'axios';
+import { adminSeoExtractTopics, adminSeoCreateTopic } from '@/utils/api';
+
+// ── Hub context reader ────────────────────────────────────────────────────────
+function readHubCtx() {
+  try {
+    const raw = localStorage.getItem('syrabit_hub_ctx');
+    if (!raw) return null;
+    const ctx = JSON.parse(raw);
+    if (Date.now() - (ctx._ts || 0) > 2 * 60 * 60 * 1000) return null;
+    return ctx;
+  } catch { return null; }
+}
 
 const card = {
   background: 'rgba(255,255,255,0.03)',
@@ -285,7 +297,7 @@ function QualityScoreCard({ token }) {
 const FALLBACK_SUBJECTS = ['Physics', 'Chemistry', 'Mathematics', 'Biology', 'English', 'Accountancy', 'Business Studies', 'Economics', 'History', 'Political Science', 'Geography'];
 const FALLBACK_CLASSES = ['Class 11', 'Class 12', 'Degree 1st Year', 'Degree 2nd Year', 'Degree 3rd Year'];
 
-function TopicSuggesterCard({ token }) {
+function TopicSuggesterCard({ token, onNavigate }) {
   const [subjects, setSubjects] = useState(FALLBACK_SUBJECTS);
   const [classes, setClasses] = useState(FALLBACK_CLASSES);
   const [subject, setSubject] = useState('Physics');
@@ -293,6 +305,9 @@ function TopicSuggesterCard({ token }) {
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [optionsError, setOptionsError] = useState(false);
+  const [pushing, setPushing] = useState(false);
+
+  const hubCtx = readHubCtx();
 
   useEffect(() => {
     let cancelled = false;
@@ -303,13 +318,22 @@ function TopicSuggesterCard({ token }) {
       if (cancelled) return;
       if (subRes.status === 'fulfilled') {
         const list = (subRes.value.data || []).map(s => s.name || s.title || s).filter(Boolean);
-        if (list.length > 0) { setSubjects(list); setSubject(list[0]); }
+        if (list.length > 0) {
+          setSubjects(list);
+          // Pre-fill from hub context if available
+          const hubSub = hubCtx?.subjectName;
+          setSubject(hubSub && list.includes(hubSub) ? hubSub : list[0]);
+        }
       } else {
         setOptionsError(true);
       }
       if (clsRes.status === 'fulfilled') {
         const list = (clsRes.value.data || []).map(c => c.name || c.title || c).filter(Boolean);
-        if (list.length > 0) { setClasses(list); setClassN(list[0]); }
+        if (list.length > 0) {
+          setClasses(list);
+          const hubCls = hubCtx?.className;
+          setClassN(hubCls && list.includes(hubCls) ? hubCls : list[0]);
+        }
       }
     });
     return () => { cancelled = true; };
@@ -356,30 +380,89 @@ function TopicSuggesterCard({ token }) {
         </button>
       </div>
       {results.length > 0 && (
-        <div style={{ maxHeight: 320, overflowY: 'auto' }}>
-          {results.map((r, i) => (
-            <div key={i} style={{ padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-              <div style={{ marginTop: 2 }}>
-                <Badge label={r.priority || 'medium'} color={r.priority === 'high' ? '#ef4444' : '#f59e0b'} />
+        <div>
+          <div style={{ maxHeight: 300, overflowY: 'auto' }}>
+            {results.map((r, i) => (
+              <div key={i} style={{ padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ marginTop: 2 }}>
+                  <Badge label={r.priority || 'medium'} color={r.priority === 'high' ? '#ef4444' : '#f59e0b'} />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#e8e8e8' }}>{r.title}</div>
+                  <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.45)', marginTop: 2 }}>{r.reason}</div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#a855f7' }}>~{r.search_volume_estimate?.toLocaleString()}</div>
+                  <div style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)' }}>searches/mo</div>
+                </div>
               </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#e8e8e8' }}>{r.title}</div>
-                <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.45)', marginTop: 2 }}>{r.reason}</div>
-              </div>
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 700, color: '#a855f7' }}>~{r.search_volume_estimate?.toLocaleString()}</div>
-                <div style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)' }}>searches/mo</div>
-              </div>
+            ))}
+          </div>
+          {onNavigate && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+              <button
+                onClick={async () => {
+                  if (!token) { toast.error('Not authenticated'); return; }
+                  setPushing(true);
+                  toast.loading('Pushing topics to SEO pipeline…', { id: 'push-seo' });
+                  try {
+                    let pushed = 0;
+                    for (const r of results) {
+                      await adminSeoCreateTopic(token, {
+                        title:      r.title,
+                        slug:       r.title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+                        subject_id: hubCtx?.subjectId || '',
+                        chapter_id: '',
+                        definition: r.reason || '',
+                        status:     'published',
+                      });
+                      pushed++;
+                    }
+                    toast.success(`Pushed ${pushed} topics to SEO pipeline`, { id: 'push-seo' });
+                    onNavigate('seomanager');
+                  } catch (e) {
+                    toast.error(e.response?.data?.detail || 'Push failed', { id: 'push-seo' });
+                  } finally { setPushing(false); }
+                }}
+                disabled={pushing}
+                style={{ ...btn('#a855f7'), fontSize: 12 }}>
+                {pushing ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
+                Push {results.length} topics to SEO
+              </button>
+              <button
+                onClick={() => onNavigate('seomanager')}
+                style={{ background: 'rgba(168,85,247,0.10)', border: '1px solid rgba(168,85,247,0.25)', color: '#d8b4fe', borderRadius: 8, padding: '7px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+                Go to SEO Manager →
+              </button>
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function SeoMetaCard({ token }) {
-  const [form, setForm] = useState({ topic: '', subject: '', class_name: 'Class 11', page_type: 'notes', board: 'AHSEC', content_preview: '' });
+function SeoMetaCard({ token, onNavigate }) {
+  const hubCtx = readHubCtx();
+  const [form, setForm] = useState({
+    topic:           '',
+    subject:         '',
+    class_name:      'Class 11',
+    page_type:       'notes',
+    board:           'AHSEC',
+    content_preview: '',
+  });
+
+  // Pre-fill from hub context on mount
+  useEffect(() => {
+    const ctx = readHubCtx();
+    if (!ctx) return;
+    setForm(f => ({
+      ...f,
+      subject:    ctx.subjectName || f.subject,
+      class_name: ctx.className   || f.class_name,
+    }));
+  }, []);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -597,14 +680,15 @@ const SERVICE_CARDS = [
   { id: 'gaps',      label: 'Content Gaps',       icon: FileSearch,  color: '#ef4444',  component: ContentGapsCard },
 ];
 
-export default function AdminVertexPanel({ token }) {
+export default function AdminVertexPanel({ token, adminToken, onNavigate }) {
+  const tk = adminToken || token;
   const [active, setActive] = useState('semantic');
 
   const ActiveCard = SERVICE_CARDS.find(s => s.id === active)?.component;
 
   return (
     <div style={{ padding: '0 2px' }}>
-      <StatusHeader token={token} />
+      <StatusHeader token={tk} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 24 }}>
         {SERVICE_CARDS.map(s => {
@@ -628,7 +712,7 @@ export default function AdminVertexPanel({ token }) {
         })}
       </div>
 
-      {ActiveCard && <ActiveCard token={token} />}
+      {ActiveCard && <ActiveCard token={tk} onNavigate={onNavigate} />}
 
       <div style={{ marginTop: 24, padding: 16, background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.15)', borderRadius: 12 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: '#8b5cf6', marginBottom: 8, textTransform: 'uppercase' }}>Also Available In Other Panels</div>

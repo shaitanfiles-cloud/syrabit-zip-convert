@@ -402,8 +402,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           />
           <StatCard label="Paid Users"      value={metrics.users?.paid || 0}     icon={Crown}  color="#f59e0b" />
           <StatCard label="Free Users"      value={metrics.users?.free || 0}     icon={Users}  color="#64748b" />
-          <StatCard label="SEO Pages"       value={metrics.seo?.published_pages || 0} icon={Globe} color="#06b6d4"
-            subLabel="Topics" subValue={metrics.seo?.topics || 0} />
+          <div className="cursor-pointer" onClick={() => onNavigate?.('seomanager')}>
+            <StatCard label="SEO Pages"       value={metrics.seo?.published_pages || 0} icon={Globe} color="#06b6d4"
+              subLabel="Topics" subValue={metrics.seo?.topics || 0} />
+          </div>
         </div>
       )}
 

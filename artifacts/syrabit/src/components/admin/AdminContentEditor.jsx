@@ -952,31 +952,55 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                       </div>
                       <div className="ml-auto flex items-center gap-2">
                         {onNavigate && (
-                          <button
-                            onClick={() => {
-                              const sub = subjectData;
-                              const ch  = editTarget ? chapters.find(c => c.id === editTarget) : null;
-                              try {
-                                localStorage.setItem('syrabit_studio_prefill', JSON.stringify({
-                                  subject:    sub?.name || '',
-                                  subjectId:  selSubject,
-                                  boardId:    selBoard  || '',
-                                  classId:    selClass  || '',
-                                  streamId:   selStream || '',
-                                  chapter:    ch?.title || contentForm.title || '',
-                                  rawText:    contentForm.content || '',
-                                  timestamp:  Date.now(),
-                                }));
-                              } catch {}
-                              onNavigate('studio');
-                            }}
-                            disabled={!contentForm.content.trim()}
-                            className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
-                            style={{ background: 'rgba(244,63,94,0.15)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.30)' }}
-                            title="Send chapter content to AI Studio for structured block generation"
-                          >
-                            <Sparkles size={11} /> Send to AI Studio
-                          </button>
+                          <>
+                            <button
+                              onClick={() => {
+                                const sub = subjectData;
+                                const ch  = editTarget ? chapters.find(c => c.id === editTarget) : null;
+                                try {
+                                  localStorage.setItem('syrabit_studio_prefill', JSON.stringify({
+                                    subject:    sub?.name || '',
+                                    subjectId:  selSubject,
+                                    boardId:    selBoard  || '',
+                                    classId:    selClass  || '',
+                                    streamId:   selStream || '',
+                                    chapter:    ch?.title || contentForm.title || '',
+                                    rawText:    contentForm.content || '',
+                                    timestamp:  Date.now(),
+                                  }));
+                                } catch {}
+                                onNavigate('studio');
+                              }}
+                              disabled={!contentForm.content.trim()}
+                              className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
+                              style={{ background: 'rgba(244,63,94,0.15)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.30)' }}
+                              title="Send chapter content to AI Studio for structured block generation"
+                            >
+                              <Sparkles size={11} /> Send to AI Studio
+                            </button>
+                            <button
+                              onClick={() => {
+                                try {
+                                  const ctx = {
+                                    subjectId:   selSubject  || '',
+                                    subjectName: subjectData?.name || '',
+                                    className:   selClass    || '',
+                                    boardName:   selBoard    || '',
+                                    streamName:  selStream   || '',
+                                    _ts: Date.now(),
+                                  };
+                                  localStorage.setItem('syrabit_hub_ctx', JSON.stringify(ctx));
+                                } catch {}
+                                onNavigate('seomanager');
+                              }}
+                              disabled={!selSubject}
+                              className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
+                              style={{ background: 'rgba(6,182,212,0.12)', color: '#67e8f9', border: '1px solid rgba(6,182,212,0.28)' }}
+                              title="Generate SEO topics for this subject in SEO Manager"
+                            >
+                              <Globe size={11} /> Generate SEO Topics →
+                            </button>
+                          </>
                         )}
                         <button
                           onClick={() => handlePublishAsBlog(selSubject, subjectData?.name || selSubject)}
