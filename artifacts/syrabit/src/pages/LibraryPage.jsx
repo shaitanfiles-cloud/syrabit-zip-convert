@@ -369,7 +369,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
   const whatsappShareUrl = useMemo(() => {
     const fullUrl = `https://syrabit.ai${subjectLandingPath}`;
-    const text = `📚 Study ${sub.name} on Syrabit.ai — AI-powered notes & practice for AHSEC students!\n${fullUrl}`;
+    const text = `📚 Study ${sub.name} on Syrabit.ai — AI-powered notes & practice for AssamBoard students!\n${fullUrl}`;
     return `https://wa.me/?text=${encodeURIComponent(text)}`;
   }, [sub.name, subjectLandingPath]);
 

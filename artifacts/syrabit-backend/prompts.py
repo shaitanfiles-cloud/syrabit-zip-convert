@@ -120,6 +120,19 @@ def _classify_question(query: str) -> str:
     return "concise"
 
 
+def _format_board_label(board: str) -> str:
+    """Format the board name as 'AssamBoard — [division]'.
+    Canonical Assam divisions (AHSEC/DEGREE/SEBA) map to exact labels.
+    Any legacy/unknown value defaults to AHSEC as the most common
+    division, ensuring AI context always reads 'AssamBoard — <division>'.
+    """
+    b = (board or "").strip().upper()
+    if b in {"AHSEC", "DEGREE", "SEBA"}:
+        return f"AssamBoard — {b}"
+    # Legacy or unknown board — default to AHSEC (most common division)
+    return "AssamBoard — AHSEC"
+
+
 def _profile_block(user_info: dict, context: dict) -> str:
     """Shared student profile block injected into every prompt."""
     name    = (user_info.get("name", "") or "").split()[0] if user_info.get("name") else "Student"
@@ -130,12 +143,14 @@ def _profile_block(user_info: dict, context: dict) -> str:
     chapter = context.get("chapter_name", "")
     plan    = user_info.get("plan", "free")
 
+    board_label = _format_board_label(board) if board else ""
+
     lines = [f"  Name    : {name}"]
-    if board:   lines.append(f"  Board   : {board}")
-    if cls:     lines.append(f"  Class   : {cls}")
-    if stream:  lines.append(f"  Stream  : {stream}")
-    if subject: lines.append(f"  Subject : {subject}")
-    if chapter: lines.append(f"  Chapter : {chapter}")
+    if board_label: lines.append(f"  Board   : {board_label}")
+    if cls:         lines.append(f"  Class   : {cls}")
+    if stream:      lines.append(f"  Stream  : {stream}")
+    if subject:     lines.append(f"  Subject : {subject}")
+    if chapter:     lines.append(f"  Chapter : {chapter}")
     lines.append(f"  Plan    : {plan}")
     return "\n".join(lines)
 

@@ -174,8 +174,11 @@ export default function OnboardingPage() {
               {/* Step 0: Board */}
               {step === 0 && (
                 <div>
-                  <h2 className="text-lg font-semibold text-white mb-1">Select your Board</h2>
-                  <p className="text-white/50 text-sm mb-6">Which education board are you studying under?</p>
+                  <h2 className="text-lg font-semibold text-white mb-1">Select your Division</h2>
+                  <p className="text-white/50 text-sm mb-4">Choose your division under AssamBoard.</p>
+                  <div className="mb-4 px-3 py-2 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center gap-2">
+                    <span className="text-xs font-bold text-violet-400 uppercase tracking-widest">AssamBoard</span>
+                  </div>
                   <div className="space-y-3">
                     {boards.map((board) => (
                       <button

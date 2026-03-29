@@ -28,7 +28,7 @@ const MODELS = [
 
 // ── Thinking indicator — rotating messages while sarvam-m reasons ─────────────
 const THINKING_STEPS = [
-  'Searching in Assam Board Syllabus…',
+  'Searching in AssamBoard Syllabus…',
   'Reading relevant chapters…',
   'Cross-referencing chapter content…',
   'Verifying accuracy for board exams…',
@@ -455,7 +455,12 @@ export default function ChatPage() {
     if (subject.description) lines.push(`Description: ${subject.description}`);
     if (Array.isArray(subject.tags) && subject.tags.length)
       lines.push(`Topics covered: ${subject.tags.join(', ')}`);
-    const parts = [user?.board_name, user?.class_name, user?.stream_name].filter(Boolean);
+    const rawBoard = (user?.board_name || '').toUpperCase();
+    const CANONICAL_DIVISIONS = new Set(['AHSEC', 'DEGREE', 'SEBA']);
+    const boardLabel = rawBoard
+      ? `AssamBoard — ${CANONICAL_DIVISIONS.has(rawBoard) ? rawBoard : 'AHSEC'}`
+      : null;
+    const parts = [boardLabel, user?.class_name, user?.stream_name].filter(Boolean);
     if (parts.length) lines.push(`Board/Class: ${parts.join(' | ')}`);
     if (scopedChapters.length) {
       lines.push('');

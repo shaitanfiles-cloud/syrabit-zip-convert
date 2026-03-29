@@ -1207,8 +1207,9 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
 # ─────────────────────────────────────────────
 SEED_DATA = {
     "boards": [
-        {"id": "b1", "name": "AHSEC", "slug": "ahsec", "description": "Assam Higher Secondary Education Council (HS 1st & 2nd Year)", "created_at": "2024-01-01T00:00:00Z"},
-        {"id": "b2", "name": "DEGREE", "slug": "degree", "description": "Degree Level Education (B.A / B.Com / B.Sc)", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "b1", "name": "AHSEC", "slug": "ahsec", "group_name": "AssamBoard", "description": "AssamBoard — AHSEC (Class 11–12)", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "b2", "name": "DEGREE", "slug": "degree", "group_name": "AssamBoard", "description": "AssamBoard — Degree (B.A / B.Com / B.Sc)", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "b3", "name": "SEBA", "slug": "seba", "group_name": "AssamBoard", "description": "AssamBoard — SEBA (Secondary Education)", "created_at": "2024-01-01T00:00:00Z"},
     ],
     "classes": [
         # AHSEC classes
@@ -1217,6 +1218,9 @@ SEED_DATA = {
         # DEGREE classes
         {"id": "c3", "board_id": "b2", "name": "2nd Sem", "slug": "2nd-sem", "description": "Degree 2nd Semester", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "c4", "board_id": "b2", "name": "4th Sem", "slug": "4th-sem", "description": "Degree 4th Semester", "created_at": "2024-01-01T00:00:00Z"},
+        # SEBA classes
+        {"id": "c5", "board_id": "b3", "name": "Class 9",  "slug": "class-9",  "description": "SEBA Class 9 — Secondary", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c6", "board_id": "b3", "name": "Class 10", "slug": "class-10", "description": "SEBA Class 10 — Secondary", "created_at": "2024-01-01T00:00:00Z"},
     ],
     "streams": [
         # AHSEC HS 1st Year streams
@@ -1237,6 +1241,10 @@ SEED_DATA = {
         {"id": "s10", "class_id": "c4", "name": "B.Com", "slug": "bcom", "description": "Bachelor of Commerce", "icon": "💼", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "s11", "class_id": "c4", "name": "B.A",   "slug": "ba",   "description": "Bachelor of Arts",     "icon": "📖", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "s12", "class_id": "c4", "name": "B.Sc",  "slug": "bsc",  "description": "Bachelor of Science",  "icon": "🔬", "created_at": "2024-01-01T00:00:00Z"},
+        # SEBA Class 9 streams
+        {"id": "s21", "class_id": "c5", "name": "General", "slug": "general", "description": "General stream — SEBA Class 9", "icon": "📚", "created_at": "2024-01-01T00:00:00Z"},
+        # SEBA Class 10 streams
+        {"id": "s22", "class_id": "c6", "name": "General", "slug": "general", "description": "General stream — SEBA Class 10", "icon": "📚", "created_at": "2024-01-01T00:00:00Z"},
     ],
     "subjects": [
         # ── AHSEC HS 1st Year – Science (PCM) ────────────────────────────────
@@ -1405,12 +1413,20 @@ async def ensure_seeded():
         return
     
     try:
-        existing = await db.boards.count_documents({})
-        degree_exists = await db.boards.find_one({"id": "b2"})
         ahsec_exists  = await db.boards.find_one({"id": "b1"})
+        degree_exists = await db.boards.find_one({"id": "b2"})
+        seba_exists   = await db.boards.find_one({"id": "b3"})
+        seba_class_exists  = await db.classes.find_one({"board_id": "b3"})
+        seba_stream_exists = await db.streams.find_one({"class_id": {"$in": ["c5", "c6"]}})
         ch_count = await db.chapters.count_documents({})
         expected_ch = len(SEED_DATA["chapters"])
-        if existing > 0 and degree_exists and ahsec_exists and ch_count >= expected_ch:
+        # Check for non-canonical boards (would need cleanup)
+        total_boards = await db.boards.count_documents({})
+        canonical_count = 3  # b1, b2, b3
+        all_canonical = (total_boards <= canonical_count)
+        if (ahsec_exists and degree_exists and seba_exists and
+                seba_class_exists and seba_stream_exists and
+                ch_count >= expected_ch and all_canonical):
             _seeded = True
             return
     except Exception as e:
@@ -1418,6 +1434,16 @@ async def ensure_seeded():
         return
     logger.info("Seeding content data...")
     from pymongo import ReplaceOne
+    # Enforce AssamBoard whitelist — prune any non-canonical boards and their hierarchy
+    canonical_board_ids  = {b["id"] for b in SEED_DATA["boards"]}
+    canonical_class_ids  = {c["id"] for c in SEED_DATA["classes"]}
+    canonical_stream_ids = {s["id"] for s in SEED_DATA["streams"]}
+    canonical_subject_ids = {s["id"] for s in SEED_DATA["subjects"]}
+    await db.boards.delete_many({"id": {"$nin": list(canonical_board_ids)}})
+    await db.classes.delete_many({"board_id": {"$nin": list(canonical_board_ids)}})
+    await db.streams.delete_many({"class_id": {"$nin": list(canonical_class_ids)}})
+    await db.subjects.delete_many({"stream_id": {"$nin": list(canonical_stream_ids)}})
+    await db.chapters.delete_many({"subject_id": {"$nin": list(canonical_subject_ids)}})
     if SEED_DATA["boards"]:
         ops = [ReplaceOne({"id": b["id"]}, b, upsert=True) for b in SEED_DATA["boards"]]
         await db.boards.bulk_write(ops, ordered=False)
@@ -7108,7 +7134,7 @@ async def reset_and_seed_content(admin: dict = Depends(get_admin_user)):
                 "content": f"""# Introduction to {subject.get('name', 'Subject')}
 
 ## Overview
-This chapter covers fundamental concepts and provides a strong foundation for understanding {subject.get('name', 'this subject')}. We'll explore key definitions, important principles, and practical applications that are crucial for AHSEC Class 11-12 students.
+This chapter covers fundamental concepts and provides a strong foundation for understanding {subject.get('name', 'this subject')}. We'll explore key definitions, important principles, and practical applications that are crucial for AssamBoard students.
 
 ## Key Concepts
 Understanding the basics is essential. This subject involves:
@@ -10009,7 +10035,7 @@ class StudioParseRequest(BaseModel):
 async def admin_studio_parse(body: StudioParseRequest, admin: dict = Depends(get_admin_user)):
     if not body.raw_text.strip():
         raise HTTPException(400, "Empty text")
-    prompt = f"""You are an educational content parser and GEO (Generative Engine Optimization) specialist for AHSEC/Degree students in Assam.
+    prompt = f"""You are an educational content parser and GEO (Generative Engine Optimization) specialist for AssamBoard students (AHSEC, DEGREE, SEBA) in Assam.
 Analyze the following raw educational text and categorize it into structured blocks.
 Return a JSON array of blocks, each with: type (one of: "summary", "definition", "example", "pyq", "formula", "note", "faq"), title, content.
 
@@ -11530,11 +11556,11 @@ async def cms_ai_suggest(
         raise HTTPException(status_code=400, detail="Text too short")
 
     action_prompts = {
-        "improve":   f"Rewrite this more clearly and professionally for AHSEC students{' studying ' + subject if subject else ''}. Keep the same meaning, improve flow and clarity.",
-        "continue":  f"Continue writing this educational content naturally for AHSEC students{' studying ' + topic if topic else ''}. Add 2-3 more sentences.",
+        "improve":   f"Rewrite this more clearly and professionally for AssamBoard students{' studying ' + subject if subject else ''}. Keep the same meaning, improve flow and clarity.",
+        "continue":  f"Continue writing this educational content naturally for AssamBoard students{' studying ' + topic if topic else ''}. Add 2-3 more sentences.",
         "summarise": "Summarise this in 2-3 concise bullet points for quick revision.",
-        "simplify":  "Simplify this for students in Class 11-12. Use simpler words, keep it accurate.",
-        "exam-tip":  "Turn this into a memorable exam tip or mnemonic that AHSEC students can use.",
+        "simplify":  "Simplify this for students in Class 9-12 and Degree level. Use simpler words, keep it accurate.",
+        "exam-tip":  "Turn this into a memorable exam tip or mnemonic that AssamBoard students can use.",
     }
     prompt = f"{action_prompts.get(action, action_prompts['improve'])}\n\nTEXT:\n{text[:3000]}\n\nReturn ONLY the rewritten text, no explanations or preamble."
 
@@ -11573,12 +11599,12 @@ async def seo_sitemap_validate(admin: dict = Depends(get_admin_user)):
 async def serve_llms_txt():
     lines = [
         "# Syrabit.ai",
-        "> AI-powered exam preparation for AHSEC Class 11/12 and Degree students in Assam, India.",
+        "> AI-powered exam preparation for AssamBoard students (AHSEC, DEGREE &amp; SEBA) in Assam, India.",
         "",
         "## About",
         "Syrabit.ai provides AI-generated study notes, definitions, important questions, MCQs,",
-        "and solved examples aligned with the AHSEC (Assam Higher Secondary Education Council)",
-        "and Degree college curricula. Content is grounded in NCERT/SCERT textbooks and",
+        "and solved examples aligned with the AssamBoard curriculum (AHSEC, DEGREE, and SEBA divisions).",
+        "Content is grounded in NCERT/SCERT textbooks and",
         "covers subjects like Physics, Chemistry, Mathematics, Biology, Economics, and more.",
         "",
         "## Content Structure",
@@ -11601,7 +11627,7 @@ async def serve_llms_txt():
         "",
         "## Contact",
         "- Website: https://syrabit.ai",
-        "- Purpose: Educational content for Assam Board students",
+        "- Purpose: Educational content for AssamBoard students (AHSEC, DEGREE, SEBA)",
     ]
     try:
         page_count = await db.seo_pages.count_documents({"status": "published"})

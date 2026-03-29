@@ -119,10 +119,10 @@ export default function CurriculumMap() {
   return (
     <div className="min-h-screen text-white" style={{ background: '#06060e' }}>
       <PageMeta
-        title="Curriculum Map — AHSEC & Degree Subject Browser | Syrabit.ai"
-        description="Browse the full Assam board curriculum: AHSEC Class 11-12 (PCM, PCB, Arts, Commerce) and Degree (B.Com, B.A, B.Sc) — all subjects and chapters in one place."
+        title="Curriculum Map — AssamBoard Subject Browser | Syrabit.ai"
+        description="Browse the full AssamBoard curriculum: AHSEC Class 11-12 (PCM, PCB, Arts, Commerce), Degree (B.Com, B.A, B.Sc), and SEBA — all subjects and chapters in one place."
         url="https://syrabit.ai/curriculum"
-        keywords="AHSEC syllabus, Assam board curriculum, Class 11 12 chapters, Degree syllabus Assam, SEBA curriculum map"
+        keywords="AssamBoard syllabus, AHSEC curriculum, SEBA curriculum, Class 11 12 chapters, Degree syllabus Assam, AssamBoard curriculum map"
       />
       <PublicNavbar />
 
@@ -137,7 +137,7 @@ export default function CurriculumMap() {
             Curriculum Map
           </h1>
           <p className="text-white/50 text-sm max-w-xl">
-            Browse every board, class, and subject in the Syrabit library.
+            Browse every AssamBoard division (AHSEC, DEGREE, SEBA), class, and subject in the Syrabit library.
             Click any chapter to open its study page.
           </p>
           {!isLoading && (

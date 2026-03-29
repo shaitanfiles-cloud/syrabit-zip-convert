@@ -186,17 +186,17 @@ function Reveal({ children, delay = 0, className = '' }) {
    Static data
    ───────────────────────────────────────────── */
 const STATS = [
-  { value: '6+',   label: 'Boards+Streams', icon: BookOpen   },
-  { value: '42',   label: 'Subjects',        icon: Layers     },
-  { value: '500+', label: 'Students',        icon: Users      },
-  { value: '3',    label: 'Plans',           icon: TrendingUp },
+  { value: '3',    label: 'AssamBoard Divisions', icon: BookOpen   },
+  { value: '42',   label: 'Subjects',              icon: Layers     },
+  { value: '500+', label: 'Students',              icon: Users      },
+  { value: '3',    label: 'Plans',                 icon: TrendingUp },
 ];
 
 const FEATURES = [
   {
     icon: Brain,
     title: 'AI-Powered Answers',
-    desc: 'Browse and ask questions on any chapter — get instant, syllabus-grounded answers based on AHSEC content, not generic internet data.',
+    desc: 'Browse and ask questions on any chapter — get instant, syllabus-grounded answers based on AssamBoard content, not generic internet data.',
     gradient: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
     glow: 'rgba(139,92,246,0.28)',
     border: 'rgba(139,92,246,0.20)',
@@ -204,7 +204,7 @@ const FEATURES = [
   {
     icon: BookOpen,
     title: 'Structured Subject Browser',
-    desc: 'Every chapter of Class 11 & 12 organized by board, stream, and subject — so you always know where to start.',
+    desc: 'Every chapter across AssamBoard divisions (AHSEC, DEGREE, SEBA) organized by class and stream — so you always know where to start.',
     gradient: 'linear-gradient(135deg,#2563eb,#06b6d4)',
     glow: 'rgba(59,130,246,0.28)',
     border: 'rgba(59,130,246,0.20)',
@@ -317,10 +317,10 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen text-white overflow-x-hidden" style={{ background: '#06060e' }}>
       <PageMeta
-        title="Syrabit.ai — Educational Browser For Assam Board Students"
-        description="Syrabit.ai is the educational browser for Assam Board students. Browse AHSEC Class 11-12 and Degree (B.Com, B.A, B.Sc) syllabus content, get instant answers, PYQs, notes, and MCQs — free to start. Trusted by 500+ students."
+        title="Syrabit.ai — Educational Browser For AssamBoard Students"
+        description="Syrabit.ai is the educational browser for AssamBoard students. Browse AHSEC Class 11-12, Degree (B.Com, B.A, B.Sc), and SEBA syllabus content, get instant answers, PYQs, notes, and MCQs — free to start. Trusted by 500+ students."
         url="https://syrabit.ai/"
-        keywords="AHSEC educational browser, Assam board study app, Class 11 12 exam prep, AHSEC syllabus browser, degree exam prep Assam, B.Com B.A B.Sc notes, SEBA AHSEC 2025 study tool, free educational browser India"
+        keywords="AssamBoard educational browser, AHSEC study app, SEBA study tool, Class 11 12 exam prep, AHSEC syllabus browser, degree exam prep Assam, B.Com B.A B.Sc notes, AssamBoard 2025 study tool, free educational browser India"
       />
       <PublicNavbar />
 
@@ -375,7 +375,7 @@ export default function LandingPage() {
           >
             <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
             <span className="text-xs font-semibold tracking-widest" style={{ color: '#a78bfa' }}>
-              AI-POWERED EXAM PREP FOR ASSAM BOARD
+              AI-POWERED EXAM PREP FOR ASSAMBOARD STUDENTS
             </span>
           </motion.div>
 
@@ -395,7 +395,7 @@ export default function LandingPage() {
               backgroundClip: 'text',
               filter: 'drop-shadow(0 0 30px rgba(139,92,246,0.30))',
             }}>
-              Assam Board
+              AssamBoard
             </span>
             <br />
             <span className="text-white">Students</span>
@@ -409,7 +409,7 @@ export default function LandingPage() {
             className="max-w-2xl mx-auto mb-10 leading-relaxed"
             style={{ fontSize: 'clamp(1rem,2vw,1.18rem)', color: 'rgba(255,255,255,0.50)', letterSpacing: '0.01em' }}
           >
-            Syrabit gives AHSEC Class 11–12 students instant, syllabus-aligned AI answers,
+            Syrabit gives AssamBoard students (AHSEC, DEGREE &amp; SEBA) instant, syllabus-aligned AI answers,
             PYQ insights, and structured subject notes — all in one place.
           </motion.p>
 
@@ -608,10 +608,10 @@ export default function LandingPage() {
             </span>
           </div>
           <h2 className="text-white mb-4" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
-            Built for AHSEC. Optimised for results.
+            Built for AssamBoard. Optimised for results.
           </h2>
           <p className="max-w-xl mx-auto" style={{ fontSize: '1.05rem', color: 'rgba(255,255,255,0.40)' }}>
-            Every feature is purpose-built for Class 11 &amp; 12 students preparing for the Assam Board exam.
+            Every feature is purpose-built for AHSEC, DEGREE, and SEBA students preparing for their AssamBoard exams.
           </p>
         </Reveal>
 
@@ -667,7 +667,7 @@ export default function LandingPage() {
             <h2 className="text-white mb-3" style={{ fontSize: 'clamp(1.6rem,4vw,2.4rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
               Content covering every subject
             </h2>
-            <p style={{ color: 'rgba(255,255,255,0.40)' }}>AHSEC Class 11 &amp; 12 · Science (PCM/PCB) · Arts</p>
+            <p style={{ color: 'rgba(255,255,255,0.40)' }}>AssamBoard · AHSEC (Class 11 &amp; 12) · DEGREE · SEBA</p>
           </Reveal>
 
           <motion.div
@@ -903,7 +903,7 @@ export default function LandingPage() {
           <h2 className="text-white mb-3" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
             Students love Syrabit.ai
           </h2>
-          <p style={{ color: 'rgba(255,255,255,0.40)' }}>Real feedback from AHSEC students across Assam</p>
+          <p style={{ color: 'rgba(255,255,255,0.40)' }}>Real feedback from AssamBoard students across Assam</p>
         </Reveal>
 
         <motion.div
@@ -970,7 +970,7 @@ export default function LandingPage() {
             Ready to ace your boards?
           </h2>
           <p className="mb-10 text-lg" style={{ color: 'rgba(255,255,255,0.45)' }}>
-            Join hundreds of AHSEC students who study smarter with Syrabit.ai. Free forever — no credit card required.
+            Join hundreds of AssamBoard students (AHSEC, DEGREE &amp; SEBA) who study smarter with Syrabit.ai. Free forever — no credit card required.
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -1025,7 +1025,7 @@ export default function LandingPage() {
             <div className="col-span-2 md:col-span-1 space-y-4">
               <LogoFull size="sm" textClassName="text-white" />
               <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.30)' }}>
-                AI-powered exam prep for AHSEC &amp; Degree students in Assam. Class 11–12 + B.Com, B.A, B.Sc.
+                AI-powered exam prep for AssamBoard students in Assam — AHSEC (Class 11–12), DEGREE (B.Com, B.A, B.Sc), and SEBA.
               </p>
               <div className="flex items-center gap-2">
                 {[{ icon: Twitter, label: 'Twitter' }, { icon: Github, label: 'GitHub' }, { icon: Mail, label: 'Email' }].map(({ icon: Icon, label }) => (
@@ -1088,7 +1088,7 @@ export default function LandingPage() {
             style={{ borderColor: 'rgba(255,255,255,0.06)' }}
           >
             <p className="text-xs" style={{ color: 'rgba(255,255,255,0.20)' }}>
-              © {year} Syrabit.ai · Built for AHSEC &amp; Degree students in Assam, India
+              © {year} Syrabit.ai · Built for AssamBoard students in Assam, India (AHSEC · DEGREE · SEBA)
             </p>
             <p className="text-xs" style={{ color: 'rgba(255,255,255,0.15)' }}>
               Made with ♥ for Class 11 &amp; 12 exam warriors

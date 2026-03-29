@@ -302,7 +302,7 @@ export default function SubjectLandingPage() {
             <Link to="/chat" className="hover:text-purple-400 transition-colors">Ask Syra</Link>
           </div>
           <p className="text-center text-xs text-gray-600 mt-3">
-            Syrabit.ai — AI-powered exam prep for Assam Board students
+            Syrabit.ai — AI-powered exam prep for AssamBoard students (AHSEC · DEGREE · SEBA)
           </p>
         </nav>
       </div>

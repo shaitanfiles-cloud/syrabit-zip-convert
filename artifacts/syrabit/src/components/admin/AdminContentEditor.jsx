@@ -289,7 +289,7 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
         title: subjectName || res.data?.title || subjectId,
         content: mergedMd,
         seo_slug: (subjectName || subjectId).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-'),
-        meta_description: `Complete ${subjectName || subjectId} notes, chapters, and PYQ for AHSEC students on Syrabit.`,
+        meta_description: `Complete ${subjectName || subjectId} notes, chapters, and PYQ for AssamBoard students on Syrabit.`,
         timestamp: Date.now(),
       };
       localStorage.setItem('syrabit_cms_prefill', JSON.stringify(prefill));
@@ -315,7 +315,7 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
         title: name,
         content: mergedMd,
         seo_slug: name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-'),
-        meta_description: `Complete ${name} notes, chapters, and PYQ for AHSEC students on Syrabit.`,
+        meta_description: `Complete ${name} notes, chapters, and PYQ for AssamBoard students on Syrabit.`,
         timestamp: Date.now(),
       };
       localStorage.setItem('syrabit_cms_prefill', JSON.stringify(prefill));

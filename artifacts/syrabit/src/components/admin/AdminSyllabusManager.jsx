@@ -416,10 +416,10 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
               onChange={(e) => setFormData({ ...formData, content: e.target.value })}
               placeholder={
                 selectedSubjectId
-                  ? `e.g., ${selectedSubject?.name || 'Physics'} for AHSEC Class 11 covers mechanics, thermodynamics, and optics. Emphasis on board exam patterns and numerical problem-solving...`
+                  ? `e.g., ${selectedSubject?.name || 'Physics'} for AssamBoard covers mechanics, thermodynamics, and optics. Emphasis on board exam patterns and numerical problem-solving...`
                   : selectedStreamId
-                  ? `e.g., AHSEC Class 11 ${selectedStream?.name || 'Science'} covers Physics, Chemistry, and ${selectedStream?.name?.includes('PCM') ? 'Mathematics' : 'Biology'}. Focus on conceptual understanding and AHSEC board exam patterns...`
-                  : 'e.g., AHSEC Class 11 covers Science, Arts, and Commerce streams. This syllabus serves as the general curriculum guide for all AI responses...'
+                  ? `e.g., AssamBoard ${selectedStream?.name || 'Science'} covers Physics, Chemistry, and ${selectedStream?.name?.includes('PCM') ? 'Mathematics' : 'Biology'}. Focus on conceptual understanding and AssamBoard exam patterns...`
+                  : 'e.g., AssamBoard AHSEC covers Science, Arts, and Commerce streams. This syllabus serves as the general curriculum guide for all AI responses...'
               }
               className="w-full px-4 py-3 rounded-xl border border-white/10 bg-white/5 text-white placeholder-white/20 text-sm focus:border-indigo-500 outline-none transition-colors resize-none"
               rows={6}
@@ -433,7 +433,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
             <textarea
               value={formData.guidelines}
               onChange={(e) => setFormData({ ...formData, guidelines: e.target.value })}
-              placeholder="e.g., Students should focus on deriving formulas, solving numeric problems, and understanding real-world applications. Emphasise AHSEC board exam patterns..."
+              placeholder="e.g., Students should focus on deriving formulas, solving numeric problems, and understanding real-world applications. Emphasise AssamBoard exam patterns..."
               className="w-full px-4 py-3 rounded-xl border border-white/10 bg-white/5 text-white placeholder-white/20 text-sm focus:border-indigo-500 outline-none transition-colors resize-none"
               rows={3}
             />
@@ -450,7 +450,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
                 value={newGeoPhrase}
                 onChange={(e) => setNewGeoPhrase(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && addGeoPhrase()}
-                placeholder='e.g., "As per AHSEC 2024 syllabus, this topic carries 5 marks"'
+                placeholder='e.g., "As per AssamBoard 2024 syllabus, this topic carries 5 marks"'
                 className="flex-1 px-3 py-2 rounded-lg border border-white/10 bg-white/5 text-white placeholder-white/25 text-sm focus:border-emerald-500 outline-none"
               />
               <button

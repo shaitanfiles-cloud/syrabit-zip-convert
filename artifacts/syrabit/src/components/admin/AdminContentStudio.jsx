@@ -463,7 +463,7 @@ export default function AdminContentStudio({ adminToken, onNavigate }) {
           if (syl?.chapters?.length) syllabusContext += `\nChapters: ${syl.chapters.slice(0, 8).join(', ')}`;
         } catch {}
       }
-      const prompt = `Generate comprehensive educational notes for AHSEC students on: ${s.name}.${syllabusContext}\nInclude: key concepts (with AHSEC board exam frequency), textbook definitions, worked examples, PYQ-style questions with marks, and 2 FAQ blocks.`;
+      const prompt = `Generate comprehensive educational notes for AssamBoard students on: ${s.name}.${syllabusContext}\nInclude: key concepts (with AssamBoard exam frequency), textbook definitions, worked examples, PYQ-style questions with marks, and 2 FAQ blocks.`;
       const res = await axios.post(`${API_BASE}/admin/studio/parse`, {
         raw_text: prompt, subject: s.name, chapter: 'Overview',
       }, headers);

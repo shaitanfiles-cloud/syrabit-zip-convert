@@ -585,7 +585,7 @@ export default function ProfilePage() {
           </div>
           {[
             { key: 'name',         label: 'Display Name', value: profile?.name,        icon: User,          placeholder: 'Your full name' },
-            { key: 'board_name',   label: 'Board',        value: profile?.board_name,  icon: Globe,         placeholder: 'e.g. AHSEC, DEGREE' },
+            { key: 'board_name',   label: 'Board',        value: profile?.board_name,  icon: Globe,         placeholder: 'AssamBoard division (AHSEC, DEGREE or SEBA)' },
             { key: 'class_name',   label: 'Class / Sem',  value: profile?.class_name,  icon: GraduationCap, placeholder: 'e.g. Class 12, 2nd Sem' },
             { key: 'stream_name',  label: 'Stream',       value: profile?.stream_name, icon: Layers,        placeholder: 'e.g. Science (PCM), B.Com' },
             { key: 'phone',        label: 'Phone',        value: profile?.phone,       icon: Phone,         placeholder: 'Optional phone number' },

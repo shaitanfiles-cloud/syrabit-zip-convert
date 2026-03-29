@@ -11,7 +11,7 @@ const BENEFITS = [
   {
     icon: Sparkles,
     title: 'AI-Powered Tutor',
-    desc: 'Instant, syllabus-aligned answers for AHSEC Class 11 & 12',
+    desc: 'Instant, syllabus-aligned answers for AssamBoard students',
     color: '#a78bfa',
     bg: 'rgba(124,58,237,0.14)',
     border: 'rgba(139,92,246,0.22)',
@@ -111,7 +111,7 @@ export default function LoginPage() {
             >
               Educational Browser For<br />
               <span style={{ background: 'linear-gradient(135deg,#a78bfa,#7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-                Assam Board Students
+                AssamBoard Students
               </span>
             </h2>
             <p className="mb-10 max-w-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.52)', fontSize: '0.95rem' }}>

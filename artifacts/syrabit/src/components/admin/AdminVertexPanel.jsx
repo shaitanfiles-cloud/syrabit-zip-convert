@@ -405,7 +405,7 @@ function SeoMetaCard({ token }) {
         <Badge label="Structured Output" color="#06b6d4" />
       </div>
       <p style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', marginBottom: 12 }}>
-        Generate title (60 chars), meta description (160 chars), keywords, OG tags — all optimised for AHSEC search intent.
+        Generate title (60 chars), meta description (160 chars), keywords, OG tags — all optimised for AssamBoard search intent.
       </p>
       <div className="grid grid-cols-2 gap-2 mb-2">
         <input value={form.topic} onChange={e => setForm(f => ({ ...f, topic: e.target.value }))} placeholder="Topic *" style={inp} />

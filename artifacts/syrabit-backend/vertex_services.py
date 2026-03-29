@@ -326,11 +326,11 @@ async def enhance_content(content: str, page_type: str = "notes",
         "mcqs":                "Improve MCQ distractors to be more plausible, ensure questions test understanding not just recall.",
         "definition":          "Make the definition precise, include etymology if helpful, and give a real-world analogy.",
         "important-questions": "Ensure questions cover all board exam patterns (2-mark, 5-mark, 10-mark). Add model answer hints.",
-        "examples":            "Add more relatable, Assam-context examples that AHSEC students will recognize.",
+        "examples":            "Add more relatable, Assam-context examples that AssamBoard students will recognize.",
     }
 
     prompt = (
-        f"You are an expert {subject} teacher for AHSEC {class_name} students in Assam, India.\n"
+        f"You are an expert {subject} teacher for AssamBoard ({class_name}) students in Assam, India.\n"
         f"Improve the following {page_type} content for the topic: {topic}\n\n"
         f"Instruction: {type_hints.get(page_type, 'Make it better and more exam-focused.')}\n\n"
         f"Return ONLY the improved content in the same format (Markdown). Do not add explanatory text.\n\n"
@@ -350,7 +350,7 @@ async def score_content(content: str, page_type: str = "notes",
         return {"overall": 0, "error": "No content or API key"}
 
     prompt = (
-        f"Score this {page_type} content about '{topic}' ({subject}) for AHSEC students.\n"
+        f"Score this {page_type} content about '{topic}' ({subject}) for AssamBoard students.\n"
         f"Return a JSON with:\n"
         f"  accuracy (0-10): factual correctness\n"
         f"  completeness (0-10): topic coverage\n"

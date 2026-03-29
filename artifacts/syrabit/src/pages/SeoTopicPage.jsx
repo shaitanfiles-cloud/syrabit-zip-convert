@@ -381,7 +381,7 @@ export default function SeoTopicPage() {
         section={page.subject_name}
         keywords={[
           page.topic_title, `${page.topic_title} notes`, `${page.topic_title} ${boardShort}`,
-          page.subject_name, page.board_name, page.class_name, 'AHSEC',
+          page.subject_name, page.board_name, page.class_name, 'AssamBoard', boardShort,
         ].filter(Boolean).join(', ')}
         tags={[page.topic_title, page.subject_name, page.board_name].filter(Boolean)}
         publishedTime={page.generated_at}
@@ -652,7 +652,7 @@ export default function SeoTopicPage() {
                 <Link to="/chat" className="hover:text-purple-400 transition-colors">Ask Syra</Link>
               </div>
               <p className="text-center text-xs text-gray-600 mt-3">
-                Syrabit.ai — Educational Browser For Assam Board Students
+                Syrabit.ai — Educational Browser For AssamBoard Students
               </p>
             </nav>
           </div>

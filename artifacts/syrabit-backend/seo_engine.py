@@ -932,7 +932,7 @@ footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-t
 {prevnext_html}
 <footer>
 <p>Source: <a href="{html_mod.escape(page_url)}">Syrabit.ai — {topic}</a></p>
-<p>&copy; Syrabit.ai — AI-powered exam prep for Assam Board students</p>
+<p>&copy; Syrabit.ai — AI-powered exam prep for AssamBoard students</p>
 </footer>
 </main>
 </body>
