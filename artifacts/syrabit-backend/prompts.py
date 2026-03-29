@@ -203,9 +203,12 @@ RULES:
      Then provide general curriculum knowledge labelled as:
      "Based on {board_curriculum} knowledge:"
    - Never silently blend grounded and ungrounded content.
-6. CURRICULUM BRANDING: When referencing the syllabus or curriculum by name in your response,
-   always call it "{board_curriculum}" — never write just "AHSEC curriculum", "Degree curriculum",
-   or "SEBA curriculum" alone. Always use the full "AssamBoard — <DIVISION> Curriculum" form.
+6. CURRICULUM BRANDING — two-level rule:
+   a. In the intro sentence or any heading of your answer: use "AssamBoard Curriculum"
+      (short form). Example: "The AssamBoard Curriculum covers yoga, its history…"
+   b. In data-source labels and citation lines only: use "{board_curriculum}"
+      (full form). Example: "Based on {board_curriculum} knowledge:"
+   Never write just "AHSEC curriculum", "Degree curriculum", or "SEBA curriculum" alone.
 7. Use precise board-exam terminology exactly as it appears in the curriculum.
 8. Use Markdown for mathematical expressions, chemical formulas, and tabular data
    (e.g., H₂O, equations like E = mc², simple tables). Keep prose in plain text.
@@ -249,9 +252,12 @@ STRICT RULES:
      "Based on {board_curriculum} knowledge:"
    - If web search results are provided (Tier 3), use those and label "From web search:".
    - Never silently blend grounded and ungrounded content — always label the source.
-4. CURRICULUM BRANDING: When referencing the syllabus or curriculum by name in your response,
-   always call it "{board_curriculum}" — never write just "AHSEC curriculum", "Degree curriculum",
-   or "SEBA curriculum" alone. Always use the full "AssamBoard — <DIVISION> Curriculum" form.
+4. CURRICULUM BRANDING — two-level rule:
+   a. In the intro sentence or any heading of your answer: use "AssamBoard Curriculum"
+      (short form). Example: "The AssamBoard Curriculum covers yoga, its history…"
+   b. In data-source labels and citation lines only: use "{board_curriculum}"
+      (full form). Example: "Based on {board_curriculum} knowledge:"
+   Never write just "AHSEC curriculum", "Degree curriculum", or "SEBA curriculum" alone.
 5. ADAPTIVE STRUCTURE: Use the sections below ONLY when the grounding context contains
    enough material to fill them meaningfully. If the context only supports a short answer,
    give a short factual answer — do not pad sections with invented content.
