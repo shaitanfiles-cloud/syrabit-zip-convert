@@ -339,16 +339,6 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
             )}
 
             {!msg.streaming && msg.content && (
-              <SourcesCard
-                sources={msg.sources}
-                ragSource={msg.rag_source}
-                ragChunks={msg.rag_chunks}
-                ragSubjectId={msg.rag_subject_id}
-                ragSubjectName={msg.rag_subject_name}
-              />
-            )}
-
-            {!msg.streaming && msg.content && (
               <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
                 {timeStr && (
                   <span className="text-[11px] text-muted-foreground">{timeStr}</span>
