@@ -367,13 +367,16 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
 
             {!msg.streaming && msg.content && (() => {
               const hasSrc = msg.rag_source && msg.rag_source !== 'none';
+              const firstSrc = msg.sources && msg.sources[0];
               const pillName = msg.rag_subject_name
+                || firstSrc?.title
                 || (msg.rag_source === 'document' ? 'Document' : null)
                 || (msg.rag_source === 'web' ? 'Web Search' : null)
                 || (hasSrc ? 'AssamBoard Curriculum' : null);
               const pillUrl = msg.rag_subject_id
                 ? `/subject/${msg.rag_subject_id}`
-                : (msg.sources && msg.sources[0]?.url) || null;
+                : firstSrc?.url
+                || '/library';
               const handlePillNav = (url) => {
                 if (!url) return;
                 if (url.startsWith('http')) window.open(url, '_blank', 'noopener,noreferrer');
@@ -385,12 +388,11 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
                     <button
                       onClick={() => handlePillNav(pillUrl)}
                       className="source-mini-pill"
-                      title={pillUrl ? `View ${pillName}` : pillName}
-                      disabled={!pillUrl}
+                      title={`View ${pillName}`}
                     >
                       <BookOpen size={10} className="shrink-0" />
                       <span className="truncate">{pillName}</span>
-                      {pillUrl && <ExternalLink size={8} className="shrink-0 opacity-50" />}
+                      <ExternalLink size={8} className="shrink-0 opacity-50" />
                     </button>
                   )}
                   <div className="flex items-center gap-1.5 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
