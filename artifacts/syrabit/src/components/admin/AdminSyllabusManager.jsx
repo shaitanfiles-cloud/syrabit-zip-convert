@@ -332,8 +332,10 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       });
       setPdfResult(res.data);
       setPreviewData(null);
-      const count = res.data?.subjects_extracted || 0;
-      toast.success(`Saved ${count} subject${count !== 1 ? 's' : ''} as ${previewData.paper_type?.toUpperCase()}`);
+      const count = res.data?.subjects_saved || res.data?.subjects_extracted || 0;
+      const skipped = res.data?.subjects_skipped_duplicates || 0;
+      const skipMsg = skipped > 0 ? ` · ${skipped} duplicate${skipped !== 1 ? 's' : ''} skipped` : '';
+      toast.success(`Saved ${count} subject${count !== 1 ? 's' : ''} as ${previewData.paper_type?.toUpperCase()}${skipMsg}`);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Save failed');
     } finally {
@@ -512,9 +514,17 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         {!previewData && pdfResult && pdfResult.success && (
           <div className="rounded-lg border text-xs" style={{ background: 'rgba(52,211,153,0.06)', borderColor: 'rgba(52,211,153,0.20)' }}>
             <div className="p-3 border-b" style={{ borderColor: 'rgba(52,211,153,0.15)' }}>
-              <p className="font-semibold text-emerald-400">
-                ✓ {pdfResult.subjects_extracted} subject{pdfResult.subjects_extracted !== 1 ? 's' : ''} saved as {pdfResult.paper_type?.toUpperCase()}
-              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <p className="font-semibold text-emerald-400">
+                  ✓ {pdfResult.subjects_saved ?? pdfResult.subjects_extracted ?? 0} subject{(pdfResult.subjects_saved ?? pdfResult.subjects_extracted ?? 0) !== 1 ? 's' : ''} saved as {pdfResult.paper_type?.toUpperCase()}
+                </p>
+                {(pdfResult.subjects_skipped_duplicates ?? 0) > 0 && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded font-semibold"
+                    style={{ background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>
+                    ⟳ {pdfResult.subjects_skipped_duplicates} duplicate{pdfResult.subjects_skipped_duplicates !== 1 ? 's' : ''} skipped
+                  </span>
+                )}
+              </div>
               <p className="text-white/40 mt-0.5 font-mono text-[10px]">
                 {pdfResult.filename} · import #{pdfResult.import_id?.slice(-6)}
               </p>
