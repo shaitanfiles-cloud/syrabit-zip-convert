@@ -292,7 +292,7 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
       variants={bubbleVariants}
       initial="hidden"
       animate="visible"
-      className={`group ${isUser ? 'flex flex-col items-end mb-4' : 'mb-6'}`}
+      className={`group ${isUser ? 'flex flex-col items-end mb-2' : 'mb-3'}`}
       data-testid="chat-message-bubble"
     >
       {isUser && (
@@ -329,8 +329,8 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
 
       {!isUser && (
         <div className="w-full">
-          <div className="flex items-center gap-2 mb-2">
-            <div className="w-6 h-6 rounded-full overflow-hidden flex-shrink-0">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="w-5 h-5 rounded-full overflow-hidden flex-shrink-0">
               <img src="/logo.png" alt="Syrabit.ai" className="w-full h-full object-cover" />
             </div>
             <span className="text-xs font-semibold text-foreground/70">Syrabit AI</span>

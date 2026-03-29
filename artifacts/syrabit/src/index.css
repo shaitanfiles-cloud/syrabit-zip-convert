@@ -719,10 +719,10 @@
 /* ── Chat Blog Card — white bg, black text, WordPress reading style ──────────── */
 .chat-blog-card {
   background: #ffffff;
-  border-radius: 14px;
-  padding: 22px 26px;
+  border-radius: 12px;
+  padding: 14px 18px;
   box-shadow: 0 1px 4px rgba(0,0,0,0.10), 0 0 0 1px rgba(0,0,0,0.06);
-  margin-bottom: 2px;
+  margin-bottom: 0;
 }
 
 .chat-blog-card .md-content-light {
@@ -789,9 +789,9 @@
 .source-card {
   background: linear-gradient(135deg, rgba(59,130,246,0.07) 0%, rgba(99,102,241,0.07) 100%);
   border: 1px solid rgba(59,130,246,0.20);
-  border-radius: 14px;
-  padding: 12px 14px;
-  margin-top: 14px;
+  border-radius: 10px;
+  padding: 9px 12px;
+  margin-top: 6px;
   backdrop-filter: blur(8px);
 }
 
