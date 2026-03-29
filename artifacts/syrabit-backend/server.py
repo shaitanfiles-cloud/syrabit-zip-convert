@@ -2749,6 +2749,24 @@ def build_rag_system_prompt(
     _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard — AHSEC"
     _curriculum_label = f"{_board_label} Curriculum"
 
+    # ── Mandatory answer intro header ────────────────────────────────────────────
+    # Derive subject and chapter from RAG context first, then fallback to user context
+    _intro_subject = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
+    _intro_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
+    _intro_parts = ["**AssamBoard Curriculum**"]
+    if _intro_subject:
+        _intro_parts.append(_intro_subject)
+    if _intro_chapter:
+        _intro_parts.append(_intro_chapter)
+    _intro_header = " · ".join(_intro_parts)
+    base_prompt += (
+        f"\n\nMANDATORY INTRO: Every academic answer MUST begin with this exact header "
+        f"on its own line, followed immediately by the answer:\n"
+        f"{_intro_header}\n"
+        f"Do not add a blank line between the header and the answer. "
+        f"Casual greetings and small-talk skip this header."
+    )
+
     grounding = ""
 
     # ── Tier -1: Syllabus constraints (curriculum boundaries) ───────────────────
