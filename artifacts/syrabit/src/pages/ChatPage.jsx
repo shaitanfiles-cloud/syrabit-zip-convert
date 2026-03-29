@@ -136,6 +136,19 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
         )}
       </div>
 
+      {/* Subject name label before source pages */}
+      {displayTitle && visibleSources.length > 0 && (
+        <div className="flex items-center gap-1.5 mb-2 px-1">
+          <span className="text-[10px] font-semibold text-white/25 uppercase tracking-widest">From</span>
+          <span
+            className="text-[11px] font-semibold px-2 py-0.5 rounded-md"
+            style={{ background: 'rgba(139,92,246,0.10)', color: '#a78bfa' }}
+          >
+            {displayTitle}
+          </span>
+        </div>
+      )}
+
       {/* Page links */}
       <div className="source-pages">
         {visibleSources.length > 0

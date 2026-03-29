@@ -290,6 +290,30 @@ export default function LearnPage() {
             </div>
           </div>
 
+          {/* Subject name card — context pill above the lesson */}
+          {(doc?.subject_name || doc?.subject_id) && (
+            <div className="flex items-center gap-2 mb-4">
+              <div
+                className="flex items-center gap-2 px-3 py-1.5 rounded-xl w-fit"
+                style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.18)' }}
+              >
+                <BookOpen size={12} className="text-violet-400 shrink-0" />
+                <span className="text-[11px] font-semibold text-violet-300/70 uppercase tracking-wider">Subject</span>
+                <span className="text-white/20 text-xs">·</span>
+                {doc.subject_id ? (
+                  <Link
+                    to={`/subject/${doc.subject_id}`}
+                    className="text-[12px] font-semibold text-violet-300 hover:text-violet-200 transition-colors"
+                  >
+                    {doc.subject_name || doc.subject_id}
+                  </Link>
+                ) : (
+                  <span className="text-[12px] font-semibold text-violet-300">{doc.subject_name}</span>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Main layout: content + TOC */}
           <div className="flex gap-8 items-start">
             {/* Article */}
