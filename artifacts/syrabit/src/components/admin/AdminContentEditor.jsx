@@ -561,17 +561,18 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     }
   }, [selSubject, adminToken]);
 
-  const handleApplyVariant = useCallback(async (variantUrl) => {
-    if (!selSubject || !variantUrl) return;
+  const handleApplyVariant = useCallback(async (variantIndex) => {
+    if (!selSubject || variantIndex == null) return;
     try {
       await axios.post(
         `${API}/admin/thumbnail/apply`,
-        { subject_id: selSubject, thumbnail_url: variantUrl },
+        { subject_id: selSubject, variant_index: variantIndex },
         authHeaders(adminToken),
       );
       await load(true);
       toast.success('Variant applied as thumbnail!');
-    } catch {
+    } catch (err) {
+      console.error('Failed to apply variant:', err);
       toast.error('Failed to apply variant');
     }
   }, [selSubject, adminToken]);
@@ -1235,7 +1236,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                                   {/* Hover overlay with "Use This" */}
                                   <div className="absolute inset-0 flex flex-col justify-end p-2 opacity-0 group-hover:opacity-100 transition-opacity"
                                     style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 60%)' }}>
-                                    <button onClick={e => { e.stopPropagation(); handleApplyVariant(varUrl); }}
+                                    <button onClick={e => { e.stopPropagation(); handleApplyVariant(i); }}
                                       className="w-full py-1.5 rounded-lg text-[10px] font-bold text-white"
                                       style={{ background: '#7c3aed' }}>
                                       Use This
@@ -1257,7 +1258,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                             </div>
 
                             {/* Apply selected */}
-                            <button onClick={() => handleApplyVariant(thumbVariants[selectedThumbVariant])}
+                            <button onClick={() => handleApplyVariant(selectedThumbVariant)}
                               className="w-full py-2.5 rounded-xl text-sm font-semibold text-white"
                               style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', boxShadow: '0 2px 10px rgba(124,58,237,0.30)' }}>
                               Apply "{['Gradient Wash', 'Geometric', 'Abstract'][selectedThumbVariant]}" as Thumbnail

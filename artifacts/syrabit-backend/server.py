@@ -7320,14 +7320,29 @@ async def apply_thumbnail_variant(
     admin: dict = Depends(get_admin_user),
 ):
     """Set the active thumbnailUrl for a subject to one of the generated variants."""
-    subject_id = data.get("subject_id", "")
-    thumb_url  = data.get("thumbnail_url", "")
-    if not subject_id or not thumb_url:
-        raise HTTPException(400, "subject_id and thumbnail_url required")
+    subject_id    = data.get("subject_id", "")
+    variant_index = data.get("variant_index")
+    if not subject_id or variant_index is None:
+        raise HTTPException(400, "subject_id and variant_index required")
+    try:
+        variant_index = int(variant_index)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "variant_index must be an integer 0, 1, or 2")
+    if variant_index not in (0, 1, 2):
+        raise HTTPException(400, "variant_index must be 0, 1, or 2")
+    subject = await db.subjects.find_one({"id": subject_id})
+    if not subject:
+        raise HTTPException(404, f"Subject '{subject_id}' not found")
+    variants = subject.get("thumbnail_variants") or {}
+    variant_key = f"variant{variant_index + 1}_url"
+    thumb_url = variants.get(variant_key)
+    if not thumb_url:
+        raise HTTPException(400, f"Variant '{variant_key}' not found for subject '{subject_id}'")
     await db.subjects.update_one(
         {"id": subject_id},
         {"$set": {"thumbnailUrl": thumb_url, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
+    _invalidate_content_cache("subjects")
     return {"success": True}
 
 
