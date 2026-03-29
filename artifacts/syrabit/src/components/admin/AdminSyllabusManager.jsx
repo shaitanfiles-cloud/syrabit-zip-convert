@@ -39,6 +39,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   ];
 
   const [nepStats, setNepStats] = useState(null);
+  const [autoAssigning, setAutoAssigning] = useState(false);
 
   // ── Imports History ──────────────────────────────────────────────────────
   const [importsOpen, setImportsOpen] = useState(false);
@@ -321,6 +322,24 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
     });
   };
 
+  const handleFyugpAutoAssign = async () => {
+    setAutoAssigning(true);
+    try {
+      const res = await axios.post(
+        `${API}/admin/fyugp/auto-assign`,
+        {},
+        authHeaders(adminToken)
+      );
+      const { reassigned, skipped, total_scanned } = res.data;
+      toast.success(`Auto-assigned ${reassigned} subject${reassigned !== 1 ? 's' : ''} into FYUGP structure (${skipped} skipped, ${total_scanned} scanned)`);
+      if (reassigned > 0 && importsOpen) loadImports();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Auto-assign failed');
+    } finally {
+      setAutoAssigning(false);
+    }
+  };
+
   const handleConfirmImport = async () => {
     if (!previewData) return;
     setConfirmLoading(true);
@@ -418,11 +437,23 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
               Syllabus auto-embed active &nbsp;·&nbsp; 98% plain-query accuracy &nbsp;·&nbsp; zero manual work
             </p>
           </div>
-          <span className="flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
-            style={{ background: 'rgba(52,211,153,0.18)', color: '#6ee7b7' }}>
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
-            LIVE
-          </span>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <button
+              onClick={handleFyugpAutoAssign}
+              disabled={autoAssigning}
+              title="Re-link all imported subjects into pre-built FYUGP Semester 1–4 slots"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-semibold transition-all disabled:opacity-50"
+              style={{ background: 'rgba(52,211,153,0.18)', color: '#6ee7b7', border: '1px solid rgba(52,211,153,0.30)' }}>
+              {autoAssigning
+                ? <><Loader2 size={10} className="animate-spin" /> Assigning…</>
+                : <><GitBranch size={10} /> Auto-Assign</>}
+            </button>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold"
+              style={{ background: 'rgba(52,211,153,0.18)', color: '#6ee7b7' }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+              LIVE
+            </span>
+          </div>
         </div>
         {/* Stats row */}
         {nepStats && (

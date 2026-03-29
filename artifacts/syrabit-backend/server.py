@@ -1249,9 +1249,14 @@ SEED_DATA = {
         # AHSEC classes
         {"id": "c1", "board_id": "b1", "name": "HS 1st Year", "slug": "hs-1st-year", "description": "Class 11 — AHSEC", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "c2", "board_id": "b1", "name": "HS 2nd Year", "slug": "hs-2nd-year", "description": "Class 12 — AHSEC", "created_at": "2024-01-01T00:00:00Z"},
-        # DEGREE classes
+        # DEGREE legacy classes (kept for backward compat)
         {"id": "c3", "board_id": "b2", "name": "2nd Sem", "slug": "2nd-sem", "description": "Degree 2nd Semester", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "c4", "board_id": "b2", "name": "4th Sem", "slug": "4th-sem", "description": "Degree 4th Semester", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE — FYUGP (NEP) Semesters 1–4 (pre-built, linker-discoverable by slug)
+        {"id": "c7",  "board_id": "b2", "name": "Semester 1", "slug": "semester-1", "description": "FYUGP 1st Semester — NEP", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c8",  "board_id": "b2", "name": "Semester 2", "slug": "semester-2", "description": "FYUGP 2nd Semester — NEP", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c9",  "board_id": "b2", "name": "Semester 3", "slug": "semester-3", "description": "FYUGP 3rd Semester — NEP", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c10", "board_id": "b2", "name": "Semester 4", "slug": "semester-4", "description": "FYUGP 4th Semester — NEP", "created_at": "2024-01-01T00:00:00Z"},
         # SEBA classes
         {"id": "c5", "board_id": "b3", "name": "Class 9",  "slug": "class-9",  "description": "SEBA Class 9 — Secondary", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "c6", "board_id": "b3", "name": "Class 10", "slug": "class-10", "description": "SEBA Class 10 — Secondary", "created_at": "2024-01-01T00:00:00Z"},
@@ -1267,14 +1272,42 @@ SEED_DATA = {
         {"id": "s18", "class_id": "c2", "name": "Science (PCB)", "slug": "science-pcb", "description": "Physics, Chemistry, Biology",    "icon": "🧬", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "s19", "class_id": "c2", "name": "Arts",          "slug": "arts",        "description": "Political Science, History, Economics, Geography", "icon": "📖", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "s20", "class_id": "c2", "name": "Commerce",      "slug": "commerce",    "description": "Accountancy, Business Studies, Economics",          "icon": "💼", "created_at": "2024-01-01T00:00:00Z"},
-        # DEGREE 2nd Sem streams
+        # DEGREE 2nd Sem legacy streams
         {"id": "s7",  "class_id": "c3", "name": "B.Com", "slug": "bcom", "description": "Bachelor of Commerce", "icon": "💼", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "s8",  "class_id": "c3", "name": "B.A",   "slug": "ba",   "description": "Bachelor of Arts",     "icon": "📖", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "s9",  "class_id": "c3", "name": "B.Sc",  "slug": "bsc",  "description": "Bachelor of Science",  "icon": "🔬", "created_at": "2024-01-01T00:00:00Z"},
-        # DEGREE 4th Sem streams
+        # DEGREE 4th Sem legacy streams
         {"id": "s10", "class_id": "c4", "name": "B.Com", "slug": "bcom", "description": "Bachelor of Commerce", "icon": "💼", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "s11", "class_id": "c4", "name": "B.A",   "slug": "ba",   "description": "Bachelor of Arts",     "icon": "📖", "created_at": "2024-01-01T00:00:00Z"},
         {"id": "s12", "class_id": "c4", "name": "B.Sc",  "slug": "bsc",  "description": "Bachelor of Science",  "icon": "🔬", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE FYUGP Semester 1 — 6 NEP course-type streams
+        {"id": "s30", "class_id": "c7",  "name": "Major", "slug": "major", "description": "Major Discipline Course",               "icon": "🎯", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s31", "class_id": "c7",  "name": "Minor", "slug": "minor", "description": "Minor Elective Course",                 "icon": "📘", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s32", "class_id": "c7",  "name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s33", "class_id": "c7",  "name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                    "icon": "✨", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s34", "class_id": "c7",  "name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s35", "class_id": "c7",  "name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE FYUGP Semester 2 — 6 NEP course-type streams
+        {"id": "s36", "class_id": "c8",  "name": "Major", "slug": "major", "description": "Major Discipline Course",               "icon": "🎯", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s37", "class_id": "c8",  "name": "Minor", "slug": "minor", "description": "Minor Elective Course",                 "icon": "📘", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s38", "class_id": "c8",  "name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s39", "class_id": "c8",  "name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                    "icon": "✨", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s40", "class_id": "c8",  "name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s41", "class_id": "c8",  "name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE FYUGP Semester 3 — 6 NEP course-type streams
+        {"id": "s42", "class_id": "c9",  "name": "Major", "slug": "major", "description": "Major Discipline Course",               "icon": "🎯", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s43", "class_id": "c9",  "name": "Minor", "slug": "minor", "description": "Minor Elective Course",                 "icon": "📘", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s44", "class_id": "c9",  "name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s45", "class_id": "c9",  "name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                    "icon": "✨", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s46", "class_id": "c9",  "name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s47", "class_id": "c9",  "name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE FYUGP Semester 4 — 6 NEP course-type streams
+        {"id": "s48", "class_id": "c10", "name": "Major", "slug": "major", "description": "Major Discipline Course",               "icon": "🎯", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s49", "class_id": "c10", "name": "Minor", "slug": "minor", "description": "Minor Elective Course",                 "icon": "📘", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s50", "class_id": "c10", "name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s51", "class_id": "c10", "name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                    "icon": "✨", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s52", "class_id": "c10", "name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s53", "class_id": "c10", "name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡", "created_at": "2024-01-01T00:00:00Z"},
         # SEBA Class 9 streams
         {"id": "s21", "class_id": "c5", "name": "General", "slug": "general", "description": "General stream — SEBA Class 9", "icon": "📚", "created_at": "2024-01-01T00:00:00Z"},
         # SEBA Class 10 streams
@@ -1314,17 +1347,26 @@ async def ensure_seeded():
         ahsec_exists  = await db.boards.find_one({"id": "b1"})
         degree_exists = await db.boards.find_one({"id": "b2"})
         seba_exists   = await db.boards.find_one({"id": "b3"})
-        seba_class_exists  = await db.classes.find_one({"board_id": "b3"})
-        seba_stream_exists = await db.streams.find_one({"class_id": {"$in": ["c5", "c6"]}})
+        seba_class_exists   = await db.classes.find_one({"board_id": "b3"})
+        seba_stream_exists  = await db.streams.find_one({"class_id": {"$in": ["c5", "c6"]}})
+        fyugp_class_exists  = await db.classes.find_one({"id": {"$in": ["c7", "c8", "c9", "c10"]}})
+        fyugp_stream_exists = await db.streams.find_one({"id": {"$in": ["s30", "s36", "s42", "s48"]}})
         ch_count = await db.chapters.count_documents({})
         expected_ch = len(SEED_DATA["chapters"])
         # Check for non-canonical boards (would need cleanup)
         total_boards = await db.boards.count_documents({})
         canonical_count = 3  # b1, b2, b3
         all_canonical = (total_boards <= canonical_count)
+        # Check for duplicate classes (e.g. cls_b2_semester-1 AND c7 both slug=semester-1)
+        has_dupes = await db.classes.find_one(
+            {"id": {"$nin": [c["id"] for c in SEED_DATA["classes"]]},
+             "slug": {"$in": ["semester-1","semester-2","semester-3","semester-4"]},
+             "board_id": "b2"}
+        )
         if (ahsec_exists and degree_exists and seba_exists and
                 seba_class_exists and seba_stream_exists and
-                ch_count >= expected_ch and all_canonical):
+                fyugp_class_exists and fyugp_stream_exists and
+                ch_count >= expected_ch and all_canonical and not has_dupes):
             _seeded = True
             return
     except Exception as e:
@@ -1336,11 +1378,16 @@ async def ensure_seeded():
     # Subjects and chapters are managed entirely via Admin panel uploads
     canonical_board_ids  = {b["id"] for b in SEED_DATA["boards"]}
     canonical_class_ids  = {c["id"] for c in SEED_DATA["classes"]}
-    canonical_stream_ids = {s["id"] for s in SEED_DATA["streams"]}
-    # Only prune boards/classes/streams that aren't in the canonical set
+    # Only prune boards whose ID isn't canonical
     await db.boards.delete_many({"id": {"$nin": list(canonical_board_ids)}})
+    # Only prune classes whose board isn't canonical (keeps dynamically created DEGREE/AHSEC/SEBA classes)
     await db.classes.delete_many({"board_id": {"$nin": list(canonical_board_ids)}})
-    await db.streams.delete_many({"class_id": {"$nin": list(canonical_class_ids)}})
+    # Protect streams belonging to any class under a canonical board (not just seeded classes)
+    dynamic_class_docs = await db.classes.find(
+        {"board_id": {"$in": list(canonical_board_ids)}}, {"id": 1}
+    ).to_list(2000)
+    all_protected_class_ids = canonical_class_ids | {c["id"] for c in dynamic_class_docs}
+    await db.streams.delete_many({"class_id": {"$nin": list(all_protected_class_ids)}})
     # NOTE: Do NOT delete subjects or chapters here — they are user-managed
     if SEED_DATA["boards"]:
         ops = [ReplaceOne({"id": b["id"]}, b, upsert=True) for b in SEED_DATA["boards"]]
@@ -1351,6 +1398,36 @@ async def ensure_seeded():
     if SEED_DATA["streams"]:
         ops = [ReplaceOne({"id": s["id"]}, s, upsert=True) for s in SEED_DATA["streams"]]
         await db.streams.bulk_write(ops, ordered=False)
+    # ── Deduplicate: remove old dynamically-created classes that share slug+board_id
+    # with a canonical class (e.g. cls_b2_semester-1 vs c7 both have slug=semester-1, board_id=b2)
+    canonical_class_ids_set = {c["id"] for c in SEED_DATA["classes"]}
+    for canon_cls in SEED_DATA["classes"]:
+        dupe_docs = await db.classes.find(
+            {"board_id": canon_cls["board_id"], "slug": canon_cls["slug"],
+             "id": {"$ne": canon_cls["id"]}},
+            {"id": 1}
+        ).to_list(100)
+        for dupe in dupe_docs:
+            dupe_id = dupe["id"]
+            # Re-point all streams under the dupe class to the canonical class
+            dupe_streams = await db.streams.find({"class_id": dupe_id}, {"id": 1, "slug": 1}).to_list(100)
+            for dupe_stream in dupe_streams:
+                # Check if a canonical stream with same slug exists under canonical class
+                canon_stream = await db.streams.find_one(
+                    {"class_id": canon_cls["id"], "slug": dupe_stream["slug"]}, {"id": 1}
+                )
+                if canon_stream:
+                    # Move subjects from dupe stream to canonical stream
+                    await db.subjects.update_many(
+                        {"stream_id": dupe_stream["id"]},
+                        {"$set": {"stream_id": canon_stream["id"],
+                                  "class_slug": canon_cls["slug"],
+                                  "class_id": canon_cls["id"]}}
+                    )
+                    await db.streams.delete_one({"id": dupe_stream["id"]})
+            # Remove the dupe class
+            await db.classes.delete_one({"id": dupe_id})
+            logger.info(f"Dedup: removed duplicate class {dupe_id} (same as {canon_cls['id']})")
     # Ensure admin user exists for each admin account in ADMIN_ACCOUNTS
     for admin_acc in ADMIN_ACCOUNTS:
         existing = await supa_get_user(admin_acc["email"])
@@ -6713,6 +6790,102 @@ async def admin_delete_stream(stream_id: str, admin: dict = Depends(get_admin_us
     await db.streams.delete_one({"id": stream_id})
     _invalidate_content_cache("streams")
     return {"message": "Stream deleted"}
+
+
+# ─────────────────────────────────────────────
+# ADMIN — FYUGP Auto-Assign
+# Re-links subjects from PDF imports into pre-built FYUGP semester/stream slots
+# ─────────────────────────────────────────────
+@api.post("/admin/fyugp/auto-assign")
+async def admin_fyugp_auto_assign(admin: dict = Depends(get_admin_user)):
+    """
+    Scans every subject that has paper_type + class_name data (from PDF imports)
+    and re-links them to the canonical FYUGP Semester 1-4 classes (c7-c10) and
+    their 6 pre-built course-type streams (Major/Minor/MDC/VAC/AEC/SEC).
+    Safe to run multiple times — idempotent.
+    """
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="MongoDB unavailable")
+
+    from syllabus_linker import _parse_semester_number, NEP_COURSE_STREAMS
+
+    # FYUGP canonical class map: slug → id
+    fyugp_classes = {
+        "semester-1": "c7", "semester-2": "c8",
+        "semester-3": "c9", "semester-4": "c10",
+    }
+    # Stream slug → canonical stream id per class
+    fyugp_streams = {
+        "c7":  {"major": "s30", "minor": "s31", "mdc": "s32", "vac": "s33", "aec": "s34", "sec": "s35"},
+        "c8":  {"major": "s36", "minor": "s37", "mdc": "s38", "vac": "s39", "aec": "s40", "sec": "s41"},
+        "c9":  {"major": "s42", "minor": "s43", "mdc": "s44", "vac": "s45", "aec": "s46", "sec": "s47"},
+        "c10": {"major": "s48", "minor": "s49", "mdc": "s50", "vac": "s51", "aec": "s52", "sec": "s53"},
+    }
+
+    subjects = await db.subjects.find(
+        {"source": "pdf_import", "paper_type": {"$exists": True, "$ne": ""}},
+        {"_id": 0}
+    ).to_list(5000)
+
+    reassigned = 0
+    skipped = 0
+
+    for subj in subjects:
+        paper_type = (subj.get("paper_type") or "").lower().strip()
+        if paper_type not in NEP_COURSE_STREAMS:
+            skipped += 1
+            continue
+
+        # Determine semester from class_name or class_slug
+        sem_text = subj.get("className") or subj.get("class_slug") or ""
+        sem_num  = _parse_semester_number(sem_text)
+        if not sem_num or sem_num > 4:
+            skipped += 1
+            continue
+
+        class_slug = f"semester-{sem_num}"
+        class_id   = fyugp_classes.get(class_slug)
+        stream_id  = fyugp_streams.get(class_id, {}).get(paper_type)
+        if not class_id or not stream_id:
+            skipped += 1
+            continue
+
+        # Already correct — skip
+        if subj.get("stream_id") == stream_id:
+            continue
+
+        # Fetch stream + class metadata for denorm fields
+        stream_doc = await db.streams.find_one({"id": stream_id}, {"_id": 0})
+        class_doc  = await db.classes.find_one({"id": class_id}, {"_id": 0})
+        stream_name = stream_doc.get("name", paper_type.upper()) if stream_doc else paper_type.upper()
+        class_name  = class_doc.get("name", f"Semester {sem_num}") if class_doc else f"Semester {sem_num}"
+
+        await db.subjects.update_one(
+            {"id": subj["id"]},
+            {"$set": {
+                "stream_id":   stream_id,
+                "stream_slug": paper_type,
+                "class_slug":  class_slug,
+                "class_id":    class_id,
+                "className":   class_name,
+                "streamName":  stream_name,
+                "boardId":     "b2",
+                "boardName":   "DEGREE",
+                "board_slug":  "degree",
+            }}
+        )
+        reassigned += 1
+
+    _invalidate_content_cache("subjects")
+    _invalidate_content_cache("streams")
+    _invalidate_content_cache("classes")
+    return {
+        "message": f"FYUGP auto-assign complete",
+        "reassigned": reassigned,
+        "skipped": skipped,
+        "total_scanned": len(subjects),
+    }
+
 
 # ─────────────────────────────────────────────
 # ADMIN CONTENT MANAGEMENT — Subjects
