@@ -2708,6 +2708,12 @@ def build_rag_system_prompt(
     document_text = rag_context.get("document_text", "")
     vector_hits = rag_context.get("vector_hits", [])
 
+    # Compute branded curriculum label once — used in all grounding tiers
+    from prompts import _format_board_label as _fbl
+    _board_raw = (context.get("board_name", "") or "").strip().upper()
+    _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard — AHSEC"
+    _curriculum_label = f"{_board_label} Curriculum"
+
     grounding = ""
 
     # ── Tier -1: Syllabus constraints (curriculum boundaries) ───────────────────
@@ -2717,8 +2723,8 @@ def build_rag_system_prompt(
         geo_phrases = syllabus.get("geo_phrases", [])
         grounding = (
             "\n\n---\n"
-            "**CURRICULUM CONSTRAINTS (Tier -1 — Board Syllabus):**\n"
-            "You are helping a student from the AHSEC/Degree curriculum. "
+            f"**CURRICULUM CONSTRAINTS (Tier -1 — {_curriculum_label}):**\n"
+            f"You are helping a student from the {_curriculum_label}. "
             "The following represents what this student is expected to know:\n\n"
             f"{syllabus_content}\n\n"
         )
@@ -2726,9 +2732,10 @@ def build_rag_system_prompt(
             grounding += f"**Key topics:** {syllabus_topics}\n\n"
         grounding += (
             "---\n"
-            "*INSTRUCTION: Keep your answer within the scope of this curriculum. "
+            f"*INSTRUCTION: Keep your answer within the scope of the {_curriculum_label}. "
             "Do not introduce concepts beyond the standard curriculum unless explicitly requested. "
             "Prioritize accuracy over breadth. "
+            f"When referencing the curriculum by name, always call it '{_curriculum_label}'. "
             "When relevant, cite specific board exam stats, PYQ frequency data, and authoritative syllabus references.*\n"
         )
         if geo_phrases:
@@ -2791,8 +2798,8 @@ def build_rag_system_prompt(
                 "1. Answer ONLY from the grounding above. Structure: Explanation → Key Points → Examples → Sources\n"
                 "2. End every answer with: 'Sources: [PAGE: slug1], [PAGE: slug2]' citing which pages you used.\n"
                 "3. If the answer is NOT in the grounding: check for Tier 3 web search results below — "
-                "use those and label 'From web search:'. If those are absent, answer from standard curriculum "
-                "knowledge and note 'Based on standard curriculum knowledge:'. Never stop without an answer.\n"
+                f"use those and label 'From web search:'. If those are absent, answer from {_curriculum_label} "
+                f"knowledge and note 'Based on {_curriculum_label} knowledge:'. Never stop without an answer.\n"
                 "4. NEVER hallucinate. NEVER invent facts not present in the grounding or web results.\n"
                 "5. Temperature is 0.05 — be deterministic and precise.*"
             )
@@ -2834,8 +2841,9 @@ def build_rag_system_prompt(
 
             grounding += (
                 "\n---\n"
-                "*ACCURACY INSTRUCTION: Answer using the curriculum context above as the primary source. "
-                "Cross-reference with your training knowledge for the AHSEC/SEBA/Degree curriculum in Assam. "
+                f"*ACCURACY INSTRUCTION: Answer using the {_curriculum_label} context above as the primary source. "
+                f"Cross-reference with your training knowledge for the {_curriculum_label} in Assam. "
+                f"When referencing the curriculum by name, always call it '{_curriculum_label}'. "
                 "If you are unsure about any specific fact, state it clearly rather than guessing. "
                 "Do not add examples or exam tips unless the student explicitly asks.*"
             )
