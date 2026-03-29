@@ -10,7 +10,7 @@ import {
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, Globe,
-  Crown, Cpu,
+  Crown, Cpu, Layers,
 } from 'lucide-react';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
@@ -40,6 +40,7 @@ const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
   { id: 'roadmap',       icon: GitBranch,       label: 'Roadmap',           group: 'main'     },
   { id: 'content',       icon: BookOpen,        label: 'Blog Publisher',    group: 'content'  },
+  { id: 'contenthub',    icon: Layers,          label: 'Content Editor',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
   { id: 'vertex',        icon: Cpu,             label: 'Vertex AI Studio',  group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
@@ -317,7 +318,7 @@ export default function AdminPage() {
         </header>
 
         {/* Section content */}
-        <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'content' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
+        <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'content' || activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
           <ActiveComponent
             adminToken={adminToken}
             adminName={adminName}
