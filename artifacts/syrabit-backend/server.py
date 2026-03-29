@@ -12003,8 +12003,8 @@ async def syllabus_import_pdf(
             url = vertex_services._gen_url(_gmodel)
             async with _httpx.AsyncClient(timeout=120) as c:
                 r = await c.post(url, json=body, headers=headers)
-            if r.status_code == 403:
-                logger.warning(f"[pdf_import] Gemini model {_gmodel} → 403, trying next model…")
+            if r.status_code in (403, 404):
+                logger.warning(f"[pdf_import] Gemini model {_gmodel} → {r.status_code}, trying next model…")
                 continue
             r.raise_for_status()
             gemini_resp = r
