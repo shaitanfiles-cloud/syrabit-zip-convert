@@ -1435,7 +1435,7 @@ async def ensure_seeded():
 # ─────────────────────────────────────────────────────────────────────────────
 # ADAPTIVE SYSTEM PROMPT  (defined in prompts.py)
 # ─────────────────────────────────────────────────────────────────────────────
-from prompts import build_system_prompt, _THINK_BRIEF, _classify_question
+from prompts import build_system_prompt, _classify_question
 
 # ─────────────────────────────────────────────
 # RAG SEARCH
