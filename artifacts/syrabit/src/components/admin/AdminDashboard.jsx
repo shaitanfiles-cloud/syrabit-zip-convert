@@ -34,7 +34,7 @@ function StatCard({ label, value, icon: Icon, color, subLabel, subValue, pulse }
       <p className="text-2xl font-bold text-white">{typeof value === 'number' ? value.toLocaleString() : (value ?? 0)}</p>
       {subLabel && (
         <p className="text-xs text-slate-500 mt-1">
-          {subLabel}: <span className="text-slate-400 font-medium">{subValue?.toLocaleString() ?? 0}</span>
+          {subLabel}: <span className="text-slate-400 font-medium">{typeof subValue === 'number' ? subValue.toLocaleString() : (subValue ?? 0)}</span>
         </p>
       )}
     </div>
@@ -107,8 +107,8 @@ function DepStatusCard({ name, status, latency }) {
             <div
               className="h-full rounded-full transition-all"
               style={{
-                width: `${Math.min(100, (latency / 200) * 100)}%`,
-                background: latency < 50 ? '#10b981' : latency < 100 ? '#f59e0b' : '#ef4444',
+                width: `${Math.min(100, (latency / 500) * 100)}%`,
+                background: latency < 100 ? '#10b981' : latency < 300 ? '#f59e0b' : '#ef4444',
               }}
             />
           </div>
@@ -244,7 +244,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         queriesRes, tokenRes, funnelRes, coverageRes,
       ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
-        axios.get(`${API_BASE}/admin/dashboard/metrics`, headers),
+        axios.get(`${API_BASE}/admin/dashboard/metrics`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/rag/accuracy`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/chat/fallbacks`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/vector/stats`, adminHdr(adminToken)),
@@ -295,10 +295,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const recentEvents = data?.recent_events || [];
   const deps = metrics?.dependencies || {};
 
-  const ragAlert = ragAccuracy?.alert || 'green';
-  const fallbackAlert = chatFallbacks?.alert || 'green';
-  const latencyAlert = latency?.alert || 'green';
-  const vectorAlert = (vectorStats?.overall_coverage_pct ?? 100) < 90 ? 'yellow' : 'green';
+  const ragAlert = failedSections.includes('rag') ? 'yellow' : (ragAccuracy?.alert || 'green');
+  const fallbackAlert = failedSections.includes('fallbacks') ? 'yellow' : (chatFallbacks?.alert || 'green');
+  const latencyAlert = failedSections.includes('latency') ? 'yellow' : (latency?.alert || 'green');
+  const vectorAlert = failedSections.includes('vector') ? 'yellow'
+    : (vectorStats?.overall_coverage_pct ?? 100) < 90 ? 'yellow' : 'green';
 
   const hasRagIssue = ragAlert === 'red' || latencyAlert === 'red';
 
@@ -393,11 +394,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard
             label="Revenue (INR)"
-            value={'₹' + (metrics.revenue.total_inr || 0).toLocaleString()}
+            value={'₹' + Math.round(metrics.revenue.total_inr || 0).toLocaleString('en-IN')}
             icon={DollarSign}
             color="#10b981"
             subLabel="MRR"
-            subValue={'₹' + (metrics.revenue.mrr_inr || 0)}
+            subValue={'₹' + Math.round(metrics.revenue.mrr_inr || 0).toLocaleString('en-IN')}
           />
           <StatCard label="Paid Users"      value={metrics.users?.paid || 0}     icon={Crown}  color="#f59e0b" />
           <StatCard label="Free Users"      value={metrics.users?.free || 0}     icon={Users}  color="#64748b" />
@@ -479,10 +480,15 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   <Line type="monotone" dataKey="fallback_rate" stroke="#f59e0b" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
+            ) : failedSections.includes('fallbacks') ? (
+              <div className="flex flex-col items-center justify-center h-[90px] text-slate-600 text-xs gap-1">
+                <Activity size={20} className="opacity-40" />
+                <span className="text-amber-500/80">Could not load fallback data</span>
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-[90px] text-slate-600 text-xs gap-1">
                 <Activity size={20} className="opacity-40" />
-                <span>No fallback data yet</span>
+                <span>No query data yet. Populates after first chat.</span>
                 <span className="text-emerald-500 text-xs font-medium">
                   {chatFallbacks?.fallback_rate_pct ?? 0}% fallback rate
                 </span>
@@ -524,6 +530,11 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 <p className="text-xs text-slate-500 pt-1">
                   {vectorStats.embedded ?? 0} / {vectorStats.total ?? 0} items embedded
                 </p>
+                {(vectorStats.embedded ?? 0) === 0 && (vectorStats.total ?? 0) > 0 && (
+                  <p className="text-xs text-amber-500/80 mt-1">
+                    Add VERTEX_SERVICE_ACCOUNT to enable embedding
+                  </p>
+                )}
               </div>
             ) : (
               <div className="flex items-center justify-center h-20 text-slate-600 text-xs">

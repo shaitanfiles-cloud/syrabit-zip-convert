@@ -2268,6 +2268,7 @@ async def rag_search(
       "medium" — no chunks, but matching subjects/chapters found (metadata only)
       "none"   — nothing found in DB at all
     """
+    _rag_t0 = time.time()
     # Fast path: 60-second in-memory cache — skips all MongoDB queries on repeat
     _rk = _rag_cache_key(query, subject_id, subject_name)
     if _rk in _rag_cache:
@@ -2451,7 +2452,7 @@ async def rag_search(
         }
         _rag_cache[_rk] = result
         try:
-            _record_rag_event(quality, 0, query)
+            _record_rag_event(quality, round((time.time() - _rag_t0) * 1000, 1), query)
         except Exception:
             pass
         return result
@@ -5798,6 +5799,18 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     except Exception:
         pass
 
+    try:
+        _prompt_chars = sum(len(m.get("content", "")) for m in messages)
+        _compl_chars  = len(answer) if answer else 0
+        record_llm_cost(
+            model=msg.model or LLM_MODEL,
+            prompt_tokens=max(1, _prompt_chars // 4),
+            completion_tokens=max(1, _compl_chars // 4),
+            provider="gemini",
+        )
+    except Exception:
+        pass
+
     return {
         "answer": answer,
         "conversation_id": conv_id,
@@ -6113,6 +6126,17 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
             try:
                 _record_chat_latency((_time_mod.time() - _stream_t0) * 1000)
+            except Exception:
+                pass
+
+            try:
+                _pc = sum(len(m.get("content", "")) for m in messages_payload)
+                record_llm_cost(
+                    model=msg.model or LLM_MODEL,
+                    prompt_tokens=max(1, _pc // 4),
+                    completion_tokens=max(1, len(answer) // 4) if answer else 1,
+                    provider="gemini",
+                )
             except Exception:
                 pass
 
