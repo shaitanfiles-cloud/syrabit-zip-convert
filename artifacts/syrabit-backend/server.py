@@ -12029,30 +12029,71 @@ async def syllabus_import_pdf(
             except ImportError:
                 from PyPDF2 import PdfReader as _PdfReader  # type: ignore
             reader = _PdfReader(io.BytesIO(pdf_bytes))
-            pages_text = "\n".join(
-                (p.extract_text() or "") for p in reader.pages[:50]
-            )
-            logger.info(f"[pdf_import] PyPDF2 extracted {len(pages_text)} chars from {len(reader.pages)} pages")
-            if not pages_text.strip():
+            total_pages = len(reader.pages)
+
+            # Extract text per page
+            page_texts = [(reader.pages[i].extract_text() or "").strip() for i in range(total_pages)]
+            full_text = "\n".join(page_texts)
+            logger.info(f"[pdf_import] PyPDF2 extracted {len(full_text)} chars from {total_pages} pages")
+            if not full_text.strip():
                 raise ValueError(
                     "Could not extract text from PDF — the file may be a scanned image. "
                     "Please upload a text-based PDF."
                 )
-            # Keep input concise so the LLM can fit the full response in 8192 tokens
-            slm_prompt = (
-                prompt + "\n\nSYLLABUS TEXT:\n" + pages_text[:8000] +
-                "\n\nReturn ONLY a valid JSON array. No markdown fences. Be concise."
+
+            # ── Chunk by groups of 10 pages so all semesters are covered ─────
+            PAGE_GROUP = 10
+            _sem = asyncio.Semaphore(4)  # max 4 concurrent LLM calls
+
+            async def _process_page_group(start_p: int, end_p: int) -> list:
+                group_text = "\n".join(page_texts[start_p:end_p]).strip()
+                if not group_text:
+                    return []
+                chunk_prompt = (
+                    prompt
+                    + f"\n\nSYLLABUS TEXT (pages {start_p+1}–{end_p} of {total_pages}):\n"
+                    + group_text[:8000]
+                    + "\n\nReturn ONLY a valid JSON array. "
+                      "If no subjects are present in this text, return []. "
+                      "No markdown fences."
+                )
+                async with _sem:
+                    raw = await _call_llm_raw(
+                        [{"role": "user", "content": chunk_prompt}],
+                        max_tokens=6000,
+                    )
+                if not raw:
+                    return []
+                c = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+                c = re.sub(r'\s*```$', '', c).strip()
+                return _recover_json(c)
+
+            groups = [
+                (s, min(s + PAGE_GROUP, total_pages))
+                for s in range(0, total_pages, PAGE_GROUP)
+            ]
+            logger.info(f"[pdf_import] Processing {len(groups)} page-groups concurrently (10 pages each)…")
+            chunk_results = await asyncio.gather(
+                *[_process_page_group(s, e) for s, e in groups],
+                return_exceptions=True,
             )
-            logger.info("[pdf_import] Sending to LLM fallback (Groq/Fireworks)…")
-            raw_slm = await _call_llm_raw(
-                [{"role": "user", "content": slm_prompt}],
-                max_tokens=8192,
-            )
-            logger.info(f"[pdf_import] LLM raw response length={len(raw_slm or '')}")
-            cleaned = re.sub(r'^```(?:json)?\s*', '', (raw_slm or "").strip())
-            cleaned = re.sub(r'\s*```$', '', cleaned).strip()
-            extracted = _recover_json(cleaned)
-            logger.info(f"[pdf_import] LLM fallback OK — extracted {len(extracted)} subjects")
+
+            # Merge & deduplicate by (subject_name, semester)
+            seen_subjects: set = set()
+            extracted = []
+            for res in chunk_results:
+                if isinstance(res, Exception):
+                    logger.warning(f"[pdf_import] chunk error (skipped): {res}")
+                    continue
+                for subj in (res or []):
+                    key = (
+                        str(subj.get("subject_name", "")).lower().strip(),
+                        str(subj.get("semester", "")).lower().strip(),
+                    )
+                    if key[0] and key not in seen_subjects:
+                        seen_subjects.add(key)
+                        extracted.append(subj)
+            logger.info(f"[pdf_import] LLM fallback OK — extracted {len(extracted)} subjects across {len(groups)} chunks")
         except HTTPException:
             raise
         except Exception as fallback_err:
