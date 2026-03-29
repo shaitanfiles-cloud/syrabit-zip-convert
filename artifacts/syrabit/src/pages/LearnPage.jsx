@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Helmet } from 'react-helmet-async';
 import {
   BookOpen, ChevronRight, Clock, BarChart3, Share2,
@@ -319,8 +321,8 @@ export default function LearnPage() {
             {/* Article */}
             <article
               ref={articleRef}
-              className="flex-1 min-w-0 rounded-2xl border border-white/10 overflow-hidden"
-              style={{ background: 'rgba(255,255,255,0.025)' }}
+              className="flex-1 min-w-0 rounded-2xl overflow-hidden blog-view-tab"
+              style={{ background: '#ffffff', border: '1px solid #e5e7eb', boxShadow: '0 1px 3px rgba(0,0,0,0.06)' }}
             >
               {doc?.thumbnail_url && (
                 <div className="w-full aspect-video overflow-hidden">
@@ -335,13 +337,15 @@ export default function LearnPage() {
               <div className="p-6 md:p-10">
                 {processedHtml ? (
                   <div
-                    className="md-content learn-article max-w-none"
+                    className="learn-article max-w-none"
                     dangerouslySetInnerHTML={{ __html: processedHtml }}
                   />
                 ) : doc?.content ? (
-                  <div className="md-content whitespace-pre-wrap text-sm leading-relaxed">{doc.content}</div>
+                  <div className="learn-article max-w-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{doc.content}</ReactMarkdown>
+                  </div>
                 ) : (
-                  <p className="text-white/30 italic">No content available.</p>
+                  <p className="italic text-center py-12" style={{ color: '#9ca3af' }}>No content available.</p>
                 )}
               </div>
             </article>
