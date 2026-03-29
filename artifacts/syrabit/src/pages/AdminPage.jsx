@@ -6,20 +6,19 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
-  LayoutDashboard, GitBranch, FolderTree, PenTool, Users,
+  LayoutDashboard, GitBranch, BookOpen, Users,
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
-  ChevronLeft, ChevronRight, Loader2, FileText, Globe,
-  Sparkles, Crown, Cpu,
+  ChevronLeft, ChevronRight, Loader2, Globe,
+  Crown, Cpu,
 } from 'lucide-react';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
 
-// ── Lazy-load section components ──────────────────────────────────────────────
+// ── Section components ────────────────────────────────────────────────────────
 import AdminDashboard        from '@/components/admin/AdminDashboard';
 import AdminRoadmap          from '@/components/admin/AdminRoadmap';
-import AdminSyllabus         from '@/components/admin/AdminSyllabus';
-import AdminContentEditor    from '@/components/admin/AdminContentEditor';
+import AdminContentHub       from '@/components/admin/AdminContentHub';
 import AdminUsers            from '@/components/admin/AdminUsers';
 import AdminConversations    from '@/components/admin/AdminConversations';
 import AdminAnalytics        from '@/components/admin/AdminAnalytics';
@@ -32,19 +31,14 @@ import AdminRateLimits       from '@/components/admin/AdminRateLimits';
 import AdminActivityLog      from '@/components/admin/AdminActivityLog';
 import AdminHealth           from '@/components/admin/AdminHealth';
 import AdminSeoManager       from '@/components/admin/AdminSeoManager';
-import AdminContentStudio    from '@/components/admin/AdminContentStudio';
 import AdminMonetization     from '@/components/admin/AdminMonetization';
-import AdminCmsDocEditor     from '@/components/admin/AdminCmsDocEditor';
 import AdminVertexPanel      from '@/components/admin/AdminVertexPanel';
 
 // ── Section registry ──────────────────────────────────────────────────────────
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
   { id: 'roadmap',       icon: GitBranch,       label: 'Roadmap',           group: 'main'     },
-  { id: 'syllabus',      icon: FolderTree,      label: 'Syllabus',          group: 'content'  },
-  { id: 'content',       icon: PenTool,         label: 'Content Editor',    group: 'content'  },
-  { id: 'cms',           icon: FileText,        label: 'CMS Editor',        group: 'content'  },
-  { id: 'studio',        icon: Sparkles,        label: 'Content Studio',    group: 'content'  },
+  { id: 'content',       icon: BookOpen,        label: 'Content',           group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
   { id: 'vertex',        icon: Cpu,             label: 'Vertex AI Studio',  group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
@@ -75,10 +69,7 @@ const GROUPS = ['main', 'content', 'audience', 'insights', 'comms', 'system'];
 const SECTION_COMPONENTS = {
   dashboard:     AdminDashboard,
   roadmap:       AdminRoadmap,
-  syllabus:      AdminSyllabus,
-  content:       AdminContentEditor,
-  cms:           AdminCmsDocEditor,
-  studio:        AdminContentStudio,
+  content:       AdminContentHub,
   seomanager:    AdminSeoManager,
   users:         AdminUsers,
   conversations: AdminConversations,

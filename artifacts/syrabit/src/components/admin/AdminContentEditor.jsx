@@ -10,7 +10,6 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import AdminSyllabusManager from './AdminSyllabusManager';
 import { TEMPLATES } from '@/utils/editorTemplates';
 import {
   MDXEditor,
@@ -128,8 +127,6 @@ function InlineCreator({ placeholder, onCreate, icon: Icon, color = 'violet' }) 
 }
 
 export default function AdminContentEditor({ adminToken, onNavigate }) {
-  const [activeTab, setActiveTab] = useState('content');
-
   const [boards, setBoards] = useState([]);
   const [classes, setClasses] = useState([]);
   const [streams, setStreams] = useState([]);
@@ -535,37 +532,8 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
 
   return (
     <div className="h-full flex flex-col bg-[#06060e]">
-      {/* Tabs */}
-      <div className="border-b border-white/10" style={{ background: 'rgba(255,255,255,0.02)' }}>
-        <div className="h-14 flex items-center px-6 gap-6">
-          <button
-            onClick={() => setActiveTab('content')}
-            className={`flex items-center gap-2 pb-1 border-b-2 transition-colors font-medium text-sm ${
-              activeTab === 'content'
-                ? 'border-violet-500 text-violet-400'
-                : 'border-transparent text-white/50 hover:text-white'
-            }`}
-          >
-            <Layers size={16} />
-            Content Manager
-          </button>
-          <button
-            onClick={() => setActiveTab('syllabus')}
-            className={`flex items-center gap-2 pb-1 border-b-2 transition-colors font-medium text-sm ${
-              activeTab === 'syllabus'
-                ? 'border-indigo-500 text-indigo-400'
-                : 'border-transparent text-white/50 hover:text-white'
-            }`}
-          >
-            <BookOpen size={16} />
-            Syllabus Manager
-          </button>
-        </div>
-      </div>
+      <>
 
-      {/* Content Manager Tab */}
-      {activeTab === 'content' && (
-        <>
           <div className="h-14 border-b border-white/10 flex items-center justify-between px-6" style={{ background: 'rgba(255,255,255,0.02)' }}>
             <div className="flex items-center gap-2 min-w-0">
               {breadcrumb.length > 0 && (
@@ -1199,20 +1167,6 @@ export default function AdminContentEditor({ adminToken, onNavigate }) {
             </div>
           )}
         </>
-      )}
-
-      {/* Syllabus Manager Tab */}
-      {activeTab === 'syllabus' && (
-        <div className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
-          <AdminSyllabusManager
-            adminToken={adminToken}
-            boards={boards}
-            classes={classes}
-            streams={streams}
-            subjects={subjects}
-          />
-        </div>
-      )}
 
       {viewerItem && <ContentViewerPopup item={viewerItem} onClose={() => setViewerItem(null)} />}
     </div>
