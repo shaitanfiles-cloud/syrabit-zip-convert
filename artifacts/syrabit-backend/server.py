@@ -11906,6 +11906,7 @@ async def syllabus_import_pdf(
     board_id: str = Form(""),              # optional — links to existing board
     class_id: str = Form(""),              # optional — links to existing class
     stream_id: str = Form(""),             # optional — links to existing stream
+    dry_run: bool = Form(False),           # if True: extract only, do NOT save
     admin: dict = Depends(get_admin_user),
 ):
     """
@@ -12006,6 +12007,16 @@ async def syllabus_import_pdf(
 
     if not extracted:
         raise HTTPException(status_code=422, detail="No syllabus subjects found in PDF — check PDF content")
+
+    # ── Dry-run: return extracted JSON for preview/editing, do NOT save ────────
+    if dry_run:
+        return {
+            "preview": True,
+            "extracted": extracted,
+            "paper_type": paper_type,
+            "filename": file.filename,
+            "subjects_count": len(extracted),
+        }
 
     # ── Auto-link each subject into the board/class/stream/subject hierarchy ──
     from syllabus_linker import SyllabusLinker, SyllabusEntry  # type: ignore
@@ -12132,6 +12143,108 @@ async def list_pdf_imports(
     cursor = db.syllabus_pdf_imports.find(q, {"_id": 0}).sort("created_at", -1)
     entries = await cursor.to_list(length=500)
     return {"imports": entries, "total": len(entries)}
+
+
+@api.post("/admin/syllabus/confirm-import")
+async def confirm_syllabus_import(
+    body: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Save a previously-extracted (dry_run) syllabus list after user preview/editing.
+    Body: { extracted: [...], paper_type: str, filename: str }
+    """
+    extracted  = body.get("extracted", [])
+    paper_type = (body.get("paper_type") or "major").lower().strip()
+    filename   = body.get("filename") or "uploaded.pdf"
+
+    if paper_type not in _VALID_PAPER_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid paper_type: {paper_type}")
+    if not extracted:
+        raise HTTPException(status_code=422, detail="No subjects in extracted list")
+
+    from syllabus_linker import SyllabusLinker, SyllabusEntry  # type: ignore
+    linker     = SyllabusLinker(db)
+    now_iso    = datetime.now(timezone.utc).isoformat()
+    import_id  = str(uuid.uuid4())
+    saved_subjects = []
+
+    for entry_raw in extracted:
+        if not isinstance(entry_raw, dict):
+            continue
+        subject_name = (entry_raw.get("subject_name") or entry_raw.get("subject") or "").strip()
+        if not subject_name:
+            continue
+
+        sem_raw = entry_raw.get("semester", "") or ""
+        sem_num = entry_raw.get("semester_number", 0) or 0
+        if sem_num and not sem_raw:
+            sem_raw = f"Semester {sem_num}"
+
+        entry = SyllabusEntry(
+            board_name   = (entry_raw.get("board") or "").strip(),
+            class_year   = (entry_raw.get("class_year") or "").strip(),
+            semester     = sem_raw.strip(),
+            subject_name = subject_name,
+            paper_type   = paper_type,
+            stream_hint  = (entry_raw.get("stream_target") or "All").strip(),
+            chapters     = [c for c in entry_raw.get("chapters", []) if isinstance(c, str)],
+            topics       = [t for t in entry_raw.get("topics", []) if isinstance(t, str)][:20],
+            guidelines   = (entry_raw.get("guidelines") or "").strip(),
+            course_code  = (entry_raw.get("course_code") or "").strip(),
+            credits      = int(entry_raw.get("credits") or 0),
+        )
+        try:
+            link = await linker.link(entry)
+        except Exception as le:
+            logger.warning(f"confirm_import linker failed for {subject_name}: {le}")
+            link = None
+
+        raw_doc = {
+            "import_id": import_id, "filename": filename, "paper_type": paper_type,
+            "board_name": entry.board_name, "class_year": entry.class_year,
+            "semester": entry.semester, "subject_name": subject_name,
+            "course_code": entry.course_code, "credits": entry.credits,
+            "stream_target": entry.stream_hint, "chapters": entry.chapters,
+            "topics": entry.topics, "guidelines": entry.guidelines,
+            "linked_board_id":   link.board_id   if link else None,
+            "linked_class_id":   link.class_id   if link else None,
+            "linked_stream_ids": [s["stream_id"] for s in link.streams] if link else [],
+            "linked_subject_ids": link.subject_ids if link else [],
+            "created_nodes":     link.created_nodes if link else [],
+            "status": "linked" if link else "imported",
+            "source": "pdf_import", "created_at": now_iso,
+        }
+        await db.syllabus_pdf_imports.insert_one(raw_doc)
+        saved_subjects.append({
+            "subject_name": subject_name,
+            "board_name": link.board_name if link else entry.board_name,
+            "class_name": link.class_name if link else entry.class_year,
+            "semester": entry.semester,
+            "stream_target": entry.stream_hint,
+            "paper_type": paper_type,
+            "credits": entry.credits,
+            "course_code": entry.course_code,
+            "chapters_count": len(entry.chapters),
+            "topics_count": len(entry.topics),
+            "streams": link.streams if link else [],
+            "created_nodes": link.created_nodes if link else [],
+        })
+
+    _invalidate_content_cache()
+    try:
+        asyncio.create_task(_reseed_syllabus_embeddings())
+    except Exception:
+        pass
+
+    return {
+        "success": True,
+        "import_id": import_id,
+        "filename": filename,
+        "paper_type": paper_type,
+        "subjects_extracted": len(saved_subjects),
+        "subjects": saved_subjects,
+    }
 
 
 @api.get("/admin/syllabus/nep-stats")

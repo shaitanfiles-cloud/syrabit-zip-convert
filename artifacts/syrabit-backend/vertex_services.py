@@ -142,37 +142,52 @@ def _headers() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
-    """Return 768-dim embedding vector for text. Returns None on failure."""
+    """Return 768-dim embedding vector for text. Returns None on failure.
+    Tries text-embedding-004 first, falls back to embedding-001 on 404."""
     if not _ok() or not text:
         return None
-    url = _embed_url()
     headers = await _auth_headers()
-    # Request body differs by mode
+
     if _SA_CREDS is not None:
-        # Vertex AI predict format
+        # Vertex AI predict format — single URL
+        url  = _embed_url()
         body = {"instances": [{"content": text[:8000], "task_type": task_type}]}
-    else:
-        # Google AI Studio embedContent format
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(url, json=body, headers=headers)
+                if r.status_code == 403:
+                    _mark_forbidden()
+                    return None
+                r.raise_for_status()
+                return r.json()["predictions"][0]["embeddings"]["values"]
+        except Exception as e:
+            logger.warning(f"embed_text (Vertex) failed: {e}")
+            return None
+
+    # Google AI Studio mode — try primary model, fall back to embedding-001 on 404
+    for model in (_EMBED_MODEL, "embedding-001"):
+        url  = f"{_BASE}/models/{model}:embedContent"
         body = {
-            "model": f"models/{_EMBED_MODEL}",
+            "model":   f"models/{model}",
             "content": {"parts": [{"text": text[:8000]}]},
             "taskType": task_type,
         }
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            r = await c.post(url, json=body, headers=headers)
-            if r.status_code == 403:
-                _mark_forbidden()
-                return None
-            r.raise_for_status()
-            data = r.json()
-            # Response format differs by mode
-            if _SA_CREDS is not None:
-                return data["predictions"][0]["embeddings"]["values"]
-            return data["embedding"]["values"]
-    except Exception as e:
-        logger.warning(f"embed_text failed: {e}")
-        return None
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(url, json=body, headers=headers)
+                if r.status_code == 403:
+                    _mark_forbidden()
+                    return None
+                if r.status_code == 404:
+                    logger.warning(f"embed_text: model {model} not found (404), trying next…")
+                    continue
+                r.raise_for_status()
+                return r.json()["embedding"]["values"]
+        except Exception as e:
+            logger.warning(f"embed_text ({model}) failed: {e}")
+            continue
+
+    return None
 
 
 async def embed_batch(texts: List[str]) -> List[Optional[List[float]]]:

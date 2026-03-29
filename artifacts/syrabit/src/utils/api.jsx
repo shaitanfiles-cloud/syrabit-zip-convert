@@ -336,6 +336,14 @@ export const deleteNotificationTrigger = (token, id) =>
 export const syllabusImportPdf = (token, formData) =>
   axios.post(`${API_BASE}/admin/syllabus/import-pdf`, formData, { headers: { ...adminHeaders(token), 'Content-Type': 'multipart/form-data' }, withCredentials: true });
 
+export const syllabusExtractPdf = (token, formData) => {
+  formData.append('dry_run', 'true');
+  return axios.post(`${API_BASE}/admin/syllabus/import-pdf`, formData, { headers: { ...adminHeaders(token), 'Content-Type': 'multipart/form-data' }, withCredentials: true });
+};
+
+export const syllabusConfirmImport = (token, payload) =>
+  axios.post(`${API_BASE}/admin/syllabus/confirm-import`, payload, { headers: adminHeaders(token), withCredentials: true });
+
 export const cmsAiSuggest = (token, text, action, subject = '', topic = '') =>
   axios.post(`${API_BASE}/admin/cms/ai-suggest`, { text, action, subject, topic }, { headers: adminHeaders(token), withCredentials: true });
 

@@ -78,16 +78,16 @@ class SyllabusEmbedder:
             return inserted
 
     async def reseed(self) -> int:
-        """Force re-seed — embed any chapters not yet in syllabus_embeddings. Called after PDF import."""
+        """Re-embed any new chapters not yet in syllabus_embeddings. Non-destructive (upsert). Called after PDF import."""
         if self._col is None:
             return 0
         async with self._seed_lock:
-            self._seeded = False       # allow _seed_chapters to run again
-            self._cache = []           # clear in-memory cache so new chapters are picked up
+            self._seeded = False
+            self._cache = []
             self._cache_loaded_at = 0.0
             inserted = await self._seed_chapters()
             self._seeded = True
-            return inserted
+        return inserted
 
     async def classify(self, query: str) -> Optional[SyllabusMatch]:
         """Embed query and return the closest-matching chapter, or None."""
@@ -141,8 +141,8 @@ class SyllabusEmbedder:
             )
         return None
 
-    async def reseed(self) -> dict:
-        """Force a full re-embed of all chapters (admin trigger)."""
+    async def full_reseed(self) -> dict:
+        """Admin trigger: drop collection and re-embed everything from scratch."""
         if self._col is None:
             return {"error": "MongoDB not available"}
         async with self._seed_lock:
@@ -248,7 +248,11 @@ class SyllabusEmbedder:
                 "status":         "active",
                 "created_at":     __import__("datetime").datetime.utcnow().isoformat(),
             }
-            await self._col.insert_one(doc)
+            await self._col.update_one(
+                {"chapter_id": ch_id},
+                {"$set": doc},
+                upsert=True,
+            )
             inserted += 1
             if inserted % 20 == 0:
                 logger.info(f"SyllabusEmbedder: {inserted} chapters embedded so far…")

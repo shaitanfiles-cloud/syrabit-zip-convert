@@ -3,7 +3,7 @@ import { Save, Trash2, Plus, Loader2, CheckCircle, BookOpen, GitBranch, Info, Gl
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { syllabusImportPdf } from '@/utils/api';
+import { syllabusExtractPdf, syllabusConfirmImport, syllabusImportPdf } from '@/utils/api';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -21,6 +21,9 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
   const [publishedSlug, setPublishedSlug] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfResult, setPdfResult] = useState(null);
+  const [previewData, setPreviewData] = useState(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [expandedIdx, setExpandedIdx] = useState(null);
   const [paperType, setPaperType] = useState('major');
   const pdfRef = useRef(null);
 
@@ -198,6 +201,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
     if (!file) return;
     setPdfLoading(true);
     setPdfResult(null);
+    setPreviewData(null);
     try {
       const fd = new FormData();
       fd.append('file', file);
@@ -205,15 +209,72 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       if (selectedBoardId) fd.append('board_id', selectedBoardId);
       if (selectedClassId) fd.append('class_id', selectedClassId);
       if (selectedStreamId) fd.append('stream_id', selectedStreamId);
-      const res = await syllabusImportPdf(adminToken, fd);
-      setPdfResult(res.data);
-      const count = res.data?.subjects_extracted || 0;
-      toast.success(`PDF imported — ${count} subject${count !== 1 ? 's' : ''} extracted as ${paperType.toUpperCase()}`);
+      const res = await syllabusExtractPdf(adminToken, fd);
+      if (res.data?.preview) {
+        setPreviewData(res.data);
+        toast.success(`Extracted ${res.data.subjects_count} subject${res.data.subjects_count !== 1 ? 's' : ''} — review & save`);
+      }
     } catch (e) {
-      toast.error(e.response?.data?.detail || 'PDF import failed');
+      toast.error(e.response?.data?.detail || 'PDF extraction failed');
     } finally {
       setPdfLoading(false);
       if (pdfRef.current) pdfRef.current.value = '';
+    }
+  };
+
+  const updatePreviewSubject = (idx, field, value) => {
+    setPreviewData(prev => {
+      const updated = [...prev.extracted];
+      updated[idx] = { ...updated[idx], [field]: value };
+      return { ...prev, extracted: updated };
+    });
+  };
+
+  const removePreviewSubject = (idx) => {
+    setPreviewData(prev => {
+      const updated = prev.extracted.filter((_, i) => i !== idx);
+      return { ...prev, extracted: updated };
+    });
+    if (expandedIdx === idx) setExpandedIdx(null);
+  };
+
+  const addPreviewChapter = (idx, chapter) => {
+    if (!chapter.trim()) return;
+    setPreviewData(prev => {
+      const updated = [...prev.extracted];
+      updated[idx] = { ...updated[idx], chapters: [...(updated[idx].chapters || []), chapter.trim()] };
+      return { ...prev, extracted: updated };
+    });
+  };
+
+  const removePreviewChapter = (subjectIdx, chapterIdx) => {
+    setPreviewData(prev => {
+      const updated = [...prev.extracted];
+      updated[subjectIdx] = {
+        ...updated[subjectIdx],
+        chapters: updated[subjectIdx].chapters.filter((_, i) => i !== chapterIdx),
+      };
+      return { ...prev, extracted: updated };
+    });
+  };
+
+  const handleConfirmImport = async () => {
+    if (!previewData) return;
+    setConfirmLoading(true);
+    try {
+      const res = await syllabusConfirmImport(adminToken, {
+        extracted: previewData.extracted,
+        paper_type: previewData.paper_type,
+        filename: previewData.filename,
+      });
+      setPdfResult(res.data);
+      setPreviewData(null);
+      const count = res.data?.subjects_extracted || 0;
+      toast.success(`Saved ${count} subject${count !== 1 ? 's' : ''} as ${previewData.paper_type?.toUpperCase()}`);
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Save failed');
+    } finally {
+      setConfirmLoading(false);
     }
   };
 
@@ -368,23 +429,36 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
           </p>
         </div>
 
-        {/* Results */}
-        {pdfResult && pdfResult.success && (
+        {/* ── Preview & Edit Panel ─────────────────────────────────────────── */}
+        {previewData && (
+          <PreviewEditPanel
+            previewData={previewData}
+            expandedIdx={expandedIdx}
+            setExpandedIdx={setExpandedIdx}
+            onUpdateSubject={updatePreviewSubject}
+            onRemoveSubject={removePreviewSubject}
+            onAddChapter={addPreviewChapter}
+            onRemoveChapter={removePreviewChapter}
+            onConfirm={handleConfirmImport}
+            onDiscard={() => { setPreviewData(null); setExpandedIdx(null); }}
+            confirmLoading={confirmLoading}
+          />
+        )}
+
+        {/* ── Saved Results ────────────────────────────────────────────────── */}
+        {!previewData && pdfResult && pdfResult.success && (
           <div className="rounded-lg border text-xs" style={{ background: 'rgba(52,211,153,0.06)', borderColor: 'rgba(52,211,153,0.20)' }}>
-            {/* Summary header */}
             <div className="p-3 border-b" style={{ borderColor: 'rgba(52,211,153,0.15)' }}>
               <p className="font-semibold text-emerald-400">
-                ✓ {pdfResult.subjects_extracted} subject{pdfResult.subjects_extracted !== 1 ? 's' : ''} linked as {pdfResult.paper_type?.toUpperCase()}
+                ✓ {pdfResult.subjects_extracted} subject{pdfResult.subjects_extracted !== 1 ? 's' : ''} saved as {pdfResult.paper_type?.toUpperCase()}
               </p>
               <p className="text-white/40 mt-0.5 font-mono text-[10px]">
                 {pdfResult.filename} · import #{pdfResult.import_id?.slice(-6)}
               </p>
             </div>
-            {/* Per-subject rows */}
             <div className="divide-y" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
               {(pdfResult.subjects || []).map((s, i) => (
                 <div key={i} className="p-3 space-y-1.5">
-                  {/* Top row */}
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="font-semibold text-white text-[11px]">{s.subject_name}</p>
@@ -399,7 +473,6 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
                       <p>{s.topics_count} topics</p>
                     </div>
                   </div>
-                  {/* Streams auto-linked */}
                   {s.streams?.length > 0 && (
                     <div className="flex flex-wrap gap-1">
                       {s.streams.map((st, j) => (
@@ -410,11 +483,8 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
                       ))}
                     </div>
                   )}
-                  {/* Created nodes */}
                   {s.created_nodes?.length > 0 && (
-                    <p className="text-emerald-400/70 text-[9px]">
-                      + {s.created_nodes.join(', ')}
-                    </p>
+                    <p className="text-emerald-400/70 text-[9px]">+ {s.created_nodes.join(', ')}</p>
                   )}
                 </div>
               ))}
@@ -747,6 +817,169 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
           <p className="text-white/25 text-xs mt-1">Stream and Subject are optional — use them for more targeted AI guidance</p>
         </div>
       )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   PreviewEditPanel — review & edit AI-extracted subjects before saving
+────────────────────────────────────────────────────────────────────────── */
+function PreviewEditPanel({
+  previewData, expandedIdx, setExpandedIdx,
+  onUpdateSubject, onRemoveSubject, onAddChapter, onRemoveChapter,
+  onConfirm, onDiscard, confirmLoading,
+}) {
+  const [newChapterText, setNewChapterText] = useState({});
+
+  const inputCls = "w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-xs text-white placeholder-white/25 focus:outline-none focus:border-violet-400/50";
+  const btnSm    = "px-2 py-0.5 rounded text-[10px] font-semibold transition";
+
+  return (
+    <div className="rounded-xl border space-y-3" style={{ background: 'rgba(139,92,246,0.04)', borderColor: 'rgba(139,92,246,0.22)' }}>
+      {/* Header */}
+      <div className="flex items-center justify-between p-3 border-b" style={{ borderColor: 'rgba(139,92,246,0.15)' }}>
+        <div>
+          <p className="text-[11px] font-semibold text-violet-300">
+            Review extracted syllabus — {previewData.subjects_count} subject{previewData.subjects_count !== 1 ? 's' : ''} from &ldquo;{previewData.filename}&rdquo;
+          </p>
+          <p className="text-[10px] text-white/35 mt-0.5">
+            Edit any field or remove subjects before saving. Chapters and topics guide AI answers.
+          </p>
+        </div>
+        <button onClick={onDiscard} className="text-white/30 hover:text-white/70 transition text-[10px] ml-3">discard</button>
+      </div>
+
+      {/* Subject cards */}
+      <div className="px-3 space-y-2">
+        {previewData.extracted.map((sub, idx) => {
+          const isOpen = expandedIdx === idx;
+          return (
+            <div key={idx} className="rounded-lg border overflow-hidden" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+              {/* Card header / toggle */}
+              <div
+                className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-white/[0.03] transition"
+                onClick={() => setExpandedIdx(isOpen ? null : idx)}
+              >
+                <span className="text-[10px] text-white/30 w-5 text-center">{idx + 1}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[11px] font-semibold text-white truncate">{sub.subject_name || '(unnamed)'}</p>
+                  <p className="text-[9px] text-white/35 truncate">
+                    {[sub.semester, sub.course_code, sub.credits ? `${sub.credits} cr` : ''].filter(Boolean).join(' · ')}
+                    {' · '}{(sub.chapters || []).length} chapters
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold"
+                    style={{ background: 'rgba(99,102,241,0.2)', color: '#a5b4fc' }}>
+                    {(sub.stream_target || 'All').slice(0, 10)}
+                  </span>
+                  <button
+                    onClick={e => { e.stopPropagation(); onRemoveSubject(idx); }}
+                    className="text-red-400/50 hover:text-red-400 transition"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                  <span className="text-white/25 text-[10px]">{isOpen ? '▲' : '▼'}</span>
+                </div>
+              </div>
+
+              {/* Expanded edit area */}
+              {isOpen && (
+                <div className="px-3 pb-3 pt-1 border-t space-y-3" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+                  {/* Metadata row */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[9px] text-white/35 uppercase tracking-wide">Subject Name</label>
+                      <input className={inputCls} value={sub.subject_name || ''} onChange={e => onUpdateSubject(idx, 'subject_name', e.target.value)} />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-white/35 uppercase tracking-wide">Course Code</label>
+                      <input className={inputCls} value={sub.course_code || ''} onChange={e => onUpdateSubject(idx, 'course_code', e.target.value)} placeholder="e.g. MAJ-101" />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-white/35 uppercase tracking-wide">Semester</label>
+                      <input className={inputCls} value={sub.semester || ''} onChange={e => onUpdateSubject(idx, 'semester', e.target.value)} placeholder="e.g. Semester 1" />
+                    </div>
+                    <div>
+                      <label className="text-[9px] text-white/35 uppercase tracking-wide">Credits</label>
+                      <input className={inputCls} type="number" min="0" value={sub.credits || ''} onChange={e => onUpdateSubject(idx, 'credits', parseInt(e.target.value) || 0)} />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-[9px] text-white/35 uppercase tracking-wide">Stream Target</label>
+                      <input className={inputCls} value={sub.stream_target || 'All'} onChange={e => onUpdateSubject(idx, 'stream_target', e.target.value)} placeholder="Arts / Science / Commerce / All" />
+                    </div>
+                  </div>
+
+                  {/* Chapters */}
+                  <div>
+                    <label className="text-[9px] text-white/35 uppercase tracking-wide block mb-1">Chapters ({(sub.chapters || []).length})</label>
+                    <div className="space-y-1 max-h-40 overflow-y-auto pr-1">
+                      {(sub.chapters || []).map((ch, ci) => (
+                        <div key={ci} className="flex items-center gap-1 group">
+                          <input
+                            className={inputCls + ' flex-1'}
+                            value={ch}
+                            onChange={e => {
+                              const chaps = [...(sub.chapters || [])];
+                              chaps[ci] = e.target.value;
+                              onUpdateSubject(idx, 'chapters', chaps);
+                            }}
+                          />
+                          <button onClick={() => onRemoveChapter(idx, ci)}
+                            className="text-red-400/40 hover:text-red-400 transition opacity-0 group-hover:opacity-100 flex-shrink-0">
+                            <Trash2 size={10} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Add chapter */}
+                    <div className="flex items-center gap-1 mt-1.5">
+                      <input
+                        className={inputCls + ' flex-1'}
+                        value={newChapterText[idx] || ''}
+                        onChange={e => setNewChapterText(p => ({ ...p, [idx]: e.target.value }))}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            onAddChapter(idx, newChapterText[idx] || '');
+                            setNewChapterText(p => ({ ...p, [idx]: '' }));
+                          }
+                        }}
+                        placeholder="Add chapter title…"
+                      />
+                      <button
+                        onClick={() => { onAddChapter(idx, newChapterText[idx] || ''); setNewChapterText(p => ({ ...p, [idx]: '' })); }}
+                        className={btnSm + " bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 flex-shrink-0"}
+                      >
+                        <Plus size={10} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Footer actions */}
+      <div className="flex items-center gap-2 px-3 pb-3">
+        <button
+          onClick={onConfirm}
+          disabled={confirmLoading || previewData.extracted.length === 0}
+          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold transition"
+          style={{ background: 'rgba(139,92,246,0.25)', color: '#c4b5fd', opacity: (confirmLoading || previewData.extracted.length === 0) ? 0.5 : 1 }}
+        >
+          {confirmLoading
+            ? <><Loader2 size={12} className="animate-spin" /> Saving…</>
+            : <><CheckCircle size={12} /> Save {previewData.extracted.length} subject{previewData.extracted.length !== 1 ? 's' : ''}</>}
+        </button>
+        <button
+          onClick={onDiscard}
+          className="px-4 py-2 rounded-lg text-xs font-semibold text-white/40 hover:text-white/70 transition"
+        >
+          Discard
+        </button>
+      </div>
     </div>
   );
 }
