@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 # ── Model names ───────────────────────────────────────────────────────────────
 _EMBED_MODEL  = "text-embedding-004"
-_GEN_MODEL    = "gemini-2.0-flash-lite"
-_PRO_MODEL    = "gemini-2.0-flash"
-_VISION_MODEL = "gemini-2.0-flash"
+_GEN_MODEL    = "gemini-2.5-flash-preview-05-20"
+_PRO_MODEL    = "gemini-2.5-flash-preview-05-20"
+_VISION_MODEL = "gemini-2.5-flash-preview-05-20"
 
 # ── Auth: detect key type at import time ──────────────────────────────────────
 _KEY_RAW = os.getenv("GEMINI_API_KEY", "").strip()
