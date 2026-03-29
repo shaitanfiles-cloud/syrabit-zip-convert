@@ -2919,26 +2919,37 @@ def build_rag_system_prompt(
                 "Do not add examples or exam tips unless the student explicitly asks.*"
             )
 
-    # ── Tier 3: Web search fallback ─────────────────────────────────────────
+    # ── Live Web Search Results (always enriches the answer) ────────────────
     if web_results:
-        web_block = (
-            "\n\n---\n"
-            "**WEB SEARCH RESULTS (Tier 3 — Fallback when library has no content):**\n"
-            "The Syrabit library does not have content for this topic yet. "
-            "The following results are from a live web search. "
-            "Use them to provide a helpful answer and label your response clearly with 'From web search:'.\n\n"
-        )
+        has_rag_content = bool(chunks or vector_hits or document_text)
+        if has_rag_content:
+            web_header = (
+                "\n\n---\n"
+                "**LIVE WEB SEARCH RESULTS (supplementary — use to enrich and verify the curriculum answer):**\n"
+                "These live results from the web complement the curriculum content above. "
+                "Blend any relevant facts, current examples, or extra context from these results "
+                "into your answer naturally — do not label them separately unless the student asks.\n\n"
+            )
+            web_footer = "---\n"
+        else:
+            web_header = (
+                "\n\n---\n"
+                "**LIVE WEB SEARCH RESULTS (primary source — curriculum library has no content for this query):**\n"
+                "Use these results to provide a helpful, accurate answer. "
+                "Start your answer with 'From web search:' to be transparent about the source.\n\n"
+            )
+            web_footer = (
+                "---\n"
+                "*INSTRUCTION: Synthesise the web results above into a clear, student-friendly answer. "
+                "Do not fabricate facts — use only what is in the results above.*\n"
+            )
+        web_block = web_header
         for i, r in enumerate(web_results, 1):
             title   = r.get("title", "")
             url     = r.get("url", "")
             snippet = r.get("snippet", "")
             web_block += f"[Result {i}] {title}\n{snippet}\nSource: {url}\n\n"
-        web_block += (
-            "---\n"
-            "*INSTRUCTION: Synthesise the web search results above into a clear, student-friendly answer. "
-            "Start your answer with 'From web search:' so the student knows the source. "
-            "Do not fabricate facts — use only what is in the results above.*\n"
-        )
+        web_block += web_footer
         grounding += web_block
 
     return base_prompt + grounding if grounding else base_prompt
@@ -5498,18 +5509,23 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         except Exception as e:
             logger.error(f"Failed to fetch syllabus: {e}")
 
-    # ── RAG → Web priority chain ──────────────────────────────────────────────
-    rag_ctx = await resolve_rag_context(
-        msg.message,
-        subject_id=msg.subject_id,
-        subject_name=msg.subject_name,
-        document_text=document_text,
-    )
+    # ── RAG + web search in parallel ─────────────────────────────────────────
+    _is_casual_sync = _classify_question(msg.message) == "casual"
 
-    # ── Web search fallback when library has no content ───────────────────────
-    web_results = []
-    if rag_ctx.get("quality") == "none" and _classify_question(msg.message) != "casual":
-        web_results = await web_search_fallback(msg.message)
+    async def _web_task_sync():
+        if _is_casual_sync:
+            return []
+        return await web_search_fallback(msg.message, num_results=6)
+
+    rag_ctx, web_results = await asyncio.gather(
+        resolve_rag_context(
+            msg.message,
+            subject_id=msg.subject_id,
+            subject_name=msg.subject_name,
+            document_text=document_text,
+        ),
+        _web_task_sync(),
+    )
 
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -5768,16 +5784,20 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             return None
         return await supa_get_conversation(msg.conversation_id, user["id"])
 
-    rag_ctx, raw_conv = await asyncio.gather(
+    _is_casual = _classify_question(msg.message) == "casual"
+
+    async def _web_search_task():
+        if _is_casual:
+            return []
+        return await web_search_fallback(msg.message, num_results=6)
+
+    # Run RAG, history fetch, AND web search all in parallel for minimum latency
+    rag_ctx, raw_conv, web_results = await asyncio.gather(
         resolve_rag_context(msg.message, subject_id=msg.subject_id,
                             subject_name=msg.subject_name, document_text=document_text),
         _fetch_history(),
+        _web_search_task(),
     )
-
-    # ── Web search fallback when library has no content ───────────────────────
-    web_results = []
-    if rag_ctx.get("quality") == "none" and _classify_question(msg.message) != "casual":
-        web_results = await web_search_fallback(msg.message)
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
