@@ -329,6 +329,138 @@ async def analyze_thumbnail(image_bytes: bytes, subject: str = "", topic: str = 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 3b. VISION OCR  (Cloud Vision API equivalent via Gemini Vision)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def ocr_image(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+    """Extract clean text from an AHSEC question paper or textbook page image."""
+    if not _ok():
+        return {"error": "No API key"}
+    prompt = (
+        "You are an OCR engine for AHSEC/SEBA educational content. "
+        "Extract ALL visible text from this image exactly as written, preserving "
+        "question numbers, sub-parts, mathematical notation, and formatting. "
+        "Structure the output as:\n"
+        "- Detected content type (question paper / textbook / notes)\n"
+        "- Extracted text (verbatim)\n"
+        "- Structured questions list (if applicable): [{number, text, marks, sub_parts:[]}]\n"
+        "Return JSON: {content_type, raw_text, questions, word_count}"
+    )
+    raw = await analyze_image(image_bytes, mime_type=mime_type, prompt=prompt)
+    if not raw:
+        return {"error": "OCR failed — check GEMINI_API_KEY and image format"}
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        return json.loads(cleaned)
+    except Exception:
+        return {"raw_text": raw, "content_type": "extracted", "questions": [], "word_count": len(raw.split())}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3c. NLP KEY CONCEPTS  (Cloud Natural Language API equivalent via Gemini)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def extract_key_concepts(text: str, subject: str = "", class_name: str = "Class 11") -> dict:
+    """Extract key concepts, entities, definitions and difficulty from educational text."""
+    if not _ok():
+        return {"error": "No API key"}
+    prompt = (
+        f"You are an educational NLP engine for {subject} ({class_name}, AHSEC/SEBA board). "
+        f"Analyse this chapter/passage and extract:\n"
+        f"1. key_terms: top 10-15 important terms as [{{term, definition, importance: high/medium/low}}]\n"
+        f"2. entities: named entities (laws, formulas, people, places, events) as [{{name, type, context}}]\n"
+        f"3. difficulty_level: easy/medium/hard/advanced\n"
+        f"4. chapter_summary: 2-3 sentence summary\n"
+        f"5. exam_weightage: estimated marks weightage (low/medium/high)\n"
+        f"6. prerequisite_topics: list of topics students need to know first\n\n"
+        f"TEXT:\n{text[:4000]}\n\n"
+        f"Return ONLY valid JSON."
+    )
+    raw = await _generate(prompt, max_tokens=2048, temperature=0.1)
+    if not raw:
+        return {"error": "NLP analysis failed"}
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        return json.loads(cleaned)
+    except Exception:
+        return {"raw": raw}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3d. FLASHCARD GENERATOR
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def generate_flashcards(text: str, subject: str = "", count: int = 10,
+                               class_name: str = "Class 11") -> dict:
+    """Generate Q&A flashcards from chapter content for student revision."""
+    if not _ok():
+        return {"error": "No API key"}
+    prompt = (
+        f"Generate {count} high-quality revision flashcards for {subject} ({class_name}, AHSEC board).\n"
+        f"Based on this content:\n{text[:4000]}\n\n"
+        f"Mix card types:\n"
+        f"- Definition cards (What is X?)\n"
+        f"- Concept cards (Explain Y)\n"
+        f"- Application cards (How does Z work?)\n"
+        f"- Formula/fact cards\n"
+        f"- True/False cards\n\n"
+        f"For each card: {{id, front, back, type, difficulty: easy/medium/hard, tags: []}}\n"
+        f"Return ONLY a JSON object: {{flashcards: [...], subject, total_cards}}"
+    )
+    raw = await _generate(prompt, max_tokens=3000, temperature=0.2)
+    if not raw:
+        return {"error": "Flashcard generation failed"}
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        return json.loads(cleaned)
+    except Exception:
+        return {"raw": raw, "flashcards": [], "subject": subject}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3e. MCQ GENERATOR  (text-based, complements PDF extract_from_document)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def generate_mcqs(text: str, subject: str = "", class_name: str = "Class 11",
+                         count: int = 10, difficulty: str = "mixed") -> dict:
+    """Generate MCQs from chapter text with AHSEC exam patterns."""
+    if not _ok():
+        return {"error": "No API key"}
+    prompt = (
+        f"Generate {count} AHSEC-pattern MCQ questions for {subject} ({class_name}) with {difficulty} difficulty.\n"
+        f"Based on content:\n{text[:4000]}\n\n"
+        f"Each MCQ must have exactly 4 options (A, B, C, D).\n"
+        f"Format: [{{id, question, options: {{A, B, C, D}}, correct_answer, explanation, difficulty, topic, marks: 1}}]\n"
+        f"Make distractors plausible. Ensure correct_answer is one of A/B/C/D.\n"
+        f"Return ONLY valid JSON: {{mcqs: [...], subject, total, difficulty}}"
+    )
+    raw = await _generate(prompt, max_tokens=3000, temperature=0.1)
+    if not raw:
+        return {"error": "MCQ generation failed"}
+    try:
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        return json.loads(cleaned)
+    except Exception:
+        return {"raw": raw, "mcqs": [], "subject": subject}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 4. CONTENT ENHANCER
 # ─────────────────────────────────────────────────────────────────────────────
 

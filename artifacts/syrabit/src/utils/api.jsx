@@ -291,6 +291,24 @@ export const vertexSeoMeta = (token, data) =>
 export const vertexContentGaps = (token) =>
   axios.get(`${API_BASE}/admin/vertex/content-gaps`, { headers: adminHeaders(token), withCredentials: true });
 
+export const vertexOcr = (token, formData) =>
+  axios.post(`${API_BASE}/admin/vertex/ocr`, formData, {
+    headers: { ...adminHeaders(token), 'Content-Type': 'multipart/form-data' },
+    withCredentials: true,
+  });
+
+export const vertexNlpConcepts = (token, text, subject, class_name) =>
+  axios.post(`${API_BASE}/admin/vertex/nlp-concepts`, { text, subject, class_name },
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexFlashcards = (token, text, subject, class_name, count = 10) =>
+  axios.post(`${API_BASE}/admin/vertex/flashcards`, { text, subject, class_name, count },
+    { headers: adminHeaders(token), withCredentials: true });
+
+export const vertexMcqGenerator = (token, text, subject, class_name, count = 10, difficulty = 'mixed') =>
+  axios.post(`${API_BASE}/admin/vertex/mcq-generator`, { text, subject, class_name, count, difficulty },
+    { headers: adminHeaders(token), withCredentials: true });
+
 // ── Upgrade Wave API Helpers ──────────────────────────────────────────────────
 export const seoInternalLinksAnalyze = (token) =>
   axios.get(`${API_BASE}/admin/seo/internal-links/analyze`, { headers: adminHeaders(token), withCredentials: true });

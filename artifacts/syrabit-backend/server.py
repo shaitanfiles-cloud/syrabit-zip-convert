@@ -11258,6 +11258,79 @@ async def vertex_extract_document(
     return result
 
 
+@api.post("/admin/vertex/ocr")
+async def vertex_ocr(
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Cloud Vision equivalent — extract text from AHSEC question paper/textbook images using Gemini Vision."""
+    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    ct = file.content_type or ""
+    if ct not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported image type: {ct}. Use JPEG, PNG, or WebP.")
+    img_bytes = await file.read()
+    if len(img_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image too large — max 10MB")
+    result = await vertex_services.ocr_image(img_bytes, mime_type=ct)
+    if "error" in result:
+        raise HTTPException(status_code=503, detail=result["error"])
+    return result
+
+
+@api.post("/admin/vertex/nlp-concepts")
+async def vertex_nlp_concepts(
+    text: str = Body(...),
+    subject: str = Body(""),
+    class_name: str = Body("Class 11"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Cloud Natural Language equivalent — extract key concepts, entities and difficulty from educational text."""
+    if not text or len(text.strip()) < 50:
+        raise HTTPException(status_code=400, detail="text must be at least 50 characters")
+    result = await vertex_services.extract_key_concepts(text, subject=subject, class_name=class_name)
+    if "error" in result:
+        raise HTTPException(status_code=503, detail=result["error"])
+    return result
+
+
+@api.post("/admin/vertex/flashcards")
+async def vertex_flashcards(
+    text: str = Body(...),
+    subject: str = Body(""),
+    class_name: str = Body("Class 11"),
+    count: int = Body(10),
+    admin: dict = Depends(get_admin_user),
+):
+    """Generate revision flashcards from chapter content for students."""
+    if not text or len(text.strip()) < 100:
+        raise HTTPException(status_code=400, detail="text must be at least 100 characters")
+    count = max(5, min(count, 20))
+    result = await vertex_services.generate_flashcards(text, subject=subject, count=count, class_name=class_name)
+    if "error" in result:
+        raise HTTPException(status_code=503, detail=result["error"])
+    return result
+
+
+@api.post("/admin/vertex/mcq-generator")
+async def vertex_mcq_generator(
+    text: str = Body(...),
+    subject: str = Body(""),
+    class_name: str = Body("Class 11"),
+    count: int = Body(10),
+    difficulty: str = Body("mixed"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Generate AHSEC-pattern MCQ questions from chapter text."""
+    if not text or len(text.strip()) < 100:
+        raise HTTPException(status_code=400, detail="text must be at least 100 characters")
+    count = max(5, min(count, 20))
+    result = await vertex_services.generate_mcqs(text, subject=subject, class_name=class_name,
+                                                  count=count, difficulty=difficulty)
+    if "error" in result:
+        raise HTTPException(status_code=503, detail=result["error"])
+    return result
+
+
 # ─────────────────────────────────────────────
 # PHASE D: AUTOMATION ENGINE
 # ─────────────────────────────────────────────
