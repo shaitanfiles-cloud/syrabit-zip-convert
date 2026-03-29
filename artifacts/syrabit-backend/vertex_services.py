@@ -37,7 +37,13 @@ _PRO_MODEL    = "gemini-2.5-flash-preview-05-20"
 _VISION_MODEL = "gemini-2.5-flash-preview-05-20"
 
 # ── Auth: detect key type at import time ──────────────────────────────────────
-_KEY_RAW = os.getenv("GEMINI_API_KEY", "").strip()
+# Priority:
+#   1. VERTEX_SERVICE_ACCOUNT  — dedicated SA JSON env var (cleanest)
+#   2. GEMINI_API_KEY          — SA JSON or simple AIza... key (legacy / backwards compat)
+_KEY_RAW = (
+    os.getenv("VERTEX_SERVICE_ACCOUNT", "").strip()
+    or os.getenv("GEMINI_API_KEY", "").strip()
+)
 
 # Mode A: simple API key
 _API_KEY: str = ""

@@ -11930,7 +11930,10 @@ async def syllabus_import_pdf(
 
     # ── Try Gemini Vision first (PDF inline_data) ─────────────────────────────
     extracted: list = []
+    _used_gemini = False
     try:
+        if not vertex_services._ok():
+            raise ValueError("Gemini unavailable — skipping to text extraction fallback")
         url = vertex_services._gen_url(vertex_services._PRO_MODEL)
         headers = await vertex_services._auth_headers()
         body = {
@@ -11947,37 +11950,50 @@ async def syllabus_import_pdf(
                 raise ValueError("Gemini Vision 403 — falling back to text extraction")
             r.raise_for_status()
             raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-            cleaned = raw.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            cleaned = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+            cleaned = re.sub(r'\s*```$', '', cleaned).strip()
             extracted = json.loads(cleaned)
             if not isinstance(extracted, list):
                 extracted = [extracted]
+            _used_gemini = True
     except Exception as gemini_err:
         logger.warning(f"Gemini Vision PDF extract failed: {gemini_err}")
-        # ── Fallback: extract raw text via PyPDF2, send as plain text to SLM ─
+        # ── Fallback: extract raw text via PyPDF2, send to LLM pool ──────────
         try:
             import io
             try:
                 from pypdf import PdfReader as _PdfReader
             except ImportError:
-                from PyPDF2 import PdfReader as _PdfReader
+                from PyPDF2 import PdfReader as _PdfReader  # type: ignore
             reader = _PdfReader(io.BytesIO(pdf_bytes))
             pages_text = "\n".join(
                 (p.extract_text() or "") for p in reader.pages[:40]
             )
             if not pages_text.strip():
-                raise ValueError("Could not extract text from PDF")
+                raise ValueError(
+                    "Could not extract text from PDF — the file may be a scanned image. "
+                    "Please upload a text-based PDF."
+                )
             slm_prompt = (
                 prompt + "\n\nSYLLABUS TEXT:\n" + pages_text[:12000] +
                 "\n\nReturn ONLY valid JSON array."
             )
-            # Use server's SLM pool (module-level, no circular import)
-            raw_slm = await slm_pool.generate(slm_prompt, max_tokens=4096, temperature=0.1)
-            cleaned = (raw_slm or "").strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+            raw_slm = await _call_llm_raw(
+                [{"role": "user", "content": slm_prompt}],
+                max_tokens=4096,
+            )
+            cleaned = re.sub(r'^```(?:json)?\s*', '', (raw_slm or "").strip())
+            cleaned = re.sub(r'\s*```$', '', cleaned).strip()
             extracted = json.loads(cleaned)
             if not isinstance(extracted, list):
                 extracted = [extracted]
+        except HTTPException:
+            raise
         except Exception as fallback_err:
-            raise HTTPException(status_code=500, detail=f"PDF extraction failed: {fallback_err}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"PDF extraction failed: {fallback_err}"
+            )
 
     if not extracted:
         raise HTTPException(status_code=422, detail="No syllabus subjects found in PDF — check PDF content")
