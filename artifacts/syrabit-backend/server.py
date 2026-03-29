@@ -2660,16 +2660,24 @@ async def _ddg_news_search(query: str, num_results: int) -> list:
 
 async def web_search_with_fallback(query: str, num_results: int = 8) -> list:
     """
-    Two-tier sequential web search:
-      Tier 1 — DuckDuckGo text search (browser-style, primary)
-      Tier 2 — DuckDuckGo news search (fallback when text search returns nothing)
-    Returns a list of dicts with keys: title, url, snippet.
+    Parallel dual-source web search:
+      Layer 1 — DuckDuckGo text search (browser-style, base layer)
+      Layer 2 — DuckDuckGo news search (open web, polish layer)
+    Both run simultaneously. Results are returned as a combined list
+    with each entry tagged with its layer so the prompt can instruct
+    the LLM to treat them appropriately.
     """
-    results = await _ddg_text_search(query, num_results)
-    if not results:
-        logger.info(f"DDG text empty — trying news fallback | query: {query[:60]}")
-        results = await _ddg_news_search(query, max(num_results - 2, 3))
-    return results
+    text_results, news_results = await asyncio.gather(
+        _ddg_text_search(query, num_results),
+        _ddg_news_search(query, max(num_results - 2, 4)),
+    )
+    for r in text_results:
+        r["_layer"] = "base"
+    for r in news_results:
+        r["_layer"] = "polish"
+    combined = text_results + news_results
+    logger.info(f"Dual web search: {len(text_results)} base + {len(news_results)} polish | query: {query[:60]}")
+    return combined
 
 
 _HISTORY_TOKEN_BUDGET = 1500  # max estimated tokens kept in conversation history
@@ -2949,21 +2957,43 @@ def build_rag_system_prompt(
                 "Do not add examples or exam tips unless the student explicitly asks.*"
             )
 
-    # ── Live Web Search Results ───────────────────────────────────────────────
+    # ── Live Web Search Results (dual-layer: base + polish) ─────────────────
     if web_results:
-        web_block = (
-            "\n\n---\n"
-            "**LIVE WEB SEARCH RESULTS (primary source):**\n"
-            "These results are from a live web search. "
-            "Use them as your primary information source to construct an accurate, "
-            "student-friendly answer. Do not fabricate facts beyond what is provided here.\n\n"
+        base_results   = [r for r in web_results if r.get("_layer") != "polish"]
+        polish_results = [r for r in web_results if r.get("_layer") == "polish"]
+
+        web_block = "\n\n---\n"
+
+        if base_results:
+            web_block += (
+                "**WEB SEARCH — BASE LAYER (browser results, primary facts):**\n"
+                "Build the core of your answer from these results. "
+                "Use them as the factual foundation — definitions, explanations, data points.\n\n"
+            )
+            for i, r in enumerate(base_results, 1):
+                title   = r.get("title", "")
+                url     = r.get("url", "")
+                snippet = r.get("snippet", "")
+                web_block += f"[Base {i}] {title}\n{snippet}\nSource: {url}\n\n"
+
+        if polish_results:
+            web_block += (
+                "**WEB SEARCH — POLISH LAYER (news/open web, enrichment):**\n"
+                "Use these to add current context, recent examples, or relevance to the student's "
+                "specific situation. Blend naturally into the answer — do not list them separately.\n\n"
+            )
+            for i, r in enumerate(polish_results, 1):
+                title   = r.get("title", "")
+                url     = r.get("url", "")
+                snippet = r.get("snippet", "")
+                web_block += f"[Polish {i}] {title}\n{snippet}\nSource: {url}\n\n"
+
+        web_block += (
+            "---\n"
+            "*INSTRUCTION: Build the answer from the Base layer first. "
+            "Then enrich it with relevant details from the Polish layer. "
+            "Do not fabricate facts beyond what the results contain.*\n"
         )
-        for i, r in enumerate(web_results, 1):
-            title   = r.get("title", "")
-            url     = r.get("url", "")
-            snippet = r.get("snippet", "")
-            web_block += f"[Result {i}] {title}\n{snippet}\nSource: {url}\n\n"
-        web_block += "---\n"
         grounding += web_block
 
     return base_prompt + grounding if grounding else base_prompt
