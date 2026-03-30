@@ -799,14 +799,22 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const handleGenerateAllNotes = async () => {
     if (!selSubject) return;
     const subjectName = subjects.find(s => s.id === selSubject)?.name || selSubject;
-    if (!confirm(`Generate AI notes for all ${chapters.length} chapters in "${subjectName}"? This may take a moment.`)) return;
+    const skipMsg = allChaptersHaveNotes ? ' — already-complete chapters will be skipped' : '';
+    if (!confirm(`Generate AI notes for all ${chapters.length} chapters in "${subjectName}"${skipMsg}? This may take a moment.`)) return;
     setBulkGenerating(true);
     try {
-      const res = await axios.post(`${API}/admin/subjects/${selSubject}/generate-notes-bulk`, {}, authHeaders(adminToken));
+      const res = await axios.post(
+        `${API}/admin/subjects/${selSubject}/generate-notes-bulk`,
+        { skip_existing: allChaptersHaveNotes },
+        authHeaders(adminToken)
+      );
       const data = res.data;
       const ok = data?.generated || 0;
-      toast.success(`Generated notes for ${ok} of ${data?.total || chapters.length} chapters`);
-      // Refresh chapters to pull updated content
+      const skipped = data?.skipped || 0;
+      const msg = skipped > 0
+        ? `Generated ${ok} chapters · ${skipped} already had notes (skipped)`
+        : `Generated notes for ${ok} of ${data?.total || chapters.length} chapters`;
+      toast.success(msg);
       const freshRes = await axios.get(`${API}/content/chapters?subject_id=${selSubject}`, authHeaders(adminToken));
       if (freshRes.data?.chapters) setChapters(freshRes.data.chapters);
     } catch (e) {

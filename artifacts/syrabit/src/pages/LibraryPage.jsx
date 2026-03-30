@@ -517,11 +517,46 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           )}
           {/* z-10 wrapper keeps chapter links above the thumbnail background */}
           <div className="relative z-10">
-            <div className="flex items-center gap-1.5 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(139,92,246,0.06)' }}>
-              <Layers size={11} className="text-purple-400/60" />
-              <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
-                {chapterCount} Lessons
-              </span>
+            <div className="flex items-center justify-between gap-1.5 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(139,92,246,0.06)' }}>
+              <div className="flex items-center gap-1.5">
+                <Layers size={11} className="text-purple-400/60" />
+                <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                  {chapterCount} Lessons
+                </span>
+              </div>
+              {/* Content coverage badges */}
+              {(sub.notes_count > 0 || sub.pyq_count > 0 || sub.flash_count > 0) && (
+                <div className="flex items-center gap-1">
+                  {sub.notes_count > 0 && chapterCount > 0 && (
+                    <span
+                      className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
+                      style={{
+                        background: sub.notes_pct >= 100 ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.12)',
+                        color: sub.notes_pct >= 100 ? '#10b981' : '#f59e0b',
+                        border: `1px solid ${sub.notes_pct >= 100 ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.20)'}`,
+                      }}
+                    >
+                      {sub.notes_count}/{chapterCount} notes
+                    </span>
+                  )}
+                  {sub.pyq_count > 0 && (
+                    <span
+                      className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
+                      style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.20)' }}
+                    >
+                      {sub.pyq_count} PYQs
+                    </span>
+                  )}
+                  {sub.flash_count > 0 && (
+                    <span
+                      className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
+                      style={{ background: 'rgba(139,92,246,0.12)', color: '#c084fc', border: '1px solid rgba(139,92,246,0.20)' }}
+                    >
+                      {sub.flash_count} Flash
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
             {visibleChapters.map((ch, i) => {
               const chPath = sub.boardSlug && sub.classSlug && sub.slug && ch.slug

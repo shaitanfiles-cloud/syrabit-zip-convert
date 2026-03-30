@@ -4888,19 +4888,51 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         if not await is_mongo_available():
             return {"boards": [], "classes": [], "streams": [], "subjects": []}
         async with _slow_query("library_bundle"):
-            boards_data, classes_data, streams_data, subjects_data, chapters_data = await asyncio.gather(
+            boards_data, classes_data, streams_data, subjects_data, chapters_data, pyq_data, fc_data = await asyncio.gather(
                 db.boards.find({}, {"_id": 0}).to_list(100),
                 db.classes.find({}, {"_id": 0}).to_list(100),
                 db.streams.find({}, {"_id": 0}).to_list(100),
                 db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
                 db.chapters.find(
                     {},
-                    {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "description": 1},
+                    {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "description": 1, "notes_generated": 1},
                 ).sort("order_index", 1).to_list(5000),
+                db.topic_pyq_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
+                db.flashcard_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
             )
+
+        # ── Compute per-subject content coverage ─────────────────────────────
+        chapters_by_subject: dict = {}
+        for ch in chapters_data:
+            sid = ch.get("subject_id", "")
+            if sid:
+                chapters_by_subject.setdefault(sid, []).append(ch)
+
+        pyq_total_by_subject: dict = {}
+        for p in pyq_data:
+            sid = p.get("subject_id", "")
+            if sid:
+                pyq_total_by_subject[sid] = pyq_total_by_subject.get(sid, 0) + (p.get("total") or 0)
+
+        fc_total_by_subject: dict = {}
+        for f in fc_data:
+            sid = f.get("subject_id", "")
+            if sid:
+                fc_total_by_subject[sid] = fc_total_by_subject.get(sid, 0) + (f.get("total") or 0)
+
         for s in subjects_data:
             if "thumbnail_url" in s and "thumbnailUrl" not in s:
                 s["thumbnailUrl"] = s.pop("thumbnail_url")
+            sid = s.get("id", "")
+            chs = chapters_by_subject.get(sid, [])
+            total_ch = len(chs)
+            notes_ch = sum(1 for c in chs if c.get("notes_generated"))
+            s["notes_count"]   = notes_ch
+            s["chapter_count"] = total_ch
+            s["notes_pct"]     = round(notes_ch / total_ch * 100) if total_ch else 0
+            s["pyq_count"]     = pyq_total_by_subject.get(sid, 0)
+            s["flash_count"]   = fc_total_by_subject.get(sid, 0)
+
         bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data, "chapters": chapters_data}
         _set_content_cache("library-bundle", bundle)
         if response:
@@ -8531,12 +8563,30 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
             detail="Add a description (or syllabus topics) to this chapter before generating notes."
         )
 
+    # ── Fetch SEO topics for this chapter as keyword seeds ───────────────────
+    seo_topic_docs = await db.seo_topics.find(
+        {"linked_chapter_id": chapter_id},
+        {"_id": 0, "topic": 1, "primary_keyword": 1}
+    ).to_list(30)
+    seo_keywords = list(dict.fromkeys(
+        (d.get("primary_keyword") or d.get("topic") or "").strip()
+        for d in seo_topic_docs
+        if (d.get("primary_keyword") or d.get("topic") or "").strip()
+    ))
+
     # Build the educational prompt
     topic_block = ""
     if topics:
         topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
     else:
         topic_block = f"  {description}"
+
+    seo_seed_block = ""
+    if seo_keywords:
+        seo_seed_block = (
+            "\n\n**SEO Keyword Seeds (naturally weave these phrases into headings and body):**\n"
+            + "\n".join(f"  - {kw}" for kw in seo_keywords[:15])
+        )
 
     prompt = f"""You are an expert academic content writer for Indian university degree students (NEP/FYUGP curriculum).
 
@@ -8547,7 +8597,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 **Description:** {description or "No additional description provided."}
 
 **Syllabus Topics to cover:**
-{topic_block}
+{topic_block}{seo_seed_block}
 
 ---
 
@@ -8558,6 +8608,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
   - A concise explanation of the topic (3-6 sentences) in simple academic language
   - **Key Points** in bullet form (4-6 bullets) covering definitions, significance, and important facts
   - Use **bold** to highlight key terms/definitions
+- If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
 - End with a brief **Summary** section recapping the chapter's main takeaways.
 - Use markdown formatting (##, ###, **, -, etc.)
 - Write for degree-level students — clear, precise, and educational
@@ -8603,12 +8654,17 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
     }
 
 
+class BulkNotesRequest(BaseModel):
+    skip_existing: bool = False
+
 @api.post("/admin/subjects/{subject_id}/generate-notes-bulk")
-async def admin_generate_subject_notes_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
+async def admin_generate_subject_notes_bulk(subject_id: str, body: BulkNotesRequest = Body(default=None), admin: dict = Depends(get_admin_user)):
     """
     Generate AI topic-wise notes for ALL chapters of a subject.
+    Pass skip_existing=true to skip chapters that already have notes (>50 words).
     Runs sequentially to avoid rate-limiting. Returns per-chapter results.
     """
+    skip_existing = (body.skip_existing if body else False)
     subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
@@ -8625,6 +8681,7 @@ async def admin_generate_subject_notes_bulk(subject_id: str, admin: dict = Depen
     class_name   = subject.get("className", "")
 
     results = []
+    skipped_count = 0
     for chapter in chapters:
         chapter_id  = chapter.get("id", "")
         title       = (chapter.get("title") or "").strip()
@@ -8637,6 +8694,13 @@ async def admin_generate_subject_notes_bulk(subject_id: str, admin: dict = Depen
 
         # Build topic block — prefer topics list > description > existing content
         existing_content = (chapter.get("content") or "").strip()
+
+        # ── skip_existing: skip chapters that already have sufficient notes ────
+        if skip_existing and len(existing_content.split()) > 50:
+            results.append({"chapter_id": chapter_id, "title": title, "status": "skipped", "reason": "notes exist"})
+            skipped_count += 1
+            continue
+
         if topics:
             topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
         elif description:
@@ -8699,6 +8763,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
         "subject_name": subject_name,
         "total": len(chapters),
         "generated": ok_count,
+        "skipped": skipped_count,
         "results": results,
     }
 
@@ -15280,14 +15345,35 @@ async def _pipeline_generate_chapter_notes(chapter: dict, subject_name: str, cla
     title = (chapter.get("title") or "").strip()
     description = (chapter.get("description") or "").strip()
     topics = chapter.get("topics") or []
+    chapter_id = chapter.get("id", "")
 
     # ── Redis cache check ────────────────────────────────────────────────────
-    cache_key = f"pipeline_notes:{chapter.get('id','')}:{hash(title + subject_name)}"
+    cache_key = f"pipeline_notes:{chapter_id}:{hash(title + subject_name)}"
     cached = _redis_get("pipeline_notes", cache_key)
     if cached and len(cached.strip()) > 100:
         return cached
 
     topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else (f"  {description}" if description else f"  {title}")
+
+    # ── SEO keyword seeds from extracted topics ───────────────────────────────
+    seo_seed_block = ""
+    try:
+        seo_topic_docs = await db.seo_topics.find(
+            {"linked_chapter_id": chapter_id},
+            {"_id": 0, "topic": 1, "primary_keyword": 1}
+        ).to_list(20)
+        seo_keywords = list(dict.fromkeys(
+            (d.get("primary_keyword") or d.get("topic") or "").strip()
+            for d in seo_topic_docs
+            if (d.get("primary_keyword") or d.get("topic") or "").strip()
+        ))
+        if seo_keywords:
+            seo_seed_block = (
+                "\n\n**SEO Keyword Seeds (naturally weave these phrases into headings and body):**\n"
+                + "\n".join(f"  - {kw}" for kw in seo_keywords[:12])
+            )
+    except Exception:
+        pass
 
     prompt = f"""You are an expert academic content writer for AHSEC/SEBA board students in Assam, India.
 
@@ -15298,7 +15384,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 **Description:** {description or "Standard chapter content."}
 
 **Syllabus Topics to cover:**
-{topic_block}
+{topic_block}{seo_seed_block}
 
 ---
 
@@ -15308,6 +15394,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
   - A **## Heading** for the topic
   - 3-5 sentence explanation in simple academic language
   - **Key Points** in 4-6 bullets with definitions/significance/**bold key terms**
+- If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
 - End with a **Summary** section.
 - Use markdown. Do NOT add disclaimers. Start directly with the introduction.
 - Target: ~500-800 words.
@@ -15712,44 +15799,58 @@ async def _pipeline_process_one_chapter(
             chapter_result["errors"].append(f"flashcards: {str(fc_err)[:60]}")
 
         # ── Step 4: Geo-SEO Blogs (all 5 cities in parallel) ────────────────
-        blog_tasks = [
-            _safe(_pipeline_generate_geo_seo_blog(
-                subject_name=subject_name, chapter_title=chapter_title,
-                content=notes_content, geo_location=city,
-                board_slug=board_slug, class_slug=class_slug, chapter_slug=chapter_slug,
-            ))
-            for city in GEO_CITIES
-        ]
-        blog_results = await asyncio.gather(*blog_tasks)
-        geo_blog_urls = []
-        for city, (blog_data, blog_err) in zip(GEO_CITIES, blog_results):
-            if blog_err or not blog_data:
-                chapter_result["errors"].append(f"geo-blog-{city}: {str(blog_err)[:60]}" if blog_err else f"geo-blog-{city}: empty")
-                continue
+        # skip_existing: skip if all geo-blogs already exist in CMS for this chapter
+        _existing_geo_count = 0
+        if skip_existing:
             try:
-                blog_slug = blog_data["seo_slug"]
-                await db.cms_documents.update_one(
-                    {"seo_slug": blog_slug},
-                    {"$set": {
-                        "id": str(uuid.uuid4()),
-                        "title": blog_data["title"], "seo_slug": blog_slug,
-                        "meta_description": blog_data["meta_description"],
-                        "content": blog_data["article_body"],
-                        "primary_keyword": blog_data["primary_keyword"],
-                        "keywords": blog_data.get("keywords", []),
-                        "geo_location": city,
-                        "linked_subject_id": subject_id, "linked_subject_name": subject_name,
-                        "linked_chapter_id": chapter_id, "linked_chapter_title": chapter_title,
-                        "status": "published", "category": "geo-blog",
-                        "schema_type": "Article", "pipeline_generated": True,
-                        "created_at": now_iso, "updated_at": now_iso,
-                    }},
-                    upsert=True,
-                )
-                geo_blog_urls.append(f"/learn/{blog_slug}")
-                chapter_result["blogs_count"] += 1
-            except Exception as e:
-                chapter_result["errors"].append(f"geo-blog-{city}-save: {str(e)[:60]}")
+                _existing_geo_count = await db.cms_documents.count_documents({
+                    "linked_chapter_id": chapter_id, "category": "geo-blog"
+                })
+            except Exception:
+                pass
+        if skip_existing and _existing_geo_count >= len(GEO_CITIES):
+            logger.info(f"[Pipeline] Skipping geo-blogs for '{chapter_title}' — {_existing_geo_count} already exist")
+            chapter_result["blogs_count"] = _existing_geo_count
+            geo_blog_urls = []
+        else:
+            blog_tasks = [
+                _safe(_pipeline_generate_geo_seo_blog(
+                    subject_name=subject_name, chapter_title=chapter_title,
+                    content=notes_content, geo_location=city,
+                    board_slug=board_slug, class_slug=class_slug, chapter_slug=chapter_slug,
+                ))
+                for city in GEO_CITIES
+            ]
+            blog_results = await asyncio.gather(*blog_tasks)
+            geo_blog_urls = []
+            for city, (blog_data, blog_err) in zip(GEO_CITIES, blog_results):
+                if blog_err or not blog_data:
+                    chapter_result["errors"].append(f"geo-blog-{city}: {str(blog_err)[:60]}" if blog_err else f"geo-blog-{city}: empty")
+                    continue
+                try:
+                    blog_slug = blog_data["seo_slug"]
+                    await db.cms_documents.update_one(
+                        {"seo_slug": blog_slug},
+                        {"$set": {
+                            "id": str(uuid.uuid4()),
+                            "title": blog_data["title"], "seo_slug": blog_slug,
+                            "meta_description": blog_data["meta_description"],
+                            "content": blog_data["article_body"],
+                            "primary_keyword": blog_data["primary_keyword"],
+                            "keywords": blog_data.get("keywords", []),
+                            "geo_location": city,
+                            "linked_subject_id": subject_id, "linked_subject_name": subject_name,
+                            "linked_chapter_id": chapter_id, "linked_chapter_title": chapter_title,
+                            "status": "published", "category": "geo-blog",
+                            "schema_type": "Article", "pipeline_generated": True,
+                            "created_at": now_iso, "updated_at": now_iso,
+                        }},
+                        upsert=True,
+                    )
+                    geo_blog_urls.append(f"/learn/{blog_slug}")
+                    chapter_result["blogs_count"] += 1
+                except Exception as e:
+                    chapter_result["errors"].append(f"geo-blog-{city}-save: {str(e)[:60]}")
 
         # ── Step 5: PYQ HTML Page ────────────────────────────────────────────
         try:

@@ -1,0 +1,59 @@
+Fix 1: Notes + SEO Topics (8min)
+python
+@app.post("/admin/content/chapters/{id}/generate-notes")
+async def generate_notes(chapter_id: str):
+    chapter = await db.chapters.find_one({"_id": chapter_id})
+    topics = await db.seo_topics.find({"chapter_id": chapter_id}).distinct("topic")  # SEED
+    prompt = f"Chapter: {chapter['title']}\nTopics: {topics}\nContent: {chapter['description']}"
+    notes = await gemini.generate(prompt)
+Notes now rank for "AHSEC Motion PYQs 2025"
+
+Fix 2: Bulk Skip (5min)
+python
+@app.post("/subjects/{id}/generate-notes-bulk")
+async def bulk_notes(subject_id: str, skip_existing: bool = False):
+    chapters = await db.chapters.find({"subject_id": subject_id}).to_list(None)
+    for c in chapters:
+        if skip_existing and c.get('notes', '').strip().count(' ') > 50: continue
+        await generate_notes(c['_id'])
+12 chapters → Skip 10 = 83% faster
+
+Fix 3: Library Badges (12min)
+python
+@app.get("/content/library-bundle")
+async def library_bundle():
+    subjects = await db.subjects.aggregate([
+        {"$lookup": {"from": "chapters", "localField": "_id", "foreignField": "subject_id", "as": "chapters"}},
+        {"$addFields": {
+            "notes_pct": {"$divide": [{"$size": "$chapters"}, {"$size": {"$objectToArray": "$chapters"}}]},
+            "pyq_count": {"$sum": "$chapters.pyqs.length"},
+            "flash_count": {"$sum": "$chapters.flashcards.length"}
+        }}
+    ]).to_list(None)
+text
+Card: Physics 🟢 10/12 | 240 PYQs | 300 Flash
+Fix 4: Geo Skip Polish (6min)
+python
+# _pipeline_process_one_chapter
+if skip_existing and await db.cms_documents.count_documents({"chapter_id": chapter_id, "type": "geo-blog"}):
+    logger.info("Skipping geo-blogs - exist")
+    continue
+Verification Post-Fix
+text
+Physics:
+✅ [AI⚡] Motion → Notes w/ SEO topics ✓
+✅ Bulk notes → Skip existing ✓  
+✅ Library → "10/12 notes | 240 PYQs" ✓
+✅ [SEO Polish] → Blogs only ✓
+✅ Chat → Full scraped answers ✓
+Deploy Plan (1hr → ₹25L/subject)
+text
+1. 🔴 Notes + topics (8min)
+2. 🔴 Bulk skip (5min)  
+3. 🔴 Library badges (12min)
+4. 🔴 Geo skip (6min)
+5. Test: Physics full flow (15min)
+6. Economics pipeline (14min)
+
+ROI: 24 subjects × ₹5k savings = ₹1.2L/mo
+6 fixes = flawless pipeline. Library badges = subscriber magnet. Deploy Notes+Topics FIRST.
