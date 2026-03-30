@@ -104,6 +104,9 @@ export const adminConnectGA4 = (token, code, redirectUri) =>
 export const adminTestGA4 = (token) =>
   axios.get(`${API_BASE}/admin/ga4/test`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminGetLiveVisitors = (token) =>
+  axios.get(`${API_BASE}/admin/analytics/live`, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminGetSettings = (token) =>
   axios.get(`${API_BASE}/admin/settings`, { headers: adminHeaders(token), withCredentials: true });
 

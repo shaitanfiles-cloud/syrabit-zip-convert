@@ -20,6 +20,10 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
 import os, uuid, base64, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys, html as _html_mod
+try:
+    from user_agents import parse as _parse_ua
+except ImportError:
+    _parse_ua = None
 import mistune as _mistune
 warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
@@ -699,6 +703,13 @@ async def lifespan(app):
         await db.page_views.create_index([("date", 1), ("visitor_id", 1)])
         await db.page_views.create_index([("timestamp", -1)])
         await db.page_views.create_index("visitor_id")
+        await db.page_views.create_index("session_id")
+        await db.page_views.create_index([("is_bot", 1)])
+
+        await db.sessions.create_index("session_id", unique=True, sparse=True)
+        await db.sessions.create_index("visitor_id")
+        await db.sessions.create_index([("last_ping", -1)])
+        await db.sessions.create_index([("start_time", -1)])
 
         await db.users.create_index("email", unique=True, sparse=True)
         await db.users.create_index("id", unique=True)
@@ -1596,20 +1607,134 @@ async def get_library_analytics(days: int = 30):
         return {"period_days": days, "top_searches": [], "most_viewed_subjects": [], "most_ask_ai_subjects": [], "document_opens": 0, "events_by_type": {}}
 
 
-async def track_page_view(path: str, visitor_id: str, user_id: str = None, referrer: str = None):
+# ── Bot/crawler User-Agent patterns ───────────────────────────────────────────
+_BOT_PATTERNS = re.compile(
+    r'(googlebot|bingbot|yandexbot|duckduckbot|baiduspider|facebookexternalhit|'
+    r'twitterbot|rogerbot|linkedinbot|embedly|quora link preview|showyoubot|'
+    r'outbrain|pinterest/0\.|developers\.google\.com/\+/web/snippet|slackbot|'
+    r'vkshare|w3c_validator|redditbot|applebot|whatsapp|googleweblight|'
+    r'ia_archiver|curl|wget|python-requests|go-http-client|okhttp|'
+    r'scrapy|heritrix|nmap|masscan|zgrab)',
+    re.IGNORECASE,
+)
+
+def _is_bot(user_agent: str) -> bool:
+    if not user_agent:
+        return False
+    return bool(_BOT_PATTERNS.search(user_agent))
+
+def _get_device_type(user_agent: str) -> str:
+    if not user_agent:
+        return 'desktop'
+    if _parse_ua:
+        try:
+            ua = _parse_ua(user_agent)
+            if ua.is_mobile:
+                return 'mobile'
+            if ua.is_tablet:
+                return 'tablet'
+            return 'desktop'
+        except Exception:
+            pass
+    ua_lower = user_agent.lower()
+    if any(k in ua_lower for k in ('mobile', 'android', 'iphone', 'ipod', 'windows phone')):
+        return 'mobile'
+    if any(k in ua_lower for k in ('ipad', 'tablet')):
+        return 'tablet'
+    return 'desktop'
+
+_ip_country_cache: dict = {}
+
+async def _resolve_country(ip: str) -> str:
+    """Resolve IP to country code using ip-api.com free tier."""
+    if not ip or ip in ('127.0.0.1', '::1', 'unknown'):
+        return ''
+    if ip in _ip_country_cache:
+        return _ip_country_cache[ip]
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            r = await client.get(f'http://ip-api.com/json/{ip}?fields=countryCode,status')
+            data = r.json()
+            if data.get('status') == 'success':
+                country = data.get('countryCode', '')
+                _ip_country_cache[ip] = country
+                if len(_ip_country_cache) > 2000:
+                    oldest = list(_ip_country_cache.keys())[:500]
+                    for k in oldest:
+                        _ip_country_cache.pop(k, None)
+                return country
+    except Exception:
+        pass
+    return ''
+
+
+async def track_page_view(
+    path: str,
+    visitor_id: str,
+    user_id: str = None,
+    referrer: str = None,
+    user_agent: str = None,
+    screen_width: int = None,
+    session_id: str = None,
+    client_ip: str = None,
+    pre_resolved_country: str = None,
+    is_404_hint: bool = None,
+):
     """Track a single page view for visitor analytics."""
     try:
+        if user_agent and _is_bot(user_agent):
+            return
+
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now = datetime.now(timezone.utc)
+
+        device_type = _get_device_type(user_agent or '')
+        # is_404: rely on frontend signal only (is_404_hint). The frontend has
+        # full React Router context and signals True when the NotFoundPage renders.
+        # Server-side route guessing is unreliable given dynamic SEO routes.
+        is_404 = bool(is_404_hint)
+
+        country = pre_resolved_country or ''
+        if not country and client_ip:
+            try:
+                country = await asyncio.wait_for(_resolve_country(client_ip), timeout=3.0)
+            except Exception:
+                pass
+
         event = {
             "id": str(uuid.uuid4()),
             "path": path,
             "visitor_id": visitor_id,
+            "session_id": session_id or '',
             "user_id": user_id,
             "referrer": referrer or "",
             "date": today,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": now.isoformat(),
+            "device_type": device_type,
+            "country": country,
+            "screen_width": screen_width,
+            "is_bot": False,
+            "is_404": is_404,
         }
         await db.page_views.insert_one(event)
+
+        if session_id:
+            now_iso = now.isoformat()
+            await db.sessions.update_one(
+                {"session_id": session_id},
+                {
+                    "$setOnInsert": {
+                        "session_id": session_id,
+                        "visitor_id": visitor_id,
+                        "start_time": now_iso,
+                        "entry_path": path,
+                    },
+                    "$set": {"last_ping": now_iso},
+                    "$inc": {"page_count": 1},
+                },
+                upsert=True,
+            )
+
     except Exception as e:
         logger.debug(f"page_view tracking failed: {e}")
 
@@ -1620,24 +1745,101 @@ async def get_visitor_stats() -> dict:
         return {"total_visitors": 0, "visitors_today": 0, "page_views_today": 0, "daily_visitors": []}
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        # Headline metrics exclude bots AND 404/empty-content pages
+        base_filter = {"is_bot": {"$ne": True}, "is_404": {"$ne": True}}
+        # All-inclusive filter (excludes only bots) for new/returning calc
+        all_valid_filter = {"is_bot": {"$ne": True}}
 
-        total_visitors = await db.page_views.distinct("visitor_id")
+        total_visitors = await db.page_views.distinct("visitor_id", base_filter)
         total_visitors_count = len(total_visitors)
 
-        visitors_today = await db.page_views.distinct("visitor_id", {"date": today})
-        visitors_today_count = len(visitors_today)
+        visitors_today_list = await db.page_views.distinct("visitor_id", {**base_filter, "date": today})
+        visitors_today_count = len(visitors_today_list)
 
-        page_views_today = await db.page_views.count_documents({"date": today})
-        total_page_views = await db.page_views.count_documents({})
+        page_views_today = await db.page_views.count_documents({**base_filter, "date": today})
+        total_page_views = await db.page_views.count_documents(base_filter)
 
-        # Daily visitors last 7 days
+        # 404 / empty-content traffic — counted separately so the admin can see them
+        not_found_today = await db.page_views.count_documents({"is_bot": {"$ne": True}, "is_404": True, "date": today})
+        not_found_total = await db.page_views.count_documents({"is_bot": {"$ne": True}, "is_404": True})
+
+        # Daily visitors last 7 days (headline: no bots, no 404)
         daily_visitors = []
         for i in range(7):
             day = (datetime.now(timezone.utc) - timedelta(days=6 - i)).strftime("%Y-%m-%d")
-            unique = await db.page_views.distinct("visitor_id", {"date": day})
-            pv = await db.page_views.count_documents({"date": day})
+            unique = await db.page_views.distinct("visitor_id", {**base_filter, "date": day})
+            pv = await db.page_views.count_documents({**base_filter, "date": day})
             daily_visitors.append({"date": day, "visitors": len(unique), "page_views": pv})
+
+        # New vs returning — based on main content views (no bots, no 404) visitors today
+        new_visitors_count = 0
+        returning_count = 0
+        for vid in visitors_today_list:
+            older = await db.page_views.count_documents({
+                "visitor_id": vid,
+                "date": {"$lt": today},
+                **all_valid_filter,
+            })
+            if older > 0:
+                returning_count += 1
+            else:
+                new_visitors_count += 1
+
+        # Device breakdown (exclude bots + 404 so metrics are clean)
+        device_pipeline = [
+            {"$match": {**base_filter, "device_type": {"$exists": True, "$ne": None, "$ne": ""}}},
+            {"$group": {"_id": "$device_type", "count": {"$sum": 1}}},
+        ]
+        device_rows = await db.page_views.aggregate(device_pipeline).to_list(10)
+        device_total = sum(r["count"] for r in device_rows) or 1
+        device_breakdown = {
+            r["_id"]: {"count": r["count"], "pct": round(r["count"] / device_total * 100, 1)}
+            for r in device_rows if r["_id"]
+        }
+
+        # Top countries (headline views only)
+        country_pipeline = [
+            {"$match": {**base_filter, "country": {"$exists": True, "$ne": None, "$ne": ""}}},
+            {"$group": {"_id": "$country", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 5},
+        ]
+        country_rows = await db.page_views.aggregate(country_pipeline).to_list(5)
+        top_countries = [{"country": r["_id"], "count": r["count"]} for r in country_rows]
+
+        # Session metrics (avg duration + bounce rate)
+        session_pipeline = [
+            {"$match": {"end_time": {"$exists": True}}},
+            {"$project": {
+                "page_count": 1,
+                "duration_secs": {
+                    "$divide": [
+                        {"$subtract": [
+                            {"$toDate": "$end_time"},
+                            {"$toDate": "$start_time"},
+                        ]},
+                        1000,
+                    ]
+                },
+            }},
+            {"$group": {
+                "_id": None,
+                "total": {"$sum": 1},
+                "bounces": {"$sum": {"$cond": [{"$lte": ["$page_count", 1]}, 1, 0]}},
+                "avg_duration": {"$avg": "$duration_secs"},
+            }},
+        ]
+        session_rows = await db.sessions.aggregate(session_pipeline).to_list(1)
+        avg_session_duration = None
+        bounce_rate = None
+        if session_rows:
+            row = session_rows[0]
+            total_sess = row.get("total", 0)
+            if total_sess > 0:
+                bounce_rate = round(row.get("bounces", 0) / total_sess * 100, 1)
+                avg_dur = row.get("avg_duration")
+                if avg_dur is not None:
+                    avg_session_duration = round(avg_dur)
 
         return {
             "total_visitors": total_visitors_count,
@@ -1645,6 +1847,14 @@ async def get_visitor_stats() -> dict:
             "page_views_today": page_views_today,
             "total_page_views": total_page_views,
             "daily_visitors": daily_visitors,
+            "new_visitors": new_visitors_count,
+            "returning_visitors": returning_count,
+            "device_breakdown": device_breakdown,
+            "top_countries": top_countries,
+            "avg_session_duration": avg_session_duration,
+            "bounce_rate": bounce_rate,
+            "not_found_today": not_found_today,
+            "not_found_total": not_found_total,
         }
     except Exception as e:
         logger.error(f"get_visitor_stats error: {e}")
@@ -6600,9 +6810,14 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
 
 @api.post("/analytics/page-view")
 async def track_page_view_endpoint(
+    request: StarletteRequest,
     path: str = Body(...),
     visitor_id: str = Body(...),
     referrer: str = Body(None),
+    session_id: str = Body(None),
+    user_agent: str = Body(None),
+    screen_width: int = Body(None),
+    is_404_hint: bool = Body(None),
     user: dict = Depends(get_current_user_optional)
 ):
     """
@@ -6610,8 +6825,85 @@ async def track_page_view_endpoint(
     Called from frontend on every route change.
     """
     user_id = user.get("id") if user else None
-    await track_page_view(path=path, visitor_id=visitor_id, user_id=user_id, referrer=referrer)
+    effective_ua = user_agent or request.headers.get("user-agent") or ""
+    cf_country = request.headers.get("cf-ipcountry", "")
+    x_forwarded = request.headers.get("x-forwarded-for", "")
+    client_ip = x_forwarded.split(",")[0].strip() if x_forwarded else (request.client.host if request.client else "")
+    await track_page_view(
+        path=path,
+        visitor_id=visitor_id,
+        user_id=user_id,
+        referrer=referrer,
+        user_agent=effective_ua,
+        screen_width=screen_width,
+        session_id=session_id,
+        client_ip=client_ip if not cf_country else None,
+        pre_resolved_country=cf_country or None,
+        is_404_hint=is_404_hint,
+    )
     return {"status": "ok"}
+
+
+@api.post("/analytics/session-ping")
+async def session_ping_endpoint(
+    session_id: str = Body(...),
+    visitor_id: str = Body(...),
+):
+    """Keep a session alive. Called every 30s from frontend heartbeat."""
+    try:
+        if db is not None and await is_mongo_available():
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.sessions.update_one(
+                {"session_id": session_id},
+                {
+                    "$setOnInsert": {
+                        "session_id": session_id,
+                        "visitor_id": visitor_id,
+                        "start_time": now_iso,
+                        "entry_path": "",
+                    },
+                    "$set": {"last_ping": now_iso},
+                },
+                upsert=True,
+            )
+    except Exception as e:
+        logger.debug(f"session_ping failed: {e}")
+    return {"status": "ok"}
+
+
+@api.post("/analytics/session-end")
+async def session_end_endpoint(
+    session_id: str = Body(...),
+    visitor_id: str = Body(None),
+):
+    """Record session end time. Called via sendBeacon on tab close."""
+    try:
+        if db is not None and await is_mongo_available():
+            now_iso = datetime.now(timezone.utc).isoformat()
+            await db.sessions.update_one(
+                {"session_id": session_id},
+                {"$set": {"end_time": now_iso, "last_ping": now_iso}},
+            )
+    except Exception as e:
+        logger.debug(f"session_end failed: {e}")
+    return {"status": "ok"}
+
+
+@api.get("/admin/analytics/live")
+async def live_visitors_endpoint(admin: dict = Depends(get_admin_user)):
+    """Count sessions with last_ping in the last 5 minutes (live visitors)."""
+    try:
+        if not await is_mongo_available():
+            return {"live_visitors": 0}
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        count = await db.sessions.count_documents({
+            "last_ping": {"$gte": cutoff},
+            "end_time": {"$exists": False},
+        })
+        return {"live_visitors": count}
+    except Exception as e:
+        logger.error(f"live_visitors error: {e}")
+        return {"live_visitors": 0}
 
 
 @api.post("/analytics/track")
