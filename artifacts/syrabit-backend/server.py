@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore", message=".*__about__.*")
 import cachetools
 import ga4_client
 import vertex_services
+import email_templates
 
 
 # ─────────────────────────────────────────────
@@ -697,7 +698,19 @@ async def _heal_credits_limit():
         logger.warning(f"[migration] credits_limit heal failed: {e}")
 
 
-@asynccontextmanager
+async def _load_ga4_from_db():
+    """Load GA4 refresh token from api_config into os.environ if not set via Replit Secrets."""
+    try:
+        if not os.getenv("GA4_REFRESH_TOKEN"):
+            cfg = await db.api_config.find_one({}, {"ga4": 1})
+            token = (cfg or {}).get("ga4", {}).get("refresh_token", "")
+            if token:
+                os.environ["GA4_REFRESH_TOKEN"] = token
+                logger.info("GA4 refresh token loaded from db.api_config")
+    except Exception as e:
+        logger.warning(f"GA4 db-load skipped: {e}")
+
+
 async def lifespan(app):
     global _rate_cleanup_task
     await _init_pg_pool()
@@ -739,6 +752,8 @@ async def lifespan(app):
         await db.payments.create_index("razorpay_payment_id", unique=True, sparse=True)
         await db.payments.create_index("stripe_session_id", unique=True, sparse=True)
         await db.payments.create_index([("user_id", 1), ("verified_at", -1)])
+        await db.push_subscriptions.create_index("user_id")
+        await db.push_subscriptions.create_index("endpoint", unique=True, sparse=True)
 
         try:
             await db.topics.create_index("chapter_id")
@@ -803,6 +818,7 @@ async def lifespan(app):
         _syllabus_embedder = SyllabusEmbedder(db)
         asyncio.create_task(_seed_syllabus_embeddings())
 
+    asyncio.create_task(_load_ga4_from_db())
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
@@ -4855,36 +4871,9 @@ async def login(data: UserLogin, response: Response):
     return TokenOut(access_token=token, user=user_out)
 
 async def _send_password_reset_email(email: str, token: str):
-    """Send password reset email via Resend API. Falls back to log-only if key is not set."""
+    """Send password reset email via email_templates (Resend SDK)."""
     reset_url = f"{FRONTEND_URL}/reset-password"
-    if not RESEND_API_KEY:
-        logger.info(f"[Email not configured] Password reset token for {email}: {token} | URL: {reset_url}")
-        return
-    try:
-        html = f"""
-        <div style="font-family:sans-serif;max-width:480px;margin:auto;padding:32px;background:#0d0d1a;color:#e2e8f0;border-radius:12px;">
-          <h2 style="color:#8b5cf6;margin-bottom:8px;">Reset your Syrabit.ai password</h2>
-          <p style="color:#94a3b8;margin-bottom:24px;">We received a request to reset your password. Use the token below on the reset page.</p>
-          <div style="background:#1e1b4b;border:1px solid #4c1d95;border-radius:8px;padding:20px;text-align:center;margin-bottom:24px;">
-            <p style="color:#94a3b8;font-size:12px;margin:0 0 8px;">Your reset token (valid for 1 hour)</p>
-            <code style="font-size:14px;color:#a78bfa;word-break:break-all;letter-spacing:0.5px;">{token}</code>
-          </div>
-          <a href="{reset_url}" style="display:inline-block;background:#7c3aed;color:white;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;font-size:14px;">Go to Reset Page</a>
-          <p style="color:#475569;font-size:12px;margin-top:24px;">If you didn't request this, ignore this email. Your password won't change.</p>
-        </div>
-        """
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                "https://api.resend.com/emails",
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                json={"from": f"Syrabit.ai <{EMAIL_FROM}>", "to": [email], "subject": "Reset your Syrabit.ai password", "html": html},
-            )
-            if resp.status_code not in (200, 201):
-                logger.warning(f"Resend email failed ({resp.status_code}): {resp.text[:200]}")
-            else:
-                logger.info(f"Password reset email sent to {email}")
-    except Exception as e:
-        logger.warning(f"Email send error: {e}")
+    await email_templates.send_password_reset(email=email, token=token, reset_url=reset_url)
 
 @api.post("/auth/reset-request")
 async def reset_request(data: PasswordResetReq):
@@ -10122,18 +10111,129 @@ async def admin_create_notification(data: dict, admin: dict = Depends(get_admin_
         "title": data.get("title", ""),
         "message": data.get("message", ""),
         "type": data.get("type", "info"),
+        "channel": data.get("channel", "push"),
         "audience": data.get("audience", "all"),
         "status": data.get("status", "draft"),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "sent_at": datetime.now(timezone.utc).isoformat() if data.get("status") == "sent" else None,
     }
     await supa_insert_notification(notif)
+    # Dispatch web-push immediately when status is "sent"
+    if notif["status"] == "sent" and notif.get("channel", "push") == "push":
+        asyncio.create_task(_dispatch_push_to_all({
+            "title": notif["title"],
+            "body":  notif["message"],
+            "url":   data.get("url", "/"),
+        }))
     return notif
 
 @api.delete("/admin/notifications/{notif_id}")
 async def admin_delete_notification(notif_id: str, admin: dict = Depends(get_admin_user)):
     await supa_delete_notification(notif_id)
     return {"message": "Deleted"}
+
+
+# ─────────────────────────────────────────────
+# PUSH NOTIFICATIONS — VAPID + Subscriptions
+# ─────────────────────────────────────────────
+
+async def _get_or_create_vapid_keys() -> dict:
+    """Return VAPID key pair from db.api_config, generating once if absent."""
+    cfg = await db.api_config.find_one({}, {"push_vapid": 1})
+    existing = (cfg or {}).get("push_vapid", {})
+    if existing.get("public_key") and existing.get("private_key_pem"):
+        return existing
+    try:
+        from py_vapid import Vapid
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding, PrivateFormat, PublicFormat, NoEncryption
+        )
+        v = Vapid()
+        v.generate_keys()
+        private_pem = v.private_key.private_bytes(
+            Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()
+        ).decode()
+        # Public key as uncompressed EC point, urlsafe-base64 (what browsers expect)
+        pub_raw = v.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+        pub_b64 = base64.urlsafe_b64encode(pub_raw).rstrip(b"=").decode()
+        keys = {"public_key": pub_b64, "private_key_pem": private_pem}
+        await db.api_config.update_one({}, {"$set": {"push_vapid": keys}}, upsert=True)
+        logger.info("VAPID keys generated and stored in db.api_config")
+        return keys
+    except Exception as e:
+        logger.error(f"VAPID key generation failed: {e}")
+        return {}
+
+
+async def _dispatch_push_to_all(payload: dict):
+    """Send a web-push to every stored subscription. Fire-and-forget."""
+    try:
+        from pywebpush import webpush, WebPushException
+        vapid = await _get_or_create_vapid_keys()
+        private_pem = vapid.get("private_key_pem", "")
+        if not private_pem:
+            logger.warning("Push dispatch skipped — VAPID private key missing")
+            return
+        subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
+        sent = failed = 0
+        for sub in subs:
+            try:
+                webpush(
+                    subscription_info=sub["subscription_info"],
+                    data=json.dumps(payload),
+                    vapid_private_key=private_pem,
+                    vapid_claims={"sub": "mailto:admin@syrabit.ai"},
+                )
+                sent += 1
+            except WebPushException as e:
+                # 410 Gone = subscription expired; clean it up
+                if e.response and e.response.status_code in (404, 410):
+                    await db.push_subscriptions.delete_one({"endpoint": sub.get("endpoint")})
+                failed += 1
+            except Exception:
+                failed += 1
+        logger.info(f"Push dispatch: sent={sent} failed={failed} total={len(subs)}")
+    except Exception as e:
+        logger.error(f"Push dispatch error: {e}")
+
+
+@api.get("/push/vapid-public-key")
+async def push_vapid_public_key():
+    """Return the VAPID public key so the browser can subscribe."""
+    keys = await _get_or_create_vapid_keys()
+    pub = keys.get("public_key", "")
+    if not pub:
+        raise HTTPException(503, "Push not configured — VAPID key generation failed")
+    return {"public_key": pub}
+
+
+@api.post("/push/subscribe")
+async def push_subscribe(data: dict, user: dict = Depends(get_current_user)):
+    """Store a browser push subscription for the authenticated user."""
+    subscription_info = data.get("subscription")
+    if not subscription_info or not subscription_info.get("endpoint"):
+        raise HTTPException(400, "Missing subscription object")
+    endpoint = subscription_info["endpoint"]
+    doc = {
+        "user_id":           str(user["id"]),
+        "endpoint":          endpoint,
+        "subscription_info": subscription_info,
+        "subscribed_at":     datetime.now(timezone.utc).isoformat(),
+    }
+    await db.push_subscriptions.update_one(
+        {"endpoint": endpoint}, {"$set": doc}, upsert=True
+    )
+    return {"ok": True}
+
+
+@api.delete("/push/subscribe")
+async def push_unsubscribe(data: dict, user: dict = Depends(get_current_user)):
+    """Remove a push subscription for the authenticated user."""
+    endpoint = (data or {}).get("endpoint", "")
+    if endpoint:
+        await db.push_subscriptions.delete_one({"endpoint": endpoint, "user_id": str(user["id"])})
+    return {"ok": True}
+
 
 # ─────────────────────────────────────────────
 # ADMIN EXPORT — CSV/JSON
@@ -10486,6 +10586,13 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
 
         _redis_invalidate_session(user_id)
         logger.info(f"Plan activated: user={user_id} plan={plan} credits+={credits}")
+        asyncio.create_task(email_templates.send_plan_activation(
+            email=user.get("email", ""),
+            name=user.get("name", user.get("email", "")),
+            plan=plan,
+            credits=credits,
+            amount_paise=PLAN_PRICES_INR[plan],
+        ))
         return {
             "success": True,
             "plan":    plan,
@@ -10924,6 +11031,12 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
 
         _redis_invalidate_session(user_id)
         logger.info(f"Credit top-up verified: user={user_id} credits+={body.credits}")
+        asyncio.create_task(email_templates.send_topup_confirmation(
+            email=user.get("email", ""),
+            name=user.get("name", user.get("email", "")),
+            credits=body.credits,
+            amount_paise=TOPUP_PRICES_INR[body.credits],
+        ))
         return {
             "success": True,
             "credits_added": body.credits,
@@ -13507,11 +13620,19 @@ async def admin_analytics_daily(
 # ─────────────────────────────────────────────
 @api.get("/admin/ga4/status")
 async def ga4_status(admin: dict = Depends(get_admin_user)):
-    connected = bool(os.getenv("GA4_REFRESH_TOKEN"))
-    property_id = os.getenv("GA4_PROPERTY_ID", "")
+    token_env = os.getenv("GA4_REFRESH_TOKEN", "")
+    # Also check db.api_config in case token was persisted there
+    token_db = ""
+    try:
+        cfg = await db.api_config.find_one({}, {"ga4": 1})
+        token_db = (cfg or {}).get("ga4", {}).get("refresh_token", "")
+    except Exception:
+        pass
+    connected = bool(token_env or token_db)
     return {
         "connected": connected,
-        "property_id": property_id,
+        "token_source": "env" if token_env else ("db" if token_db else "none"),
+        "property_id": os.getenv("GA4_PROPERTY_ID", ""),
         "client_id_set": bool(os.getenv("GOOGLE_OAUTH_CLIENT_ID")),
         "client_secret_set": bool(os.getenv("GOOGLE_CLIENT_SECRET")),
     }
@@ -13533,12 +13654,14 @@ async def ga4_connect(
     if not tokens or "refresh_token" not in tokens:
         raise HTTPException(status_code=400, detail="Failed to exchange code — ensure you selected the correct Google account with GA4 access and that you clicked 'Allow'.")
     refresh_token = tokens["refresh_token"]
-    # Store in env for current process
+    # Persist to MongoDB so it survives process restarts
+    await db.api_config.update_one({}, {"$set": {"ga4.refresh_token": refresh_token}}, upsert=True)
+    # Also update current process env so GA4 works immediately without restart
     os.environ["GA4_REFRESH_TOKEN"] = refresh_token
+    logger.info("GA4 refresh token stored in db.api_config and os.environ")
     return {
         "status": "connected",
-        "refresh_token": refresh_token,
-        "message": "Copy the refresh_token value and add it as GA4_REFRESH_TOKEN in Replit Secrets to persist across restarts.",
+        "message": "GA4 connected. Token persisted to database — no Replit Secret needed.",
     }
 
 

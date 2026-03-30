@@ -11,29 +11,35 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-GA4_PROPERTY_ID = os.getenv("GA4_PROPERTY_ID", "")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
-GA4_REFRESH_TOKEN = os.getenv("GA4_REFRESH_TOKEN", "")
+def _cfg():
+    """Read GA4 credentials from environment at call time (never cached at module level)."""
+    return {
+        "property_id":    os.getenv("GA4_PROPERTY_ID", ""),
+        "client_id":      os.getenv("GOOGLE_OAUTH_CLIENT_ID", ""),
+        "client_secret":  os.getenv("GOOGLE_CLIENT_SECRET", ""),
+        "refresh_token":  os.getenv("GA4_REFRESH_TOKEN", ""),
+    }
 
 
 def _is_configured() -> bool:
-    return bool(GA4_PROPERTY_ID and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and GA4_REFRESH_TOKEN)
+    c = _cfg()
+    return bool(c["property_id"] and c["client_id"] and c["client_secret"] and c["refresh_token"])
 
 
 async def _get_access_token() -> Optional[str]:
-    """Exchange refresh token for access token."""
-    if not GA4_REFRESH_TOKEN:
+    """Exchange refresh token for an access token."""
+    c = _cfg()
+    if not c["refresh_token"]:
         return None
     try:
         import httpx
         r = await httpx.AsyncClient().post(
             "https://oauth2.googleapis.com/token",
             data={
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "refresh_token": GA4_REFRESH_TOKEN,
-                "grant_type": "refresh_token",
+                "client_id":     c["client_id"],
+                "client_secret": c["client_secret"],
+                "refresh_token": c["refresh_token"],
+                "grant_type":    "refresh_token",
             },
             timeout=10,
         )
@@ -63,7 +69,7 @@ async def run_report(dimensions: list, metrics: list,
         }
         if order_bys:
             body["orderBys"] = order_bys
-        url = f"https://analyticsdata.googleapis.com/v1beta/properties/{GA4_PROPERTY_ID}:runReport"
+        url = f"https://analyticsdata.googleapis.com/v1beta/properties/{_cfg()['property_id']}:runReport"
         r = await httpx.AsyncClient().post(url, json=body,
             headers={"Authorization": f"Bearer {token}"}, timeout=15)
         r.raise_for_status()
@@ -189,8 +195,9 @@ async def get_top_referrers_ga4(limit: int = 15) -> Optional[list]:
 def get_oauth_url(redirect_uri: str) -> str:
     """Generate the GA4 OAuth consent URL."""
     from urllib.parse import urlencode
+    c = _cfg()
     params = {
-        "client_id": GOOGLE_CLIENT_ID,
+        "client_id": c["client_id"],
         "redirect_uri": redirect_uri,
         "response_type": "code",
         "scope": "https://www.googleapis.com/auth/analytics.readonly",
@@ -202,16 +209,17 @@ def get_oauth_url(redirect_uri: str) -> str:
 
 async def exchange_code_for_tokens(code: str, redirect_uri: str) -> Optional[dict]:
     """Exchange OAuth code for access + refresh tokens."""
+    c = _cfg()
     try:
         import httpx
         r = await httpx.AsyncClient().post(
             "https://oauth2.googleapis.com/token",
             data={
-                "client_id": GOOGLE_CLIENT_ID,
-                "client_secret": GOOGLE_CLIENT_SECRET,
-                "redirect_uri": redirect_uri,
-                "code": code,
-                "grant_type": "authorization_code",
+                "client_id":     c["client_id"],
+                "client_secret": c["client_secret"],
+                "redirect_uri":  redirect_uri,
+                "code":          code,
+                "grant_type":    "authorization_code",
             },
             timeout=15,
         )
