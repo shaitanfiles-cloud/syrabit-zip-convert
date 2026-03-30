@@ -8301,11 +8301,18 @@ async def admin_generate_subject_notes_bulk(subject_id: str, admin: dict = Depen
         if not title:
             results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
             continue
-        if not description and not topics:
-            results.append({"chapter_id": chapter_id, "title": title, "status": "skipped", "reason": "no description or topics"})
-            continue
 
-        topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else f"  {description}"
+        # Build topic block — prefer topics list > description > existing content
+        existing_content = (chapter.get("content") or "").strip()
+        if topics:
+            topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
+        elif description:
+            topic_block = f"  {description}"
+        elif existing_content:
+            topic_block = existing_content[:400]
+        else:
+            results.append({"chapter_id": chapter_id, "title": title, "status": "skipped", "reason": "no description, topics, or content"})
+            continue
 
         prompt = f"""You are an expert academic content writer for Indian university degree students (NEP/FYUGP curriculum).
 
@@ -8504,6 +8511,145 @@ async def admin_generate_flashcards_bulk(subject_id: str, admin: dict = Depends(
         "generated": ok_count,
         "total_flashcards": total_flashcards,
         "results": results,
+    }
+
+
+@api.post("/admin/subjects/{subject_id}/generate-pyqs-bulk")
+async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """
+    AI-generate lesson-wise Previous Year Questions for all chapters of a subject.
+    Each question carries a plausible exam-year tag ([YEAR]).
+    Upserts into ai_pyq_collections. Returns per-chapter results.
+    """
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).sort("order_index", 1).to_list(100)
+
+    if not chapters:
+        return {"subject_id": subject_id, "results": [], "total": 0, "generated": 0, "total_pyqs": 0}
+
+    subject_name = subject.get("name", "")
+    class_name   = subject.get("className", "")
+    paper_type   = (subject.get("paper_type") or "").upper()
+    now_iso      = datetime.now(timezone.utc).isoformat()
+
+    import random
+    YEAR_POOL = list(range(2015, 2024))   # 2015-2023
+
+    results = []
+    for chapter in chapters:
+        chapter_id    = chapter.get("id", "")
+        chapter_title = (chapter.get("title") or "").strip()
+        description   = (chapter.get("description") or "").strip()
+        topics        = chapter.get("topics") or []
+        content       = (chapter.get("content") or "").strip()
+
+        if not chapter_title:
+            results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
+            continue
+
+        topic_block = ""
+        if topics:
+            topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
+        elif description:
+            topic_block = f"  {description}"
+        elif content:
+            topic_block = content[:400]
+        else:
+            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "skipped", "reason": "no content or topics"})
+            continue
+
+        prompt = f"""You are an expert question-paper setter for {subject_name} ({paper_type} — {class_name or "Degree"}) for AHSEC/Gauhati University exams.
+
+Generate **12 Previous Year Questions** for the chapter below. These must look exactly like questions from real AHSEC/GU exam papers (2015-2023).
+
+**Chapter:** {chapter_title}
+**Subject:** {subject_name}
+**Topics:**
+{topic_block}
+
+**Rules:**
+- Mix question types: Define, Explain, Distinguish, Short Note, Long Answer, List.
+- Mix marks: 2-mark (short), 5-mark (medium), 10-mark (long essay).
+- Assign a realistic exam year tag [YEAR] (pick from 2015-2023, vary them).
+- Return a JSON array of objects with keys: question, type, marks (integer), year (integer), answer (model answer ≤80 words for 2-mark, ≤200 words for 5-mark, ≤350 words for 10-mark).
+- No duplicate questions. No preamble. Output pure JSON array only."""
+
+        try:
+            raw = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+            if not raw or len(raw.strip()) < 20:
+                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "empty response"})
+                continue
+
+            # Parse JSON from response
+            import re as _re
+            json_match = _re.search(r'\[[\s\S]*\]', raw)
+            if not json_match:
+                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "no JSON array in response"})
+                continue
+
+            pyqs = json.loads(json_match.group())
+            if not isinstance(pyqs, list) or len(pyqs) == 0:
+                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "empty JSON array"})
+                continue
+
+            # Normalise & validate each item
+            cleaned = []
+            for q in pyqs:
+                if not isinstance(q, dict) or not q.get("question"):
+                    continue
+                year_val = q.get("year")
+                if not isinstance(year_val, int) or year_val < 2010 or year_val > 2024:
+                    year_val = random.choice(YEAR_POOL)
+                cleaned.append({
+                    "question": str(q.get("question", "")).strip(),
+                    "type":     str(q.get("type", "Short Answer")).strip(),
+                    "marks":    int(q.get("marks", 5)),
+                    "year":     year_val,
+                    "answer":   str(q.get("answer", "")).strip(),
+                })
+
+            if not cleaned:
+                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "no valid questions parsed"})
+                continue
+
+            pyq_doc = {
+                "id":             str(uuid.uuid4()),
+                "subject_id":     subject_id,
+                "subject_name":   subject_name,
+                "chapter_id":     chapter_id,
+                "chapter_title":  chapter_title,
+                "pyqs":           cleaned,
+                "total":          len(cleaned),
+                "ai_generated":   True,
+                "created_at":     now_iso,
+                "updated_at":     now_iso,
+            }
+            await db.ai_pyq_collections.update_one(
+                {"chapter_id": chapter_id, "ai_generated": True},
+                {"$set": pyq_doc},
+                upsert=True,
+            )
+            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "ok", "count": len(cleaned)})
+
+        except (json.JSONDecodeError, ValueError) as parse_err:
+            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": f"parse error: {str(parse_err)[:60]}"})
+        except Exception as e:
+            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": str(e)[:80]})
+
+    ok_count   = sum(1 for r in results if r.get("status") == "ok")
+    total_pyqs = sum(r.get("count", 0) for r in results)
+    return {
+        "subject_id":   subject_id,
+        "subject_name": subject_name,
+        "total":        len(chapters),
+        "generated":    ok_count,
+        "total_pyqs":   total_pyqs,
+        "results":      results,
     }
 
 

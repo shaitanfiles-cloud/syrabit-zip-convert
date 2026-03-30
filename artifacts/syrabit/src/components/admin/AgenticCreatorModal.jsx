@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  X, Sparkles, BookOpen, HelpCircle, Layers, CheckCircle2,
-  AlertCircle, Loader2, Zap, ChevronRight, Bot, TerminalSquare,
-  ArrowRight,
+  X, Sparkles, BookOpen, FileQuestion, Layers, CheckCircle2,
+  AlertCircle, Loader2, Zap, Bot, TerminalSquare,
+  ArrowRight, CalendarDays,
 } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -28,16 +28,16 @@ const STEPS = [
     outputLabel: (data) => `${data.generated} chapters`,
   },
   {
-    key: 'mcqs',
-    label: 'MCQ Bank',
-    icon: HelpCircle,
+    key: 'pyqs',
+    label: 'Previous Year Questions',
+    icon: CalendarDays,
     color: '#f59e0b',
     bg: 'rgba(245,158,11,0.12)',
-    description: '20 exam-pattern MCQs per chapter with explanations',
+    description: '12 exam-pattern PYQs per chapter with year tags [2015–2023]',
     unit: 'questions',
-    endpoint: (id) => `/admin/subjects/${id}/generate-mcqs-bulk`,
-    countKey: 'total_mcqs',
-    outputLabel: (data) => `${data.total_mcqs} MCQs`,
+    endpoint: (id) => `/admin/subjects/${id}/generate-pyqs-bulk`,
+    countKey: 'total_pyqs',
+    outputLabel: (data) => `${data.total_pyqs} PYQs`,
   },
   {
     key: 'flashcards',
@@ -59,8 +59,8 @@ export default function AgenticCreatorModal({
   adminToken, subjectId, subjectName, chapterCount, onClose, onComplete,
 }) {
   const [phase, setPhase]             = useState('plan');
-  const [enabled, setEnabled]         = useState(new Set(['notes', 'mcqs', 'flashcards']));
-  const [stepStates, setStepStates]   = useState({ notes: STATE.idle, mcqs: STATE.idle, flashcards: STATE.idle });
+  const [enabled, setEnabled]         = useState(new Set(['notes', 'pyqs', 'flashcards']));
+  const [stepStates, setStepStates]   = useState({ notes: STATE.idle, pyqs: STATE.idle, flashcards: STATE.idle });
   const [stepResults, setStepResults] = useState({});
   const [log, setLog]                 = useState([]);
   const [currentStep, setCurrentStep] = useState(null);
@@ -133,9 +133,9 @@ export default function AgenticCreatorModal({
     onComplete?.();
   };
 
-  const allDone  = phase === 'done';
-  const totalNotes      = stepResults.notes?.generated || 0;
-  const totalMcqs       = stepResults.mcqs?.total_mcqs || 0;
+  const allDone        = phase === 'done';
+  const totalNotes     = stepResults.notes?.generated || 0;
+  const totalPyqs      = stepResults.pyqs?.total_pyqs || 0;
   const totalFlashcards = stepResults.flashcards?.total_flashcards || 0;
 
   return (
@@ -209,7 +209,13 @@ export default function AgenticCreatorModal({
                             <span className="text-sm font-semibold" style={{ color: on ? '#e8e8e8' : 'rgba(255,255,255,0.40)' }}>
                               Step {i + 1} — {step.label}
                             </span>
-                            {i > 0 && (
+                            {step.key === 'pyqs' && (
+                              <span className="text-[10px] px-1.5 py-0.5 rounded-full"
+                                style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
+                                with year tags
+                              </span>
+                            )}
+                            {step.key === 'flashcards' && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full"
                                 style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.30)' }}>
                                 uses notes
@@ -241,8 +247,8 @@ export default function AgenticCreatorModal({
                   {enabled.has('notes') && (
                     <span className="font-mono" style={{ color: '#8b5cf6' }}>{chapterCount} notes</span>
                   )}
-                  {enabled.has('mcqs') && (
-                    <span className="font-mono" style={{ color: '#f59e0b' }}>{chapterCount * 20} MCQs</span>
+                  {enabled.has('pyqs') && (
+                    <span className="font-mono" style={{ color: '#f59e0b' }}>{chapterCount * 12} PYQs</span>
                   )}
                   {enabled.has('flashcards') && (
                     <span className="font-mono" style={{ color: '#10b981' }}>{chapterCount * 25} flashcards</span>
@@ -338,10 +344,10 @@ export default function AgenticCreatorModal({
                       <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>chapters<br />with notes</p>
                     </div>
                   )}
-                  {enabled.has('mcqs') && (
+                  {enabled.has('pyqs') && (
                     <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.20)' }}>
-                      <p className="text-xl font-bold" style={{ color: '#fbbf24' }}>{totalMcqs}</p>
-                      <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>MCQs<br />generated</p>
+                      <p className="text-xl font-bold" style={{ color: '#fbbf24' }}>{totalPyqs}</p>
+                      <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>PYQs<br />generated</p>
                     </div>
                   )}
                   {enabled.has('flashcards') && (

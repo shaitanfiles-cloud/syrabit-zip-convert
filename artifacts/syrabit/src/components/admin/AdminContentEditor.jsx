@@ -1445,9 +1445,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
           onClose={() => setShowAgenticCreator(false)}
           onComplete={() => {
             toast.success('Agentic generation complete — refreshing chapters…');
-            axios.get(`${API}/content/chapters?subject_id=${selSubject}`, authHeaders(adminToken))
-              .then(r => { if (r.data?.chapters) setChapters(r.data.chapters); })
-              .catch(() => {});
+            refreshChapters(selSubject);
           }}
         />
       )}
