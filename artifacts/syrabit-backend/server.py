@@ -819,6 +819,7 @@ async def lifespan(app):
         asyncio.create_task(_seed_syllabus_embeddings())
 
     asyncio.create_task(_load_ga4_from_db())
+    asyncio.create_task(_exam_reminder_loop())
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
@@ -10232,6 +10233,153 @@ async def push_unsubscribe(data: dict, user: dict = Depends(get_current_user)):
     endpoint = (data or {}).get("endpoint", "")
     if endpoint:
         await db.push_subscriptions.delete_one({"endpoint": endpoint, "user_id": str(user["id"])})
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────
+# EXAM REMINDER LOOP + ADMIN SCHEDULE
+# ─────────────────────────────────────────────
+
+async def _exam_reminder_loop():
+    """
+    Runs every 6 hours. Queries db.exam_schedule for exams 1 day, 3 days, or
+    on the date of the exam (IST), then dispatches push notifications.
+    Wakes every 6 hours so it never misses a window even after restart.
+    """
+    import zoneinfo
+    from datetime import timedelta as _td
+    IST = zoneinfo.ZoneInfo("Asia/Kolkata")
+    await asyncio.sleep(30)   # let startup settle
+    while True:
+        try:
+            now_ist   = datetime.now(IST)
+            today_str = now_ist.date().isoformat()
+
+            targets = {
+                "today":      today_str,
+                "1_day_away": (now_ist.date() + _td(days=1)).isoformat(),
+                "3_day_away": (now_ist.date() + _td(days=3)).isoformat(),
+            }
+
+            exams = await db.exam_schedule.find(
+                {"exam_date": {"$in": list(targets.values())}, "active": True},
+                {"_id": 1, "board": 1, "class_name": 1, "subject": 1, "exam_date": 1, "notified_for": 1}
+            ).to_list(200)
+
+            for exam in exams:
+                eid      = str(exam["_id"])
+                board    = exam.get("board", "")
+                subject  = exam.get("subject", "")
+                klass    = exam.get("class_name", "")
+                edate    = exam.get("exam_date", "")
+                notified = set(exam.get("notified_for", []))
+
+                trigger = None
+                for label, dstr in targets.items():
+                    if dstr == edate and label not in notified:
+                        trigger = label
+                        break
+
+                if trigger is None:
+                    continue
+
+                if trigger == "today":
+                    title = f"📋 {subject} exam is TODAY"
+                    body  = f"{board} Class {klass} — Best of luck! You've got this."
+                elif trigger == "1_day_away":
+                    title = f"⏰ {subject} exam tomorrow"
+                    body  = f"{board} Class {klass} — Quick revision time!"
+                else:
+                    title = f"📅 {subject} exam in 3 days"
+                    body  = f"{board} Class {klass} — Keep revising!"
+
+                asyncio.create_task(_dispatch_push_to_all({
+                    "title": title,
+                    "body":  body,
+                    "icon":  "/icons/icon-192.png",
+                    "url":   "/library",
+                    "tag":   f"exam-{eid}-{trigger}",
+                }))
+                logger.info(f"Exam reminder dispatched: {subject} ({trigger})")
+
+                await db.exam_schedule.update_one(
+                    {"_id": exam["_id"]},
+                    {"$addToSet": {"notified_for": trigger}}
+                )
+
+        except Exception as exc:
+            logger.error(f"Exam reminder loop error: {exc}")
+
+        await asyncio.sleep(6 * 3600)   # check every 6 hours
+
+
+@api.get("/admin/exam-schedule")
+async def admin_exam_schedule_list(admin: dict = Depends(get_admin_user)):
+    """List all exam dates in the schedule."""
+    items = await db.exam_schedule.find(
+        {}, {"_id": 1, "board": 1, "class_name": 1, "subject": 1, "exam_date": 1, "active": 1, "notified_for": 1, "created_at": 1}
+    ).sort("exam_date", 1).to_list(500)
+    for i in items:
+        i["id"] = str(i.pop("_id"))
+    return {"exams": items}
+
+
+@api.post("/admin/exam-schedule")
+async def admin_exam_schedule_add(data: dict, admin: dict = Depends(get_admin_user)):
+    """Add an exam date. Body: { board, class_name, subject, exam_date (YYYY-MM-DD) }"""
+    board   = (data.get("board") or "").strip()
+    klass   = (data.get("class_name") or "").strip()
+    subject = (data.get("subject") or "").strip()
+    edate   = (data.get("exam_date") or "").strip()
+    if not all([board, klass, subject, edate]):
+        raise HTTPException(400, "board, class_name, subject, and exam_date are required")
+    try:
+        datetime.strptime(edate, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "exam_date must be YYYY-MM-DD")
+    doc = {
+        "board":        board,
+        "class_name":   klass,
+        "subject":      subject,
+        "exam_date":    edate,
+        "active":       data.get("active", True),
+        "notified_for": [],
+        "created_at":   datetime.now(timezone.utc).isoformat(),
+    }
+    result = await db.exam_schedule.insert_one(doc)
+    return {"id": str(result.inserted_id), "message": "Exam date added"}
+
+
+@api.delete("/admin/exam-schedule/{exam_id}")
+async def admin_exam_schedule_delete(exam_id: str, admin: dict = Depends(get_admin_user)):
+    """Delete an exam date entry."""
+    from bson import ObjectId as _ObjId
+    try:
+        oid = _ObjId(exam_id)
+    except Exception:
+        raise HTTPException(400, "Invalid exam_id")
+    result = await db.exam_schedule.delete_one({"_id": oid})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Exam not found")
+    return {"ok": True}
+
+
+@api.patch("/admin/exam-schedule/{exam_id}")
+async def admin_exam_schedule_toggle(exam_id: str, data: dict, admin: dict = Depends(get_admin_user)):
+    """Toggle active flag or reset notification history for an exam entry."""
+    from bson import ObjectId as _ObjId
+    try:
+        oid = _ObjId(exam_id)
+    except Exception:
+        raise HTTPException(400, "Invalid exam_id")
+    update = {}
+    if "active" in data:
+        update["active"] = bool(data["active"])
+    if data.get("reset_notifications"):
+        update["notified_for"] = []
+    if not update:
+        raise HTTPException(400, "Nothing to update")
+    await db.exam_schedule.update_one({"_id": oid}, {"$set": update})
     return {"ok": True}
 
 

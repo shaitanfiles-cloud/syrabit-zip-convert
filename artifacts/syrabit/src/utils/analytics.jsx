@@ -127,6 +127,7 @@ export const Analytics = {
 
   chatMessage: (ragSource, creditsRemaining, model) => {
     track('chat_message_sent', { rag_source: ragSource, credits_remaining: creditsRemaining, model });
+    trackGA4('chat_message_sent', { rag_source: ragSource, model, credits_remaining: creditsRemaining });
   },
 
   chatCreditsExhausted: () => {
