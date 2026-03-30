@@ -25,6 +25,56 @@ import SharedMdxEditor from './SharedMdxEditor';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
+function SerpPreview({ title, slug, metaDescription }) {
+  return (
+    <div className="rounded-xl p-4" style={{ background: '#ffffff' }}>
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)' }} />
+        <div className="min-w-0">
+          <p className="text-xs font-medium" style={{ color: '#202124' }}>syrabit.ai</p>
+          <p className="text-[10px] truncate" style={{ color: '#4d5156' }}>https://syrabit.ai/{slug || 'your-slug'}</p>
+        </div>
+      </div>
+      <p className="text-base leading-tight mb-1" style={{ color: '#1a0dab', fontFamily: 'arial,sans-serif' }}>
+        {title ? `${title} | Syrabit.ai` : 'Your Page Title — Syrabit.ai'}
+      </p>
+      <p className="text-sm leading-snug" style={{ color: '#4d5156', fontFamily: 'arial,sans-serif' }}>
+        {metaDescription
+          ? (metaDescription.length > 160 ? metaDescription.slice(0, 157) + '…' : metaDescription)
+          : 'Your meta description will appear here. Write 120–160 characters for best click-through.'}
+      </p>
+    </div>
+  );
+}
+
+function PerplexityPreview({ title, slug, metaDescription }) {
+  return (
+    <div className="rounded-xl p-4" style={{ background: '#0d1117', border: '1px solid rgba(139,92,246,0.25)' }}>
+      <div className="flex items-start gap-3">
+        <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
+          <Sparkles size={11} className="text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-semibold mb-1" style={{ color: '#e2e8f0' }}>
+            {title || 'Your page title as the AI answer heading'}
+          </p>
+          <p className="text-[11px] leading-relaxed mb-2" style={{ color: '#94a3b8' }}>
+            {metaDescription || 'Your meta description appears as the AI-generated excerpt. Perplexity cites pages with clear educational intent and AHSEC-aligned content.'}
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px]" style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa' }}>
+              <Globe size={9} /> syrabit.ai/{slug || 'slug'}
+            </div>
+          </div>
+        </div>
+        <div className="flex-shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.20)', color: '#a78bfa' }}>
+          [1]
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function authHeaders(token) {
   const isRealJwt = token && token.split('.').length === 3;
   return { headers: isRealJwt ? { Authorization: `Bearer ${token}` } : {}, withCredentials: true };
@@ -1459,6 +1509,29 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
               style={{ opacity: 0.6, cursor: 'default' }} />
           </div>
         )}
+      </div>
+
+      {/* ── SERP & Perplexity Previews ────────────────────────────────── */}
+      <div className="mt-6 space-y-3">
+        <p className="text-xs font-semibold text-white/40 uppercase tracking-wider">Live Previews</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <p className="text-[10px] text-white/30 mb-1.5 font-medium">Google SERP</p>
+            <SerpPreview
+              title={state.seoTitle}
+              slug={state.seoSlug}
+              metaDescription={state.metaDescription}
+            />
+          </div>
+          <div>
+            <p className="text-[10px] text-white/30 mb-1.5 font-medium">Perplexity / AI Overview</p>
+            <PerplexityPreview
+              title={state.seoTitle}
+              slug={state.seoSlug}
+              metaDescription={state.metaDescription}
+            />
+          </div>
+        </div>
       </div>
 
       <div className="mt-6 flex items-center justify-between">

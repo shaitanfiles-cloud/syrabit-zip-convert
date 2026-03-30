@@ -306,7 +306,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
   const quickActions = [
     { id: 'users',     label: 'View Users',     icon: Users,    color: 'from-violet-600 to-violet-500' },
-    { id: 'studio',    label: 'Content Studio',  icon: PenTool,  color: 'from-blue-600 to-blue-500'    },
+    { id: 'content',   label: 'Content Hub',    icon: PenTool,  color: 'from-blue-600 to-blue-500'    },
     { id: 'analytics', label: 'Analytics',       icon: BarChart2, color: 'from-emerald-600 to-emerald-500' },
     { id: 'monetization', label: 'Monetization', icon: Crown,    color: 'from-amber-600 to-amber-500'  },
   ];

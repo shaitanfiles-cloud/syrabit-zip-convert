@@ -1130,31 +1130,6 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                         {onNavigate && (
                           <>
                             <button
-                              onClick={() => {
-                                const sub = subjectData;
-                                const ch  = editTarget ? chapters.find(c => c.id === editTarget) : null;
-                                try {
-                                  localStorage.setItem('syrabit_studio_prefill', JSON.stringify({
-                                    subject:    sub?.name || '',
-                                    subjectId:  selSubject,
-                                    boardId:    selBoard  || '',
-                                    classId:    selClass  || '',
-                                    streamId:   selStream || '',
-                                    chapter:    ch?.title || contentForm.title || '',
-                                    rawText:    contentForm.content || '',
-                                    timestamp:  Date.now(),
-                                  }));
-                                } catch {}
-                                onNavigate('studio');
-                              }}
-                              disabled={!selSubject}
-                              className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
-                              style={{ background: 'rgba(244,63,94,0.15)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.30)' }}
-                              title={!selSubject ? 'Select a subject first' : contentForm.content.trim() ? 'Send chapter content to AI Studio' : 'Open AI Studio for this subject (add raw text there)'}
-                            >
-                              <Sparkles size={11} /> Send to AI Studio
-                            </button>
-                            <button
                               onClick={handleGenerateSeoTopics}
                               disabled={!selSubject || generatingSeoTopics || chapters.length === 0}
                               className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"

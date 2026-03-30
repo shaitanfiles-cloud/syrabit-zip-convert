@@ -1,21 +1,18 @@
 /**
  * AdminContentHub — Centralized content workflow
- * Tabs: Syllabus → Content Editor → AI Studio → CMS/Docs → Blog Publisher
+ * Tabs: Syllabus → Content Editor → CMS/Docs → Blog Publisher
  *
  * Shared hubContext propagates Board/Class/Stream/Subject selection across
  * all tabs so the user never has to re-pick the same hierarchy.
  *
  * Cross-tab wiring:
  *   Syllabus  →  Editor  : hubContext + onNavigate('editor')
- *   Syllabus  →  Studio  : hubContext + onNavigate('studio')
- *   Editor    →  Studio  : localStorage(syrabit_studio_prefill) + onNavigate('studio')
  *   Editor    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')
- *   Studio    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')
  *   CMS       →  Editor  : localStorage(syrabit_content_prefill)+ onNavigate('editor')
  */
 import { useState, useEffect, useCallback } from 'react';
 import {
-  FolderTree, PenTool, Sparkles, FileText, ArrowRight,
+  FolderTree, PenTool, FileText, ArrowRight,
   Loader2, Globe, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -24,7 +21,6 @@ import axios from 'axios';
 import AdminSyllabusManager  from './AdminSyllabusManager';
 import AdminContentEditor    from './AdminContentEditor';
 import AdminCmsDocEditor     from './AdminCmsDocEditor';
-import AdminContentStudio    from './AdminContentStudio';
 import BlogPublishWizard     from './BlogPublishWizard';
 import PipelineProgressPanel from './PipelineProgressPanel';
 
@@ -33,7 +29,6 @@ const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 const TABS = [
   { id: 'syllabus', label: 'Syllabus',        icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
   { id: 'editor',   label: 'Content Editor',  icon: PenTool,     color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
-  { id: 'studio',   label: 'AI Studio',       icon: Sparkles,    color: 'rose',    desc: 'Generate structured content blocks with AI' },
   { id: 'cms',      label: 'CMS / Docs',      icon: FileText,    color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
   { id: 'blog',     label: 'Blog Publisher',  icon: Globe,       color: 'sky',     desc: 'SEO & GEO-rich 5-step blog publish wizard' },
 ];
@@ -41,7 +36,6 @@ const TABS = [
 const FLOW = [
   { label: 'Syllabus',      sub: 'Import structure',   tab: 'syllabus', arrow: true  },
   { label: 'Editor',        sub: 'Write content',      tab: 'editor',   arrow: true  },
-  { label: 'AI Studio',     sub: 'Generate & enrich',  tab: 'studio',   arrow: true  },
   { label: 'Blog Publisher', sub: 'SEO & publish',     tab: 'blog',     arrow: false },
 ];
 
@@ -77,7 +71,7 @@ function loadPersistedCtx() {
   } catch { return EMPTY_CTX; }
 }
 
-const INTERNAL_TABS = new Set(['editor', 'syllabus', 'studio', 'cms', 'blog']);
+const INTERNAL_TABS = new Set(['editor', 'syllabus', 'cms', 'blog']);
 
 export default function AdminContentHub({ adminToken, onNavigate: topNavigate }) {
   const [activeTab, setActiveTab] = useState('syllabus');
@@ -243,17 +237,6 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate })
           </div>
         )}
 
-        {activeTab === 'studio' && (
-          <div className="h-full overflow-y-auto">
-            <AdminContentStudio
-              adminToken={adminToken}
-              onNavigate={navigate}
-              hubContext={hubContext}
-              onHubContext={setHubContext}
-            />
-          </div>
-        )}
-
         {activeTab === 'cms' && (
           <div className="h-full overflow-hidden">
             <AdminCmsDocEditor
@@ -307,14 +290,14 @@ function SyllabusTabHeader({ onNavigate, hubContext }) {
         {hubContext?.subjectName && (
           <>
             <QuickActionBtn
-              label="Write Content"
+              label="Content Editor"
               color="#8b5cf6"
               onClick={() => onNavigate('editor')}
             />
             <QuickActionBtn
-              label="Generate AI"
-              color="#f43f5e"
-              onClick={() => onNavigate('studio')}
+              label="Blog Publisher"
+              color="#0ea5e9"
+              onClick={() => onNavigate('blog')}
             />
           </>
         )}

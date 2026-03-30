@@ -985,10 +985,10 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
             Upload PYQ →
           </button>
           <button
-            onClick={() => onNavigate('studio')}
+            onClick={() => onNavigate('editor')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
-            style={{ background: 'rgba(244,63,94,0.15)', color: '#fda4af', border: '1px solid rgba(244,63,94,0.30)' }}>
-            Generate AI Content →
+            style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.30)' }}>
+            Content Editor →
           </button>
         </div>
       )}
