@@ -503,15 +503,14 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
             border: '1px solid rgba(139,92,246,0.08)',
           }}
         >
-          {/* Thumbnail background — semi-transparent so links stay readable */}
+          {/* Thumbnail wallpaper — full-bleed with dark gradient overlay */}
           {sub.thumbnailUrl && (
             <div
               className="absolute inset-0 pointer-events-none"
               style={{
-                backgroundImage: `url(${sub.thumbnailUrl})`,
+                backgroundImage: `linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.70) 100%), url(${sub.thumbnailUrl})`,
                 backgroundSize: 'cover',
-                backgroundPosition: 'center top',
-                opacity: 0.13,
+                backgroundPosition: 'center',
                 zIndex: 0,
               }}
             />

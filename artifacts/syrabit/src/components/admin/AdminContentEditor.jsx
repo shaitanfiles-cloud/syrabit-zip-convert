@@ -413,11 +413,17 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const res = await adminSeoExtractTopics(adminToken, selSubject, false);
       const d = res.data || {};
       setSeoTopicsGeneratedIds(prev => new Set([...prev, selSubject]));
+      const topicCount = (d.created || 0) + (d.skipped || 0);
       toast.success(
-        `Created ${d.created || 0} SEO topics for "${subjectName}"` +
-        (d.skipped ? ` · ${d.skipped} already existed` : '') +
-        (d.errors ? ` · ${d.errors} AI errors` : ''),
-        { id: 'seo-extract' }
+        `${topicCount} SEO topics ready for "${subjectName}" — now run Full Pipeline to generate ${topicCount * 5}+ pages`,
+        {
+          id: 'seo-extract',
+          duration: 8000,
+          action: {
+            label: 'Run Full Pipeline →',
+            onClick: () => setShowPipeline(true),
+          },
+        }
       );
       onNavigate?.('seomanager', { subjectId: selSubject, subjectName });
     } catch (e) {

@@ -6,7 +6,8 @@ import { Helmet } from 'react-helmet-async';
 import {
   BookOpen, ChevronRight, Clock, BarChart3, Share2,
   ArrowLeft, List, Loader2, AlertCircle, ExternalLink,
-  Globe, CheckCircle, GraduationCap, Layers,
+  Globe, CheckCircle, GraduationCap, Layers, HelpCircle,
+  FlipHorizontal, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { apiClient } from '@/utils/api';
@@ -111,20 +112,45 @@ function injectHeadingIds(html) {
 export default function LearnPage() {
   const { slug } = useParams();
   const navigate = useNavigate();
-  const [doc, setDoc]       = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]   = useState(null);
-  const [activeId, setActiveId] = useState('');
+  const [doc, setDoc]             = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [error, setError]         = useState(null);
+  const [activeId, setActiveId]   = useState('');
+  const [pyqs, setPyqs]           = useState([]);
+  const [flashcards, setFlashcards] = useState([]);
+  const [showAllPyqs, setShowAllPyqs] = useState(false);
+  const [flippedCards, setFlippedCards] = useState(new Set());
   const articleRef = useRef(null);
 
   useEffect(() => {
     setLoading(true);
     setError(null);
+    setPyqs([]);
+    setFlashcards([]);
+    setShowAllPyqs(false);
+    setFlippedCards(new Set());
     apiClient().get(`/content/cms-documents/${slug}`)
-      .then(r => setDoc(r.data))
+      .then(r => {
+        setDoc(r.data);
+        const chId = r.data?.linked_chapter_id;
+        if (chId) {
+          apiClient().get(`/content/chapters/${chId}/topic-pyqs?limit=20`)
+            .then(pr => setPyqs(pr.data?.pyqs || []))
+            .catch(() => {});
+          apiClient().get(`/content/chapters/${chId}/flashcards?limit=10`)
+            .then(fr => setFlashcards(fr.data?.flashcards || []))
+            .catch(() => {});
+        }
+      })
       .catch(e => setError(e.response?.status === 404 ? 'not-found' : 'error'))
       .finally(() => setLoading(false));
   }, [slug]);
+
+  const toggleFlip = (idx) => setFlippedCards(prev => {
+    const next = new Set(prev);
+    next.has(idx) ? next.delete(idx) : next.add(idx);
+    return next;
+  });
 
   useEffect(() => {
     if (!doc) return;
@@ -354,24 +380,104 @@ export default function LearnPage() {
             <TocSidebar toc={toc} activeId={activeId} />
           </div>
 
-          {/* Syllabus: Lessons Coming Soon */}
-          {doc?.type === 'syllabus' && (
-            <div className="mt-8 rounded-2xl border border-white/10 overflow-hidden">
-              <div className="px-6 py-4 border-b border-white/[0.06] flex items-center gap-2" style={{ background: 'rgba(16,185,129,0.05)' }}>
-                <Layers size={15} className="text-emerald-400" />
-                <span className="text-sm font-semibold text-white">Lesson Content</span>
-                <span className="ml-auto px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/20">Coming Soon</span>
+          {/* Topic PYQs */}
+          {pyqs.length > 0 && (
+            <div className="mt-8 rounded-2xl border border-amber-500/15 overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-amber-500/10 flex items-center gap-2"
+                style={{ background: 'rgba(245,158,11,0.05)' }}>
+                <HelpCircle size={15} className="text-amber-400" />
+                <span className="text-sm font-bold text-white">Topic PYQs</span>
+                <span className="ml-1 text-xs text-white/35">— Previous Year Questions</span>
+                <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                  style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.25)' }}>
+                  {pyqs.length} questions
+                </span>
               </div>
-              <div className="px-6 py-8 text-center" style={{ background: 'rgba(255,255,255,0.015)' }}>
-                <GraduationCap size={32} className="mx-auto text-white/10 mb-3" />
-                <p className="text-white/50 text-sm mb-1">Detailed lesson content is being prepared for each chapter.</p>
-                <p className="text-white/30 text-xs">Each chapter will have full explanations, examples, and practice questions.</p>
-                <Link
-                  to="/chat"
-                  className="inline-flex items-center gap-2 mt-5 h-9 px-4 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 text-sm font-medium transition-colors border border-emerald-500/20"
-                >
-                  <BookOpen size={13} /> Ask AI about this subject now
-                </Link>
+              <div style={{ background: 'rgba(255,255,255,0.012)' }}>
+                {(showAllPyqs ? pyqs : pyqs.slice(0, 5)).map((q, i) => (
+                  <div key={q.id || i}
+                    className="px-5 py-4 border-b last:border-0"
+                    style={{ borderColor: 'rgba(245,158,11,0.07)' }}>
+                    <div className="flex items-start gap-3">
+                      <span className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold mt-0.5"
+                        style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-white/85 leading-relaxed mb-2">{q.question}</p>
+                        {q.answer && (
+                          <div className="rounded-lg px-3 py-2.5 text-sm text-white/55 leading-relaxed"
+                            style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.10)' }}>
+                            {q.answer}
+                          </div>
+                        )}
+                        {q.marks && (
+                          <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 rounded"
+                            style={{ background: 'rgba(245,158,11,0.10)', color: '#fcd34d' }}>
+                            {q.marks} marks
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {pyqs.length > 5 && (
+                  <button
+                    onClick={() => setShowAllPyqs(v => !v)}
+                    className="w-full py-3 flex items-center justify-center gap-1.5 text-xs font-medium text-amber-400/70 hover:text-amber-300 transition-colors"
+                    style={{ background: 'rgba(245,158,11,0.04)', borderTop: '1px solid rgba(245,158,11,0.07)' }}
+                  >
+                    {showAllPyqs
+                      ? <><ChevronUp size={13} /> Show less</>
+                      : <><ChevronDown size={13} /> Show all {pyqs.length} questions</>}
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Flashcards */}
+          {flashcards.length > 0 && (
+            <div className="mt-6 rounded-2xl border border-emerald-500/15 overflow-hidden">
+              <div className="px-5 py-3.5 border-b border-emerald-500/10 flex items-center gap-2"
+                style={{ background: 'rgba(16,185,129,0.05)' }}>
+                <FlipHorizontal size={15} className="text-emerald-400" />
+                <span className="text-sm font-bold text-white">Revision Flashcards</span>
+                <span className="ml-1 text-xs text-white/35">— tap to flip</span>
+                <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                  style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>
+                  {flashcards.length} cards
+                </span>
+              </div>
+              <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3"
+                style={{ background: 'rgba(255,255,255,0.012)' }}>
+                {flashcards.map((fc, i) => {
+                  const flipped = flippedCards.has(i);
+                  return (
+                    <button
+                      key={fc.id || i}
+                      onClick={() => toggleFlip(i)}
+                      className="text-left rounded-xl p-4 transition-all cursor-pointer select-none"
+                      style={{
+                        background: flipped
+                          ? 'rgba(16,185,129,0.10)'
+                          : 'rgba(255,255,255,0.04)',
+                        border: flipped
+                          ? '1px solid rgba(16,185,129,0.25)'
+                          : '1px solid rgba(255,255,255,0.07)',
+                      }}
+                    >
+                      <div className="text-[10px] font-semibold uppercase tracking-wider mb-1.5"
+                        style={{ color: flipped ? '#6ee7b7' : 'rgba(255,255,255,0.25)' }}>
+                        {flipped ? 'Answer' : 'Question'}
+                      </div>
+                      <p className="text-sm leading-relaxed"
+                        style={{ color: flipped ? '#d1fae5' : 'rgba(255,255,255,0.80)' }}>
+                        {flipped ? (fc.back || fc.answer || '—') : (fc.front || fc.question)}
+                      </p>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
