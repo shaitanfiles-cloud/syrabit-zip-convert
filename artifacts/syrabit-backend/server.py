@@ -12783,6 +12783,7 @@ class StudioPublishRequest(BaseModel):
     slug: str
     blocks: list
     subject_id: str = ""
+    chapter_id: str = ""
     board: str = "ahsec"
     class_slug: str = "class-12"
     subject_slug: str = ""
@@ -12839,6 +12840,12 @@ async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends
         "updated_at": now_iso,
         "source": "studio",
     }
+    # Persist subject_id and chapter_id linkage when provided — required for
+    # SEO topic → chapter cross-linking and AI chat source navigation.
+    if body.subject_id:
+        topic_doc["subject_id"] = body.subject_id
+    if hasattr(body, "chapter_id") and body.chapter_id:
+        topic_doc["chapter_id"] = body.chapter_id
     existing_topic = await db.seo_topics.find_one({"slug": body.slug}, {"_id": 0, "created_at": 1})
     if not existing_topic:
         topic_doc["created_at"] = now_iso
@@ -13709,6 +13716,187 @@ async def admin_automation_auto_generate(admin: dict = Depends(get_admin_user)):
         )
         generated.append({"slug": slug, "title": title, "geo_meta": geo_meta})
     return {"generated": generated, "count": len(generated)}
+
+
+# ─────────────────────────────────────────────
+# CMS SCRAPER STATUS — surfaces scraper blockers
+# GET /admin/cms/scraper-status
+# ─────────────────────────────────────────────
+
+@api.get("/admin/cms/scraper-status")
+async def admin_cms_scraper_status(admin: dict = Depends(get_admin_user)):
+    """
+    Surfaces the status of the personalized CMS scraper pipeline and any blockers.
+    Checks:
+      1. CmsNoIndexMiddleware anti-scraper UA blocklist (python-requests, wget, curl, etc.)
+      2. _cms_request_ctx context-var scraper-prevention flag (no web-search from within CMS)
+      3. Paid-gate enforcement — users on free plan receive 402
+      4. cms_documents collection — total personal plans, recent failures, empty content
+      5. LLM connectivity — new plans fail silently if LLM is down
+    Returns a status summary + prioritised blocker list for the admin Automation panel.
+    """
+    blockers = []
+    stats = {
+        "total_plans": 0,
+        "published_plans": 0,
+        "error_plans": 0,
+        "empty_plans": 0,
+        "paid_users": 0,
+        "free_users": 0,
+        "scraper_status": "ok",
+    }
+
+    # ── Structural/architectural blocker checks (always run, no DB required) ──
+    # 1. CmsNoIndexMiddleware UA blocklist — automated HTTP clients are blocked 403
+    blocked_ua_patterns = [
+        "python-requests", "wget", "curl", "scrapy", "go-http-client",
+        "ahrefsbot", "semrushbot", "gptbot", "claudebot", "perplexitybot",
+        "bingbot", "googlebot", "yandexbot", "duckduckbot",
+    ]
+    blockers.append({
+        "type": "ua_blocklist_active",
+        "message": (
+            "CmsNoIndexMiddleware is ACTIVE on all /api/cms/* routes. "
+            f"The following User-Agent patterns are blocked with 403: {', '.join(blocked_ua_patterns[:6])} (and {len(blocked_ua_patterns)-6} more). "
+            "Any external scraper using these clients will receive 403 Forbidden — use a browser-like UA or authenticated SDK client."
+        ),
+        "severity": "warning",
+        "detail": {
+            "middleware": "CmsNoIndexMiddleware",
+            "path_prefix": "/api/cms/",
+            "blocked_uas": blocked_ua_patterns,
+            "response_headers": ["X-Robots-Tag: noindex, nofollow", "Cache-Control: private, no-store"],
+        },
+    })
+
+    # 2. Context-var web-search prevention — outbound web calls raise 403 from within CMS handlers
+    blockers.append({
+        "type": "cms_request_ctx_guard",
+        "message": (
+            "_cms_request_ctx context variable is set to True for all /api/cms/* requests. "
+            "This structurally prevents outbound web-search/firecrawl calls from executing inside CMS handlers — "
+            "any scraper that relies on web fetching will silently get a 403 from the guard. "
+            "CMS content generation uses only call_slm + MongoDB (no external fetching)."
+        ),
+        "severity": "info",
+        "detail": {
+            "guard_var": "_cms_request_ctx",
+            "effect": "Raises HTTP 403 if any outbound web/scrape call is attempted from CMS handlers",
+        },
+    })
+
+    try:
+        if not await is_mongo_available():
+            blockers.insert(0, {
+                "type": "db_unavailable",
+                "message": "MongoDB unavailable — CMS scraper cannot read/write personalized plans",
+                "severity": "critical",
+            })
+            stats["scraper_status"] = "critical"
+            return {"status": "critical", "blockers": blockers, "stats": stats, "recent_plans": []}
+
+        # Count all personalized plans
+        stats["total_plans"]     = await db.cms_documents.count_documents({"doc_type": "personalized"})
+        stats["published_plans"] = await db.cms_documents.count_documents({"doc_type": "personalized", "status": "published"})
+        stats["error_plans"]     = await db.cms_documents.count_documents({"doc_type": "personalized", "status": "error"})
+
+        # Detect plans with empty/too-short content (generation truncation blocker)
+        sample_plans = await db.cms_documents.find(
+            {"doc_type": "personalized", "status": "published"},
+            {"_id": 0, "id": 1, "title": 1, "user_id": 1, "content": 1, "word_count": 1, "created_at": 1}
+        ).sort("created_at", -1).limit(50).to_list(50)
+
+        for plan in sample_plans:
+            wc = plan.get("word_count") or len((plan.get("content") or "").split())
+            if wc < 50:
+                stats["empty_plans"] += 1
+
+        if stats["error_plans"] > 0:
+            blockers.append({
+                "type": "generation_errors",
+                "message": f"{stats['error_plans']} personalized plan(s) failed during generation (LLM timeout or prompt error). "
+                           "Check recent error documents and verify LLM key health below.",
+                "severity": "high",
+                "count": stats["error_plans"],
+            })
+
+        if stats["empty_plans"] > 0:
+            blockers.append({
+                "type": "empty_content",
+                "message": f"{stats['empty_plans']} published plan(s) have fewer than 50 words — "
+                           "content generation may have been truncated by LLM token limit or rate limit.",
+                "severity": "medium",
+                "count": stats["empty_plans"],
+            })
+
+        # Check paid/free user breakdown — free users get 402 from /cms/personalize
+        try:
+            all_users = await supa_list_users()
+            paid_users = [u for u in all_users if u.get("plan", "free") in {"starter", "pro"}]
+            free_users = [u for u in all_users if u.get("plan", "free") == "free"]
+            stats["paid_users"] = len(paid_users)
+            stats["free_users"] = len(free_users)
+            if len(paid_users) == 0 and stats["total_plans"] > 0:
+                blockers.append({
+                    "type": "no_paid_users",
+                    "message": (
+                        f"Plans exist in DB but 0 users are on Starter/Pro — "
+                        "POST /api/cms/personalize will return 402 for ALL users. "
+                        f"Total users: {len(all_users)}, all on free plan."
+                    ),
+                    "severity": "warning",
+                })
+        except Exception:
+            pass
+
+        # Check LLM connectivity — quick probe (new plan generation fails if LLM is down)
+        llm_ok = True
+        try:
+            test_resp = await call_slm("Say OK", max_tokens=5, temperature=0)
+            if not test_resp or len(test_resp.strip()) == 0:
+                llm_ok = False
+        except Exception:
+            llm_ok = False
+
+        if not llm_ok:
+            blockers.append({
+                "type": "llm_unavailable",
+                "message": "LLM provider (call_slm) is unreachable — new personalized plans will fail at generation step. "
+                           "Existing published plans are still served from MongoDB.",
+                "severity": "critical",
+            })
+
+        # Overall status
+        if any(b["severity"] == "critical" for b in blockers):
+            stats["scraper_status"] = "critical"
+        elif any(b["severity"] == "high" for b in blockers):
+            stats["scraper_status"] = "degraded"
+        elif any(b["severity"] in ("medium", "warning") for b in blockers):
+            stats["scraper_status"] = "warning"
+        else:
+            stats["scraper_status"] = "ok"
+
+        return {
+            "status": stats["scraper_status"],
+            "blockers": blockers,
+            "stats": stats,
+            "recent_plans": [
+                {
+                    "id": p.get("id"), "title": p.get("title"), "user_id": p.get("user_id"),
+                    "word_count": p.get("word_count") or len((p.get("content") or "").split()),
+                    "created_at": p.get("created_at"),
+                }
+                for p in sample_plans[:5]
+            ],
+        }
+
+    except Exception as exc:
+        logger.error(f"admin_cms_scraper_status error: {exc}")
+        return {
+            "status": "error",
+            "blockers": [{"type": "internal_error", "message": str(exc)[:200], "severity": "critical"}],
+            "stats": stats,
+        }
 
 
 # ─────────────────────────────────────────────
@@ -16090,6 +16278,114 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
         return ""
 
 
+async def _pipeline_generate_mark_wise_pyq(
+    content: str, subject_name: str, chapter_title: str, class_name: str, paper_type: str = ""
+) -> dict:
+    """
+    Generate mark-wise important questions (1/2/3/5/10 marks) for a chapter.
+    Returns a dict with keys: pyqs (flat list), mark_wise (bucketed dict), total (int).
+    Stores nothing — caller is responsible for persisting the result.
+    """
+    import re as _re
+    if not content or len(content.strip()) < 100:
+        return {}
+    topic_block = chapter_title
+    prompt = f"""You are an expert exam question setter for {class_name} {subject_name}.
+
+Generate the MOST IMPORTANT exam questions for the chapter below, organised strictly by mark weight.
+These should be high-probability questions a student must prepare.
+
+Chapter: {chapter_title}
+Topics: {topic_block}
+
+Return ONLY valid JSON in this exact schema (no markdown, no explanation):
+{{
+  "1_mark": [
+    {{"question": "...", "type": "MCQ/very_short_answer"}},
+    {{"question": "...", "type": "MCQ/very_short_answer"}},
+    {{"question": "...", "type": "MCQ/very_short_answer"}}
+  ],
+  "2_mark": [
+    {{"question": "...", "type": "short_answer"}},
+    {{"question": "...", "type": "short_answer"}},
+    {{"question": "...", "type": "short_answer"}}
+  ],
+  "3_mark": [
+    {{"question": "...", "type": "brief_answer"}},
+    {{"question": "...", "type": "brief_answer"}},
+    {{"question": "...", "type": "brief_answer"}}
+  ],
+  "5_mark": [
+    {{"question": "...", "type": "medium_answer"}},
+    {{"question": "...", "type": "medium_answer"}},
+    {{"question": "...", "type": "medium_answer"}}
+  ],
+  "10_mark": [
+    {{"question": "...", "type": "long_answer/essay"}},
+    {{"question": "...", "type": "long_answer/essay"}},
+    {{"question": "...", "type": "long_answer/essay"}}
+  ]
+}}
+
+Rules:
+- 1-mark: MCQ options OR one-word/one-line answers
+- 2-mark: short answers (2-3 sentences)
+- 3-mark: brief answers with 3 clear points
+- 5-mark: medium answers with points/explanation
+- 10-mark: detailed essay or long-answer questions
+- Questions must be specific to "{chapter_title}", not generic
+- Exactly 3 questions per mark bucket, total 15 questions
+- Pure JSON only, no markdown fences
+
+Chapter content for context:
+{content[:3000]}"""
+    try:
+        raw_resp = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=1600)
+        if not raw_resp:
+            return {}
+        json_match = _re.search(r'\{[\s\S]*\}', raw_resp)
+        if not json_match:
+            return {}
+        parsed = json.loads(json_match.group())
+        mark_wise = {
+            "1":  parsed.get("1_mark",  []),
+            "2":  parsed.get("2_mark",  []),
+            "3":  parsed.get("3_mark",  []),
+            "5":  parsed.get("5_mark",  []),
+            "10": parsed.get("10_mark", []),
+        }
+        flat_questions = []
+        for marks_str, qs in mark_wise.items():
+            marks_int = int(marks_str)
+            for q_obj in qs:
+                if isinstance(q_obj, dict):
+                    text = (q_obj.get("question") or "").strip()
+                else:
+                    text = str(q_obj).strip()
+                if text:
+                    flat_questions.append({
+                        "question":   text,
+                        "marks":      marks_int,
+                        "type":       q_obj.get("type", "") if isinstance(q_obj, dict) else "",
+                        "year":       0,
+                        "paper_type": paper_type,
+                        "sub_parts":  [],
+                        "source":     "ai_generated",
+                    })
+        if not flat_questions:
+            return {}
+        return {
+            "pyqs": flat_questions,
+            "mark_wise": {k: [
+                (q.get("question", q) if isinstance(q, dict) else q)
+                for q in v
+            ] for k, v in mark_wise.items()},
+            "total": len(flat_questions),
+        }
+    except Exception:
+        return {}
+
+
 async def _pipeline_generate_topic_pyq(
     content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 20
 ) -> list:
@@ -16402,6 +16698,7 @@ async def _pipeline_process_one_chapter(
             "chapter_title":    chapter_title,
             "notes_generated":  False,
             "topic_pyq_count":  0,
+            "mark_wise_count":  0,
             "flashcards_count": 0,
             "blogs_count":      0,
             "pyq_page":         False,
@@ -16446,26 +16743,32 @@ async def _pipeline_process_one_chapter(
                 _pipeline_jobs[job_id].update({"progress": pct, "message": f"Chapter {done_counter['done']}/{total_chapters} processed"})
             return {"skipped": True, "result": chapter_result}
 
-        # ── Steps 2 & 3: Topic PYQs + Flashcards (parallel) ────────────────
+        # ── Steps 2, 2b & 3: Topic PYQs + Mark-wise PYQs + Flashcards (parallel) ─
         # If skip_existing, check DB first — only generate if absent
         pyq_err = None
+        mw_err  = None
         fc_err  = None
         _existing_pyqs = None
+        _existing_mw   = None
         _existing_fc   = None
         if skip_existing:
             _existing_pyqs = await db.topic_pyq_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1})
+            _existing_mw   = await db.ai_pyq_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1})
             _existing_fc   = await db.flashcard_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1})
 
-        if skip_existing and _existing_pyqs and _existing_fc:
-            chapter_result["topic_pyq_count"]  = _existing_pyqs.get("total", 0)
-            chapter_result["flashcards_count"]  = _existing_fc.get("total", 0)
+        if skip_existing and _existing_pyqs and _existing_mw and _existing_fc:
+            chapter_result["topic_pyq_count"]   = _existing_pyqs.get("total", 0)
+            chapter_result["mark_wise_count"]    = _existing_mw.get("total", 0)
+            chapter_result["flashcards_count"]   = _existing_fc.get("total", 0)
             topic_pyqs = None
+            mark_wise_result = None
             flashcards = None
         else:
             pyq_task = _pipeline_generate_topic_pyq(notes_content, subject_name, chapter_title, class_name, count=20)
+            mw_task  = _pipeline_generate_mark_wise_pyq(notes_content, subject_name, chapter_title, class_name, paper_type=paper_type)
             fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30)
-            (topic_pyqs, pyq_err), (flashcards, fc_err) = await asyncio.gather(
-                _safe(pyq_task), _safe(fc_task)
+            (topic_pyqs, pyq_err), (mark_wise_result, mw_err), (flashcards, fc_err) = await asyncio.gather(
+                _safe(pyq_task), _safe(mw_task), _safe(fc_task)
             )
 
         if topic_pyqs:
@@ -16486,6 +16789,35 @@ async def _pipeline_process_one_chapter(
                 chapter_result["errors"].append(f"topic-pyq-save: {str(e)[:60]}")
         elif pyq_err:
             chapter_result["errors"].append(f"topic-pyqs: {str(pyq_err)[:60]}")
+
+        # ── Step 2b: Persist mark-wise questions into ai_pyq_collections ──────
+        if mark_wise_result and mark_wise_result.get("pyqs"):
+            try:
+                mw_doc = {
+                    "id":            str(uuid.uuid4()),
+                    "subject_id":    subject_id,
+                    "subject_name":  subject_name,
+                    "chapter_id":    chapter_id,
+                    "chapter_title": chapter_title,
+                    "pyqs":          mark_wise_result["pyqs"],
+                    "mark_wise":     mark_wise_result["mark_wise"],
+                    "total":         mark_wise_result["total"],
+                    "source":        "pipeline_mark_wise",
+                    "ai_generated":  True,
+                    "pipeline_generated": True,
+                    "created_at":    now_iso,
+                    "updated_at":    now_iso,
+                }
+                await db.ai_pyq_collections.update_one(
+                    {"chapter_id": chapter_id},
+                    {"$set": mw_doc},
+                    upsert=True,
+                )
+                chapter_result["mark_wise_count"] = mark_wise_result["total"]
+            except Exception as e:
+                chapter_result["errors"].append(f"mark-wise-save: {str(e)[:60]}")
+        elif mw_err:
+            chapter_result["errors"].append(f"mark-wise: {str(mw_err)[:60]}")
 
         if flashcards:
             try:
@@ -16670,7 +17002,7 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
     summary = {
         "subject_id": subject_id, "subject_name": subject_name,
         "chapters_processed": 0, "chapters_skipped": 0,
-        "total_topic_pyqs": 0, "total_flashcards": 0,
+        "total_topic_pyqs": 0, "total_mark_wise_pyqs": 0, "total_flashcards": 0,
         "total_blogs": 0, "total_pyq_pages": 0,
         "blog_urls": [], "chapter_results": [],
         "sitemap_pinged": False, "ping_status": "",
@@ -16686,9 +17018,10 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
             continue
         r = outcome["result"]
         summary["chapters_processed"] += 1
-        summary["total_topic_pyqs"] += r.get("topic_pyq_count", 0)
-        summary["total_flashcards"] += r.get("flashcards_count", 0)
-        summary["total_blogs"]      += r.get("blogs_count", 0)
+        summary["total_topic_pyqs"]     += r.get("topic_pyq_count", 0)
+        summary["total_mark_wise_pyqs"] += r.get("mark_wise_count", 0)
+        summary["total_flashcards"]     += r.get("flashcards_count", 0)
+        summary["total_blogs"]          += r.get("blogs_count", 0)
         if r.get("pyq_page"):
             summary["total_pyq_pages"] += 1
         summary["blog_urls"].extend(outcome.get("blog_urls", []))

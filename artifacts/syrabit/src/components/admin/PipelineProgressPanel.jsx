@@ -14,11 +14,12 @@ import { adminPipelineAutoGenerate, adminPipelineStatus } from '@/utils/api';
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 const STEP_LABELS = [
-  { icon: BookOpen,   label: 'Chapter Notes',       color: '#8b5cf6' },
-  { icon: HelpCircle, label: '20 Topic PYQs',       color: '#f59e0b' },
-  { icon: FileText,   label: '30 Flashcards',       color: '#10b981' },
-  { icon: Globe,      label: '5 Geo-SEO Blogs',     color: '#3b82f6' },
-  { icon: Sparkles,   label: 'PYQ HTML Page',       color: '#ec4899' },
+  { icon: BookOpen,   label: 'Chapter Notes',              color: '#8b5cf6' },
+  { icon: HelpCircle, label: '20 Topic PYQs',              color: '#f59e0b' },
+  { icon: HelpCircle, label: '15 Mark-Wise Questions',     color: '#f97316' },
+  { icon: FileText,   label: '30 Flashcards',              color: '#10b981' },
+  { icon: Globe,      label: '5 Geo-SEO Blogs',            color: '#3b82f6' },
+  { icon: Sparkles,   label: 'PYQ HTML Page',              color: '#ec4899' },
 ];
 
 export default function PipelineProgressPanel({ adminToken, subjectId, subjectName, skipExisting, onClose, onComplete }) {
@@ -261,16 +262,18 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
               </div>
 
               {/* Stats grid */}
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {[
                   { label: 'Chapters', value: summary.chapters_processed, color: '#8b5cf6' },
-                  { label: 'Topic PYQs', value: summary.total_topic_pyqs,   color: '#f59e0b' },
+                  { label: 'Topic PYQs', value: summary.total_topic_pyqs, color: '#f59e0b' },
+                  { label: 'Mark-Wise Qs', value: summary.total_mark_wise_pyqs ?? 0, color: '#f97316' },
                   { label: 'Flashcards', value: summary.total_flashcards, color: '#10b981' },
-                  { label: 'Blogs',    value: summary.total_blogs,         color: '#3b82f6' },
+                  { label: 'Geo Blogs', value: summary.total_blogs, color: '#3b82f6' },
+                  { label: 'PYQ Pages', value: summary.total_pyq_pages ?? 0, color: '#ec4899' },
                 ].map((s, i) => (
                   <div key={i} className="rounded-xl p-3 text-center"
                     style={{ background: `${s.color}12`, border: `1px solid ${s.color}25` }}>
-                    <p className="text-xl font-bold" style={{ color: s.color }}>{s.value}</p>
+                    <p className="text-xl font-bold" style={{ color: s.color }}>{s.value ?? '—'}</p>
                     <p className="text-[10px] text-white/40 mt-0.5">{s.label}</p>
                   </div>
                 ))}

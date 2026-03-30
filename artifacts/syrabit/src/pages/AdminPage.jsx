@@ -10,7 +10,7 @@ import {
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, Globe,
-  Crown, Cpu, Layers,
+  Crown, Cpu, Layers, Zap,
 } from 'lucide-react';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
@@ -33,6 +33,7 @@ import AdminHealth           from '@/components/admin/AdminHealth';
 import AdminSeoManager       from '@/components/admin/AdminSeoManager';
 import AdminMonetization     from '@/components/admin/AdminMonetization';
 import AdminVertexPanel      from '@/components/admin/AdminVertexPanel';
+import AdminAutomation       from '@/components/admin/AdminAutomation';
 
 // ── Section registry ──────────────────────────────────────────────────────────
 const SECTIONS = [
@@ -41,6 +42,7 @@ const SECTIONS = [
   { id: 'contenthub',    icon: Layers,          label: 'Content Editor',    group: 'content'  },
   { id: 'seomanager',    icon: Globe,           label: 'SEO Manager',       group: 'content'  },
   { id: 'vertex',        icon: Cpu,             label: 'Vertex AI Studio',  group: 'content'  },
+  { id: 'automation',    icon: Zap,             label: 'Automation',        group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
   { id: 'conversations', icon: MessageSquare,   label: 'Conversations',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
@@ -71,6 +73,7 @@ const SECTION_COMPONENTS = {
   roadmap:       AdminRoadmap,
   contenthub:    AdminContentHub,
   seomanager:    AdminSeoManager,
+  automation:    AdminAutomation,
   users:         AdminUsers,
   conversations: AdminConversations,
   analytics:     AdminAnalytics,
