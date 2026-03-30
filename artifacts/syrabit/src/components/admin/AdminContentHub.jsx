@@ -1,24 +1,22 @@
 /**
  * AdminContentHub — Centralized content workflow
- * Tabs: Syllabus → PYQ → Content Editor → AI Studio → CMS/Docs
+ * Tabs: Syllabus → Content Editor → AI Studio → CMS/Docs → Blog Publisher
  *
  * Shared hubContext propagates Board/Class/Stream/Subject selection across
- * all five tabs so the user never has to re-pick the same hierarchy.
+ * all tabs so the user never has to re-pick the same hierarchy.
  *
  * Cross-tab wiring:
  *   Syllabus  →  Editor  : hubContext + onNavigate('editor')
- *   Syllabus  →  PYQ     : hubContext + onNavigate('pyq')
  *   Syllabus  →  Studio  : hubContext + onNavigate('studio')
- *   PYQ       →  Editor  : hubContext + onNavigate('editor')
  *   Editor    →  Studio  : localStorage(syrabit_studio_prefill) + onNavigate('studio')
- *   Editor    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')   [existing]
- *   Studio    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')   [existing]
- *   CMS       →  Editor  : localStorage(syrabit_content_prefill)+ onNavigate('editor')[existing]
+ *   Editor    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')
+ *   Studio    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')
+ *   CMS       →  Editor  : localStorage(syrabit_content_prefill)+ onNavigate('editor')
  */
 import { useState, useEffect, useCallback } from 'react';
 import {
   FolderTree, PenTool, Sparkles, FileText, ArrowRight,
-  Loader2, BookMarked, ChevronDown, Globe, Zap,
+  Loader2, Globe, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -27,7 +25,6 @@ import AdminSyllabusManager  from './AdminSyllabusManager';
 import AdminContentEditor    from './AdminContentEditor';
 import AdminCmsDocEditor     from './AdminCmsDocEditor';
 import AdminContentStudio    from './AdminContentStudio';
-import AdminPYQManager       from './AdminPYQManager';
 import BlogPublishWizard     from './BlogPublishWizard';
 import PipelineProgressPanel from './PipelineProgressPanel';
 
@@ -35,7 +32,6 @@ const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 const TABS = [
   { id: 'syllabus', label: 'Syllabus',        icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
-  { id: 'pyq',      label: 'PYQ',             icon: BookMarked,  color: 'amber',   desc: 'Upload & manage previous year question papers' },
   { id: 'editor',   label: 'Content Editor',  icon: PenTool,     color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
   { id: 'studio',   label: 'AI Studio',       icon: Sparkles,    color: 'rose',    desc: 'Generate structured content blocks with AI' },
   { id: 'cms',      label: 'CMS / Docs',      icon: FileText,    color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
@@ -44,7 +40,6 @@ const TABS = [
 
 const FLOW = [
   { label: 'Syllabus',      sub: 'Import structure',   tab: 'syllabus', arrow: true  },
-  { label: 'PYQ',           sub: 'Upload questions',   tab: 'pyq',      arrow: true  },
   { label: 'Editor',        sub: 'Write content',      tab: 'editor',   arrow: true  },
   { label: 'AI Studio',     sub: 'Generate & enrich',  tab: 'studio',   arrow: true  },
   { label: 'Blog Publisher', sub: 'SEO & publish',     tab: 'blog',     arrow: false },
@@ -82,7 +77,7 @@ function loadPersistedCtx() {
   } catch { return EMPTY_CTX; }
 }
 
-const INTERNAL_TABS = new Set(['editor', 'syllabus', 'studio', 'pyq', 'cms', 'blog']);
+const INTERNAL_TABS = new Set(['editor', 'syllabus', 'studio', 'cms', 'blog']);
 
 export default function AdminContentHub({ adminToken, onNavigate: topNavigate }) {
   const [activeTab, setActiveTab] = useState('syllabus');
@@ -174,7 +169,7 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate })
               onClick={() => setShowPipeline(true)}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition hover:opacity-90"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: '#fff' }}
-              title="Auto-Generate Full Subject — 1 click generates all content, MCQs, blogs & PYQ pages"
+              title="Auto-Generate Full Subject — 1 click generates all content, MCQs & blogs"
             >
               <Zap size={11} /> Auto-Generate Full Subject
             </button>
@@ -232,19 +227,6 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate })
                 subjects={subjects}
                 onNavigate={navigate}
                 onHubContext={setHubContext}
-              />
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'pyq' && (
-          <div className="h-full overflow-y-auto">
-            <div className="p-6 max-w-4xl mx-auto w-full">
-              <PYQTabHeader onNavigate={navigate} hubContext={hubContext} />
-              <AdminPYQManager
-                adminToken={adminToken}
-                hubContext={hubContext}
-                onNavigate={navigate}
               />
             </div>
           </div>
@@ -330,11 +312,6 @@ function SyllabusTabHeader({ onNavigate, hubContext }) {
               onClick={() => onNavigate('editor')}
             />
             <QuickActionBtn
-              label="Upload PYQ"
-              color="#f59e0b"
-              onClick={() => onNavigate('pyq')}
-            />
-            <QuickActionBtn
               label="Generate AI"
               color="#f43f5e"
               onClick={() => onNavigate('studio')}
@@ -351,32 +328,6 @@ function SyllabusTabHeader({ onNavigate, hubContext }) {
           </button>
         )}
       </div>
-    </div>
-  );
-}
-
-function PYQTabHeader({ onNavigate, hubContext }) {
-  return (
-    <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
-      <div>
-        <h2 className="text-base font-bold text-white">PYQ Manager</h2>
-        <p className="text-xs text-white/35 mt-0.5">
-          Upload previous year question papers — images or PDFs, linked to subjects
-          {hubContext?.subjectName && (
-            <span className="ml-2 px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
-              style={{ background: 'rgba(245,158,11,0.18)', color: '#fcd34d' }}>
-              {hubContext.subjectName}
-            </span>
-          )}
-        </p>
-      </div>
-      {hubContext?.subjectName && (
-        <QuickActionBtn
-          label="Write Content"
-          color="#8b5cf6"
-          onClick={() => onNavigate('editor')}
-        />
-      )}
     </div>
   );
 }
