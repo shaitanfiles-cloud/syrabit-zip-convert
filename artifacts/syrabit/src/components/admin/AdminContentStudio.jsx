@@ -211,6 +211,10 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
   const [mergingToCms, setMergingToCms]   = useState({});
   const [fromEditor, setFromEditor]       = useState(false);
   const [nextStepsDismissed, setNextStepsDismissed] = useState(false);
+  const [autoProcessing, setAutoProcessing] = useState(false);
+
+  const autoParseRef  = useRef(false);
+  const autoSeoRef    = useRef(false);
 
   const headers = { withCredentials: true };
 
@@ -258,6 +262,81 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
     if (hubContext.classId)     setSelectedClassId(hubContext.classId);
     if (hubContext.streamId)    setSelectedStreamId(hubContext.streamId);
   }, [hubContext?.subjectId]);
+
+  // ── Combined: Generate SEO meta then immediately apply it ─────────────────
+  const handleAutoSeoAndApply = useCallback(async (blocksArg, titleArg) => {
+    if (blocksArg.length === 0 && !titleArg) return;
+    setSeoGenerating(true);
+    try {
+      const contentSnippet = blocksArg.map(b => `${b.title}: ${b.content}`).join('\n').slice(0, 3000);
+      const sylSubj = sylSubjects.find(s => s._id === selectedSylSubjectId || s.id === selectedSylSubjectId);
+      const payload = {
+        title: titleArg || '',
+        content: contentSnippet,
+        primary_keyword: '',
+        seo_tags: '',
+        subject: sylSubj?.name || subject,
+        linked_scope: sylSubj?.name || subject || '',
+        board: boards.find(b => b._id === selectedBoardId || b.id === selectedBoardId)?.name || 'AHSEC',
+        class_name: classes.find(c => c._id === selectedClassId || c.id === selectedClassId)?.name || '',
+      };
+      const { data } = await axios.post(`${API}/admin/seo/generate`, payload, authHeaders(adminToken));
+      if (data.seo_title)       setTitle(data.seo_title.replace(/\s*\|\s*Syrabit.*$/i, '').trim());
+      if (data.meta_description) setMetaDescription(data.meta_description);
+      setSeoResult(null);
+      toast.success('Title & meta auto-generated — SERP preview updated');
+    } catch {
+      toast.error('Auto SEO generation failed');
+    } finally {
+      setSeoGenerating(false);
+      setAutoProcessing(false);
+    }
+  }, [sylSubjects, selectedSylSubjectId, subject, boards, selectedBoardId, classes, selectedClassId, adminToken]);
+
+  // ── Auto-parse when content arrives from Editor ────────────────────────────
+  useEffect(() => {
+    if (!fromEditor || !rawText.trim() || rawText.trim().length < 80) return;
+    if (autoParseRef.current) return;
+    autoParseRef.current = true;
+    setAutoProcessing(true);
+    toast(`Auto-parsing lesson content…`, { id: 'auto-parse', duration: 3000 });
+    setParsing(true);
+    setPublished(null);
+    axios.post(`${API_BASE}/admin/studio/parse`, {
+      raw_text: rawText, subject, chapter,
+    }, headers)
+      .then(res => {
+        const parsed = res.data.blocks || [];
+        setBlocks(parsed);
+        const inferredTitle = parsed[0]?.title || subject || '';
+        if (!title) setTitle(inferredTitle);
+        if (!slug && (subject || chapter)) setSlug(slugify((subject + '-' + (chapter || 'notes'))));
+        if (!metaDescription) {
+          const sb = parsed.find(b => b.type === 'summary' || b.type === 'note' || b.type === 'definition');
+          if (sb) setMetaDescription(sb.content.slice(0, 160));
+        }
+        toast.success(`${parsed.length} blocks parsed — generating SEO title & meta…`, { id: 'auto-parse' });
+        return { parsed, inferredTitle };
+      })
+      .then(({ parsed, inferredTitle }) => {
+        if (parsed.length > 0) {
+          return handleAutoSeoAndApply(parsed, inferredTitle || subject);
+        }
+      })
+      .catch(() => toast.error('Auto-parse failed — click "Parse with AI" manually'))
+      .finally(() => setParsing(false));
+  }, [fromEditor, rawText]);
+
+  // ── Auto-generate SEO when blocks arrive + fromEditor + no meta yet ────────
+  useEffect(() => {
+    if (!fromEditor || blocks.length === 0) return;
+    if (autoSeoRef.current) return;
+    if (title && metaDescription) return;
+    autoSeoRef.current = true;
+    if (!autoParseRef.current) {
+      handleAutoSeoAndApply(blocks, title || blocks[0]?.title || subject);
+    }
+  }, [blocks, fromEditor]);
 
   // ── Broadcast subject selection back to hub ───────────────────────────────
   useEffect(() => {
@@ -612,8 +691,11 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
             <Sparkles size={18} style={{ color: '#a78bfa' }} />
             AI Content Studio
           </h2>
-          <p className="text-sm mt-1" style={{ color: 'rgba(255,255,255,0.35)' }}>
-            Paste raw notes → AI categorizes → Edit → Publish to SEO pages
+          <p className="text-sm mt-1 flex items-center gap-1.5" style={{ color: 'rgba(255,255,255,0.35)' }}>
+            {fromEditor && autoParseRef.current
+              ? <><span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Auto-mode: content parsed → SEO generated → live SERP preview</>
+              : <>Content in → AI parses → SEO title + meta auto-generated → live SERP preview → Publish</>
+            }
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -793,14 +875,14 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
           },
           {
             num: 2,
-            label: 'Parse with AI',
-            sub: 'Click "Parse with AI" below',
+            label: blocks.length > 0 ? 'Blocks Ready' : (parsing ? 'AI Parsing…' : 'Auto-Parsing'),
+            sub: blocks.length > 0 ? `${blocks.length} blocks parsed` : (parsing ? 'AI is parsing content…' : 'Auto-triggered from Editor'),
             done: blocks.length > 0,
           },
           {
             num: 3,
-            label: 'SEO & Title',
-            sub: 'Generate metadata for ranking',
+            label: seoGenerating ? 'Generating SEO…' : (title && metaDescription ? 'SEO Ready' : 'Auto-SEO'),
+            sub: title && metaDescription ? 'Title + meta auto-generated' : (seoGenerating ? 'AI generating title & meta…' : 'Auto-generates after parse'),
             done: !!(title.trim() && metaDescription.trim()),
           },
           {
@@ -1005,36 +1087,106 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
 
           {/* ── EDITOR VIEW ──────────────────────────────────────────── */}
           {view === 'editor' && (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-              <div className="space-y-3">
-                <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>Raw Text Input</label>
-                <textarea value={rawText} onChange={e => setRawText(e.target.value)}
-                  placeholder="Paste your raw educational notes, textbook content, or study material here…"
-                  rows={18}
-                  className="w-full rounded-xl px-4 py-3 text-sm resize-y outline-none font-mono"
-                  style={{ color: '#E8E8E8', background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(255,255,255,0.08)' }} />
-                <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.20)' }}>{rawText.length} chars · max 8,000 sent to AI</p>
-              </div>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
-                    Structured Blocks {blocks.length > 0 && <span style={{ color: '#a78bfa' }}>({blocks.length})</span>}
-                  </label>
-                  {blocks.length > 0 && (
-                    <button onClick={() => setBlocks([])} className="text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Clear all</button>
-                  )}
+            <div className="space-y-5">
+              {/* Auto-processing banner */}
+              {autoProcessing && (
+                <div className="flex items-center gap-3 px-4 py-3 rounded-xl" style={{ background: 'rgba(139,92,246,0.12)', border: '1px solid rgba(139,92,246,0.30)' }}>
+                  <Loader2 size={14} className="animate-spin text-violet-400 flex-shrink-0" />
+                  <div>
+                    <p className="text-xs font-semibold text-violet-300">Auto-processing lesson content…</p>
+                    <p className="text-[10px] text-white/40 mt-0.5">Parsing blocks → generating SEO title & meta → updating SERP preview</p>
+                  </div>
                 </div>
-                <div className="space-y-2.5 max-h-[500px] overflow-y-auto pr-1">
-                  {blocks.map((block, i) => (
-                    <BlockCard key={i} block={block} index={i} onEdit={handleEditBlock} onRemove={handleRemoveBlock} />
-                  ))}
-                  {blocks.length === 0 && (
-                    <div className="rounded-xl p-10 text-center border border-dashed" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-                      <Sparkles size={24} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
-                      <p className="text-sm" style={{ color: 'rgba(255,255,255,0.25)' }}>AI-parsed blocks will appear here</p>
-                      <p className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.15)' }}>Paste text and click "Parse with AI"</p>
-                    </div>
-                  )}
+              )}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                <div className="space-y-3">
+                  <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>Raw Text Input</label>
+                  <textarea value={rawText} onChange={e => setRawText(e.target.value)}
+                    placeholder="Paste your raw educational notes, textbook content, or study material here…"
+                    rows={14}
+                    className="w-full rounded-xl px-4 py-3 text-sm resize-y outline-none font-mono"
+                    style={{ color: '#E8E8E8', background: 'rgba(0,0,0,0.35)', border: `1px solid ${parsing ? 'rgba(139,92,246,0.40)' : 'rgba(255,255,255,0.08)'}` }} />
+                  <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.20)' }}>{rawText.length} chars · max 8,000 sent to AI</p>
+                </div>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                      Structured Blocks {blocks.length > 0 && <span style={{ color: '#a78bfa' }}>({blocks.length})</span>}
+                    </label>
+                    {blocks.length > 0 && (
+                      <button onClick={() => setBlocks([])} className="text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Clear all</button>
+                    )}
+                  </div>
+                  <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                    {blocks.map((block, i) => (
+                      <BlockCard key={i} block={block} index={i} onEdit={handleEditBlock} onRemove={handleRemoveBlock} />
+                    ))}
+                    {blocks.length === 0 && (
+                      <div className="rounded-xl p-8 text-center border border-dashed" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+                        {parsing
+                          ? <>
+                              <Loader2 size={24} className="mx-auto mb-3 animate-spin text-violet-400" />
+                              <p className="text-sm text-violet-300">AI is parsing your content…</p>
+                            </>
+                          : <>
+                              <Sparkles size={24} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
+                              <p className="text-sm" style={{ color: 'rgba(255,255,255,0.25)' }}>AI-parsed blocks will appear here</p>
+                              <p className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.15)' }}>Paste text and click "Parse with AI"</p>
+                            </>
+                        }
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* ── Live SERP + Perplexity Preview (always visible) ──── */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-medium" style={{ color: 'rgba(255,255,255,0.35)' }}>Google SERP Preview</p>
+                    {seoGenerating && <span className="flex items-center gap-1 text-[10px] text-violet-400"><Loader2 size={9} className="animate-spin" /> Generating…</span>}
+                  </div>
+                  <SerpPreview title={title} slug={slug} metaDescription={metaDescription} />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-xs font-medium" style={{ color: 'rgba(255,255,255,0.35)' }}>Perplexity AI Citation</p>
+                    {(title || metaDescription) && <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa' }}>Live</span>}
+                  </div>
+                  <PerplexityPreview title={title} slug={slug} metaDescription={metaDescription} blocks={blocks} />
+                </div>
+              </div>
+
+              {/* Quick meta editor + AI generator button */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'rgba(255,255,255,0.30)' }}>SEO Title</label>
+                    <span className="text-[9px]" style={{ color: title.length > 65 ? '#dc2626' : 'rgba(255,255,255,0.20)' }}>{title.length}/65</span>
+                  </div>
+                  <input value={title} onChange={e => setTitle(e.target.value)}
+                    placeholder="Auto-filled from AI…"
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                    style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }} />
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'rgba(255,255,255,0.30)' }}>Meta Description</label>
+                    <span className="text-[9px]" style={{ color: metaDescription.length >= 140 ? '#16a34a' : 'rgba(255,255,255,0.20)' }}>{metaDescription.length}/160</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <input value={metaDescription} onChange={e => setMetaDescription(e.target.value.slice(0, 160))}
+                      placeholder="Auto-filled from AI…"
+                      className="flex-1 px-3 py-2 rounded-lg text-sm outline-none"
+                      style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }} />
+                    <button onClick={handleGenerateSeoMeta} disabled={seoGenerating || (!blocks.length && !title)}
+                      className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40 flex-shrink-0"
+                      style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}
+                      title="AI-generate title + meta description">
+                      {seoGenerating ? <Loader2 size={11} className="animate-spin" /> : <Zap size={11} />}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
