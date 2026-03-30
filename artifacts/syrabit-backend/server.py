@@ -5942,6 +5942,14 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 document_text=document_text,
             )
 
+    # ── PYQ paywall: strip pyq chunks for free-plan users ─────────────────────
+    _user_plan_ns = user.get("plan", "free")
+    _pyq_blocked_ns = 0
+    if _user_plan_ns == "free" and rag_ctx.get("chunks"):
+        _orig_ns = rag_ctx["chunks"]
+        rag_ctx["chunks"] = [c for c in _orig_ns if c.get("content_type") != "pyq"]
+        _pyq_blocked_ns = len(_orig_ns) - len(rag_ctx["chunks"])
+
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
         {
@@ -6251,6 +6259,14 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 msg.message, subject_id=msg.subject_id,
                 subject_name=msg.subject_name, document_text=document_text
             )
+
+    # ── PYQ paywall: strip pyq chunks for free-plan users ─────────────────────
+    _user_plan_s = user.get("plan", "free")
+    _pyq_blocked_s = 0
+    if _user_plan_s == "free" and rag_ctx.get("chunks"):
+        _orig_s = rag_ctx["chunks"]
+        rag_ctx["chunks"] = [c for c in _orig_s if c.get("content_type") != "pyq"]
+        _pyq_blocked_s = len(_orig_s) - len(rag_ctx["chunks"])
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -10847,8 +10863,8 @@ async def get_public_cms_library():
         return []
 
 @api.get("/content/cms-documents/{doc_id}")
-async def get_public_cms_document(doc_id: str):
-    """Get single CMS document for public view"""
+async def get_public_cms_document(doc_id: str, user: dict = Depends(get_current_user_optional)):
+    """Get single CMS document for public view. PYQ-category docs require a paid plan."""
     try:
         if not await is_mongo_available():
             raise HTTPException(status_code=503, detail="Content service unavailable")
@@ -10858,6 +10874,38 @@ async def get_public_cms_document(doc_id: str):
         )
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
+
+        # ── PYQ paywall: free / anonymous users get a teaser + upgrade CTA ───
+        if doc.get("category") == "pyq":
+            user_plan = (user or {}).get("plan", "free")
+            if user_plan == "free":
+                raw_content = doc.get("content") or doc.get("content_html") or ""
+                # Strip HTML tags for teaser
+                import re as _re
+                teaser_text = _re.sub(r'<[^>]+>', ' ', raw_content).strip()[:400]
+                pyq_count = doc.get("pyq_count") or 0
+                if not pyq_count:
+                    # rough count: count "Q." patterns in content
+                    pyq_count = len(_re.findall(r'\bQ\.\s*\d+|\bQuestion\s+\d+', raw_content[:5000])) or 0
+                return Response(
+                    content=json.dumps({
+                        "paywalled":   True,
+                        "category":    "pyq",
+                        "title":       doc.get("title", ""),
+                        "teaser":      teaser_text,
+                        "pyq_count":   pyq_count,
+                        "subject_name": doc.get("linked_subject_name") or doc.get("subject_name") or "",
+                        "chapter_name": doc.get("linked_chapter_title") or doc.get("chapter_name") or "",
+                        "upgrade_cta": {
+                            "text":  f"Unlock PYQs — ₹10/mo",
+                            "url":   "/subscribe",
+                            "price": "₹10/mo",
+                        },
+                    }),
+                    status_code=402,
+                    media_type="application/json",
+                )
+
         return doc
     except HTTPException:
         raise
