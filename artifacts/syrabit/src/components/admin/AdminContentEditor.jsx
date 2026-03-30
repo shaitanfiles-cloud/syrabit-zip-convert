@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Search, Plus, Save, Trash2, X, BookOpen, Loader2,
   FolderPlus, FilePlus, Edit2, FileText, Book,
-  CheckCircle, Layers, Eye, Upload, Paperclip, Link2, BarChart3, Sparkles, RefreshCw,
+  CheckCircle, AlertCircle, AlertTriangle, Layers, Eye, Upload, Paperclip, Link2, BarChart3, Sparkles, RefreshCw,
   ChevronRight, ChevronLeft, ChevronDown, GraduationCap, Building2, GitBranch, ArrowLeft,
   Globe, LayoutTemplate, Wand2, Zap
 } from 'lucide-react';
@@ -199,6 +199,15 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [generatingSeoTopics, setGeneratingSeoTopics]     = useState(false);
   const [editorKey, setEditorKey]               = useState(0);
   const [showPipeline, setShowPipeline]         = useState(false);
+
+  const [showGapPanel, setShowGapPanel]         = useState(false);
+  const [gapSubjects, setGapSubjects]           = useState([]);
+  const [loadingGaps, setLoadingGaps]           = useState(false);
+  const [gapGenStatus, setGapGenStatus]         = useState({});
+  const [gapGenSubject, setGapGenSubject]       = useState(null);
+  const [bulkGapSelected, setBulkGapSelected]   = useState(new Set());
+  const [bulkGapGenerating, setBulkGapGenerating] = useState(false);
+  const [bulkGapProgress, setBulkGapProgress]  = useState({ done: 0, total: 0 });
 
   const CONTENT_TYPES = [
     { value: 'notes', label: 'Notes', color: 'violet' },
@@ -416,6 +425,73 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       setGeneratingSeoTopics(false);
     }
   }, [adminToken, selSubject, subjects, onNavigate]);
+
+  // ── Content Gaps helpers ──────────────────────────────────────────────────
+  const loadGapSubjects = useCallback(async () => {
+    setLoadingGaps(true);
+    try {
+      const res = await axios.get(`${API}/content/subjects`);
+      const subs = res.data || [];
+      setGapSubjects(subs.filter(s => (s.chapter_count || 0) < 3));
+    } catch { toast.error('Could not load subjects'); }
+    finally { setLoadingGaps(false); }
+  }, []);
+
+  const handleAutoGenerateGap = useCallback(async (s) => {
+    setGapGenSubject(s.id);
+    setGapGenStatus(prev => ({ ...prev, [s.id]: 'generating' }));
+    try {
+      const prompt = `Generate comprehensive educational notes for AssamBoard students on: ${s.name}.\nInclude: key concepts (with AssamBoard exam frequency), textbook definitions, worked examples, PYQ-style questions with marks, and 2 FAQ blocks.`;
+      const res = await axios.post(`${API}/admin/studio/parse`, {
+        raw_text: prompt, subject: s.name, chapter: 'Overview',
+      }, { withCredentials: true });
+      const parsed = res.data.blocks || [];
+      if (!parsed.length) { setGapGenStatus(prev => ({ ...prev, [s.id]: 'failed' })); return; }
+      const markdown = parsed.map(b => `## ${b.title}\n\n${b.content}`).join('\n\n---\n\n');
+      await axios.post(
+        `${API}/admin/content/chapters`,
+        {
+          subject_id:   s.id,
+          title:        `${s.name} — Overview`,
+          slug:         s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-overview',
+          content:      markdown,
+          content_type: 'notes',
+          order:        1,
+        },
+        { headers: adminToken && adminToken.split('.').length === 3 ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true }
+      );
+      setGapGenStatus(prev => ({ ...prev, [s.id]: 'done' }));
+      toast.success(`Auto-generated chapter for "${s.name}"`);
+      loadGapSubjects();
+    } catch {
+      setGapGenStatus(prev => ({ ...prev, [s.id]: 'failed' }));
+      toast.error(`Auto-generate failed for "${s.name}"`);
+    } finally { setGapGenSubject(null); }
+  }, [adminToken, loadGapSubjects]);
+
+  const handleMergeGapToCms = async (s) => {
+    try {
+      await axios.post(`${API}/admin/cms/merge/${s.id}`, {},
+        { headers: adminToken && adminToken.split('.').length === 3 ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true }
+      );
+      toast.success(`Merged "${s.name}" → CMS`);
+      onNavigate?.('cms');
+    } catch (e) { toast.error(e.response?.data?.detail || 'Merge failed'); }
+  };
+
+  const handleBulkGapAutoGen = async () => {
+    const selected = [...bulkGapSelected].map(id => gapSubjects.find(s => s.id === id)).filter(Boolean);
+    if (!selected.length) return;
+    setBulkGapGenerating(true);
+    setBulkGapProgress({ done: 0, total: selected.length });
+    const tasks = selected.map(s =>
+      handleAutoGenerateGap(s).then(() => setBulkGapProgress(p => ({ ...p, done: p.done + 1 })))
+    );
+    await Promise.allSettled(tasks);
+    setBulkGapGenerating(false);
+    setBulkGapSelected(new Set());
+    toast.success(`Bulk generation complete (${selected.length} subjects)`);
+  };
 
   // ── Auto-progress: when SEO topics generated, nudge toward pipeline ──────
   useEffect(() => {
@@ -1502,6 +1578,109 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
             </div>
           )}
         </>
+
+      {/* ══════════════════════════════════════════════════════════════
+          CONTENT GAPS PANEL (collapsible)
+      ══════════════════════════════════════════════════════════════ */}
+      <div className="border-t mt-4" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
+        <button
+          onClick={() => {
+            const next = !showGapPanel;
+            setShowGapPanel(next);
+            if (next && gapSubjects.length === 0) loadGapSubjects();
+          }}
+          className="w-full flex items-center justify-between px-6 py-3 text-xs font-semibold text-white/40 hover:text-white/70 transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <AlertTriangle size={12} className={gapSubjects.length > 0 ? 'text-amber-400' : ''} />
+            Content Gaps
+            {gapSubjects.length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'rgba(245,158,11,0.20)', color: '#fbbf24' }}>
+                {gapSubjects.length} subjects need content
+              </span>
+            )}
+          </span>
+          <ChevronDown size={12} className={`transition-transform ${showGapPanel ? 'rotate-180' : ''}`} />
+        </button>
+
+        {showGapPanel && (
+          <div className="px-6 pb-6 space-y-4">
+            <p className="text-xs text-white/30">Subjects with fewer than 3 chapters. Auto-generate an overview chapter or merge to CMS.</p>
+
+            {/* Toolbar */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {bulkGapSelected.size > 0 && !bulkGapGenerating && (
+                <button onClick={handleBulkGapAutoGen}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg"
+                  style={{ background: 'rgba(139,92,246,0.25)', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.35)' }}>
+                  <Sparkles size={11} /> Generate All ({bulkGapSelected.size})
+                </button>
+              )}
+              {bulkGapGenerating && (
+                <div className="flex items-center gap-2 text-xs text-amber-400">
+                  <Loader2 size={11} className="animate-spin" />
+                  {bulkGapProgress.done}/{bulkGapProgress.total} generating…
+                </div>
+              )}
+              <button onClick={loadGapSubjects} disabled={loadingGaps}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg disabled:opacity-50 ml-auto"
+                style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.40)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                {loadingGaps ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+                Refresh
+              </button>
+            </div>
+
+            {loadingGaps ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {[...Array(4)].map((_, i) => <div key={i} className="h-24 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.04)' }} />)}
+              </div>
+            ) : gapSubjects.length === 0 ? (
+              <div className="text-center py-10">
+                <CheckCircle size={28} className="mx-auto mb-2" style={{ color: '#34d399' }} />
+                <p className="text-sm font-semibold text-white/70">All subjects have 3+ chapters!</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {gapSubjects.map(s => {
+                  const status = gapGenStatus[s.id];
+                  const isGen  = gapGenSubject === s.id;
+                  const isSel  = bulkGapSelected.has(s.id);
+                  return (
+                    <div key={s.id} className="p-3 rounded-xl border transition-all"
+                      style={{
+                        borderColor: isSel ? 'rgba(139,92,246,0.35)' : status === 'done' ? 'rgba(52,211,153,0.28)' : 'rgba(255,255,255,0.07)',
+                        background:  isSel ? 'rgba(139,92,246,0.07)' : 'rgba(255,255,255,0.02)',
+                      }}>
+                      <div className="flex items-start gap-2 mb-1.5">
+                        <input type="checkbox" checked={isSel}
+                          onChange={() => setBulkGapSelected(prev => { const n = new Set(prev); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })}
+                          className="rounded accent-violet-500 mt-0.5 flex-shrink-0" />
+                        <p className="text-xs font-medium flex-1 min-w-0 text-white">{s.icon || '📚'} {s.name}</p>
+                        {status === 'done'   && <CheckCircle size={12} className="text-emerald-400 flex-shrink-0" />}
+                        {status === 'failed' && <AlertCircle size={12} className="text-red-400 flex-shrink-0" />}
+                      </div>
+                      <p className="text-[10px] ml-5 mb-2.5 text-amber-400">{s.chapter_count || 0} / 3 chapters</p>
+                      <div className="flex gap-1.5 flex-wrap ml-5">
+                        <button onClick={() => handleAutoGenerateGap(s)} disabled={isGen || status === 'done'}
+                          className="px-2 py-1 rounded-lg text-[10px] font-medium disabled:opacity-40 flex items-center gap-1 flex-1 min-w-[64px]"
+                          style={{ background: 'rgba(139,92,246,0.20)', color: '#a78bfa' }}>
+                          {isGen ? <Loader2 size={9} className="animate-spin" /> : <Sparkles size={9} />}
+                          {status === 'done' ? 'Done!' : isGen ? 'Gen…' : 'Auto-Gen'}
+                        </button>
+                        <button onClick={() => handleMergeGapToCms(s)}
+                          className="px-2 py-1 rounded-lg text-[10px] font-medium flex items-center gap-1 flex-1 min-w-[64px]"
+                          style={{ background: 'rgba(99,102,241,0.18)', color: '#818cf8' }}>
+                          <Globe size={9} /> CMS Blog
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {viewerItem && <ContentViewerPopup item={viewerItem} onClose={() => setViewerItem(null)} />}
 

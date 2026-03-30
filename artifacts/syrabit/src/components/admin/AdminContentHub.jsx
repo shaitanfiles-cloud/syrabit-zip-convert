@@ -36,6 +36,7 @@ const TABS = [
 const FLOW = [
   { label: 'Syllabus',      sub: 'Import structure',   tab: 'syllabus', arrow: true  },
   { label: 'Editor',        sub: 'Write content',      tab: 'editor',   arrow: true  },
+  { label: 'CMS / Docs',   sub: 'Manage docs',        tab: 'cms',      arrow: true  },
   { label: 'Blog Publisher', sub: 'SEO & publish',     tab: 'blog',     arrow: false },
 ];
 
