@@ -213,8 +213,12 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
   const [nextStepsDismissed, setNextStepsDismissed] = useState(false);
   const [autoProcessing, setAutoProcessing] = useState(false);
 
-  const autoParseRef  = useRef(false);
-  const autoSeoRef    = useRef(false);
+  const autoParseRef    = useRef(false);
+  const autoSeoRef      = useRef(false);
+  // Stores the prefill IDs so cascade effects can restore them instead of clearing
+  const prefillRef      = useRef(null);
+  // Always holds latest handleAutoSeoAndApply so the auto-parse effect never has a stale closure
+  const autoSeoFnRef    = useRef(null);
 
   const headers = { withCredentials: true };
 
@@ -240,16 +244,37 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
         return;
       }
       localStorage.removeItem('syrabit_studio_prefill');
+
+      // Store ALL prefill IDs in ref so cascade effects can restore them
+      // instead of clearing to '' when their deps change
+      prefillRef.current = {
+        boardId:   pf.boardId   || '',
+        classId:   pf.classId   || '',
+        streamId:  pf.streamId  || '',
+        subjectId: pf.subjectId || '',
+        subject:   pf.subject   || '',
+        chapter:   pf.chapter   || '',
+      };
+
+      // Set text fields immediately — these don't participate in the cascade
       if (pf.subject)   setSubject(pf.subject);
-      if (pf.subjectId) setSubjectId(pf.subjectId);
+      if (pf.subjectId) { setSubjectId(pf.subjectId); setSelectedSylSubjectId(pf.subjectId); }
       if (pf.chapter)   setChapter(pf.chapter);
       if (pf.rawText)   setRawText(pf.rawText);
-      if (pf.boardId)   setSelectedBoardId(pf.boardId);
-      if (pf.classId)   setSelectedClassId(pf.classId);
-      if (pf.streamId)  setSelectedStreamId(pf.streamId);
+      if (pf.boardId && pf.chapter && pf.subject) {
+        setSlug(slugify(`${pf.subject}-${pf.chapter}-notes`));
+      }
+
+      // Set only boardId — the cascade effects will propagate class → stream → subject
+      // using prefillRef values instead of clearing to ''
+      if (pf.boardId) setSelectedBoardId(pf.boardId);
+      else if (pf.classId) setSelectedClassId(pf.classId);
+      else if (pf.streamId) setSelectedStreamId(pf.streamId);
+
       setFromEditor(true);
       setNextStepsDismissed(false);
-      if (pf.subject)   toast.success(`Pre-filled with "${pf.subject}" chapter content — review and generate`);
+      const label = pf.chapter ? `"${pf.chapter}" (${pf.subject})` : `"${pf.subject}"`;
+      toast.success(`Loaded ${label} — auto-parsing + SEO generation starting…`);
     } catch {}
   }, []);
 
@@ -293,6 +318,9 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
     }
   }, [sylSubjects, selectedSylSubjectId, subject, boards, selectedBoardId, classes, selectedClassId, adminToken]);
 
+  // Keep the fn ref fresh so auto-parse doesn't capture a stale closure
+  useEffect(() => { autoSeoFnRef.current = handleAutoSeoAndApply; }, [handleAutoSeoAndApply]);
+
   // ── Auto-parse when content arrives from Editor ────────────────────────────
   useEffect(() => {
     if (!fromEditor || !rawText.trim() || rawText.trim().length < 80) return;
@@ -302,15 +330,19 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
     toast(`Auto-parsing lesson content…`, { id: 'auto-parse', duration: 3000 });
     setParsing(true);
     setPublished(null);
+    // Capture subject/chapter at this point (set from prefill)
+    const capturedSubject = subject;
+    const capturedChapter = chapter;
     axios.post(`${API_BASE}/admin/studio/parse`, {
-      raw_text: rawText, subject, chapter,
+      raw_text: rawText, subject: capturedSubject, chapter: capturedChapter,
     }, headers)
       .then(res => {
         const parsed = res.data.blocks || [];
         setBlocks(parsed);
-        const inferredTitle = parsed[0]?.title || subject || '';
+        const inferredTitle = parsed[0]?.title || capturedSubject || '';
         if (!title) setTitle(inferredTitle);
-        if (!slug && (subject || chapter)) setSlug(slugify((subject + '-' + (chapter || 'notes'))));
+        if (!slug && (capturedSubject || capturedChapter))
+          setSlug(slugify(`${capturedSubject}-${capturedChapter || 'notes'}`));
         if (!metaDescription) {
           const sb = parsed.find(b => b.type === 'summary' || b.type === 'note' || b.type === 'definition');
           if (sb) setMetaDescription(sb.content.slice(0, 160));
@@ -320,7 +352,8 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
       })
       .then(({ parsed, inferredTitle }) => {
         if (parsed.length > 0) {
-          return handleAutoSeoAndApply(parsed, inferredTitle || subject);
+          // Use the ref so we always call the most up-to-date version
+          return autoSeoFnRef.current?.(parsed, inferredTitle || capturedSubject);
         }
       })
       .catch(() => toast.error('Auto-parse failed — click "Parse with AI" manually'))
@@ -346,23 +379,65 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
 
   useEffect(() => {
     if (!selectedBoardId) { setClasses([]); setSelectedClassId(''); return; }
-    axios.get(`${API}/content/classes?board_id=${selectedBoardId}`).then(r => setClasses(r.data || [])).catch(() => {});
-    setSelectedClassId('');
+    const restore = prefillRef.current?.classId || '';
+    axios.get(`${API}/content/classes?board_id=${selectedBoardId}`)
+      .then(r => {
+        setClasses(r.data || []);
+        // Restore the prefill classId (or clear if no prefill)
+        setSelectedClassId(restore);
+      })
+      .catch(() => setSelectedClassId(''));
+    if (!restore) setSelectedClassId('');
   }, [selectedBoardId]);
 
   useEffect(() => {
     if (!selectedClassId) { setStreams([]); setSelectedStreamId(''); return; }
-    axios.get(`${API}/content/streams?class_id=${selectedClassId}`).then(r => setStreams(r.data || [])).catch(() => {});
-    setSelectedStreamId('');
+    const restore = prefillRef.current?.streamId || '';
+    axios.get(`${API}/content/streams?class_id=${selectedClassId}`)
+      .then(r => {
+        setStreams(r.data || []);
+        setSelectedStreamId(restore);
+      })
+      .catch(() => setSelectedStreamId(''));
+    if (!restore) setSelectedStreamId('');
   }, [selectedClassId]);
 
   useEffect(() => {
-    if (!selectedStreamId) { setSylSubjects([]); setSelectedSylSubjectId(''); setSubject(''); setSubjectId(''); setChapters([]); return; }
-    axios.get(`${API}/content/subjects?stream_id=${selectedStreamId}`).then(r => setSylSubjects(r.data || [])).catch(() => {});
-    setSelectedSylSubjectId('');
-    setSubject('');
-    setSubjectId('');
-    setChapters([]);
+    if (!selectedStreamId) {
+      setSylSubjects([]);
+      setSelectedSylSubjectId('');
+      // Only clear subject/subjectId when NOT in a prefill restore
+      if (!prefillRef.current?.subjectId) { setSubject(''); setSubjectId(''); }
+      setChapters([]);
+      return;
+    }
+    const restoreSubjectId = prefillRef.current?.subjectId || '';
+    const restoreSubject   = prefillRef.current?.subject   || '';
+    axios.get(`${API}/content/subjects?stream_id=${selectedStreamId}`)
+      .then(r => {
+        const subs = r.data || [];
+        setSylSubjects(subs);
+        if (restoreSubjectId) {
+          // Auto-select the matching subject from the loaded list
+          const match = subs.find(s => (s.id || s._id) === restoreSubjectId);
+          if (match) {
+            setSelectedSylSubjectId(match.id || match._id);
+            setSubject(match.name);
+            setSubjectId(match.id || match._id);
+          } else {
+            // Subject not in cascade list — keep the direct prefill values
+            setSelectedSylSubjectId(restoreSubjectId);
+            if (restoreSubject) setSubject(restoreSubject);
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        // Clear the prefill ref so normal user-initiated cascades work correctly from now on
+        prefillRef.current = null;
+      });
+    // Only clear if no prefill restore pending
+    if (!restoreSubjectId) { setSelectedSylSubjectId(''); setSubject(''); setSubjectId(''); setChapters([]); }
   }, [selectedStreamId]);
 
   useEffect(() => {
@@ -1022,10 +1097,15 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={handleParse} disabled={parsing || !rawText.trim()}
               className="flex items-center gap-2 disabled:opacity-50 text-white rounded-lg px-5 py-2 text-sm font-medium transition-colors"
-              style={{ background: '#7c3aed' }}>
+              style={{ background: fromEditor && autoParseRef.current ? 'rgba(139,92,246,0.60)' : '#7c3aed' }}>
               {parsing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-              {parsing ? 'AI Parsing…' : 'Parse with AI'}
+              {parsing ? 'AI Parsing…' : fromEditor && autoParseRef.current && blocks.length === 0 ? 'Auto-parsing…' : 'Parse with AI'}
             </button>
+            {fromEditor && !rawText.trim() && !parsing && !autoParseRef.current && (
+              <span className="text-[11px] px-2 py-1 rounded-lg" style={{ background: 'rgba(251,191,36,0.08)', color: 'rgba(251,191,36,0.70)', border: '1px solid rgba(251,191,36,0.18)' }}>
+                Paste raw lesson notes below — auto-parse will trigger automatically
+              </span>
+            )}
 
             {(selectedBoardId && selectedClassId) && (
               <button onClick={() => setSyllabusOpen(v => !v)}
