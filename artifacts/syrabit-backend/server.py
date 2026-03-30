@@ -19,7 +19,7 @@ from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
-import os, uuid, base64, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys, html as _html_mod
+import os, uuid, base64, logging, hashlib, hmac, json, re, asyncio, httpx, warnings, time, sys, html as _html_mod, contextvars
 try:
     from user_agents import parse as _parse_ua
 except ImportError:
@@ -617,6 +617,21 @@ pwd_ctx  = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
 
 logger = logging.getLogger(__name__)
+
+# ── CMS request context guard ─────────────────────────────────────────────────
+# Set to True during /cms/{user_id}/* request processing so that web-search /
+# library-scrape functions can detect and refuse outbound calls made in this context.
+_cms_request_ctx: contextvars.ContextVar[bool] = contextvars.ContextVar("_cms_request_ctx", default=False)
+
+
+def _assert_not_cms_context(operation: str = "web search"):
+    """Raise HTTPException 403 if called from within a CMS personalized-plan request."""
+    if _cms_request_ctx.get():
+        raise HTTPException(
+            status_code=403,
+            detail=f"Outbound {operation} is not permitted in personalized CMS context.",
+        )
+
 
 _rate_cleanup_task = None
 
@@ -2163,8 +2178,9 @@ async def _fetch_content_card(
 ) -> Optional[tuple]:
     """
     Search seo_pages + chapters for the most relevant content card.
-    Returns (card_text: str, card_slugs: set[str]) if found, else None.
+    Returns (card_text: str, card_slugs: set[str], source_meta: dict) if found, else None.
     Card slugs are used by the grounding builder to deduplicate vector hits.
+    source_meta contains card_name, lesson_name, subject_name for chat attribution.
     """
     _ck = _content_card_cache_key(query, subject_id, subject_name)
     if _ck in _content_card_cache:
@@ -2251,6 +2267,10 @@ async def _fetch_content_card(
 
         ordered_pages = sorted(pages, key=_page_priority)
         card_slugs: set = set()
+        # Track top card name + lesson name for attribution
+        _top_card_name: str = ""
+        _top_lesson_name: str = ""
+        _top_subject_name: str = ""
         for p in ordered_pages[:3]:
             content = p.get("content", "")
             if not content:
@@ -2258,6 +2278,10 @@ async def _fetch_content_card(
             slug = p.get("slug") or p.get("topic_title", "")
             card_slugs.add(slug)
             topic_title = p.get("topic_title") or p.get("chapter_title") or ""
+            if not _top_card_name and topic_title:
+                _top_card_name = topic_title
+                _top_lesson_name = p.get("chapter_title") or ""
+                _top_subject_name = p.get("subject_name") or subject_name or ""
             header = f"[Content: {topic_title}]" if topic_title else "[Content Page]"
             relevant = _extract_relevant_sections(content, keywords, max_chars=2000)
             cards.append(f"{header}\n{relevant}")
@@ -2267,6 +2291,8 @@ async def _fetch_content_card(
             content = ch.get("content", "")
             if not content:
                 continue
+            if not _top_lesson_name:
+                _top_lesson_name = ch.get("title") or ""
             header = f"[Chapter: {ch.get('title', '')}]"
             relevant = _extract_relevant_sections(content, keywords, max_chars=1200)
             cards.append(f"{header}\n{relevant}")
@@ -2274,7 +2300,12 @@ async def _fetch_content_card(
         if not cards:
             return None
 
-        result = ("\n\n---\n\n".join(cards), card_slugs)
+        source_meta = {
+            "card_name": _top_card_name,
+            "lesson_name": _top_lesson_name,
+            "subject_name": _top_subject_name,
+        }
+        result = ("\n\n---\n\n".join(cards), card_slugs, source_meta)
         _content_card_cache[_ck] = result
         return result
 
@@ -2805,13 +2836,14 @@ async def resolve_rag_context(
 
     rag_ctx = dict(cached_rag)
 
-    # Unpack content card tuple → (text, slug_set used for dedup)
+    # Unpack content card tuple → (text, slug_set used for dedup, source_meta)
     content_card_text: Optional[str] = None
     content_card_slugs: set = set()
     if _card_result:
-        content_card_text, content_card_slugs = _card_result
+        content_card_text, content_card_slugs, _card_source_meta = _card_result
         rag_ctx["content_card"] = content_card_text
         rag_ctx["content_card_slugs"] = content_card_slugs
+        rag_ctx["content_card_meta"] = _card_source_meta
         if rag_ctx["quality"] == "none":
             rag_ctx["quality"] = "high"
             rag_ctx["source"] = "rag"
@@ -2906,6 +2938,7 @@ async def web_search_with_fallback(
                      for open-web enrichment, current examples, reasoning.
     Both run simultaneously. Results tagged with _layer for prompt routing.
     """
+    _assert_not_cms_context("web search")
     if scoped_query:
         curriculum_query = scoped_query
     else:
@@ -2962,9 +2995,23 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
     Returns a list of dicts with keys: slug, title, url (compatible with the
     frontend sources format). URLs are auto-built as /learn/{slug} for SEO pages
     so the frontend can render clickable blue links for [PAGE: X] citations.
+    When content_card_meta is present, emits a leading content_card source entry
+    with type="content_card", card_name, and lesson_name for clean attribution.
     """
     seen = set()
     sources = []
+
+    # Content card attribution — prepend as first source when available
+    _cc_meta = rag_ctx.get("content_card_meta")
+    if _cc_meta and (_cc_meta.get("card_name") or _cc_meta.get("lesson_name")):
+        sources.append({
+            "type":        "content_card",
+            "card_name":   _cc_meta.get("card_name", ""),
+            "lesson_name": _cc_meta.get("lesson_name", ""),
+            "slug":        "",
+            "title":       _cc_meta.get("card_name", "") or _cc_meta.get("lesson_name", ""),
+            "url":         "",
+        })
 
     def _build_url(slug: str, provided_url: str, subject_id: str = "") -> str:
         """Return the best available URL for a source."""
@@ -6307,6 +6354,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     rag_chunks_count = len(rag_ctx.get("chunks",   []))
     rag_subjects_count = len(rag_ctx.get("subjects", []))
     web_search_used  = bool(web_results)
+    content_card_meta = rag_ctx.get("content_card_meta") or None
     # Resolve the primary subject this answer came from (for frontend badge link)
     _rag_subjs = rag_ctx.get("subjects", [])
     rag_subject_id   = (_rag_subjs[0].get("id")   if _rag_subjs else None) or msg.subject_id   or None
@@ -6333,7 +6381,11 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
             # Send RAG metadata with full quality info + subject link data + web search flag
-            yield f"data: {json.dumps({'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used})}\n\n"
+            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used}
+            if content_card_meta:
+                _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
+                _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')
+            yield f"data: {json.dumps(_meta_event)}\n\n"
 
             # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
             cache_key = _cache_key(msg.message)
@@ -6389,6 +6441,9 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 "sources": rag_sources,
                 "web_search_used": web_search_used,
             }
+            if content_card_meta:
+                done_payload["content_card_name"] = content_card_meta.get("card_name", "")
+                done_payload["content_card_lesson"] = content_card_meta.get("lesson_name", "")
             yield f"data: {json.dumps(done_payload)}\n\n"
             yield "data: [DONE]\n\n"
 
@@ -8841,6 +8896,292 @@ async def admin_sync_content_bulk(subject_id: str, admin: dict = Depends(get_adm
     }
 
 
+# ── Subject-scoped content pipeline: notes → questions → flashcards → sync ──
+
+_subject_pipeline_jobs: dict = {}
+
+
+def _subject_pipeline_job_gc():
+    """Remove jobs older than 2 hours."""
+    cutoff = datetime.now(timezone.utc).timestamp() - 7200
+    stale = [k for k, v in _subject_pipeline_jobs.items() if v.get("started_at", 0) < cutoff]
+    for k in stale:
+        _subject_pipeline_jobs.pop(k, None)
+
+
+async def _run_subject_content_pipeline(job_id: str, subject_id: str):
+    """
+    Sequential background worker: for each chapter in order,
+    check notes_generated flag (skip if True), then generate notes → mark-wise
+    questions → flashcards → sync back onto the chapter document.
+    Updates _subject_pipeline_jobs[job_id] with per-chapter progress.
+    """
+    import re as _re
+
+    def _update_job(**kwargs):
+        if job_id in _subject_pipeline_jobs:
+            _subject_pipeline_jobs[job_id].update(kwargs)
+
+    try:
+        subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+        if not subject:
+            _update_job(status="error", message="Subject not found", progress=100,
+                        finished_at=datetime.now(timezone.utc).isoformat())
+            return
+
+        subject_name = subject.get("name", "")
+        class_name   = subject.get("className", "")
+        paper_type   = (subject.get("paper_type") or "").upper()
+
+        chapters = await db.chapters.find(
+            {"subject_id": subject_id}, {"_id": 0}
+        ).sort("order_index", 1).to_list(100)
+
+        total = len(chapters)
+        if not total:
+            _update_job(status="complete", progress=100, message="No chapters found",
+                        finished_at=datetime.now(timezone.utc).isoformat(),
+                        chapter_results=[])
+            return
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        chapter_results = []
+
+        for idx, chapter in enumerate(chapters):
+            chapter_id    = chapter.get("id", "")
+            chapter_title = (chapter.get("title") or "").strip()
+            pct = int(5 + (idx / total) * 88)
+            _update_job(progress=pct, message=f"Processing chapter {idx + 1}/{total}: {chapter_title[:40]}")
+
+            if not chapter_title:
+                chapter_results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
+                continue
+
+            cr: dict = {"chapter_id": chapter_id, "chapter_title": chapter_title,
+                        "notes": None, "questions": None, "flashcards": None, "sync": None}
+
+            # ── Step 1: Notes (skip entire chapter if notes_generated=True) ────
+            if chapter.get("notes_generated") is True:
+                cr["notes"] = "skipped_existing"
+                cr["questions"] = "skipped_existing"
+                cr["flashcards"] = "skipped_existing"
+                cr["sync"] = "skipped_existing"
+                chapter_results.append(cr)
+                continue
+            else:
+                try:
+                    generated = await _pipeline_generate_chapter_notes(chapter, subject_name, class_name, paper_type)
+                    if generated and len(generated.strip()) > 50:
+                        await db.chapters.update_one(
+                            {"id": chapter_id},
+                            {"$set": {
+                                "content": generated.strip(),
+                                "content_type": "notes",
+                                "notes_generated": True,
+                                "notes_generated_at": now_iso,
+                            }}
+                        )
+                        try:
+                            await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=subject_id)
+                        except Exception:
+                            pass
+                        notes_content = generated.strip()
+                        cr["notes"] = "generated"
+                    else:
+                        notes_content = (chapter.get("content") or "").strip()
+                        cr["notes"] = "skipped_empty"
+                except Exception as e:
+                    notes_content = (chapter.get("content") or "").strip()
+                    cr["notes"] = f"error: {str(e)[:60]}"
+
+            if len(notes_content) < 100:
+                cr["questions"] = "skipped_no_content"
+                cr["flashcards"] = "skipped_no_content"
+                cr["sync"] = "skipped"
+                chapter_results.append(cr)
+                continue
+
+            # ── Step 2: Mark-wise important questions ──────────────────────────
+            try:
+                topics     = chapter.get("topics") or []
+                description = (chapter.get("description") or "").strip()
+                topic_block = ", ".join(str(t) for t in topics[:15]) if topics else (description[:200] if description else chapter_title)
+                generate_prompt = f"""You are an expert exam question setter for {class_name} {subject_name}.
+
+Generate the MOST IMPORTANT exam questions for the chapter below, organised strictly by mark weight.
+
+Chapter: {chapter_title}
+Topics: {topic_block}
+
+Return ONLY valid JSON in this exact schema (no markdown, no explanation):
+{{
+  "1_mark": [{{"question": "...", "type": "MCQ/very_short_answer"}},{{"question": "...", "type": "MCQ/very_short_answer"}},{{"question": "...", "type": "MCQ/very_short_answer"}}],
+  "2_mark": [{{"question": "...", "type": "short_answer"}},{{"question": "...", "type": "short_answer"}},{{"question": "...", "type": "short_answer"}}],
+  "3_mark": [{{"question": "...", "type": "brief_answer"}},{{"question": "...", "type": "brief_answer"}},{{"question": "...", "type": "brief_answer"}}],
+  "5_mark": [{{"question": "...", "type": "medium_answer"}},{{"question": "...", "type": "medium_answer"}},{{"question": "...", "type": "medium_answer"}}],
+  "10_mark": [{{"question": "...", "type": "long_answer/essay"}},{{"question": "...", "type": "long_answer/essay"}},{{"question": "...", "type": "long_answer/essay"}}]
+}}
+Rules: 3 questions per mark bucket, total 15 questions. Specific to "{chapter_title}". Pure JSON only."""
+                raw_resp = await call_llm_api([{"role": "user", "content": generate_prompt}], max_tokens=1600)
+                json_match = _re.search(r'\{[\s\S]*\}', raw_resp or "")
+                if json_match:
+                    parsed = json.loads(json_match.group())
+                    mark_wise = {
+                        "1":  parsed.get("1_mark",  []),
+                        "2":  parsed.get("2_mark",  []),
+                        "3":  parsed.get("3_mark",  []),
+                        "5":  parsed.get("5_mark",  []),
+                        "10": parsed.get("10_mark", []),
+                    }
+                    flat_questions = []
+                    for marks_str, qs in mark_wise.items():
+                        for q_obj in qs:
+                            text = (q_obj.get("question") if isinstance(q_obj, dict) else str(q_obj)).strip()
+                            if text:
+                                flat_questions.append({
+                                    "question":   text,
+                                    "marks":      int(marks_str),
+                                    "type":       q_obj.get("type", "") if isinstance(q_obj, dict) else "",
+                                    "year":       0,
+                                    "paper_type": paper_type,
+                                    "source":     "ai_generated",
+                                })
+                    if flat_questions:
+                        pyq_doc = {
+                            "id": str(uuid.uuid4()),
+                            "subject_id": subject_id, "subject_name": subject_name,
+                            "chapter_id": chapter_id, "chapter_title": chapter_title,
+                            "pyqs": flat_questions,
+                            "mark_wise": {k: [
+                                (q.get("question", q) if isinstance(q, dict) else q) for q in v
+                            ] for k, v in mark_wise.items()},
+                            "total": len(flat_questions),
+                            "source": "ai_important_questions", "ai_generated": True,
+                            "created_at": now_iso, "updated_at": now_iso,
+                        }
+                        await db.ai_pyq_collections.update_one(
+                            {"chapter_id": chapter_id}, {"$set": pyq_doc}, upsert=True,
+                        )
+                        cr["questions"] = f"generated:{len(flat_questions)}"
+                    else:
+                        cr["questions"] = "empty"
+                else:
+                    cr["questions"] = "no_json"
+            except Exception as e:
+                cr["questions"] = f"error: {str(e)[:60]}"
+
+            # ── Step 3: Memory-trick flashcards ────────────────────────────────
+            try:
+                flashcards = await _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=25)
+                if flashcards:
+                    fc_doc = {
+                        "id": str(uuid.uuid4()),
+                        "subject_id": subject_id, "subject_name": subject_name,
+                        "chapter_id": chapter_id, "chapter_title": chapter_title,
+                        "flashcards": flashcards, "total": len(flashcards),
+                        "pipeline_generated": True, "created_at": now_iso,
+                    }
+                    await db.flashcard_collections.update_one(
+                        {"chapter_id": chapter_id, "pipeline_generated": True},
+                        {"$set": fc_doc}, upsert=True,
+                    )
+                    cr["flashcards"] = f"generated:{len(flashcards)}"
+                else:
+                    cr["flashcards"] = "empty"
+            except Exception as e:
+                cr["flashcards"] = f"error: {str(e)[:60]}"
+
+            # ── Step 4: Sync generated assets back onto chapter document ───────
+            try:
+                update_fields: dict = {"content_synced_at": now_iso}
+                q_doc  = await db.ai_pyq_collections.find_one({"chapter_id": chapter_id}, {"_id": 0})
+                fc_doc = await db.flashcard_collections.find_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True}, {"_id": 0}
+                )
+                if q_doc:
+                    update_fields["has_important_questions"] = True
+                    update_fields["questions_synced"]        = True
+                    update_fields["mark_wise_questions"]     = q_doc.get("mark_wise", {})
+                    update_fields["important_questions"]     = q_doc.get("pyqs", [])
+                if fc_doc:
+                    update_fields["has_flashcards"]    = True
+                    update_fields["flashcards_synced"] = True
+                    update_fields["memory_tricks"]     = fc_doc.get("flashcards", [])
+                await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
+                cr["sync"] = "ok"
+                _invalidate_content_cache("chapters")
+            except Exception as e:
+                cr["sync"] = f"error: {str(e)[:60]}"
+
+            chapter_results.append(cr)
+
+        _update_job(
+            status="complete", progress=100,
+            message=f"Pipeline complete: {total} chapters processed",
+            finished_at=datetime.now(timezone.utc).isoformat(),
+            chapter_results=chapter_results,
+        )
+
+    except Exception as exc:
+        _subject_pipeline_jobs.get(job_id, {}).update({
+            "status": "error", "progress": 100,
+            "message": str(exc)[:200],
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.error(f"Subject pipeline job {job_id} failed: {exc}")
+    finally:
+        _subject_pipeline_job_gc()
+
+
+@api.post("/admin/subjects/{subject_id}/run-content-pipeline")
+async def admin_run_content_pipeline(
+    subject_id: str,
+    background_tasks: BackgroundTasks,
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Agentic content pipeline: iterates chapters in order, skips any chapter
+    where notes_generated=True, then runs notes → mark-wise questions (1/2/3/5/10)
+    → memory-trick flashcards → sync back to chapter document — all in one
+    sequential background job. Returns job_id immediately; poll status endpoint.
+    """
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    job_id = str(uuid.uuid4())
+    _subject_pipeline_jobs[job_id] = {
+        "job_id":       job_id,
+        "subject_id":   subject_id,
+        "subject_name": subject.get("name", ""),
+        "status":       "running",
+        "progress":     0,
+        "message":      "Pipeline starting…",
+        "chapter_results": [],
+        "started_at":   datetime.now(timezone.utc).timestamp(),
+    }
+    background_tasks.add_task(_run_subject_content_pipeline, job_id, subject_id)
+    return {"job_id": job_id, "status": "running", "subject_id": subject_id}
+
+
+@api.get("/admin/subjects/{subject_id}/content-pipeline-status")
+async def admin_content_pipeline_status(
+    subject_id: str,
+    job_id: str,
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Poll the status of a run-content-pipeline background job.
+    Returns per-chapter progress and final results when complete.
+    """
+    job = _subject_pipeline_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired (jobs expire after 2 hours)")
+    if job.get("subject_id") != subject_id:
+        raise HTTPException(status_code=403, detail="Job does not belong to this subject")
+    return job
+
+
 @api.post("/admin/subjects/{subject_id}/generate-mcqs-bulk")
 async def admin_generate_mcqs_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
     """
@@ -10982,7 +11323,7 @@ async def get_public_cms_document(doc_id: str):
 _PLAN_IS_PAID = {"starter", "pro"}
 
 @api.get("/cms/{user_id}")
-async def list_personal_plans(user_id: str, user: dict = Depends(get_current_user)):
+async def list_personal_plans(user_id: str, response: Response, user: dict = Depends(get_current_user)):
     """List all personalized study plans that belong to this user (paid plan required)."""
     if str(user["id"]) != str(user_id):
         raise HTTPException(403, "Access denied")
@@ -10990,6 +11331,8 @@ async def list_personal_plans(user_id: str, user: dict = Depends(get_current_use
         raise HTTPException(402, "Upgrade to Starter or Pro to access personalized study plans.")
     if not await is_mongo_available():
         raise HTTPException(503, "Content service unavailable")
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    response.headers["Cache-Control"] = "private, no-store"
     docs = await db.cms_documents.find(
         {"user_id": user_id, "doc_type": "personalized", "status": "published"},
         {"_id": 0, "id": 1, "slug": 1, "title": 1, "created_at": 1, "subject_name": 1}
@@ -12146,6 +12489,49 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
 
+class CmsNoIndexMiddleware(BaseHTTPMiddleware):
+    """
+    Hard scraper block for all /cms/{user_id}/* routes.
+    - Adds X-Robots-Tag: noindex, nofollow on every CMS response.
+    - Adds Cache-Control: private, no-store on every CMS response.
+    - Blocks known scraper/bot user-agents with 403.
+    Outbound web-search calls are structurally impossible in CMS handlers
+    (they only call call_slm / MongoDB). This middleware provides defence-in-depth.
+    """
+    _CMS_BOT_UA_RE = re.compile(
+        r"scrapy|wget|curl|python-requests|go-http-client|java/|"
+        r"ahrefsbot|semrushbot|gptbot|claudebot|perplexitybot|"
+        r"bingbot|googlebot|yandexbot|duckduckbot",
+        re.IGNORECASE,
+    )
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if not path.startswith("/api/cms/"):
+            return await call_next(request)
+        ua = request.headers.get("user-agent", "")
+        if ua and self._CMS_BOT_UA_RE.search(ua):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Automated access to personalized content is not permitted."},
+                headers={
+                    "X-Robots-Tag": "noindex, nofollow",
+                    "Cache-Control": "private, no-store",
+                },
+            )
+        # Set CMS context flag so that web-search/scrape functions raise 403 if called
+        token = _cms_request_ctx.set(True)
+        try:
+            response = await call_next(request)
+        finally:
+            _cms_request_ctx.reset(token)
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+
+
+app.add_middleware(CmsNoIndexMiddleware)
 app.add_middleware(BotRenderMiddleware)
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)

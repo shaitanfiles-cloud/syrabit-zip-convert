@@ -121,7 +121,13 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
     else navigate(url);
   };
 
-  const visibleSources = hasSrc ? sources.filter(s => s.url || s.slug) : [];
+  // Separate content-card attribution from URL-based sources
+  const contentCardSource = hasSrc ? sources.find(s => s.type === 'content_card') : null;
+  const hasNamedContentCard = !!(contentCardSource && (contentCardSource.card_name || contentCardSource.lesson_name));
+  // Hide raw URL-only sources when a named content card is present
+  const visibleSources = hasSrc
+    ? sources.filter(s => s.type !== 'content_card' && (s.url || s.slug) && !(hasNamedContentCard && !s.url))
+    : [];
   const subjectUrl     = ragSubjectId ? `/subject/${ragSubjectId}` : null;
   const fallbackUrl    = subjectUrl || '/library';
   const displayTitle   = ragSubjectName || 'Syrabit Library';
@@ -134,7 +140,7 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
   ].filter(Boolean).join(' · ');
 
   // No individual page sources — make entire card a single clickable link
-  if (visibleSources.length === 0) {
+  if (visibleSources.length === 0 && !hasNamedContentCard) {
     return (
       <button
         onClick={() => handleNav(fallbackUrl)}
@@ -173,8 +179,34 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
         <ExternalLink size={10} className="ml-auto shrink-0 opacity-40" style={{ color: '#60a5fa' }} />
       </button>
 
-      {/* Subject label */}
-      {displayTitle && (
+      {/* Content card attribution — shown when type="content_card" is present */}
+      {hasNamedContentCard && (
+        <div className="flex items-center gap-1.5 mb-2 px-1 mt-1 flex-wrap">
+          <span className="text-[10px] font-semibold text-white/25 uppercase tracking-widest">From</span>
+          {contentCardSource.card_name && (
+            <span
+              className="text-[11px] font-semibold px-2 py-0.5 rounded-md"
+              style={{ background: 'rgba(139,92,246,0.10)', color: '#a78bfa' }}
+            >
+              {contentCardSource.card_name}
+            </span>
+          )}
+          {contentCardSource.card_name && contentCardSource.lesson_name && (
+            <span className="text-[10px] text-white/30">·</span>
+          )}
+          {contentCardSource.lesson_name && (
+            <span
+              className="text-[11px] font-semibold px-2 py-0.5 rounded-md"
+              style={{ background: 'rgba(96,165,250,0.08)', color: '#93c5fd' }}
+            >
+              {contentCardSource.lesson_name}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Subject label — shown when no named content card */}
+      {!hasNamedContentCard && displayTitle && (
         <div className="flex items-center gap-1.5 mb-2 px-1 mt-1">
           <span className="text-[10px] font-semibold text-white/25 uppercase tracking-widest">From</span>
           <span
@@ -186,22 +218,24 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
         </div>
       )}
 
-      {/* Individual page links */}
-      <div className="source-pages">
-        {visibleSources.map((src, i) => (
-          <button
-            key={i}
-            onClick={() => handleNav(src.url || '')}
-            className="source-link"
-            title={src.url || src.title}
-            disabled={!src.url}
-          >
-            <span className="source-link-icon">📖</span>
-            <span className="truncate">{src.title || src.slug}</span>
-            {src.url && <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />}
-          </button>
-        ))}
-      </div>
+      {/* Individual page links — hidden when named content card is present */}
+      {!hasNamedContentCard && visibleSources.length > 0 && (
+        <div className="source-pages">
+          {visibleSources.map((src, i) => (
+            <button
+              key={i}
+              onClick={() => handleNav(src.url || '')}
+              className="source-link"
+              title={src.url || src.title}
+              disabled={!src.url}
+            >
+              <span className="source-link-icon">📖</span>
+              <span className="truncate">{src.title || src.slug}</span>
+              {src.url && <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />}
+            </button>
+          ))}
+        </div>
+      )}
 
       {footerText && <div className="source-stats">{footerText}</div>}
     </div>

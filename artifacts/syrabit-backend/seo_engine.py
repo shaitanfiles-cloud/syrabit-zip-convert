@@ -643,6 +643,8 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "board_name_raw": board_name,
         "chapter_title": h.get("chapter", {}).get("title", ""),
         "topic_title": topic["title"],
+        "source_chapter_title": h.get("chapter", {}).get("title", ""),
+        "source_topic_title": topic["title"],
         "status": "published",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),

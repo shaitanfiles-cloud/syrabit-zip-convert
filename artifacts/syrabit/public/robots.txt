@@ -5,6 +5,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 Sitemap: https://syrabit.ai/sitemap.xml
 Sitemap: https://syrabit.ai/api/seo/sitemap.xml
@@ -19,6 +20,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 User-agent: OAI-SearchBot
 Allow: /
@@ -26,6 +28,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 User-agent: ChatGPT-User
 Allow: /
@@ -33,6 +36,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 # Google (Gemini AI + Search)
 User-agent: Google-Extended
@@ -41,6 +45,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 User-agent: Googlebot
 Allow: /
@@ -48,6 +53,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 # Perplexity AI
 User-agent: PerplexityBot
@@ -56,6 +62,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 # Anthropic (Claude)
 User-agent: ClaudeBot
@@ -64,6 +71,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 User-agent: anthropic-ai
 Allow: /
@@ -71,6 +79,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 # Meta AI
 User-agent: FacebookBot
@@ -79,6 +88,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 User-agent: meta-externalagent
 Allow: /
@@ -86,6 +96,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 # Microsoft (Copilot / Bing)
 User-agent: Bingbot
@@ -94,6 +105,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 # Apple (Siri / Spotlight)
 User-agent: Applebot
@@ -102,6 +114,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 User-agent: Applebot-Extended
 Allow: /
@@ -109,6 +122,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 # Other AI crawlers
 User-agent: cohere-ai
@@ -117,6 +131,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 User-agent: Bytespider
 Allow: /
@@ -124,6 +139,7 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
 
 User-agent: CCBot
 Allow: /
@@ -131,3 +147,4 @@ Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
+Disallow: /cms/
