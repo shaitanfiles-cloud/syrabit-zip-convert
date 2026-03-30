@@ -1468,7 +1468,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
           subjectName={subjectData?.name || selSubject}
           onClose={() => setShowPipeline(false)}
           onComplete={(summary) => {
-            const total = (summary.total_blogs || 0) + (summary.total_mcqs || 0) + (summary.total_flashcards || 0) + (summary.total_pyq_pages || 0);
+            const total = (summary.total_blogs || 0) + (summary.total_topic_pyqs || 0) + (summary.total_flashcards || 0) + (summary.total_pyq_pages || 0);
             toast.success(`${total} assets generated for "${subjectData?.name}" — ${summary.total_blogs || 0} blogs live`);
             setAssetsGeneratedIds(prev => new Set([...prev, selSubject]));
             setMergedSubjectIds(prev => new Set([...prev, selSubject]));

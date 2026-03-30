@@ -254,7 +254,7 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {[
                   { label: 'Chapters', value: summary.chapters_processed, color: '#8b5cf6' },
-                  { label: 'MCQs',     value: summary.total_mcqs,         color: '#f59e0b' },
+                  { label: 'Topic PYQs', value: summary.total_topic_pyqs,   color: '#f59e0b' },
                   { label: 'Flashcards', value: summary.total_flashcards, color: '#10b981' },
                   { label: 'Blogs',    value: summary.total_blogs,         color: '#3b82f6' },
                 ].map((s, i) => (

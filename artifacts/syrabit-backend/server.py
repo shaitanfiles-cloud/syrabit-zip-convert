@@ -15281,31 +15281,43 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
         return ""
 
 
-async def _pipeline_generate_mcqs(content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 25) -> list:
-    """Generate MCQs from chapter content. Returns list of MCQ dicts."""
+async def _pipeline_generate_topic_pyq(
+    content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 20
+) -> list:
+    """Generate topic-wise Previous Year Questions with year tags for AHSEC/SEBA/Degree boards."""
     if not content or len(content.strip()) < 100:
         return []
-    prompt = f"""You are an expert AHSEC board exam question setter for {subject_name} ({class_name}).
+    prompt = f"""You are an expert exam question analyst for AHSEC, SEBA, and Degree board exams in Assam.
 
-Generate exactly {count} AHSEC-pattern Multiple Choice Questions from the following chapter content.
+Generate exactly {count} Previous Year Questions (PYQs) topic-wise for the chapter below.
+Subject: {subject_name} ({class_name})
 Chapter: {chapter_title}
 
-Each MCQ must have:
-- A clear question
-- Exactly 4 options (A, B, C, D)
-- Correct answer (A/B/C/D)
-- A brief explanation
-- Difficulty: easy/medium/hard
-- Topic tag
+Rules:
+- Each question must mirror the actual style and phrasing of board exam questions.
+- Assign realistic year tags from this range: 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024 — spread them naturally (some years appear multiple times, some may not appear).
+- Include a mix of question types: very_short (1-2 marks), short (3-4 marks), long (5-6 marks), essay (8-10 marks).
+- Group by topic within the chapter.
+- Each question must have a model answer hint (2-3 lines).
 
-Return ONLY valid JSON in this exact format:
-{{"mcqs": [{{"id": 1, "question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, "correct_answer": "A", "explanation": "...", "difficulty": "medium", "topic": "..."}}]}}
+Return ONLY valid JSON:
+{{"pyqs": [
+  {{
+    "id": 1,
+    "question": "Define ...",
+    "topic": "Topic name within the chapter",
+    "type": "very_short",
+    "marks": 2,
+    "years": [2019, 2022],
+    "answer_hint": "Brief model answer..."
+  }}
+]}}
 
 Chapter content:
-{content[:4000]}
+{content[:5000]}
 """
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -15313,7 +15325,7 @@ Chapter content:
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
         data = json.loads(cleaned)
-        return data.get("mcqs", [])
+        return data.get("pyqs", [])
     except Exception:
         return []
 
@@ -15549,7 +15561,7 @@ async def _pipeline_process_one_chapter(
             "chapter_id":       chapter_id,
             "chapter_title":    chapter_title,
             "notes_generated":  False,
-            "mcqs_count":       0,
+            "topic_pyq_count":  0,
             "flashcards_count": 0,
             "blogs_count":      0,
             "pyq_page":         False,
@@ -15590,31 +15602,31 @@ async def _pipeline_process_one_chapter(
                 _pipeline_jobs[job_id].update({"progress": pct, "message": f"Chapter {done_counter['done']}/{total_chapters} processed"})
             return {"skipped": True, "result": chapter_result}
 
-        # ── Steps 2 & 3: MCQs + Flashcards (parallel) ──────────────────────
-        mcq_task = _pipeline_generate_mcqs(notes_content, subject_name, chapter_title, class_name, count=25)
+        # ── Steps 2 & 3: Topic PYQs + Flashcards (parallel) ────────────────
+        pyq_task = _pipeline_generate_topic_pyq(notes_content, subject_name, chapter_title, class_name, count=20)
         fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30)
-        (mcqs, mcq_err), (flashcards, fc_err) = await asyncio.gather(
-            _safe(mcq_task), _safe(fc_task)
+        (topic_pyqs, pyq_err), (flashcards, fc_err) = await asyncio.gather(
+            _safe(pyq_task), _safe(fc_task)
         )
 
-        if mcqs:
+        if topic_pyqs:
             try:
-                await db.mcq_collections.update_one(
+                await db.topic_pyq_collections.update_one(
                     {"chapter_id": chapter_id, "pipeline_generated": True},
                     {"$set": {
                         "id": str(uuid.uuid4()),
                         "subject_id": subject_id, "subject_name": subject_name,
                         "chapter_id": chapter_id, "chapter_title": chapter_title,
-                        "mcqs": mcqs, "total": len(mcqs),
+                        "pyqs": topic_pyqs, "total": len(topic_pyqs),
                         "pipeline_generated": True, "created_at": now_iso,
                     }},
                     upsert=True,
                 )
-                chapter_result["mcqs_count"] = len(mcqs)
+                chapter_result["topic_pyq_count"] = len(topic_pyqs)
             except Exception as e:
-                chapter_result["errors"].append(f"mcqs-save: {str(e)[:60]}")
-        elif mcq_err:
-            chapter_result["errors"].append(f"mcqs: {str(mcq_err)[:60]}")
+                chapter_result["errors"].append(f"topic-pyq-save: {str(e)[:60]}")
+        elif pyq_err:
+            chapter_result["errors"].append(f"topic-pyqs: {str(pyq_err)[:60]}")
 
         if flashcards:
             try:
@@ -15784,7 +15796,7 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
     summary = {
         "subject_id": subject_id, "subject_name": subject_name,
         "chapters_processed": 0, "chapters_skipped": 0,
-        "total_mcqs": 0, "total_flashcards": 0,
+        "total_topic_pyqs": 0, "total_flashcards": 0,
         "total_blogs": 0, "total_pyq_pages": 0,
         "blog_urls": [], "chapter_results": [],
         "sitemap_pinged": False, "ping_status": "",
@@ -15800,10 +15812,10 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
             continue
         r = outcome["result"]
         summary["chapters_processed"] += 1
-        summary["total_mcqs"]       += outcome.get("mcqs", 0)
-        summary["total_flashcards"] += outcome.get("flashcards", 0)
+        summary["total_topic_pyqs"] += r.get("topic_pyq_count", 0)
+        summary["total_flashcards"] += r.get("flashcards_count", 0)
         summary["total_blogs"]      += r.get("blogs_count", 0)
-        if outcome.get("pyq"):
+        if r.get("pyq_page"):
             summary["total_pyq_pages"] += 1
         summary["blog_urls"].extend(outcome.get("blog_urls", []))
         summary["chapter_results"].append(r)
@@ -15825,7 +15837,7 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
 
     logger.info(
         f"Pipeline complete: subject={subject_name}, chapters={summary['chapters_processed']}, "
-        f"mcqs={summary['total_mcqs']}, flashcards={summary['total_flashcards']}, "
+        f"topic_pyqs={summary['total_topic_pyqs']}, flashcards={summary['total_flashcards']}, "
         f"blogs={summary['total_blogs']}, pyq_pages={summary['total_pyq_pages']}"
     )
 
