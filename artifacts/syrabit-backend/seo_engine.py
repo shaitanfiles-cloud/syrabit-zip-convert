@@ -102,6 +102,7 @@ def _robust_parse_json_array(raw: str) -> list[str]:
 
 
 PAGE_TYPES = ["notes", "definition", "important-questions", "mcqs", "examples"]
+AUTO_PAGE_TYPES = ["notes", "mcqs"]
 
 def _topic_hash(topic_title: str, page_type: str, n_variants: int) -> int:
     """Deterministic variant selector based on topic+type. Stable across regenerations."""
@@ -132,8 +133,8 @@ Example 1: [Complete step-by-step solution relevant to {board} exam pattern]
 Example 2: [Complete step-by-step solution]
 Example 3: [Complete step-by-step solution — use Assam/Northeast India context if naturally applicable]
 
-## Previous Year Questions (PYQs)
-[5 questions typical of {board} {class_name} exams on {topic}, with model answers — include 1-mark, 2-mark, and 3-5 mark types matching the {board} paper pattern. Format: "Q ({board} 20XX, X marks): ..."]
+## Exam-Style Questions
+[5 questions commonly asked in {board} {class_name} exams on {topic}, with model answers — include 1-mark, 2-mark, and 3-5 mark types matching the {board} paper pattern. Format: "Q (X marks): ..."]
 
 ## Key Points
 [6-8 bullet points for last-minute revision before the {board} exam, organized by mark-value importance]
@@ -303,8 +304,8 @@ Create a question bank using EXACTLY this structure:
 ## 5-Mark Questions (Long Answer)
 [3 questions with detailed, exam-ready answers — test analysis. Include marking scheme breakdown showing how {board} examiners allocate marks]
 
-## Previous Year Questions (PYQs)
-[4-5 questions typical of past {board} exams on {topic}, with complete answers following {board} marking conventions]
+## Exam-Style Questions (Board Pattern)
+[4-5 questions commonly tested in {board} exams on {topic}, with complete answers following {board} marking conventions]
 
 All answers must follow {board} marking scheme. Use exam-standard language.""",
 
@@ -327,8 +328,8 @@ Create an exam-focused question bank. Use EXACTLY this structure:
 ## Long Answer (5 marks each)
 [3 questions with complete structured answers. Each answer should have sub-points matching {board} marking scheme. Include connections to related topics in the syllabus]
 
-## Frequently Repeated Questions
-[4 questions that are commonly repeated in {board} exams on {topic}, with model answers]
+## Commonly Tested Questions
+[4 questions frequently tested in {board} exams on {topic}, with model answers]
 
 ## Tricky / Higher-Order Questions
 [2 application or analysis questions that go beyond textbook recall — test deeper understanding of {topic} within the {subject} syllabus]
@@ -512,38 +513,74 @@ def _extract_summary_from_content(content: str) -> str | None:
     return None
 
 
-def _compute_quality_score(content: str, page_type: str) -> dict:
-    """Compute content quality indicators for a generated page."""
+REQUIRED_SECTIONS = {
+    "notes": ["explanation", "example", "key point", "revision", "faq", "exam"],
+    "definition": ["definition", "meaning", "example"],
+    "important-questions": ["1-mark", "2-mark", "5-mark", "long answer", "short answer"],
+    "mcqs": ["easy", "medium", "hard", "answer", "explanation"],
+    "examples": ["example", "solution", "step", "practice"],
+}
+
+
+def _compute_quality_score(content: str, page_type: str, context: dict | None = None) -> dict:
+    """Compute content quality indicators for a generated page.
+
+    ``context`` is an optional dict with keys like board_name, subject_name,
+    chapter_title used to verify curriculum anchoring.
+    """
     words = content.split()
     word_count = len(words)
     headings = re.findall(r'^#{1,4}\s+.+', content, re.MULTILINE)
     heading_count = len(headings)
+    content_lower = content.lower()
 
     has_faq = bool(re.search(r'##\s*(FAQ|Frequently Asked)', content, re.IGNORECASE))
-    has_pyq = bool(re.search(r'##\s*(Previous Year|PYQ|Frequently Repeated)', content, re.IGNORECASE))
+    has_exam_q = bool(re.search(r'##\s*(Exam.Style|Commonly Tested|Board Pattern|Previous Year|PYQ|Frequently Repeated)', content, re.IGNORECASE))
     has_examples = bool(re.search(r'Example\s*\d', content, re.IGNORECASE))
 
     unique_words = set(w.lower() for w in words if len(w) > 3)
     unique_ratio = round(len(unique_words) / max(word_count, 1), 3)
 
+    required = REQUIRED_SECTIONS.get(page_type, [])
+    sections_present = sum(1 for s in required if s in content_lower)
+    sections_ratio = round(sections_present / max(len(required), 1), 2)
+
+    anchored = False
+    if context:
+        anchor_terms = [
+            v.lower() for k in ("board_name", "subject_name", "chapter_title")
+            if (v := context.get(k)) and len(v) > 2
+        ]
+        anchored = any(t in content_lower for t in anchor_terms) if anchor_terms else True
+    else:
+        anchored = True
+
     score = 0
-    if word_count >= 300: score += 25
-    elif word_count >= 150: score += 15
-    if heading_count >= 4: score += 20
-    elif heading_count >= 2: score += 10
-    if unique_ratio >= 0.35: score += 20
-    elif unique_ratio >= 0.25: score += 10
-    if has_faq: score += 10
-    if has_pyq: score += 15
-    if has_examples: score += 10
+    if word_count >= 500: score += 25
+    elif word_count >= 300: score += 20
+    elif word_count >= 150: score += 10
+    if heading_count >= 5: score += 15
+    elif heading_count >= 3: score += 10
+    elif heading_count >= 2: score += 5
+    if unique_ratio >= 0.35: score += 15
+    elif unique_ratio >= 0.30: score += 10
+    elif unique_ratio >= 0.20: score += 5
+    if sections_ratio >= 0.8: score += 15
+    elif sections_ratio >= 0.5: score += 8
+    if has_faq: score += 5
+    if has_exam_q: score += 10
+    if has_examples: score += 5
+    if anchored: score += 10
 
     return {
         "word_count": word_count,
         "heading_count": heading_count,
         "unique_ratio": unique_ratio,
+        "sections_ratio": sections_ratio,
         "has_faq": has_faq,
-        "has_pyq": has_pyq,
+        "has_exam_q": has_exam_q,
         "has_examples": has_examples,
+        "anchored": anchored,
         "score": min(score, 100),
     }
 
@@ -620,8 +657,17 @@ async def list_topics_public(board_slug: str, class_slug: str, subject_slug: str
     ch_ids = list(ch_map.keys())
     if not ch_ids: return []
     topics = await _db.topics.find({"chapter_id": {"$in": ch_ids}, "status": "published"}, {"_id": 0}).sort("order", 1).to_list(5000)
+    topic_ids = [t["id"] for t in topics]
+    published_pages = await _db.seo_pages.find(
+        {"topic_id": {"$in": topic_ids}, "status": "published"},
+        {"_id": 0, "topic_id": 1}
+    ).to_list(50000)
+    topics_with_pages = {p["topic_id"] for p in published_pages}
+
     matched = []
     for t in topics:
+        if t["id"] not in topics_with_pages:
+            continue
         ch_info = ch_map.get(t.get("chapter_id"), {})
         matched.append({
             "id": t["id"], "title": t.get("title", ""), "topic_slug": t.get("slug", ""),
@@ -976,8 +1022,8 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         return None
 
     word_count = len(content.split())
-    if word_count < 100:
-        logger.warning(f"Generated content too short ({word_count} words) for {topic['title']} / {page_type}")
+    if word_count < 300:
+        logger.warning(f"Generated content too short ({word_count} words) for {topic['title']} / {page_type} — minimum 300")
         return None
 
     title_templates = TITLE_TEMPLATES.get(page_type, ["{topic} — {board} {grade} {subject}"])
@@ -1005,7 +1051,22 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
             f"{board_display} syllabus for Assam students."
         )
 
-    quality_score = _compute_quality_score(content, page_type)
+    quality_context = {
+        "board_name": board_display,
+        "subject_name": subject_name,
+        "chapter_title": h.get("chapter", {}).get("title", ""),
+    }
+    quality_score = _compute_quality_score(content, page_type, context=quality_context)
+    q_score = quality_score.get("score", 0)
+
+    if q_score >= 70:
+        page_status = "published"
+    elif q_score >= 50:
+        page_status = "draft"
+        logger.info(f"Page for {topic['title']}/{page_type} scored {q_score} — saved as draft for review")
+    else:
+        page_status = "rejected"
+        logger.warning(f"Page for {topic['title']}/{page_type} scored {q_score} — rejected (below 50)")
 
     page = {
         "id": f"seo-{uuid.uuid4().hex[:8]}",
@@ -1036,7 +1097,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "prompt_variant": variant_idx,
         "title_variant": title_idx,
         "quality_score": quality_score,
-        "status": "published",
+        "status": page_status,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1056,7 +1117,7 @@ async def refresh_meta_descriptions(_admin: dict = Depends(_require_admin)):
     pages = await _db.seo_pages.find(
         {"status": "published"},
         {"_id": 0, "topic_id": 1, "page_type": 1, "content": 1, "topic_title": 1,
-         "board_name": 1, "class_name": 1, "subject_name": 1},
+         "board_name": 1, "class_name": 1, "subject_name": 1, "chapter_title": 1},
     ).to_list(50000)
 
     updated = 0
@@ -1077,7 +1138,12 @@ async def refresh_meta_descriptions(_admin: dict = Depends(_require_admin)):
             subject=p.get("subject_name", ""),
         )
 
-        quality = _compute_quality_score(content, page_type)
+        ctx = {
+            "board_name": p.get("board_name", ""),
+            "subject_name": p.get("subject_name", ""),
+            "chapter_title": p.get("chapter_title", ""),
+        }
+        quality = _compute_quality_score(content, page_type, context=ctx)
 
         update_fields = {
             "title": new_title,
@@ -1236,7 +1302,7 @@ async def list_seo_pages(
 
 @router.patch("/pages/{page_id}/status")
 async def update_page_status(page_id: str, status: str = "published", _admin: dict = Depends(_require_admin)):
-    if status not in ("published", "draft", "archived"):
+    if status not in ("published", "draft", "archived", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid status")
     result = await _db.seo_pages.update_one(
         {"id": page_id},
@@ -1245,6 +1311,97 @@ async def update_page_status(page_id: str, status: str = "published", _admin: di
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Page not found")
     return {"message": f"Status updated to {status}"}
+
+
+# ─── ADMIN: Review queue ─────────────────────────────────────────────────────
+
+@router.get("/review-queue")
+async def get_review_queue(
+    status: str = "draft",
+    limit: int = 50,
+    offset: int = 0,
+    _admin: dict = Depends(_require_admin),
+):
+    """Return pages needing review, sorted by quality score ascending (worst first)."""
+    query = {"status": status}
+    pages = await _db.seo_pages.find(query, {"_id": 0, "content": 0}).sort(
+        [("quality_score.score", 1), ("generated_at", -1)]
+    ).skip(offset).limit(limit).to_list(limit)
+    total = await _db.seo_pages.count_documents(query)
+    return {"pages": pages, "total": total}
+
+
+@router.post("/review-queue/bulk-action")
+async def bulk_review_action(
+    action: str,
+    page_ids: List[str] = [],
+    min_score: Optional[int] = None,
+    _admin: dict = Depends(_require_admin),
+):
+    """Bulk approve (publish) or reject pages. Can filter by min_score threshold."""
+    if action not in ("publish", "reject", "archive"):
+        raise HTTPException(status_code=400, detail="Action must be publish, reject, or archive")
+
+    status_map = {"publish": "published", "reject": "rejected", "archive": "archived"}
+    new_status = status_map[action]
+
+    query = {}
+    if page_ids:
+        query["id"] = {"$in": page_ids}
+    elif min_score is not None and action == "publish":
+        query["status"] = "draft"
+        query["quality_score.score"] = {"$gte": min_score}
+    else:
+        raise HTTPException(status_code=400, detail="Provide page_ids or min_score for bulk publish")
+
+    result = await _db.seo_pages.update_many(
+        query,
+        {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    await _seo_log("seo:bulk_review", f"Bulk {action}: {result.modified_count} pages → {new_status}")
+    return {"modified": result.modified_count, "new_status": new_status}
+
+
+@router.post("/flag-low-quality")
+async def flag_low_quality_pages(_admin: dict = Depends(_require_admin)):
+    """Recompute quality scores for all published pages using stricter criteria.
+    Pages scoring below 50 are moved to draft for review. Returns count of affected pages."""
+    published = await _db.seo_pages.find(
+        {"status": "published"},
+        {"_id": 0, "id": 1, "content": 1, "page_type": 1,
+         "board_name": 1, "subject_name": 1, "chapter_title": 1, "topic_title": 1}
+    ).to_list(50000)
+
+    flagged = 0
+    rescored = 0
+    for p in published:
+        ctx = {
+            "board_name": p.get("board_name", ""),
+            "subject_name": p.get("subject_name", ""),
+            "chapter_title": p.get("chapter_title", ""),
+        }
+        new_score = _compute_quality_score(p.get("content", ""), p.get("page_type", "notes"), context=ctx)
+        updates = {
+            "quality_score": new_score,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if new_score["score"] < 50:
+            updates["status"] = "draft"
+            flagged += 1
+        rescored += 1
+        await _db.seo_pages.update_one({"id": p["id"]}, {"$set": updates})
+
+    await _seo_log("seo:flag_low_quality", f"Rescored {rescored} pages, flagged {flagged} as draft")
+    return {"rescored": rescored, "flagged_as_draft": flagged}
+
+
+@router.get("/page/{page_id}/preview")
+async def preview_page(page_id: str, _admin: dict = Depends(_require_admin)):
+    """Get full page content for admin preview."""
+    page = await _db.seo_pages.find_one({"id": page_id}, {"_id": 0})
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    return page
 
 
 # ─── PUBLIC: Serve SEO pages ────────────────────────────────────────────────
@@ -2434,7 +2591,7 @@ async def get_subject_coverage(_admin: dict = Depends(_require_admin)):
         ch_count    = await _db.chapters.count_documents({"subject_id": sid})
         topic_count = await _db.topics.count_documents({"subject_id": sid})
         page_count  = await _db.seo_pages.count_documents({"subject_slug": sid_slug}) if sid_slug else 0
-        expected    = topic_count * len(PAGE_TYPES)
+        expected    = topic_count * len(AUTO_PAGE_TYPES)
         coverage    = round((page_count / expected) * 100, 1) if expected > 0 else 0
 
         result.append({
@@ -2484,7 +2641,7 @@ async def run_subject_pipeline(
     if not sub:
         raise HTTPException(status_code=404, detail="Subject not found")
 
-    types_to_run = page_types or PAGE_TYPES
+    types_to_run = page_types or AUTO_PAGE_TYPES
     job_id = f"subj-{uuid.uuid4().hex[:10]}"
     _seo_jobs[job_id] = {
         "job_id":      job_id,
@@ -2648,8 +2805,9 @@ async def auto_run_pipeline(
     data: PageTypesRequest = PageTypesRequest(),
     _admin: dict = Depends(_require_admin),
 ):
-    """One-click: extract all topics → generate all missing pages → regen sitemap."""
-    types_to_run = (data.page_types if data else None) or PAGE_TYPES
+    """One-click: extract all topics → generate all missing pages → regen sitemap.
+    Defaults to AUTO_PAGE_TYPES (notes + mcqs) unless explicit page_types provided."""
+    types_to_run = (data.page_types if data else None) or AUTO_PAGE_TYPES
     job_id = f"job-{uuid.uuid4().hex[:10]}"
     _seo_jobs[job_id] = {
         "job_id": job_id,
@@ -2671,7 +2829,6 @@ async def _auto_run_bg(job_id: str, page_types: list):
     try:
         _job_update(job_id, status="extracting", current="Extracting topics from chapters…")
 
-        # Step 1: Extract topics from all chapters
         chapters = await _db.chapters.find({}, {"_id": 0}).to_list(5000)
         new_topics = 0
         for ch in chapters:
@@ -2681,6 +2838,7 @@ async def _auto_run_bg(job_id: str, page_types: list):
             title = ch.get("title", "").strip()
             if not title:
                 continue
+            has_syllabus_content = bool(ch.get("description") or ch.get("content"))
             topic = {
                 "id": f"topic-{uuid.uuid4().hex[:8]}",
                 "chapter_id": ch["id"],
@@ -2690,11 +2848,15 @@ async def _auto_run_bg(job_id: str, page_types: list):
                 "definition": ch.get("description", ""),
                 "examples": "",
                 "order": ch.get("order_index", ch.get("chapter_number", 0)),
-                "status": "published",
+                "status": "published" if has_syllabus_content else "suggested",
+                "source": "syllabus" if has_syllabus_content else "gap-fill",
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await _db.topics.insert_one(topic)
             new_topics += 1
+            if not has_syllabus_content:
+                logger.info(f"Auto-run: topic '{title}' created as suggested (no syllabus content in chapter)")
+
 
         # Step 2: Generate missing pages for all topics
         all_topics = await _db.topics.find({"status": "published"}, {"_id": 0}).to_list(10000)

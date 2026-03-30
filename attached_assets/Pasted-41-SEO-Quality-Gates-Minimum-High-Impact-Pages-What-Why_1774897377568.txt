@@ -1,0 +1,39 @@
+41 - SEO Quality Gates & Minimum High-Impact Pages
+What & Why
+The current SEO pipeline generates 5 page types for every topic, auto-publishes everything with a 100-word minimum, and fabricates PYQ citations. This risks Google's "scaled content abuse" penalty. The strategy should flip to minimum pages, maximum impact: only generate the fewest, strongest pages that cover the high-value search routes (board → class → subject → syllabus topic). Every published page must be tightly focused on the board, class, subject, and syllabus curriculum — not generic filler.
+
+Done looks like
+Page types reduced to 2 per topic by default: only "Notes" and "MCQs" are auto-generated (the two highest-intent page types students actually search for). "Definition", "Important Questions", and "Examples" are available as optional manual generation from the admin panel — not auto-run.
+The auto-run pipeline only generates pages for topics that are directly from the syllabus (linked to a chapter with syllabus content) — not from AI gap-fill suggestions, which go to a separate "suggested topics" queue for admin approval before any pages are created.
+New pages generate as draft by default. Only pages scoring 70+ on the quality check auto-publish. Pages scoring 50–69 stay in draft for admin review. Pages below 50 are rejected and logged.
+Minimum content threshold raised from 100 to 300 words.
+Quality scoring is stricter: checks all required sections are present, vocabulary uniqueness ratio >= 0.30, heading count >= 3, and content is specifically anchored to the board/class/subject/chapter (not generic).
+PYQ prompts no longer fabricate exam years — replaced with "Exam-style questions commonly asked in board exams" framing without fake year citations.
+The admin SEO Manager shows a review queue of draft pages sorted by quality score, with approve/reject/preview actions and bulk-approve above a threshold.
+Existing published pages with scores below 50 under the new criteria are flagged for admin review (not auto-unpublished).
+Subject landing pages (/{board}/{class}/{subject}) only list topics that have at least one published page — no empty topic stubs visible to users or search engines.
+Out of scope
+Integrating real PYQ data from uploaded past papers (separate pipeline, Task #23)
+Rewriting all existing content from scratch
+Off-site SEO or backlink strategy
+SSR/prerendering changes
+Tasks
+Reduce default page types to high-impact only — Change PAGE_TYPES usage in the auto-run pipeline and the per-subject pipeline so they only generate "notes" and "mcqs" by default. Keep all 5 types available for manual/selective generation from the admin panel. Update the coverage/gap calculations to reflect this (expected = topics × 2, not × 5).
+Gate gap-fill topics — Change the auto-generate gap-fill flow so AI-suggested topics (from chat queries) are created with status: "suggested" instead of "published". These don't get SEO pages until an admin approves them into the regular topics pool. Only syllabus-linked topics (those with a valid chapter_id pointing to a chapter with actual content) auto-proceed.
+Raise the quality floor — Change minimum word count from 100 to 300. Strengthen _compute_quality_score to check: all required sections present for the page type, vocabulary uniqueness >= 0.30, heading count >= 3, and board/subject/chapter name actually appears in the content body (not just the prompt — proving the output is curriculum-anchored).
+Draft-first generation with score tiers — Change _generate_single_page so new pages default to status: "draft". Score 70+ → auto-publish. Score 50–69 → draft for review. Score below 50 → rejected and logged. Update the quality score thresholds in the admin UI to show tier badges (green/yellow/red).
+Remove fake PYQ citations — Rewrite PYQ sections in all prompt variants to remove "Q (AHSEC 20XX, X marks)" format. Replace with "Exam-style questions frequently tested in board exams" without fabricated years. Keep mark allocation structure.
+Sharpen Definition vs Notes distinction — Rework Definition prompts to be glossary-style (under 400 words): one-line answer, formal definition, simplified explanation, exam-ready answers by mark value. No lengthy explanations or worked examples — those belong in Notes only.
+Admin review queue — Add a "Review Queue" section to the Admin SEO Manager showing draft pages sorted by quality score (lowest first). Each row shows topic, page type, quality score breakdown, word count, and a content preview. Provide approve (publish), reject (archive), and preview actions. Add bulk-approve for pages above a configurable threshold.
+Flag existing low-quality pages — Add an admin endpoint that recomputes quality scores for all published pages using the new stricter criteria and moves pages scoring below 50 to draft. Wire to a button with a confirmation dialog showing the count of affected pages.
+Clean subject landing pages — Update the subject landing page query so it only lists topics that have at least one published SEO page. Topics with zero published pages should not appear as links (avoids dead-end pages that hurt crawl quality).
+Relevant files
+artifacts/syrabit-backend/seo_engine.py:104-216
+artifacts/syrabit-backend/seo_engine.py:218-281
+artifacts/syrabit-backend/seo_engine.py:515-548
+artifacts/syrabit-backend/seo_engine.py:940-1049
+artifacts/syrabit-backend/seo_engine.py:1237-1247
+artifacts/syrabit-backend/seo_engine.py:2430-2440
+artifacts/syrabit-backend/seo_engine.py:2645-2655
+artifacts/syrabit/src/components/admin/AdminSeoManager.jsx
+artifacts/syrabit/src/pages/SubjectLandingPage.jsx

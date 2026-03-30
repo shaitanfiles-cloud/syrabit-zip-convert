@@ -16,7 +16,8 @@ import {
   adminSeoBulkPublish, adminSeoSubjectCoverage, adminSeoRunSubject,
   seoInternalLinksAnalyze, seoInternalLinksInject,
   seoInjectSchemaBulk, seoInjectSchema, seoSitemapValidate,
-  adminSeoRefreshMeta,
+  adminSeoRefreshMeta, adminSeoReviewQueue, adminSeoBulkReviewAction,
+  adminSeoFlagLowQuality,
 } from '@/utils/api';
 
 const PAGE_TYPES = [
@@ -30,6 +31,7 @@ const PAGE_TYPES = [
 const STATUS_COLORS = {
   published: { text: '#34d399', bg: 'rgba(16,185,129,0.10)', border: 'rgba(52,211,153,0.20)' },
   draft:     { text: '#fbbf24', bg: 'rgba(245,158,11,0.10)',  border: 'rgba(251,191,36,0.20)' },
+  rejected:  { text: '#f87171', bg: 'rgba(239,68,68,0.10)',   border: 'rgba(248,113,113,0.20)' },
   archived:  { text: '#9ca3af', bg: 'rgba(156,163,175,0.10)', border: 'rgba(156,163,175,0.20)' },
 };
 
@@ -205,6 +207,25 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
   useEffect(() => {
     if (tab === 'pipeline' && subjectCoverage.length === 0) loadCoverage();
   }, [tab, subjectCoverage.length, loadCoverage]);
+
+  const [reviewQueue, setReviewQueue] = useState([]);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [reviewSelected, setReviewSelected] = useState(new Set());
+  const [flagging, setFlagging] = useState(false);
+  const [bulkThreshold, setBulkThreshold] = useState(70);
+
+  const loadReviewQueue = useCallback(async () => {
+    setReviewLoading(true);
+    try {
+      const res = await adminSeoReviewQueue(adminToken);
+      setReviewQueue(res.data?.pages || []);
+    } catch { toast.error('Failed to load review queue'); }
+    finally { setReviewLoading(false); }
+  }, [adminToken]);
+
+  useEffect(() => {
+    if (tab === 'review' && reviewQueue.length === 0) loadReviewQueue();
+  }, [tab, reviewQueue.length, loadReviewQueue]);
 
   useEffect(() => () => Object.values(subjectPollsRef.current).forEach(clearInterval), []);
 
@@ -533,10 +554,11 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
 
   const publishedCount = pages.filter(p => p.status === 'published').length;
   const draftCount     = pages.filter(p => p.status !== 'published').length;
-  const coverage       = topics.length > 0 ? Math.round((publishedCount / (topics.length * 5)) * 100) : 0;
+  const coverage       = topics.length > 0 ? Math.round((publishedCount / (topics.length * 2)) * 100) : 0;
 
   const TABS = [
     { id: 'pipeline', label: '⚡ Pipeline', count: subjectCoverage.length || null },
+    { id: 'review',   label: '🔍 Review',  count: reviewQueue.length || null },
     { id: 'pages',    label: 'SEO Pages',  count: pages.length },
     { id: 'topics',   label: 'Topics',     count: topics.length },
     { id: 'insights', label: '✦ Insights', count: insights?.insights?.length ?? null },
@@ -608,7 +630,7 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
           <StatCard icon={FileText}     label="Drafts"          value={draftCount}         color="#fbbf24" />
           <StatCard icon={Globe}        label="Sitemap URLs"    value={stats?.sitemap_urls ?? publishedCount} color="#a78bfa" />
           <StatCard icon={Activity}     label="Coverage"        value={`${coverage}%`}     color={coverage >= 80 ? '#34d399' : coverage >= 40 ? '#fbbf24' : '#f87171'}
-            sub={`${topics.length} topics × 5 types`} />
+            sub={`${topics.length} topics × 2 types`} />
         </div>
       )}
 
@@ -630,6 +652,155 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
           </button>
         ))}
       </div>
+
+      {/* ── Review Queue Tab ──────────────────────────────────────────── */}
+      {tab === 'review' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h3 className="text-sm font-semibold" style={{ color: '#e8e8e8' }}>
+              Draft Pages for Review ({reviewQueue.length})
+            </h3>
+            <div className="flex gap-2 items-center flex-wrap">
+              <button onClick={async () => {
+                if (!confirm('This will rescore all published pages and demote low-quality ones to draft. Continue?')) return;
+                setFlagging(true);
+                try {
+                  const res = await adminSeoFlagLowQuality(adminToken);
+                  toast.success(`Rescored ${res.data.rescored} pages, flagged ${res.data.flagged_as_draft} as draft`);
+                  loadReviewQueue();
+                } catch { toast.error('Flag operation failed'); }
+                finally { setFlagging(false); }
+              }}
+                className="h-8 px-3 rounded-lg text-xs font-medium flex items-center gap-1.5"
+                style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' }}
+                disabled={flagging}>
+                {flagging ? <Loader2 size={12} className="animate-spin" /> : <AlertTriangle size={12} />}
+                Flag Low-Quality Published
+              </button>
+              <div className="flex items-center gap-1">
+                <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>Bulk approve score ≥</span>
+                <input type="number" min={0} max={100} value={bulkThreshold} onChange={e => setBulkThreshold(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                  className="w-12 h-7 text-center rounded text-xs"
+                  style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', color: '#e8e8e8' }}
+                />
+                <button onClick={async () => {
+                  if (!confirm(`Publish all draft pages scoring ${bulkThreshold}+?`)) return;
+                  try {
+                    const res = await adminSeoBulkReviewAction(adminToken, 'publish', [], bulkThreshold);
+                    toast.success(`Published ${res.data.modified} pages`);
+                    loadReviewQueue();
+                  } catch { toast.error('Bulk approve failed'); }
+                }}
+                  className="h-7 px-2 rounded text-[10px] font-semibold"
+                  style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)' }}>
+                  Apply
+                </button>
+              </div>
+              <button onClick={loadReviewQueue} className="h-7 w-7 rounded flex items-center justify-center"
+                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                <RefreshCw size={11} style={{ color: 'rgba(255,255,255,0.40)' }} />
+              </button>
+            </div>
+          </div>
+
+          {reviewLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="animate-spin" size={20} style={{ color: '#7c3aed' }} />
+            </div>
+          ) : reviewQueue.length === 0 ? (
+            <div className="text-center py-12 text-sm" style={{ color: 'rgba(255,255,255,0.30)' }}>
+              No pages in review queue — all pages either published or rejected
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              {reviewQueue.map(p => {
+                const qs = p.quality_score || {};
+                const score = qs.score ?? 0;
+                const tierColor = score >= 70 ? '#34d399' : score >= 50 ? '#fbbf24' : '#f87171';
+                const selected = reviewSelected.has(p.id);
+                return (
+                  <div key={p.id} className="rounded-lg p-3 flex items-center gap-3"
+                    style={{ background: selected ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.02)', border: `1px solid ${selected ? 'rgba(124,58,237,0.30)' : 'rgba(255,255,255,0.06)'}` }}>
+                    <input type="checkbox" checked={selected} onChange={() => {
+                      const s = new Set(reviewSelected);
+                      s.has(p.id) ? s.delete(p.id) : s.add(p.id);
+                      setReviewSelected(s);
+                    }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate" style={{ color: '#e8e8e8' }}>{p.topic_title || p.title}</p>
+                      <p className="text-[10px] mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                        {p.board_name} · {p.class_name} · {p.subject_name} · {p.page_type}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="text-center">
+                        <span className="text-sm font-bold" style={{ color: tierColor }}>{score}</span>
+                        <p className="text-[9px]" style={{ color: 'rgba(255,255,255,0.25)' }}>{qs.word_count ?? '?'}w</p>
+                      </div>
+                      <div className="flex gap-1">
+                        {qs.anchored && <span className="text-[8px] px-1 rounded" style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399' }}>anchored</span>}
+                        {(qs.sections_ratio ?? 0) >= 0.8 && <span className="text-[8px] px-1 rounded" style={{ background: 'rgba(59,130,246,0.15)', color: '#60a5fa' }}>sections</span>}
+                      </div>
+                      <button onClick={async () => {
+                        try {
+                          await adminSeoUpdatePageStatus(adminToken, p.id, 'published');
+                          toast.success('Published');
+                          setReviewQueue(q => q.filter(x => x.id !== p.id));
+                        } catch { toast.error('Failed'); }
+                      }}
+                        className="h-6 px-2 rounded text-[10px] font-semibold"
+                        style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399' }}>
+                        Approve
+                      </button>
+                      <button onClick={async () => {
+                        try {
+                          await adminSeoUpdatePageStatus(adminToken, p.id, 'rejected');
+                          toast.success('Rejected');
+                          setReviewQueue(q => q.filter(x => x.id !== p.id));
+                        } catch { toast.error('Failed'); }
+                      }}
+                        className="h-6 px-2 rounded text-[10px] font-semibold"
+                        style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171' }}>
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              {reviewSelected.size > 0 && (
+                <div className="flex gap-2 pt-2">
+                  <button onClick={async () => {
+                    try {
+                      const ids = [...reviewSelected];
+                      await adminSeoBulkReviewAction(adminToken, 'publish', ids);
+                      toast.success(`Published ${ids.length} pages`);
+                      setReviewQueue(q => q.filter(x => !reviewSelected.has(x.id)));
+                      setReviewSelected(new Set());
+                    } catch { toast.error('Bulk publish failed'); }
+                  }}
+                    className="h-8 px-3 rounded-lg text-xs font-semibold"
+                    style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399', border: '1px solid rgba(52,211,153,0.25)' }}>
+                    Approve {reviewSelected.size} Selected
+                  </button>
+                  <button onClick={async () => {
+                    try {
+                      const ids = [...reviewSelected];
+                      await adminSeoBulkReviewAction(adminToken, 'reject', ids);
+                      toast.success(`Rejected ${ids.length} pages`);
+                      setReviewQueue(q => q.filter(x => !reviewSelected.has(x.id)));
+                      setReviewSelected(new Set());
+                    } catch { toast.error('Bulk reject failed'); }
+                  }}
+                    className="h-8 px-3 rounded-lg text-xs font-semibold"
+                    style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' }}>
+                    Reject {reviewSelected.size} Selected
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* ── SEO Pages Tab ─────────────────────────────────────────────── */}
       {tab === 'pages' && (

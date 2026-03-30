@@ -243,6 +243,25 @@ export const adminSeoRunSubject = (token, subjectId, force = false, pageTypes = 
 export const adminSeoRefreshMeta = (token) =>
   axios.post(`${API_BASE}/seo/refresh-meta`, {}, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminSeoReviewQueue = (token, status = 'draft', limit = 200) =>
+  axios.get(`${API_BASE}/seo/review-queue`, { headers: adminHeaders(token), withCredentials: true, params: { status, limit } });
+
+export const adminSeoBulkReviewAction = (token, action, pageIds = [], minScore = null) => {
+  const params = new URLSearchParams();
+  params.append('action', action);
+  pageIds.forEach(id => params.append('page_ids', id));
+  if (minScore != null) params.append('min_score', String(minScore));
+  return axios.post(`${API_BASE}/seo/review-queue/bulk-action`, null, {
+    headers: adminHeaders(token), withCredentials: true, params,
+  });
+};
+
+export const adminSeoFlagLowQuality = (token) =>
+  axios.post(`${API_BASE}/seo/flag-low-quality`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoPagePreview = (token, pageId) =>
+  axios.get(`${API_BASE}/seo/page/${pageId}/preview`, { headers: adminHeaders(token), withCredentials: true });
+
 // ── QA Engine ─────────────────────────────────────────────────────────────────
 export const getTopicQa = (board, classSlug, subjectSlug, topicSlug) =>
   axios.get(`${API_BASE}/seo/qa/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
