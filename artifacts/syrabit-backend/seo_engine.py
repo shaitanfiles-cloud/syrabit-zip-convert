@@ -1284,6 +1284,33 @@ def _render_seo_html(
     updated = page.get("updated_at", generated)
     kw = page.get("primary_keyword", f"{topic} {board} {cls}")
 
+    edu_level = f"{board} {cls}".strip()
+    subject_url = f"https://syrabit.ai/{page.get('board_slug','')}/{page.get('class_slug','')}/{page.get('subject_slug','')}"
+
+    _ASSAM_GEO = {
+        "@type": "Place",
+        "name": "Assam, India",
+        "geo": {"@type": "GeoCoordinates", "latitude": 26.2006, "longitude": 92.9376},
+        "address": {"@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN"},
+    }
+
+    _ORG_NODE = {
+        "@type": "Organization",
+        "name": "Syrabit.ai",
+        "url": "https://syrabit.ai",
+        "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
+        "areaServed": {
+            "@type": "State",
+            "name": "Assam",
+            "containedInPlace": {"@type": "Country", "name": "India"},
+        },
+        "address": {
+            "@type": "PostalAddress",
+            "addressRegion": "Assam",
+            "addressCountry": "IN",
+        },
+    }
+
     # ── Schema.org graph ────────────────────────────────────────────────────
     graph_nodes = [
         {
@@ -1291,37 +1318,40 @@ def _render_seo_html(
             "headline": page.get("title", ""),
             "description": page.get("meta_description", ""),
             "keywords": kw,
-            "author": {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai"},
-            "publisher": {
-                "@type": "Organization",
-                "name": "Syrabit.ai",
-                "url": "https://syrabit.ai",
-                "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
-            },
+            "author": _ORG_NODE,
+            "publisher": _ORG_NODE,
             "datePublished": generated,
             "dateModified": updated,
             "image": "https://syrabit.ai/opengraph.jpg",
             "mainEntityOfPage": {"@type": "WebPage", "@id": page_url},
-            "educationalLevel": f"{cls} {board}".strip(),
+            "educationalLevel": edu_level,
             "about": {"@type": "Thing", "name": page.get("topic_title", "")},
             "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
             "inLanguage": "en-IN",
+            "spatialCoverage": _ASSAM_GEO,
+            "locationCreated": _ASSAM_GEO,
+            "audience": {
+                "@type": "EducationalAudience",
+                "educationalRole": "student",
+                "geographicArea": {"@type": "State", "name": "Assam, India"},
+            },
         },
         {
             "@type": "Course",
-            "name": f"{topic} — {cls} {board}".strip(),
+            "name": f"{topic} — {edu_level}".strip(),
             "description": page.get("meta_description", ""),
-            "provider": {"@type": "Organization", "name": "Syrabit.ai", "sameAs": "https://syrabit.ai"},
-            "educationalLevel": f"{cls} {board}".strip(),
+            "provider": _ORG_NODE,
+            "educationalLevel": edu_level,
             "url": page_url,
             "inLanguage": "en-IN",
+            "availableLanguage": ["en", "as", "hi", "bn"],
         },
         {
             "@type": "BreadcrumbList",
             "itemListElement": [
                 {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
                 {"@type": "ListItem", "position": 2, "name": "Library", "item": "https://syrabit.ai/library"},
-                {"@type": "ListItem", "position": 3, "name": page.get("subject_name", ""), "item": "https://syrabit.ai/library"},
+                {"@type": "ListItem", "position": 3, "name": page.get("subject_name", ""), "item": subject_url},
                 {"@type": "ListItem", "position": 4, "name": page.get("topic_title", ""), "item": page_url},
             ],
         },
@@ -1421,13 +1451,19 @@ def _render_seo_html(
             items += f'<li><a href="https://syrabit.ai{rt_path}">{rt_title}</a></li>'
         related_html = f'<section class="related"><h2>Related Topics in {html_mod.escape(page.get("subject_name",""))}</h2><ul>{items}</ul></section>'
 
-    # ── Prev / Next navigation HTML ──────────────────────────────────────────
+    # ── Prev / Next navigation HTML + link tags ─────────────────────────────
     prevnext_html = ""
+    _prev_link = ""
+    _next_link = ""
     parts = []
     if prev_topic and prev_topic.get("seo_path"):
-        parts.append(f'<a class="pn-prev" href="https://syrabit.ai{html_mod.escape(prev_topic["seo_path"])}">&larr; {html_mod.escape(prev_topic.get("title","Previous"))}</a>')
+        prev_url = f"https://syrabit.ai{html_mod.escape(prev_topic['seo_path'])}"
+        parts.append(f'<a class="pn-prev" href="{prev_url}">&larr; {html_mod.escape(prev_topic.get("title","Previous"))}</a>')
+        _prev_link = f'<link rel="prev" href="{prev_url}">\n'
     if next_topic and next_topic.get("seo_path"):
-        parts.append(f'<a class="pn-next" href="https://syrabit.ai{html_mod.escape(next_topic["seo_path"])}">{html_mod.escape(next_topic.get("title","Next"))} &rarr;</a>')
+        next_url = f"https://syrabit.ai{html_mod.escape(next_topic['seo_path'])}"
+        parts.append(f'<a class="pn-next" href="{next_url}">{html_mod.escape(next_topic.get("title","Next"))} &rarr;</a>')
+        _next_link = f'<link rel="next" href="{next_url}">\n'
     if parts:
         prevnext_html = f'<nav class="pn-nav" aria-label="Topic navigation">{"".join(parts)}</nav>'
 
@@ -1473,10 +1509,17 @@ def _render_seo_html(
 <meta name="dc.type" content="Text">
 <meta name="dc.language" content="en-IN">
 <meta name="dc.source" content="https://syrabit.ai">
-<script type="application/ld+json">{ld_json}</script>
+<meta name="geo.region" content="IN-AS">
+<meta name="geo.placename" content="Assam, India">
+<meta name="geo.position" content="26.2006;92.9376">
+<meta name="ICBM" content="26.2006, 92.9376">
+<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
+{_prev_link}{_next_link}<script type="application/ld+json">{ld_json}</script>
 <style>
 body{{font-family:system-ui,sans-serif;max-width:860px;margin:0 auto;padding:1rem 1.25rem;color:#1a1a1a;line-height:1.7}}
 h1{{font-size:1.75rem;margin-bottom:.5rem}}h2{{font-size:1.3rem;margin-top:2rem}}
+img{{max-width:100%;height:auto}}
+table{{width:100%;border-collapse:collapse;margin:1rem 0}}th,td{{border:1px solid #e5e7eb;padding:.5rem;text-align:left}}
 .pt-nav{{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0 1.5rem}}
 .pt-link{{padding:.35rem .8rem;border-radius:6px;border:1px solid #d1d5db;color:#374151;text-decoration:none;font-size:.9rem}}
 .pt-link:hover{{background:#f3f4f6}}.pt-active{{padding:.35rem .8rem;border-radius:6px;background:#7c3aed;color:#fff;font-size:.9rem;font-weight:600}}
@@ -1488,6 +1531,8 @@ h1{{font-size:1.75rem;margin-bottom:.5rem}}h2{{font-size:1.3rem;margin-top:2rem}
 nav[aria-label="Breadcrumb"]{{font-size:.85rem;color:#6b7280;margin-bottom:.5rem}}
 nav[aria-label="Breadcrumb"] a{{color:#7c3aed;text-decoration:none}}
 footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-top:1px solid #e5e7eb}}
+.geo-footer{{font-size:.8rem;color:#9ca3af;margin-top:.5rem}}
+@media(max-width:640px){{body{{padding:.75rem}}h1{{font-size:1.35rem}}h2{{font-size:1.1rem}}.pn-nav{{flex-direction:column;gap:.75rem}}.pn-prev,.pn-next{{max-width:100%}}.pt-nav{{gap:.3rem}}.pt-link,.pt-active{{font-size:.8rem;padding:.25rem .6rem}}}}
 </style>
 </head>
 <body>
@@ -1511,7 +1556,8 @@ footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-t
 {prevnext_html}
 <footer>
 <p>Source: <a href="{html_mod.escape(page_url)}">Syrabit.ai — {topic}</a></p>
-<p>&copy; Syrabit.ai — AI-powered exam prep for AssamBoard students</p>
+<p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
+<p class="geo-footer">Serving students in Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, and across Assam, India</p>
 </footer>
 </main>
 </body>
