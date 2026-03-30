@@ -2782,6 +2782,119 @@ async def syrabit_library_search(
     return final
 
 
+def _slug_to_title(slug: str) -> str:
+    """Convert a URL slug like 'newtons-third-law-ahsec-notes' to a readable title."""
+    if not slug:
+        return ""
+    cleaned = re.sub(r'-(notes|mcqs|definition|important-questions|examples|ahsec|seba|degree)$', '', slug)
+    cleaned = re.sub(r'-+', ' ', cleaned)
+    return cleaned.strip().title()
+
+
+_exact_topic_cache: dict = {}
+_EXACT_TOPIC_CACHE_TTL = 120
+
+
+async def _exact_topic_match(
+    query: str,
+    subject_id: Optional[str] = None,
+    subject_name: Optional[str] = None,
+) -> Optional[dict]:
+    """
+    Fast exact/near-exact topic title match against seo_pages.
+    Returns the best matching page dict if topic_title closely matches the query,
+    else None. This runs BEFORE the parallel RAG fan-out to lock to specific topics.
+
+    Matching strategy:
+      1. Normalize query → lowercase, strip common question words
+      2. Search seo_pages where topic_title regex-matches the cleaned query core
+      3. Score matches: exact title match > title-contains-query > query-contains-title
+      4. Return best match only if score is high enough (avoids false locks)
+    """
+    _ck = f"exact:{query[:80]}:{subject_id or ''}"
+    cached = _exact_topic_cache.get(_ck)
+    if cached is not None:
+        return cached if cached else None
+
+    try:
+        if not await is_mongo_available():
+            return None
+
+        _stop_words = {"what", "is", "are", "explain", "describe", "define", "how", "does",
+                       "the", "of", "in", "a", "an", "and", "for", "to", "with", "about",
+                       "tell", "me", "can", "you", "please", "give", "write", "discuss",
+                       "difference", "between", "why", "when", "which", "do", "state",
+                       "mention", "list", "briefly", "short", "note", "notes", "on"}
+        words = re.sub(r'[^\w\s]', '', query.lower()).split()
+        core_words = [w for w in words if w not in _stop_words and len(w) > 1]
+        if not core_words or len(core_words) > 8:
+            _exact_topic_cache[_ck] = False
+            return None
+
+        core_phrase = " ".join(core_words)
+        regex_pattern = ".*".join(re.escape(w) for w in core_words)
+
+        match_filter: dict = {
+            "status": "published",
+            "topic_title": {"$regex": regex_pattern, "$options": "i"},
+        }
+        if subject_id:
+            subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "slug": 1})
+            if subj and subj.get("slug"):
+                match_filter["subject_slug"] = subj["slug"]
+
+        candidates = await db.seo_pages.find(
+            match_filter,
+            {"_id": 0, "topic_title": 1, "chapter_title": 1, "subject_name": 1,
+             "board_name": 1, "class_name": 1, "slug": 1, "content": 1, "page_type": 1},
+        ).limit(10).to_list(10)
+
+        if not candidates:
+            _exact_topic_cache[_ck] = False
+            return None
+
+        def _score(page: dict) -> float:
+            title = (page.get("topic_title") or "").lower().strip()
+            if not title:
+                return 0
+            title_words = set(re.sub(r'[^\w\s]', '', title).split())
+            core_set = set(core_words)
+            overlap = len(core_set & title_words)
+            if overlap == 0:
+                return 0
+            precision = overlap / max(len(core_set), 1)
+            recall = overlap / max(len(title_words), 1)
+            f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0
+            if core_phrase == title:
+                f1 += 0.5
+            elif core_phrase in title:
+                f1 += 0.2
+            elif title in core_phrase:
+                f1 += 0.1
+            pt = page.get("page_type", "")
+            if pt == "notes":
+                f1 += 0.05
+            return f1
+
+        scored = [(c, _score(c)) for c in candidates]
+        scored.sort(key=lambda x: -x[1])
+        best, best_score = scored[0]
+
+        if best_score < 0.55:
+            logger.debug(f"Exact topic match: best score {best_score:.2f} below threshold for query: {query[:50]}")
+            _exact_topic_cache[_ck] = False
+            return None
+
+        best["match_score"] = round(best_score, 3)
+        _exact_topic_cache[_ck] = best
+        return best
+
+    except Exception as e:
+        logger.debug(f"_exact_topic_match error: {e}")
+        _exact_topic_cache[_ck] = False
+        return None
+
+
 async def resolve_rag_context(
     query: str,
     subject_id: Optional[str] = None,
@@ -2834,15 +2947,37 @@ async def resolve_rag_context(
             "source":  "document",
             "quality": "tier0",
         }
+    # ── Tier 0.5: Exact topic match — lock to best topic BEFORE parallel fan-out ──
+    exact_topic = await _exact_topic_match(query, subject_id=subject_id, subject_name=subject_name)
+    if exact_topic:
+        logger.info(f"RAG [EXACT TOPIC]: locked to '{exact_topic['topic_title']}' (score={exact_topic.get('match_score', 0)}) | query: {query[:50]}")
+        _et_content = exact_topic.get("content", "")
+        keywords = _extract_keywords(query)
+        relevant = _extract_relevant_sections(_et_content, keywords, max_chars=2500) if _et_content else ""
+        _et_meta = {
+            "card_name": exact_topic.get("topic_title", ""),
+            "lesson_name": exact_topic.get("chapter_title", ""),
+            "subject_name": exact_topic.get("subject_name", "") or subject_name or "",
+            "board_name": exact_topic.get("board_name", ""),
+            "class_name": exact_topic.get("class_name", ""),
+        }
+        return {
+            "chunks": [], "chapters": [], "subjects": [],
+            "vector_hits": [],
+            "content_card": f"[Content: {exact_topic.get('topic_title', '')}]\n{relevant}",
+            "content_card_slugs": {exact_topic.get("slug", "")},
+            "content_card_meta": _et_meta,
+            "source": "rag", "quality": "high",
+        }
+
     cached_rag, _card_result, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
-        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name),  # returns (text, slug_set) or None
+        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name),
         vector_rag_search(query, subject_id=subject_id, top_k=8),
     )
 
     rag_ctx = dict(cached_rag)
 
-    # Unpack content card tuple → (text, slug_set used for dedup, source_meta)
     content_card_text: Optional[str] = None
     content_card_slugs: set = set()
     if _card_result:
@@ -2855,7 +2990,6 @@ async def resolve_rag_context(
             rag_ctx["source"] = "rag"
         logger.info(f"RAG resolve: content card found ({len(content_card_text)} chars, {len(content_card_slugs)} slugs) | query: {query[:50]}")
 
-    # Vector hits: deduplicate against content card slugs before injecting
     if vector_hits:
         deduped = [h for h in vector_hits if h.get("slug") not in content_card_slugs]
         rag_ctx["vector_hits"] = deduped
@@ -3031,9 +3165,10 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
     def _add(slug: str, title: str, url: str = "", subject_id: str = ""):
         if slug and slug not in seen:
             seen.add(slug)
+            display_title = title or _slug_to_title(slug) or slug
             sources.append({
                 "slug":  slug,
-                "title": title or slug,
+                "title": display_title,
                 "url":   _build_url(slug, url, subject_id),
             })
 
@@ -6191,14 +6326,18 @@ async def _persist_chat_turn(
     rag_source: str, rag_chunks: int,
     credits_used_before: int,
     deduct_credit: bool = False,
+    breadcrumb: dict | None = None,
 ):
     """Background: save conversation messages. Optionally deduct 1 credit. Non-blocking."""
     try:
         now = datetime.now(timezone.utc).isoformat()
+        assistant_msg = {"role": "assistant", "content": answer, "timestamp": now,
+             "rag_source": rag_source, "rag_chunks": rag_chunks}
+        if breadcrumb:
+            assistant_msg.update(breadcrumb)
         new_msgs = [
             {"role": "user", "content": user_msg, "timestamp": now},
-            {"role": "assistant", "content": answer, "timestamp": now,
-             "rag_source": rag_source, "rag_chunks": rag_chunks},
+            assistant_msg,
         ]
         conv = await supa_get_conversation(conv_id, user_id)
         if conv:
@@ -6405,6 +6544,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     rag_subject_name = (_rag_subjs[0].get("name") if _rag_subjs else None) or msg.subject_name or None
     _rag_chaps       = rag_ctx.get("chunk_chapters") or rag_ctx.get("chapters", [])
     rag_chapter_name = (_rag_chaps[0].get("title", "") if _rag_chaps else None) or msg.chapter_name or None
+    rag_topic_name = (content_card_meta or {}).get("card_name", "") or None
     full_response = []
 
     # Pull router classification for metadata (prefer router chapter over RAG chapter)
@@ -6424,11 +6564,13 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         nonlocal full_response
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
-            # Send RAG metadata with full quality info + subject link data + web search flag
-            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used}
+            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'rag_topic_name': rag_topic_name or '', 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': ctx_board_name or '', 'ctx_class_name': ctx_class_name or ''}
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')
+                _meta_event['content_card_subject'] = content_card_meta.get('subject_name', '')
+                _meta_event['content_card_board'] = content_card_meta.get('board_name', '')
+                _meta_event['content_card_class'] = content_card_meta.get('class_name', '')
             yield f"data: {json.dumps(_meta_event)}\n\n"
 
             # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
@@ -6516,11 +6658,20 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             # Fire background: save messages (credit already deducted before stream started)
             if answer:
                 _credit_saved = True  # mark credit as legitimately consumed
+                _breadcrumb = {}
+                if ctx_board_name: _breadcrumb["rag_board_name"] = ctx_board_name
+                if ctx_class_name: _breadcrumb["rag_class_name"] = ctx_class_name
+                if rag_subject_id: _breadcrumb["rag_subject_id"] = rag_subject_id
+                if rag_subject_name: _breadcrumb["rag_subject_name"] = rag_subject_name
+                if rag_chapter_name: _breadcrumb["rag_chapter_name"] = rag_chapter_name
+                if rag_topic_name: _breadcrumb["rag_topic_name"] = rag_topic_name
+                if rag_sources: _breadcrumb["sources"] = rag_sources
                 asyncio.create_task(_persist_chat_turn(
                     conv_id, user["id"],
                     user_msg_saved, answer,
                     rag_source_saved, rag_chunks_count,
                     credits_info["used"],
+                    breadcrumb=_breadcrumb or None,
                 ))
                 asyncio.create_task(_log_chat_message(
                     user_id=user["id"],
