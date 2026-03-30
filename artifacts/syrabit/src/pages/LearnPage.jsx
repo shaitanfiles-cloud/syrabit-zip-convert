@@ -7,7 +7,7 @@ import {
   BookOpen, ChevronRight, Clock, BarChart3, Share2,
   ArrowLeft, List, Loader2, AlertCircle, ExternalLink,
   Globe, CheckCircle, GraduationCap, Layers, HelpCircle,
-  FlipHorizontal, ChevronDown, ChevronUp, Lock, Zap,
+  FlipHorizontal, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { apiClient } from '@/utils/api';
@@ -115,7 +115,6 @@ export default function LearnPage() {
   const [doc, setDoc]             = useState(null);
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
-  const [paywallData, setPaywallData] = useState(null);
   const [activeId, setActiveId]   = useState('');
   const [pyqs, setPyqs]           = useState([]);
   const [flashcards, setFlashcards] = useState([]);
@@ -126,7 +125,6 @@ export default function LearnPage() {
   useEffect(() => {
     setLoading(true);
     setError(null);
-    setPaywallData(null);
     setPyqs([]);
     setFlashcards([]);
     setShowAllPyqs(false);
@@ -145,12 +143,7 @@ export default function LearnPage() {
         }
       })
       .catch(e => {
-        if (e.response?.status === 402) {
-          setPaywallData(e.response.data);
-          setError('paywalled');
-        } else {
-          setError(e.response?.status === 404 ? 'not-found' : 'error');
-        }
+        setError(e.response?.status === 404 ? 'not-found' : 'error');
       })
       .finally(() => setLoading(false));
   }, [slug]);
@@ -218,66 +211,6 @@ export default function LearnPage() {
           <Link to="/library" className="mt-2 h-9 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium flex items-center gap-2">
             <ArrowLeft size={14} /> Back to Browser
           </Link>
-        </div>
-      </AppLayout>
-    );
-  }
-
-  if (error === 'paywalled' && paywallData) {
-    const pw = paywallData;
-    return (
-      <AppLayout>
-        <div className="min-h-screen flex flex-col items-center justify-center gap-0 futuristic-bg px-4">
-          <div className="w-full max-w-md rounded-2xl overflow-hidden" style={{ border: '1px solid rgba(139,92,246,0.25)', background: 'var(--card)' }}>
-            {/* Header */}
-            <div className="px-6 pt-6 pb-4" style={{ borderBottom: '1px solid rgba(139,92,246,0.10)' }}>
-              <div className="flex items-center gap-2 mb-3">
-                <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.15)' }}>
-                  <Lock size={16} className="text-violet-400" />
-                </div>
-                <span className="text-[11px] font-semibold text-violet-400 uppercase tracking-widest">Premium Content</span>
-              </div>
-              <h1 className="text-lg font-bold text-white leading-tight">{pw.title || 'Previous Year Questions'}</h1>
-              {(pw.subject_name || pw.chapter_name) && (
-                <p className="text-sm text-white/45 mt-1">
-                  {[pw.subject_name, pw.chapter_name].filter(Boolean).join(' · ')}
-                </p>
-              )}
-            </div>
-            {/* Teaser preview */}
-            {pw.teaser && (
-              <div className="relative px-6 py-4" style={{ borderBottom: '1px solid rgba(139,92,246,0.08)' }}>
-                <p className="text-sm text-white/55 leading-relaxed line-clamp-3">{pw.teaser}</p>
-                <div className="absolute bottom-0 left-0 right-0 h-10 pointer-events-none" style={{ background: 'linear-gradient(to bottom, transparent, var(--card))' }} />
-              </div>
-            )}
-            {/* Stats + CTA */}
-            <div className="px-6 py-5">
-              {pw.pyq_count > 0 && (
-                <div className="flex items-center gap-2 mb-4">
-                  <div className="flex items-center gap-1.5 text-sm font-semibold text-amber-400">
-                    <Layers size={14} />
-                    {pw.pyq_count}+ PYQs locked
-                  </div>
-                  <span className="text-white/25 text-xs">— solved previous year questions</span>
-                </div>
-              )}
-              <Link
-                to="/subscribe"
-                className="flex items-center justify-center gap-2 w-full h-11 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
-                style={{ background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)', boxShadow: '0 4px 20px rgba(124,58,237,0.35)' }}
-              >
-                <Zap size={15} />
-                Unlock PYQs — ₹10/mo
-              </Link>
-              <p className="text-center text-[11px] text-white/30 mt-2.5">Starter plan · Cancel anytime · Instant access</p>
-              <div className="flex justify-center mt-4">
-                <Link to="/library" className="text-xs text-white/35 hover:text-white/60 flex items-center gap-1 transition-colors">
-                  <ArrowLeft size={11} /> Back to Library
-                </Link>
-              </div>
-            </div>
-          </div>
         </div>
       </AppLayout>
     );

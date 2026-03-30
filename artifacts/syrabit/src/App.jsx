@@ -51,8 +51,9 @@ const SubjectLandingPage = lazy(() => import("@/pages/SubjectLandingPage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
 const PaymentCancelPage  = lazy(() => import("@/pages/PaymentCancelPage"));
-const LearnPage          = lazy(() => import("@/pages/LearnPage"));
-const PYQReplicaPage     = lazy(() => import("@/pages/PYQReplicaPage"));
+const LearnPage              = lazy(() => import("@/pages/LearnPage"));
+const PYQReplicaPage         = lazy(() => import("@/pages/PYQReplicaPage"));
+const PersonalizedCmsPage    = lazy(() => import("@/pages/PersonalizedCmsPage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallback = () => (
@@ -184,6 +185,12 @@ function App() {
 
                   {/* ── CMS Learn pages ── */}
                   <Route path="/learn/:slug" element={<LearnPage />} />
+
+                  {/* ── Personalized CMS (private, paid) ── */}
+                  <Route path="/cms/:userId/:slug" element={<AuthGuard><PersonalizedCmsPage /></AuthGuard>} />
+
+                  {/* /subscribe → pricing */}
+                  <Route path="/subscribe" element={<PricingPage />} />
 
                   {/* ── PYQ HTML Replica pages ── */}
                   <Route path="/pyq/:slug" element={<PYQReplicaPage />} />

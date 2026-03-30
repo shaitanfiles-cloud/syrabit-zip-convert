@@ -5942,14 +5942,6 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 document_text=document_text,
             )
 
-    # ── PYQ paywall: strip pyq chunks for free-plan users ─────────────────────
-    _user_plan_ns = user.get("plan", "free")
-    _pyq_blocked_ns = 0
-    if _user_plan_ns == "free" and rag_ctx.get("chunks"):
-        _orig_ns = rag_ctx["chunks"]
-        rag_ctx["chunks"] = [c for c in _orig_ns if c.get("content_type") != "pyq"]
-        _pyq_blocked_ns = len(_orig_ns) - len(rag_ctx["chunks"])
-
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
         {
@@ -5971,14 +5963,6 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         syllabus=syllabus,
         web_results=web_results or None,
     )
-    if _pyq_blocked_ns > 0:
-        system_prompt += (
-            "\n\n[SYSTEM NOTE]: This student is on the FREE plan. "
-            f"{_pyq_blocked_ns} PYQ question(s) are locked behind a paywall. "
-            "If their question is about past year questions (PYQs), share what you know from general knowledge, "
-            "then end your answer with: "
-            "'\\n\\n🔒 **Unlock full PYQs** — Upgrade to Syrabit Starter at [/subscribe](/subscribe) for ₹10/mo.'"
-        )
 
     conv_id = msg.conversation_id
     history_messages = []
@@ -6268,14 +6252,6 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 subject_name=msg.subject_name, document_text=document_text
             )
 
-    # ── PYQ paywall: strip pyq chunks for free-plan users ─────────────────────
-    _user_plan_s = user.get("plan", "free")
-    _pyq_blocked_s = 0
-    if _user_plan_s == "free" and rag_ctx.get("chunks"):
-        _orig_s = rag_ctx["chunks"]
-        rag_ctx["chunks"] = [c for c in _orig_s if c.get("content_type") != "pyq"]
-        _pyq_blocked_s = len(_orig_s) - len(rag_ctx["chunks"])
-
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
         {
@@ -6297,14 +6273,6 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         syllabus=syllabus,
         web_results=web_results or None,
     )
-    if _pyq_blocked_s > 0:
-        system_prompt += (
-            "\n\n[SYSTEM NOTE]: This student is on the FREE plan. "
-            f"{_pyq_blocked_s} PYQ question(s) are locked behind a paywall. "
-            "If their question is about past year questions (PYQs), share what you know from general knowledge, "
-            "then end your answer with: "
-            "'\\n\\n🔒 **Unlock full PYQs** — Upgrade to Syrabit Starter at [/subscribe](/subscribe) for ₹10/mo.'"
-        )
 
     conv_id = msg.conversation_id
     history_messages = []
@@ -10879,8 +10847,8 @@ async def get_public_cms_library():
         return []
 
 @api.get("/content/cms-documents/{doc_id}")
-async def get_public_cms_document(doc_id: str, user: dict = Depends(get_current_user_optional)):
-    """Get single CMS document for public view. PYQ-category docs require a paid plan."""
+async def get_public_cms_document(doc_id: str):
+    """Get single CMS document for public view (PYQs and notes are freely scrapable)."""
     try:
         if not await is_mongo_available():
             raise HTTPException(status_code=503, detail="Content service unavailable")
@@ -10890,44 +10858,162 @@ async def get_public_cms_document(doc_id: str, user: dict = Depends(get_current_
         )
         if not doc:
             raise HTTPException(status_code=404, detail="Document not found")
-
-        # ── PYQ paywall: free / anonymous users get a teaser + upgrade CTA ───
-        if doc.get("category") == "pyq":
-            user_plan = (user or {}).get("plan", "free")
-            if user_plan == "free":
-                raw_content = doc.get("content") or doc.get("content_html") or ""
-                # Strip HTML tags for teaser
-                import re as _re
-                teaser_text = _re.sub(r'<[^>]+>', ' ', raw_content).strip()[:400]
-                pyq_count = doc.get("pyq_count") or 0
-                if not pyq_count:
-                    # rough count: count "Q." patterns in content
-                    pyq_count = len(_re.findall(r'\bQ\.\s*\d+|\bQuestion\s+\d+', raw_content[:5000])) or 0
-                return Response(
-                    content=json.dumps({
-                        "paywalled":   True,
-                        "category":    "pyq",
-                        "title":       doc.get("title", ""),
-                        "teaser":      teaser_text,
-                        "pyq_count":   pyq_count,
-                        "subject_name": doc.get("linked_subject_name") or doc.get("subject_name") or "",
-                        "chapter_name": doc.get("linked_chapter_title") or doc.get("chapter_name") or "",
-                        "upgrade_cta": {
-                            "text":  f"Unlock PYQs — ₹10/mo",
-                            "url":   "/subscribe",
-                            "price": "₹10/mo",
-                        },
-                    }),
-                    status_code=402,
-                    media_type="application/json",
-                )
-
         return doc
     except HTTPException:
         raise
     except Exception:
         mark_mongo_down()
         raise HTTPException(status_code=503, detail="Content service unavailable")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PERSONALIZED CMS — private, paid, un-scrapable study plans
+# GET  /cms/{user_id}/{slug}   — view a personal study plan (auth + paid plan)
+# GET  /cms/{user_id}          — list all personal plans for user
+# POST /cms/personalize        — generate a new personalized plan via Gemini
+# ──────────────────────────────────────────────────────────────────────────────
+
+_PLAN_IS_PAID = {"starter", "pro"}
+
+@api.get("/cms/{user_id}")
+async def list_personal_plans(user_id: str, user: dict = Depends(get_current_user)):
+    """List all personalized study plans that belong to this user (paid plan required)."""
+    if str(user["id"]) != str(user_id):
+        raise HTTPException(403, "Access denied")
+    if user.get("plan", "free") not in _PLAN_IS_PAID:
+        raise HTTPException(402, "Upgrade to Starter or Pro to access personalized study plans.")
+    if not await is_mongo_available():
+        raise HTTPException(503, "Content service unavailable")
+    docs = await db.cms_documents.find(
+        {"user_id": user_id, "doc_type": "personalized", "status": "published"},
+        {"_id": 0, "id": 1, "slug": 1, "title": 1, "created_at": 1, "subject_name": 1}
+    ).sort("created_at", -1).limit(50).to_list(50)
+    return {"plans": docs, "total": len(docs)}
+
+@api.get("/cms/{user_id}/{slug}")
+async def get_personal_plan(
+    user_id: str,
+    slug: str,
+    response: Response,
+    user: dict = Depends(get_current_user),
+):
+    """Fetch a single personalized study plan. Auth + paid plan required. No-index headers applied."""
+    if str(user["id"]) != str(user_id):
+        raise HTTPException(403, "This plan belongs to another account.")
+    if user.get("plan", "free") not in _PLAN_IS_PAID:
+        raise HTTPException(
+            402,
+            detail={
+                "error": "upgrade_required",
+                "message": "Personalized study plans require Starter or Pro.",
+                "upgrade_url": "/pricing",
+            }
+        )
+    if not await is_mongo_available():
+        raise HTTPException(503, "Content service unavailable")
+    doc = await db.cms_documents.find_one(
+        {"user_id": user_id, "$or": [{"id": slug}, {"slug": slug}], "doc_type": "personalized"},
+        {"_id": 0}
+    )
+    if not doc:
+        raise HTTPException(404, "Study plan not found.")
+    if response is not None:
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+        response.headers["Cache-Control"] = "private, no-store"
+    return doc
+
+
+class PersonalizePlanRequest(BaseModel):
+    subject_name: str = ""
+    chapter_name: str = ""
+    weak_topics: List[str] = []
+    context: str = ""          # e.g. "I'm weak in Motion and Gravitation"
+    days: int = 7              # sprint length
+
+
+@api.post("/cms/personalize")
+async def generate_personalized_plan(body: PersonalizePlanRequest, user: dict = Depends(get_current_user)):
+    """Generate a personalized study plan using Gemini and store it as a private CMS doc."""
+    if user.get("plan", "free") not in _PLAN_IS_PAID:
+        raise HTTPException(
+            402,
+            detail={
+                "error": "upgrade_required",
+                "message": "Personalized plans require a paid plan (Starter/Pro).",
+                "upgrade_url": "/pricing",
+            }
+        )
+    if not await is_mongo_available():
+        raise HTTPException(503, "Content service unavailable")
+
+    user_id = str(user["id"])
+    subject  = body.subject_name or "your subject"
+    chapter  = body.chapter_name or ""
+    days     = max(1, min(body.days, 30))
+    weak     = ", ".join(body.weak_topics) if body.weak_topics else body.context or "general gaps"
+
+    prompt = (
+        f"You are a personalised exam coach for AHSEC/SEBA students in Assam (NEP 2020).\n"
+        f"Student: {user.get('name', 'Student')} | Subject: {subject}"
+        + (f" | Chapter focus: {chapter}" if chapter else "") +
+        f"\nWeak areas identified: {weak}\n\n"
+        f"Create a detailed, actionable {days}-day study sprint plan:\n"
+        f"- Day-by-day schedule (topics, activities, timed blocks)\n"
+        f"- Specific PYQ practice recommendations from AHSEC board papers\n"
+        f"- Short-answer and long-answer question targets per day\n"
+        f"- Revision checkpoints and self-assessment tips\n"
+        f"- Exam-day strategy summary\n\n"
+        f"Format: Clean Markdown with ## Day headers. Be specific and motivating."
+    )
+
+    try:
+        plan_md = await call_slm(prompt, max_tokens=2000, temperature=0.7)
+    except Exception as e:
+        logger.error(f"Personalize plan generation failed: {e}")
+        raise HTTPException(500, "Plan generation failed. Please try again.")
+
+    plan_html = _md_to_html(plan_md)
+    word_count = len(plan_md.split())
+    slug_base  = re.sub(r"[^a-z0-9]+", "-", f"{subject} {days}-day plan".lower()).strip("-")
+    slug       = f"{slug_base}-{int(time.time())}"
+    doc_id     = str(uuid.uuid4())
+    now        = datetime.now(timezone.utc).isoformat()
+    title      = f"Your {days}-Day {subject.title()} Sprint" + (f": {chapter}" if chapter else "")
+
+    doc = {
+        "id":           doc_id,
+        "slug":         slug,
+        "user_id":      user_id,
+        "doc_type":     "personalized",
+        "category":     "study_plan",
+        "title":        title,
+        "content":      plan_md,
+        "content_html": plan_html,
+        "word_count":   word_count,
+        "subject_name": subject,
+        "chapter_name": chapter,
+        "weak_topics":  body.weak_topics,
+        "days":         days,
+        "status":       "published",
+        "created_at":   now,
+        "updated_at":   now,
+        "meta": {
+            "robots":    "noindex, nofollow",
+            "is_private": True,
+        },
+    }
+
+    await db.cms_documents.insert_one(doc)
+    doc.pop("_id", None)
+    logger.info(f"Personalized plan generated for user {user_id}: {doc_id}")
+    return {
+        "id":    doc_id,
+        "slug":  slug,
+        "title": title,
+        "url":   f"/cms/{user_id}/{slug}",
+        "doc":   {k: v for k, v in doc.items() if k != "_id"},
+    }
+
 
 # ──────────────────────────────────────────────
 # CMS POSTS — subject-merged blog posts

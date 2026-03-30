@@ -14,13 +14,14 @@ import {
   AlertTriangle, ChevronRight, Check, Copy,
   GraduationCap, BookMarked, Layers,
   Sparkles, Globe, CheckCircle, CreditCard,
+  FileText, Plus, Calendar, Target, Lock,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { isDegreeBoard } from '@/utils/courseTypes';
 import { useAuth } from '@/context/AuthContext';
 import { PageTitle } from '@/components/PageTitle';
 import { LogoMark } from '@/components/Logo';
-import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp } from '@/utils/api';
+import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp, cmsPersonalize, cmsListPlans } from '@/utils/api';
 import { toast } from 'sonner';
 
 // ── Load Razorpay checkout.js script once ─────────────────────────────────────
@@ -115,6 +116,11 @@ export default function ProfilePage() {
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpCredits, setTopUpCredits]     = useState(null);
   const [topUpLoading, setTopUpLoading]     = useState(false);
+  const [myPlans, setMyPlans]               = useState([]);
+  const [plansLoading, setPlansLoading]     = useState(false);
+  const [genLoading, setGenLoading]         = useState(false);
+  const [showGenModal, setShowGenModal]     = useState(false);
+  const [genForm, setGenForm]               = useState({ subject_name: '', context: '', days: 7 });
 
   const editInputRef = useRef(null);
 
@@ -138,6 +144,52 @@ export default function ProfilePage() {
       .catch(() => toast.error('Failed to load profile'))
       .finally(() => setLoading(false));
   }, [user]);
+
+  // ── Load personalized plans (paid users only) ─────────────────────────────
+  useEffect(() => {
+    if (!profile || !['starter', 'pro'].includes(profile.plan)) return;
+    setPlansLoading(true);
+    cmsListPlans(profile.id)
+      .then(r => setMyPlans(r.data?.plans || []))
+      .catch(() => {})
+      .finally(() => setPlansLoading(false));
+  }, [profile]);
+
+  // ── Generate personalized plan handler ────────────────────────────────────
+  const handleGeneratePlan = async () => {
+    if (!genForm.subject_name.trim() && !genForm.context.trim()) {
+      toast.error('Enter a subject or describe your weak areas.');
+      return;
+    }
+    setGenLoading(true);
+    try {
+      const res = await cmsPersonalize({
+        subject_name: genForm.subject_name,
+        context:      genForm.context,
+        days:         Number(genForm.days) || 7,
+        board_name:   profile?.board_name || '',
+        class_name:   profile?.class_name || '',
+      });
+      const { url, title, id: docId, slug } = res.data;
+      toast.success(`Plan created: "${title}"`, { description: 'Opening now…' });
+      setMyPlans(prev => [res.data.doc, ...prev]);
+      setShowGenModal(false);
+      setGenForm({ subject_name: '', context: '', days: 7 });
+      navigate(`/cms/${profile.id}/${slug}`);
+    } catch (e) {
+      const status = e.response?.status;
+      if (status === 402) {
+        toast.error('Upgrade to Starter or Pro to generate personalized plans.');
+        setShowGenModal(false);
+        setShowPaymentModal(true);
+        setPaymentPlan('starter');
+      } else {
+        toast.error(e.response?.data?.detail || 'Plan generation failed. Try again.');
+      }
+    } finally {
+      setGenLoading(false);
+    }
+  };
 
   // ── Auto-open payment modal from ?upgrade= query param ───────────────────
   useEffect(() => {
@@ -840,7 +892,101 @@ export default function ProfilePage() {
         </div>
 
         {/* ═══════════════════════════════════════════════════
-            SECTION 6 — ADMIN PORTAL (conditional)
+            SECTION 6 — PERSONALIZED STUDY PLANS
+            ═══════════════════════════════════════════════════ */}
+        <div className="glass-card rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">My Study Plans</p>
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
+                style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))', border: '1px solid rgba(139,92,246,0.20)' }}>
+                AI-Generated
+              </span>
+            </div>
+            {['starter', 'pro'].includes(plan) ? (
+              <button
+                onClick={() => setShowGenModal(true)}
+                className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-semibold text-white hover:opacity-90 transition-all"
+                style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)' }}>
+                <Plus size={12} /> Generate Plan
+              </button>
+            ) : (
+              <button
+                onClick={() => { setPaymentPlan('starter'); setShowPaymentModal(true); }}
+                className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-semibold hover:opacity-90 transition-all"
+                style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))', border: '1px solid rgba(139,92,246,0.20)' }}>
+                <Lock size={11} /> Starter only
+              </button>
+            )}
+          </div>
+
+          <div className="p-4">
+            {!['starter', 'pro'].includes(plan) ? (
+              <div className="text-center py-6 space-y-3">
+                <div className="w-10 h-10 rounded-xl mx-auto flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.10)' }}>
+                  <Sparkles size={18} className="text-violet-400" />
+                </div>
+                <p className="text-sm font-medium text-foreground">Personalized Exam Plans</p>
+                <p className="text-xs text-muted-foreground max-w-xs mx-auto">
+                  AI generates a custom day-by-day sprint based on your weak topics.
+                  Available on Starter &amp; Pro.
+                </p>
+                <button
+                  onClick={() => { setPaymentPlan('starter'); setShowPaymentModal(true); }}
+                  className="inline-flex items-center gap-2 h-9 px-5 rounded-xl text-sm font-semibold text-white hover:opacity-90 transition-all"
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', boxShadow: '0 4px 16px rgba(124,58,237,0.30)' }}>
+                  <Zap size={13} /> Upgrade — ₹99
+                </button>
+              </div>
+            ) : plansLoading ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 size={20} className="animate-spin text-violet-400" />
+              </div>
+            ) : myPlans.length === 0 ? (
+              <div className="text-center py-6 space-y-3">
+                <FileText size={28} className="mx-auto text-white/20" />
+                <p className="text-sm text-muted-foreground">No plans yet. Generate your first!</p>
+                <button
+                  onClick={() => setShowGenModal(true)}
+                  className="inline-flex items-center gap-2 h-9 px-5 rounded-xl text-sm font-semibold text-white hover:opacity-90 transition-all"
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', boxShadow: '0 4px 16px rgba(124,58,237,0.30)' }}>
+                  <Sparkles size={13} /> Generate My First Plan
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {myPlans.slice(0, 5).map(p => (
+                  <Link
+                    key={p.id}
+                    to={`/cms/${profile?.id}/${p.slug}`}
+                    className="flex items-center gap-3 p-3 rounded-xl hover:opacity-90 transition-all group"
+                    style={{ background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.12)' }}>
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
+                      style={{ background: 'rgba(139,92,246,0.12)' }}>
+                      <Target size={14} className="text-violet-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{p.title}</p>
+                      <p className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
+                        {p.subject_name && <span>{p.subject_name}</span>}
+                        {p.created_at && (
+                          <span className="flex items-center gap-1">
+                            <Calendar size={10} />
+                            {new Date(p.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                    <ChevronRight size={14} className="text-white/20 group-hover:text-white/50 transition-colors flex-shrink-0" />
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* ═══════════════════════════════════════════════════
+            SECTION 7 — ADMIN PORTAL (conditional)
             ═══════════════════════════════════════════════════ */}
         {profile?.is_admin && (
           <Link to="/admin">
@@ -1214,6 +1360,84 @@ export default function ProfilePage() {
               <p className="text-center text-xs text-muted-foreground/40">
                 Secured by Razorpay · UPI, Cards, Net Banking accepted
               </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Generate Plan Modal ──────────────────────────────────────────── */}
+      <AnimatePresence>
+        {showGenModal && (
+          <motion.div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            style={{ background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }}
+            onClick={e => { if (e.target === e.currentTarget) setShowGenModal(false); }}>
+            <motion.div
+              className="relative w-full max-w-md rounded-2xl overflow-hidden"
+              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+              style={{ background: 'var(--card)', border: '1px solid rgba(139,92,246,0.25)', boxShadow: '0 24px 80px rgba(0,0,0,0.5)' }}>
+              {/* Header */}
+              <div className="flex items-center justify-between px-5 pt-5 pb-4"
+                style={{ borderBottom: '1px solid rgba(139,92,246,0.10)' }}>
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.15)' }}>
+                    <Sparkles size={15} className="text-violet-400" />
+                  </div>
+                  <span className="text-sm font-bold text-white">Generate My Study Plan</span>
+                </div>
+                <button onClick={() => setShowGenModal(false)} className="p-1.5 rounded-lg hover:bg-white/8 transition-colors">
+                  <X size={16} className="text-white/50" />
+                </button>
+              </div>
+
+              {/* Form */}
+              <div className="p-5 space-y-4">
+                <div>
+                  <label className="text-xs font-medium text-white/60 block mb-1.5">Subject</label>
+                  <input
+                    type="text"
+                    value={genForm.subject_name}
+                    onChange={e => setGenForm(f => ({ ...f, subject_name: e.target.value }))}
+                    placeholder="e.g. Physics, Chemistry, English"
+                    className="w-full h-10 px-3 rounded-xl text-sm bg-white/5 border border-white/10 text-white placeholder:text-white/30 focus:outline-none focus:border-violet-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-white/60 block mb-1.5">What are you weak in?</label>
+                  <textarea
+                    rows={3}
+                    value={genForm.context}
+                    onChange={e => setGenForm(f => ({ ...f, context: e.target.value }))}
+                    placeholder="e.g. I struggle with Motion, Gravitation, and Optics."
+                    className="w-full px-3 py-2 rounded-xl text-sm bg-white/5 border border-white/10 text-white placeholder:text-white/30 focus:outline-none focus:border-violet-500/50 resize-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-white/60 block mb-1.5">Sprint length (days)</label>
+                  <div className="flex gap-2">
+                    {[3, 5, 7, 14].map(d => (
+                      <button key={d}
+                        onClick={() => setGenForm(f => ({ ...f, days: d }))}
+                        className={`flex-1 h-9 rounded-xl text-sm font-semibold border transition-all ${genForm.days === d
+                          ? 'text-white border-violet-500/60'
+                          : 'text-white/40 border-white/10 hover:border-white/20'}`}
+                        style={genForm.days === d ? { background: 'rgba(124,58,237,0.20)' } : {}}>
+                        {d}d
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleGeneratePlan}
+                  disabled={genLoading}
+                  className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 disabled:opacity-60 hover:opacity-90 transition-all"
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', boxShadow: '0 4px 20px rgba(124,58,237,0.35)' }}>
+                  {genLoading ? <><Loader2 size={15} className="animate-spin" /> Generating plan…</> : <><Sparkles size={15} /> Generate My {genForm.days}-Day Plan</>}
+                </button>
+                <p className="text-center text-[11px] text-white/30">Your plan is private — only you can see it</p>
+              </div>
             </motion.div>
           </motion.div>
         )}

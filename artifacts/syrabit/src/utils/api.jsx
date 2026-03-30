@@ -397,6 +397,16 @@ export const cmsAiSuggest = (token, text, action, subject = '', topic = '') =>
 export const adminUpdateUserCredits = (token, userId, data) =>
   axios.patch(`${API_BASE}/admin/users/${userId}/credits`, data, { headers: adminHeaders(token), withCredentials: true });
 
+// ── Personalized CMS ────────────────────────────────────────────────────────
+export const cmsPersonalize = (body) =>
+  apiClient().post('/cms/personalize', body);
+
+export const cmsListPlans = (userId) =>
+  apiClient().get(`/cms/${userId}`);
+
+export const cmsGetPlan = (userId, slug) =>
+  apiClient().get(`/cms/${userId}/${slug}`);
+
 export const adminSearchUsers = (token, params = {}) =>
   axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true, params });
 

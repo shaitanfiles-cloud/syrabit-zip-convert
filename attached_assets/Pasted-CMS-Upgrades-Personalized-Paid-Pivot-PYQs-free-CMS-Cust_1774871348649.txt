@@ -1,0 +1,74 @@
+CMS Upgrades: Personalized Paid Pivot 🚀
+
+PYQs free → CMS = Custom study plans | 5 upgrades → ₹50k MRR.
+
+New CMS Scope
+text
+Public: PYQs/notes on LearnPage (scrapable)
+Paid CMS: /cms/{user_id}/{personalized_slug}
+- Custom explanations: "Your Motion gaps"
+- Study plans: "Your 7-day Physics sprint"  
+- Session notes: "Your March 30 practice"
+- Progress reports: "78% mastery report"
+Priority Upgrades
+Upgrade	Why	Code	Time	ROI
+1. User-specific CMS	Personalization lock	/cms/{user_id}/{slug}	10min	Upsell king
+2. Razorpay /subscribe	Payment capture	Checkout + webhook	20min	₹50k MRR
+3. Signed URLs	Secure delivery	S3 presign per user	15min	Zero leaks
+4. Auto-generate plans	1-click premium	Gemini "Your gaps → plan"	25min	3x retention
+5. Usage analytics	Churn prevention	Per-user CMS views	10min	20% LTV boost
+Fix 1: User CMS Routes (10min)
+python
+@app.route("/cms/{user_id}/{slug}", methods=["GET"])
+async def user_cms(user_id: str, slug: str, user=Depends(get_user)):
+    if user.id != user_id or not user.is_paid():
+        raise HTTPException(403, "Private Study Plan")
+    
+    doc = await db.cms_documents.find_one({
+        "user_id": user_id,
+        "slug": slug,
+        "type": "personalized"
+    })
+    return doc
+Fix 2: Razorpay Subscribe (20min)
+python
+@app.post("/subscribe")
+async def razorpay_checkout(user=Depends(get_user)):
+    order = razorpay.order.create({
+        "amount": 1000,  # ₹10
+        "currency": "INR",
+        "notes": {"user_id": user.id}
+    })
+    return {"id": order.id, "amount": order.amount}
+Fix 3: Auto-Plans (25min)
+python
+@app.post("/cms/personalize")
+async def generate_plan(user=Depends(get_user)):
+    weak_topics = await get_user_weaknesses(user.id)
+    plan = await gemini.generate(f"Your Physics gaps: {weak_topics}\n7-day plan:")
+    doc_id = await db.cms_documents.insert_one({
+        "user_id": user.id,
+        "type": "personalized",
+        "slug": f"physics-plan-{datetime.now().isoformat()}",
+        "content": plan
+    })
+    return {"url": f"/cms/{user.id}/{doc_id}"}
+Student Flow
+text
+1. Chat: "I'm weak in Motion" → Free PYQs shown
+2. [₹10/mo] → "Generate My Plan" → CMS personalized
+3. /cms/user123/physics-plan → Private 7-day sprint
+4. Retention: 30% monthly → ₹50k MRR (5k users)
+Deploy Plan (90min → ₹50k)
+text
+1. User CMS routes (10min)
+2. Razorpay subscribe (20min)  
+3. Signed URLs (15min)
+4. Auto-plan Gemini (25min)
+5. Test: Weak topics → Paid plan ✓
+
+Monitor: CMS views/user → Churn insight
+CMS = personalized goldmine. PYQs free hook → Custom paid lock. ₹10 = "Your exam mastery".
+
+User routes FIRST → Razorpay subscribe → ₹50k MRR. 🚀
+
