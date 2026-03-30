@@ -7,6 +7,7 @@ import {
   Globe, LayoutTemplate, Wand2, Zap
 } from 'lucide-react';
 import PipelineProgressPanel from './PipelineProgressPanel';
+import AgenticCreatorModal from './AgenticCreatorModal';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { adminSeoExtractTopics } from '@/utils/api';
@@ -180,6 +181,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [selectedThumbVariant, setSelectedThumbVariant] = useState(0);
   const [generatingNotes, setGeneratingNotes] = useState(new Set());
   const [bulkGenerating, setBulkGenerating] = useState(false);
+  const [showAgenticCreator, setShowAgenticCreator] = useState(false);
   const fileInputRef = useRef(null);
   const thumbnailInputRef = useRef(null);
   const contentTextareaRef = useRef(null);
@@ -1331,14 +1333,13 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                           )}
                           {chapters.length > 0 && (
                             <button
-                              onClick={handleGenerateAllNotes}
-                              disabled={bulkGenerating}
-                              className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-medium transition-colors disabled:opacity-40"
-                              style={{ background: 'rgba(149,117,224,0.18)', color: '#c4b0f0' }}
-                              title="Generate AI notes for all chapters"
+                              onClick={() => setShowAgenticCreator(true)}
+                              className="flex items-center gap-1 h-6 px-2.5 rounded-lg text-[10px] font-semibold transition-all hover:brightness-110"
+                              style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.30),rgba(79,70,229,0.30))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.30)' }}
+                              title="Agentic content creator — notes, MCQs, flashcards"
                             >
-                              {bulkGenerating ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
-                              {bulkGenerating ? 'Generating…' : 'Gen All Notes'}
+                              <Zap size={10} />
+                              Agentic Generate
                             </button>
                           )}
                         </div>
@@ -1431,6 +1432,22 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
           onComplete={(summary) => {
             toast.success(`${summary.total_blogs} blogs published for "${subjectData?.name}"`);
             setMergedSubjectIds(prev => new Set([...prev, selSubject]));
+          }}
+        />
+      )}
+
+      {showAgenticCreator && selSubject && (
+        <AgenticCreatorModal
+          adminToken={adminToken}
+          subjectId={selSubject}
+          subjectName={subjectData?.name || selSubject}
+          chapterCount={chapters.length}
+          onClose={() => setShowAgenticCreator(false)}
+          onComplete={() => {
+            toast.success('Agentic generation complete — refreshing chapters…');
+            axios.get(`${API}/content/chapters?subject_id=${selSubject}`, authHeaders(adminToken))
+              .then(r => { if (r.data?.chapters) setChapters(r.data.chapters); })
+              .catch(() => {});
           }}
         />
       )}

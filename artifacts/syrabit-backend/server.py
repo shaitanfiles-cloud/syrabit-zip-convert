@@ -8344,6 +8344,150 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
     }
 
 
+@api.post("/admin/subjects/{subject_id}/generate-mcqs-bulk")
+async def admin_generate_mcqs_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """
+    Generate MCQs for ALL chapters of a subject using existing pipeline helper.
+    Runs sequentially. Upserts to mcq_collections. Returns per-chapter results.
+    """
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).sort("order_index", 1).to_list(100)
+
+    if not chapters:
+        return {"subject_id": subject_id, "results": [], "total": 0, "generated": 0}
+
+    subject_name = subject.get("name", "")
+    paper_type   = subject.get("paper_type", "")
+    class_name   = subject.get("className", "")
+    now_iso      = datetime.now(timezone.utc).isoformat()
+
+    results = []
+    for chapter in chapters:
+        chapter_id    = chapter.get("id", "")
+        chapter_title = (chapter.get("title") or "").strip()
+        content       = (chapter.get("content") or "").strip()
+
+        if not chapter_title:
+            results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
+            continue
+        if len(content) < 100:
+            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "skipped", "reason": "content too short"})
+            continue
+
+        try:
+            mcqs = await _pipeline_generate_mcqs(content, subject_name, chapter_title, class_name, count=20)
+            if mcqs:
+                mcq_doc = {
+                    "id": str(uuid.uuid4()),
+                    "subject_id": subject_id,
+                    "subject_name": subject_name,
+                    "chapter_id": chapter_id,
+                    "chapter_title": chapter_title,
+                    "mcqs": mcqs,
+                    "total": len(mcqs),
+                    "pipeline_generated": True,
+                    "created_at": now_iso,
+                }
+                await db.mcq_collections.update_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True},
+                    {"$set": mcq_doc},
+                    upsert=True,
+                )
+                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "ok", "count": len(mcqs)})
+            else:
+                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "empty response"})
+        except Exception as e:
+            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": str(e)[:80]})
+
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    total_mcqs = sum(r.get("count", 0) for r in results)
+    return {
+        "subject_id": subject_id,
+        "subject_name": subject_name,
+        "total": len(chapters),
+        "generated": ok_count,
+        "total_mcqs": total_mcqs,
+        "results": results,
+    }
+
+
+@api.post("/admin/subjects/{subject_id}/generate-flashcards-bulk")
+async def admin_generate_flashcards_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """
+    Generate flashcards for ALL chapters of a subject using existing pipeline helper.
+    Runs sequentially. Upserts to flashcard_collections. Returns per-chapter results.
+    """
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).sort("order_index", 1).to_list(100)
+
+    if not chapters:
+        return {"subject_id": subject_id, "results": [], "total": 0, "generated": 0}
+
+    subject_name = subject.get("name", "")
+    paper_type   = subject.get("paper_type", "")
+    class_name   = subject.get("className", "")
+    now_iso      = datetime.now(timezone.utc).isoformat()
+
+    results = []
+    for chapter in chapters:
+        chapter_id    = chapter.get("id", "")
+        chapter_title = (chapter.get("title") or "").strip()
+        content       = (chapter.get("content") or "").strip()
+
+        if not chapter_title:
+            results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
+            continue
+        if len(content) < 100:
+            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "skipped", "reason": "content too short"})
+            continue
+
+        try:
+            flashcards = await _pipeline_generate_flashcards(content, subject_name, chapter_title, class_name, count=25)
+            if flashcards:
+                fc_doc = {
+                    "id": str(uuid.uuid4()),
+                    "subject_id": subject_id,
+                    "subject_name": subject_name,
+                    "chapter_id": chapter_id,
+                    "chapter_title": chapter_title,
+                    "flashcards": flashcards,
+                    "total": len(flashcards),
+                    "pipeline_generated": True,
+                    "created_at": now_iso,
+                }
+                await db.flashcard_collections.update_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True},
+                    {"$set": fc_doc},
+                    upsert=True,
+                )
+                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "ok", "count": len(flashcards)})
+            else:
+                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "empty response"})
+        except Exception as e:
+            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": str(e)[:80]})
+
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    total_flashcards = sum(r.get("count", 0) for r in results)
+    return {
+        "subject_id": subject_id,
+        "subject_name": subject_name,
+        "total": len(chapters),
+        "generated": ok_count,
+        "total_flashcards": total_flashcards,
+        "results": results,
+    }
+
+
 @api.post("/admin/content/chapters/{chapter_id}/rechunk")
 async def admin_rechunk_chapter(chapter_id: str, admin: dict = Depends(get_admin_user)):
     """
