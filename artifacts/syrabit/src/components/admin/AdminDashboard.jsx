@@ -445,7 +445,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" style={{ marginBottom: vs.daily_signups?.length ? 14 : 0 }}>
           <StatCard
-            label="Registered Visitors"
+            label="Total Visitors"
             value={vs.registered_visitors ?? vs.total_visitors ?? 0}
             icon={Users}
             color="#22d3ee"
