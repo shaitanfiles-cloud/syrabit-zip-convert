@@ -11583,6 +11583,65 @@ async def get_merged_subject_ids(admin: dict = Depends(get_admin_user)):
         mark_mongo_down()
         return []
 
+@api.get("/admin/content/cms-documents/seo-topics-subject-ids")
+async def get_seo_topics_subject_ids(admin: dict = Depends(get_admin_user)):
+    """Return subject IDs that have at least one SEO topic in the topics collection."""
+    try:
+        if not await is_mongo_available():
+            return []
+        ids = await db.topics.distinct("subject_id", {"subject_id": {"$exists": True, "$ne": ""}})
+        return [sid for sid in ids if sid]
+    except Exception:
+        mark_mongo_down()
+        return []
+
+@api.get("/admin/content/cms-documents/assets-generated-subject-ids")
+async def get_assets_generated_subject_ids(admin: dict = Depends(get_admin_user)):
+    """Return subject IDs where all chapters have notes generated or content > 100 chars,
+    OR where pipeline artifacts (PYQs, flashcards, blogs) exist for that subject."""
+    try:
+        if not await is_mongo_available():
+            return []
+        chapter_pipeline = [
+            {"$match": {"subject_id": {"$exists": True, "$ne": ""}}},
+            {"$project": {
+                "subject_id": 1,
+                "has_notes": {"$or": [
+                    {"$eq": ["$notes_generated", True]},
+                    {"$gt": [{"$strLenCP": {"$trim": {"input": {"$ifNull": ["$content", ""]}}}}, 100]}
+                ]}
+            }},
+            {"$group": {
+                "_id": "$subject_id",
+                "total": {"$sum": 1},
+                "with_notes": {"$sum": {"$cond": ["$has_notes", 1, 0]}}
+            }},
+            {"$match": {"$expr": {"$eq": ["$total", "$with_notes"]}, "total": {"$gt": 0}}}
+        ]
+        chapter_results, pyq_sids, fc_sids, ai_pyq_sids = await asyncio.gather(
+            db.chapters.aggregate(chapter_pipeline).to_list(10000),
+            db.topic_pyq_collections.distinct("subject_id", {"subject_id": {"$exists": True, "$ne": ""}}),
+            db.flashcard_collections.distinct("subject_id", {"subject_id": {"$exists": True, "$ne": ""}}),
+            db.ai_pyq_collections.distinct("subject_id", {"subject_id": {"$exists": True, "$ne": ""}}),
+        )
+        result_set = set()
+        for r in chapter_results:
+            if r.get("_id"):
+                result_set.add(r["_id"])
+        for sid in pyq_sids:
+            if sid:
+                result_set.add(sid)
+        for sid in fc_sids:
+            if sid:
+                result_set.add(sid)
+        for sid in ai_pyq_sids:
+            if sid:
+                result_set.add(sid)
+        return list(result_set)
+    except Exception:
+        mark_mongo_down()
+        return []
+
 @api.get("/admin/content/cms-documents")
 async def get_cms_documents(admin: dict = Depends(get_admin_user)):
     """Get all CMS documents for admin"""

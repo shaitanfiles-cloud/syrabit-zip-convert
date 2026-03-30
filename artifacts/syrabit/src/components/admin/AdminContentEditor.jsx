@@ -573,6 +573,26 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     })();
   }, [adminToken]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await axios.get(`${API}/admin/content/cms-documents/seo-topics-subject-ids`, authHeaders(adminToken));
+        const ids = new Set((res.data || []).filter(Boolean));
+        if (ids.size > 0) setSeoTopicsGeneratedIds(prev => new Set([...prev, ...ids]));
+      } catch {}
+    })();
+  }, [adminToken]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await axios.get(`${API}/admin/content/cms-documents/assets-generated-subject-ids`, authHeaders(adminToken));
+        const ids = new Set((res.data || []).filter(Boolean));
+        if (ids.size > 0) setAssetsGeneratedIds(prev => new Set([...prev, ...ids]));
+      } catch {}
+    })();
+  }, [adminToken]);
+
   // Read CMS → Editor handoff prefill on mount
   useEffect(() => {
     try {
