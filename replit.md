@@ -72,7 +72,7 @@ Addresses Google "unhelpful content" signals from templated meta/titles/structur
 | # | Feature | Component | Status |
 |---|---------|-----------|--------|
 | T001 | Internal Linking Engine | AdminSeoManager → "🔗 Int. Links" tab | ✅ Done |
-| T002 | Quality Gate in Content Studio | AdminContentStudio → auto-score + warning banner | ✅ Done |
+| T002 | Quality Gate in Content Studio | AdminContentHub (Content Editor) → auto-score + warning banner | ✅ Done |
 | T003 | FAQ Auto-Extractor | AdminConversations → Extract FAQs button | ✅ Done |
 | T004 | Conversion Funnel + Drop-Off Rates | AdminMonetization → Funnel tab | ✅ Done |
 | T005 | PDF-to-Syllabus Importer | AdminSyllabusManager → PDF Import panel | ✅ Done |
@@ -102,8 +102,10 @@ Addresses Google "unhelpful content" signals from templated meta/titles/structur
 ```text
 artifacts-monorepo/
 ├── artifacts/              # Deployable applications
-│   └── api-server/         # Express API server
-├── lib/                    # Shared libraries
+│   ├── syrabit/            # React + Vite frontend (primary)
+│   ├── syrabit-backend/    # FastAPI Python backend
+│   └── mockup-sandbox/     # Component preview server
+├── lib/                    # Shared libraries (scaffolded, not actively used)
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
 │   ├── api-client-react/   # Generated React Query hooks
 │   ├── api-zod/            # Generated Zod schemas from OpenAPI
@@ -130,18 +132,6 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 - `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
 
 ## Packages
-
-### `artifacts/api-server` (`@workspace/api-server`)
-
-Express 5 API server. Routes live in `src/routes/` and use `@workspace/api-zod` for request and response validation and `@workspace/db` for persistence.
-
-- Entry: `src/index.ts` — reads `PORT`, starts Express
-- App setup: `src/app.ts` — mounts CORS, JSON/urlencoded parsing, routes at `/api`
-- Routes: `src/routes/index.ts` mounts sub-routers; `src/routes/health.ts` exposes `GET /health` (full path: `/api/health`)
-- Depends on: `@workspace/db`, `@workspace/api-zod`
-- `pnpm --filter @workspace/api-server run dev` — run the dev server
-- `pnpm --filter @workspace/api-server run build` — production esbuild bundle (`dist/index.cjs`)
-- Build bundles an allowlist of deps (express, cors, pg, drizzle-orm, zod, etc.) and externalizes the rest
 
 ### `lib/db` (`@workspace/db`)
 

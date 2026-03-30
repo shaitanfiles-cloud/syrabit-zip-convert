@@ -301,8 +301,6 @@ def _redis_del(prefix: str, key: str):
 def _redis_get_ai_cache(key: str) -> Optional[str]:
     return _redis_get("ai_cache", key)
 
-def _redis_set_ai_cache(key: str, value: str):
-    _redis_set("ai_cache", key, value, REDIS_AI_CACHE_TTL)
 
 def _redis_cache_conversation(conv_id: str, user_id: str, conv_data: dict):
     _redis_set("chat", f"{conv_id}:{user_id}", json.dumps(conv_data, default=str), REDIS_CHAT_CACHE_TTL)
@@ -1015,12 +1013,6 @@ if redis_client:
 else:
     logger.warning("Redis not configured — using in-memory caching/rate-limiting")
 
-def supa_table(table: str):
-    """Return Supabase table builder, or raise if unavailable."""
-    if supa is None:
-        raise RuntimeError("Supabase not configured")
-    return supa.table(table)
-
 async def get_user_credits(user: dict) -> dict:
     """
     Lifetime credits — NO daily/monthly reset.
@@ -1146,14 +1138,6 @@ async def get_current_user_optional(
     except:
         return None
 
-def require_role(*roles: str):
-    async def _checker(user: dict = Depends(get_current_user)):
-        user_role = user.get("role", "student")
-        if user_role not in roles:
-            raise HTTPException(status_code=403, detail=f"Requires one of: {', '.join(roles)}")
-        return user
-    return _checker
-
 async def get_admin_user(
     creds: Optional[HTTPAuthorizationCredentials] = Depends(security),
     syrabit_admin_session: Optional[str] = Cookie(default=None),
@@ -1168,9 +1152,6 @@ async def get_admin_user(
         return payload
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid admin token")
-
-def get_today_str() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 # ─────────────────────────────────────────────
 # RATE LIMITER — sliding window, per user/IP
@@ -1213,17 +1194,6 @@ def check_rate_limit(key: str, max_requests: int = 100, window_seconds: int = 60
         except Exception as e:
             logger.debug(f"Redis rate limit failed, falling back to memory: {e}")
     return _check_rate_limit_memory(key, max_requests, window_seconds)
-
-async def rate_limit_user(user: dict = Depends(get_current_user)):
-    """Dependency: 100 req/min per user. Returns 429 if exceeded."""
-    user_id = user.get("id", "anonymous")
-    if not check_rate_limit(f"user:{user_id}", max_requests=300, window_seconds=60):
-        raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded — 100 requests/minute. Please wait.",
-            headers={"Retry-After": "60", "X-RateLimit-Limit": "100"},
-        )
-    return user
 
 async def rate_limit_chat(user: dict = Depends(get_current_user)):
     """Dependency: 30 chat req/min per user (stricter for AI)."""
@@ -2906,11 +2876,6 @@ async def resolve_rag_context(
     return {"chunks": [], "chapters": [], "subjects": [], "vector_hits": [], "source": "none", "quality": "none"}
 
 
-async def web_search_fallback(query: str, num_results: int = 5) -> list:
-    """Alias kept for internal compatibility — delegates to web_search_with_fallback."""
-    return await web_search_with_fallback(query, num_results=num_results)
-
-
 async def _ddg_text_search(query: str, num_results: int) -> list:
     """DuckDuckGo text search — primary browser-style web search."""
     def _run():
@@ -3659,10 +3624,6 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     return await _llm_batcher.call(messages, model, max_tokens)
 
 
-def _stream_filter_think(token_iter):
-    """Async generator that strips <think>...</think> blocks from a token stream."""
-    return token_iter  # caller handles filtering inline
-
 _THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
 
 def _inject_think_budget(messages: list) -> list:
@@ -4017,11 +3978,6 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
 import concurrent.futures as _cf
 _THREAD_POOL = _cf.ThreadPoolExecutor(max_workers=50)
-
-def _run_sync(fn):
-    """Execute a sync supabase-py call in a background thread."""
-    loop = asyncio.get_event_loop()
-    return loop.run_in_executor(_THREAD_POOL, fn)
 
 async def _supa(fn):
     """Await a sync supabase-py operation non-blockingly."""
