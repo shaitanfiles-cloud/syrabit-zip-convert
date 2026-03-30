@@ -49,6 +49,13 @@ export default function PageMeta({
       <meta name="twitter:title" content={title} />
       <meta name="twitter:description" content={description} />
       <meta name="twitter:image" content={absImage} />
+
+      {/* GEO targeting */}
+      <meta name="geo.region" content="IN-AS" />
+      <meta name="geo.placename" content="Assam, India" />
+      <meta name="geo.position" content="26.2006;92.9376" />
+      <meta name="ICBM" content="26.2006, 92.9376" />
+      <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
     </Helmet>
   );
 }

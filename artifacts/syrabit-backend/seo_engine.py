@@ -1262,6 +1262,30 @@ _PAGE_TYPE_LABELS = {
     "examples": "Solved Examples",
 }
 
+_ASSAM_GEO = {
+    "@type": "Place",
+    "name": "Assam, India",
+    "geo": {"@type": "GeoCoordinates", "latitude": 26.2006, "longitude": 92.9376},
+    "address": {"@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN"},
+}
+
+_ORG_NODE = {
+    "@type": "Organization",
+    "name": "Syrabit.ai",
+    "url": "https://syrabit.ai",
+    "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
+    "areaServed": {
+        "@type": "State",
+        "name": "Assam",
+        "containedInPlace": {"@type": "Country", "name": "India"},
+    },
+    "address": {
+        "@type": "PostalAddress",
+        "addressRegion": "Assam",
+        "addressCountry": "IN",
+    },
+}
+
 
 def _render_seo_html(
     page: dict,
@@ -1286,30 +1310,6 @@ def _render_seo_html(
 
     edu_level = f"{board} {cls}".strip()
     subject_url = f"https://syrabit.ai/{page.get('board_slug','')}/{page.get('class_slug','')}/{page.get('subject_slug','')}"
-
-    _ASSAM_GEO = {
-        "@type": "Place",
-        "name": "Assam, India",
-        "geo": {"@type": "GeoCoordinates", "latitude": 26.2006, "longitude": 92.9376},
-        "address": {"@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN"},
-    }
-
-    _ORG_NODE = {
-        "@type": "Organization",
-        "name": "Syrabit.ai",
-        "url": "https://syrabit.ai",
-        "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
-        "areaServed": {
-            "@type": "State",
-            "name": "Assam",
-            "containedInPlace": {"@type": "Country", "name": "India"},
-        },
-        "address": {
-            "@type": "PostalAddress",
-            "addressRegion": "Assam",
-            "addressCountry": "IN",
-        },
-    }
 
     # ── Schema.org graph ────────────────────────────────────────────────────
     graph_nodes = [
@@ -1632,11 +1632,11 @@ async def get_homepage_html():
          "description": desc,
          "potentialAction": {"@type": "SearchAction", "target": "https://syrabit.ai/search?q={search_term_string}",
                              "query-input": "required name=search_term_string"}},
-        {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai",
-         "logo": "https://syrabit.ai/icons/icon-192x192.png",
-         "sameAs": []},
+        _ORG_NODE,
         {"@type": "EducationalOrganization", "name": "Syrabit.ai",
-         "description": "AI-powered study platform for Assam Board students"},
+         "description": "AI-powered study platform for Assam Board students",
+         "areaServed": {"@type": "State", "name": "Assam", "containedInPlace": {"@type": "Country", "name": "India"}},
+         "address": {"@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN"}},
     ]}, ensure_ascii=False)
 
     html_out = f"""<!DOCTYPE html>
@@ -1653,9 +1653,13 @@ async def get_homepage_html():
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Syrabit.ai">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="robots" content="index, follow">
+<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
 <meta name="geo.region" content="IN-AS">
-<meta name="geo.placename" content="Assam">
+<meta name="geo.placename" content="Assam, India">
+<meta name="geo.position" content="26.2006;92.9376">
+<meta name="ICBM" content="26.2006, 92.9376">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta property="og:locale" content="en_IN">
 <script type="application/ld+json">{schema}</script>
 <style>
 body{{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:0 auto;padding:1rem;color:#1a1a1a;line-height:1.6}}
@@ -1665,6 +1669,8 @@ ul{{list-style:none;padding:0}}li{{margin:.5rem 0}}
 small{{color:#6b7280}}.stats{{display:flex;gap:2rem;margin:1rem 0}}
 .stat{{text-align:center}}.stat strong{{display:block;font-size:1.5rem;color:#2563eb}}
 footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:.85rem;color:#9ca3af}}
+.geo-footer{{font-size:.8rem;color:#9ca3af;margin-top:.5rem}}
+@media(max-width:640px){{body{{padding:.75rem}}h1{{font-size:1.5rem}}h2{{font-size:1.2rem}}.stats{{flex-direction:column;gap:.5rem}}}}
 </style>
 </head>
 <body>
@@ -1691,7 +1697,8 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 </ul>
 </main>
 <footer>
-<p>&copy; Syrabit.ai — AI-powered exam prep for AHSEC, SEBA &amp; Degree students in Assam</p>
+<p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
+<p class="geo-footer">Serving students in Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, and across Assam, India</p>
 <p><a href="https://syrabit.ai/library">Full Library</a> &middot; <a href="https://syrabit.ai/chat">AI Chat</a></p>
 </footer>
 </body>
@@ -1747,7 +1754,11 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
     schema = json.dumps({"@context": "https://schema.org", "@graph": [
         {"@type": "CollectionPage", "name": title, "description": desc, "url": page_url,
          "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
-         "provider": {"@type": "Organization", "name": "Syrabit.ai"}},
+         "provider": _ORG_NODE,
+         "spatialCoverage": _ASSAM_GEO,
+         "audience": {"@type": "EducationalAudience", "educationalRole": "student",
+                      "geographicArea": "Assam, India"},
+         "educationalLevel": f"{board_label} {class_label}"},
         {"@type": "ItemList", "itemListElement": items_ld},
         {"@type": "BreadcrumbList", "itemListElement": [
             {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
@@ -1770,7 +1781,13 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Syrabit.ai">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="robots" content="index, follow">
+<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
+<meta name="geo.region" content="IN-AS">
+<meta name="geo.placename" content="Assam, India">
+<meta name="geo.position" content="26.2006;92.9376">
+<meta name="ICBM" content="26.2006, 92.9376">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta property="og:locale" content="en_IN">
 <script type="application/ld+json">{schema}</script>
 <style>
 body{{font-family:system-ui,-apple-system,sans-serif;max-width:800px;margin:0 auto;padding:1rem;color:#1a1a1a;line-height:1.6}}
@@ -1779,6 +1796,8 @@ h1{{font-size:1.8rem;margin-bottom:.5rem}}h2{{font-size:1.3rem;margin-top:2rem;b
 ul{{list-style:none;padding:0}}li{{margin:.8rem 0;padding:.5rem;border:1px solid #e5e7eb;border-radius:6px}}
 small{{color:#6b7280}}nav{{font-size:.9rem;color:#6b7280;margin-bottom:1rem}}
 footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:.85rem;color:#9ca3af}}
+.geo-footer{{font-size:.8rem;color:#9ca3af;margin-top:.5rem}}
+@media(max-width:640px){{body{{padding:.75rem}}h1{{font-size:1.4rem}}h2{{font-size:1.1rem}}li{{padding:.4rem}}}}
 </style>
 </head>
 <body>
@@ -1796,7 +1815,8 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 {topics_html}
 </main>
 <footer>
-<p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board students</p>
+<p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
+<p class="geo-footer">Serving students in Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, and across Assam, India</p>
 </footer>
 </body>
 </html>"""

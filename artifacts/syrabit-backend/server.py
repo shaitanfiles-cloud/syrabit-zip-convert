@@ -12926,7 +12926,11 @@ def _bot_html_response(html: str):
     from fastapi.responses import HTMLResponse
     return HTMLResponse(
         content=html, status_code=200,
-        headers={"Cache-Control": "public, max-age=3600, s-maxage=86400", "X-Bot-Rendered": "1"},
+        headers={
+            "Cache-Control": "public, max-age=3600, s-maxage=86400",
+            "X-Bot-Rendered": "1",
+            "Vary": "User-Agent",
+        },
     )
 
 
