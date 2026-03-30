@@ -15715,7 +15715,7 @@ async def _pipeline_process_one_chapter(
             pct = int(5 + (done_counter["done"] / max(total_chapters, 1)) * 88)
             _pipeline_jobs[job_id].update({"progress": pct, "message": f"Chapter {done_counter['done']}/{total_chapters} complete"})
 
-        return {"skipped": False, "result": chapter_result, "blog_urls": geo_blog_urls, "mcqs": len(mcqs or []), "flashcards": len(flashcards or []), "pyq": chapter_result["pyq_page"]}
+        return {"skipped": False, "result": chapter_result, "blog_urls": geo_blog_urls, "mcqs": len(topic_pyqs or []), "flashcards": len(flashcards or []), "pyq": chapter_result["pyq_page"]}
 
 
 async def _safe(coro):
@@ -15822,18 +15822,23 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
 
     _invalidate_content_cache("chapters")
 
-    # ── Step 6: Regenerate Sitemap & Ping Google ─────────────────────────────
+    # ── Step 6: Verify Sitemap is Alive (self-check) ─────────────────────────
+    # Google deprecated their sitemap ping endpoint in 2023 (returns 404).
+    # Instead we self-verify our own sitemap endpoint on localhost.
     try:
-        base_url = (os.environ.get("FRONTEND_URL") or "https://syrabit.ai").rstrip("/")
-        sitemap_url = f"{base_url}/api/seo/sitemap.xml"
+        local_port = int(os.environ.get("PORT", "5000"))
+        sitemap_local = f"http://localhost:{local_port}/api/seo/sitemap.xml"
         async with httpx.AsyncClient(timeout=10.0) as client:
-            ping_resp = await client.get(f"https://www.google.com/ping?sitemap={sitemap_url}")
+            smap_resp = await client.get(sitemap_local)
             summary["sitemap_pinged"] = True
-            summary["ping_status"] = f"HTTP {ping_resp.status_code}"
-            logger.info(f"Google sitemap ping: {ping_resp.status_code} for {sitemap_url}")
+            if smap_resp.status_code == 200:
+                summary["ping_status"] = "Sitemap OK"
+            else:
+                summary["ping_status"] = f"Sitemap HTTP {smap_resp.status_code}"
+            logger.info(f"Sitemap self-check: {smap_resp.status_code} at {sitemap_local}")
     except Exception as e:
-        summary["ping_status"] = f"ping failed: {str(e)[:60]}"
-        logger.warning(f"Sitemap ping failed: {e}")
+        summary["ping_status"] = f"check failed: {str(e)[:50]}"
+        logger.warning(f"Sitemap self-check failed: {e}")
 
     logger.info(
         f"Pipeline complete: subject={subject_name}, chapters={summary['chapters_processed']}, "
