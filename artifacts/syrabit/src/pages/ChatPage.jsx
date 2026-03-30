@@ -110,7 +110,10 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
 
   const boardLabel = (() => {
     if (ragSource === 'document')                       return 'Document';
-    if (ragSource === 'rag' || ragSource === 'rag+web') return 'AssamBoard Curriculum';
+    if (ragSource === 'rag' || ragSource === 'rag+web') {
+      // Use the actual subject name when known; avoid hard-coding the board name
+      return ragSubjectName ? `${ragSubjectName} — Curriculum` : 'Syrabit Curriculum';
+    }
     if (ragSource === 'web')                            return 'Web Search';
     return 'Syrabit Library';
   })();
@@ -124,9 +127,9 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
   // Separate content-card attribution from URL-based sources
   const contentCardSource = hasSrc ? sources.find(s => s.type === 'content_card') : null;
   const hasNamedContentCard = !!(contentCardSource && (contentCardSource.card_name || contentCardSource.lesson_name));
-  // Hide raw URL-only sources when a named content card is present
+  // Always show all sources with a URL — content card is additive, not a replacement
   const visibleSources = hasSrc
-    ? sources.filter(s => s.type !== 'content_card' && (s.url || s.slug) && !(hasNamedContentCard && !s.url))
+    ? sources.filter(s => s.type !== 'content_card' && (s.url || s.slug))
     : [];
   const subjectUrl     = ragSubjectId ? `/subject/${ragSubjectId}` : null;
   const fallbackUrl    = subjectUrl || '/library';
@@ -134,7 +137,7 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
 
   const footerText = [
     ragChunks > 0 ? `${ragChunks} chunks` : null,
-    (ragSource === 'rag' || ragSource === 'rag+web') ? 'AssamBoard Curriculum' : null,
+    (ragSource === 'rag' || ragSource === 'rag+web') ? (ragSubjectName ? `${ragSubjectName} curriculum` : 'Syrabit curriculum') : null,
     ragSource === 'web' ? 'Web search' : null,
     ragSource === 'document' ? 'Uploaded document' : null,
   ].filter(Boolean).join(' · ');
@@ -230,22 +233,25 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
         </div>
       )}
 
-      {/* Individual page links — hidden when named content card is present */}
-      {!hasNamedContentCard && visibleSources.length > 0 && (
+      {/* Individual page links — always shown when available (content card is additive) */}
+      {visibleSources.length > 0 && (
         <div className="source-pages">
-          {visibleSources.map((src, i) => (
-            <button
-              key={i}
-              onClick={() => handleNav(src.url || '')}
-              className="source-link"
-              title={src.url || src.title}
-              disabled={!src.url}
-            >
-              <span className="source-link-icon">📖</span>
-              <span className="truncate">{src.title || src.slug}</span>
-              {src.url && <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />}
-            </button>
-          ))}
+          {visibleSources.map((src, i) => {
+            const tooltip = [src.title, src.slug].filter(Boolean).join(' — ') || src.url || 'View source';
+            return (
+              <button
+                key={i}
+                onClick={() => handleNav(src.url || '')}
+                className="source-link"
+                title={tooltip}
+                disabled={!src.url}
+              >
+                <span className="source-link-icon">📖</span>
+                <span className="truncate">{src.title || src.slug}</span>
+                {src.url && <ExternalLink size={9} className="shrink-0 ml-auto opacity-40" />}
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -281,10 +287,10 @@ function MarkdownContent({ content, streaming, sources }) {
       if (s.title) urlMap.set(s.title.trim().toLowerCase(), url);
       if (s.slug)  urlMap.set(s.slug.trim().toLowerCase(),  url || `/learn/${s.slug}`);
     }
-    // Replace [PAGE: Title] with [Title](url) markdown links
-    return content.replace(/\[PAGE:\s*([^\]]+)\]/g, (_, rawTitle) => {
-      const title  = rawTitle.trim();
-      const key    = title.toLowerCase();
+    // Replace [PAGE/CHAPTER/TOPIC/LESSON/SECTION: Title] with [Title](url) markdown links
+    return content.replace(/\[(PAGE|CHAPTER|TOPIC|LESSON|SECTION):\s*([^\]]+)\]/gi, (_, _type, rawTitle) => {
+      const title   = rawTitle.trim();
+      const key     = title.toLowerCase();
       // Try exact title match, then slug-style key
       const slugKey = key.replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
       const url = urlMap.get(key) || urlMap.get(slugKey) || '';
@@ -430,10 +436,19 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
                     <button
                       onClick={() => handlePillNav(pillUrl)}
                       className="source-mini-pill"
-                      title="View source"
+                      title={[
+                        msg.rag_source === 'document' ? 'Uploaded Document' : (subjectLabel || 'Syrabit Curriculum'),
+                        chapterLabel,
+                      ].filter(Boolean).join(' › ')}
                     >
                       <BookOpen size={10} className="shrink-0" />
-                      <span className="pill-seg pill-brand">AssamBoard Curriculum</span>
+                      <span className="pill-seg pill-brand">
+                        {msg.rag_source === 'document'
+                          ? 'Document'
+                          : msg.rag_source === 'web'
+                          ? 'Web Search'
+                          : 'Syrabit'}
+                      </span>
                       {subjectLabel && (
                         <>
                           <span className="pill-dot">·</span>
