@@ -1529,6 +1529,216 @@ async def _build_related_data(page: dict, board: str, class_slug: str, subject_s
     return related, prev_t, next_t
 
 
+@router.get("/html/homepage", response_class=HTMLResponse)
+async def get_homepage_html():
+    subjects = await _db.seo_pages.aggregate([
+        {"$match": {"status": "published", "page_type": "notes"}},
+        {"$group": {
+            "_id": {"board": "$board_slug", "cls": "$class_slug", "subj": "$subject_slug"},
+            "subject_name": {"$first": "$subject_name"},
+            "board_name": {"$first": "$board_name"},
+            "class_name": {"$first": "$class_name"},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"count": -1}},
+        {"$limit": 50},
+    ]).to_list(50)
+
+    total_pages = await _db.seo_pages.count_documents({"status": "published"})
+
+    title = "Syrabit.ai — Free AHSEC, SEBA & Degree Study Notes, PYQs & MCQs for Assam Students"
+    desc = (
+        "AI-powered study platform for Assam Board (AHSEC/SEBA) and Degree students. "
+        "Free topic-wise notes, previous year questions, MCQs, and important questions "
+        f"across {len(subjects)} subjects and {total_pages}+ pages."
+    )
+
+    subj_html_parts = []
+    for s in subjects:
+        g = s["_id"]
+        url = f"https://syrabit.ai/{g['board']}/{g['cls']}/{g['subj']}"
+        label = f"{s.get('subject_name', g['subj'])} — {s.get('board_name', g['board'])} {s.get('class_name', g['cls'])}"
+        subj_html_parts.append(
+            f'<li><a href="{url}">{html_mod.escape(label)}</a> <small>({s["count"]} topics)</small></li>'
+        )
+    subj_list = "\n".join(subj_html_parts)
+
+    schema = json.dumps({"@context": "https://schema.org", "@graph": [
+        {"@type": "WebSite", "name": "Syrabit.ai", "url": "https://syrabit.ai",
+         "description": desc,
+         "potentialAction": {"@type": "SearchAction", "target": "https://syrabit.ai/search?q={search_term_string}",
+                             "query-input": "required name=search_term_string"}},
+        {"@type": "Organization", "name": "Syrabit.ai", "url": "https://syrabit.ai",
+         "logo": "https://syrabit.ai/icons/icon-192x192.png",
+         "sameAs": []},
+        {"@type": "EducationalOrganization", "name": "Syrabit.ai",
+         "description": "AI-powered study platform for Assam Board students"},
+    ]}, ensure_ascii=False)
+
+    html_out = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html_mod.escape(title)}</title>
+<meta name="description" content="{html_mod.escape(desc)}">
+<link rel="canonical" href="https://syrabit.ai">
+<meta property="og:title" content="{html_mod.escape(title)}">
+<meta property="og:description" content="{html_mod.escape(desc)}">
+<meta property="og:url" content="https://syrabit.ai">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="robots" content="index, follow">
+<meta name="geo.region" content="IN-AS">
+<meta name="geo.placename" content="Assam">
+<script type="application/ld+json">{schema}</script>
+<style>
+body{{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:0 auto;padding:1rem;color:#1a1a1a;line-height:1.6}}
+a{{color:#2563eb;text-decoration:none}}a:hover{{text-decoration:underline}}
+h1{{font-size:2rem}}h2{{font-size:1.4rem;margin-top:2rem}}
+ul{{list-style:none;padding:0}}li{{margin:.5rem 0}}
+small{{color:#6b7280}}.stats{{display:flex;gap:2rem;margin:1rem 0}}
+.stat{{text-align:center}}.stat strong{{display:block;font-size:1.5rem;color:#2563eb}}
+footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:.85rem;color:#9ca3af}}
+</style>
+</head>
+<body>
+<header>
+<h1>Syrabit.ai</h1>
+<p>Free AI-powered study material for <strong>AHSEC</strong>, <strong>SEBA</strong>, and <strong>Degree</strong> students in Assam.</p>
+<div class="stats">
+<div class="stat"><strong>{total_pages}+</strong>Study pages</div>
+<div class="stat"><strong>{len(subjects)}</strong>Subjects</div>
+</div>
+</header>
+<main>
+<h2>Browse Subjects</h2>
+<ul>
+{subj_list}
+</ul>
+<h2>What You Get — Free</h2>
+<ul>
+<li>Topic-wise study notes aligned to your syllabus</li>
+<li>Previous year questions (PYQs) with answers</li>
+<li>MCQs for quick revision</li>
+<li>Important questions mark-wise</li>
+<li>Definitions and examples</li>
+</ul>
+</main>
+<footer>
+<p>&copy; Syrabit.ai — AI-powered exam prep for AHSEC, SEBA &amp; Degree students in Assam</p>
+<p><a href="https://syrabit.ai/library">Full Library</a> &middot; <a href="https://syrabit.ai/chat">AI Chat</a></p>
+</footer>
+</body>
+</html>"""
+    return HTMLResponse(content=html_out)
+
+
+@router.get("/html/subject/{board}/{class_slug}/{subject_slug}", response_class=HTMLResponse)
+async def get_subject_landing_html(board: str, class_slug: str, subject_slug: str):
+    pages = await _db.seo_pages.find(
+        {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
+         "status": "published", "page_type": "notes"},
+        {"_id": 0, "topic_title": 1, "topic_slug": 1, "meta_description": 1,
+         "chapter_title": 1, "quality_score": 1},
+    ).to_list(500)
+    if not pages:
+        raise HTTPException(status_code=404, detail="No published topics for this subject")
+
+    subject_doc = await _db.subjects.find_one({"slug": subject_slug}, {"_id": 0, "name": 1})
+    subject_name = subject_doc["name"] if subject_doc else subject_slug.replace("-", " ").title()
+    board_label = board.upper() if board in ("ahsec", "seba") else board.title()
+    class_label = class_slug.replace("-", " ").title()
+
+    page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}"
+    title = f"{subject_name} — {board_label} {class_label} Study Notes, MCQs & PYQs | Syrabit.ai"
+    desc = f"Free {subject_name} study material for {board_label} {class_label}. Topic-wise notes, MCQs, important questions, and previous year questions."
+
+    by_chapter: dict = {}
+    for p in pages:
+        ch = p.get("chapter_title", "General")
+        by_chapter.setdefault(ch, []).append(p)
+
+    topics_html_parts = []
+    for ch, ch_pages in by_chapter.items():
+        topics_html_parts.append(f'<h2>{html_mod.escape(ch)}</h2><ul>')
+        for tp in ch_pages:
+            t_slug = tp.get("topic_slug", "")
+            t_title = html_mod.escape(tp.get("topic_title", t_slug))
+            t_desc = html_mod.escape(tp.get("meta_description", "")[:120])
+            url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{t_slug}"
+            topics_html_parts.append(
+                f'<li><a href="{url}"><strong>{t_title}</strong></a>'
+                f'<br><small>{t_desc}</small></li>'
+            )
+        topics_html_parts.append("</ul>")
+    topics_html = "\n".join(topics_html_parts)
+
+    items_ld = [
+        {"@type": "ListItem", "position": i + 1, "name": p.get("topic_title", ""),
+         "url": f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{p.get('topic_slug', '')}"}
+        for i, p in enumerate(pages)
+    ]
+    schema = json.dumps({"@context": "https://schema.org", "@graph": [
+        {"@type": "CollectionPage", "name": title, "description": desc, "url": page_url,
+         "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
+         "provider": {"@type": "Organization", "name": "Syrabit.ai"}},
+        {"@type": "ItemList", "itemListElement": items_ld},
+        {"@type": "BreadcrumbList", "itemListElement": [
+            {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
+            {"@type": "ListItem", "position": 2, "name": "Library", "item": "https://syrabit.ai/library"},
+            {"@type": "ListItem", "position": 3, "name": subject_name, "item": page_url},
+        ]},
+    ]}, ensure_ascii=False)
+
+    html_out = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html_mod.escape(title)}</title>
+<meta name="description" content="{html_mod.escape(desc)}">
+<link rel="canonical" href="{html_mod.escape(page_url)}">
+<meta property="og:title" content="{html_mod.escape(title)}">
+<meta property="og:description" content="{html_mod.escape(desc)}">
+<meta property="og:url" content="{html_mod.escape(page_url)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="robots" content="index, follow">
+<script type="application/ld+json">{schema}</script>
+<style>
+body{{font-family:system-ui,-apple-system,sans-serif;max-width:800px;margin:0 auto;padding:1rem;color:#1a1a1a;line-height:1.6}}
+a{{color:#2563eb;text-decoration:none}}a:hover{{text-decoration:underline}}
+h1{{font-size:1.8rem;margin-bottom:.5rem}}h2{{font-size:1.3rem;margin-top:2rem;border-bottom:1px solid #e5e7eb;padding-bottom:.3rem}}
+ul{{list-style:none;padding:0}}li{{margin:.8rem 0;padding:.5rem;border:1px solid #e5e7eb;border-radius:6px}}
+small{{color:#6b7280}}nav{{font-size:.9rem;color:#6b7280;margin-bottom:1rem}}
+footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:.85rem;color:#9ca3af}}
+</style>
+</head>
+<body>
+<nav aria-label="Breadcrumb">
+<a href="https://syrabit.ai">Home</a> &rsaquo;
+<a href="https://syrabit.ai/library">Library</a> &rsaquo;
+<span>{html_mod.escape(subject_name)}</span>
+</nav>
+<header>
+<h1>{html_mod.escape(subject_name)} — {html_mod.escape(board_label)} {html_mod.escape(class_label)}</h1>
+<p>{html_mod.escape(desc)}</p>
+<p><strong>{len(pages)} topics</strong> available with notes, MCQs, and important questions.</p>
+</header>
+<main>
+{topics_html}
+</main>
+<footer>
+<p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board students</p>
+</footer>
+</body>
+</html>"""
+    return HTMLResponse(content=html_out)
+
+
 @router.get("/html/{board}/{class_slug}/{subject_slug}/{topic_slug}", response_class=HTMLResponse)
 async def get_seo_html_default(board: str, class_slug: str, subject_slug: str, topic_slug: str):
     page = await _db.seo_pages.find_one(
@@ -1757,6 +1967,7 @@ async def get_sitemap_index():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     sitemap_names = [
         "sitemap-pages.xml",
+        "sitemap-subjects.xml",
         "sitemap-notes.xml",
         "sitemap-mcqs.xml",
         "sitemap-pyqs.xml",
@@ -1781,6 +1992,23 @@ async def get_sitemap_pages():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     entries = [{"loc": f"{BASE_URL}{path}", "lastmod": today, "pri": pri, "freq": freq}
                for path, freq, pri in STATIC_PAGES]
+    return _xml_response(_build_urlset(entries))
+
+
+@router.get("/sitemap-subjects.xml", response_class=Response)
+async def get_sitemap_subjects():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    subjects = await _db.seo_pages.aggregate([
+        {"$match": {"status": "published", "page_type": "notes"}},
+        {"$group": {
+            "_id": {"board": "$board_slug", "cls": "$class_slug", "subj": "$subject_slug"},
+        }},
+    ]).to_list(500)
+    entries = [
+        {"loc": f"{BASE_URL}/{s['_id']['board']}/{s['_id']['cls']}/{s['_id']['subj']}",
+         "lastmod": today, "pri": "0.7", "freq": "weekly"}
+        for s in subjects
+    ]
     return _xml_response(_build_urlset(entries))
 
 

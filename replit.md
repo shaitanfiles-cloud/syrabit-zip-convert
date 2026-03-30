@@ -61,7 +61,11 @@ Addresses Google "unhelpful content" signals from templated meta/titles/structur
 - **Content-Derived Meta Descriptions**: `_extract_summary_from_content()` extracts the Summary section (or first meaningful paragraph as fallback) from generated content. No more identical templated descriptions.
 - **Quality Scoring**: `_compute_quality_score()` stores per-page: `word_count`, `heading_count`, `unique_ratio`, `has_faq`, `has_pyq`, `has_examples`, and composite `score` (0-100). Displayed in admin pages list with color-coded badges.
 - **Bulk Meta Refresh**: `POST /api/seo/refresh-meta` — iterates all published pages, re-extracts meta descriptions, diversifies titles, recomputes quality scores. Zero LLM cost. Button in Admin SEO Manager → Sitemap tab.
-- **Segmented Sitemaps**: Split by content type for GSC diagnostic visibility (sitemap-pages/notes/mcqs/pyqs/examples/definitions.xml + sitemap-index.xml). All listed in robots.txt.
+- **Segmented Sitemaps**: Split by content type for GSC diagnostic visibility (sitemap-pages/subjects/notes/mcqs/pyqs/examples/definitions.xml + sitemap-index.xml). All listed in robots.txt.
+- **Bot-Aware Pre-Rendering**: `BotRenderMiddleware` in `server.py` detects 20+ bot user-agents (Googlebot, Bingbot, GPTBot, PerplexityBot, ClaudeBot, etc.) and serves pre-rendered HTML instead of SPA shell. Covers: homepage (`/`), library (`/library`), subject landings (`/{board}/{class}/{subject}`), topic pages (4-5 segments), PYQ pages (`/pyq/{slug}`). 1-hour TTL cache (512 entries). Bots see full content, meta tags, Schema.org, internal links.
+- **Subject Landing Pages**: `GET /api/seo/html/subject/{board}/{class}/{subject}` — generates HTML listing all published topics grouped by chapter, with CollectionPage + ItemList + BreadcrumbList Schema.org. Added to sitemap-subjects.xml.
+- **Homepage Pre-Render**: `GET /api/seo/html/homepage` — dynamic HTML with subject listing, stats, WebSite + Organization + EducationalOrganization Schema.org, SearchAction, geo meta (IN-AS).
+- **Production Build**: `build_frontend.sh` builds Vite → copies to `frontend/build/` for Python backend to serve via `serve_spa` catch-all route.
 
 ## Admin Panel — Upgrade Wave (All 12 + 5 Quick Wins COMPLETE)
 

@@ -12922,15 +12922,31 @@ _VALID_PAGE_TYPES = {"notes", "definition", "important-questions", "mcqs", "exam
 _bot_html_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=3600)
 
 
+def _bot_html_response(html: str):
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(
+        content=html, status_code=200,
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=86400", "X-Bot-Rendered": "1"},
+    )
+
+
 class BotRenderMiddleware(BaseHTTPMiddleware):
-    """Intercept SEO route requests from bot user-agents and return pre-rendered HTML."""
+    """Intercept requests from bot user-agents and return pre-rendered HTML.
+
+    Handles:
+    - /                                  → homepage
+    - /pyq/{slug}                        → PYQ HTML replica (html only)
+    - /{board}/{class}/{subject}         → subject landing page
+    - /{board}/{class}/{subject}/{topic}      → topic page (notes)
+    - /{board}/{class}/{subject}/{topic}/{type} → topic page (typed)
+    """
 
     async def dispatch(self, request: StarletteRequest, call_next):
         ua = request.headers.get("user-agent", "")
         if not _BOT_UA_RE.search(ua):
             return await call_next(request)
 
-        path = request.url.path
+        path = request.url.path.rstrip("/") or "/"
         for prefix in _BOT_SKIP_PREFIXES:
             if path.startswith(prefix):
                 return await call_next(request)
@@ -12939,48 +12955,52 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         parts = [p for p in path.split("/") if p]
-        if len(parts) not in (4, 5):
+        n = len(parts)
+
+        if n == 0:
+            cache_key = "_homepage_"
+        elif n == 2 and parts[0] == "pyq":
+            cache_key = f"_pyq_/{parts[1]}"
+        elif n == 3:
+            cache_key = f"_subj_/{parts[0]}/{parts[1]}/{parts[2]}"
+        elif n in (4, 5):
+            page_type_part = parts[4] if n == 5 else None
+            if page_type_part and page_type_part not in _VALID_PAGE_TYPES:
+                return await call_next(request)
+            current_type = page_type_part or "notes"
+            cache_key = f"{parts[0]}/{parts[1]}/{parts[2]}/{parts[3]}/{current_type}"
+        else:
             return await call_next(request)
 
-        board, class_slug, subject_slug, topic_slug = parts[0], parts[1], parts[2], parts[3]
-        page_type_part = parts[4] if len(parts) == 5 else None
-        if page_type_part and page_type_part not in _VALID_PAGE_TYPES:
-            return await call_next(request)
-        current_type = page_type_part or "notes"
-
-        cache_key = f"{board}/{class_slug}/{subject_slug}/{topic_slug}/{current_type}"
         cached_html = _bot_html_cache.get(cache_key)
         if cached_html:
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse(
-                content=cached_html,
-                status_code=200,
-                headers={
-                    "Cache-Control": "public, max-age=3600, s-maxage=86400",
-                    "X-Bot-Rendered": "1",
-                },
-            )
+            return _bot_html_response(cached_html)
 
         try:
             _seo_port = int(os.environ.get("PORT", "8000"))
             api_base = f"http://localhost:{_seo_port}/api/seo"
+
+            if cache_key == "_homepage_":
+                api_url = f"{api_base}/html/homepage"
+            elif cache_key.startswith("_pyq_/"):
+                slug = parts[1]
+                api_url = f"http://localhost:{_seo_port}/api/pyq/{slug}"
+            elif cache_key.startswith("_subj_/"):
+                api_url = f"{api_base}/html/subject/{parts[0]}/{parts[1]}/{parts[2]}"
+            else:
+                current_type = parts[4] if n == 5 else "notes"
+                api_url = f"{api_base}/html/{parts[0]}/{parts[1]}/{parts[2]}/{parts[3]}/{current_type}"
+
             async with httpx.AsyncClient(timeout=10.0) as client:
-                html_resp = await client.get(
-                    f"{api_base}/html/{board}/{class_slug}/{subject_slug}/{topic_slug}/{current_type}"
-                )
+                html_resp = await client.get(api_url)
             if html_resp.status_code != 200:
+                return await call_next(request)
+            ct = html_resp.headers.get("content-type", "")
+            if "text/html" not in ct and "text/xml" not in ct:
                 return await call_next(request)
             html_content = html_resp.text
             _bot_html_cache[cache_key] = html_content
-            from fastapi.responses import HTMLResponse
-            return HTMLResponse(
-                content=html_content,
-                status_code=200,
-                headers={
-                    "Cache-Control": "public, max-age=3600, s-maxage=86400",
-                    "X-Bot-Rendered": "1",
-                },
-            )
+            return _bot_html_response(html_content)
         except Exception as _bot_err:
             logger.debug(f"BotRenderMiddleware fallthrough: {_bot_err}")
             return await call_next(request)
@@ -13061,8 +13081,12 @@ if FRONTEND_BUILD.is_dir():
     if static_dir.is_dir():
         app.mount("/static", CachedStaticFiles(directory=str(static_dir)), name="static-assets")
 
+    _SPA_SKIP_PREFIXES = ("api/", "docs", "openapi.json", "health")
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        if any(full_path.startswith(p) for p in _SPA_SKIP_PREFIXES):
+            raise HTTPException(status_code=404, detail="Not found")
         file_path = FRONTEND_BUILD / full_path
         if full_path and file_path.is_file():
             if full_path in ("sw.js", "index.html"):

@@ -4,6 +4,9 @@
     <loc>https://syrabit.ai/api/seo/sitemap-pages.xml</loc>
   </sitemap>
   <sitemap>
+    <loc>https://syrabit.ai/api/seo/sitemap-subjects.xml</loc>
+  </sitemap>
+  <sitemap>
     <loc>https://syrabit.ai/api/seo/sitemap-notes.xml</loc>
   </sitemap>
   <sitemap>
