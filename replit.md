@@ -52,6 +52,17 @@ CMS Editor: Translate button + AI Write (Gemini palette) in toolbar
 - **SEO**: Schema.org `ExamPaper` JSON-LD, geo.placename meta tags for Dhemaji, Jorhat, Guwahati, Assam.
 - **HTML style**: white bg, black text, Times New Roman 14px, 2in 1.5in margins, marks floated right, mobile-responsive.
 
+## SEO Content Quality & Ranking Fix
+
+Addresses Google "unhelpful content" signals from templated meta/titles/structure.
+
+- **Prompt Variants**: `PROMPT_VARIANTS` dict in `seo_engine.py` — 2-3 structural variants per page type (notes/definition/important-questions/mcqs/examples). Deterministic hash-based selection via `_topic_hash()` ensures stable regeneration.
+- **Title Diversification**: `TITLE_TEMPLATES` — 3-4 title templates per page type, hash-selected. Stored as `title_variant` on each page.
+- **Content-Derived Meta Descriptions**: `_extract_summary_from_content()` extracts the Summary section (or first meaningful paragraph as fallback) from generated content. No more identical templated descriptions.
+- **Quality Scoring**: `_compute_quality_score()` stores per-page: `word_count`, `heading_count`, `unique_ratio`, `has_faq`, `has_pyq`, `has_examples`, and composite `score` (0-100). Displayed in admin pages list with color-coded badges.
+- **Bulk Meta Refresh**: `POST /api/seo/refresh-meta` — iterates all published pages, re-extracts meta descriptions, diversifies titles, recomputes quality scores. Zero LLM cost. Button in Admin SEO Manager → Sitemap tab.
+- **Segmented Sitemaps**: Split by content type for GSC diagnostic visibility (sitemap-pages/notes/mcqs/pyqs/examples/definitions.xml + sitemap-index.xml). All listed in robots.txt.
+
 ## Admin Panel — Upgrade Wave (All 12 + 5 Quick Wins COMPLETE)
 
 | # | Feature | Component | Status |

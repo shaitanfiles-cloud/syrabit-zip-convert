@@ -240,6 +240,9 @@ export const adminSeoRunSubject = (token, subjectId, force = false, pageTypes = 
     params: { subject_id: subjectId, ...(force ? { force: true } : {}) },
   });
 
+export const adminSeoRefreshMeta = (token) =>
+  axios.post(`${API_BASE}/seo/refresh-meta`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 // ── QA Engine ─────────────────────────────────────────────────────────────────
 export const getTopicQa = (board, classSlug, subjectSlug, topicSlug) =>
   axios.get(`${API_BASE}/seo/qa/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);

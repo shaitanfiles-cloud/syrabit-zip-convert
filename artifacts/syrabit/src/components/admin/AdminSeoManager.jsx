@@ -16,6 +16,7 @@ import {
   adminSeoBulkPublish, adminSeoSubjectCoverage, adminSeoRunSubject,
   seoInternalLinksAnalyze, seoInternalLinksInject,
   seoInjectSchemaBulk, seoInjectSchema, seoSitemapValidate,
+  adminSeoRefreshMeta,
 } from '@/utils/api';
 
 const PAGE_TYPES = [
@@ -478,6 +479,17 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
     finally { setSitemapValidating(false); }
   };
 
+  const [refreshingMeta, setRefreshingMeta] = useState(false);
+  const handleRefreshMeta = async () => {
+    setRefreshingMeta(true);
+    try {
+      const res = await adminSeoRefreshMeta(adminToken);
+      toast.success(res.data?.message || 'Meta refreshed');
+      setTimeout(load, 2000);
+    } catch { toast.error('Meta refresh failed'); }
+    finally { setRefreshingMeta(false); }
+  };
+
   const handlePilot = async () => {
     setPiloting(true);
     setPilotResult(null);
@@ -672,9 +684,20 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
                     )}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium truncate" style={{ color: '#E8E8E8' }}>{page.title || page.topic_title || '—'}</p>
-                      <p className="text-xs truncate mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>
-                        {[page.board_name, page.class_name, page.subject_name, page.page_type].filter(Boolean).join(' · ')}
-                      </p>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <p className="text-xs truncate" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                          {[page.board_name, page.class_name, page.subject_name, page.page_type].filter(Boolean).join(' · ')}
+                        </p>
+                        {page.quality_score != null && (
+                          <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold"
+                            style={{
+                              background: page.quality_score.score >= 70 ? 'rgba(34,197,94,0.15)' : page.quality_score.score >= 40 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
+                              color: page.quality_score.score >= 70 ? '#4ade80' : page.quality_score.score >= 40 ? '#fbbf24' : '#f87171',
+                            }}>
+                            Q:{page.quality_score.score} · {page.quality_score.word_count}w
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <span className="flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold border"
                       style={{ color: sc.text, background: sc.bg, borderColor: sc.border }}>
@@ -1199,6 +1222,21 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
       {/* ── Sitemap Tab ─────────────────────────────────────────────── */}
       {tab === 'sitemap' && (
         <div className="space-y-5">
+          <div className="rounded-xl border p-5 space-y-4" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-white">Refresh Meta Descriptions</p>
+                <p className="text-xs mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>Re-extract meta descriptions from content, diversify titles, and recompute quality scores (no LLM cost)</p>
+              </div>
+              <button onClick={handleRefreshMeta} disabled={refreshingMeta}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+                style={{ background: '#7c3aed', color: '#fff' }}>
+                {refreshingMeta ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                {refreshingMeta ? 'Refreshing…' : 'Refresh All Meta'}
+              </button>
+            </div>
+          </div>
+
           <div className="rounded-xl border p-5 space-y-4" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.08)' }}>
             <div className="flex items-center justify-between">
               <div>

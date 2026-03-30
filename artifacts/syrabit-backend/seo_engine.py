@@ -18,7 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
 from typing import Any, Callable, Coroutine, List, Optional
 from datetime import datetime, timezone
-import asyncio, uuid, re, logging, json, html as html_mod
+import asyncio, uuid, re, logging, json, html as html_mod, hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -79,8 +79,15 @@ def _slug(text: str) -> str:
 
 PAGE_TYPES = ["notes", "definition", "important-questions", "mcqs", "examples"]
 
-PROMPTS = {
-    "notes": """You are an expert {board} teacher for {class_name} and a GEO (Generative Engine Optimization) specialist.
+def _topic_hash(topic_title: str, page_type: str, n_variants: int) -> int:
+    """Deterministic variant selector based on topic+type. Stable across regenerations."""
+    h = hashlib.md5(f"{topic_title}:{page_type}".encode()).hexdigest()
+    return int(h, 16) % n_variants
+
+
+PROMPT_VARIANTS = {
+    "notes": [
+        """You are an expert {board} teacher for {class_name} and a GEO (Generative Engine Optimization) specialist.
 
 Topic: {topic}
 Subject: {subject} | Class: {class_name} | Board: {board}
@@ -117,7 +124,75 @@ A3: [Clear answer]
 
 Language: simple and clear for {class_name} students in Assam. Every section must be complete and exam-focused. Use authoritative framing throughout.""",
 
-    "definition": """You are an expert {board} teacher for {class_name}.
+        """You are a {subject} expert specialising in {board} {class_name} exam preparation.
+
+Topic: {topic}
+Subject: {subject} | Class: {class_name} | Board: {board}
+
+Write comprehensive study notes. Begin with a real-world context that makes the topic relatable, then build towards the formal definition. Use EXACTLY this structure:
+
+## Why {topic} Matters
+[50-70 words: start with a real-world scenario or analogy that connects {topic} to everyday life, then link to its importance in {board} {class_name} {subject}]
+
+## Core Concept
+[Formal definition in 2-3 sentences citing {board} curriculum. Then a simplified re-explanation in student-friendly language]
+
+## Detailed Breakdown
+[300-400 words. Break the topic into 3-4 sub-concepts. Use numbered sub-headings like "1. First aspect", "2. Second aspect". Include one real-world application per sub-concept]
+
+## Key Points for Revision
+[6-8 crisp bullet points — exam-ready, each starting with an action verb]
+
+## Worked Examples
+Example 1: [Problem + full solution]
+Example 2: [Problem + full solution]
+
+## Exam Corner
+[4 exam-style questions with model answers: 2× short answer (2 marks), 2× long answer (5 marks). Format: "Q (X marks): ..."]
+
+## FAQ
+Q1: How is {topic} different from [closely related concept]?
+A1: [Precise comparison]
+Q2: What are common mistakes students make with {topic}?
+A2: [2-3 common errors and how to avoid them]
+
+Write for {class_name} students in Assam. Be specific — avoid vague generalities.""",
+
+        """You are a senior {board} examiner and {subject} faculty.
+
+Topic: {topic}
+Subject: {subject} | Class: {class_name} | Board: {board}
+
+Create study notes from an examiner's perspective. Use EXACTLY this structure:
+
+## At a Glance
+[A compact table or structured summary: What it is | Why it matters | Exam weight | Key formula/rule (if any)]
+
+## The Basics
+[Academic definition with textbook citation, followed by 2-3 sentence plain-English explanation]
+
+## Deep Dive
+[250-350 words exploring the topic thoroughly. Use a cause-and-effect or chronological flow rather than bullet lists. Include cross-references to related {subject} topics in the {board} syllabus]
+
+## Common Exam Patterns
+[Describe how {board} examiners typically frame questions on {topic}: what types appear (MCQ, short answer, long answer), what traps to watch for, and what earns full marks]
+
+## Practice Questions with Solutions
+Q1 (1 mark): [Question] → [Answer]
+Q2 (2 marks): [Question] → [Answer]
+Q3 (5 marks): [Question] → [Detailed answer with marking scheme breakdown]
+
+## Memory Aids
+[2-3 mnemonics, visual tricks, or association techniques specific to {topic}]
+
+## Quick Revision Points
+[5-7 bullet points covering everything a student must know the night before the exam]
+
+Tone: authoritative but approachable. Written for {class_name} students in Assam.""",
+    ],
+
+    "definition": [
+        """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
 Subject: {subject} | Class: {class_name} | Board: {board}
@@ -147,7 +222,42 @@ Write a definition article using EXACTLY this structure:
 
 Keep language simple for {class_name} students in Assam.""",
 
-    "important-questions": """You are an expert {board} teacher for {class_name}.
+        """You are a {subject} lexicographer writing for {board} {class_name} students.
+
+Topic: {topic}
+Subject: {subject} | Class: {class_name} | Board: {board}
+
+Create a thorough definition guide. Use EXACTLY this structure:
+
+## In One Line
+[Single crisp sentence: "{topic} is..." — suitable for a 1-mark exam answer]
+
+## Formal Definition
+[Academic definition as it would appear in the {board}-prescribed textbook. 2-3 sentences]
+
+## What It Really Means
+[Explain like you're talking to a friend — use an analogy or everyday example to make it click. 60-100 words]
+
+## Key Features
+[5-6 distinguishing characteristics, each as "Feature: Explanation" pairs]
+
+## How It Connects
+[Show how {topic} relates to 3-4 other concepts in the {board} {class_name} {subject} syllabus. Use a brief sentence per connection]
+
+## See It in Action
+[2-3 concrete examples or scenarios where {topic} applies — at least one from Assam/Northeast India context if relevant]
+
+## Exam-Ready Answers
+[Model answers for 3 likely exam questions:
+- 1-mark: Define {topic}. → [answer]
+- 2-mark: Explain {topic} with an example. → [answer]
+- 5-mark: Discuss {topic} in detail. → [answer]]
+
+Language: clear and exam-focused for {class_name} students in Assam.""",
+    ],
+
+    "important-questions": [
+        """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
 Subject: {subject} | Class: {class_name} | Board: {board}
@@ -174,7 +284,36 @@ Create a question bank using EXACTLY this structure:
 
 All answers must follow {board} marking scheme. Use exam-standard language.""",
 
-    "mcqs": """You are an expert {board} teacher for {class_name}.
+        """You are a {board} paper-setter for {class_name} {subject}.
+
+Topic: {topic}
+Subject: {subject} | Class: {class_name} | Board: {board}
+
+Create an exam-focused question bank. Use EXACTLY this structure:
+
+## What Examiners Ask About {topic}
+[50-60 words: which aspects of {topic} are tested most often, what question formats appear, and common mark distributions in {board} exams]
+
+## Very Short Answer (1 mark each)
+[6 questions — each needs only 1-2 sentences. Mix: 3 definition-based, 2 factual, 1 true/false with correction]
+
+## Short Answer (2-3 marks each)
+[5 questions with answers. Include "why" and "how" questions, not just "what". Show expected word count per answer]
+
+## Long Answer (5 marks each)
+[3 questions with complete structured answers. Each answer should have sub-points or numbered steps. Include diagram descriptions where applicable]
+
+## Frequently Repeated Questions
+[4 questions that have appeared multiple times in {board} exams on {topic}, with year references and model answers]
+
+## Tricky / Higher-Order Questions
+[2 application or analysis questions that go beyond textbook recall]
+
+Answers must match {board} marking scheme expectations.""",
+    ],
+
+    "mcqs": [
+        """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
 Subject: {subject} | Class: {class_name} | Board: {board}
@@ -201,7 +340,35 @@ Explanation: [1-2 sentences]
 
 Match {board} exam pattern and difficulty level.""",
 
-    "examples": """You are an expert {board} teacher for {class_name}.
+        """You are a competitive exam coach preparing {board} {class_name} students.
+
+Topic: {topic}
+Subject: {subject} | Class: {class_name} | Board: {board}
+
+Create 15 MCQs that test different cognitive levels. Use EXACTLY this structure:
+
+## About These Questions
+[40-60 words: which specific concepts within {topic} are tested and at what difficulty levels]
+
+## Recall & Recognition (Q1-Q5)
+[5 MCQs testing definitions, facts, and direct textbook knowledge. Each: question, 4 options (A-D), correct answer, 1-sentence explanation]
+
+## Understanding & Application (Q6-Q10)
+[5 MCQs requiring students to apply concepts or interpret scenarios. Include at least 1 assertion-reason question and 1 diagram/data-based question]
+
+## Analysis & Evaluation (Q11-Q15)
+[5 MCQs involving multi-step reasoning, comparison, or error identification. Include 1 "which of the following is INCORRECT" type]
+
+Format:
+**Q[n].** [question text]
+(a) ... (b) ... (c) ... (d) ...
+**Ans:** [letter] — [explanation]
+
+All questions aligned with {board} {class_name} exam standards.""",
+    ],
+
+    "examples": [
+        """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
 Subject: {subject} | Class: {class_name} | Board: {board}
@@ -228,7 +395,133 @@ Example 7: [Problem matching {board} exam difficulty] → [Complete solution wit
 [5 unsolved problems with answers only — for student practice]
 
 Show complete working for all solved examples. Use {board} exam-standard notation and methods.""",
+
+        """You are a {subject} tutor known for making problem-solving easy for {board} {class_name} students.
+
+Topic: {topic}
+Subject: {subject} | Class: {class_name} | Board: {board}
+
+Create a solved examples collection. Use EXACTLY this structure:
+
+## What to Expect
+[40-60 words: the types of {topic} problems in {board} exams, marks distribution, and which formulas/rules are needed]
+
+## Foundation Examples (Warm-Up)
+[3 examples. For each: state the problem, identify the approach, then solve step by step. Highlight the formula or rule used]
+
+## Board-Exam Standard Examples
+[3 examples at {board} exam difficulty. For each: problem statement, "Approach" paragraph explaining strategy, then detailed solution with all intermediate steps shown]
+
+## Challenge Problems
+[2 examples slightly above exam level — to build confidence. Full solutions provided]
+
+## Common Mistakes to Avoid
+[3-4 typical errors students make when solving {topic} problems, with the correct approach shown]
+
+## Self-Test
+[4 unsolved problems graded by difficulty (★ easy, ★★ medium, ★★★ hard), with final answers provided]
+
+Use {board}-standard notation. Show every step — never skip working.""",
+    ],
 }
+
+PROMPTS = {k: v[0] for k, v in PROMPT_VARIANTS.items()}
+
+
+TITLE_TEMPLATES = {
+    "notes": [
+        "{topic} Notes — {board} {grade} {subject}",
+        "Learn {topic} for {board} {grade} Exams | {subject}",
+        "Complete {topic} Study Guide — {grade} {board} {subject}",
+        "{topic} Explained: {subject} Notes for {board} {grade}",
+    ],
+    "definition": [
+        "{topic} Definition & Meaning — {board} {grade} {subject}",
+        "What is {topic}? Definition for {board} {grade} {subject}",
+        "{topic}: Meaning, Definition & Examples | {grade} {board}",
+    ],
+    "important-questions": [
+        "{topic} Important Questions — {board} {grade} {subject}",
+        "Top Questions on {topic} for {board} {grade} Exams",
+        "{topic} Question Bank with Answers | {grade} {board} {subject}",
+        "{board} {grade} {topic} Questions: 1-Mark to 5-Mark",
+    ],
+    "mcqs": [
+        "{topic} MCQ Practice — {board} {grade} {subject}",
+        "MCQs on {topic} for {board} {grade} | {subject}",
+        "{topic} Multiple Choice Questions with Answers — {grade} {board}",
+    ],
+    "examples": [
+        "{topic} Solved Examples — {board} {grade} {subject}",
+        "Solved Problems on {topic} for {board} {grade} Exams",
+        "{topic} Examples with Step-by-Step Solutions | {grade} {board}",
+    ],
+}
+
+
+def _extract_summary_from_content(content: str) -> str | None:
+    """Extract the Summary section from generated markdown content.
+    Tries known heading patterns first, then falls back to first paragraph."""
+    match = re.search(
+        r'##\s*(?:Summary|At a Glance|In One Line|Why .+ Matters|What to Expect|'
+        r'About These Questions|What Examiners Ask[^\n]*)\s*\n+(.*?)(?:\n##|\Z)',
+        content,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if match:
+        text = match.group(1).strip()
+        text = re.sub(r'\[.*?\]', '', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        if len(text) >= 30:
+            return text[:155].rsplit(' ', 1)[0] + '...' if len(text) > 155 else text
+
+    paragraphs = re.split(r'\n{2,}', content)
+    for para in paragraphs:
+        clean = para.strip()
+        if clean.startswith('#') or clean.startswith('[') or len(clean) < 40:
+            continue
+        clean = re.sub(r'\*\*|__|`', '', clean)
+        clean = re.sub(r'\s+', ' ', clean).strip()
+        if len(clean) >= 40:
+            return clean[:155].rsplit(' ', 1)[0] + '...' if len(clean) > 155 else clean
+
+    return None
+
+
+def _compute_quality_score(content: str, page_type: str) -> dict:
+    """Compute content quality indicators for a generated page."""
+    words = content.split()
+    word_count = len(words)
+    headings = re.findall(r'^#{1,4}\s+.+', content, re.MULTILINE)
+    heading_count = len(headings)
+
+    has_faq = bool(re.search(r'##\s*(FAQ|Frequently Asked)', content, re.IGNORECASE))
+    has_pyq = bool(re.search(r'##\s*(Previous Year|PYQ|Frequently Repeated)', content, re.IGNORECASE))
+    has_examples = bool(re.search(r'Example\s*\d', content, re.IGNORECASE))
+
+    unique_words = set(w.lower() for w in words if len(w) > 3)
+    unique_ratio = round(len(unique_words) / max(word_count, 1), 3)
+
+    score = 0
+    if word_count >= 300: score += 25
+    elif word_count >= 150: score += 15
+    if heading_count >= 4: score += 20
+    elif heading_count >= 2: score += 10
+    if unique_ratio >= 0.35: score += 20
+    elif unique_ratio >= 0.25: score += 10
+    if has_faq: score += 10
+    if has_pyq: score += 15
+    if has_examples: score += 10
+
+    return {
+        "word_count": word_count,
+        "heading_count": heading_count,
+        "unique_ratio": unique_ratio,
+        "has_faq": has_faq,
+        "has_pyq": has_pyq,
+        "has_examples": has_examples,
+        "score": min(score, 100),
+    }
 
 
 class TopicCreate(BaseModel):
@@ -567,9 +860,11 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
     else:
         prompt_class_label = f"{grade_str} {board_display}".strip()
 
-    prompt_template = PROMPTS.get(page_type)
-    if not prompt_template:
+    variants = PROMPT_VARIANTS.get(page_type, [])
+    if not variants:
         return None
+    variant_idx = _topic_hash(topic["title"], page_type, len(variants))
+    prompt_template = variants[variant_idx]
 
     prompt = prompt_template.format(
         board=board_display,
@@ -603,24 +898,32 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         logger.warning(f"Generated content too short ({word_count} words) for {topic['title']} / {page_type}")
         return None
 
-    type_title_labels = {
-        "notes": "Notes",
-        "definition": "Definition & Meaning",
-        "important-questions": "Important Questions",
-        "mcqs": "MCQ Practice",
-        "examples": "Solved Examples",
-    }
-
+    title_templates = TITLE_TEMPLATES.get(page_type, ["{topic} — {board} {grade} {subject}"])
+    title_idx = _topic_hash(topic["title"], page_type + ":title", len(title_templates))
     h = hierarchy
-    title = (
-        f"{topic['title']} {type_title_labels.get(page_type, page_type.title())} "
-        f"– {board_display} {grade_str} {subject_name}"
+    title = title_templates[title_idx].format(
+        topic=topic["title"],
+        board=board_display,
+        grade=grade_str,
+        subject=subject_name,
     )
-    meta_desc = (
-        f"Study {topic['title']} with comprehensive {type_title_labels.get(page_type, 'notes').lower()} "
-        f"for {board_display} {grade_str} {subject_name}. Covers definitions, examples, and important "
-        f"questions aligned with the {board_display} syllabus for Assam students."
-    )
+
+    extracted_desc = _extract_summary_from_content(content)
+    if extracted_desc:
+        meta_desc = extracted_desc
+    else:
+        type_label_map = {
+            "notes": "notes", "definition": "definition and meaning",
+            "important-questions": "important questions with answers",
+            "mcqs": "MCQ practice questions", "examples": "solved examples",
+        }
+        meta_desc = (
+            f"Study {topic['title']} — {type_label_map.get(page_type, 'notes')} "
+            f"for {board_display} {grade_str} {subject_name}. Aligned with the "
+            f"{board_display} syllabus for Assam students."
+        )
+
+    quality_score = _compute_quality_score(content, page_type)
 
     page = {
         "id": f"seo-{uuid.uuid4().hex[:8]}",
@@ -645,6 +948,9 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "topic_title": topic["title"],
         "source_chapter_title": h.get("chapter", {}).get("title", ""),
         "source_topic_title": topic["title"],
+        "prompt_variant": variant_idx,
+        "title_variant": title_idx,
+        "quality_score": quality_score,
         "status": "published",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -656,6 +962,63 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         upsert=True,
     )
     return page
+
+
+@router.post("/refresh-meta")
+async def refresh_meta_descriptions(_admin: dict = Depends(_require_admin)):
+    """Bulk-refresh meta descriptions from existing content (no LLM calls).
+    Also recomputes quality scores and diversifies titles for all published pages."""
+    pages = await _db.seo_pages.find(
+        {"status": "published"},
+        {"_id": 0, "topic_id": 1, "page_type": 1, "content": 1, "topic_title": 1,
+         "board_name": 1, "class_name": 1, "subject_name": 1},
+    ).to_list(50000)
+
+    updated = 0
+    meta_refreshed = 0
+    for p in pages:
+        content = p.get("content", "")
+        page_type = p.get("page_type", "notes")
+        topic_title = p.get("topic_title", "")
+        if not content or not topic_title:
+            continue
+
+        title_templates = TITLE_TEMPLATES.get(page_type, ["{topic} — {board} {grade} {subject}"])
+        title_idx = _topic_hash(topic_title, page_type + ":title", len(title_templates))
+        new_title = title_templates[title_idx].format(
+            topic=topic_title,
+            board=p.get("board_name", ""),
+            grade=p.get("class_name", ""),
+            subject=p.get("subject_name", ""),
+        )
+
+        quality = _compute_quality_score(content, page_type)
+
+        update_fields = {
+            "title": new_title,
+            "title_variant": title_idx,
+            "quality_score": quality,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        new_desc = _extract_summary_from_content(content)
+        if new_desc:
+            update_fields["meta_description"] = new_desc[:160]
+            meta_refreshed += 1
+
+        await _db.seo_pages.update_one(
+            {"topic_id": p["topic_id"], "page_type": page_type},
+            {"$set": update_fields},
+        )
+        updated += 1
+
+    await _seo_log("refresh_meta", f"Refreshed {updated}/{len(pages)} pages ({meta_refreshed} meta descriptions)")
+    return {
+        "message": f"Refreshed {updated} pages ({meta_refreshed} meta descriptions updated)",
+        "total_scanned": len(pages),
+        "updated": updated,
+        "meta_refreshed": meta_refreshed,
+    }
 
 
 @router.post("/generate")

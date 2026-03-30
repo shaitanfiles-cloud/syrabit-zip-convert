@@ -1,0 +1,34 @@
+SEO Content Quality & Ranking Fix
+What & Why
+The programmatic SEO content generation pipeline produces pages that are structurally sound (good JSON-LD, sitemaps, canonicals) but have critical content-quality issues that prevent Google from ranking them. Specifically: near-identical meta descriptions across all ~2,500 pages, formulaic titles, identical content structure on every page, and no unique/original data. These issues trigger Google's "unhelpful content" signals and cause most pages to be filtered or ignored in search results.
+
+Done looks like
+Every generated SEO page has a truly unique meta description that mentions specific concepts from that topic (not a template with swapped variables)
+Titles vary in structure across page types and include topic-specific hooks (not just "[Topic] [Type] – [Board] [Class] [Subject]" for every page)
+Content prompts produce varied structures — notes pages don't all have identical section headings in the same order
+The meta description is derived from the actual generated content (e.g., first meaningful paragraph or AI-summarized) rather than a pre-baked template
+Existing published pages can be bulk-updated with improved meta descriptions via an admin action
+A content quality score is stored per page (word count, uniqueness indicators) so admins can identify thin/duplicate pages
+Out of scope
+Adding real PYQ exam data (requires manual data entry — separate effort)
+Backlink building or off-site SEO
+Rewriting all existing content from scratch (focus is on meta/title fixes and prompt improvements for new content)
+SSR/prerendering changes (already handled by bot-render setup)
+Tasks
+Fix meta description generation — Replace the single hard-coded meta description template in _generate_single_page with per-page-type description templates that reference specific concepts. After LLM content is generated, extract the Summary section and use it (or a trimmed version) as the meta description instead of the generic template. This ensures every page's description reflects its actual content.
+
+Diversify title patterns — Create 3-4 title templates per page type that rotate or are selected based on topic characteristics. For example, notes could alternate between "[Topic] Notes — [Class] [Board]", "Learn [Topic] for [Board] [Class] Exams", "Complete [Topic] Study Guide — [Subject]". Store the chosen pattern so regeneration is stable.
+
+Vary content prompt structures — Modify the PROMPTS dictionary so each page type has 2-3 structural variants (e.g., notes variant A starts with Definition then Explanation, variant B starts with a real-world context then builds to the formal definition). Add a randomized or topic-hash-based variant selector in _generate_single_page so not every page has identical section ordering.
+
+Add bulk meta-refresh admin endpoint — Create a new endpoint (e.g., /api/seo/refresh-meta) that iterates over existing published pages, extracts/regenerates their meta descriptions from the existing content (without re-calling the LLM), and updates them in the database. Wire this to a button in the Admin SEO Manager panel.
+
+Add content quality scoring — When a page is generated or refreshed, compute and store a quality_score object with: word count, unique term ratio (compared to other pages of same type+subject), whether FAQ/PYQ sections are populated, and heading count. Display this score in the admin SEO pages list so thin or duplicate pages can be identified at a glance.
+
+Relevant files
+artifacts/syrabit-backend/seo_engine.py:82-231
+artifacts/syrabit-backend/seo_engine.py:548-658
+artifacts/syrabit-backend/seo_engine.py:885-964
+artifacts/syrabit/src/pages/SeoTopicPage.jsx:240-328
+artifacts/syrabit/src/components/seo/PageMeta.jsx
+artifacts/syrabit/src/components/admin/AdminSeoManager.jsx
