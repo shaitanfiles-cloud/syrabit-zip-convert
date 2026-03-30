@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
+import { log } from '@/utils/logger';
 import {
   Upload, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight,
   Sparkles, BookOpen, Brain, Layers, Database, Zap, FileText,
@@ -346,7 +347,7 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
             try {
               processEvent(eventName, JSON.parse(dataStr));
             } catch (pe) {
-              console.warn('SSE parse error', pe, dataStr);
+              log.warn('SSE parse error — skipping malformed event', { error: pe.message, raw: dataStr?.slice(0, 200) });
             }
           }
         }

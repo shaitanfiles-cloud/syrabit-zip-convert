@@ -5,6 +5,7 @@
  * credit progress bar, sync indicator, RAG source badge.
  */
 import { useState, useEffect, useRef, useCallback, memo, useMemo } from 'react';
+import { log } from '@/utils/logger';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
@@ -341,7 +342,7 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
         setTimeout(() => setCopied(false), 2000);
         if (onCopy) onCopy();
       } catch (e) {
-        console.error('Copy failed:', e);
+        log.error('Clipboard copy failed', { error: e.message });
       }
       document.body.removeChild(textArea);
     }

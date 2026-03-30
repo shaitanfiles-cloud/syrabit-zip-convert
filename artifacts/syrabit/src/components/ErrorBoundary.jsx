@@ -5,6 +5,7 @@
  */
 import { Component } from 'react';
 import { RefreshCw, Home, AlertTriangle } from 'lucide-react';
+import { log } from '@/utils/logger';
 
 export class ErrorBoundary extends Component {
   constructor(props) {
@@ -33,10 +34,12 @@ export class ErrorBoundary extends Component {
       });
     }
 
-    // Log to console in development
-    if (process.env.NODE_ENV !== 'production') {
-      console.error('[ErrorBoundary] Caught error:', error, errorInfo);
-    }
+    log.error('[ErrorBoundary] Uncaught render error', {
+      error: error.message,
+      stack: error.stack?.slice(0, 500),
+      page: window.location.pathname,
+      componentStack: errorInfo?.componentStack?.slice(0, 400),
+    });
   }
 
   handleReset = () => {

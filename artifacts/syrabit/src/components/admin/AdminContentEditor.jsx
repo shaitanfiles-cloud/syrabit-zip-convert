@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { log } from '@/utils/logger';
 import {
   Search, Plus, Save, Trash2, X, BookOpen, Loader2,
   FolderPlus, FilePlus, Edit2, FileText, Book,
@@ -733,7 +734,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       await load(true);
       toast.success('Variant applied as thumbnail!');
     } catch (err) {
-      console.error('Failed to apply variant:', err);
+      log.error('Apply thumbnail variant failed', { error: err.message, status: err.response?.status, subjectId: selSubject });
       toast.error('Failed to apply variant');
     }
   }, [selSubject, adminToken]);

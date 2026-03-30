@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
+import { log } from '@/utils/logger';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Search, Bookmark, BookmarkCheck,
@@ -151,7 +152,7 @@ function CmsPostsGrid({ board, classSlug }) {
       setTotal(data.total || 0);
       if (skip + POSTS_PER_PAGE >= (data.total || 0)) setDone(true);
       groupKey.current += 1;
-    } catch (err) { console.error('[CmsPostsGrid] fetchPage error:', err); }
+    } catch (err) { log.error('CMS posts fetch failed', { error: err.message, route: '/api/cms/posts', skip }); }
     finally { setLoading(false); }
   }, [board, classSlug]);
 

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { log } from '@/utils/logger';
 import { Save, Trash2, Plus, Loader2, CheckCircle, BookOpen, GitBranch, Info, Globe, ExternalLink, FileUp, Sparkles, ChevronDown, ChevronUp, Pencil, X, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -180,7 +181,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         setFormData(EMPTY_FORM);
       }
     } catch (err) {
-      console.error('Fetch syllabus error:', err);
+      log.error('Fetch syllabus failed', { error: err.message, status: err.response?.status, endpoint: syllabusEndpoint() });
       setEditingSyllabus(null);
       setFormData(EMPTY_FORM);
     } finally {
@@ -215,7 +216,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       toast.success('Syllabus saved successfully!');
       fetchSyllabus();
     } catch (err) {
-      console.error('Save error:', err);
+      log.error('Save syllabus failed', { error: err.message, status: err.response?.status });
       toast.error(err.response?.data?.detail || 'Failed to save syllabus');
     } finally {
       setSaving(false);
@@ -233,7 +234,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       setIsFallback(false);
       setPublishedSlug('');
     } catch (err) {
-      console.error('Delete error:', err);
+      log.error('Delete syllabus failed', { error: err.message, status: err.response?.status });
       toast.error(err.response?.data?.detail || 'Failed to delete syllabus');
     } finally {
       setSaving(false);
@@ -255,7 +256,7 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
       setPublishedSlug(res.data.seo_slug);
       toast.success('Syllabus card published to library!');
     } catch (err) {
-      console.error('Publish error:', err);
+      log.error('Publish syllabus failed', { error: err.message, status: err.response?.status, boardId: selectedBoardId, subjectId: selectedSubjectId });
       toast.error(err.response?.data?.detail || 'Failed to publish syllabus card');
     } finally {
       setPublishing(false);

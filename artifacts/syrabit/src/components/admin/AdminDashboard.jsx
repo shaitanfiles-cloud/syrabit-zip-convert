@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { log } from '@/utils/logger';
 import AdminQuickLinks from './AdminQuickLinks';
 import {
   Users, MessageSquare, BookOpen, Zap, Loader2, Activity,
@@ -269,7 +270,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       setFailedSections(failed);
       setLastRefresh(new Date());
     } catch (e) {
-      console.error('Dashboard load error:', e);
+      log.error('Admin dashboard load failed', { error: e.message, status: e.response?.status });
       setFailedSections(['overview', 'metrics', 'rag', 'fallbacks', 'vector', 'latency', 'queries', 'tokens', 'funnel', 'coverage']);
     }
     finally {
