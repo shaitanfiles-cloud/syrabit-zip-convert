@@ -5591,13 +5591,16 @@ async def publish_syllabus_as_card(
     class_slug   = (class_doc  or {}).get("slug",  _slugify(class_name))
     subject_slug = (subject_doc or {}).get("slug", _slugify(subject_name))
 
-    title       = f"{subject_name} Syllabus — {board_name} {class_name}"
+    _grade_disp   = _smart_grade_label(class_name, board_name)
+    _board_disp   = _smart_board_display(board_name)
+
+    title       = f"{subject_name} Syllabus — {_board_disp} {_grade_disp}"
     seo_slug    = f"{board_slug}-{class_slug}-{_slugify(subject_name)}-syllabus"
-    geo_tags    = f"{class_name}, {board_name}, {stream_name}"
-    seo_tags    = f"Syllabus,{subject_name},{board_name},{class_name}"
+    geo_tags    = f"{_grade_disp}, {_board_disp}, {stream_name}"
+    seo_tags    = f"Syllabus,{subject_name},{_board_disp},{_grade_disp}"
     meta_desc   = (
-        f"Complete {subject_name} syllabus for {board_name} {class_name} ({stream_name}). "
-        f"Covers key topics, chapters, and learning guidelines as per the {board_name} board."
+        f"Complete {subject_name} syllabus for {_board_disp} {_grade_disp} ({stream_name}). "
+        f"Covers key topics, chapters, and learning guidelines as per the {_board_disp} board."
     )
 
     # ── 3. Build structured markdown ──────────────────────────────────────────
@@ -11190,7 +11193,7 @@ async def metrics_history(minutes: int = 60, admin: dict = Depends(get_admin_use
 # ─────────────────────────────────────────────
 # APP SETUP
 # ─────────────────────────────────────────────
-from seo_engine import router as seo_router, init_seo_engine
+from seo_engine import router as seo_router, init_seo_engine, _smart_grade_label, _smart_board_display
 init_seo_engine(db, call_llm_api, get_admin_user, log_activity_fn=supa_insert_activity_log)
 api.include_router(seo_router)
 

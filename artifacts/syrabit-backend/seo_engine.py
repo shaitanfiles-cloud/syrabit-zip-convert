@@ -500,26 +500,84 @@ async def extract_topics_from_chapters(
 
 # ─── ADMIN: AI Content Generation ───────────────────────────────────────────
 
+def _smart_grade_label(cn: str, bn: str) -> str:
+    """
+    Return the human-readable grade string for a given class_name / board_name.
+
+    Rules:
+      • class_name already contains "semester" → normalise to "Semester N"
+      • DEGREE board → always "Semester N"
+      • AHSEC ordinal ("HS 1st Year") → "Class 11", "HS 2nd Year" → "Class 12"
+      • SEBA / other school boards → preserve as-is or "Class N"
+      • Unknown board with digit → keep class_name unchanged (no blind "Class" prefix)
+    """
+    bn_up = (bn or "").strip().upper()
+    cn_s  = (cn or "").strip()
+
+    if re.search(r'\bsem(ester)?\b', cn_s, re.IGNORECASE):
+        m = re.search(r'\d+', cn_s)
+        return f"Semester {m.group()}" if m else cn_s
+
+    if bn_up in {"DEGREE", "NEP FYUGP", "FYUGP"}:
+        m = re.search(r'\d+', cn_s)
+        return f"Semester {m.group()}" if m else cn_s
+
+    ord_m = re.search(r'(\d+)(st|nd|rd|th)\s*year', cn_s, re.IGNORECASE)
+    if ord_m:
+        n = int(ord_m.group(1))
+        return f"Class {10 + n}" if n <= 2 else f"Class {n}"
+
+    if re.search(r'\bclass\s*\d+', cn_s, re.IGNORECASE):
+        return cn_s
+
+    m = re.search(r'\d+', cn_s)
+    if m:
+        if bn_up in {"AHSEC", "SEBA"}:
+            return f"Class {m.group()}"
+        return cn_s  # unknown board — don't blindly prefix "Class"
+
+    return cn_s or "Class 12"
+
+
+def _smart_board_display(bn: str) -> str:
+    """Return a user-facing board label. 'DEGREE' in DB → 'NEP FYUGP' publicly."""
+    _map = {"DEGREE": "NEP FYUGP", "AHSEC": "AHSEC", "SEBA": "SEBA"}
+    return _map.get((bn or "").strip().upper(), bn or "AHSEC")
+
+
 async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
-    board_name = hierarchy.get("board", {}).get("name", "AHSEC")
-    class_name = hierarchy.get("class", {}).get("name", "Class 12")
-    subject_name = hierarchy.get("subject", {}).get("name", "")
+    board_name    = hierarchy.get("board", {}).get("name", "AHSEC")
+    class_name    = hierarchy.get("class", {}).get("name", "Class 12")
+    subject_name  = hierarchy.get("subject", {}).get("name", "")
     chapter_title = hierarchy.get("chapter", {}).get("title", "")
+
+    # Resolve correct human-readable labels up-front
+    grade_str     = _smart_grade_label(class_name, board_name)
+    board_display = _smart_board_display(board_name)
+    is_degree     = board_name.upper() in {"DEGREE", "NEP FYUGP", "FYUGP"}
+    prompt_class_label = (
+        f"{grade_str} (NEP FYUGP Degree)" if is_degree else f"{grade_str} {board_display}".strip()
+    )
 
     prompt_template = PROMPTS.get(page_type)
     if not prompt_template:
         return None
 
     prompt = prompt_template.format(
-        board=board_name,
-        class_name=class_name,
+        board=board_display,
+        class_name=prompt_class_label,
         subject=subject_name,
         chapter=chapter_title,
         topic=topic["title"],
     )
 
     messages = [
-        {"role": "system", "content": f"You are an expert {board_name} teacher specializing in {subject_name} for {class_name}. Create educational content that is comprehensive, exam-focused, and easy to understand for students in Assam, India."},
+        {"role": "system", "content": (
+            f"You are an expert {board_display} teacher specialising in {subject_name} "
+            f"for {prompt_class_label} students. "
+            f"Create educational content that is comprehensive, exam-focused, and easy to understand "
+            f"for students in Assam, India."
+        )},
         {"role": "user", "content": prompt},
     ]
 
@@ -545,21 +603,15 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "examples": "Solved Examples",
     }
 
-    # "HS 1st Year" → "Class 11", "HS 2nd Year" → "Class 12"; plain digit fallback
-    _ord_match = re.search(r'(\d+)(st|nd|rd|th)\s*year', class_name, re.IGNORECASE)
-    if _ord_match:
-        _n = int(_ord_match.group(1))
-        grade_str = f"Class {10 + _n}" if _n <= 2 else f"Class {_n}"
-    else:
-        grade_match = re.search(r'\d+', class_name)
-        grade_str = f"Class {grade_match.group()}" if grade_match else class_name
-
     h = hierarchy
-    title = f"{topic['title']} {type_title_labels.get(page_type, page_type.title())} – {board_name} {grade_str} {subject_name}"
+    title = (
+        f"{topic['title']} {type_title_labels.get(page_type, page_type.title())} "
+        f"– {board_display} {grade_str} {subject_name}"
+    )
     meta_desc = (
         f"Study {topic['title']} with comprehensive {type_title_labels.get(page_type, 'notes').lower()} "
-        f"for {board_name} {grade_str} {subject_name}. Covers definitions, examples, and important "
-        f"questions aligned with {board_name} syllabus for Assam students."
+        f"for {board_display} {grade_str} {subject_name}. Covers definitions, examples, and important "
+        f"questions aligned with the {board_display} syllabus for Assam students."
     )
 
     page = {
@@ -577,8 +629,10 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "meta_description": meta_desc[:160],
         "word_count": word_count,
         "subject_name": subject_name,
-        "class_name": class_name,
-        "board_name": board_name,
+        "class_name": grade_str,
+        "board_name": board_display,
+        "class_name_raw": class_name,
+        "board_name_raw": board_name,
         "chapter_title": h.get("chapter", {}).get("title", ""),
         "topic_title": topic["title"],
         "status": "published",
