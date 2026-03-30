@@ -3594,6 +3594,7 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
     return response
 
 async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024) -> str:
+    import time as _t
     use_model = model or LLM_MODEL
     primary_provider, primary_key = _resolve_provider_for_model(use_model)
 
@@ -3607,8 +3608,11 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     try_model = use_model
     try:
         tried.add((provider, try_model))
-        logger.info(f"LLM call: provider={provider}, model={try_model}")
-        return await _call_single_provider(messages, provider, key, try_model, max_tokens)
+        _t0 = _t.perf_counter()
+        result = await _call_single_provider(messages, provider, key, try_model, max_tokens)
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={len(result.split())}")
+        return result
     except Exception as e:
         last_err = e
         logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
@@ -3618,9 +3622,12 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
         if (fallback["provider"], fb_model) in tried:
             continue
         tried.add((fallback["provider"], fb_model))
-        logger.info(f"LLM fallback: provider={fallback['provider']}, model={fb_model}")
         try:
-            return await _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens)
+            _t0 = _t.perf_counter()
+            result = await _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens)
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={len(result.split())} fallback=true")
+            return result
         except Exception as e:
             last_err = e
             logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
@@ -13166,9 +13173,12 @@ async def _check_health_deps():
     return result
 
 
+_cache_stats_log_counter = 0   # increments each 25 s cycle; log every 12 cycles = 5 min
+
 async def _bg_health_loop():
-    """Warm the health-deps cache every 25 s so dashboard reads are near-instant."""
-    global _health_deps_cache, _health_deps_cache_at
+    """Warm the health-deps cache every 25 s so dashboard reads are near-instant.
+    Also emits a structured cache_stats log every 5 minutes."""
+    global _health_deps_cache, _health_deps_cache_at, _cache_stats_log_counter
     await asyncio.sleep(8)                  # let startup settle first
     while True:
         try:
@@ -13177,6 +13187,17 @@ async def _bg_health_loop():
             _health_deps_cache_at = time.time()
         except Exception as _e:
             logger.debug(f"Health bg loop: {_e}")
+
+        # Emit cache hit-rate log every 5 minutes
+        _cache_stats_log_counter += 1
+        if _cache_stats_log_counter % 12 == 0:
+            total = _redis_hit_count + _redis_miss_count
+            hit_rate = round(_redis_hit_count / max(1, total), 3)
+            logger.info(
+                f"cache_stats hit_rate={hit_rate} "
+                f"hits={_redis_hit_count} misses={_redis_miss_count} total={total}"
+            )
+
         await asyncio.sleep(25)
 
 

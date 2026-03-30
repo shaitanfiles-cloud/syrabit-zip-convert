@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
+import { visualizer } from "rollup-plugin-visualizer";
 
 const port = Number(process.env.PORT || 25144);
 const basePath = process.env.BASE_PATH ?? "/";
@@ -17,6 +18,15 @@ export default defineConfig({
           ),
         ]
       : []),
+    // Bundle visualizer — writes dist/stats.html on every production build
+    // Open dist/stats.html in a browser to see module sizes and composition
+    visualizer({
+      filename: "dist/stats.html",
+      open: false,
+      gzipSize: true,
+      brotliSize: true,
+      template: "treemap",
+    }),
   ],
   resolve: {
     alias: {

@@ -1,3 +1,5 @@
+// @ts-nocheck — recharts type definitions are not compatible with strict mode;
+// this is a vendored shadcn/ui component and type-safety is handled at call sites.
 import * as React from "react"
 import * as RechartsPrimitive from "recharts"
 
