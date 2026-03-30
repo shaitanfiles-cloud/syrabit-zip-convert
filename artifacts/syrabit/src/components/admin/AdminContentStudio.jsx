@@ -769,7 +769,7 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
           <p className="text-sm mt-1 flex items-center gap-1.5" style={{ color: 'rgba(255,255,255,0.35)' }}>
             {fromEditor && autoParseRef.current
               ? <><span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Auto-mode: content parsed → SEO generated → live SERP preview</>
-              : <>Content in → AI parses → SEO title + meta auto-generated → live SERP preview → Publish</>
+              : <>Send a lesson from Content Editor → AI auto-parses → SEO title + meta generated → Publish</>
             }
           </p>
         </div>
@@ -944,9 +944,9 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
         const steps = [
           {
             num: 1,
-            label: 'Content Ready',
-            sub: 'Chapter loaded from Editor',
-            done: !!(chapter.trim() || rawText.trim()),
+            label: fromEditor ? 'Lesson Received' : 'Waiting for Lesson',
+            sub: fromEditor ? `${chapter || subject || 'Chapter'} loaded from Content Editor` : 'Send a chapter from Content Editor',
+            done: fromEditor && !!(chapter.trim() || rawText.trim()),
           },
           {
             num: 2,
@@ -1097,13 +1097,13 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
           <div className="flex items-center gap-2 flex-wrap">
             <button onClick={handleParse} disabled={parsing || !rawText.trim()}
               className="flex items-center gap-2 disabled:opacity-50 text-white rounded-lg px-5 py-2 text-sm font-medium transition-colors"
-              style={{ background: fromEditor && autoParseRef.current ? 'rgba(139,92,246,0.60)' : '#7c3aed' }}>
+              style={{ background: '#7c3aed' }}>
               {parsing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-              {parsing ? 'AI Parsing…' : fromEditor && autoParseRef.current && blocks.length === 0 ? 'Auto-parsing…' : 'Parse with AI'}
+              {parsing ? 'AI Parsing…' : 'Parse with AI'}
             </button>
-            {fromEditor && !rawText.trim() && !parsing && !autoParseRef.current && (
-              <span className="text-[11px] px-2 py-1 rounded-lg" style={{ background: 'rgba(251,191,36,0.08)', color: 'rgba(251,191,36,0.70)', border: '1px solid rgba(251,191,36,0.18)' }}>
-                Paste raw lesson notes below — auto-parse will trigger automatically
+            {!rawText.trim() && !parsing && (
+              <span className="text-[11px] px-2 py-1 rounded-lg" style={{ background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.07)' }}>
+                Send a lesson from Content Editor to enable
               </span>
             )}
 
@@ -1178,45 +1178,35 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                <div className="space-y-3">
-                  <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>Raw Text Input</label>
-                  <textarea value={rawText} onChange={e => setRawText(e.target.value)}
-                    placeholder="Paste your raw educational notes, textbook content, or study material here…"
-                    rows={14}
-                    className="w-full rounded-xl px-4 py-3 text-sm resize-y outline-none font-mono"
-                    style={{ color: '#E8E8E8', background: 'rgba(0,0,0,0.35)', border: `1px solid ${parsing ? 'rgba(139,92,246,0.40)' : 'rgba(255,255,255,0.08)'}` }} />
-                  <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.20)' }}>{rawText.length} chars · max 8,000 sent to AI</p>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
+                    Structured Blocks {blocks.length > 0 && <span style={{ color: '#a78bfa' }}>({blocks.length})</span>}
+                  </label>
+                  {blocks.length > 0 && (
+                    <button onClick={() => setBlocks([])} className="text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Clear all</button>
+                  )}
                 </div>
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
-                      Structured Blocks {blocks.length > 0 && <span style={{ color: '#a78bfa' }}>({blocks.length})</span>}
-                    </label>
-                    {blocks.length > 0 && (
-                      <button onClick={() => setBlocks([])} className="text-[10px]" style={{ color: 'rgba(255,255,255,0.25)' }}>Clear all</button>
-                    )}
-                  </div>
-                  <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-                    {blocks.map((block, i) => (
-                      <BlockCard key={i} block={block} index={i} onEdit={handleEditBlock} onRemove={handleRemoveBlock} />
-                    ))}
-                    {blocks.length === 0 && (
-                      <div className="rounded-xl p-8 text-center border border-dashed" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-                        {parsing
-                          ? <>
-                              <Loader2 size={24} className="mx-auto mb-3 animate-spin text-violet-400" />
-                              <p className="text-sm text-violet-300">AI is parsing your content…</p>
-                            </>
-                          : <>
-                              <Sparkles size={24} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
-                              <p className="text-sm" style={{ color: 'rgba(255,255,255,0.25)' }}>AI-parsed blocks will appear here</p>
-                              <p className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.15)' }}>Paste text and click "Parse with AI"</p>
-                            </>
-                        }
-                      </div>
-                    )}
-                  </div>
+                <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
+                  {blocks.map((block, i) => (
+                    <BlockCard key={i} block={block} index={i} onEdit={handleEditBlock} onRemove={handleRemoveBlock} />
+                  ))}
+                  {blocks.length === 0 && (
+                    <div className="rounded-xl p-10 text-center border border-dashed" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+                      {parsing
+                        ? <>
+                            <Loader2 size={28} className="mx-auto mb-3 animate-spin text-violet-400" />
+                            <p className="text-sm text-violet-300">AI is parsing lesson content…</p>
+                            <p className="text-xs mt-1" style={{ color: 'rgba(255,255,255,0.20)' }}>Blocks will appear here shortly</p>
+                          </>
+                        : <>
+                            <Sparkles size={28} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.08)' }} />
+                            <p className="text-sm" style={{ color: 'rgba(255,255,255,0.25)' }}>Blocks will auto-appear when a lesson is sent from Content Editor</p>
+                            <p className="text-xs mt-1.5" style={{ color: 'rgba(255,255,255,0.12)' }}>Go to Content Editor → open a chapter → click "Send to AI Studio"</p>
+                          </>
+                      }
+                    </div>
+                  )}
                 </div>
               </div>
 
