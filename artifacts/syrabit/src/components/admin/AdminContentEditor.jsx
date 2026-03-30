@@ -195,6 +195,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [mergedSubjectIds, setMergedSubjectIds] = useState(new Set());
   const [seoTopicsGeneratedIds, setSeoTopicsGeneratedIds] = useState(new Set());
   const [assetsGeneratedIds, setAssetsGeneratedIds]       = useState(new Set());
+  const [chapterAssets, setChapterAssets]                 = useState({});
   const [generatingSeoTopics, setGeneratingSeoTopics]     = useState(false);
   const [editorKey, setEditorKey]               = useState(0);
   const [showPipeline, setShowPipeline]         = useState(false);
@@ -1406,51 +1407,119 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                       )}
 
                       {chapters.length === 0 && <p className="text-xs text-white/30 py-4 text-center">No chapters yet — create the first one above</p>}
-                      {chapters.map(ch => (
-                        <div key={ch.id} className="p-3 rounded-xl border hover:border-violet-500/20 bg-white/[0.02] flex items-start justify-between transition-colors"
-                          style={{ borderColor: selectedChapters.has(ch.id) ? 'rgba(149,117,224,0.35)' : 'rgba(255,255,255,0.08)', background: selectedChapters.has(ch.id) ? 'rgba(149,117,224,0.06)' : undefined }}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <input
-                              type="checkbox"
-                              checked={selectedChapters.has(ch.id)}
-                              onChange={e => setSelectedChapters(prev => {
-                                const next = new Set(prev);
-                                if (e.target.checked) next.add(ch.id); else next.delete(ch.id);
-                                return next;
-                              })}
-                              className="rounded flex-shrink-0 accent-violet-500 cursor-pointer"
-                              onClick={e => e.stopPropagation()}
-                            />
-                            <Book size={14} className="text-violet-400 flex-shrink-0" />
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <p className="text-sm font-medium text-white truncate">{ch.title}</p>
-                                {ch.content_type && ch.content_type !== 'notes' && (
-                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/10 text-white/50 uppercase">{ch.content_type}</span>
+                      {chapters.map(ch => {
+                        const assets   = chapterAssets[ch.id] || {};
+                        const hasNotes = assets.notesGenerated || (ch.content && ch.content.trim().length > 50);
+                        const preview  = ch.content ? ch.content.replace(/#{1,6}\s?/g, '').replace(/\*+/g, '').replace(/\n+/g, ' ').trim().slice(0, 130) : '';
+                        const wordCount = ch.content ? ch.content.split(/\s+/).filter(Boolean).length : 0;
+                        const hasPyqs   = (assets.pyqCount || 0) > 0;
+                        const hasFc     = (assets.flashcardCount || 0) > 0;
+                        const hasBlogs  = (assets.blogCount || 0) > 0;
+                        const isSelected = selectedChapters.has(ch.id);
+                        return (
+                          <div key={ch.id}
+                            className="rounded-xl border transition-all"
+                            style={{
+                              borderColor: isSelected ? 'rgba(149,117,224,0.40)' : hasNotes ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.08)',
+                              background:  isSelected ? 'rgba(149,117,224,0.05)' : 'rgba(255,255,255,0.02)',
+                            }}>
+                            {/* Card header row */}
+                            <div className="flex items-start gap-2 p-3 pb-2">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={e => setSelectedChapters(prev => {
+                                  const next = new Set(prev);
+                                  if (e.target.checked) next.add(ch.id); else next.delete(ch.id);
+                                  return next;
+                                })}
+                                className="rounded flex-shrink-0 accent-violet-500 cursor-pointer mt-0.5"
+                                onClick={e => e.stopPropagation()}
+                              />
+                              {/* Status dot */}
+                              <div className="flex-shrink-0 mt-1">
+                                {hasNotes
+                                  ? <div className="w-2 h-2 rounded-full bg-emerald-400" title="Notes generated" />
+                                  : <div className="w-2 h-2 rounded-full bg-white/15" title="No notes yet" />}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <p className="text-sm font-semibold text-white truncate">{ch.title}</p>
+                                  {ch.content_type && ch.content_type !== 'notes' && (
+                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-white/10 text-white/40 uppercase tracking-wide">{ch.content_type}</span>
+                                  )}
+                                  {wordCount > 0 && (
+                                    <span className="text-[9px] text-white/25 font-mono">{wordCount.toLocaleString()} words</span>
+                                  )}
+                                </div>
+                                {ch.description && !preview && (
+                                  <p className="text-xs text-white/35 mt-0.5 truncate">{ch.description}</p>
+                                )}
+                                {/* Notes content preview */}
+                                {preview && (
+                                  <p className="text-[11px] text-white/40 mt-1 leading-relaxed line-clamp-2">{preview}{preview.length >= 130 ? '…' : ''}</p>
+                                )}
+                                {!hasNotes && !preview && (
+                                  <p className="text-[11px] text-white/20 mt-1 italic">No notes yet — generate with AI or edit manually</p>
                                 )}
                               </div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                {ch.slug && <span className="text-[10px] text-white/25 font-mono truncate max-w-[180px]">/{ch.slug}</span>}
-                                {ch.description && <span className="text-xs text-white/40 truncate">{ch.description}</span>}
+                              {/* Action buttons */}
+                              <div className="flex gap-0.5 flex-shrink-0 ml-1">
+                                <button
+                                  onClick={() => handleGenerateNotes(ch.id, ch.title)}
+                                  disabled={generatingNotes.has(ch.id) || bulkGenerating}
+                                  className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400 disabled:opacity-40 transition-colors"
+                                  title="Generate AI notes for this chapter"
+                                >
+                                  {generatingNotes.has(ch.id) ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                                </button>
+                                <button onClick={() => setViewerItem(ch)} className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-white/30 hover:text-emerald-400" title="Preview lesson" data-testid={`open-chapter-${ch.id}`}><Eye size={13} /></button>
+                                <button onClick={() => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1 }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
+                                  className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400" title="Edit chapter"><Edit2 size={13} /></button>
+                                <button onClick={() => handleDeleteChapter(ch.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400" title="Delete chapter"><Trash2 size={13} /></button>
                               </div>
                             </div>
+                            {/* Asset badges footer */}
+                            {(hasNotes || hasPyqs || hasFc || hasBlogs || ch.slug) && (
+                              <div className="flex items-center gap-1.5 px-3 pb-2.5 flex-wrap">
+                                {hasNotes && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                                    style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>
+                                    <CheckCircle size={9} /> Notes
+                                  </span>
+                                )}
+                                {hasPyqs && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                                    style={{ background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.20)' }}>
+                                    <FileText size={9} /> {assets.pyqCount} PYQs
+                                  </span>
+                                )}
+                                {hasFc && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                                    style={{ background: 'rgba(16,185,129,0.10)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.18)' }}>
+                                    <Layers size={9} /> {assets.flashcardCount} Flashcards
+                                  </span>
+                                )}
+                                {hasBlogs && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                                    style={{ background: 'rgba(59,130,246,0.12)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.20)' }}>
+                                    <Globe size={9} /> {assets.blogCount} Blogs
+                                  </span>
+                                )}
+                                {assets.pyqPage && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                                    style={{ background: 'rgba(236,72,153,0.10)', color: '#f9a8d4', border: '1px solid rgba(236,72,153,0.18)' }}>
+                                    <Sparkles size={9} /> PYQ Page
+                                  </span>
+                                )}
+                                {ch.slug && !hasPyqs && !hasFc && !hasBlogs && (
+                                  <span className="text-[9px] text-white/20 font-mono">/{ch.slug}</span>
+                                )}
+                              </div>
+                            )}
                           </div>
-                          <div className="flex gap-0.5 flex-shrink-0">
-                            <button
-                              onClick={() => handleGenerateNotes(ch.id, ch.title)}
-                              disabled={generatingNotes.has(ch.id) || bulkGenerating}
-                              className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400 disabled:opacity-40 transition-colors"
-                              title="Generate AI notes for this chapter"
-                            >
-                              {generatingNotes.has(ch.id) ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                            </button>
-                            <button onClick={() => setViewerItem(ch)} className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-white/30 hover:text-emerald-400" title="Preview" data-testid={`open-chapter-${ch.id}`}><Eye size={14} /></button>
-                            <button onClick={() => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1 }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
-                              className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400"><Edit2 size={14} /></button>
-                            <button onClick={() => handleDeleteChapter(ch.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400"><Trash2 size={14} /></button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 ) : null}
@@ -1472,6 +1541,23 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
             toast.success(`${total} assets generated for "${subjectData?.name}" — ${summary.total_blogs || 0} blogs live`);
             setAssetsGeneratedIds(prev => new Set([...prev, selSubject]));
             setMergedSubjectIds(prev => new Set([...prev, selSubject]));
+            if (summary.chapter_results?.length > 0) {
+              setChapterAssets(prev => {
+                const next = { ...prev };
+                for (const r of summary.chapter_results) {
+                  if (r.chapter_id) {
+                    next[r.chapter_id] = {
+                      notesGenerated: r.notes_generated,
+                      pyqCount:       r.topic_pyq_count  || 0,
+                      flashcardCount: r.flashcards_count  || 0,
+                      blogCount:      r.blogs_count        || 0,
+                      pyqPage:        r.pyq_page           || false,
+                    };
+                  }
+                }
+                return next;
+              });
+            }
           }}
         />
       )}

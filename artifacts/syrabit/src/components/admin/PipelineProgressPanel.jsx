@@ -14,8 +14,8 @@ import { adminPipelineAutoGenerate, adminPipelineStatus } from '@/utils/api';
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 const STEP_LABELS = [
-  { icon: BookOpen,   label: 'Chapter Notes',      color: '#8b5cf6' },
-  { icon: HelpCircle, label: '25 MCQs',             color: '#f59e0b' },
+  { icon: BookOpen,   label: 'Chapter Notes',       color: '#8b5cf6' },
+  { icon: HelpCircle, label: '20 Topic PYQs',       color: '#f59e0b' },
   { icon: FileText,   label: '30 Flashcards',       color: '#10b981' },
   { icon: Globe,      label: '5 Geo-SEO Blogs',     color: '#3b82f6' },
   { icon: Sparkles,   label: 'PYQ HTML Page',       color: '#ec4899' },
