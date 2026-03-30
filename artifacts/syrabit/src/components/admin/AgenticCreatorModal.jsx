@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   X, Sparkles, BookOpen, FileQuestion, Layers, CheckCircle2,
   AlertCircle, Loader2, Zap, Bot, TerminalSquare,
-  ArrowRight, Target,
+  ArrowRight, Target, Brain, RefreshCw,
 } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -21,8 +21,10 @@ const STEPS = [
     icon: BookOpen,
     color: '#8b5cf6',
     bg: 'rgba(139,92,246,0.12)',
-    description: 'Topic-wise structured study notes for each chapter',
+    description: 'Smart skip if notes exist — generates only for new chapters',
+    badge: 'skip if exists',
     unit: 'notes',
+    body: { skip_existing: true },
     endpoint: (id) => `/admin/subjects/${id}/generate-notes-bulk`,
     countKey: 'generated',
     outputLabel: (data) => `${data.generated} chapters`,
@@ -33,7 +35,8 @@ const STEPS = [
     icon: Target,
     color: '#f59e0b',
     bg: 'rgba(245,158,11,0.12)',
-    description: 'Mark-wise: 1M, 2M, 5M & 10M most important questions per chapter',
+    description: 'Mark-wise: 1M, 2M, 3M, 5M & 10M most important questions per chapter',
+    badge: '1M·2M·3M·5M·10M',
     unit: 'questions',
     endpoint: (id) => `/admin/subjects/${id}/generate-pyqs-bulk`,
     countKey: 'total_pyqs',
@@ -41,15 +44,29 @@ const STEPS = [
   },
   {
     key: 'flashcards',
-    label: 'Flashcard Deck',
-    icon: Layers,
+    label: 'Memory Tricks & Mindmaps',
+    icon: Brain,
     color: '#10b981',
     bg: 'rgba(16,185,129,0.12)',
-    description: '25 revision flashcards per chapter (definition, concept, formula)',
+    description: 'Memory hacks, mnemonics, mindmaps & shortcuts per chapter',
+    badge: 'memory hacks',
     unit: 'cards',
     endpoint: (id) => `/admin/subjects/${id}/generate-flashcards-bulk`,
     countKey: 'total_flashcards',
     outputLabel: (data) => `${data.total_flashcards} cards`,
+  },
+  {
+    key: 'sync',
+    label: 'Update Chapter Content',
+    icon: RefreshCw,
+    color: '#06b6d4',
+    bg: 'rgba(6,182,212,0.12)',
+    description: 'Embeds all generated content into each chapter for LearnPage',
+    badge: 'final step',
+    unit: 'chapters',
+    endpoint: (id) => `/admin/subjects/${id}/sync-content-bulk`,
+    countKey: 'synced',
+    outputLabel: (data) => `${data.synced} chapters synced`,
   },
 ];
 
@@ -59,8 +76,8 @@ export default function AgenticCreatorModal({
   adminToken, subjectId, subjectName, chapterCount, onClose, onComplete,
 }) {
   const [phase, setPhase]             = useState('plan');
-  const [enabled, setEnabled]         = useState(new Set(['notes', 'pyqs', 'flashcards']));
-  const [stepStates, setStepStates]   = useState({ notes: STATE.idle, pyqs: STATE.idle, flashcards: STATE.idle });
+  const [enabled, setEnabled]         = useState(new Set(STEPS.map(s => s.key)));
+  const [stepStates, setStepStates]   = useState(Object.fromEntries(STEPS.map(s => [s.key, STATE.idle])));
   const [stepResults, setStepResults] = useState({});
   const [log, setLog]                 = useState([]);
   const [currentStep, setCurrentStep] = useState(null);
@@ -100,7 +117,7 @@ export default function AgenticCreatorModal({
       try {
         const res = await axios.post(
           `${API}${step.endpoint(subjectId)}`,
-          {},
+          step.body || {},
           { ...authHeaders(adminToken), timeout: 600_000 },
         );
         const data = res.data;
@@ -125,7 +142,10 @@ export default function AgenticCreatorModal({
         const skipped = (data.results || []).filter(r => r.status === 'skipped').length;
         const errors  = (data.results || []).filter(r => r.status === 'error').length;
         push(`✓ ${step.outputLabel(data)} generated`, 'ok');
-        if (skipped > 0) push(`  ${skipped} chapter(s) skipped (missing content)`, 'warn');
+        if (step.key === 'notes' && skipped > 0)
+          push(`  ${skipped} chapter(s) skipped — notes already exist`, 'detail');
+        else if (skipped > 0)
+          push(`  ${skipped} chapter(s) skipped (missing content)`, 'warn');
         if (errors > 0)  push(`  ${errors} chapter(s) failed`, 'warn');
 
         (data.results || []).filter(r => r.status === 'ok').slice(0, 5).forEach(r => {
@@ -148,10 +168,7 @@ export default function AgenticCreatorModal({
     onComplete?.();
   };
 
-  const allDone        = phase === 'done';
-  const totalNotes     = stepResults.notes?.generated || 0;
-  const totalPyqs      = stepResults.pyqs?.total_pyqs || 0;
-  const totalFlashcards = stepResults.flashcards?.total_flashcards || 0;
+  const allDone = phase === 'done';
 
   return (
     <div
@@ -224,16 +241,10 @@ export default function AgenticCreatorModal({
                             <span className="text-sm font-semibold" style={{ color: on ? '#e8e8e8' : 'rgba(255,255,255,0.40)' }}>
                               Step {i + 1} — {step.label}
                             </span>
-                            {step.key === 'pyqs' && (
+                            {step.badge && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full"
-                                style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
-                                1M · 2M · 5M · 10M
-                              </span>
-                            )}
-                            {step.key === 'flashcards' && (
-                              <span className="text-[10px] px-1.5 py-0.5 rounded-full"
-                                style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.30)' }}>
-                                uses notes
+                                style={{ background: `${step.color}18`, color: step.color }}>
+                                {step.badge}
                               </span>
                             )}
                           </div>
@@ -263,10 +274,13 @@ export default function AgenticCreatorModal({
                     <span className="font-mono" style={{ color: '#8b5cf6' }}>{chapterCount} notes</span>
                   )}
                   {enabled.has('pyqs') && (
-                    <span className="font-mono" style={{ color: '#f59e0b' }}>{chapterCount * 12} imp. questions</span>
+                    <span className="font-mono" style={{ color: '#f59e0b' }}>{chapterCount * 15} questions</span>
                   )}
                   {enabled.has('flashcards') && (
-                    <span className="font-mono" style={{ color: '#10b981' }}>{chapterCount * 25} flashcards</span>
+                    <span className="font-mono" style={{ color: '#10b981' }}>{chapterCount * 25} memory cards</span>
+                  )}
+                  {enabled.has('sync') && (
+                    <span className="font-mono" style={{ color: '#06b6d4' }}>{chapterCount} synced</span>
                   )}
                 </div>
               )}
@@ -352,25 +366,23 @@ export default function AgenticCreatorModal({
 
               {/* Done summary */}
               {allDone && (
-                <div className="grid grid-cols-3 gap-2">
-                  {enabled.has('notes') && (
-                    <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.20)' }}>
-                      <p className="text-xl font-bold" style={{ color: '#a78bfa' }}>{totalNotes}</p>
-                      <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>chapters<br />with notes</p>
-                    </div>
-                  )}
-                  {enabled.has('pyqs') && (
-                    <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.20)' }}>
-                      <p className="text-xl font-bold" style={{ color: '#fbbf24' }}>{totalPyqs}</p>
-                      <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>imp. questions<br />generated</p>
-                    </div>
-                  )}
-                  {enabled.has('flashcards') && (
-                    <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.20)' }}>
-                      <p className="text-xl font-bold" style={{ color: '#34d399' }}>{totalFlashcards}</p>
-                      <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>flashcards<br />generated</p>
-                    </div>
-                  )}
+                <div className={`grid gap-2 grid-cols-${Math.min(enabled.size, 4)}`}>
+                  {STEPS.filter(s => enabled.has(s.key)).map(step => {
+                    const res = stepResults[step.key];
+                    const val = res?.[step.countKey] ?? 0;
+                    return (
+                      <div key={step.key} className="rounded-xl p-3 text-center"
+                        style={{ background: `${step.color}1a`, border: `1px solid ${step.color}33` }}>
+                        <p className="text-xl font-bold" style={{ color: step.color }}>{val}</p>
+                        <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>
+                          {step.key === 'notes' ? 'chapters\nnoted' :
+                           step.key === 'pyqs'  ? 'questions\ngenerated' :
+                           step.key === 'flashcards' ? 'memory\ncards' :
+                           'chapters\nsynced'}
+                        </p>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>

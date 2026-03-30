@@ -8768,6 +8768,79 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
     }
 
 
+@api.post("/admin/subjects/{subject_id}/sync-content-bulk")
+async def admin_sync_content_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """
+    Final pipeline step: for each chapter, embed all generated assets
+    (mark-wise questions + memory-trick flashcards) back into the chapter document.
+    Sets has_important_questions, has_flashcards, mark_wise_questions, flashcard_summary,
+    and content_synced_at on each chapter.
+    """
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).sort("order_index", 1).to_list(100)
+
+    if not chapters:
+        return {"subject_id": subject_id, "synced": 0, "total": 0, "results": []}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    results = []
+
+    for chapter in chapters:
+        chapter_id    = chapter.get("id", "")
+        chapter_title = (chapter.get("title") or "").strip()
+
+        if not chapter_title:
+            results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
+            continue
+
+        update_fields: dict = {"content_synced_at": now_iso}
+
+        # Load mark-wise questions for this chapter
+        q_doc = await db.ai_pyq_collections.find_one({"chapter_id": chapter_id}, {"_id": 0})
+        if q_doc:
+            update_fields["has_important_questions"] = True
+            update_fields["questions_synced"]        = True
+            update_fields["mark_wise_questions"]     = q_doc.get("mark_wise", {})
+            update_fields["important_questions"]     = q_doc.get("pyqs", [])
+
+        # Load memory-trick flashcards for this chapter
+        fc_doc = await db.flashcard_collections.find_one(
+            {"chapter_id": chapter_id, "pipeline_generated": True}, {"_id": 0}
+        )
+        if fc_doc:
+            update_fields["has_flashcards"]    = True
+            update_fields["flashcards_synced"] = True
+            # Embed the full flashcard list into the chapter document
+            update_fields["memory_tricks"]     = fc_doc.get("flashcards", [])
+
+        await db.chapters.update_one(
+            {"id": chapter_id},
+            {"$set": update_fields},
+        )
+
+        results.append({
+            "chapter_id":   chapter_id,
+            "title":        chapter_title,
+            "status":       "ok",
+            "has_questions": bool(q_doc),
+            "has_flashcards": bool(fc_doc),
+        })
+
+    synced = sum(1 for r in results if r.get("status") == "ok")
+    _invalidate_content_cache("chapters")
+    return {
+        "subject_id": subject_id,
+        "synced":     synced,
+        "total":      len(chapters),
+        "results":    results,
+    }
+
+
 @api.post("/admin/subjects/{subject_id}/generate-mcqs-bulk")
 async def admin_generate_mcqs_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
     """
@@ -9162,6 +9235,11 @@ Return ONLY valid JSON in this exact schema (no markdown, no explanation):
     {{"question": "...", "type": "short_answer"}},
     {{"question": "...", "type": "short_answer"}}
   ],
+  "3_mark": [
+    {{"question": "...", "type": "brief_answer"}},
+    {{"question": "...", "type": "brief_answer"}},
+    {{"question": "...", "type": "brief_answer"}}
+  ],
   "5_mark": [
     {{"question": "...", "type": "medium_answer"}},
     {{"question": "...", "type": "medium_answer"}},
@@ -9177,16 +9255,17 @@ Return ONLY valid JSON in this exact schema (no markdown, no explanation):
 Rules:
 - 1-mark: MCQ options OR one-word/one-line answers
 - 2-mark: short answers (2–3 sentences)
+- 3-mark: brief answers with 3 clear points (1 mark each)
 - 5-mark: medium answers with points/explanation
 - 10-mark: detailed essay or long-answer questions
 - Questions must be specific to "{chapter_title}", not generic
-- Exactly 3 questions per mark bucket, total 12 questions
+- Exactly 3 questions per mark bucket, total 15 questions
 - Pure JSON only, no markdown fences"""
 
         try:
             raw_resp = await call_llm_api(
                 [{"role": "user", "content": generate_prompt}],
-                max_tokens=1200,
+                max_tokens=1600,
             )
             if not raw_resp:
                 results.append({"chapter_id": chapter_id, "title": chapter_title,
@@ -9206,6 +9285,7 @@ Rules:
             mark_wise = {
                 "1":  parsed.get("1_mark",  []),
                 "2":  parsed.get("2_mark",  []),
+                "3":  parsed.get("3_mark",  []),
                 "5":  parsed.get("5_mark",  []),
                 "10": parsed.get("10_mark", []),
             }
@@ -15635,24 +15715,51 @@ Chapter content:
 
 
 async def _pipeline_generate_flashcards(content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 30) -> list:
-    """Generate flashcards from chapter content. Returns list of flashcard dicts."""
+    """
+    Generate memory-trick flashcards: mnemonics, mindmaps, shortcuts, hacks, and key-fact cards.
+    Returns list of flashcard dicts.
+    """
     if not content or len(content.strip()) < 100:
         return []
-    prompt = f"""You are an expert revision flashcard creator for AHSEC board students in Assam.
+    prompt = f"""You are an expert memory coach and study-hack creator for AHSEC/FYUGP students in Assam.
 
-Generate exactly {count} high-quality revision flashcards for {subject_name} ({class_name}).
+Generate exactly {count} MEMORY-TRICK flashcards for:
+Subject: {subject_name} ({class_name})
 Chapter: {chapter_title}
 
-Mix types: definition cards, concept cards, application cards, formula/fact cards.
+Each card must help a student REMEMBER, not just recall. Use:
+- Mnemonics (acronyms, rhymes, first-letter tricks)
+- Mindmap cues (central idea → branches)
+- Memory palaces / vivid associations
+- Shortcut formulas or patterns
+- "Because" hooks ("X happens BECAUSE...")
+- One-line exam tips
 
-Return ONLY valid JSON:
-{{"flashcards": [{{"id": 1, "front": "What is ...?", "back": "...", "type": "definition", "difficulty": "medium", "tags": []}}]}}
+Mix these types equally:
+1. "mnemonic"   — acronym or rhyme to remember a list
+2. "mindmap"    — central concept with 3-5 branch keywords
+3. "shortcut"   — quick rule or formula pattern to remember
+4. "memory_hack"— vivid story, analogy, or association
+5. "key_fact"   — single crucial fact + why it matters in exam
 
-Chapter content:
-{content[:4000]}
+Return ONLY valid JSON (no markdown fences):
+{{"flashcards": [
+  {{
+    "id": 1,
+    "front": "How to remember the 5 functions of X?",
+    "back": "Use DRAMA: D=..., R=..., A=..., M=..., A=...",
+    "type": "mnemonic",
+    "difficulty": "easy",
+    "exam_tip": "Often asked as 1-mark or 2-mark",
+    "tags": ["chapter keyword", "exam topic"]
+  }}
+]}}
+
+Chapter content to base cards on:
+{content[:4500]}
 """
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
