@@ -6795,6 +6795,137 @@ async def admin_update_user_credits(user_id: str, data: UserCreditsUpdate, admin
     await supa_update_user(user_id, update)
     return {"message": "Credits updated", **update}
 
+@api.post("/admin/sync-conversations")
+async def admin_sync_conversations(admin: dict = Depends(get_admin_user)):
+    """Sync all Supabase conversations → PostgreSQL (upsert, PG wins on message count tie)."""
+    if not supa or not pg_pool:
+        raise HTTPException(status_code=503, detail="Both Supabase and PostgreSQL required for sync")
+
+    # ── 1. Fetch all Supabase conversations (paginated) ──────────────────────
+    all_supa: list = []
+    offset = 0
+    while True:
+        r = await _supa(lambda o=offset: supa.table("conversations")
+            .select("id, user_id, title, preview, subject_id, subject_name, starred, archived, messages, tokens, created_at, updated_at")
+            .order("created_at", desc=False)
+            .range(o, o + 199).execute())
+        batch = r.data or []
+        if not batch:
+            break
+        for row in batch:
+            msgs = row.get("messages")
+            if isinstance(msgs, str) and msgs.strip():
+                try:
+                    parsed = json.loads(msgs)
+                    row["_parsed_messages"] = parsed if isinstance(parsed, list) else []
+                    row["_raw_messages"] = msgs
+                except Exception:
+                    row["_parsed_messages"] = []
+                    row["_raw_messages"] = "[]"
+            elif isinstance(msgs, list):
+                row["_parsed_messages"] = msgs
+                row["_raw_messages"] = json.dumps(msgs)
+            else:
+                row["_parsed_messages"] = []
+                row["_raw_messages"] = "[]"
+        all_supa.extend(batch)
+        offset += 200
+        if len(batch) < 200:
+            break
+
+    total_supa = len(all_supa)
+
+    # ── 2. Fetch existing PG ids + message lengths ────────────────────────────
+    async with pg_pool.acquire() as conn:
+        pg_rows = await conn.fetch("SELECT id, octet_length(messages) AS msg_len FROM conversations")
+    pg_map = {r["id"]: (r["msg_len"] or 0) for r in pg_rows}
+
+    # ── 3. Upsert each Supabase row into PG ───────────────────────────────────
+    inserted = 0
+    updated = 0
+    skipped = 0
+    errors = 0
+
+    UPSERT_SQL = """
+        INSERT INTO conversations
+            (id, user_id, title, preview, subject_id, subject_name, starred, archived,
+             messages, tokens, created_at, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ON CONFLICT (id) DO UPDATE SET
+            messages   = CASE
+                WHEN octet_length(EXCLUDED.messages) > octet_length(conversations.messages)
+                THEN EXCLUDED.messages
+                ELSE conversations.messages
+            END,
+            title      = COALESCE(EXCLUDED.title, conversations.title),
+            preview    = COALESCE(EXCLUDED.preview, conversations.preview),
+            updated_at = GREATEST(EXCLUDED.updated_at, conversations.updated_at)
+    """
+
+    async with pg_pool.acquire() as conn:
+        for row in all_supa:
+            try:
+                raw_msgs = row["_raw_messages"]
+                supa_msg_len = len(raw_msgs.encode())
+                pg_msg_len = pg_map.get(row["id"], -1)
+
+                if pg_msg_len == -1:
+                    # Not in PG at all — insert
+                    action = "insert"
+                elif supa_msg_len > pg_msg_len:
+                    # Supabase has more data — update
+                    action = "update"
+                else:
+                    skipped += 1
+                    continue
+
+                await conn.execute(
+                    UPSERT_SQL,
+                    row.get("id"),
+                    row.get("user_id"),
+                    row.get("title") or "Untitled",
+                    row.get("preview") or "",
+                    row.get("subject_id") or "",
+                    row.get("subject_name") or "",
+                    bool(row.get("starred", False)),
+                    bool(row.get("archived", False)),
+                    raw_msgs,
+                    int(row.get("tokens") or 0),
+                    str(row.get("created_at") or ""),
+                    str(row.get("updated_at") or ""),
+                )
+                if action == "insert":
+                    inserted += 1
+                else:
+                    updated += 1
+            except Exception as e:
+                logger.warning(f"sync conv {row.get('id')}: {e}")
+                errors += 1
+
+    # ── 4. Final PG counts ────────────────────────────────────────────────────
+    async with pg_pool.acquire() as conn:
+        pg_total = await conn.fetchval("SELECT COUNT(*) FROM conversations") or 0
+        pg_with_msgs = await conn.fetchval(
+            "SELECT COUNT(*) FROM conversations WHERE messages IS NOT NULL AND messages != '[]' AND length(messages) > 2"
+        ) or 0
+        pg_total_msgs = await conn.fetchval(
+            "SELECT SUM(jsonb_array_length(messages::jsonb)) FROM conversations "
+            "WHERE messages IS NOT NULL AND messages != '[]' AND length(messages) > 2"
+        ) or 0
+
+    return {
+        "ok": True,
+        "supa_total": total_supa,
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+        "errors": errors,
+        "pg_total_after": pg_total,
+        "pg_with_messages_after": pg_with_msgs,
+        "pg_total_messages_after": pg_total_msgs,
+    }
+
+
 @api.get("/admin/conversations")
 async def admin_get_conversations(admin: dict = Depends(get_admin_user)):
     # Fetch from both PostgreSQL and Supabase and merge (PG takes precedence for messages)

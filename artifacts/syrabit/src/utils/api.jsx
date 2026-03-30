@@ -337,6 +337,9 @@ export const extractFaqs = (token, limit = 100) =>
 export const conversationsSentiment = (token) =>
   axios.get(`${API_BASE}/admin/conversations/sentiment`, { headers: adminHeaders(token), withCredentials: true });
 
+export const syncConversations = (token) =>
+  axios.post(`${API_BASE}/admin/sync-conversations`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 export const pageConversions = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/page-conversions?days=${days}`, { headers: adminHeaders(token), withCredentials: true });
 

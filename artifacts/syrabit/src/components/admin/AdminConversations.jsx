@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Loader2, MessageSquare, BookOpen, Search, Mail, User,
-  ChevronRight, Crown, X, Clock, ArrowLeft, Sparkles, SmilePlus, Frown, Meh, TrendingUp,
+  ChevronRight, Crown, X, Clock, ArrowLeft, Sparkles, SmilePlus, Frown, Meh, TrendingUp, RefreshCw,
 } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
-import { adminGetConversations, extractFaqs, conversationsSentiment } from '@/utils/api';
+import { adminGetConversations, extractFaqs, conversationsSentiment, syncConversations } from '@/utils/api';
 import { toast } from 'sonner';
 import { formatDistanceToNow, format } from 'date-fns';
 
@@ -66,15 +66,38 @@ export default function AdminConversations({ adminToken, onNavigate }) {
   const [faqLoading, setFaqLoading] = useState(false);
   const [sentiment, setSentiment] = useState(null);
   const [filterMode, setFilterMode] = useState('all'); // 'all' | 'with_messages'
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
   const chatEndRef = useRef(null);
 
-  useEffect(() => {
-    adminGetConversations(adminToken)
+  const loadConversations = (token) => {
+    setLoading(true);
+    adminGetConversations(token)
       .then((res) => setConversations(res.data))
       .catch(() => toast.error('Failed to load conversations'))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadConversations(adminToken);
     conversationsSentiment(adminToken).then(r => setSentiment(r.data)).catch(() => {});
   }, [adminToken]);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const r = await syncConversations(adminToken);
+      const d = r.data;
+      setSyncResult(d);
+      toast.success(`Sync complete — ${d.inserted} inserted, ${d.updated} updated, ${d.skipped} unchanged. PG now has ${d.pg_with_messages_after} conversations with ${d.pg_total_messages_after} messages.`);
+      loadConversations(adminToken);
+    } catch (err) {
+      toast.error('Sync failed: ' + (err?.response?.data?.detail || err.message));
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const handleExtractFaqs = async () => {
     setFaqLoading(true);
@@ -129,6 +152,11 @@ export default function AdminConversations({ adminToken, onNavigate }) {
           </button>
         ))}
         <div style={{ flex: 1 }} />
+        <button onClick={handleSync} disabled={syncing}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: '1px solid rgba(16,185,129,0.3)', background: 'rgba(16,185,129,0.08)', color: '#34d399' }}>
+          {syncing ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          {syncing ? 'Syncing…' : 'Sync Supabase → PG'}
+        </button>
         <button onClick={handleExtractFaqs} disabled={faqLoading}
           style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: 'pointer', border: '1px solid rgba(139,92,246,0.3)', background: 'rgba(139,92,246,0.1)', color: '#a78bfa' }}>
           {faqLoading ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />} Extract FAQs
