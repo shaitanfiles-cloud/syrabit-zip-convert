@@ -1,0 +1,35 @@
+SEO Quality Gates & Review Workflow
+What & Why
+The current SEO pipeline auto-publishes every AI-generated page with a minimum bar of just 100 words. There is no human review step, the AI fabricates "Previous Year Questions" with fake exam years, and all 5 page types are generated regardless of whether they add meaningful value for a given topic. These issues risk Google's "unhelpful content" and "scaled content abuse" penalties, which would damage the entire domain's ranking — not just the SEO pages.
+
+This task raises the quality floor, adds a review workflow, and removes fake citations so the SEO pages that do get published are genuinely excellent.
+
+Done looks like
+New pages generate as draft by default instead of auto-publishing
+Pages scoring below a quality threshold stay in draft and are flagged for review in the admin panel
+The quality floor rejects content under 300 words (up from 100)
+Quality scoring is stricter: checks vocabulary diversity, required section completeness, and cross-page similarity within the same subject
+The admin SEO Manager shows a review queue — draft pages sorted by quality score, with one-click approve/reject/edit actions
+Admins can bulk-approve pages above a certain score threshold
+PYQ prompts no longer fabricate exam years — they use phrasing like "Frequently asked in board exams" or "Exam-style questions" instead of fake "Q (AHSEC 2019, 3 marks)" citations
+The "Definition" page type prompts are reworked to be clearly distinct from "Notes" — focused on concise, glossary-style entries rather than full explanations
+Existing published pages with quality scores below the new threshold are flagged for admin review (not auto-unpublished)
+Out of scope
+Integrating real PYQ data from uploaded past papers (that's a separate data pipeline, already handled by Task #23)
+Rewriting all existing content from scratch
+Reducing the number of page types (the 5 types serve distinct search intents — the fix is making each type's content truly different, not eliminating types)
+Off-site SEO or backlink strategy
+Tasks
+Raise the quality floor — Change the minimum word count from 100 to 300. Strengthen _compute_quality_score to also check: all required sections present for the page type, vocabulary uniqueness ratio >= 0.30, and heading count >= 3. Pages below a score of 50 should auto-draft instead of auto-publish.
+Draft-first generation — Change _generate_single_page so new pages default to status: "draft". Only pages scoring 70+ auto-publish. Pages scoring 50–69 go to draft for review. Pages scoring below 50 are rejected and logged.
+Remove fake PYQ citations — Rewrite the PYQ sections in all prompt variants to remove the "Q (AHSEC 20XX, X marks)" format. Replace with "Exam-style questions commonly asked in board exams" framing. Keep the question quality and mark allocation but drop the fabricated year citations.
+Sharpen Definition vs Notes distinction — Rework Definition prompt variants to produce short, glossary-style entries (under 400 words): one-line answer, formal definition, simplified explanation, exam-ready answers by mark value. Remove the overlap with Notes (no lengthy explanations or worked examples in definitions).
+Admin review queue UI — Add a "Review Queue" tab/section to the Admin SEO Manager showing draft pages sorted by quality score (lowest first). Each row shows topic, page type, quality score breakdown, and word count. Provide one-click approve (publish), reject (archive), and preview actions. Add a bulk-approve button for pages above a configurable score threshold.
+Flag existing low-quality pages — Add an admin endpoint that scans all published pages, recomputes quality scores with the new stricter criteria, and flags (moves to draft) any pages scoring below 50. Wire this to a button in the admin panel with a confirmation dialog showing how many pages will be affected.
+Relevant files
+artifacts/syrabit-backend/seo_engine.py:104-216
+artifacts/syrabit-backend/seo_engine.py:218-281
+artifacts/syrabit-backend/seo_engine.py:515-548
+artifacts/syrabit-backend/seo_engine.py:940-1049
+artifacts/syrabit-backend/seo_engine.py:1237-1247
+artifacts/syrabit/src/components/admin/AdminSeoManager.jsx
