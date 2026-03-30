@@ -12,7 +12,7 @@ URL pattern (4-segment):
 """
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Cookie
-from fastapi.responses import Response, HTMLResponse
+from fastapi.responses import Response, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel, Field
@@ -1310,71 +1310,169 @@ async def get_sitemap_entries():
     return {"entries": entries, "total": len(entries)}
 
 
-# ─── PUBLIC: Dynamic sitemap XML ────────────────────────────────────────────
+# ─── PUBLIC: Segmented sitemap system ───────────────────────────────────────
+# Split by content type for GSC diagnostic visibility:
+#   sitemap-index.xml  → master index (references all below)
+#   sitemap-pages.xml  → static pages (home, pricing, library, etc.)
+#   sitemap-notes.xml  → all /board/class/subject/topic note pages
+#   sitemap-mcqs.xml   → all MCQ pages
+#   sitemap-pyqs.xml   → all important-questions / PYQ pages
+#   sitemap-examples.xml → all examples pages
+#   sitemap-definitions.xml → all definition pages
+#   sitemap.xml        → legacy combined (backward compat)
 
-CORE_URLS = [
-    ("https://syrabit.ai/", "weekly", "1.0"),
-    ("https://syrabit.ai/pricing", "monthly", "0.8"),
-    ("https://syrabit.ai/signup", "monthly", "0.9"),
-    ("https://syrabit.ai/library", "weekly", "0.9"),
-    ("https://syrabit.ai/curriculum", "weekly", "0.8"),
-    ("https://syrabit.ai/exam-routine", "weekly", "0.8"),
-    ("https://syrabit.ai/terms", "yearly", "0.3"),
-    ("https://syrabit.ai/privacy", "yearly", "0.3"),
+BASE_URL = "https://syrabit.ai"
+
+STATIC_PAGES = [
+    ("/", "weekly", "1.0"),
+    ("/pricing", "monthly", "0.8"),
+    ("/signup", "monthly", "0.9"),
+    ("/library", "weekly", "0.9"),
+    ("/curriculum", "weekly", "0.8"),
+    ("/exam-routine", "weekly", "0.8"),
+    ("/terms", "yearly", "0.3"),
+    ("/privacy", "yearly", "0.3"),
 ]
 
-@router.get("/sitemap.xml", response_class=Response)
-async def get_dynamic_sitemap():
-    BASE = "https://syrabit.ai"
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+_SITEMAP_TYPES = ["notes", "mcqs", "important-questions", "examples", "definition"]
 
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>']
-    lines.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"'
-                 ' xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">')
+def _build_urlset(entries: list[dict]) -> str:
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+    for e in entries:
+        lines.append(
+            f'  <url><loc>{e["loc"]}</loc>'
+            f'<lastmod>{e["lastmod"]}</lastmod>'
+            f'<changefreq>{e.get("freq", "monthly")}</changefreq>'
+            f'<priority>{e["pri"]}</priority></url>'
+        )
+    lines.append("</urlset>")
+    return "\n".join(lines)
 
-    for loc, freq, pri in CORE_URLS:
-        lines.append(f"  <url><loc>{loc}</loc><changefreq>{freq}</changefreq>"
-                     f"<priority>{pri}</priority><lastmod>{today}</lastmod></url>")
+def _xml_response(xml: str) -> Response:
+    return Response(
+        content=xml,
+        media_type="application/xml; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
-    pages = []
+async def _fetch_published_pages() -> list[dict]:
     try:
-        pages = await _db.seo_pages.find(
+        return await _db.seo_pages.find(
             {"status": "published"},
             {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1,
              "chapter_slug": 1, "topic_slug": 1, "page_type": 1, "updated_at": 1},
         ).to_list(50000)
     except Exception:
-        pass
+        return []
 
-    seen_topics = set()
+def _page_to_entry(p: dict, today: str) -> dict | None:
+    bs, cs, ss, ts = p.get("board_slug"), p.get("class_slug"), p.get("subject_slug"), p.get("topic_slug")
+    pt = p.get("page_type", "notes")
+    if not all([bs, cs, ss, ts]):
+        return None
+    base_path = f"/{bs}/{cs}/{ss}/{ts}"
+    path = base_path if pt == "notes" else f"{base_path}/{pt}"
+    try:
+        raw = p.get("updated_at", "")
+        lastmod = raw[:10] if raw else today
+    except Exception:
+        lastmod = today
+    return {
+        "loc": f"{BASE_URL}{path}",
+        "lastmod": lastmod,
+        "pri": "0.8" if pt == "notes" else "0.7",
+        "freq": "monthly",
+        "page_type": pt,
+    }
+
+
+@router.get("/sitemap-index.xml", response_class=Response)
+async def get_sitemap_index():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    sitemap_names = [
+        "sitemap-pages.xml",
+        "sitemap-notes.xml",
+        "sitemap-mcqs.xml",
+        "sitemap-pyqs.xml",
+        "sitemap-examples.xml",
+        "sitemap-definitions.xml",
+    ]
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+    for name in sitemap_names:
+        lines.append(
+            f"  <sitemap><loc>{BASE_URL}/api/seo/{name}</loc>"
+            f"<lastmod>{today}</lastmod></sitemap>"
+        )
+    lines.append("</sitemapindex>")
+    return _xml_response("\n".join(lines))
+
+
+@router.get("/sitemap-pages.xml", response_class=Response)
+async def get_sitemap_pages():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    entries = [{"loc": f"{BASE_URL}{path}", "lastmod": today, "pri": pri, "freq": freq}
+               for path, freq, pri in STATIC_PAGES]
+    return _xml_response(_build_urlset(entries))
+
+
+@router.get("/sitemap-notes.xml", response_class=Response)
+async def get_sitemap_notes():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pages = await _fetch_published_pages()
+    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "notes"]
+    return _xml_response(_build_urlset(entries))
+
+
+@router.get("/sitemap-mcqs.xml", response_class=Response)
+async def get_sitemap_mcqs():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pages = await _fetch_published_pages()
+    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "mcqs"]
+    return _xml_response(_build_urlset(entries))
+
+
+@router.get("/sitemap-pyqs.xml", response_class=Response)
+async def get_sitemap_pyqs():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pages = await _fetch_published_pages()
+    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "important-questions"]
+    return _xml_response(_build_urlset(entries))
+
+
+@router.get("/sitemap-examples.xml", response_class=Response)
+async def get_sitemap_examples():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pages = await _fetch_published_pages()
+    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "examples"]
+    return _xml_response(_build_urlset(entries))
+
+
+@router.get("/sitemap-definitions.xml", response_class=Response)
+async def get_sitemap_definitions():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    pages = await _fetch_published_pages()
+    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "definition"]
+    return _xml_response(_build_urlset(entries))
+
+
+@router.get("/sitemap.xml", response_class=Response)
+async def get_dynamic_sitemap():
+    """Legacy combined sitemap — kept for backward compatibility."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    entries = [{"loc": f"{BASE_URL}{path}", "lastmod": today, "pri": pri, "freq": freq}
+               for path, freq, pri in STATIC_PAGES]
+    pages = await _fetch_published_pages()
     for p in pages:
-        bs = p.get("board_slug")
-        cs = p.get("class_slug")
-        ss = p.get("subject_slug")
-        ts = p.get("topic_slug")
-        pt = p.get("page_type", "notes")
-        if not all([bs, cs, ss, ts]):
-            continue
-        base_path = f"/{bs}/{cs}/{ss}/{ts}"
-        path = base_path if pt == "notes" else f"{base_path}/{pt}"
-        loc = f"{BASE}{path}"
-        pri = "0.8" if pt == "notes" else "0.7"
-        try:
-            raw = p.get("updated_at", "")
-            lastmod = raw[:10] if raw else today
-        except Exception:
-            lastmod = today
-        lines.append(f"  <url><loc>{loc}</loc><changefreq>monthly</changefreq>"
-                     f"<priority>{pri}</priority><lastmod>{lastmod}</lastmod></url>")
-        html_loc = f"{BASE}/api/seo/html{path}"
-        lines.append(f"  <url><loc>{html_loc}</loc><changefreq>monthly</changefreq>"
-                     f"<priority>0.6</priority><lastmod>{lastmod}</lastmod></url>")
-        seen_topics.add(base_path)
-
-    lines.append("</urlset>")
-    xml = "\n".join(lines)
-    return Response(content=xml, media_type="application/xml; charset=utf-8",
-                    headers={"Cache-Control": "public, max-age=3600"})
+        e = _page_to_entry(p, today)
+        if e:
+            entries.append(e)
+    return _xml_response(_build_urlset(entries))
 
 
 # ─── PUBLIC: Browse by subject ──────────────────────────────────────────────

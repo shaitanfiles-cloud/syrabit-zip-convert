@@ -1,9 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <sitemap>
-    <loc>https://syrabit.ai/sitemap-static.xml</loc>
+    <loc>https://syrabit.ai/api/seo/sitemap-pages.xml</loc>
   </sitemap>
   <sitemap>
-    <loc>https://syrabit.ai/api/seo/sitemap.xml</loc>
+    <loc>https://syrabit.ai/api/seo/sitemap-notes.xml</loc>
+  </sitemap>
+  <sitemap>
+    <loc>https://syrabit.ai/api/seo/sitemap-mcqs.xml</loc>
+  </sitemap>
+  <sitemap>
+    <loc>https://syrabit.ai/api/seo/sitemap-pyqs.xml</loc>
+  </sitemap>
+  <sitemap>
+    <loc>https://syrabit.ai/api/seo/sitemap-examples.xml</loc>
+  </sitemap>
+  <sitemap>
+    <loc>https://syrabit.ai/api/seo/sitemap-definitions.xml</loc>
   </sitemap>
 </sitemapindex>

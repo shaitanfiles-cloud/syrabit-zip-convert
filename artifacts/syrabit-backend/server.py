@@ -16387,7 +16387,14 @@ async def serve_llms_txt():
         "- /{board}/{class}/{subject}/{topic}/examples — Solved examples",
         "",
         "## API",
-        "- /api/seo/sitemap.xml — Full sitemap",
+        "- /api/seo/sitemap-index.xml — Master sitemap index",
+        "- /api/seo/sitemap-pages.xml — Static pages",
+        "- /api/seo/sitemap-notes.xml — Notes pages",
+        "- /api/seo/sitemap-mcqs.xml — MCQ pages",
+        "- /api/seo/sitemap-pyqs.xml — PYQ/important questions",
+        "- /api/seo/sitemap-examples.xml — Examples pages",
+        "- /api/seo/sitemap-definitions.xml — Definition pages",
+        "- /api/seo/sitemap.xml — Legacy combined sitemap",
         "- /api/seo/sitemap-entries — JSON sitemap entries",
         "- /api/seo/page/{board}/{class}/{subject}/{topic} — JSON page data",
         "- /api/seo/html/{board}/{class}/{subject}/{topic} — Pre-rendered HTML",
@@ -17678,7 +17685,7 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
     # Instead we self-verify our own sitemap endpoint on localhost.
     try:
         local_port = int(os.environ.get("PORT", "5000"))
-        sitemap_local = f"http://localhost:{local_port}/api/seo/sitemap.xml"
+        sitemap_local = f"http://localhost:{local_port}/api/seo/sitemap-index.xml"
         async with httpx.AsyncClient(timeout=10.0) as client:
             smap_resp = await client.get(sitemap_local)
             summary["sitemap_pinged"] = True
