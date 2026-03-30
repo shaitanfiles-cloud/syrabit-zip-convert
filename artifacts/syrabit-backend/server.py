@@ -5971,6 +5971,14 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         syllabus=syllabus,
         web_results=web_results or None,
     )
+    if _pyq_blocked_ns > 0:
+        system_prompt += (
+            "\n\n[SYSTEM NOTE]: This student is on the FREE plan. "
+            f"{_pyq_blocked_ns} PYQ question(s) are locked behind a paywall. "
+            "If their question is about past year questions (PYQs), share what you know from general knowledge, "
+            "then end your answer with: "
+            "'\\n\\n🔒 **Unlock full PYQs** — Upgrade to Syrabit Starter at [/subscribe](/subscribe) for ₹10/mo.'"
+        )
 
     conv_id = msg.conversation_id
     history_messages = []
@@ -6289,6 +6297,14 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         syllabus=syllabus,
         web_results=web_results or None,
     )
+    if _pyq_blocked_s > 0:
+        system_prompt += (
+            "\n\n[SYSTEM NOTE]: This student is on the FREE plan. "
+            f"{_pyq_blocked_s} PYQ question(s) are locked behind a paywall. "
+            "If their question is about past year questions (PYQs), share what you know from general knowledge, "
+            "then end your answer with: "
+            "'\\n\\n🔒 **Unlock full PYQs** — Upgrade to Syrabit Starter at [/subscribe](/subscribe) for ₹10/mo.'"
+        )
 
     conv_id = msg.conversation_id
     history_messages = []
