@@ -38,9 +38,10 @@ function TreeNode({ label, icon: Icon, count, children, defaultOpen = false, dep
 }
 
 /* ── Subject block with chapters ───────────────────────────────────── */
-function SubjectNode({ subject, boardSlug, classSlug, streamSlug }) {
+function SubjectNode({ subject, boardSlug, classSlug }) {
   const navigate = useNavigate();
   const chapters = subject.chapters || [];
+  const subjectSlug = subject.slug || slugify(subject.name);
   return (
     <TreeNode
       label={subject.name}
@@ -54,7 +55,7 @@ function SubjectNode({ subject, boardSlug, classSlug, streamSlug }) {
         )}
         {chapters.map((ch, idx) => {
           const chSlug = ch.slug || slugify(ch.title || ch.name || `chapter-${idx + 1}`);
-          const url = `/${boardSlug}/${classSlug}/${streamSlug}/${chSlug}`;
+          const url = `/${boardSlug}/${classSlug}/${subjectSlug}/${chSlug}`;
           return (
             <button
               key={ch.id || idx}
@@ -201,7 +202,6 @@ export default function CurriculumMap() {
                           subject={sub}
                           boardSlug={board.slug}
                           classSlug={cls.slug}
-                          streamSlug={stream.slug}
                         />
                       ))}
                     </div>
