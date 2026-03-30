@@ -12,10 +12,10 @@ URL pattern (4-segment):
 """
 
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Cookie
-from fastapi.responses import Response, HTMLResponse, RedirectResponse
+from fastapi.responses import Response, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorDatabase
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Any, Callable, Coroutine, List, Optional
 from datetime import datetime, timezone
 import asyncio, uuid, re, logging, json, html as html_mod, hashlib

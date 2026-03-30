@@ -6,7 +6,7 @@ Falls back gracefully when credentials are missing/invalid.
 import os
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 logger = logging.getLogger(__name__)

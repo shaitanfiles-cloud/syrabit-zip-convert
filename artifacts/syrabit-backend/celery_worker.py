@@ -3,10 +3,9 @@ Syrabit.ai Celery Worker
 Background task processing with Upstash Redis broker
 """
 import os
-import hashlib
 import logging
 from celery import Celery
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 

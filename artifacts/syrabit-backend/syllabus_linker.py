@@ -26,8 +26,6 @@ CC   → Core Course                            (cross-stream)
 Major / Minor → B.Com / B.A / B.Sc based on stream_target in PDF
 """
 
-from __future__ import annotations
-import asyncio
 import logging
 import re
 import uuid

@@ -231,7 +231,6 @@ def _invalidate_conv_cache(conv_id: str, uid: str):
 
 # ── RAG Result Cache ───────────────────────────────────────────────────────────
 # Keyed by (query_hash, subject_id), 600-second TTL — skips 3 MongoDB queries on repeat
-import hashlib as _hashlib
 _rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=600)
 
 # Vector RAG cache — 300-second TTL (Gemini embed API calls are expensive to re-run)
@@ -242,7 +241,7 @@ _content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=
 
 def _content_card_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str]) -> str:
     raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}"
-    return _hashlib.md5(raw.encode()).hexdigest()
+    return hashlib.md5(raw.encode()).hexdigest()
 
 # Syllabus cache — 30-minute TTL; syllabi almost never change between requests
 _syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=1800)
@@ -252,11 +251,11 @@ def _syllabus_cache_key(board_id: str, class_id: str, stream_id: Optional[str], 
 
 def _rag_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str]) -> str:
     raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}"
-    return _hashlib.md5(raw.encode()).hexdigest()
+    return hashlib.md5(raw.encode()).hexdigest()
 
 def _vector_rag_cache_key(query: str, subject_id: Optional[str], top_k: int) -> str:
     raw = f"{query.strip().lower()}|{subject_id or ''}|{top_k}"
-    return _hashlib.md5(raw.encode()).hexdigest()
+    return hashlib.md5(raw.encode()).hexdigest()
 
 REDIS_AI_CACHE_TTL = 3600
 REDIS_CASUAL_CACHE_TTL = 300
@@ -460,7 +459,6 @@ def mark_mongo_down():
     _mongo_last_check = _time_mod.time()
 
 # Supabase client (sync, used for users/conversations)
-from supabase import create_client as _create_supa
 supa: Optional[Any] = None
 try:
     if SUPABASE_SERVICE_KEY and _create_supa:

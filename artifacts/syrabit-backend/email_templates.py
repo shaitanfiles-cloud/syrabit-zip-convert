@@ -5,7 +5,6 @@ All functions are fire-and-forget — they log warnings on failure and never rai
 import os
 import logging
 import asyncio
-from functools import partial
 
 logger = logging.getLogger(__name__)
 

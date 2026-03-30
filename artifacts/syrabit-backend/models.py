@@ -2,7 +2,7 @@
 Syrabit.ai — Pydantic request/response models.
 Imported by server.py and any future router modules.
 """
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 
 

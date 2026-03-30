@@ -12,7 +12,6 @@ Returns a SubjectRoute with board, class, stream, subject, chapter hint
 and confidence so callers can enrich web-search queries and RAG scoping.
 """
 
-from __future__ import annotations
 import asyncio
 import logging
 import re

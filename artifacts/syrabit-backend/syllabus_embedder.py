@@ -20,7 +20,6 @@ Usage
     result = await embedder.classify(query)  # returns SyllabusMatch | None
 """
 
-from __future__ import annotations
 import asyncio
 import logging
 import time

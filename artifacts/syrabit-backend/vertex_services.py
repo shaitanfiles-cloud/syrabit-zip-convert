@@ -24,7 +24,7 @@ import json
 import asyncio
 import logging
 import base64
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 import httpx
 
