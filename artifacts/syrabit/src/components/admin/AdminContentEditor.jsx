@@ -4,8 +4,9 @@ import {
   FolderPlus, FilePlus, Edit2, FileText, Book,
   CheckCircle, Layers, Eye, Upload, Paperclip, Link2, BarChart3, Sparkles, RefreshCw,
   ChevronRight, ChevronLeft, ChevronDown, GraduationCap, Building2, GitBranch, ArrowLeft,
-  Globe, LayoutTemplate, Wand2
+  Globe, LayoutTemplate, Wand2, Zap
 } from 'lucide-react';
+import PipelineProgressPanel from './PipelineProgressPanel';
 import { toast } from 'sonner';
 import axios from 'axios';
 import ReactMarkdown from 'react-markdown';
@@ -189,6 +190,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [showPreview, setShowPreview]           = useState(false);
   const [mergedSubjectIds, setMergedSubjectIds] = useState(new Set());
   const [editorKey, setEditorKey]               = useState(0);
+  const [showPipeline, setShowPipeline]         = useState(false);
 
   const CONTENT_TYPES = [
     { value: 'notes', label: 'Notes', color: 'violet' },
@@ -1118,6 +1120,15 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                           </>
                         )}
                         <button
+                          onClick={() => setShowPipeline(true)}
+                          disabled={chapters.length === 0}
+                          className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-bold disabled:opacity-40 transition-all hover:opacity-90"
+                          style={{ background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: 'white' }}
+                          title="Auto-Generate Full Subject — 1 click generates all content, MCQs, blogs & PYQ pages"
+                        >
+                          <Zap size={11} /> Auto-Generate Full Subject
+                        </button>
+                        <button
                           onClick={() => handlePublishAsBlog(selSubject, subjectData?.name || selSubject)}
                           disabled={publishingBlog || chapters.length === 0}
                           className="flex items-center gap-1.5 h-8 px-4 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
@@ -1383,6 +1394,18 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
         </>
 
       {viewerItem && <ContentViewerPopup item={viewerItem} onClose={() => setViewerItem(null)} />}
+
+      {showPipeline && (
+        <PipelineProgressPanel
+          adminToken={adminToken}
+          subjectId={selSubject}
+          subjectName={subjectData?.name || selSubject}
+          onClose={() => setShowPipeline(false)}
+          onComplete={(summary) => {
+            toast.success(`${summary.total_blogs} blogs published for "${subjectData?.name}"`);
+          }}
+        />
+      )}
     </div>
   );
 }

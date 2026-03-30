@@ -18,7 +18,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   FolderTree, PenTool, Sparkles, FileText, ArrowRight,
-  Loader2, BookMarked, ChevronDown, Globe,
+  Loader2, BookMarked, ChevronDown, Globe, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -29,6 +29,7 @@ import AdminCmsDocEditor     from './AdminCmsDocEditor';
 import AdminContentStudio    from './AdminContentStudio';
 import AdminPYQManager       from './AdminPYQManager';
 import BlogPublishWizard     from './BlogPublishWizard';
+import PipelineProgressPanel from './PipelineProgressPanel';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -90,6 +91,7 @@ export default function AdminContentHub({ adminToken }) {
   const [loading, setLoading]     = useState(true);
 
   const [hubContext, setHubContextRaw] = useState(loadPersistedCtx);
+  const [showPipeline, setShowPipeline] = useState(false);
 
   const setHubContext = useCallback((ctxOrFn) => {
     setHubContextRaw(prev => {
@@ -151,15 +153,25 @@ export default function AdminContentHub({ adminToken }) {
 
         {/* Hub context pill — shows currently active subject */}
         {hubContext.subjectName && (
-          <span className="ml-auto flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]"
-            style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
-            <span className="text-white/25">subject:</span>
-            <span className="font-semibold truncate max-w-[120px]">{hubContext.subjectName}</span>
+          <span className="ml-auto flex items-center gap-1.5 flex-wrap">
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]"
+              style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
+              <span className="text-white/25">subject:</span>
+              <span className="font-semibold truncate max-w-[120px]">{hubContext.subjectName}</span>
+              <button
+                onClick={() => setHubContext(EMPTY_CTX)}
+                className="text-white/30 hover:text-white/70 ml-0.5"
+                title="Clear context"
+              >×</button>
+            </span>
             <button
-              onClick={() => setHubContext(EMPTY_CTX)}
-              className="text-white/30 hover:text-white/70 ml-0.5"
-              title="Clear context"
-            >×</button>
+              onClick={() => setShowPipeline(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition hover:opacity-90"
+              style={{ background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: '#fff' }}
+              title="Auto-Generate Full Subject — 1 click generates all content, MCQs, blogs & PYQ pages"
+            >
+              <Zap size={11} /> Auto-Generate Full Subject
+            </button>
           </span>
         )}
         {!hubContext.subjectName && (
@@ -275,6 +287,19 @@ export default function AdminContentHub({ adminToken }) {
           </div>
         )}
       </div>
+
+      {/* ── Pipeline Progress Panel ───────────────────────────────────── */}
+      {showPipeline && (
+        <PipelineProgressPanel
+          adminToken={adminToken}
+          subjectId={hubContext.subjectId}
+          subjectName={hubContext.subjectName}
+          onClose={() => setShowPipeline(false)}
+          onComplete={(summary) => {
+            toast.success(`${summary.total_blogs} blogs published for "${hubContext.subjectName}"`);
+          }}
+        />
+      )}
     </div>
   );
 }

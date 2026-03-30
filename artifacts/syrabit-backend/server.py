@@ -13982,6 +13982,505 @@ async def admin_content_coverage(admin: dict = Depends(get_admin_user)):
     return {"subjects": result, "has_data": bool(result)}
 
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1-CLICK FULL SUBJECT PIPELINE
+# POST /admin/pipeline/auto-generate
+# ═══════════════════════════════════════════════════════════════════════════
+
+GEO_CITIES = ["dhemaji", "jorhat", "guwahati", "silchar", "tezpur"]
+
+
+def _pipeline_slugify(text: str) -> str:
+    """Simple slug for pipeline use."""
+    return re.sub(r'[^a-z0-9]+', '-', (text or '').lower()).strip('-') or 'content'
+
+
+async def _pipeline_generate_chapter_notes(chapter: dict, subject_name: str, class_name: str, paper_type: str) -> str:
+    """Generate chapter notes using LLM. Returns markdown content."""
+    title = (chapter.get("title") or "").strip()
+    description = (chapter.get("description") or "").strip()
+    topics = chapter.get("topics") or []
+
+    topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else (f"  {description}" if description else f"  {title}")
+
+    prompt = f"""You are an expert academic content writer for AHSEC/SEBA board students in Assam, India.
+
+Generate **detailed, topic-wise summary notes** for the following chapter. These notes will be the primary study material for students.
+
+**Chapter:** {title}
+**Subject:** {subject_name or "General"} ({(paper_type or "").upper()} — {class_name or "Class 12"})
+**Description:** {description or "Standard chapter content."}
+
+**Syllabus Topics to cover:**
+{topic_block}
+
+---
+
+**INSTRUCTIONS:**
+- Write a brief **introduction** (2-3 sentences) about the chapter.
+- For EACH topic listed, write:
+  - A **## Heading** for the topic
+  - 3-5 sentence explanation in simple academic language
+  - **Key Points** in 4-6 bullets with definitions/significance/**bold key terms**
+- End with a **Summary** section.
+- Use markdown. Do NOT add disclaimers. Start directly with the introduction.
+- Target: ~500-800 words.
+"""
+    try:
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
+        return result.strip() if result and len(result.strip()) > 50 else ""
+    except Exception:
+        return ""
+
+
+async def _pipeline_generate_mcqs(content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 25) -> list:
+    """Generate MCQs from chapter content. Returns list of MCQ dicts."""
+    if not content or len(content.strip()) < 100:
+        return []
+    prompt = f"""You are an expert AHSEC board exam question setter for {subject_name} ({class_name}).
+
+Generate exactly {count} AHSEC-pattern Multiple Choice Questions from the following chapter content.
+Chapter: {chapter_title}
+
+Each MCQ must have:
+- A clear question
+- Exactly 4 options (A, B, C, D)
+- Correct answer (A/B/C/D)
+- A brief explanation
+- Difficulty: easy/medium/hard
+- Topic tag
+
+Return ONLY valid JSON in this exact format:
+{{"mcqs": [{{"id": 1, "question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, "correct_answer": "A", "explanation": "...", "difficulty": "medium", "topic": "..."}}]}}
+
+Chapter content:
+{content[:4000]}
+"""
+    try:
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        cleaned = result.strip()
+        if cleaned.startswith("```"):
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        data = json.loads(cleaned)
+        return data.get("mcqs", [])
+    except Exception:
+        return []
+
+
+async def _pipeline_generate_flashcards(content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 30) -> list:
+    """Generate flashcards from chapter content. Returns list of flashcard dicts."""
+    if not content or len(content.strip()) < 100:
+        return []
+    prompt = f"""You are an expert revision flashcard creator for AHSEC board students in Assam.
+
+Generate exactly {count} high-quality revision flashcards for {subject_name} ({class_name}).
+Chapter: {chapter_title}
+
+Mix types: definition cards, concept cards, application cards, formula/fact cards.
+
+Return ONLY valid JSON:
+{{"flashcards": [{{"id": 1, "front": "What is ...?", "back": "...", "type": "definition", "difficulty": "medium", "tags": []}}]}}
+
+Chapter content:
+{content[:4000]}
+"""
+    try:
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        cleaned = result.strip()
+        if cleaned.startswith("```"):
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        data = json.loads(cleaned)
+        return data.get("flashcards", [])
+    except Exception:
+        return []
+
+
+async def _pipeline_generate_geo_seo_blog(
+    subject_name: str,
+    chapter_title: str,
+    content: str,
+    geo_location: str,
+    board_slug: str,
+    class_slug: str,
+    chapter_slug: str,
+) -> dict:
+    """Generate a geo-optimized SEO blog post for a specific Assam city."""
+    prompt = f"""You are an expert SEO content writer for Syrabit.ai, an educational platform for AHSEC/SEBA students in Assam, India.
+
+Write a geo-optimized SEO blog article for students in {geo_location.title()}, Assam.
+
+Topic: {chapter_title} — {subject_name}
+Target City: {geo_location.title()}, Assam
+Board: AHSEC/SEBA
+
+Requirements:
+1. Title (55-65 chars): Include chapter name, subject, "{geo_location.title()} students", "AHSEC"
+2. Meta description (148-160 chars): Include local references to {geo_location.title()}, action verb, "free on Syrabit"
+3. Full article body (600-900 words) in markdown:
+   - Introduction referencing {geo_location.title()} students specifically
+   - Key concepts from the chapter
+   - 3-4 important exam questions with answers
+   - Local study tips for {geo_location.title()} students
+   - Conclusion with CTA to Syrabit.ai
+4. SEO keywords list (5-8 keywords including "{geo_location} {subject_name.lower()}", "AHSEC {chapter_title.lower()}")
+
+Return ONLY valid JSON:
+{{"title": "...", "meta_description": "...", "article_body": "...", "keywords": [], "primary_keyword": "..."}}
+
+Chapter content to reference:
+{content[:3000]}
+"""
+    try:
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2500)
+        cleaned = result.strip()
+        if cleaned.startswith("```"):
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        data = json.loads(cleaned)
+        slug = f"{board_slug}-{class_slug}-{chapter_slug}-{_pipeline_slugify(geo_location)}"
+        return {
+            "title": data.get("title", f"{chapter_title} — {subject_name} | {geo_location.title()} | AHSEC"),
+            "meta_description": data.get("meta_description", ""),
+            "article_body": data.get("article_body", ""),
+            "keywords": data.get("keywords", []),
+            "primary_keyword": data.get("primary_keyword", f"{geo_location} {subject_name.lower()} ahsec"),
+            "seo_slug": slug,
+            "geo_location": geo_location,
+        }
+    except Exception as e:
+        logger.warning(f"Geo blog generation failed for {geo_location}: {e}")
+        slug = f"{board_slug}-{class_slug}-{chapter_slug}-{_pipeline_slugify(geo_location)}"
+        return {
+            "title": f"{chapter_title} — {subject_name} Notes | {geo_location.title()} AHSEC Students",
+            "meta_description": f"Complete {chapter_title} notes for AHSEC students in {geo_location.title()}. Study {subject_name} with Syrabit.ai — free.",
+            "article_body": content[:2000],
+            "keywords": [f"{geo_location} {subject_name.lower()}", f"ahsec {chapter_title.lower()}"],
+            "primary_keyword": f"{geo_location} {subject_name.lower()} ahsec",
+            "seo_slug": slug,
+            "geo_location": geo_location,
+        }
+
+
+async def _pipeline_generate_pyq_html(chapter: dict, subject_name: str, pyq_docs: list) -> str:
+    """Generate an HTML PYQ replica page from uploaded PYQ documents."""
+    chapter_title = chapter.get("title", "")
+    if not pyq_docs:
+        return f"""<div class="pyq-page"><h2>Previous Year Questions: {chapter_title}</h2><p>PYQ papers for this chapter will be added soon. Check back later on Syrabit.ai.</p></div>"""
+
+    pyq_items = []
+    for i, pyq in enumerate(pyq_docs[:5]):
+        year = pyq.get("exam_year", "")
+        exam_title = pyq.get("exam_title", f"Paper {i+1}")
+        file_url = pyq.get("file_url", "")
+        pyq_items.append(f"""
+  <div class="pyq-item">
+    <h3>{exam_title} ({year})</h3>
+    <p><a href="{file_url}" target="_blank" rel="noopener">Download / View Paper</a></p>
+  </div>""")
+
+    pyq_block = "\n".join(pyq_items)
+    return f"""<div class="pyq-page">
+  <h2>Previous Year Questions: {chapter_title}</h2>
+  <p class="pyq-subject">Subject: {subject_name}</p>
+  <div class="pyq-list">
+{pyq_block}
+  </div>
+  <p class="pyq-note">All previous year question papers are sourced from official AHSEC/SEBA board examinations.</p>
+</div>"""
+
+
+class PipelineAutoGenerateRequest(BaseModel):
+    subject_id: str
+
+
+@api.post("/admin/pipeline/auto-generate")
+async def admin_pipeline_auto_generate(body: PipelineAutoGenerateRequest, admin: dict = Depends(get_admin_user)):
+    """
+    1-Click Full Subject Pipeline.
+    For a given subject_id, generates for every chapter:
+      1. Chapter notes (via LLM)
+      2. 25 MCQs
+      3. 30 Flashcards
+      4. 5 geo-targeted SEO blog variants (Assam cities)
+      5. PYQ HTML page using uploaded PYQs
+    Bulk-inserts all assets, regenerates sitemap, pings Google.
+    Returns a structured summary.
+    """
+    subject_id = body.subject_id.strip()
+    if not subject_id:
+        raise HTTPException(status_code=400, detail="subject_id is required")
+
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    subject_name = subject.get("name", "")
+    paper_type   = subject.get("paper_type", "")
+    class_name   = subject.get("className", "") or subject.get("class_name", "")
+
+    # Resolve board/class/stream slugs for URL construction
+    stream_id = subject.get("stream_id", "")
+    board_slug = "ahsec"
+    class_slug = _pipeline_slugify(class_name or "class-12")
+
+    if stream_id:
+        stream_doc = await db.streams.find_one({"id": stream_id}, {"_id": 0})
+        if stream_doc:
+            class_id = stream_doc.get("class_id", "")
+            if class_id:
+                class_doc = await db.classes.find_one({"id": class_id}, {"_id": 0})
+                if class_doc:
+                    class_slug = class_doc.get("slug") or _pipeline_slugify(class_doc.get("name", ""))
+                    board_id = class_doc.get("board_id", "")
+                    if board_id:
+                        board_doc = await db.boards.find_one({"id": board_id}, {"_id": 0})
+                        if board_doc:
+                            board_slug = board_doc.get("slug") or _pipeline_slugify(board_doc.get("name", ""))
+
+    # Load chapters
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).sort("order_index", 1).to_list(100)
+
+    if not chapters:
+        return {"subject_id": subject_id, "status": "no_chapters", "message": "No chapters found for this subject"}
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    subject_slug = subject.get("slug") or _pipeline_slugify(subject_name)
+
+    # Load PYQs for this subject (for PYQ HTML pages)
+    pyq_docs = await db.pyq_uploads.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).sort("exam_year", -1).to_list(20)
+
+    summary = {
+        "subject_id": subject_id,
+        "subject_name": subject_name,
+        "chapters_processed": 0,
+        "chapters_skipped": 0,
+        "total_mcqs": 0,
+        "total_flashcards": 0,
+        "total_blogs": 0,
+        "total_pyq_pages": 0,
+        "blog_urls": [],
+        "chapter_results": [],
+        "sitemap_pinged": False,
+        "ping_status": "",
+    }
+
+    cms_docs_to_insert = []
+
+    for chapter in chapters:
+        chapter_id    = chapter.get("id", "")
+        chapter_title = (chapter.get("title") or "").strip()
+        if not chapter_title:
+            summary["chapters_skipped"] += 1
+            continue
+
+        chapter_slug = chapter.get("slug") or _pipeline_slugify(chapter_title)
+        chapter_result = {
+            "chapter_id": chapter_id,
+            "chapter_title": chapter_title,
+            "notes_generated": False,
+            "mcqs_count": 0,
+            "flashcards_count": 0,
+            "blogs_count": 0,
+            "pyq_page": False,
+            "errors": [],
+        }
+
+        # ── Step 1: Generate chapter notes ──────────────────────────────────
+        existing_content = (chapter.get("content") or "").strip()
+        notes_content = existing_content
+
+        try:
+            generated = await _pipeline_generate_chapter_notes(chapter, subject_name, class_name, paper_type)
+            if generated:
+                notes_content = generated
+                await db.chapters.update_one(
+                    {"id": chapter_id},
+                    {"$set": {
+                        "content": generated,
+                        "content_type": "notes",
+                        "notes_generated": True,
+                        "notes_generated_at": now_iso,
+                    }}
+                )
+                chapter_result["notes_generated"] = True
+                try:
+                    await auto_chunk_content(chapter_id=chapter_id, content=generated, subject_id=subject_id)
+                except Exception:
+                    pass
+        except Exception as e:
+            chapter_result["errors"].append(f"notes: {str(e)[:80]}")
+
+        if not notes_content:
+            summary["chapters_skipped"] += 1
+            summary["chapter_results"].append(chapter_result)
+            continue
+
+        # ── Step 2: Generate MCQs ────────────────────────────────────────────
+        try:
+            mcqs = await _pipeline_generate_mcqs(notes_content, subject_name, chapter_title, class_name, count=25)
+            if mcqs:
+                mcq_doc = {
+                    "id": str(uuid.uuid4()),
+                    "subject_id": subject_id,
+                    "subject_name": subject_name,
+                    "chapter_id": chapter_id,
+                    "chapter_title": chapter_title,
+                    "mcqs": mcqs,
+                    "total": len(mcqs),
+                    "pipeline_generated": True,
+                    "created_at": now_iso,
+                }
+                await db.mcq_collections.update_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True},
+                    {"$set": mcq_doc},
+                    upsert=True,
+                )
+                chapter_result["mcqs_count"] = len(mcqs)
+                summary["total_mcqs"] += len(mcqs)
+        except Exception as e:
+            chapter_result["errors"].append(f"mcqs: {str(e)[:80]}")
+
+        # ── Step 3: Generate Flashcards ──────────────────────────────────────
+        try:
+            flashcards = await _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30)
+            if flashcards:
+                fc_doc = {
+                    "id": str(uuid.uuid4()),
+                    "subject_id": subject_id,
+                    "subject_name": subject_name,
+                    "chapter_id": chapter_id,
+                    "chapter_title": chapter_title,
+                    "flashcards": flashcards,
+                    "total": len(flashcards),
+                    "pipeline_generated": True,
+                    "created_at": now_iso,
+                }
+                await db.flashcard_collections.update_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True},
+                    {"$set": fc_doc},
+                    upsert=True,
+                )
+                chapter_result["flashcards_count"] = len(flashcards)
+                summary["total_flashcards"] += len(flashcards)
+        except Exception as e:
+            chapter_result["errors"].append(f"flashcards: {str(e)[:80]}")
+
+        # ── Step 4: Generate 5 Geo-SEO Blog Variants ─────────────────────────
+        for city in GEO_CITIES:
+            try:
+                blog_data = await _pipeline_generate_geo_seo_blog(
+                    subject_name=subject_name,
+                    chapter_title=chapter_title,
+                    content=notes_content,
+                    geo_location=city,
+                    board_slug=board_slug,
+                    class_slug=class_slug,
+                    chapter_slug=chapter_slug,
+                )
+                blog_slug = blog_data["seo_slug"]
+                blog_doc = {
+                    "id": str(uuid.uuid4()),
+                    "title": blog_data["title"],
+                    "seo_slug": blog_slug,
+                    "meta_description": blog_data["meta_description"],
+                    "content": blog_data["article_body"],
+                    "primary_keyword": blog_data["primary_keyword"],
+                    "keywords": blog_data.get("keywords", []),
+                    "geo_location": city,
+                    "linked_subject_id": subject_id,
+                    "linked_subject_name": subject_name,
+                    "linked_chapter_id": chapter_id,
+                    "linked_chapter_title": chapter_title,
+                    "status": "published",
+                    "category": "geo-blog",
+                    "schema_type": "Article",
+                    "pipeline_generated": True,
+                    "created_at": now_iso,
+                    "updated_at": now_iso,
+                }
+                await db.cms_documents.update_one(
+                    {"seo_slug": blog_slug},
+                    {"$set": blog_doc},
+                    upsert=True,
+                )
+                blog_url = f"/learn/{blog_slug}"
+                summary["blog_urls"].append(blog_url)
+                chapter_result["blogs_count"] += 1
+                summary["total_blogs"] += 1
+            except Exception as e:
+                chapter_result["errors"].append(f"geo-blog-{city}: {str(e)[:80]}")
+
+        # ── Step 5: Generate PYQ HTML Page ───────────────────────────────────
+        try:
+            pyq_html = await _pipeline_generate_pyq_html(chapter, subject_name, pyq_docs)
+            pyq_slug = f"pyq-{board_slug}-{class_slug}-{chapter_slug}"
+            pyq_cms_doc = {
+                "id": str(uuid.uuid4()),
+                "title": f"PYQ: {chapter_title} — {subject_name}",
+                "seo_slug": pyq_slug,
+                "meta_description": f"Previous year questions for {chapter_title} ({subject_name}) — AHSEC/SEBA board exams. Download PYQ papers on Syrabit.ai.",
+                "content": pyq_html,
+                "content_html": pyq_html,
+                "linked_subject_id": subject_id,
+                "linked_subject_name": subject_name,
+                "linked_chapter_id": chapter_id,
+                "linked_chapter_title": chapter_title,
+                "status": "published",
+                "category": "pyq",
+                "pipeline_generated": True,
+                "created_at": now_iso,
+                "updated_at": now_iso,
+            }
+            await db.cms_documents.update_one(
+                {"seo_slug": pyq_slug},
+                {"$set": pyq_cms_doc},
+                upsert=True,
+            )
+            chapter_result["pyq_page"] = True
+            summary["total_pyq_pages"] += 1
+        except Exception as e:
+            chapter_result["errors"].append(f"pyq-page: {str(e)[:80]}")
+
+        summary["chapters_processed"] += 1
+        summary["chapter_results"].append(chapter_result)
+
+    _invalidate_content_cache("chapters")
+
+    # ── Step 6: Regenerate Sitemap & Ping Google ─────────────────────────────
+    try:
+        base_url = (os.environ.get("FRONTEND_URL") or "https://syrabit.ai").rstrip("/")
+        sitemap_url = f"{base_url}/api/seo/sitemap.xml"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            ping_resp = await client.get(f"https://www.google.com/ping?sitemap={sitemap_url}")
+            summary["sitemap_pinged"] = True
+            summary["ping_status"] = f"HTTP {ping_resp.status_code}"
+            logger.info(f"Google sitemap ping: {ping_resp.status_code} for {sitemap_url}")
+    except Exception as e:
+        summary["ping_status"] = f"ping failed: {str(e)[:60]}"
+        logger.warning(f"Sitemap ping failed: {e}")
+
+    logger.info(
+        f"Pipeline complete: subject={subject_name}, chapters={summary['chapters_processed']}, "
+        f"mcqs={summary['total_mcqs']}, flashcards={summary['total_flashcards']}, "
+        f"blogs={summary['total_blogs']}, pyq_pages={summary['total_pyq_pages']}"
+    )
+
+    return summary
+
+
 app.include_router(api)
 
 
