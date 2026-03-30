@@ -2,11 +2,13 @@
  * Service Worker — Syrabit.ai
  * Network-first for HTML/JS/CSS, cache-first for images/icons only.
  * Excludes /api/ai/chat/stream (never cached - real-time AI).
+ * Serves /offline.html when navigation fails with no cached fallback.
  */
 
-const CACHE_NAME = 'syrabit-v3.0-clean';
+const CACHE_NAME = 'syrabit-v3.1-pwa';
 const STATIC_ASSETS = [
   '/manifest.json',
+  '/offline.html',
   '/icons/icon-192x192.png',
   '/icons/icon-512x512.png',
 ];
@@ -80,6 +82,27 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Navigation requests (HTML pages): network-first, offline.html fallback
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cached = await caches.match(request);
+          if (cached) return cached;
+          return caches.match('/offline.html');
+        })
+    );
+    return;
+  }
+
+  // All other requests: network-first, cache fallback
   event.respondWith(
     fetch(request)
       .then((response) => {
