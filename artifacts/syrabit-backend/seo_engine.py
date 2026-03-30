@@ -114,68 +114,68 @@ PROMPT_VARIANTS = {
         """You are an expert {board} teacher for {class_name} and a GEO (Generative Engine Optimization) specialist.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Write study notes using EXACTLY this structure — all sections required:
 
 ## Summary
-[40-60 words: what {topic} is, why it matters, and its importance for {board} exam. Start with "According to the {board} syllabus..."]
+[40-60 words: what {topic} is within the chapter "{chapter}", why it matters for the {board} syllabus, and its importance for the {board} exam. Start with "In the {board} {class_name} {subject} syllabus, under {chapter}..."]
 
 ## Definition
-[Precise academic definition in 2-3 sentences using standard {board} terminology. Cite the textbook: "As defined in NCERT/SCERT {subject}..."]
+[Precise academic definition in 2-3 sentences using standard {board} terminology. Cite the textbook: "As defined in the NCERT/SCERT {subject} textbook prescribed for {board} {class_name}..."]
 
 ## Explanation
-[Detailed explanation 250-350 words. Cover core concepts, sub-topics, and connections. Include at least one citation like "As per the {board} {class_name} curriculum..."]
+[Detailed explanation 250-350 words. Cover core concepts, sub-topics, and how {topic} connects to other topics in the chapter "{chapter}". Include at least one citation like "As per the {board} {class_name} curriculum for {subject}..." and reference how this topic builds on or leads to related syllabus topics]
 
 ## Solved Examples
-Example 1: [Complete step-by-step solution]
+Example 1: [Complete step-by-step solution relevant to {board} exam pattern]
 Example 2: [Complete step-by-step solution]
-Example 3: [Complete step-by-step solution]
+Example 3: [Complete step-by-step solution — use Assam/Northeast India context if naturally applicable]
 
 ## Previous Year Questions (PYQs)
-[5 questions that appear in {board} {class_name} exams, with model answers — include 1-mark, 2-mark, and 3-5 mark types. Format: "Q (AHSEC 20XX, X marks): ..."]
+[5 questions typical of {board} {class_name} exams on {topic}, with model answers — include 1-mark, 2-mark, and 3-5 mark types matching the {board} paper pattern. Format: "Q ({board} 20XX, X marks): ..."]
 
 ## Key Points
-[6-8 bullet points for last-minute revision before the {board} exam]
+[6-8 bullet points for last-minute revision before the {board} exam, organized by mark-value importance]
 
 ## Frequently Asked Questions
-Q1: What is {topic} in {subject}?
+Q1: What is {topic} in {subject} ({chapter})?
 A1: [Concise answer citing {board} syllabus]
 Q2: Why is {topic} important for {board} exams?
-A2: [Answer with exam frequency data]
-Q3: [Common student question about {topic}]
-A3: [Clear answer]
+A2: [Answer with exam frequency and mark allocation data]
+Q3: How does {topic} connect to other topics in {chapter}?
+A3: [Show syllabus connections]
 
 Language: simple and clear for {class_name} students in Assam. Every section must be complete and exam-focused. Use authoritative framing throughout.""",
 
         """You are a {subject} expert specialising in {board} {class_name} exam preparation.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Write comprehensive study notes. Begin with a real-world context that makes the topic relatable, then build towards the formal definition. Use EXACTLY this structure:
 
 ## Why {topic} Matters
-[50-70 words: start with a real-world scenario or analogy that connects {topic} to everyday life, then link to its importance in {board} {class_name} {subject}]
+[50-70 words: start with a real-world scenario or analogy — preferably from Assam/Northeast India context if naturally relevant — that connects {topic} to everyday life, then link to its importance in {board} {class_name} {subject}, chapter "{chapter}"]
 
 ## Core Concept
-[Formal definition in 2-3 sentences citing {board} curriculum. Then a simplified re-explanation in student-friendly language]
+[Formal definition in 2-3 sentences citing {board} curriculum. Then a simplified re-explanation in student-friendly language. Mention where {topic} sits within the chapter "{chapter}" and what prerequisite knowledge is needed]
 
 ## Detailed Breakdown
-[300-400 words. Break the topic into 3-4 sub-concepts. Use numbered sub-headings like "1. First aspect", "2. Second aspect". Include one real-world application per sub-concept]
+[300-400 words. Break the topic into 3-4 sub-concepts. Use numbered sub-headings like "1. First aspect", "2. Second aspect". For each sub-concept, include one real-world application. Reference connections to other topics in the same chapter where relevant]
 
 ## Key Points for Revision
-[6-8 crisp bullet points — exam-ready, each starting with an action verb]
+[6-8 crisp bullet points — exam-ready, each starting with an action verb. Organized by {board} mark-value importance]
 
 ## Worked Examples
-Example 1: [Problem + full solution]
+Example 1: [Problem + full solution matching {board} exam standard]
 Example 2: [Problem + full solution]
 
 ## Exam Corner
-[4 exam-style questions with model answers: 2× short answer (2 marks), 2× long answer (5 marks). Format: "Q (X marks): ..."]
+[4 exam-style questions with model answers matching {board} paper pattern: 2× short answer (2 marks), 2× long answer (5 marks). Format: "Q (X marks): ..."]
 
 ## FAQ
-Q1: How is {topic} different from [closely related concept]?
+Q1: How is {topic} different from [closely related concept in {chapter}]?
 A1: [Precise comparison]
 Q2: What are common mistakes students make with {topic}?
 A2: [2-3 common errors and how to avoid them]
@@ -185,32 +185,32 @@ Write for {class_name} students in Assam. Be specific — avoid vague generaliti
         """You are a senior {board} examiner and {subject} faculty.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Create study notes from an examiner's perspective. Use EXACTLY this structure:
 
 ## At a Glance
-[A compact table or structured summary: What it is | Why it matters | Exam weight | Key formula/rule (if any)]
+[A compact table or structured summary: What it is | Chapter: {chapter} | Why it matters | {board} exam weight | Key formula/rule (if any) | Prerequisite topics]
 
 ## The Basics
-[Academic definition with textbook citation, followed by 2-3 sentence plain-English explanation]
+[Academic definition with textbook citation from the {board}-prescribed {subject} textbook, followed by 2-3 sentence plain-English explanation. Note where this topic falls in the chapter "{chapter}" syllabus sequence]
 
 ## Deep Dive
-[250-350 words exploring the topic thoroughly. Use a cause-and-effect or chronological flow rather than bullet lists. Include cross-references to related {subject} topics in the {board} syllabus]
+[250-350 words exploring the topic thoroughly. Use a cause-and-effect or chronological flow rather than bullet lists. Include cross-references to related topics within "{chapter}" and other chapters in {board} {class_name} {subject} syllabus]
 
 ## Common Exam Patterns
-[Describe how {board} examiners typically frame questions on {topic}: what types appear (MCQ, short answer, long answer), what traps to watch for, and what earns full marks]
+[Describe how {board} examiners typically frame questions on {topic}: what types appear (MCQ, short answer, long answer) matching the {board} paper pattern, what traps to watch for, what earns full marks, and typical mark allocations]
 
 ## Practice Questions with Solutions
 Q1 (1 mark): [Question] → [Answer]
 Q2 (2 marks): [Question] → [Answer]
-Q3 (5 marks): [Question] → [Detailed answer with marking scheme breakdown]
+Q3 (5 marks): [Question] → [Detailed answer with {board} marking scheme breakdown]
 
 ## Memory Aids
 [2-3 mnemonics, visual tricks, or association techniques specific to {topic}]
 
 ## Quick Revision Points
-[5-7 bullet points covering everything a student must know the night before the exam]
+[5-7 bullet points covering everything a student must know the night before the {board} exam]
 
 Tone: authoritative but approachable. Written for {class_name} students in Assam.""",
     ],
@@ -219,63 +219,63 @@ Tone: authoritative but approachable. Written for {class_name} students in Assam
         """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Write a definition article using EXACTLY this structure:
 
 ## Summary
-[40-60 words: what {topic} means, its significance, and when students encounter it in {board} exams]
+[40-60 words: what {topic} means within the chapter "{chapter}" of {board} {class_name} {subject}, its significance, and when students encounter it in {board} exams]
 
 ## Definition of {topic}
-[Precise, exam-ready academic definition in 2-3 sentences]
+[Precise, exam-ready academic definition in 2-3 sentences citing the {board}-prescribed textbook for {subject}]
 
 ## Meaning and Explanation
-[Explain in simple terms — what it means, why it matters, how it connects to the syllabus]
+[Explain in simple terms — what it means, why it matters in the context of chapter "{chapter}", and how it connects to the {board} syllabus]
 
 ## Characteristics / Properties
 [4-6 key characteristics or properties as a bullet list]
 
 ## Real-World Examples
-[3-4 relatable, easy-to-understand examples]
+[3-4 relatable examples — include at least one from Assam/Northeast India context if naturally applicable to {topic}]
 
 ## Related Concepts
-[3-4 related topics from the {board} {class_name} {subject} syllabus]
+[3-4 related topics from the same chapter "{chapter}" or nearby chapters in {board} {class_name} {subject} syllabus, with brief explanation of each connection]
 
 ## Exam Questions on This Definition
-[3 commonly asked questions in {board} exams with concise model answers]
+[3 commonly asked questions in {board} exams with concise model answers matching {board} mark allocation pattern]
 
 Keep language simple for {class_name} students in Assam.""",
 
         """You are a {subject} lexicographer writing for {board} {class_name} students.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Create a thorough definition guide. Use EXACTLY this structure:
 
 ## In One Line
-[Single crisp sentence: "{topic} is..." — suitable for a 1-mark exam answer]
+[Single crisp sentence: "{topic} is..." — suitable for a 1-mark {board} exam answer]
 
 ## Formal Definition
-[Academic definition as it would appear in the {board}-prescribed textbook. 2-3 sentences]
+[Academic definition as it would appear in the {board}-prescribed {subject} textbook for {class_name}. 2-3 sentences]
 
 ## What It Really Means
-[Explain like you're talking to a friend — use an analogy or everyday example to make it click. 60-100 words]
+[Explain like you're talking to a friend — use an analogy or everyday example from Assam/India context to make it click. 60-100 words. Mention its role within chapter "{chapter}"]
 
 ## Key Features
 [5-6 distinguishing characteristics, each as "Feature: Explanation" pairs]
 
 ## How It Connects
-[Show how {topic} relates to 3-4 other concepts in the {board} {class_name} {subject} syllabus. Use a brief sentence per connection]
+[Show how {topic} relates to 3-4 other concepts in chapter "{chapter}" and the broader {board} {class_name} {subject} syllabus. Use a brief sentence per connection]
 
 ## See It in Action
 [2-3 concrete examples or scenarios where {topic} applies — at least one from Assam/Northeast India context if relevant]
 
 ## Exam-Ready Answers
-[Model answers for 3 likely exam questions:
+[Model answers for 3 likely {board} exam questions:
 - 1-mark: Define {topic}. → [answer]
 - 2-mark: Explain {topic} with an example. → [answer]
-- 5-mark: Discuss {topic} in detail. → [answer]]
+- 5-mark: Discuss {topic} in detail with reference to {chapter}. → [answer]]
 
 Language: clear and exam-focused for {class_name} students in Assam.""",
     ],
@@ -284,54 +284,54 @@ Language: clear and exam-focused for {class_name} students in Assam.""",
         """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Create a question bank using EXACTLY this structure:
 
 ## Summary
-[40-60 words: overview of {topic} and which types of questions appear in {board} exams]
+[40-60 words: overview of {topic} within chapter "{chapter}" and which types of questions appear in {board} exams, with typical mark allocation]
 
 ## 1-Mark Questions
-[5 questions with one-line answers — test basic recall]
+[5 questions with one-line answers — test basic recall of {topic} as per {board} syllabus]
 
 ## 2-Mark Questions
-[5 questions with 2-3 sentence answers — test understanding]
+[5 questions with 2-3 sentence answers — test understanding. Include questions that connect {topic} to other concepts in "{chapter}"]
 
 ## 3-Mark Questions
-[4 questions with structured answers — test application]
+[4 questions with structured answers — test application. At least one should reference real-world context relevant to Assam students]
 
 ## 5-Mark Questions (Long Answer)
-[3 questions with detailed, exam-ready answers — test analysis]
+[3 questions with detailed, exam-ready answers — test analysis. Include marking scheme breakdown showing how {board} examiners allocate marks]
 
 ## Previous Year Questions (PYQs)
-[4-5 actual-style questions from past {board} exams on {topic}, with complete answers]
+[4-5 questions typical of past {board} exams on {topic}, with complete answers following {board} marking conventions]
 
 All answers must follow {board} marking scheme. Use exam-standard language.""",
 
         """You are a {board} paper-setter for {class_name} {subject}.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Create an exam-focused question bank. Use EXACTLY this structure:
 
 ## What Examiners Ask About {topic}
-[50-60 words: which aspects of {topic} are tested most often, what question formats appear, and common mark distributions in {board} exams]
+[50-60 words: which aspects of {topic} (from chapter "{chapter}") are tested most often in {board} exams, what question formats appear, and typical mark distributions]
 
 ## Very Short Answer (1 mark each)
-[6 questions — each needs only 1-2 sentences. Mix: 3 definition-based, 2 factual, 1 true/false with correction]
+[6 questions — each needs only 1-2 sentences. Mix: 3 definition-based, 2 factual, 1 true/false with correction. Aligned with {board} paper Section A pattern]
 
 ## Short Answer (2-3 marks each)
-[5 questions with answers. Include "why" and "how" questions, not just "what". Show expected word count per answer]
+[5 questions with answers. Include "why" and "how" questions connecting {topic} to other concepts in "{chapter}". Show expected word count per answer]
 
 ## Long Answer (5 marks each)
-[3 questions with complete structured answers. Each answer should have sub-points or numbered steps. Include diagram descriptions where applicable]
+[3 questions with complete structured answers. Each answer should have sub-points matching {board} marking scheme. Include connections to related topics in the syllabus]
 
 ## Frequently Repeated Questions
-[4 questions that have appeared multiple times in {board} exams on {topic}, with year references and model answers]
+[4 questions that are commonly repeated in {board} exams on {topic}, with model answers]
 
 ## Tricky / Higher-Order Questions
-[2 application or analysis questions that go beyond textbook recall]
+[2 application or analysis questions that go beyond textbook recall — test deeper understanding of {topic} within the {subject} syllabus]
 
 Answers must match {board} marking scheme expectations.""",
     ],
@@ -340,48 +340,48 @@ Answers must match {board} marking scheme expectations.""",
         """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Create 15 MCQs using EXACTLY this structure:
 
 ## Summary
-[40-60 words: what {topic} concepts these MCQs test, aligned with {board} exam pattern]
+[40-60 words: what {topic} concepts (from chapter "{chapter}") these MCQs test, aligned with {board} exam pattern and mark allocation]
 
 ## Easy Level (MCQs 1-5)
-[Test basic recall and definitions — each with 4 options A/B/C/D, correct answer, brief explanation]
+[Test basic recall and definitions from {topic} as covered in {board} {class_name} {subject} syllabus — each with 4 options A/B/C/D, correct answer, brief explanation]
 
 ## Medium Level (MCQs 6-10)
-[Test understanding and application — each with 4 options, correct answer, explanation]
+[Test understanding and application — each with 4 options, correct answer, explanation. Include questions that connect {topic} to other concepts in chapter "{chapter}"]
 
 ## Hard Level (MCQs 11-15)
-[Test analysis and problem-solving — each with 4 options, correct answer, detailed explanation]
+[Test analysis and problem-solving at {board} exam difficulty — each with 4 options, correct answer, detailed explanation]
 
 Format each MCQ as:
 Q: [question]
 A) B) C) D)
 Answer: [letter]
-Explanation: [1-2 sentences]
+Explanation: [1-2 sentences referencing {board} syllabus concepts]
 
 Match {board} exam pattern and difficulty level.""",
 
         """You are a competitive exam coach preparing {board} {class_name} students.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
-Create 15 MCQs that test different cognitive levels. Use EXACTLY this structure:
+Create 15 MCQs that test different cognitive levels for {topic} from chapter "{chapter}". Use EXACTLY this structure:
 
 ## About These Questions
-[40-60 words: which specific concepts within {topic} are tested and at what difficulty levels]
+[40-60 words: which specific concepts within {topic} (chapter: {chapter}) are tested and at what difficulty levels in {board} exams]
 
 ## Recall & Recognition (Q1-Q5)
-[5 MCQs testing definitions, facts, and direct textbook knowledge. Each: question, 4 options (A-D), correct answer, 1-sentence explanation]
+[5 MCQs testing definitions, facts, and direct textbook knowledge from the {board}-prescribed {subject} textbook. Each: question, 4 options (A-D), correct answer, 1-sentence explanation]
 
 ## Understanding & Application (Q6-Q10)
-[5 MCQs requiring students to apply concepts or interpret scenarios. Include at least 1 assertion-reason question and 1 diagram/data-based question]
+[5 MCQs requiring students to apply {topic} concepts or interpret scenarios. Include at least 1 assertion-reason question. Use Assam/India examples where naturally relevant]
 
 ## Analysis & Evaluation (Q11-Q15)
-[5 MCQs involving multi-step reasoning, comparison, or error identification. Include 1 "which of the following is INCORRECT" type]
+[5 MCQs involving multi-step reasoning, comparison, or error identification. Include 1 "which of the following is INCORRECT" type. Test connections to related topics in "{chapter}"]
 
 Format:
 **Q[n].** [question text]
@@ -395,55 +395,55 @@ All questions aligned with {board} {class_name} exam standards.""",
         """You are an expert {board} teacher for {class_name}.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
 Create a solved examples guide using EXACTLY this structure:
 
 ## Summary
-[40-60 words: what types of problems on {topic} appear in {board} exams and what skills they test]
+[40-60 words: what types of problems on {topic} (chapter: "{chapter}") appear in {board} exams, what skills they test, and typical mark allocation]
 
 ## Basic Examples
-Example 1: [Problem statement] → [Complete step-by-step solution]
+Example 1: [Problem statement relevant to {board} syllabus] → [Complete step-by-step solution]
 Example 2: [Problem statement] → [Complete step-by-step solution]
-Example 3: [Problem statement] → [Complete step-by-step solution]
+Example 3: [Problem using Assam/India context if naturally applicable] → [Complete step-by-step solution]
 
 ## Intermediate Examples
-Example 4: [Problem statement] → [Complete step-by-step solution]
-Example 5: [Problem statement] → [Complete step-by-step solution]
+Example 4: [Problem connecting {topic} to related concepts in "{chapter}"] → [Complete step-by-step solution]
+Example 5: [Problem statement at {board} exam difficulty] → [Complete step-by-step solution]
 
 ## Exam-Level Examples
-Example 6: [Problem matching {board} exam difficulty] → [Complete solution with all steps]
+Example 6: [Problem matching {board} exam difficulty and paper pattern] → [Complete solution with all steps and mark allocation]
 Example 7: [Problem matching {board} exam difficulty] → [Complete solution with all steps]
 
 ## Practice Problems (Try Yourself)
-[5 unsolved problems with answers only — for student practice]
+[5 unsolved problems with answers only — graded by {board} mark values (1-mark, 2-mark, 5-mark)]
 
 Show complete working for all solved examples. Use {board} exam-standard notation and methods.""",
 
         """You are a {subject} tutor known for making problem-solving easy for {board} {class_name} students.
 
 Topic: {topic}
-Subject: {subject} | Class: {class_name} | Board: {board}
+Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 
-Create a solved examples collection. Use EXACTLY this structure:
+Create a solved examples collection for {topic} from chapter "{chapter}". Use EXACTLY this structure:
 
 ## What to Expect
-[40-60 words: the types of {topic} problems in {board} exams, marks distribution, and which formulas/rules are needed]
+[40-60 words: the types of {topic} problems in {board} exams, marks distribution matching {board} paper pattern, and which formulas/rules from the {board} syllabus are needed]
 
 ## Foundation Examples (Warm-Up)
-[3 examples. For each: state the problem, identify the approach, then solve step by step. Highlight the formula or rule used]
+[3 examples. For each: state the problem, identify the approach from the {board} textbook, then solve step by step. Highlight the formula or rule used]
 
 ## Board-Exam Standard Examples
-[3 examples at {board} exam difficulty. For each: problem statement, "Approach" paragraph explaining strategy, then detailed solution with all intermediate steps shown]
+[3 examples at {board} exam difficulty. For each: problem statement, "Approach" paragraph explaining strategy, then detailed solution with all intermediate steps shown. Use Assam/India context where naturally relevant]
 
 ## Challenge Problems
-[2 examples slightly above exam level — to build confidence. Full solutions provided]
+[2 examples slightly above exam level — to build confidence. Full solutions provided. Connect to other concepts in chapter "{chapter}"]
 
 ## Common Mistakes to Avoid
-[3-4 typical errors students make when solving {topic} problems, with the correct approach shown]
+[3-4 typical errors {board} {class_name} students make when solving {topic} problems, with the correct approach shown]
 
 ## Self-Test
-[4 unsolved problems graded by difficulty (★ easy, ★★ medium, ★★★ hard), with final answers provided]
+[4 unsolved problems graded by {board} mark values (★ 1-mark, ★★ 2-3 marks, ★★★ 5 marks), with final answers provided]
 
 Use {board}-standard notation. Show every step — never skip working.""",
     ],
@@ -457,27 +457,27 @@ TITLE_TEMPLATES = {
         "{topic} Notes — {board} {grade} {subject}",
         "Learn {topic} for {board} {grade} Exams | {subject}",
         "Complete {topic} Study Guide — {grade} {board} {subject}",
-        "{topic} Explained: {subject} Notes for {board} {grade}",
+        "{topic} Explained: {subject} Notes for {board} {grade} Assam",
     ],
     "definition": [
         "{topic} Definition & Meaning — {board} {grade} {subject}",
         "What is {topic}? Definition for {board} {grade} {subject}",
-        "{topic}: Meaning, Definition & Examples | {grade} {board}",
+        "{topic}: Meaning, Definition & Examples | {grade} {board} {subject}",
     ],
     "important-questions": [
         "{topic} Important Questions — {board} {grade} {subject}",
-        "Top Questions on {topic} for {board} {grade} Exams",
+        "Top Questions on {topic} for {board} {grade} Exams | Assam",
         "{topic} Question Bank with Answers | {grade} {board} {subject}",
-        "{board} {grade} {topic} Questions: 1-Mark to 5-Mark",
+        "{board} {grade} {topic} Questions: 1-Mark to 5-Mark | {subject}",
     ],
     "mcqs": [
         "{topic} MCQ Practice — {board} {grade} {subject}",
-        "MCQs on {topic} for {board} {grade} | {subject}",
+        "MCQs on {topic} for {board} {grade} | {subject} Assam",
         "{topic} Multiple Choice Questions with Answers — {grade} {board}",
     ],
     "examples": [
         "{topic} Solved Examples — {board} {grade} {subject}",
-        "Solved Problems on {topic} for {board} {grade} Exams",
+        "Solved Problems on {topic} for {board} {grade} Exams | {subject}",
         "{topic} Examples with Step-by-Step Solutions | {grade} {board}",
     ],
 }
@@ -856,19 +856,42 @@ def _smart_board_display(bn: str) -> str:
     return _map.get((bn or "").strip().upper(), bn or "AHSEC")
 
 
+_BOARD_EXAM_CONTEXT = {
+    "AHSEC": (
+        "AHSEC (Assam Higher Secondary Education Council) conducts the HS Final Exam for Class 11-12 in Assam. "
+        "The exam follows NCERT/SCERT Assam syllabus. Question paper pattern: Section A (1-mark MCQs/very short), "
+        "Section B (2-mark short answers), Section C (3-mark answers), Section D (5-mark long answers/essays). "
+        "Total marks typically 100 (70 theory + 30 internal). Medium of instruction: English/Assamese/Bengali/Bodo/Hindi. "
+        "Students come from towns like Guwahati, Jorhat, Dibrugarh, Tezpur, Silchar, and rural Assam."
+    ),
+    "SEBA": (
+        "SEBA (Board of Secondary Education, Assam) conducts the HSLC exam for Class 10 in Assam. "
+        "Syllabus follows SCERT Assam / NCERT guidelines. Paper pattern: very short (1 mark), short (2-3 marks), "
+        "long answer (4-5 marks), and sometimes project/practical components. Total marks typically 100 per subject. "
+        "Medium: Assamese/English/Bengali/Bodo/Hindi. Many students are first-generation exam takers from rural Assam."
+    ),
+    "DEGREE": (
+        "NEP FYUGP (Four Year Undergraduate Programme) under National Education Policy 2020, implemented in Assam universities "
+        "(Gauhati University, Dibrugarh University, Cotton University, Tezpur University, Bodoland University, etc.). "
+        "Semester-based assessment with internal (30%) + end-semester (70%). Course types: Major, Minor, MDC (Multi-Disciplinary), "
+        "VAC (Value Added), SEC (Skill Enhancement), AEC (Ability Enhancement). "
+        "Students study for degree from colleges across Assam under RUSA and UGC frameworks."
+    ),
+}
+
 async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
     board_name    = hierarchy.get("board", {}).get("name", "AHSEC")
     class_name    = hierarchy.get("class", {}).get("name", "Class 12")
     subject_name  = hierarchy.get("subject", {}).get("name", "")
-    chapter_title = hierarchy.get("chapter", {}).get("title", "")
+    chapter_obj   = hierarchy.get("chapter", {})
+    chapter_title = chapter_obj.get("title", "")
+    chapter_id    = chapter_obj.get("id", "")
     stream_name   = hierarchy.get("stream", {}).get("name", "")
 
-    # Resolve correct human-readable labels up-front
     grade_str     = _smart_grade_label(class_name, board_name)
     board_display = _smart_board_display(board_name)
     is_degree     = board_name.upper() in {"DEGREE", "NEP FYUGP", "FYUGP"}
 
-    # For DEGREE, stream IS the course type (Major/Minor/MDC/VAC/SEC/AEC)
     _DEGREE_COURSE_TYPES = {"major", "minor", "mdc", "vac", "sec", "aec"}
     is_degree_stream = stream_name.lower().strip() in _DEGREE_COURSE_TYPES
 
@@ -877,6 +900,43 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         prompt_class_label = f"{grade_str} (NEP FYUGP Degree{course_type_suffix})"
     else:
         prompt_class_label = f"{grade_str} {board_display}".strip()
+
+    sibling_topics = []
+    syllabus_position = ""
+    if chapter_id and _db:
+        siblings = await _db.topics.find(
+            {"chapter_id": chapter_id, "status": "published"},
+            {"_id": 0, "title": 1, "order": 1, "id": 1}
+        ).sort("order", 1).to_list(200)
+        sibling_topics = [s.get("title", "") for s in siblings if s.get("title")]
+        for idx, s in enumerate(siblings):
+            if s.get("id") == topic.get("id"):
+                syllabus_position = f"Topic {idx + 1} of {len(siblings)} in Chapter: {chapter_title}"
+                break
+
+    sibling_list = ", ".join(sibling_topics[:15]) if sibling_topics else "N/A"
+
+    board_key = board_name.upper()
+    if board_key in {"NEP FYUGP", "FYUGP"}:
+        board_key = "DEGREE"
+    board_exam_context = _BOARD_EXAM_CONTEXT.get(board_key, _BOARD_EXAM_CONTEXT["AHSEC"])
+
+    syllabus_context = (
+        f"\n\n--- SYLLABUS CONTEXT ---\n"
+        f"Board: {board_display} | Class/Level: {prompt_class_label}\n"
+        f"Subject: {subject_name} | Chapter: {chapter_title}\n"
+        f"Position: {syllabus_position or 'Unknown'}\n"
+        f"Other topics in this chapter: {sibling_list}\n"
+        f"Stream/Course Type: {stream_name or 'General'}\n\n"
+        f"--- BOARD EXAM PATTERN ---\n"
+        f"{board_exam_context}\n\n"
+        f"--- REGIONAL CONTEXT ---\n"
+        f"Students are from Assam, Northeast India. When giving examples, prefer contexts "
+        f"relevant to Assam (tea gardens, Brahmaputra river, Kaziranga, Bihu festival, silk/muga, "
+        f"flood management, biodiversity, local industries) where naturally applicable to the topic. "
+        f"Do not force regional examples if they don't fit the subject matter.\n"
+        f"--- END CONTEXT ---\n"
+    )
 
     variants = PROMPT_VARIANTS.get(page_type, [])
     if not variants:
@@ -892,12 +952,16 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         topic=topic["title"],
     )
 
+    prompt = prompt + syllabus_context
+
     messages = [
         {"role": "system", "content": (
             f"You are an expert {board_display} teacher specialising in {subject_name} "
-            f"for {prompt_class_label} students. "
-            f"Create educational content that is comprehensive, exam-focused, and easy to understand "
-            f"for students in Assam, India."
+            f"for {prompt_class_label} students in Assam, India. "
+            f"Chapter: \"{chapter_title}\" | Topic position: {syllabus_position or 'N/A'}. "
+            f"Create educational content that is comprehensive, exam-focused, syllabus-aligned, "
+            f"and easy to understand. Reference the chapter context and connect to neighboring topics "
+            f"in the syllabus where relevant. Use {board_display} exam marking patterns."
         )},
         {"role": "user", "content": prompt},
     ]
@@ -966,6 +1030,9 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "topic_title": topic["title"],
         "source_chapter_title": h.get("chapter", {}).get("title", ""),
         "source_topic_title": topic["title"],
+        "syllabus_position": syllabus_position,
+        "sibling_topics": sibling_topics[:15],
+        "stream_name": stream_name,
         "prompt_variant": variant_idx,
         "title_variant": title_idx,
         "quality_score": quality_score,
