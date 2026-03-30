@@ -445,10 +445,10 @@ export default function AdminPYQManager({ adminToken, hubContext, onNavigate }) 
               style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.30)' }}>
               Write Content →
             </button>
-            <button onClick={() => onNavigate('editor')}
+            <button onClick={() => onNavigate('blog')}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
-              style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.30)' }}>
-              Content Editor →
+              style={{ background: 'rgba(14,165,233,0.15)', color: '#7dd3fc', border: '1px solid rgba(14,165,233,0.30)' }}>
+              Blog Publisher →
             </button>
           </div>
         )}
