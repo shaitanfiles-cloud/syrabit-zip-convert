@@ -13735,6 +13735,7 @@ async def agentic_syllabus_run(
         total_chapters_all = 0
         total_chunks_all   = 0
         total_embedded     = 0
+        all_subject_ids: list = []
 
         for subj_idx, entry_raw in enumerate(extracted):
             subject_name = (entry_raw.get("subject_name") or entry_raw.get("subject") or "").strip()
@@ -13923,6 +13924,7 @@ async def agentic_syllabus_run(
                 "created_at":         now_iso,
             })
 
+            all_subject_ids.extend(sid for sid in subject_ids if sid not in all_subject_ids)
             yield _sse("subject_done", {
                 "name":           subject_name,
                 "chapters_done":  n_chapters,
@@ -13944,6 +13946,7 @@ async def agentic_syllabus_run(
             "total_chapters":   total_chapters_all,
             "total_chunks":     total_chunks_all,
             "total_embedded":   total_embedded,
+            "subject_ids":      all_subject_ids,
         })
 
     return StreamingResponse(

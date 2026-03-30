@@ -230,6 +230,16 @@ export const adminSeoBulkPublish = (token, pageType = null, subjectId = null) =>
     params: { ...(pageType ? { page_type: pageType } : {}), ...(subjectId ? { subject_id: subjectId } : {}) },
   });
 
+export const adminSeoSubjectCoverage = (token) =>
+  axios.get(`${API_BASE}/seo/subject-coverage`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoRunSubject = (token, subjectId, force = false, pageTypes = null) =>
+  axios.post(`${API_BASE}/seo/run-subject`, pageTypes ? { page_types: pageTypes } : {}, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { subject_id: subjectId, ...(force ? { force: true } : {}) },
+  });
+
 // ── QA Engine ─────────────────────────────────────────────────────────────────
 export const getTopicQa = (board, classSlug, subjectSlug, topicSlug) =>
   axios.get(`${API_BASE}/seo/qa/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);

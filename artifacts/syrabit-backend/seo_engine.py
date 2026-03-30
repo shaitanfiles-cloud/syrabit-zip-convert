@@ -1567,6 +1567,241 @@ async def get_job_progress(job_id: str, _admin: dict = Depends(_require_admin)):
     return job
 
 
+# ─── ADMIN: Per-subject coverage stats ──────────────────────────────────────
+
+@router.get("/subject-coverage")
+async def get_subject_coverage(_admin: dict = Depends(_require_admin)):
+    """
+    Return per-subject pipeline stats:
+    board / class / stream / subject / chapters / topics / seo_pages / coverage_pct
+    Used by the Pipeline tab in AdminSeoManager.
+    """
+    subjects = await _db.subjects.find({}, {"_id": 0}).to_list(500)
+    result = []
+
+    for subj in subjects:
+        sid      = subj.get("id", "")
+        sid_name = subj.get("name", "Unknown")
+        sid_slug = subj.get("slug", "")
+
+        # Resolve hierarchy for display
+        stream = await _db.streams.find_one({"id": subj.get("stream_id", "")}, {"_id": 0}) if subj.get("stream_id") else None
+        cls    = await _db.classes.find_one({"id": stream.get("class_id", "")}, {"_id": 0}) if stream else None
+        board  = await _db.boards.find_one({"id": cls.get("board_id", "")}, {"_id": 0}) if cls else None
+
+        ch_count    = await _db.chapters.count_documents({"subject_id": sid})
+        topic_count = await _db.topics.count_documents({"subject_id": sid})
+        page_count  = await _db.seo_pages.count_documents({"subject_slug": sid_slug}) if sid_slug else 0
+        expected    = topic_count * len(PAGE_TYPES)
+        coverage    = round((page_count / expected) * 100, 1) if expected > 0 else 0
+
+        result.append({
+            "subject_id":   sid,
+            "subject_name": sid_name,
+            "subject_slug": sid_slug,
+            "stream":       stream.get("name", "") if stream else "",
+            "stream_slug":  stream.get("slug", "") if stream else "",
+            "class_name":   cls.get("name", "") if cls else "",
+            "class_slug":   cls.get("slug", "") if cls else "",
+            "board_name":   board.get("name", "") if board else "",
+            "board_slug":   board.get("slug", "") if board else "",
+            "chapters":     ch_count,
+            "topics":       topic_count,
+            "seo_pages":    page_count,
+            "coverage_pct": coverage,
+            "status": (
+                "complete"  if coverage >= 95 else
+                "partial"   if coverage > 0   else
+                "no_pages"  if topic_count > 0 else
+                "no_topics"
+            ),
+        })
+
+    result.sort(key=lambda x: (-x["seo_pages"], x["subject_name"]))
+    return {"subjects": result, "total": len(result)}
+
+
+# ─── ADMIN: Per-subject pipeline run ────────────────────────────────────────
+
+@router.post("/run-subject")
+async def run_subject_pipeline(
+    background_tasks: BackgroundTasks,
+    subject_id: str,
+    force: bool = False,
+    page_types: Optional[List[str]] = None,
+    _admin: dict = Depends(_require_admin),
+):
+    """
+    Run the full SEO pipeline for ONE subject:
+      1. AI extract topics from chapters (skips if topics already exist, unless force=True)
+      2. Generate all missing SEO pages for each topic
+      3. Regen sitemap
+    Returns job_id for polling via GET /seo/jobs/{job_id}
+    """
+    sub = await _db.subjects.find_one({"id": subject_id}, {"_id": 0, "name": 1})
+    if not sub:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    types_to_run = page_types or PAGE_TYPES
+    job_id = f"subj-{uuid.uuid4().hex[:10]}"
+    _seo_jobs[job_id] = {
+        "job_id":      job_id,
+        "subject_id":  subject_id,
+        "subject_name": sub.get("name", subject_id),
+        "status":      "queued",
+        "total":       0,
+        "done":        0,
+        "errors":      0,
+        "skipped":     0,
+        "current":     "Starting…",
+        "started_at":  datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "page_types":  types_to_run,
+    }
+    background_tasks.add_task(_run_subject_bg, job_id, subject_id, force, types_to_run)
+    return {"job_id": job_id, "subject_name": sub.get("name"), "status": "queued"}
+
+
+async def _run_subject_bg(job_id: str, subject_id: str, force: bool, page_types: list):
+    try:
+        sub = await _db.subjects.find_one({"id": subject_id}, {"_id": 0, "name": 1})
+        sub_name = sub.get("name", subject_id) if sub else subject_id
+
+        # ── Step 1: AI extract topics ────────────────────────────────────────
+        _job_update(job_id, status="extracting", current=f"Extracting topics for {sub_name}…")
+        chapters = await _db.chapters.find({"subject_id": subject_id}, {"_id": 0}).to_list(200)
+        new_topics = 0
+        errors = 0
+
+        for ch in chapters:
+            existing = await _db.topics.count_documents({"chapter_id": ch["id"]})
+            if existing > 0 and not force:
+                continue
+            title   = ch.get("title", "").strip()
+            content = (ch.get("content") or "").strip()
+            if not title:
+                continue
+
+            topic_titles: list[str] = []
+            if _call_llm and len(content) > 150:
+                try:
+                    msgs = [
+                        {"role": "system", "content": (
+                            "You are an educational curriculum analyst. "
+                            "Extract 4-10 specific study topics a student would search for from this chapter. "
+                            "Each topic: 2-7 words, NOT the chapter title itself. "
+                            'Return ONLY a valid JSON array of strings, e.g. ["Topic One", "Topic Two"].'
+                        )},
+                        {"role": "user", "content": f"Chapter: {title}\n\nContent:\n{content[:4000]}"},
+                    ]
+                    raw = await asyncio.wait_for(_call_llm(msgs, max_tokens=512), timeout=30)
+                    match = re.search(r"\[.*?\]", raw, re.DOTALL)
+                    if match:
+                        parsed = json.loads(match.group())
+                        if isinstance(parsed, list):
+                            topic_titles = [str(t).strip() for t in parsed if str(t).strip()]
+                except Exception as exc:
+                    logger.warning(f"[run-subject] topic extract failed for {title!r}: {exc}")
+                    errors += 1
+
+            if not topic_titles:
+                topic_titles = [title]
+
+            if force and existing:
+                await _db.topics.delete_many({"chapter_id": ch["id"]})
+
+            base_order = ch.get("order_index", ch.get("chapter_number", 0))
+            for idx, t_title in enumerate(topic_titles):
+                await _db.topics.insert_one({
+                    "id":            f"topic-{uuid.uuid4().hex[:8]}",
+                    "chapter_id":    ch["id"],
+                    "subject_id":    subject_id,
+                    "chapter_title": title,
+                    "title":         t_title,
+                    "slug":          _slug(t_title),
+                    "definition":    ch.get("description", ""),
+                    "examples":      "",
+                    "order":         base_order * 100 + idx,
+                    "status":        "published",
+                    "created_at":    datetime.now(timezone.utc).isoformat(),
+                })
+                new_topics += 1
+
+        # ── Step 2: Generate SEO pages ────────────────────────────────────────
+        topics = await _db.topics.find(
+            {"subject_id": subject_id, "status": "published"}, {"_id": 0}
+        ).to_list(2000)
+
+        total_ops = len(topics) * len(page_types)
+        _job_update(
+            job_id,
+            status="generating",
+            total=total_ops,
+            current=f"Generating pages for {len(topics)} topics × {len(page_types)} types…",
+        )
+
+        done = 0
+        skipped = 0
+
+        for topic in topics:
+            _job_update(job_id, current=f"Topic: {topic.get('title', '')}")
+            try:
+                hierarchy = await _resolve_hierarchy(topic)
+                if not hierarchy:
+                    skipped += len(page_types)
+                    done    += len(page_types)
+                    _job_update(job_id, done=done, skipped=skipped)
+                    continue
+
+                for pt in page_types:
+                    existing = await _db.seo_pages.find_one(
+                        {"topic_id": topic["id"], "page_type": pt}, {"_id": 0, "id": 1}
+                    )
+                    if existing and not force:
+                        skipped += 1
+                        done    += 1
+                        _job_update(job_id, done=done, skipped=skipped)
+                        continue
+                    try:
+                        page = await _generate_single_page(topic, pt, hierarchy)
+                        done += 1 if page else done
+                    except Exception as ge:
+                        logger.error(f"[run-subject] gen error {topic.get('id')}/{pt}: {ge}")
+                        errors += 1
+                        done   += 1
+                    _job_update(job_id, done=done, errors=errors)
+
+            except Exception as te:
+                logger.error(f"[run-subject] topic loop error {topic.get('id')}: {te}")
+                errors  += len(page_types)
+                done    += len(page_types)
+                _job_update(job_id, done=done, errors=errors)
+
+        # ── Step 3: Log + finish ──────────────────────────────────────────────
+        now = datetime.now(timezone.utc).isoformat()
+        await _db.seo_generation_log.insert_one({
+            "job_id": job_id, "subject_id": subject_id, "subject_name": sub_name,
+            "new_topics": new_topics, "total_ops": total_ops,
+            "generated": done - skipped - errors,
+            "skipped": skipped, "errors": errors,
+            "completed_at": now,
+        })
+        _job_update(
+            job_id,
+            status="done",
+            finished_at=now,
+            current=f"Done — {new_topics} new topics, {done - skipped - errors} pages generated, {skipped} skipped, {errors} errors",
+        )
+        await _seo_log(
+            action="seo:subject_pipeline",
+            details=f"Pipeline done for {sub_name}: {new_topics} topics + {done - skipped - errors} seo_pages generated",
+        )
+
+    except Exception as e:
+        logger.error(f"[run-subject] bg job failed: {e}")
+        _job_update(job_id, status="error", current=str(e), finished_at=datetime.now(timezone.utc).isoformat())
+
+
 # ─── ADMIN: Full auto-run pipeline ──────────────────────────────────────────
 
 @router.post("/auto-run")

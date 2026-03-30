@@ -5,6 +5,7 @@ import {
   Globe, ArrowRight, RefreshCw, AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { adminSeoRunSubject } from '@/utils/api';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -304,6 +305,17 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
             setPhase('done');
             setRunning(false);
             if (onComplete) onComplete(data);
+            // Auto-trigger SEO pipeline for every newly imported subject
+            if (data.subject_ids?.length) {
+              addLog(`\n🚀 Auto-triggering SEO pipeline for ${data.subject_ids.length} subject(s)…`, '#a78bfa');
+              Promise.allSettled(
+                data.subject_ids.map(sid =>
+                  adminSeoRunSubject(adminToken, sid, false)
+                    .then(r => addLog(`   ⚡ SEO job queued for subject ${sid} (job ${r.data?.job_id})`, '#67e8f9'))
+                    .catch(() => addLog(`   ⚠️  SEO pipeline skipped for subject ${sid}`, '#fca5a5'))
+                )
+              );
+            }
             break;
 
           case 'error':
