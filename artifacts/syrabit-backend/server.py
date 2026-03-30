@@ -1841,8 +1841,41 @@ async def get_visitor_stats() -> dict:
                 if avg_dur is not None:
                     avg_session_duration = round(avg_dur)
 
+        # ── Multi-source visitor recovery ────────────────────────────────────
+        # 1. Registered users from PG (all-time confirmed real visitors)
+        registered_visitors = 0
+        daily_signups: list = []
+        users_since: str = ""
+        chatters: int = 0
+        try:
+            if pg_pool:
+                async with pg_pool.acquire() as conn:
+                    reg_rows = await conn.fetch(
+                        "SELECT created_at FROM users ORDER BY created_at ASC"
+                    )
+                    registered_visitors = len(reg_rows)
+                    if reg_rows:
+                        users_since = str(reg_rows[0]["created_at"])[:10]
+                    by_day: dict = {}
+                    for r in reg_rows:
+                        d = str(r["created_at"])[:10]
+                        by_day[d] = by_day.get(d, 0) + 1
+                    daily_signups = [{"date": d, "signups": n} for d, n in sorted(by_day.items())]
+
+                    # Unique chatters from conversations
+                    chatter_ids = await conn.fetch(
+                        "SELECT DISTINCT user_id FROM conversations WHERE user_id IS NOT NULL AND user_id != ''"
+                    )
+                    chatters = len(chatter_ids)
+        except Exception as ex:
+            logger.warning(f"visitor_stats pg enrichment: {ex}")
+
+        # Best total estimate: at least the registered count (confirmed); MongoDB tracking is additive
+        # Registered users = definitive floor of real visitors (they navigated + signed up)
+        best_total_visitors = max(registered_visitors, total_visitors_count)
+
         return {
-            "total_visitors": total_visitors_count,
+            "total_visitors": total_visitors_count,           # MongoDB cookie-tracked
             "visitors_today": visitors_today_count,
             "page_views_today": page_views_today,
             "total_page_views": total_page_views,
@@ -1855,6 +1888,13 @@ async def get_visitor_stats() -> dict:
             "bounce_rate": bounce_rate,
             "not_found_today": not_found_today,
             "not_found_total": not_found_total,
+            # Multi-source enrichment
+            "registered_visitors": registered_visitors,       # All-time signed-up users
+            "chatters": chatters,                             # Users who actually chatted
+            "daily_signups": daily_signups,                   # Registration timeline
+            "users_since": users_since,                       # Earliest user date
+            "tracking_since": "2026-03-29",                   # When MongoDB tracking started
+            "best_total_visitors": best_total_visitors,       # Best recoverable estimate
         }
     except Exception as e:
         logger.error(f"get_visitor_stats error: {e}")

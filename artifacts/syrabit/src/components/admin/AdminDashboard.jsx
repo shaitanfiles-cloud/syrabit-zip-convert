@@ -428,26 +428,85 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
       )}
 
+      {/* ── VISITOR RECOVERY SECTION ───────────────────────────────────────── */}
+      <div style={{ background: 'rgba(6,182,212,0.04)', border: '1px solid rgba(6,182,212,0.15)', borderRadius: 14, padding: '14px 18px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <Globe size={14} style={{ color: '#22d3ee' }} />
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#22d3ee' }}>All-time Visitor Recovery</span>
+          {vs.users_since && (
+            <span style={{ fontSize: 11, color: 'rgba(232,232,232,0.4)', marginLeft: 4 }}>
+              since {vs.users_since}
+            </span>
+          )}
+          <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(232,232,232,0.3)', fontStyle: 'italic' }}>
+            Session tracking started {vs.tracking_since || '2026-03-29'} · pre-tracking data from user registrations
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" style={{ marginBottom: vs.daily_signups?.length ? 14 : 0 }}>
+          <StatCard
+            label="Registered Visitors"
+            value={vs.registered_visitors ?? vs.total_visitors ?? 0}
+            icon={Users}
+            color="#22d3ee"
+            subLabel="All-time (best estimate)"
+            subValue=""
+          />
+          <StatCard
+            label="AI Chatters"
+            value={vs.chatters ?? 0}
+            icon={MessageSquare}
+            color="#8b5cf6"
+            subLabel="Used AI chat"
+            subValue=""
+          />
+          <StatCard
+            label="Session-tracked"
+            value={vs.total_visitors ?? 0}
+            icon={Eye}
+            color="#06b6d4"
+            subLabel={`Since ${vs.tracking_since || '2026-03-29'}`}
+            subValue=""
+          />
+          <StatCard label="Visitors Today"  value={vs.visitors_today ?? 0}   icon={TrendingUp} color="#f97316" pulse
+            subLabel="Page views" subValue={vs.page_views_today ?? 0} />
+        </div>
+
+        {/* Daily signups sparkline as traffic proxy */}
+        {vs.daily_signups?.length > 0 && (
+          <div>
+            <div style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Daily User Signups (traffic proxy since {vs.users_since})
+            </div>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 40 }}>
+              {(() => {
+                const max = Math.max(...(vs.daily_signups || []).map(d => d.signups), 1);
+                return (vs.daily_signups || []).map((d, i) => {
+                  const h = Math.max(3, Math.round((d.signups / max) * 36));
+                  const isToday = d.date === new Date().toISOString().slice(0,10);
+                  return (
+                    <div key={i} title={`${d.date}: ${d.signups} signups`}
+                      style={{ flex: 1, minWidth: 4, maxWidth: 20, height: h, borderRadius: 2,
+                        background: isToday ? '#f97316' : d.signups > 10 ? '#22d3ee' : 'rgba(6,182,212,0.35)',
+                        cursor: 'default' }} />
+                  );
+                });
+              })()}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.25)' }}>{vs.daily_signups?.[0]?.date}</span>
+              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.25)' }}>{vs.daily_signups?.[vs.daily_signups.length-1]?.date}</span>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          label="Total Visitors"
-          value={vs.total_visitors}
-          icon={Globe}
-          color="#06b6d4"
-          subLabel="Today"
-          subValue={vs.visitors_today}
-          pulse
-        />
-        <StatCard label="Visitors Today"  value={vs.visitors_today}   icon={TrendingUp} color="#f97316" pulse />
-        <StatCard label="Page Views Today" value={vs.page_views_today} icon={Eye}        color="#ec4899" pulse />
-        <StatCard
-          label="Total Page Views"
-          value={vs?.total_page_views ?? 0}
-          icon={BarChart2}
-          color="#84cc16"
-          subLabel="Today"
-          subValue={vs?.page_views_today ?? 0}
-        />
+        <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
+        <StatCard label="Total Page Views" value={vs?.total_page_views ?? 0} icon={BarChart2} color="#84cc16"
+          subLabel="Today" subValue={vs?.page_views_today ?? 0} />
+        <StatCard label="Bounce Rate"  value={vs.bounce_rate != null ? `${vs.bounce_rate}%` : '—'} icon={TrendingUp} color="#f59e0b" />
+        <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
       </div>
 
       {/* ── AI HEALTH SECTION ─────────────────────────────────────────────── */}
