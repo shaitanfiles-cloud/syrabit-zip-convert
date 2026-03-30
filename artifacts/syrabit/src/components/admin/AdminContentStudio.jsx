@@ -198,6 +198,7 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
   const [selectedSylSubjectId, setSelectedSylSubjectId] = useState('');
   const [syllabusOpen, setSyllabusOpen]             = useState(false);
   const [syllabusLoading, setSyllabusLoading]       = useState(false);
+  const [chapters, setChapters]                     = useState([]);
 
   const [allSubjects, setAllSubjects]   = useState([]);
   const [gapSubjects, setGapSubjects]   = useState([]);
@@ -277,10 +278,31 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
   }, [selectedClassId]);
 
   useEffect(() => {
-    if (!selectedStreamId) { setSylSubjects([]); setSelectedSylSubjectId(''); return; }
+    if (!selectedStreamId) { setSylSubjects([]); setSelectedSylSubjectId(''); setSubject(''); setSubjectId(''); setChapters([]); return; }
     axios.get(`${API}/content/subjects?stream_id=${selectedStreamId}`).then(r => setSylSubjects(r.data || [])).catch(() => {});
     setSelectedSylSubjectId('');
+    setSubject('');
+    setSubjectId('');
+    setChapters([]);
   }, [selectedStreamId]);
+
+  useEffect(() => {
+    if (!subjectId) { setChapters([]); return; }
+    axios.get(`${API}/content/chapters/${subjectId}`).then(r => setChapters(r.data || [])).catch(() => {});
+  }, [subjectId]);
+
+  const handleSubjectSelect = useCallback((id) => {
+    setSelectedSylSubjectId(id);
+    const found = sylSubjects.find(s => (s.id || s._id) === id);
+    if (found) {
+      setSubject(found.name);
+      setSubjectId(found.id || found._id);
+    } else {
+      setSubject('');
+      setSubjectId('');
+    }
+    setChapter('');
+  }, [sylSubjects]);
 
   const loadDrafts = useCallback(async () => {
     try {
@@ -853,8 +875,8 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
       ══════════════════════════════════════════════════════════════ */}
       {view !== 'gaps' && (
         <>
-          {/* Board / Class row */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {/* Board / Class / Stream row */}
+          <div className="grid grid-cols-3 gap-2">
             <div>
               <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Board</p>
               <select value={selectedBoardId} onChange={e => setSelectedBoardId(e.target.value)} style={selStyle}>
@@ -870,14 +892,47 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
               </select>
             </div>
             <div>
+              <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Stream</p>
+              <select value={selectedStreamId} onChange={e => setSelectedStreamId(e.target.value)} disabled={!selectedClassId} style={selStyle}>
+                <option value="">— Stream —</option>
+                {streams.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {/* Subject / Chapter (Lesson) row */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
               <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Subject</p>
-              <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="e.g. Physics"
-                style={{ ...selStyle, padding: '6px 10px' }} />
+              {sylSubjects.length > 0 ? (
+                <select value={selectedSylSubjectId} onChange={e => handleSubjectSelect(e.target.value)} style={selStyle}>
+                  <option value="">— Select Subject —</option>
+                  {sylSubjects.map(s => <option key={s.id || s._id} value={s.id || s._id}>{s.name}</option>)}
+                </select>
+              ) : (
+                <input
+                  value={subject}
+                  onChange={e => setSubject(e.target.value)}
+                  placeholder={selectedStreamId ? 'No subjects found' : 'Select Stream first'}
+                  style={{ ...selStyle, padding: '6px 10px', opacity: selectedStreamId ? 1 : 0.5 }}
+                />
+              )}
             </div>
             <div>
-              <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Chapter</p>
-              <input value={chapter} onChange={e => setChapter(e.target.value)} placeholder="e.g. Optics"
-                style={{ ...selStyle, padding: '6px 10px' }} />
+              <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Chapter / Lesson</p>
+              {chapters.length > 0 ? (
+                <select value={chapter} onChange={e => setChapter(e.target.value)} style={selStyle}>
+                  <option value="">— Select Chapter —</option>
+                  {chapters.map(c => <option key={c.id || c._id} value={c.title}>{c.title}</option>)}
+                </select>
+              ) : (
+                <input
+                  value={chapter}
+                  onChange={e => setChapter(e.target.value)}
+                  placeholder={subjectId ? 'No chapters found' : 'Select Subject first'}
+                  style={{ ...selStyle, padding: '6px 10px', opacity: subjectId ? 1 : 0.5 }}
+                />
+              )}
             </div>
           </div>
 
@@ -915,29 +970,26 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
           {syllabusOpen && (
             <div className="rounded-xl p-4 border space-y-3" style={{ background: 'rgba(52,211,153,0.04)', borderColor: 'rgba(52,211,153,0.15)' }}>
               <p className="text-xs font-semibold" style={{ color: '#34d399' }}>Load Subject Syllabus as Context Block</p>
-              <div className="flex items-end gap-2 flex-wrap">
-                <div>
-                  <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.30)' }}>Stream</p>
-                  <select value={selectedStreamId} onChange={e => setSelectedStreamId(e.target.value)} style={{ ...selStyle, width: 'auto' }}>
-                    <option value="">— Stream —</option>
-                    {streams.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+              {selectedSylSubjectId ? (
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs" style={{ background: 'rgba(52,211,153,0.10)', color: '#34d399', border: '1px solid rgba(52,211,153,0.20)' }}>
+                    <BookOpen size={11} />
+                    <span className="font-medium">{subject}</span>
+                    <span style={{ color: 'rgba(52,211,153,0.55)' }}>selected above</span>
+                  </div>
+                  <button onClick={handleLoadSyllabus} disabled={syllabusLoading}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
+                    style={{ background: '#34d399', color: '#064e3b' }}>
+                    {syllabusLoading ? <Loader2 size={13} className="animate-spin" /> : <BookOpen size={13} />}
+                    Insert Scope
+                  </button>
                 </div>
-                <div>
-                  <p className="text-[10px] mb-1" style={{ color: 'rgba(255,255,255,0.30)' }}>Subject</p>
-                  <select value={selectedSylSubjectId} onChange={e => setSelectedSylSubjectId(e.target.value)} disabled={!selectedStreamId} style={{ ...selStyle, width: 'auto' }}>
-                    <option value="">— Subject —</option>
-                    {sylSubjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                </div>
-                <button onClick={handleLoadSyllabus} disabled={syllabusLoading}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-40"
-                  style={{ background: '#34d399', color: '#064e3b' }}>
-                  {syllabusLoading ? <Loader2 size={13} className="animate-spin" /> : <BookOpen size={13} />}
-                  Insert Scope
-                </button>
-              </div>
-              <p className="text-[10px]" style={{ color: 'rgba(52,211,153,0.60)' }}>
+              ) : (
+                <p className="text-xs" style={{ color: 'rgba(52,211,153,0.60)' }}>
+                  Select a Board → Class → Stream → Subject above, then click Insert Scope.
+                </p>
+              )}
+              <p className="text-[10px]" style={{ color: 'rgba(52,211,153,0.50)' }}>
                 Inserts a syllabus block at position 1. On publish, auto-creates a CMS syllabus stub if subject ID is set.
               </p>
             </div>
