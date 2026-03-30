@@ -3293,17 +3293,27 @@ def build_rag_system_prompt(
 
     # ── Live Web Search Results (dual-layer: base + polish) ─────────────────
     if web_results:
+        _has_internal = bool(chunks or subjects or chapters or content_card or vector_hits)
         base_results   = [r for r in web_results if r.get("_layer") != "polish"]
         polish_results = [r for r in web_results if r.get("_layer") == "polish"]
 
         web_block = "\n\n---\n"
 
-        if base_results:
+        if _has_internal:
             web_block += (
-                "**WEB SEARCH — BASE LAYER (browser results, primary facts):**\n"
-                "Build the core of your answer from these results. "
-                "Use them as the factual foundation — definitions, explanations, data points.\n\n"
+                "**WEB SEARCH — SUPPLEMENTARY (external sources):**\n"
+                "Internal Syrabit content above is the PRIMARY source. "
+                "Use these web results ONLY to supplement or enrich your answer. "
+                "Always prefer citing internal [PAGE: slug] sources over external web links.\n\n"
             )
+
+        if base_results:
+            if not _has_internal:
+                web_block += (
+                    "**WEB SEARCH — BASE LAYER (browser results, primary facts):**\n"
+                    "Build the core of your answer from these results. "
+                    "Use them as the factual foundation — definitions, explanations, data points.\n\n"
+                )
             for i, r in enumerate(base_results, 1):
                 title   = r.get("title", "")
                 url     = r.get("url", "")
@@ -3311,23 +3321,33 @@ def build_rag_system_prompt(
                 web_block += f"[Base {i}] {title}\n{snippet}\nSource: {url}\n\n"
 
         if polish_results:
-            web_block += (
-                "**WEB SEARCH — POLISH LAYER (news/open web, enrichment):**\n"
-                "Use these to add current context, recent examples, or relevance to the student's "
-                "specific situation. Blend naturally into the answer — do not list them separately.\n\n"
-            )
+            if not _has_internal:
+                web_block += (
+                    "**WEB SEARCH — POLISH LAYER (news/open web, enrichment):**\n"
+                    "Use these to add current context, recent examples, or relevance to the student's "
+                    "specific situation. Blend naturally into the answer — do not list them separately.\n\n"
+                )
             for i, r in enumerate(polish_results, 1):
                 title   = r.get("title", "")
                 url     = r.get("url", "")
                 snippet = r.get("snippet", "")
                 web_block += f"[Polish {i}] {title}\n{snippet}\nSource: {url}\n\n"
 
-        web_block += (
-            "---\n"
-            "*INSTRUCTION: Build the answer from the Base layer first. "
-            "Then enrich it with relevant details from the Polish layer. "
-            "Do not fabricate facts beyond what the results contain.*\n"
-        )
+        if _has_internal:
+            web_block += (
+                "---\n"
+                "*INSTRUCTION: Your answer MUST prioritize internal Syrabit content above. "
+                "Cite internal pages using [PAGE: slug] format first. "
+                "Web results are supplementary — use them only to fill gaps or add context. "
+                "Do not fabricate facts beyond what the sources contain.*\n"
+            )
+        else:
+            web_block += (
+                "---\n"
+                "*INSTRUCTION: Build the answer from the Base layer first. "
+                "Then enrich it with relevant details from the Polish layer. "
+                "Do not fabricate facts beyond what the results contain.*\n"
+            )
         grounding += web_block
 
     return base_prompt + grounding if grounding else base_prompt
@@ -5989,7 +6009,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         except Exception as e:
             logger.error(f"Failed to fetch syllabus: {e}")
 
-    # ── Web-first sequential: DDG text → DDG news → MongoDB RAG ──────────────
+    # ── Internal-content-first: MongoDB RAG → web fallback ──────────────
     _is_casual_sync = _classify_question(msg.message) == "casual"
 
     if _is_casual_sync:
@@ -5998,7 +6018,6 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
-        # Run SubjectRouter to get a curriculum-scoped query for web search
         _ns_scoped_query, _ns_route = await build_search_scope(
             msg.message,
             board_name=ctx_board_name,
@@ -6006,25 +6025,42 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             subject_name=msg.subject_name or "",
             embedder=_syllabus_embedder,
         )
-        web_results = await web_search_with_fallback(
-            msg.message, num_results=8,
-            board_name=ctx_board_name,
-            class_name=ctx_class_name,
-            subject_name=msg.subject_name or "",
-            scoped_query=_ns_scoped_query,
+        rag_ctx = await resolve_rag_context(
+            msg.message,
+            subject_id=msg.subject_id,
+            subject_name=msg.subject_name,
+            document_text=document_text,
         )
-        if web_results:
-            logger.info(f"[NON-STREAM] Web primary: {len(web_results)} results | RAG skipped")
-            rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                       "vector_hits": [], "source": "web", "quality": "web"}
-        else:
-            logger.info("[NON-STREAM] Web empty — falling back to MongoDB RAG")
-            rag_ctx = await resolve_rag_context(
-                msg.message,
-                subject_id=msg.subject_id,
-                subject_name=msg.subject_name,
-                document_text=document_text,
+        _ns_rag_quality = rag_ctx.get("quality", "none")
+        if _ns_rag_quality in ("high", "tier0"):
+            logger.info(f"[NON-STREAM][INTERNAL-FIRST] RAG quality={_ns_rag_quality} | web search skipped")
+            web_results = []
+        elif _ns_rag_quality == "medium":
+            logger.info(f"[NON-STREAM][INTERNAL-FIRST] RAG quality=medium | running web search as supplement")
+            web_results = await web_search_with_fallback(
+                msg.message, num_results=8,
+                board_name=ctx_board_name,
+                class_name=ctx_class_name,
+                subject_name=msg.subject_name or "",
+                scoped_query=_ns_scoped_query,
             )
+            if web_results:
+                logger.info(f"[NON-STREAM][INTERNAL-FIRST] Merged: internal medium + {len(web_results)} web results")
+        else:
+            logger.info("[NON-STREAM][INTERNAL-FIRST] RAG quality=none | [WEB-FALLBACK] running web search")
+            web_results = await web_search_with_fallback(
+                msg.message, num_results=8,
+                board_name=ctx_board_name,
+                class_name=ctx_class_name,
+                subject_name=msg.subject_name or "",
+                scoped_query=_ns_scoped_query,
+            )
+            if web_results:
+                logger.info(f"[NON-STREAM][WEB-FALLBACK] {len(web_results)} web results found")
+                rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+                           "vector_hits": [], "source": "web", "quality": "web"}
+            else:
+                logger.info("[NON-STREAM][WEB-FALLBACK] Web search also empty — AI uses training knowledge")
 
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -6314,28 +6350,45 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             subject_name=msg.subject_name or "",
             embedder=_syllabus_embedder,
         )
-        # Step 1: curriculum-scoped base + open-web polish, alongside history
-        web_results, raw_conv = await asyncio.gather(
-            web_search_with_fallback(
+        # Step 1: Internal RAG first (content cards, vector hits, DB chunks) + history
+        rag_ctx, raw_conv = await asyncio.gather(
+            resolve_rag_context(
+                msg.message, subject_id=msg.subject_id,
+                subject_name=msg.subject_name, document_text=document_text
+            ),
+            _fetch_history(),
+        )
+        _rag_quality = rag_ctx.get("quality", "none")
+        # Step 2: Web search only when internal content is insufficient
+        if _rag_quality in ("high", "tier0"):
+            logger.info(f"[STREAM][INTERNAL-FIRST] RAG quality={_rag_quality} | web search skipped")
+            web_results = []
+        elif _rag_quality == "medium":
+            logger.info(f"[STREAM][INTERNAL-FIRST] RAG quality=medium | running web search as supplement")
+            web_results = await web_search_with_fallback(
                 msg.message, num_results=8,
                 board_name=ctx_board_name,
                 class_name=ctx_class_name,
                 subject_name=msg.subject_name or "",
                 scoped_query=_sr_scoped_query,
-            ),
-            _fetch_history(),
-        )
-        # Step 2: MongoDB RAG only when BOTH web tiers returned nothing
-        if web_results:
-            logger.info(f"Web search primary: {len(web_results)} results | RAG skipped")
-            rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                       "vector_hits": [], "source": "web", "quality": "web"}
-        else:
-            logger.info("Web search empty — falling back to MongoDB RAG")
-            rag_ctx = await resolve_rag_context(
-                msg.message, subject_id=msg.subject_id,
-                subject_name=msg.subject_name, document_text=document_text
             )
+            if web_results:
+                logger.info(f"[STREAM][INTERNAL-FIRST] Merged: internal medium + {len(web_results)} web results")
+        else:
+            logger.info("[STREAM][INTERNAL-FIRST] RAG quality=none | [WEB-FALLBACK] running web search")
+            web_results = await web_search_with_fallback(
+                msg.message, num_results=8,
+                board_name=ctx_board_name,
+                class_name=ctx_class_name,
+                subject_name=msg.subject_name or "",
+                scoped_query=_sr_scoped_query,
+            )
+            if web_results:
+                logger.info(f"[STREAM][WEB-FALLBACK] {len(web_results)} web results found")
+                rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+                           "vector_hits": [], "source": "web", "quality": "web"}
+            else:
+                logger.info("[STREAM][WEB-FALLBACK] Web search also empty — AI uses training knowledge")
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
