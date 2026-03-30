@@ -8517,10 +8517,19 @@ async def admin_generate_flashcards_bulk(subject_id: str, admin: dict = Depends(
 @api.post("/admin/subjects/{subject_id}/generate-pyqs-bulk")
 async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
     """
-    AI-generate lesson-wise Previous Year Questions for all chapters of a subject.
-    Each question carries a plausible exam-year tag ([YEAR]).
-    Upserts into ai_pyq_collections. Returns per-chapter results.
+    Lesson-wise PYQ assignment from REAL uploaded exam papers.
+
+    Workflow:
+      1. Collect all questions from pyq_html_pages where subject_id matches
+         (these were extracted via Gemini OCR from actual board PDFs).
+      2. Fallback: match by subject_name keyword in pyq_html_pages.
+      3. If no papers found → return early with a clear message.
+      4. For each chapter, use AI *only* to classify which real questions
+         from the pool belong to that chapter (no question fabrication).
+      5. Upsert results into ai_pyq_collections.
     """
+    import re as _re
+
     subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
@@ -8530,23 +8539,103 @@ async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_ad
     ).sort("order_index", 1).to_list(100)
 
     if not chapters:
-        return {"subject_id": subject_id, "results": [], "total": 0, "generated": 0, "total_pyqs": 0}
+        return {"subject_id": subject_id, "results": [], "total": 0, "generated": 0,
+                "total_pyqs": 0, "message": "No chapters found"}
 
     subject_name = subject.get("name", "")
     class_name   = subject.get("className", "")
     paper_type   = (subject.get("paper_type") or "").upper()
     now_iso      = datetime.now(timezone.utc).isoformat()
 
-    import random
-    YEAR_POOL = list(range(2015, 2024))   # 2015-2023
+    # ── Step 1: Collect all real questions from uploaded papers ───────────────
+    # Primary: match by subject_id stored on pyq_html_pages
+    html_pages = await db.pyq_html_pages.find(
+        {"subject_id": subject_id},
+        {"_id": 0, "questions": 1, "raw_text": 1, "exam_year": 1, "paper_type": 1, "subject_name": 1, "slug": 1}
+    ).sort("exam_year", -1).to_list(50)
 
+    # Fallback: keyword match on subject_name (case-insensitive)
+    if not html_pages and subject_name:
+        kw = _re.escape(subject_name.split()[0])   # use first word as keyword
+        html_pages = await db.pyq_html_pages.find(
+            {"subject_name": {"$regex": kw, "$options": "i"}},
+            {"_id": 0, "questions": 1, "raw_text": 1, "exam_year": 1,
+             "paper_type": 1, "subject_name": 1, "slug": 1}
+        ).sort("exam_year", -1).to_list(50)
+
+    # Fallback 2: look in pyq_uploads for slugs, then fetch html_pages by slug
+    if not html_pages:
+        upload_docs = await db.pyq_uploads.find(
+            {"subject_id": subject_id}, {"_id": 0, "slug": 1}
+        ).to_list(50)
+        slugs = [u["slug"] for u in upload_docs if u.get("slug")]
+        if slugs:
+            html_pages = await db.pyq_html_pages.find(
+                {"slug": {"$in": slugs}},
+                {"_id": 0, "questions": 1, "raw_text": 1, "exam_year": 1,
+                 "paper_type": 1, "subject_name": 1, "slug": 1}
+            ).to_list(50)
+
+    if not html_pages:
+        return {
+            "subject_id":   subject_id,
+            "subject_name": subject_name,
+            "total":        len(chapters),
+            "generated":    0,
+            "total_pyqs":   0,
+            "results":      [],
+            "message":      "no_papers_found — upload PYQ PDFs via the PYQ Manager tab and process them with HTML Replica first",
+        }
+
+    # ── Step 2: Build a flat question pool with year tags ─────────────────────
+    question_pool = []   # {idx, text, marks, year, paper_type, sub_parts}
+    for page in html_pages:
+        year = int(page.get("exam_year") or 0)
+        ptype = page.get("paper_type", "")
+        qs = page.get("questions") or []
+        for q in qs:
+            text = (q.get("text") or q.get("question_text") or q.get("q") or "").strip()
+            if not text:
+                continue
+            question_pool.append({
+                "idx":        len(question_pool),
+                "text":       text,
+                "marks":      str(q.get("marks") or ""),
+                "year":       year,
+                "paper_type": ptype,
+                "sub_parts":  q.get("sub_parts") or [],
+            })
+
+    if not question_pool:
+        return {
+            "subject_id":   subject_id,
+            "subject_name": subject_name,
+            "total":        len(chapters),
+            "generated":    0,
+            "total_pyqs":   0,
+            "results":      [],
+            "message":      "papers_found_but_no_questions — re-run HTML Replica to extract questions from the uploaded PDFs",
+        }
+
+    # Render the pool as a numbered list for the prompt (truncate each text)
+    def _pool_text(pool):
+        lines = []
+        for q in pool:
+            marks_str = f" [{q['marks']} marks]" if q["marks"] else ""
+            year_str  = f" [{q['year']}]" if q["year"] else ""
+            text_trunc = q["text"][:200]
+            lines.append(f"{q['idx']}. {text_trunc}{marks_str}{year_str}")
+        return "\n".join(lines)
+
+    pool_text = _pool_text(question_pool)
+
+    # ── Step 3: Per-chapter AI classification ─────────────────────────────────
     results = []
     for chapter in chapters:
         chapter_id    = chapter.get("id", "")
         chapter_title = (chapter.get("title") or "").strip()
-        description   = (chapter.get("description") or "").strip()
         topics        = chapter.get("topics") or []
-        content       = (chapter.get("content") or "").strip()
+        description   = (chapter.get("description") or "").strip()
 
         if not chapter_title:
             results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
@@ -8554,102 +8643,112 @@ async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_ad
 
         topic_block = ""
         if topics:
-            topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
+            topic_block = ", ".join(str(t) for t in topics[:15])
         elif description:
-            topic_block = f"  {description}"
-        elif content:
-            topic_block = content[:400]
+            topic_block = description[:200]
         else:
-            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "skipped", "reason": "no content or topics"})
-            continue
+            topic_block = chapter_title
 
-        prompt = f"""You are an expert question-paper setter for {subject_name} ({paper_type} — {class_name or "Degree"}) for AHSEC/Gauhati University exams.
+        classify_prompt = f"""You are an exam question classifier.
 
-Generate **12 Previous Year Questions** for the chapter below. These must look exactly like questions from real AHSEC/GU exam papers (2015-2023).
+Below is a numbered list of questions extracted from real {subject_name} exam papers.
+Your task: identify which question numbers (0-indexed) are relevant to the chapter below.
 
-**Chapter:** {chapter_title}
-**Subject:** {subject_name}
-**Topics:**
-{topic_block}
+Chapter: {chapter_title}
+Topics covered: {topic_block}
 
-**Rules:**
-- Mix question types: Define, Explain, Distinguish, Short Note, Long Answer, List.
-- Mix marks: 2-mark (short), 5-mark (medium), 10-mark (long essay).
-- Assign a realistic exam year tag [YEAR] (pick from 2015-2023, vary them).
-- Return a JSON array of objects with keys: question, type, marks (integer), year (integer), answer (model answer ≤80 words for 2-mark, ≤200 words for 5-mark, ≤350 words for 10-mark).
-- No duplicate questions. No preamble. Output pure JSON array only."""
+Questions (index. text [marks] [year]):
+{pool_text}
+
+Return ONLY a JSON array of integer indices for questions that clearly relate to this chapter.
+Example: [0, 3, 7, 12]
+If none match, return: []
+No explanation. Pure JSON array only."""
 
         try:
-            raw = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
-            if not raw or len(raw.strip()) < 20:
-                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "empty response"})
+            raw_resp = await call_llm_api(
+                [{"role": "user", "content": classify_prompt}],
+                max_tokens=400,
+            )
+            if not raw_resp:
+                results.append({"chapter_id": chapter_id, "title": chapter_title,
+                                 "status": "skipped", "reason": "empty classifier response"})
                 continue
 
-            # Parse JSON from response
-            import re as _re
-            json_match = _re.search(r'\[[\s\S]*\]', raw)
-            if not json_match:
-                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "no JSON array in response"})
+            # Extract JSON array from response
+            arr_match = _re.search(r'\[[\d,\s]*\]', raw_resp)
+            if not arr_match:
+                results.append({"chapter_id": chapter_id, "title": chapter_title,
+                                 "status": "skipped", "reason": "no indices returned"})
                 continue
 
-            pyqs = json.loads(json_match.group())
-            if not isinstance(pyqs, list) or len(pyqs) == 0:
-                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "empty JSON array"})
-                continue
+            indices = json.loads(arr_match.group())
+            if not isinstance(indices, list):
+                indices = []
 
-            # Normalise & validate each item
-            cleaned = []
-            for q in pyqs:
-                if not isinstance(q, dict) or not q.get("question"):
-                    continue
-                year_val = q.get("year")
-                if not isinstance(year_val, int) or year_val < 2010 or year_val > 2024:
-                    year_val = random.choice(YEAR_POOL)
-                cleaned.append({
-                    "question": str(q.get("question", "")).strip(),
-                    "type":     str(q.get("type", "Short Answer")).strip(),
-                    "marks":    int(q.get("marks", 5)),
-                    "year":     year_val,
-                    "answer":   str(q.get("answer", "")).strip(),
-                })
+            # Collect the actual questions
+            matched = []
+            for idx in indices:
+                if isinstance(idx, int) and 0 <= idx < len(question_pool):
+                    q = question_pool[idx]
+                    marks_val = 0
+                    try:
+                        marks_val = int(q["marks"]) if q["marks"] else 0
+                    except (ValueError, TypeError):
+                        marks_val = 0
+                    matched.append({
+                        "question":   q["text"],
+                        "marks":      marks_val,
+                        "year":       q["year"],
+                        "paper_type": q["paper_type"],
+                        "sub_parts":  q["sub_parts"],
+                        "source":     "real_paper",
+                    })
 
-            if not cleaned:
-                results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": "no valid questions parsed"})
+            if not matched:
+                results.append({"chapter_id": chapter_id, "title": chapter_title,
+                                 "status": "skipped", "reason": "no matching questions in pool"})
                 continue
 
             pyq_doc = {
-                "id":             str(uuid.uuid4()),
-                "subject_id":     subject_id,
-                "subject_name":   subject_name,
-                "chapter_id":     chapter_id,
-                "chapter_title":  chapter_title,
-                "pyqs":           cleaned,
-                "total":          len(cleaned),
-                "ai_generated":   True,
-                "created_at":     now_iso,
-                "updated_at":     now_iso,
+                "id":            str(uuid.uuid4()),
+                "subject_id":    subject_id,
+                "subject_name":  subject_name,
+                "chapter_id":    chapter_id,
+                "chapter_title": chapter_title,
+                "pyqs":          matched,
+                "total":         len(matched),
+                "source":        "real_papers",
+                "ai_generated":  False,
+                "created_at":    now_iso,
+                "updated_at":    now_iso,
             }
             await db.ai_pyq_collections.update_one(
-                {"chapter_id": chapter_id, "ai_generated": True},
+                {"chapter_id": chapter_id},
                 {"$set": pyq_doc},
                 upsert=True,
             )
-            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "ok", "count": len(cleaned)})
+            results.append({"chapter_id": chapter_id, "title": chapter_title,
+                             "status": "ok", "count": len(matched)})
 
         except (json.JSONDecodeError, ValueError) as parse_err:
-            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": f"parse error: {str(parse_err)[:60]}"})
+            results.append({"chapter_id": chapter_id, "title": chapter_title,
+                             "status": "error", "reason": f"parse: {str(parse_err)[:60]}"})
         except Exception as e:
-            results.append({"chapter_id": chapter_id, "title": chapter_title, "status": "error", "reason": str(e)[:80]})
+            results.append({"chapter_id": chapter_id, "title": chapter_title,
+                             "status": "error", "reason": str(e)[:80]})
 
     ok_count   = sum(1 for r in results if r.get("status") == "ok")
     total_pyqs = sum(r.get("count", 0) for r in results)
     return {
-        "subject_id":   subject_id,
-        "subject_name": subject_name,
-        "total":        len(chapters),
-        "generated":    ok_count,
-        "total_pyqs":   total_pyqs,
-        "results":      results,
+        "subject_id":        subject_id,
+        "subject_name":      subject_name,
+        "total":             len(chapters),
+        "generated":         ok_count,
+        "total_pyqs":        total_pyqs,
+        "papers_used":       len(html_pages),
+        "pool_size":         len(question_pool),
+        "results":           results,
     }
 
 

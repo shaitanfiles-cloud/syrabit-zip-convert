@@ -105,7 +105,28 @@ export default function AgenticCreatorModal({
         );
         const data = res.data;
         setStepResults(prev => ({ ...prev, [step.key]: data }));
+
+        // PYQ step: if no papers were found, treat as a warning not a hard error
+        if (step.key === 'pyqs' && data.total_pyqs === 0 && data.message?.startsWith('no_papers_found')) {
+          setStepStatus(step.key, STATE.error);
+          push(`⚠ No uploaded PYQ papers found for this subject`, 'warn');
+          push(`  → Upload PDFs via the PYQ Manager tab, then run "HTML Replica" to extract questions`, 'warn');
+          push(`  → Then re-run Agentic Generate to assign real questions per chapter`, 'warn');
+          continue;
+        }
+        if (step.key === 'pyqs' && data.total_pyqs === 0 && data.message?.startsWith('papers_found_but_no_questions')) {
+          setStepStatus(step.key, STATE.error);
+          push(`⚠ PYQ papers found but no questions extracted yet`, 'warn');
+          push(`  → Open PYQ Manager and run "HTML Replica" on each uploaded paper`, 'warn');
+          continue;
+        }
+
         setStepStatus(step.key, STATE.done);
+
+        // Extra stats for PYQ step
+        if (step.key === 'pyqs' && data.papers_used) {
+          push(`  ${data.papers_used} paper(s) · ${data.pool_size} total questions in pool`, 'detail');
+        }
 
         const skipped = (data.results || []).filter(r => r.status === 'skipped').length;
         const errors  = (data.results || []).filter(r => r.status === 'error').length;
