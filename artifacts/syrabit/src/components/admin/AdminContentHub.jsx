@@ -82,7 +82,9 @@ function loadPersistedCtx() {
   } catch { return EMPTY_CTX; }
 }
 
-export default function AdminContentHub({ adminToken }) {
+const INTERNAL_TABS = new Set(['editor', 'syllabus', 'studio', 'pyq', 'cms', 'blog']);
+
+export default function AdminContentHub({ adminToken, onNavigate: topNavigate }) {
   const [activeTab, setActiveTab] = useState('syllabus');
   const [boards, setBoards]       = useState([]);
   const [classes, setClasses]     = useState([]);
@@ -105,8 +107,12 @@ export default function AdminContentHub({ adminToken }) {
 
   const navigate = useCallback((tab, ctxPatch) => {
     if (ctxPatch) setHubContext(ctxPatch);
-    setActiveTab(tab);
-  }, [setHubContext]);
+    if (INTERNAL_TABS.has(tab)) {
+      setActiveTab(tab);
+    } else if (topNavigate) {
+      topNavigate(tab);
+    }
+  }, [setHubContext, topNavigate]);
 
   useEffect(() => {
     const nc = `?_=${Date.now()}`;
