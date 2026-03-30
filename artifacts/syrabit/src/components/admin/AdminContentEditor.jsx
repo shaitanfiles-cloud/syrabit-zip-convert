@@ -194,6 +194,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [showPreview, setShowPreview]           = useState(false);
   const [mergedSubjectIds, setMergedSubjectIds] = useState(new Set());
   const [seoTopicsGeneratedIds, setSeoTopicsGeneratedIds] = useState(new Set());
+  const [assetsGeneratedIds, setAssetsGeneratedIds]       = useState(new Set());
   const [generatingSeoTopics, setGeneratingSeoTopics]     = useState(false);
   const [editorKey, setEditorKey]               = useState(0);
   const [showPipeline, setShowPipeline]         = useState(false);
@@ -414,6 +415,26 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       setGeneratingSeoTopics(false);
     }
   }, [adminToken, selSubject, subjects, onNavigate]);
+
+  // ── Auto-progress: when SEO topics generated, nudge toward pipeline ──────
+  useEffect(() => {
+    if (!selSubject || !seoTopicsGeneratedIds.has(selSubject)) return;
+    if (assetsGeneratedIds.has(selSubject)) return;
+    toast(`Topics ready — run "Auto-Generate Full Subject" to produce 300+ assets`, {
+      id: `auto-nudge-${selSubject}`,
+      duration: 5000,
+      action: { label: 'Run Now', onClick: () => setShowPipeline(true) },
+    });
+  }, [seoTopicsGeneratedIds, selSubject]);
+
+  // ── Auto-progress: when assets generated, nudge toward publish ───────────
+  useEffect(() => {
+    if (!selSubject || !assetsGeneratedIds.has(selSubject)) return;
+    toast.success(`Assets ready — click "Publish as Blog" to go live`, {
+      id: `publish-nudge-${selSubject}`,
+      duration: 6000,
+    });
+  }, [assetsGeneratedIds, selSubject]);
 
   const load = useCallback(async (bustCache = false) => {
     try {
@@ -1081,22 +1102,27 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
                     {/* ── Workflow Tracker ──────────────────────────────── */}
                     <div className="flex items-center gap-2 px-4 py-3 rounded-xl border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
+                      {/* Step 1: Chapters */}
                       <div className={`flex items-center gap-1.5 text-xs font-medium ${chapters.length > 0 ? 'text-emerald-400' : 'text-white/30'}`}>
-                        {chapters.length > 0
-                          ? <CheckCircle size={13} />
-                          : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
+                        {chapters.length > 0 ? <CheckCircle size={13} /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
                         <span>{chapters.length} Chapter{chapters.length !== 1 ? 's' : ''}</span>
                       </div>
                       <ChevronRight size={11} className="text-white/20" />
-                      <div className={`flex items-center gap-1.5 text-xs font-medium ${mergedSubjectIds.has(selSubject) ? 'text-violet-400' : 'text-white/25'}`}>
-                        {mergedSubjectIds.has(selSubject)
-                          ? <CheckCircle size={13} />
-                          : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
-                        <span>Blog Merged</span>
+                      {/* Step 2: SEO Topics */}
+                      <div className={`flex items-center gap-1.5 text-xs font-medium ${seoTopicsGeneratedIds.has(selSubject) ? 'text-cyan-400' : 'text-white/25'}`}>
+                        {seoTopicsGeneratedIds.has(selSubject) ? <CheckCircle size={13} /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
+                        <span>SEO Topics</span>
                       </div>
                       <ChevronRight size={11} className="text-white/20" />
-                      <div className="flex items-center gap-1.5 text-xs font-medium text-white/25">
-                        <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />
+                      {/* Step 3: Assets */}
+                      <div className={`flex items-center gap-1.5 text-xs font-medium ${assetsGeneratedIds.has(selSubject) ? 'text-violet-400' : 'text-white/25'}`}>
+                        {assetsGeneratedIds.has(selSubject) ? <CheckCircle size={13} /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
+                        <span>300+ Assets</span>
+                      </div>
+                      <ChevronRight size={11} className="text-white/20" />
+                      {/* Step 4: Published */}
+                      <div className={`flex items-center gap-1.5 text-xs font-medium ${mergedSubjectIds.has(selSubject) ? 'text-emerald-400' : 'text-white/25'}`}>
+                        {mergedSubjectIds.has(selSubject) ? <CheckCircle size={13} /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
                         <span>Published</span>
                       </div>
                       <div className="ml-auto flex items-center gap-2">
@@ -1156,19 +1182,27 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                         </button>
                         <button
                           onClick={() => handlePublishAsBlog(selSubject, subjectData?.name || selSubject)}
-                          disabled={publishingBlog || chapters.length === 0 || !mergedSubjectIds.has(selSubject)}
+                          disabled={publishingBlog || chapters.length === 0 || (!assetsGeneratedIds.has(selSubject) && !mergedSubjectIds.has(selSubject))}
                           className="flex items-center gap-1.5 h-8 px-4 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
-                          style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: 'white', boxShadow: '0 2px 8px rgba(124,58,237,0.28)' }}
+                          style={{
+                            background: assetsGeneratedIds.has(selSubject)
+                              ? 'linear-gradient(135deg,#059669,#10b981)'
+                              : 'linear-gradient(135deg,#7c3aed,#9575e0)',
+                            color: 'white', boxShadow: '0 2px 8px rgba(124,58,237,0.28)',
+                          }}
                           title={
                             chapters.length === 0
                               ? 'Add chapters first'
-                              : !mergedSubjectIds.has(selSubject)
-                              ? 'Run "Auto-Generate Full Subject" first to merge content'
+                              : (!assetsGeneratedIds.has(selSubject) && !mergedSubjectIds.has(selSubject))
+                              ? 'Run "Auto-Generate Full Subject" first to build 300+ assets'
+                              : assetsGeneratedIds.has(selSubject)
+                              ? '✅ 300+ assets ready — merge & open Blog Publisher'
                               : 'Publish merged content as a blog post'
                           }
                         >
                           {publishingBlog ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />}
                           Publish as Blog
+                          {assetsGeneratedIds.has(selSubject) && <span style={{ fontSize: 9, marginLeft: 2, opacity: 0.8 }}>✅</span>}
                         </button>
                       </div>
                     </div>
@@ -1434,7 +1468,9 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
           subjectName={subjectData?.name || selSubject}
           onClose={() => setShowPipeline(false)}
           onComplete={(summary) => {
-            toast.success(`${summary.total_blogs} blogs published for "${subjectData?.name}"`);
+            const total = (summary.total_blogs || 0) + (summary.total_mcqs || 0) + (summary.total_flashcards || 0) + (summary.total_pyq_pages || 0);
+            toast.success(`${total} assets generated for "${subjectData?.name}" — ${summary.total_blogs || 0} blogs live`);
+            setAssetsGeneratedIds(prev => new Set([...prev, selSubject]));
             setMergedSubjectIds(prev => new Set([...prev, selSubject]));
           }}
         />

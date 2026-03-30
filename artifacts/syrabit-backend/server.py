@@ -15235,10 +15235,16 @@ def _pipeline_slugify(text: str) -> str:
 
 
 async def _pipeline_generate_chapter_notes(chapter: dict, subject_name: str, class_name: str, paper_type: str) -> str:
-    """Generate chapter notes using LLM. Returns markdown content."""
+    """Generate chapter notes using LLM with Redis cache (1hr TTL). Returns markdown content."""
     title = (chapter.get("title") or "").strip()
     description = (chapter.get("description") or "").strip()
     topics = chapter.get("topics") or []
+
+    # ── Redis cache check ────────────────────────────────────────────────────
+    cache_key = f"pipeline_notes:{chapter.get('id','')}:{hash(title + subject_name)}"
+    cached = _redis_get("pipeline_notes", cache_key)
+    if cached and len(cached.strip()) > 100:
+        return cached
 
     topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else (f"  {description}" if description else f"  {title}")
 
@@ -15267,7 +15273,10 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 """
     try:
         result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
-        return result.strip() if result and len(result.strip()) > 50 else ""
+        text = result.strip() if result and len(result.strip()) > 50 else ""
+        if text:
+            _redis_set("pipeline_notes", cache_key, text, 3600)
+        return text
     except Exception:
         return ""
 
@@ -15514,6 +15523,197 @@ async def admin_pipeline_auto_generate(body: PipelineAutoGenerateRequest, backgr
     return {"job_id": job_id, "status": "running"}
 
 
+async def _pipeline_process_one_chapter(
+    chapter: dict,
+    *,
+    subject_id: str,
+    subject_name: str,
+    class_name: str,
+    paper_type: str,
+    board_slug: str,
+    class_slug: str,
+    now_iso: str,
+    pyq_docs: list,
+    semaphore: asyncio.Semaphore,
+    done_counter: dict,
+    total_chapters: int,
+    job_id: str,
+) -> dict:
+    """Process a single chapter: notes → MCQs → flashcards → geo-blogs (parallel) → PYQ."""
+    async with semaphore:
+        chapter_id    = chapter.get("id", "")
+        chapter_title = (chapter.get("title") or "").strip()
+        chapter_slug  = chapter.get("slug") or _pipeline_slugify(chapter_title)
+
+        chapter_result = {
+            "chapter_id":       chapter_id,
+            "chapter_title":    chapter_title,
+            "notes_generated":  False,
+            "mcqs_count":       0,
+            "flashcards_count": 0,
+            "blogs_count":      0,
+            "pyq_page":         False,
+            "errors":           [],
+        }
+
+        if not chapter_title:
+            return {"skipped": True, "result": chapter_result}
+
+        # ── Step 1: Notes (Redis-cached) ─────────────────────────────────────
+        existing_content = (chapter.get("content") or "").strip()
+        notes_content = existing_content
+        try:
+            generated = await _pipeline_generate_chapter_notes(chapter, subject_name, class_name, paper_type)
+            if generated:
+                notes_content = generated
+                await db.chapters.update_one(
+                    {"id": chapter_id},
+                    {"$set": {
+                        "content": generated,
+                        "content_type": "notes",
+                        "notes_generated": True,
+                        "notes_generated_at": now_iso,
+                    }}
+                )
+                chapter_result["notes_generated"] = True
+                try:
+                    await auto_chunk_content(chapter_id=chapter_id, content=generated, subject_id=subject_id)
+                except Exception:
+                    pass
+        except Exception as e:
+            chapter_result["errors"].append(f"notes: {str(e)[:80]}")
+
+        if not notes_content:
+            done_counter["done"] += 1
+            if job_id and job_id in _pipeline_jobs:
+                pct = int(5 + (done_counter["done"] / max(total_chapters, 1)) * 88)
+                _pipeline_jobs[job_id].update({"progress": pct, "message": f"Chapter {done_counter['done']}/{total_chapters} processed"})
+            return {"skipped": True, "result": chapter_result}
+
+        # ── Steps 2 & 3: MCQs + Flashcards (parallel) ──────────────────────
+        mcq_task = _pipeline_generate_mcqs(notes_content, subject_name, chapter_title, class_name, count=25)
+        fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30)
+        (mcqs, mcq_err), (flashcards, fc_err) = await asyncio.gather(
+            _safe(mcq_task), _safe(fc_task)
+        )
+
+        if mcqs:
+            try:
+                await db.mcq_collections.update_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True},
+                    {"$set": {
+                        "id": str(uuid.uuid4()),
+                        "subject_id": subject_id, "subject_name": subject_name,
+                        "chapter_id": chapter_id, "chapter_title": chapter_title,
+                        "mcqs": mcqs, "total": len(mcqs),
+                        "pipeline_generated": True, "created_at": now_iso,
+                    }},
+                    upsert=True,
+                )
+                chapter_result["mcqs_count"] = len(mcqs)
+            except Exception as e:
+                chapter_result["errors"].append(f"mcqs-save: {str(e)[:60]}")
+        elif mcq_err:
+            chapter_result["errors"].append(f"mcqs: {str(mcq_err)[:60]}")
+
+        if flashcards:
+            try:
+                await db.flashcard_collections.update_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True},
+                    {"$set": {
+                        "id": str(uuid.uuid4()),
+                        "subject_id": subject_id, "subject_name": subject_name,
+                        "chapter_id": chapter_id, "chapter_title": chapter_title,
+                        "flashcards": flashcards, "total": len(flashcards),
+                        "pipeline_generated": True, "created_at": now_iso,
+                    }},
+                    upsert=True,
+                )
+                chapter_result["flashcards_count"] = len(flashcards)
+            except Exception as e:
+                chapter_result["errors"].append(f"flashcards-save: {str(e)[:60]}")
+        elif fc_err:
+            chapter_result["errors"].append(f"flashcards: {str(fc_err)[:60]}")
+
+        # ── Step 4: Geo-SEO Blogs (all 5 cities in parallel) ────────────────
+        blog_tasks = [
+            _safe(_pipeline_generate_geo_seo_blog(
+                subject_name=subject_name, chapter_title=chapter_title,
+                content=notes_content, geo_location=city,
+                board_slug=board_slug, class_slug=class_slug, chapter_slug=chapter_slug,
+            ))
+            for city in GEO_CITIES
+        ]
+        blog_results = await asyncio.gather(*blog_tasks)
+        geo_blog_urls = []
+        for city, (blog_data, blog_err) in zip(GEO_CITIES, blog_results):
+            if blog_err or not blog_data:
+                chapter_result["errors"].append(f"geo-blog-{city}: {str(blog_err)[:60]}" if blog_err else f"geo-blog-{city}: empty")
+                continue
+            try:
+                blog_slug = blog_data["seo_slug"]
+                await db.cms_documents.update_one(
+                    {"seo_slug": blog_slug},
+                    {"$set": {
+                        "id": str(uuid.uuid4()),
+                        "title": blog_data["title"], "seo_slug": blog_slug,
+                        "meta_description": blog_data["meta_description"],
+                        "content": blog_data["article_body"],
+                        "primary_keyword": blog_data["primary_keyword"],
+                        "keywords": blog_data.get("keywords", []),
+                        "geo_location": city,
+                        "linked_subject_id": subject_id, "linked_subject_name": subject_name,
+                        "linked_chapter_id": chapter_id, "linked_chapter_title": chapter_title,
+                        "status": "published", "category": "geo-blog",
+                        "schema_type": "Article", "pipeline_generated": True,
+                        "created_at": now_iso, "updated_at": now_iso,
+                    }},
+                    upsert=True,
+                )
+                geo_blog_urls.append(f"/learn/{blog_slug}")
+                chapter_result["blogs_count"] += 1
+            except Exception as e:
+                chapter_result["errors"].append(f"geo-blog-{city}-save: {str(e)[:60]}")
+
+        # ── Step 5: PYQ HTML Page ────────────────────────────────────────────
+        try:
+            pyq_html = await _pipeline_generate_pyq_html(chapter, subject_name, pyq_docs)
+            pyq_slug = f"pyq-{board_slug}-{class_slug}-{chapter_slug}"
+            await db.cms_documents.update_one(
+                {"seo_slug": pyq_slug},
+                {"$set": {
+                    "id": str(uuid.uuid4()),
+                    "title": f"PYQ: {chapter_title} — {subject_name}",
+                    "seo_slug": pyq_slug,
+                    "meta_description": f"Previous year questions for {chapter_title} ({subject_name}) — AHSEC/SEBA board exams. Download PYQ papers on Syrabit.ai.",
+                    "content": pyq_html, "content_html": pyq_html,
+                    "linked_subject_id": subject_id, "linked_subject_name": subject_name,
+                    "linked_chapter_id": chapter_id, "linked_chapter_title": chapter_title,
+                    "status": "published", "category": "pyq",
+                    "pipeline_generated": True, "created_at": now_iso, "updated_at": now_iso,
+                }},
+                upsert=True,
+            )
+            chapter_result["pyq_page"] = True
+        except Exception as e:
+            chapter_result["errors"].append(f"pyq-page: {str(e)[:80]}")
+
+        done_counter["done"] += 1
+        if job_id and job_id in _pipeline_jobs:
+            pct = int(5 + (done_counter["done"] / max(total_chapters, 1)) * 88)
+            _pipeline_jobs[job_id].update({"progress": pct, "message": f"Chapter {done_counter['done']}/{total_chapters} complete"})
+
+        return {"skipped": False, "result": chapter_result, "blog_urls": geo_blog_urls, "mcqs": len(mcqs or []), "flashcards": len(flashcards or []), "pyq": chapter_result["pyq_page"]}
+
+
+async def _safe(coro):
+    """Run a coroutine; return (result, None) on success or (None, exc) on error."""
+    try:
+        return await coro, None
+    except Exception as e:
+        return None, e
+
+
 async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
     """Core pipeline logic — extracted so it can run as a background task."""
     subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
@@ -15552,216 +15752,61 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
         return {"subject_id": subject_id, "status": "no_chapters", "message": "No chapters found for this subject"}
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    subject_slug = subject.get("slug") or _pipeline_slugify(subject_name)
 
     # Load PYQs for this subject (for PYQ HTML pages)
     pyq_docs = await db.pyq_uploads.find(
         {"subject_id": subject_id}, {"_id": 0}
     ).sort("exam_year", -1).to_list(20)
 
-    summary = {
-        "subject_id": subject_id,
-        "subject_name": subject_name,
-        "chapters_processed": 0,
-        "chapters_skipped": 0,
-        "total_mcqs": 0,
-        "total_flashcards": 0,
-        "total_blogs": 0,
-        "total_pyq_pages": 0,
-        "blog_urls": [],
-        "chapter_results": [],
-        "sitemap_pinged": False,
-        "ping_status": "",
-    }
-
-    cms_docs_to_insert = []
+    # ── Parallel chapter processing (semaphore=4 to respect LLM rate limits) ─
+    semaphore     = asyncio.Semaphore(4)
+    done_counter  = {"done": 0}
     total_chapters = len(chapters)
 
-    for ch_idx, chapter in enumerate(chapters):
-        # Update job progress
-        if job_id and job_id in _pipeline_jobs:
-            pct = int(5 + (ch_idx / max(total_chapters, 1)) * 90)
-            _pipeline_jobs[job_id].update({
-                "progress": pct,
-                "message": f"Processing chapter {ch_idx + 1}/{total_chapters}…",
-            })
+    if job_id and job_id in _pipeline_jobs:
+        _pipeline_jobs[job_id].update({"progress": 5, "message": f"Starting parallel processing for {total_chapters} chapters…"})
 
-        chapter_id    = chapter.get("id", "")
-        chapter_title = (chapter.get("title") or "").strip()
-        if not chapter_title:
+    tasks = [
+        _pipeline_process_one_chapter(
+            ch,
+            subject_id=subject_id, subject_name=subject_name,
+            class_name=class_name, paper_type=paper_type,
+            board_slug=board_slug, class_slug=class_slug,
+            now_iso=now_iso, pyq_docs=pyq_docs,
+            semaphore=semaphore, done_counter=done_counter,
+            total_chapters=total_chapters, job_id=job_id,
+        )
+        for ch in chapters
+    ]
+    chapter_outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # ── Aggregate results ─────────────────────────────────────────────────────
+    summary = {
+        "subject_id": subject_id, "subject_name": subject_name,
+        "chapters_processed": 0, "chapters_skipped": 0,
+        "total_mcqs": 0, "total_flashcards": 0,
+        "total_blogs": 0, "total_pyq_pages": 0,
+        "blog_urls": [], "chapter_results": [],
+        "sitemap_pinged": False, "ping_status": "",
+    }
+
+    for outcome in chapter_outcomes:
+        if isinstance(outcome, Exception):
             summary["chapters_skipped"] += 1
             continue
-
-        chapter_slug = chapter.get("slug") or _pipeline_slugify(chapter_title)
-        chapter_result = {
-            "chapter_id": chapter_id,
-            "chapter_title": chapter_title,
-            "notes_generated": False,
-            "mcqs_count": 0,
-            "flashcards_count": 0,
-            "blogs_count": 0,
-            "pyq_page": False,
-            "errors": [],
-        }
-
-        # ── Step 1: Generate chapter notes ──────────────────────────────────
-        existing_content = (chapter.get("content") or "").strip()
-        notes_content = existing_content
-
-        try:
-            generated = await _pipeline_generate_chapter_notes(chapter, subject_name, class_name, paper_type)
-            if generated:
-                notes_content = generated
-                await db.chapters.update_one(
-                    {"id": chapter_id},
-                    {"$set": {
-                        "content": generated,
-                        "content_type": "notes",
-                        "notes_generated": True,
-                        "notes_generated_at": now_iso,
-                    }}
-                )
-                chapter_result["notes_generated"] = True
-                try:
-                    await auto_chunk_content(chapter_id=chapter_id, content=generated, subject_id=subject_id)
-                except Exception:
-                    pass
-        except Exception as e:
-            chapter_result["errors"].append(f"notes: {str(e)[:80]}")
-
-        if not notes_content:
+        if outcome.get("skipped"):
             summary["chapters_skipped"] += 1
-            summary["chapter_results"].append(chapter_result)
+            summary["chapter_results"].append(outcome["result"])
             continue
-
-        # ── Step 2: Generate MCQs ────────────────────────────────────────────
-        try:
-            mcqs = await _pipeline_generate_mcqs(notes_content, subject_name, chapter_title, class_name, count=25)
-            if mcqs:
-                mcq_doc = {
-                    "id": str(uuid.uuid4()),
-                    "subject_id": subject_id,
-                    "subject_name": subject_name,
-                    "chapter_id": chapter_id,
-                    "chapter_title": chapter_title,
-                    "mcqs": mcqs,
-                    "total": len(mcqs),
-                    "pipeline_generated": True,
-                    "created_at": now_iso,
-                }
-                await db.mcq_collections.update_one(
-                    {"chapter_id": chapter_id, "pipeline_generated": True},
-                    {"$set": mcq_doc},
-                    upsert=True,
-                )
-                chapter_result["mcqs_count"] = len(mcqs)
-                summary["total_mcqs"] += len(mcqs)
-        except Exception as e:
-            chapter_result["errors"].append(f"mcqs: {str(e)[:80]}")
-
-        # ── Step 3: Generate Flashcards ──────────────────────────────────────
-        try:
-            flashcards = await _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30)
-            if flashcards:
-                fc_doc = {
-                    "id": str(uuid.uuid4()),
-                    "subject_id": subject_id,
-                    "subject_name": subject_name,
-                    "chapter_id": chapter_id,
-                    "chapter_title": chapter_title,
-                    "flashcards": flashcards,
-                    "total": len(flashcards),
-                    "pipeline_generated": True,
-                    "created_at": now_iso,
-                }
-                await db.flashcard_collections.update_one(
-                    {"chapter_id": chapter_id, "pipeline_generated": True},
-                    {"$set": fc_doc},
-                    upsert=True,
-                )
-                chapter_result["flashcards_count"] = len(flashcards)
-                summary["total_flashcards"] += len(flashcards)
-        except Exception as e:
-            chapter_result["errors"].append(f"flashcards: {str(e)[:80]}")
-
-        # ── Step 4: Generate 5 Geo-SEO Blog Variants ─────────────────────────
-        for city in GEO_CITIES:
-            try:
-                blog_data = await _pipeline_generate_geo_seo_blog(
-                    subject_name=subject_name,
-                    chapter_title=chapter_title,
-                    content=notes_content,
-                    geo_location=city,
-                    board_slug=board_slug,
-                    class_slug=class_slug,
-                    chapter_slug=chapter_slug,
-                )
-                blog_slug = blog_data["seo_slug"]
-                blog_doc = {
-                    "id": str(uuid.uuid4()),
-                    "title": blog_data["title"],
-                    "seo_slug": blog_slug,
-                    "meta_description": blog_data["meta_description"],
-                    "content": blog_data["article_body"],
-                    "primary_keyword": blog_data["primary_keyword"],
-                    "keywords": blog_data.get("keywords", []),
-                    "geo_location": city,
-                    "linked_subject_id": subject_id,
-                    "linked_subject_name": subject_name,
-                    "linked_chapter_id": chapter_id,
-                    "linked_chapter_title": chapter_title,
-                    "status": "published",
-                    "category": "geo-blog",
-                    "schema_type": "Article",
-                    "pipeline_generated": True,
-                    "created_at": now_iso,
-                    "updated_at": now_iso,
-                }
-                await db.cms_documents.update_one(
-                    {"seo_slug": blog_slug},
-                    {"$set": blog_doc},
-                    upsert=True,
-                )
-                blog_url = f"/learn/{blog_slug}"
-                summary["blog_urls"].append(blog_url)
-                chapter_result["blogs_count"] += 1
-                summary["total_blogs"] += 1
-            except Exception as e:
-                chapter_result["errors"].append(f"geo-blog-{city}: {str(e)[:80]}")
-
-        # ── Step 5: Generate PYQ HTML Page ───────────────────────────────────
-        try:
-            pyq_html = await _pipeline_generate_pyq_html(chapter, subject_name, pyq_docs)
-            pyq_slug = f"pyq-{board_slug}-{class_slug}-{chapter_slug}"
-            pyq_cms_doc = {
-                "id": str(uuid.uuid4()),
-                "title": f"PYQ: {chapter_title} — {subject_name}",
-                "seo_slug": pyq_slug,
-                "meta_description": f"Previous year questions for {chapter_title} ({subject_name}) — AHSEC/SEBA board exams. Download PYQ papers on Syrabit.ai.",
-                "content": pyq_html,
-                "content_html": pyq_html,
-                "linked_subject_id": subject_id,
-                "linked_subject_name": subject_name,
-                "linked_chapter_id": chapter_id,
-                "linked_chapter_title": chapter_title,
-                "status": "published",
-                "category": "pyq",
-                "pipeline_generated": True,
-                "created_at": now_iso,
-                "updated_at": now_iso,
-            }
-            await db.cms_documents.update_one(
-                {"seo_slug": pyq_slug},
-                {"$set": pyq_cms_doc},
-                upsert=True,
-            )
-            chapter_result["pyq_page"] = True
-            summary["total_pyq_pages"] += 1
-        except Exception as e:
-            chapter_result["errors"].append(f"pyq-page: {str(e)[:80]}")
-
+        r = outcome["result"]
         summary["chapters_processed"] += 1
-        summary["chapter_results"].append(chapter_result)
+        summary["total_mcqs"]       += outcome.get("mcqs", 0)
+        summary["total_flashcards"] += outcome.get("flashcards", 0)
+        summary["total_blogs"]      += r.get("blogs_count", 0)
+        if outcome.get("pyq"):
+            summary["total_pyq_pages"] += 1
+        summary["blog_urls"].extend(outcome.get("blog_urls", []))
+        summary["chapter_results"].append(r)
 
     _invalidate_content_cache("chapters")
 
