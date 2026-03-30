@@ -755,6 +755,25 @@ async def lifespan(app):
         await db.push_subscriptions.create_index("user_id")
         await db.push_subscriptions.create_index("endpoint", unique=True, sparse=True)
 
+        # cms_documents — heavily queried by id, seo_slug, status, subject_id
+        await db.cms_documents.create_index("id", unique=True, sparse=True)
+        await db.cms_documents.create_index("seo_slug", unique=True, sparse=True)
+        await db.cms_documents.create_index("status")
+        await db.cms_documents.create_index("subject_id")
+        await db.cms_documents.create_index([("board_id", 1), ("class_id", 1), ("subject_id", 1), ("status", 1)])
+        await db.cms_documents.create_index([("updated_at", -1)])
+
+        # topic_pyq_collections — looked up by chapter_id + subject_id
+        await db.topic_pyq_collections.create_index("chapter_id")
+        await db.topic_pyq_collections.create_index("subject_id")
+
+        # ai_pyq_collections — same pattern as above (agentic pipeline)
+        await db.ai_pyq_collections.create_index("chapter_id")
+        await db.ai_pyq_collections.create_index("subject_id")
+
+        # exam_schedule — queried by exam_date + active
+        await db.exam_schedule.create_index([("exam_date", 1), ("active", 1)])
+
         try:
             await db.topics.create_index("chapter_id")
             await db.topics.create_index("status")
@@ -12471,8 +12490,19 @@ async def health():
         except Exception:
             pass
 
+    # Razorpay — check if keys are configured (no live HTTP call; avoids cost)
+    rp_cfg = await db.api_config.find_one({}, {"payment": 1}) or {}
+    rp_payment = rp_cfg.get("payment", {})
+    rp_key_id = (rp_payment.get("razorpay_key_id") or os.environ.get("RAZORPAY_KEY_ID", "")).strip()
+    rp_key_secret = (rp_payment.get("razorpay_key_secret") or os.environ.get("RAZORPAY_KEY_SECRET", "")).strip()
+    rp_status = "configured" if (rp_key_id and rp_key_secret) else "not_configured"
+
+    # Overall status: degraded if any critical dependency is down
+    critical_ok = kv_ok and pg_ok
+    overall = "ok" if critical_ok else "degraded"
+
     return {
-        "status": "ok",
+        "status": overall,
         "version": "2.0.0",
         "service": "Syrabit.ai API",
         "workers": int(os.environ.get("GUNICORN_WORKERS", 3)),
@@ -12489,6 +12519,7 @@ async def health():
                 "fallback": len(_LLM_PROVIDERS) > 1,
             },
             "supabase": {"status": "ok" if supa else "not_configured"},
+            "razorpay": {"status": rp_status},
         }
     }
 

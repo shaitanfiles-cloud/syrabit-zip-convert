@@ -1,0 +1,62 @@
+39 - Enterprise Build Quality & Performance Audit
+What & Why
+Syrabit.ai has grown rapidly with 32+ shipped tasks across backend AI orchestration, programmatic SEO, content pipelines, payments, analytics, and admin tooling. A full enterprise-grade audit is now needed to surface and fix every quality, performance, and reliability gap before scale — covering the FastAPI backend, React frontend, RAG pipeline, database layers, payment flows, security posture, monitoring, and code architecture.
+
+Done looks like
+Core Web Vitals pass (LCP < 2.5s, CLS < 0.1, INP < 200ms) on both mobile and desktop
+API response times are measured and p95 < 1s for all non-AI endpoints; AI streaming TTFB < 800ms
+server.py (18,000+ lines) is modularized into logical router/service files with no dead code
+All API routes have proper auth guards, input validation, and structured error responses
+Redis caching hit rate is measurable and working correctly for AI responses
+Supabase and MongoDB queries all use indexes; no N+1 patterns exist
+Razorpay webhook signature verification is bulletproof and idempotent
+GA4 event tracking fires on all key user actions with correct parameters
+All secrets are read from env vars; no credentials are hardcoded anywhere
+CORS is locked to production origins only
+Frontend bundle is analyzed; unnecessary large dependencies are removed or code-split
+All console.log debug statements are removed from production builds
+TypeScript is set to strict mode with zero any escapes in critical paths
+Python type hints cover all public functions in the backend
+Health check endpoints return structured JSON for all critical services (DB, Redis, AI, Razorpay)
+404, 500, and unhandled promise rejections show user-friendly error UI, not blank screens
+Out of scope
+New features or functionality changes
+Redesigning UI components
+Adding new content or syllabus data
+Infra changes (moving providers, migrating databases)
+Tasks
+Backend modularization & dead code removal — Break server.py (18,000+ lines) into focused router and service modules (e.g., routes/chat.py, routes/payments.py, services/rag.py, services/seo.py). Remove all dead/commented code, duplicate route definitions, and unused imports.
+
+API security hardening — Audit every FastAPI route for missing auth guards, overly permissive CORS origins, and missing input validation (Pydantic models). Scan for hardcoded secrets, API keys, or credentials. Ensure all error responses return structured JSON, never raw Python exceptions.
+
+Database query optimization — Review all MongoDB queries for missing indexes (especially on subject, board, class, topic fields). Review all Supabase/PostgreSQL queries for N+1 patterns and missing LIMIT clauses. Add compound indexes where needed.
+
+Redis caching correctness — Verify the Upstash Redis cache is correctly keying, storing, expiring, and retrieving AI responses. Confirm cache hit/miss rates are loggable. Fix any cases where stale cache serves incorrect responses.
+
+AI/RAG pipeline reliability — Audit the LLM fallback chain (Groq → Gemini → OpenAI → Sarvam) for correct error handling and retry logic. Verify the subject router's 4-tier classification handles edge cases gracefully. Confirm cosine similarity thresholds are tuned appropriately. Measure AI streaming TTFB and optimize prompt token counts.
+
+Payment flow integrity — End-to-end audit of the Razorpay integration: verify webhook signature validation is correct and idempotent, confirm payment status updates are atomic (no double-credit risk), and validate that failed/cancelled payments trigger the correct user state rollback.
+
+Frontend performance & bundle audit — Run Vite bundle analysis; identify and eliminate or lazy-load any chunk over 250KB. Enable code splitting for admin routes (they should never load on the public site). Remove all console.log statements. Verify React Query cache TTLs are set correctly to avoid stale UI.
+
+Core Web Vitals & mobile performance — Audit LCP (largest image/text element), CLS (layout shift from async content), and INP (interaction responsiveness). Fix the top 3 offenders in each metric. Verify all images use correct width/height attributes and are served in WebP format where possible.
+
+TypeScript & Python type safety — Enable TypeScript strict mode on the frontend; fix all resulting errors. Ensure all Python public functions in the backend have type hints; replace dict with typed TypedDict or Pydantic models for AI response shapes.
+
+Monitoring, logging & error boundaries — Add a React error boundary at the app root and at the chat interface so crashes show a recovery UI, not a blank screen. Add structured logging to the backend (replacing bare print() calls) with log levels. Ensure health check endpoint /api/health returns live status of all dependencies (MongoDB, Supabase, Redis, Razorpay reachability).
+
+SEO & crawlability quality check — Verify all programmatic SEO pages (Notes, MCQs, PYQs) have unique, accurate <title> and <meta description> tags. Confirm the sitemap includes all generated pages. Check that the robots.txt does not block any indexable content. Validate structured data (JSON-LD schema) on content pages.
+
+Final cross-cutting fixes — Address all remaining issues surfaced during the above audits that do not belong to a single category: stale dependencies with security advisories, missing loading and error states in UI components, any broken internal links, and inconsistent API response envelope formats.
+
+Relevant files
+artifacts/syrabit-backend/server.py
+artifacts/syrabit-backend/seo_engine.py
+artifacts/syrabit-backend/qa_engine.py
+artifacts/syrabit-backend/subject_router.py
+artifacts/syrabit-backend/syllabus_embedder.py
+artifacts/syrabit/src
+artifacts/syrabit/vite.config.ts
+artifacts/syrabit/tsconfig.json
+artifacts/api-server
+lib/db
