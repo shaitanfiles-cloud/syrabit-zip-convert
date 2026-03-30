@@ -356,7 +356,10 @@ export default function AdminContentStudio({ adminToken, onNavigate, hubContext,
           return autoSeoFnRef.current?.(parsed, inferredTitle || capturedSubject);
         }
       })
-      .catch(() => toast.error('Auto-parse failed — click "Parse with AI" manually'))
+      .catch(() => {
+        autoParseRef.current = false;
+        toast.error('Auto-parse failed — click "Parse with AI" manually');
+      })
       .finally(() => setParsing(false));
   }, [fromEditor, rawText]);
 

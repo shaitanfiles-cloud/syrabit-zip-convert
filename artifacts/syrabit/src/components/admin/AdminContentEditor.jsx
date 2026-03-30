@@ -364,6 +364,8 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
         workingTitle:   richTitle,
         primaryKeyword: autoKeyword,
         draftContent:   mergedMd,
+        docId:          res.data?.doc_id || null,
+        seoSlug:        autoSeoSlug,
         autoFlow:       true,
         timestamp:      Date.now(),
       };

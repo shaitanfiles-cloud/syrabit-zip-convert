@@ -237,14 +237,14 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
         workingTitle:   pf.workingTitle   || '',
         primaryKeyword: pf.primaryKeyword || '',
         draftContent:   pf.draftContent   || '',
-        // Reset doc/steps so wizard starts fresh for this subject
-        docId:    null,
+        docId:          pf.docId          || null,
+        seoSlug:        pf.seoSlug        || '',
         step:     1,
         unlocked: [1],
         enrichedBlocks: null,
         enrichedContent: '',
         enrichmentAccepted: false,
-        seoSlug: '', seoTitle: '', metaDescription: '',
+        seoTitle: '', metaDescription: '',
         seoTags: '', geoTags: '',
         publishedStatus: 'draft',
       }});
@@ -987,13 +987,11 @@ function Step3AiEnrichment({ state, set, goNext, goPrev, adminToken, autoRun }) 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-accept enrichment once blocks are ready in autoRun mode
   const autoAcceptFired = useRef(false);
   useEffect(() => {
     if (!autoRun || autoAcceptFired.current || !localBlocks?.length || enriching || saving) return;
     autoAcceptFired.current = true;
-    const t = setTimeout(() => handleAccept(), 800);
-    return () => clearTimeout(t);
+    handleAccept();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRun, localBlocks, enriching, saving]);
 
@@ -1312,8 +1310,11 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
   const autoRunFired4 = useRef(false);
 
   const metaLen = (state.metaDescription || '').length;
-  const metaValid = metaLen >= 148 && metaLen <= 158;
+  const metaValid = metaLen >= 120 && metaLen <= 160;
   const metaColor = metaLen === 0 ? 'text-white/30' : metaValid ? 'text-emerald-400' : 'text-red-400';
+  const metaErrorMsg = metaLen > 0 && !metaValid
+    ? (metaLen < 120 ? `Too short (${metaLen}/120 min)` : `Too long (${metaLen}/160 max)`)
+    : '';
 
   const requiredFilled = state.seoSlug && state.seoTitle && state.metaDescription && state.primaryKeyword && metaValid && state.seoTags && state.geoTags;
 
@@ -1388,8 +1389,7 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
   useEffect(() => {
     if (!autoRun || autoContFired4.current || !requiredFilled || !state.docId || generating || saving) return;
     autoContFired4.current = true;
-    const t = setTimeout(() => handleContinue(), 800);
-    return () => clearTimeout(t);
+    handleContinue();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRun, requiredFilled, state.docId, generating, saving]);
 
@@ -1439,7 +1439,7 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
         {/* Meta Description */}
         <div>
           <label className={lbl}>
-            Meta Description * <span className={`font-semibold ml-1 ${metaColor}`}>{metaLen} chars {metaLen > 0 && `(target: 148–158)`}</span>
+            Meta Description * <span className={`font-semibold ml-1 ${metaColor}`}>{metaLen} chars {metaLen > 0 && `(target: 120–160)`}</span>
           </label>
           <textarea
             className={`w-full px-3 py-2 rounded-lg text-sm text-white bg-white/5 border outline-none focus:border-violet-500 transition resize-none ${!metaValid && metaLen > 0 ? 'border-red-500/50' : 'border-white/10'}`}
@@ -1451,10 +1451,15 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
           <div className="h-1 rounded-full bg-white/5 mt-1.5 overflow-hidden">
             <div className="h-full rounded-full transition-all"
               style={{
-                width: `${Math.min(100, (metaLen / 158) * 100)}%`,
-                background: metaValid ? '#10b981' : metaLen > 158 ? '#ef4444' : '#f59e0b',
+                width: `${Math.min(100, (metaLen / 160) * 100)}%`,
+                background: metaValid ? '#10b981' : metaLen > 160 ? '#ef4444' : '#f59e0b',
               }} />
           </div>
+          {metaErrorMsg && (
+            <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+              <AlertCircle size={11} /> {metaErrorMsg}
+            </p>
+          )}
         </div>
 
         {/* Primary Keyword */}
@@ -1564,12 +1569,12 @@ function Step5ReviewPublish({ state, set, goPrev, adminToken, autoRun }) {
 
   const wc = wordCount(state.enrichedContent || state.draftContent);
   const metaLen = (state.metaDescription || '').length;
-  const metaValid = metaLen >= 148 && metaLen <= 158;
+  const metaValid = metaLen >= 120 && metaLen <= 160;
 
   const checks = [
     { label: 'Content ≥ 150 words', ok: wc >= 150, value: `${wc} words` },
     { label: 'SEO title filled', ok: !!state.seoTitle, value: state.seoTitle ? `${state.seoTitle.length} chars` : 'Missing' },
-    { label: 'Meta description 148–158 chars', ok: metaValid, value: metaLen ? `${metaLen} chars` : 'Missing' },
+    { label: 'Meta description 120–160 chars', ok: metaValid, value: metaLen ? `${metaLen} chars` : 'Missing' },
     { label: 'Primary keyword set', ok: !!state.primaryKeyword, value: state.primaryKeyword || 'Missing' },
     { label: 'SEO slug set', ok: !!state.seoSlug, value: state.seoSlug || 'Missing' },
     { label: 'SEO tags added', ok: !!state.seoTags, value: state.seoTags || 'Missing' },
@@ -1583,8 +1588,7 @@ function Step5ReviewPublish({ state, set, goPrev, adminToken, autoRun }) {
     if (!autoRun || autoRunFired5.current || publishing) return;
     if (!allGreen || !state.docId) return;
     autoRunFired5.current = true;
-    const t = setTimeout(() => handlePublishToggle(), 800);
-    return () => clearTimeout(t);
+    handlePublishToggle();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRun, allGreen, state.docId, publishing]);
 

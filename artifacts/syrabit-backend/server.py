@@ -12935,6 +12935,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 
     Handles:
     - /                                  → homepage
+    - /library                           → homepage (same listing)
     - /pyq/{slug}                        → PYQ HTML replica (html only)
     - /{board}/{class}/{subject}         → subject landing page
     - /{board}/{class}/{subject}/{topic}      → topic page (notes)
@@ -12957,7 +12958,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
         parts = [p for p in path.split("/") if p]
         n = len(parts)
 
-        if n == 0:
+        if n == 0 or (n == 1 and parts[0] == "library"):
             cache_key = "_homepage_"
         elif n == 2 and parts[0] == "pyq":
             cache_key = f"_pyq_/{parts[1]}"

@@ -77,6 +77,30 @@ def _slug(text: str) -> str:
     return re.sub(r'-+', '-', s).strip('-')
 
 
+def _robust_parse_json_array(raw: str) -> list[str]:
+    """Parse a JSON string array from LLM output, handling markdown fences,
+    conversational prefixes, and other formatting variations."""
+    text = (raw or "").strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.MULTILINE)
+    text = re.sub(r"```\s*$", "", text, flags=re.MULTILINE)
+    text = text.strip()
+
+    for attempt_text in [text, re.sub(r"^[^[]*", "", text, count=1)]:
+        match = re.search(r"\[[\s\S]*\]", attempt_text)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list):
+                    return [str(t).strip() for t in parsed if str(t).strip()]
+            except json.JSONDecodeError:
+                continue
+
+    lines = [l.strip().lstrip("-•*0123456789.) ").strip('"').strip("'").strip()
+             for l in text.split("\n") if l.strip() and not l.strip().startswith("{")]
+    results = [l for l in lines if 2 <= len(l.split()) <= 12 and len(l) < 120]
+    return results
+
+
 PAGE_TYPES = ["notes", "definition", "important-questions", "mcqs", "examples"]
 
 def _topic_hash(topic_title: str, page_type: str, n_variants: int) -> int:
@@ -723,13 +747,7 @@ async def extract_topics_from_chapters(
                 raw = await asyncio.wait_for(
                     _call_llm(messages, max_tokens=512), timeout=30
                 )
-                match = re.search(r"\[.*?\]", raw, re.DOTALL)
-                if match:
-                    parsed = json.loads(match.group())
-                    if isinstance(parsed, list):
-                        topic_titles = [
-                            str(t).strip() for t in parsed if str(t).strip()
-                        ]
+                topic_titles = _robust_parse_json_array(raw)
             except Exception as exc:
                 logger.warning(
                     f"AI topic extraction failed for chapter '{title}': {exc}"
@@ -2386,11 +2404,7 @@ async def _run_subject_bg(job_id: str, subject_id: str, force: bool, page_types:
                         {"role": "user", "content": f"Chapter: {title}\n\nContent:\n{content[:4000]}"},
                     ]
                     raw = await asyncio.wait_for(_call_llm(msgs, max_tokens=512), timeout=30)
-                    match = re.search(r"\[.*?\]", raw, re.DOTALL)
-                    if match:
-                        parsed = json.loads(match.group())
-                        if isinstance(parsed, list):
-                            topic_titles = [str(t).strip() for t in parsed if str(t).strip()]
+                    topic_titles = _robust_parse_json_array(raw)
                 except Exception as exc:
                     logger.warning(f"[run-subject] topic extract failed for {title!r}: {exc}")
                     errors += 1

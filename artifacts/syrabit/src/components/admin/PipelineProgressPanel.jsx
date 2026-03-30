@@ -62,6 +62,12 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
           stopPolling();
           setError('Job not found or expired');
           setStatus('error');
+        } else {
+          const detail = e?.response?.data?.detail || e?.message || 'Connection lost while polling';
+          stopPolling();
+          setError(detail);
+          setStatus('error');
+          toast.error(`Pipeline polling error: ${detail}`);
         }
       }
     }, 3000);
