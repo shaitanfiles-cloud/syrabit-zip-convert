@@ -10430,11 +10430,14 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         logger.error(f"Razorpay order fetch error: {e}")
         raise HTTPException(502, "Could not verify order details with Razorpay.")
 
-    # Activate plan — add credits + upgrade plan + doc access
-    user_id  = user["id"]
-    credits  = PLAN_CREDITS[plan]
-    doc_acc  = PLAN_DOC_ACCESS[plan]
-    now_iso  = datetime.now(timezone.utc).isoformat()
+    # Activate plan — compensating transaction: roll back on partial failure
+    user_id   = user["id"]
+    credits   = PLAN_CREDITS[plan]
+    doc_acc   = PLAN_DOC_ACCESS[plan]
+    now_iso   = datetime.now(timezone.utc).isoformat()
+    new_limit = (user.get("credits_limit") or 30) + credits
+    prev_plan = user.get("plan", "free")
+    prev_doc  = user.get("document_access", "none")
 
     payment_record = {
         "user_id":            str(user_id),
@@ -10446,11 +10449,15 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         "verified_at":        now_iso,
     }
 
+    _payment_inserted = False
+    _pg_updated       = False
+    _mongo_updated    = False
     try:
-        # Record payment
+        # 1. Record payment
         await db.payments.insert_one(payment_record)
+        _payment_inserted = True
 
-        # Upgrade user in PostgreSQL
+        # 2. Upgrade in PostgreSQL
         if pg_pool:
             async with pg_pool.acquire() as conn:
                 await conn.execute(
@@ -10460,17 +10467,22 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
                         WHERE id=$5""",
                     plan, credits, doc_acc, now_iso, user_id,
                 )
+        _pg_updated = True
+
+        # 3. Upgrade in MongoDB
         await db.users.update_one(
             {"id": str(user_id)},
             {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
              "$inc": {"credits_limit": credits}},
         )
-        # Mirror plan + new credits_limit to Supabase so all fallback paths agree
-        new_limit = (user.get("credits_limit") or 30) + credits
+        _mongo_updated = True
+
+        # 4. Mirror to Supabase (best-effort — read fallback only)
         _supa_mirror(lambda: supa.table("users").update({
             "plan": plan, "document_access": doc_acc,
             "credits_limit": new_limit, "updated_at": now_iso,
         }).eq("id", str(user_id)).execute())
+
         _redis_invalidate_session(user_id)
         logger.info(f"Plan activated: user={user_id} plan={plan} credits+={credits}")
         return {
@@ -10480,8 +10492,39 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
             "message": f"Welcome to {plan.capitalize()}! {credits} credits added.",
         }
     except Exception as e:
-        logger.error(f"Plan activation error for user {user_id}: {e}")
-        raise HTTPException(500, "Payment verified but plan activation failed. Contact admin@syrabit.ai.")
+        logger.error(
+            f"Plan activation error for user {user_id} "
+            f"(pg={_pg_updated} mongo={_mongo_updated} payment={_payment_inserted}): {e}"
+        )
+        # Compensating rollback — undo only what already succeeded
+        try:
+            if _mongo_updated:
+                await db.users.update_one(
+                    {"id": str(user_id)},
+                    {"$set": {"plan": prev_plan, "document_access": prev_doc, "updated_at": now_iso},
+                     "$inc": {"credits_limit": -credits}},
+                )
+            if _pg_updated and pg_pool:
+                async with pg_pool.acquire() as conn:
+                    await conn.execute(
+                        """UPDATE users
+                              SET plan=$1, credits_limit=credits_limit-$2,
+                                  document_access=$3, updated_at=$4
+                            WHERE id=$5""",
+                        prev_plan, credits, prev_doc, now_iso, user_id,
+                    )
+            if _payment_inserted:
+                await db.payments.delete_one({"razorpay_payment_id": body.razorpay_payment_id})
+        except Exception as rb_err:
+            logger.error(
+                f"ROLLBACK FAILED for user {user_id}: {rb_err} — "
+                "manual reconciliation required"
+            )
+        raise HTTPException(
+            500,
+            "Payment verified but plan activation failed — changes rolled back. "
+            "Contact support@syrabit.ai if you were charged.",
+        )
 
 # ─────────────────────────────────────────────
 # STRIPE PAYMENT (OPTIONAL — configurable via api-config)
@@ -10660,27 +10703,72 @@ async def razorpay_webhook(request: StarletteRequest2):
             elif plan and plan in PLAN_CREDITS:
                 credits = PLAN_CREDITS[plan]
                 doc_acc = PLAN_DOC_ACCESS[plan]
-                await db.payments.insert_one({
-                    "user_id": user_id,
-                    "plan": plan,
-                    "provider": "razorpay",
-                    "razorpay_payment_id": rp_payment_id,
-                    "amount_paise": entity.get("amount", 0),
-                    "verified_at": now_iso,
-                })
-                await db.users.update_one(
-                    {"id": user_id},
-                    {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
-                     "$inc": {"credits_limit": credits}},
-                )
-                if pg_pool:
-                    async with pg_pool.acquire() as conn:
-                        await conn.execute(
-                            "UPDATE users SET plan=$1, credits_limit=credits_limit+$2, document_access=$3, updated_at=$4 WHERE id=$5",
-                            plan, credits, doc_acc, now_iso, user_id,
+                # Guard: never downgrade a user via webhook (e.g. stale event for lower tier)
+                wh_user = await db.users.find_one({"id": user_id}, {"plan": 1})
+                wh_current_plan = (wh_user or {}).get("plan", "free")
+                if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(wh_current_plan, 0):
+                    logger.warning(
+                        f"Razorpay webhook: skipping downgrade {wh_current_plan}→{plan} "
+                        f"for user={user_id} payment={rp_payment_id} — payment logged only"
+                    )
+                    await db.payments.insert_one({
+                        "user_id": user_id, "plan": plan, "provider": "razorpay",
+                        "razorpay_payment_id": rp_payment_id,
+                        "amount_paise": entity.get("amount", 0),
+                        "verified_at": now_iso, "activation_skipped": True,
+                        "skip_reason": f"user already on higher plan ({wh_current_plan})",
+                    })
+                else:
+                    _wh_payment_inserted = False
+                    _wh_mongo_updated    = False
+                    _wh_pg_updated       = False
+                    try:
+                        await db.payments.insert_one({
+                            "user_id": user_id, "plan": plan, "provider": "razorpay",
+                            "razorpay_payment_id": rp_payment_id,
+                            "amount_paise": entity.get("amount", 0),
+                            "verified_at": now_iso,
+                        })
+                        _wh_payment_inserted = True
+                        await db.users.update_one(
+                            {"id": user_id},
+                            {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
+                             "$inc": {"credits_limit": credits}},
                         )
-                _redis_invalidate_session(user_id)
-                logger.info(f"Razorpay webhook: user={user_id} plan={plan} credits+={credits}")
+                        _wh_mongo_updated = True
+                        if pg_pool:
+                            async with pg_pool.acquire() as conn:
+                                await conn.execute(
+                                    "UPDATE users SET plan=$1, credits_limit=credits_limit+$2, "
+                                    "document_access=$3, updated_at=$4 WHERE id=$5",
+                                    plan, credits, doc_acc, now_iso, user_id,
+                                )
+                        _wh_pg_updated = True
+                        _redis_invalidate_session(user_id)
+                        logger.info(f"Razorpay webhook: user={user_id} plan={plan} credits+={credits}")
+                    except Exception as wh_err:
+                        logger.error(
+                            f"Razorpay webhook activation failed for user={user_id} "
+                            f"(mongo={_wh_mongo_updated} pg={_wh_pg_updated}): {wh_err}"
+                        )
+                        try:
+                            if _wh_mongo_updated:
+                                await db.users.update_one(
+                                    {"id": user_id},
+                                    {"$set": {"plan": wh_current_plan, "updated_at": now_iso},
+                                     "$inc": {"credits_limit": -credits}},
+                                )
+                            if _wh_pg_updated and pg_pool:
+                                async with pg_pool.acquire() as conn:
+                                    await conn.execute(
+                                        "UPDATE users SET plan=$1, credits_limit=credits_limit-$2, "
+                                        "updated_at=$3 WHERE id=$4",
+                                        wh_current_plan, credits, now_iso, user_id,
+                                    )
+                            if _wh_payment_inserted:
+                                await db.payments.delete_one({"razorpay_payment_id": rp_payment_id})
+                        except Exception as rb_err:
+                            logger.error(f"Webhook rollback failed user={user_id}: {rb_err}")
         return {"received": True}
     except HTTPException:
         raise
@@ -10740,6 +10828,9 @@ class CreditTopUpVerifyRequest(BaseModel):
 
 @api.post("/payments/credit-topup/verify")
 async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depends(get_current_user)):
+    # Guard: free-plan users must upgrade before they can top up credits
+    if user.get("plan", "free") == "free":
+        raise HTTPException(403, "Free plan users cannot top up credits. Upgrade to Starter or Pro first.")
     if body.credits not in TOPUP_PRICES_INR:
         raise HTTPException(400, "Invalid top-up amount.")
     key_id, key_secret, _ = await _get_razorpay_keys()
@@ -10776,40 +10867,84 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
     except Exception as e:
         logger.error(f"Razorpay order fetch error (topup): {e}")
         raise HTTPException(502, "Could not verify order details with Razorpay.")
-    now_iso = datetime.now(timezone.utc).isoformat()
-    await db.payments.insert_one({
-        "user_id": str(user_id),
-        "plan": "topup",
-        "provider": "razorpay",
-        "razorpay_order_id": body.razorpay_order_id,
-        "razorpay_payment_id": body.razorpay_payment_id,
-        "amount_paise": TOPUP_PRICES_INR[body.credits],
-        "credits_added": body.credits,
-        "verified_at": now_iso,
-    })
-    if pg_pool:
-        async with pg_pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE users SET credits_limit=credits_limit+$1, updated_at=$2 WHERE id=$3",
-                body.credits, now_iso, user_id,
-            )
-    await db.users.update_one(
-        {"id": str(user_id)},
-        {"$set": {"updated_at": now_iso},
-         "$inc": {"credits_limit": body.credits}},
-    )
-    # Mirror updated credits_limit to Supabase
+    # Apply credits — compensating transaction: roll back on partial failure
+    now_iso   = datetime.now(timezone.utc).isoformat()
     new_limit = (user.get("credits_limit") or 0) + body.credits
-    _supa_mirror(lambda: supa.table("users").update({
-        "credits_limit": new_limit, "updated_at": now_iso,
-    }).eq("id", str(user_id)).execute())
-    _redis_invalidate_session(user_id)
-    logger.info(f"Credit top-up verified: user={user_id} credits+={body.credits}")
-    return {
-        "success": True,
-        "credits_added": body.credits,
-        "message": f"{body.credits} credits added to your account!",
-    }
+
+    _tu_payment_inserted = False
+    _tu_pg_updated       = False
+    _tu_mongo_updated    = False
+    try:
+        # 1. Record payment
+        await db.payments.insert_one({
+            "user_id": str(user_id),
+            "plan": "topup",
+            "provider": "razorpay",
+            "razorpay_order_id": body.razorpay_order_id,
+            "razorpay_payment_id": body.razorpay_payment_id,
+            "amount_paise": TOPUP_PRICES_INR[body.credits],
+            "credits_added": body.credits,
+            "verified_at": now_iso,
+        })
+        _tu_payment_inserted = True
+
+        # 2. Update PostgreSQL
+        if pg_pool:
+            async with pg_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET credits_limit=credits_limit+$1, updated_at=$2 WHERE id=$3",
+                    body.credits, now_iso, user_id,
+                )
+        _tu_pg_updated = True
+
+        # 3. Update MongoDB
+        await db.users.update_one(
+            {"id": str(user_id)},
+            {"$set": {"updated_at": now_iso},
+             "$inc": {"credits_limit": body.credits}},
+        )
+        _tu_mongo_updated = True
+
+        # 4. Mirror to Supabase (best-effort — non-critical)
+        _supa_mirror(lambda: supa.table("users").update({
+            "credits_limit": new_limit, "updated_at": now_iso,
+        }).eq("id", str(user_id)).execute())
+
+        _redis_invalidate_session(user_id)
+        logger.info(f"Credit top-up verified: user={user_id} credits+={body.credits}")
+        return {
+            "success": True,
+            "credits_added": body.credits,
+            "message": f"{body.credits} credits added to your account!",
+        }
+    except Exception as e:
+        logger.error(
+            f"Topup credit error for user {user_id} "
+            f"(pg={_tu_pg_updated} mongo={_tu_mongo_updated} payment={_tu_payment_inserted}): {e}"
+        )
+        # Compensating rollback
+        try:
+            if _tu_mongo_updated:
+                await db.users.update_one(
+                    {"id": str(user_id)},
+                    {"$set": {"updated_at": now_iso},
+                     "$inc": {"credits_limit": -body.credits}},
+                )
+            if _tu_pg_updated and pg_pool:
+                async with pg_pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE users SET credits_limit=credits_limit-$1, updated_at=$2 WHERE id=$3",
+                        body.credits, now_iso, user_id,
+                    )
+            if _tu_payment_inserted:
+                await db.payments.delete_one({"razorpay_payment_id": body.razorpay_payment_id})
+        except Exception as rb_err:
+            logger.error(f"Topup rollback failed for user {user_id}: {rb_err} — manual reconciliation needed")
+        raise HTTPException(
+            500,
+            "Payment verified but credit application failed — changes rolled back. "
+            "Contact support@syrabit.ai if you were charged.",
+        )
 
 
 # ─────────────────────────────────────────────

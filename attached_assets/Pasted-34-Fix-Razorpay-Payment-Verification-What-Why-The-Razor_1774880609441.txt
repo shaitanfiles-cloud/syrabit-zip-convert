@@ -1,0 +1,23 @@
+34 - Fix Razorpay Payment Verification
+What & Why
+The Razorpay verification flow has two critical issues that block revenue: a DB desync race condition that leaves users' credit balances out of sync across PostgreSQL, MongoDB, and Supabase if the process crashes mid-update; and a signature verification path that uses the API secret where the webhook secret should be used, risking failed payment confirmation.
+
+Done looks like
+Successful payments atomically update credit balances across all three data stores — a partial failure does not leave balances inconsistent
+The verify endpoint and webhook endpoint each use the correct secret for Razorpay signature validation (API secret for client-side payments, webhook secret for server-side webhook events)
+A user who pays for a lower plan than their current one receives a clear error and is not charged without an upgrade
+Top-up verification explicitly blocks free-plan users from bypassing the creation-step guard
+Out of scope
+Changing the payment flow UI
+Switching payment providers
+Adding new plan tiers
+Tasks
+Fix signature verification secrets — Ensure verify_payment uses the correct Razorpay API key secret for client-side payment signatures, and razorpay_webhook exclusively uses the webhook secret; audit _get_razorpay_keys so credentials are resolved consistently from a single source of truth.
+Atomic credit update — Wrap the sequential PG → MongoDB → Supabase credit update into a compensating transaction pattern: if any update fails, roll back already-applied changes and return a clear error rather than leaving balances split.
+Guard top-up for free-plan users — Add an explicit free-plan check in credit_topup_verify matching the guard already present in the creation step.
+Prevent paid-but-not-upgraded scenario — If plan activation is blocked (user already on a higher plan), log the payment as received and refund or credit appropriately rather than silently failing.
+Relevant files
+artifacts/syrabit-backend/server.py:10308-10340
+artifacts/syrabit-backend/server.py:10373-10500
+artifacts/syrabit-backend/server.py:10596-10650
+artifacts/syrabit-backend/server.py:10735-10800

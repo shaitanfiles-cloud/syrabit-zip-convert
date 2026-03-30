@@ -1,0 +1,28 @@
+An effective audit for vibe-coded apps must bridge the gap between "it works" and "it is secure." Because AI prioritizes functional results over architectural safety, a manual and automated review process is essential. [1, 2] 
+1. Security & Authentication Audit
+Vibe-coded apps frequently fail at the "front door" by using insecure defaults or client-side logic. [1, 3] 
+
+* Credential Search: Scan the entire codebase for hardcoded API keys, database passwords, or JWT secrets.
+* Authentication Bypass: Attempt to access protected pages (e.g., /admin, /dashboard) while logged out to verify server-side checks are actually in place.
+* Database Isolation: If using platforms like [Supabase](https://supabase.com/), confirm that Row Level Security (RLS) is enabled for every table so users cannot access each other's data.
+* Input Sanitization: Test forms for Cross-Site Scripting (XSS) or SQL injection. AI often misses innerHTML risks and fails to use parameterized queries unless specifically prompted. [1, 4, 5, 6, 7, 8] 
+
+2. Technical Debt & Code Quality
+AI-generated code is prone to "architectural drift," where the app works but the underlying structure is a mess. [9] 
+
+* Dependency Review: Check for "hallucinated" packages (non-existent libraries suggested by the AI) and outdated versions with known vulnerabilities.
+* Black Box Triage: Identify complex functions that you (or the developer) don't fully understand. Use an AI tool to "explain" these sections to find hidden logic bombs or inefficient loops.
+* Error Handling: Verify that error messages are generic for users but detailed in logs. AI often leaks system details or database structures in error pop-ups. [4, 9, 10, 11] 
+
+3. Automated Scanning Tools
+Manual checks aren't enough; use specialized tools to catch what "vibe coding" misses:
+
+* Snyk or Sonar: Run these for Static Application Security Testing (SAST) to find common injection flaws and vulnerable dependencies.
+* PageSpeed Insights: Use Google PageSpeed to identify unoptimized images or excessive JavaScript common in prompt-built apps.
+* SecurityHeaders.com: Use the Security Headers scanner to check for missing basic protections like Content Security Policy (CSP) or HSTS. [1, 4, 12, 13] 
+
+4. Operational Readiness
+
+* Rate Limiting: Check if a user (or bot) can spam your API endpoints. Vibe-coded apps often lack protection against brute-force attacks or massive billing spikes from unthrottled AI calls.
+* Environment Config: Ensure production secrets are moved to environment variables and are not part of the source code repository. [1, 5] 
+
