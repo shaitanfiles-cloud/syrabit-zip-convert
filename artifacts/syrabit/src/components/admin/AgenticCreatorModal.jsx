@@ -109,23 +109,24 @@ export default function AgenticCreatorModal({
         // PYQ step: if no papers were found, treat as a warning not a hard error
         if (step.key === 'pyqs' && data.total_pyqs === 0 && data.message?.startsWith('no_papers_found')) {
           setStepStatus(step.key, STATE.error);
-          push(`⚠ No uploaded PYQ papers found for this subject`, 'warn');
-          push(`  → Upload PDFs via the PYQ Manager tab, then run "HTML Replica" to extract questions`, 'warn');
-          push(`  → Then re-run Agentic Generate to assign real questions per chapter`, 'warn');
-          continue;
-        }
-        if (step.key === 'pyqs' && data.total_pyqs === 0 && data.message?.startsWith('papers_found_but_no_questions')) {
-          setStepStatus(step.key, STATE.error);
-          push(`⚠ PYQ papers found but no questions extracted yet`, 'warn');
-          push(`  → Open PYQ Manager and run "HTML Replica" on each uploaded paper`, 'warn');
+          push(`⚠ Web search found no questions and no uploaded PYQ papers exist`, 'warn');
+          push(`  → This may be a very niche subject — try uploading actual PYQ PDFs`, 'warn');
+          push(`  → PYQ Manager tab → upload PDF → run "HTML Replica" → re-run Agentic Generate`, 'warn');
           continue;
         }
 
         setStepStatus(step.key, STATE.done);
 
         // Extra stats for PYQ step
-        if (step.key === 'pyqs' && data.papers_used) {
-          push(`  ${data.papers_used} paper(s) · ${data.pool_size} total questions in pool`, 'detail');
+        if (step.key === 'pyqs') {
+          const webN   = data.web_found   ?? 0;
+          const localN = data.local_found ?? 0;
+          const poolN  = data.pool_size   ?? 0;
+          const parts  = [];
+          if (webN > 0)   parts.push(`${webN} from web search`);
+          if (localN > 0) parts.push(`${localN} from uploaded papers`);
+          if (parts.length)
+            push(`  Sources: ${parts.join(' · ')} (${poolN} unique in pool)`, 'detail');
         }
 
         const skipped = (data.results || []).filter(r => r.status === 'skipped').length;

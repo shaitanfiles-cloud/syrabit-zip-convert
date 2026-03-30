@@ -8514,19 +8514,110 @@ async def admin_generate_flashcards_bulk(subject_id: str, admin: dict = Depends(
     }
 
 
+async def _gemini_web_search_pyqs(
+    subject_name: str,
+    class_name: str,
+    paper_type: str,
+    gemini_key: str,
+) -> list:
+    """
+    Use Gemini with Google Search grounding to retrieve real PYQs from the web.
+    Returns a flat list of {text, marks, year, sub_parts, source} dicts.
+    """
+    import re as _re
+
+    if not gemini_key:
+        return []
+
+    search_prompt = (
+        f"Search the web and find REAL previous year exam questions for:\n"
+        f"Subject: {subject_name}\n"
+        f"Class / Level: {class_name or 'Degree'} ({paper_type or 'Major'} paper)\n"
+        f"Board / University: AHSEC / SEBA / Gauhati University / Dibrugarh University (Assam)\n\n"
+        f"Collect as many actual board exam questions as you can find from years 2015–2024.\n"
+        f"Return ONLY a JSON array — no markdown fences, no explanation:\n"
+        f'[{{"question":"...", "year":2022, "marks":5}}, ...]\n'
+        f"year must be an integer. marks must be an integer (use 0 if unknown).\n"
+        f"Include ONLY real questions from actual exam papers, not practice questions or study notes."
+    )
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.0-flash:generateContent?key={gemini_key}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": search_prompt}]}],
+        "tools": [{"google_search": {}}],
+        "generationConfig": {"maxOutputTokens": 4000, "temperature": 0.1},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+
+        # Extract text from Gemini response
+        text = ""
+        for candidate in data.get("candidates", []):
+            for part in candidate.get("content", {}).get("parts", []):
+                if "text" in part:
+                    text += part["text"]
+
+        if not text.strip():
+            return []
+
+        # Find a JSON array in the response
+        arr_match = _re.search(r'\[[\s\S]*\]', text)
+        if not arr_match:
+            return []
+
+        raw_list = json.loads(arr_match.group())
+        if not isinstance(raw_list, list):
+            return []
+
+        cleaned = []
+        for q in raw_list:
+            if not isinstance(q, dict):
+                continue
+            text_val = (q.get("question") or q.get("text") or "").strip()
+            if not text_val:
+                continue
+            year_val = q.get("year", 0)
+            if not isinstance(year_val, int) or not (2010 <= year_val <= 2025):
+                year_val = 0
+            marks_val = q.get("marks", 0)
+            try:
+                marks_val = int(marks_val)
+            except (TypeError, ValueError):
+                marks_val = 0
+            cleaned.append({
+                "text":       text_val,
+                "marks":      str(marks_val) if marks_val else "",
+                "year":       year_val,
+                "sub_parts":  [],
+                "source":     "web_search",
+            })
+        return cleaned
+
+    except Exception as exc:
+        logger.warning(f"Gemini web search PYQ failed: {exc}")
+        return []
+
+
 @api.post("/admin/subjects/{subject_id}/generate-pyqs-bulk")
 async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
     """
-    Lesson-wise PYQ assignment from REAL uploaded exam papers.
+    Lesson-wise PYQ assignment — PRIORITY: web search via Gemini grounding.
 
     Workflow:
-      1. Collect all questions from pyq_html_pages where subject_id matches
-         (these were extracted via Gemini OCR from actual board PDFs).
-      2. Fallback: match by subject_name keyword in pyq_html_pages.
-      3. If no papers found → return early with a clear message.
-      4. For each chapter, use AI *only* to classify which real questions
-         from the pool belong to that chapter (no question fabrication).
-      5. Upsert results into ai_pyq_collections.
+      1. [PRIORITY] Gemini Google Search grounding → real questions from the web.
+      2. [SUPPLEMENT] pyq_html_pages → questions from locally uploaded PDFs.
+      3. Merge both pools (web questions first).
+      4. If pool is empty → return early with actionable message.
+      5. Per chapter: AI classifies which questions from the merged pool belong
+         to that chapter (no question fabrication, only real ones).
+      6. Upsert per-chapter results into ai_pyq_collections.
     """
     import re as _re
 
@@ -8547,23 +8638,34 @@ async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_ad
     paper_type   = (subject.get("paper_type") or "").upper()
     now_iso      = datetime.now(timezone.utc).isoformat()
 
-    # ── Step 1: Collect all real questions from uploaded papers ───────────────
+    # ── Step 1 [PRIORITY]: Web search via Gemini Google Search grounding ──────
+    web_questions = await _gemini_web_search_pyqs(
+        subject_name=subject_name,
+        class_name=class_name,
+        paper_type=paper_type,
+        gemini_key=_GEMINI_KEY,
+    )
+    logger.info(f"PYQ web search for '{subject_name}': {len(web_questions)} questions found")
+
+    # ── Step 2 [SUPPLEMENT]: Collect questions from locally uploaded papers ────
+    local_questions = []
+
     # Primary: match by subject_id stored on pyq_html_pages
     html_pages = await db.pyq_html_pages.find(
         {"subject_id": subject_id},
         {"_id": 0, "questions": 1, "raw_text": 1, "exam_year": 1, "paper_type": 1, "subject_name": 1, "slug": 1}
     ).sort("exam_year", -1).to_list(50)
 
-    # Fallback: keyword match on subject_name (case-insensitive)
+    # Fallback: keyword match on subject_name
     if not html_pages and subject_name:
-        kw = _re.escape(subject_name.split()[0])   # use first word as keyword
+        kw = _re.escape(subject_name.split()[0])
         html_pages = await db.pyq_html_pages.find(
             {"subject_name": {"$regex": kw, "$options": "i"}},
             {"_id": 0, "questions": 1, "raw_text": 1, "exam_year": 1,
              "paper_type": 1, "subject_name": 1, "slug": 1}
         ).sort("exam_year", -1).to_list(50)
 
-    # Fallback 2: look in pyq_uploads for slugs, then fetch html_pages by slug
+    # Fallback 2: look in pyq_uploads for slugs → html_pages
     if not html_pages:
         upload_docs = await db.pyq_uploads.find(
             {"subject_id": subject_id}, {"_id": 0, "slug": 1}
@@ -8576,35 +8678,31 @@ async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_ad
                  "paper_type": 1, "subject_name": 1, "slug": 1}
             ).to_list(50)
 
-    if not html_pages:
-        return {
-            "subject_id":   subject_id,
-            "subject_name": subject_name,
-            "total":        len(chapters),
-            "generated":    0,
-            "total_pyqs":   0,
-            "results":      [],
-            "message":      "no_papers_found — upload PYQ PDFs via the PYQ Manager tab and process them with HTML Replica first",
-        }
-
-    # ── Step 2: Build a flat question pool with year tags ─────────────────────
-    question_pool = []   # {idx, text, marks, year, paper_type, sub_parts}
     for page in html_pages:
-        year = int(page.get("exam_year") or 0)
+        year  = int(page.get("exam_year") or 0)
         ptype = page.get("paper_type", "")
-        qs = page.get("questions") or []
-        for q in qs:
+        for q in (page.get("questions") or []):
             text = (q.get("text") or q.get("question_text") or q.get("q") or "").strip()
-            if not text:
-                continue
-            question_pool.append({
-                "idx":        len(question_pool),
-                "text":       text,
-                "marks":      str(q.get("marks") or ""),
-                "year":       year,
-                "paper_type": ptype,
-                "sub_parts":  q.get("sub_parts") or [],
-            })
+            if text:
+                local_questions.append({
+                    "text":       text,
+                    "marks":      str(q.get("marks") or ""),
+                    "year":       year,
+                    "paper_type": ptype,
+                    "sub_parts":  q.get("sub_parts") or [],
+                    "source":     "uploaded_paper",
+                })
+    logger.info(f"PYQ local papers for '{subject_name}': {len(local_questions)} questions from {len(html_pages)} papers")
+
+    # ── Step 3: Merge pools (web first = priority) ────────────────────────────
+    # De-duplicate by question text (first 80 chars)
+    seen_texts: set = set()
+    question_pool = []
+    for q in web_questions + local_questions:
+        fingerprint = q["text"][:80].lower().strip()
+        if fingerprint not in seen_texts:
+            seen_texts.add(fingerprint)
+            question_pool.append({**q, "idx": len(question_pool)})
 
     if not question_pool:
         return {
@@ -8614,7 +8712,12 @@ async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_ad
             "generated":    0,
             "total_pyqs":   0,
             "results":      [],
-            "message":      "papers_found_but_no_questions — re-run HTML Replica to extract questions from the uploaded PDFs",
+            "web_found":    0,
+            "local_found":  0,
+            "message":      (
+                "no_papers_found — web search returned no results and no uploaded PYQ papers found. "
+                "Upload PYQ PDFs via the PYQ Manager tab and process with HTML Replica."
+            ),
         }
 
     # Render the pool as a numbered list for the prompt (truncate each text)
@@ -8740,14 +8843,18 @@ No explanation. Pure JSON array only."""
 
     ok_count   = sum(1 for r in results if r.get("status") == "ok")
     total_pyqs = sum(r.get("count", 0) for r in results)
+    web_count   = sum(1 for q in question_pool if q.get("source") == "web_search")
+    local_count = sum(1 for q in question_pool if q.get("source") == "uploaded_paper")
     return {
         "subject_id":        subject_id,
         "subject_name":      subject_name,
         "total":             len(chapters),
         "generated":         ok_count,
         "total_pyqs":        total_pyqs,
-        "papers_used":       len(html_pages),
         "pool_size":         len(question_pool),
+        "web_found":         web_count,
+        "local_found":       local_count,
+        "papers_used":       len(html_pages),
         "results":           results,
     }
 
