@@ -180,26 +180,38 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
       </button>
 
       {/* Content card attribution — shown when type="content_card" is present */}
+      {/* Breadcrumb: Topic · Chapter · Subject (rightmost = most specific = leftmost visually) */}
       {hasNamedContentCard && (
         <div className="flex items-center gap-1.5 mb-2 px-1 mt-1 flex-wrap">
           <span className="text-[10px] font-semibold text-white/25 uppercase tracking-widest">From</span>
-          {contentCardSource.card_name && (
+          {contentCardSource.subject_name && (
+            <span
+              className="text-[11px] font-medium px-2 py-0.5 rounded-md"
+              style={{ background: 'rgba(59,130,246,0.07)', color: '#7dd3fc' }}
+            >
+              {contentCardSource.subject_name}
+            </span>
+          )}
+          {contentCardSource.subject_name && contentCardSource.lesson_name && (
+            <span className="text-[10px] text-white/20">›</span>
+          )}
+          {contentCardSource.lesson_name && (
+            <span
+              className="text-[11px] font-medium px-2 py-0.5 rounded-md"
+              style={{ background: 'rgba(96,165,250,0.08)', color: '#93c5fd' }}
+            >
+              {contentCardSource.lesson_name}
+            </span>
+          )}
+          {contentCardSource.lesson_name && contentCardSource.card_name && contentCardSource.card_name !== contentCardSource.lesson_name && (
+            <span className="text-[10px] text-white/20">›</span>
+          )}
+          {contentCardSource.card_name && contentCardSource.card_name !== contentCardSource.lesson_name && (
             <span
               className="text-[11px] font-semibold px-2 py-0.5 rounded-md"
               style={{ background: 'rgba(139,92,246,0.10)', color: '#a78bfa' }}
             >
               {contentCardSource.card_name}
-            </span>
-          )}
-          {contentCardSource.card_name && contentCardSource.lesson_name && (
-            <span className="text-[10px] text-white/30">·</span>
-          )}
-          {contentCardSource.lesson_name && (
-            <span
-              className="text-[11px] font-semibold px-2 py-0.5 rounded-md"
-              style={{ background: 'rgba(96,165,250,0.08)', color: '#93c5fd' }}
-            >
-              {contentCardSource.lesson_name}
             </span>
           )}
         </div>

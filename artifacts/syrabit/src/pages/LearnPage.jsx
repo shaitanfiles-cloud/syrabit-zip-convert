@@ -116,8 +116,9 @@ export default function LearnPage() {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState(null);
   const [activeId, setActiveId]   = useState('');
-  const [pyqs, setPyqs]           = useState([]);
-  const [flashcards, setFlashcards] = useState([]);
+  const [pyqs, setPyqs]               = useState([]);
+  const [markWise, setMarkWise]       = useState({});
+  const [flashcards, setFlashcards]   = useState([]);
   const [showAllPyqs, setShowAllPyqs] = useState(false);
   const [flippedCards, setFlippedCards] = useState(new Set());
   const articleRef = useRef(null);
@@ -126,6 +127,7 @@ export default function LearnPage() {
     setLoading(true);
     setError(null);
     setPyqs([]);
+    setMarkWise({});
     setFlashcards([]);
     setShowAllPyqs(false);
     setFlippedCards(new Set());
@@ -135,7 +137,10 @@ export default function LearnPage() {
         const chId = r.data?.linked_chapter_id;
         if (chId) {
           apiClient().get(`/content/chapters/${chId}/topic-pyqs?limit=20`)
-            .then(pr => setPyqs(pr.data?.pyqs || []))
+            .then(pr => {
+              setPyqs(pr.data?.pyqs || []);
+              setMarkWise(pr.data?.mark_wise || {});
+            })
             .catch(() => {});
           apiClient().get(`/content/chapters/${chId}/flashcards?limit=10`)
             .then(fr => setFlashcards(fr.data?.flashcards || []))
@@ -382,48 +387,97 @@ export default function LearnPage() {
             <TocSidebar toc={toc} activeId={activeId} />
           </div>
 
-          {/* Topic PYQs */}
+          {/* Important Questions (mark-wise) */}
           {pyqs.length > 0 && (
             <div className="mt-8 rounded-2xl border border-amber-500/15 overflow-hidden">
               <div className="px-5 py-3.5 border-b border-amber-500/10 flex items-center gap-2"
                 style={{ background: 'rgba(245,158,11,0.05)' }}>
                 <HelpCircle size={15} className="text-amber-400" />
-                <span className="text-sm font-bold text-white">Topic PYQs</span>
-                <span className="ml-1 text-xs text-white/35">— Previous Year Questions</span>
+                <span className="text-sm font-bold text-white">Important Questions</span>
+                <span className="ml-1 text-xs text-white/35">— mark-wise for exam</span>
                 <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold"
                   style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.25)' }}>
                   {pyqs.length} questions
                 </span>
               </div>
               <div style={{ background: 'rgba(255,255,255,0.012)' }}>
-                {(showAllPyqs ? pyqs : pyqs.slice(0, 5)).map((q, i) => (
-                  <div key={q.id || i}
-                    className="px-5 py-4 border-b last:border-0"
-                    style={{ borderColor: 'rgba(245,158,11,0.07)' }}>
-                    <div className="flex items-start gap-3">
-                      <span className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold mt-0.5"
-                        style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
-                        {i + 1}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-white/85 leading-relaxed mb-2">{q.question}</p>
-                        {q.answer && (
-                          <div className="rounded-lg px-3 py-2.5 text-sm text-white/55 leading-relaxed"
-                            style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.10)' }}>
-                            {q.answer}
+                {/* Mark-wise grouped display when mark_wise data is available */}
+                {Object.keys(markWise).length > 0
+                  ? (() => {
+                      const markOrder = ['1','2','3','5','10'];
+                      const markLabels = { '1':'1 Mark','2':'2 Marks','3':'3 Marks','5':'5 Marks','10':'10 Marks' };
+                      const shown = showAllPyqs ? markOrder : markOrder.slice(0, 3);
+                      return shown.map(mk => {
+                        const qs = markWise[mk];
+                        if (!qs || qs.length === 0) return null;
+                        return (
+                          <div key={mk}>
+                            <div className="px-5 py-2 flex items-center gap-2"
+                              style={{ background: 'rgba(245,158,11,0.04)', borderBottom: '1px solid rgba(245,158,11,0.07)' }}>
+                              <span className="text-[10px] font-bold uppercase tracking-widest"
+                                style={{ color: '#fbbf24' }}>{markLabels[mk] || `${mk} Marks`}</span>
+                              <span className="text-[9px] text-white/25">{qs.length} questions</span>
+                            </div>
+                            {qs.map((q, i) => {
+                              const qText = typeof q === 'string' ? q : (q.question || '');
+                              const qAns  = typeof q === 'object' ? q.answer : '';
+                              return (
+                                <div key={i} className="px-5 py-3.5 border-b last:border-0"
+                                  style={{ borderColor: 'rgba(245,158,11,0.06)' }}>
+                                  <div className="flex items-start gap-3">
+                                    <span className="flex-shrink-0 w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold mt-0.5"
+                                      style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
+                                      {i + 1}
+                                    </span>
+                                    <div className="min-w-0 flex-1">
+                                      <p className="text-sm font-medium text-white/85 leading-relaxed">{qText}</p>
+                                      {qAns && (
+                                        <div className="mt-2 rounded-lg px-3 py-2 text-xs text-white/50 leading-relaxed"
+                                          style={{ background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.09)' }}>
+                                          {qAns}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
-                        )}
-                        {q.marks && (
-                          <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 rounded"
-                            style={{ background: 'rgba(245,158,11,0.10)', color: '#fcd34d' }}>
-                            {q.marks} marks
+                        );
+                      });
+                    })()
+                  : /* Flat list fallback */
+                    (showAllPyqs ? pyqs : pyqs.slice(0, 5)).map((q, i) => (
+                      <div key={q.id || i}
+                        className="px-5 py-4 border-b last:border-0"
+                        style={{ borderColor: 'rgba(245,158,11,0.07)' }}>
+                        <div className="flex items-start gap-3">
+                          <span className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-bold mt-0.5"
+                            style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
+                            {i + 1}
                           </span>
-                        )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium text-white/85 leading-relaxed mb-2">{q.question}</p>
+                            {q.answer && (
+                              <div className="rounded-lg px-3 py-2.5 text-sm text-white/55 leading-relaxed"
+                                style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.10)' }}>
+                                {q.answer}
+                              </div>
+                            )}
+                            {q.marks && (
+                              <span className="inline-block mt-1.5 text-[10px] px-1.5 py-0.5 rounded"
+                                style={{ background: 'rgba(245,158,11,0.10)', color: '#fcd34d' }}>
+                                {q.marks} marks
+                              </span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                ))}
-                {pyqs.length > 5 && (
+                    ))
+                }
+                {(Object.keys(markWise).length > 0
+                  ? Object.values(markWise).reduce((a, b) => a + (b?.length || 0), 0)
+                  : pyqs.length) > 5 && (
                   <button
                     onClick={() => setShowAllPyqs(v => !v)}
                     className="w-full py-3 flex items-center justify-center gap-1.5 text-xs font-medium text-amber-400/70 hover:text-amber-300 transition-colors"
@@ -444,7 +498,7 @@ export default function LearnPage() {
               <div className="px-5 py-3.5 border-b border-emerald-500/10 flex items-center gap-2"
                 style={{ background: 'rgba(16,185,129,0.05)' }}>
                 <FlipHorizontal size={15} className="text-emerald-400" />
-                <span className="text-sm font-bold text-white">Revision Flashcards</span>
+                <span className="text-sm font-bold text-white">Memory Tricks & Flashcards</span>
                 <span className="ml-1 text-xs text-white/35">— tap to flip</span>
                 <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold"
                   style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>

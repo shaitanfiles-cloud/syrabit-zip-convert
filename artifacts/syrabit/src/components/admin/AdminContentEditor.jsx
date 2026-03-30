@@ -225,6 +225,20 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const res = await axios.get(`${API}/admin/content/chapters/${chapterId}/stats`, authHeaders(adminToken));
       setChapterStats(res.data);
+      // Update chapterAssets so chapter list badges survive page navigation
+      if (chapterId) {
+        setChapterAssets(prev => ({
+          ...prev,
+          [chapterId]: {
+            ...prev[chapterId],
+            notesGenerated: res.data.notes_generated,
+            pyqCount:       res.data.pyq_count       || 0,
+            flashcardCount: res.data.flashcard_count  || 0,
+            blogCount:      res.data.geo_blog_count   || 0,
+            pyqPage:        res.data.pyq_html_count   > 0,
+          },
+        }));
+      }
     } catch { setChapterStats(null); }
   }, [adminToken]);
 
@@ -924,13 +938,29 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                 </div>
 
                 {chapterStats && (
-                  <div className="flex-shrink-0 flex items-center gap-4 px-4 py-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs">
+                  <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs flex-wrap">
                     <div className="flex items-center gap-1.5 text-white/60">
                       <BarChart3 size={12} className="text-violet-400" />
                       <span>{chapterStats.chunk_count} chunks</span>
                     </div>
-                    <div className="text-white/40">{chapterStats.content_length.toLocaleString()} chars</div>
-                    <div className={`${chapterStats.has_slug ? 'text-emerald-400' : 'text-amber-400'}`}>{chapterStats.has_slug ? 'Slug OK' : 'No slug'}</div>
+                    <div className="text-white/40">{chapterStats.content_length?.toLocaleString()} chars</div>
+                    <div className={`${chapterStats.has_slug ? 'text-emerald-400' : 'text-amber-400'}`}>{chapterStats.has_slug ? 'Slug ✓' : 'No slug'}</div>
+                    {(chapterStats.pyq_count || 0) > 0 && (
+                      <div className="flex items-center gap-1 text-amber-400">
+                        <FileText size={11} />{chapterStats.pyq_count} Qs
+                        {chapterStats.mark_wise_counts && Object.keys(chapterStats.mark_wise_counts).length > 0 && (
+                          <span className="text-white/25 text-[9px]">
+                            ({Object.entries(chapterStats.mark_wise_counts).map(([m, c]) => `${c}×${m}M`).join(' ')})
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {(chapterStats.flashcard_count || 0) > 0 && (
+                      <div className="flex items-center gap-1 text-emerald-400"><Layers size={11} />{chapterStats.flashcard_count} cards</div>
+                    )}
+                    {(chapterStats.geo_blog_count || 0) > 0 && (
+                      <div className="flex items-center gap-1 text-blue-400"><Globe size={11} />{chapterStats.geo_blog_count} blogs</div>
+                    )}
                     {(chapterStats.attached_files || []).length > 0 && (
                       <div className="flex items-center gap-1 text-blue-400"><Paperclip size={11} />{chapterStats.attached_files.length} files</div>
                     )}

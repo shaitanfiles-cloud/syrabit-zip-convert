@@ -224,6 +224,38 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 - **Endpoints**: 139 API endpoints total (as of Phase 8 completion)
 - **Deployment**: Root `pyproject.toml` and `uv.lock` removed entirely to prevent platform auto-detection from running `uv sync`; Python deps installed via `PIP_USER=0 pip3 install --target=.python-deps` (avoids Nix pip `user=yes` config that breaks virtualenvs); run uses `PYTHONPATH=.python-deps`; `path-to-regexp` pinned to 8.4.0 via pnpm override
 
+## Enterprise Pipeline Audit — Full Fix (2026-03-30)
+
+### API Crash Fix
+- `CmsNoIndexMiddleware.dispatch` used unresolved `Request` type — fixed to `StarletteRequest` (imported alias on line 13)
+
+### Collection Mismatch Fix (CRITICAL)
+- `generate-pyqs-bulk` and `run-content-pipeline` write to `ai_pyq_collections`
+- `topic-pyqs` endpoint previously only read from `topic_pyq_collections` → questions **never showed on LearnPage**
+- Fixed: endpoint now checks `ai_pyq_collections` first, falls back to `topic_pyq_collections`
+- Endpoint now also returns `mark_wise` dict (grouped by 1M/2M/3M/5M/10M) alongside flat `pyqs[]`
+- If `pyqs[]` is empty but `mark_wise` has data, auto-flattens with `marks` field
+
+### Chapter Stats Endpoint — Full Asset Counts
+- `/admin/content/chapters/{id}/stats` now returns `pyq_count`, `mark_wise_counts`, `flashcard_count`, `geo_blog_count`, `pyq_html_count`, `notes_generated`
+- Queries `ai_pyq_collections` (primary) + `topic_pyq_collections` (fallback) + `flashcard_collections` + `seo_pages` + `pyq_html_pages` in parallel
+
+### AdminContentEditor — Persistent Asset Badges
+- `loadChapterStats()` now also updates `chapterAssets` state from the new stats response
+- Badges (PYQs, flashcards, blogs) now survive page reload — previously only populated after pipeline runs in the same session
+- Stats panel in edit view now shows: chunks · chars · Slug ✓ · Qs with mark-wise breakdown · cards · blogs · files
+
+### Chat Source Breadcrumb (3-level)
+- `_sources_from_rag_ctx` now includes `subject_name` in the content_card source object (was already in `content_card_meta` but not forwarded)
+- `SourcesCard` in ChatPage now shows full breadcrumb: **Subject › Chapter › Topic** with colour-coded pills (blue › lightblue › violet)
+
+### LearnPage — Mark-wise Grouped Display
+- New `markWise` state stores the `mark_wise` dict from the topic-pyqs response
+- When mark_wise data present: questions are grouped under `1 Mark / 2 Marks / 3 Marks / 5 Marks / 10 Marks` dividers
+- "Show all" toggle reveals all mark groups (default: first 3 groups visible)
+- Section label changed from "Topic PYQs — Previous Year Questions" → **"Important Questions — mark-wise for exam"**
+- Flashcard section label updated to **"Memory Tricks & Flashcards"**
+
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
