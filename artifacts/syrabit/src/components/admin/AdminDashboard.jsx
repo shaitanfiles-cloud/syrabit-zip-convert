@@ -386,7 +386,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Total Users"     value={data?.total_users}          icon={Users}         color="#8b5cf6" />
-        <StatCard label="Conversations"   value={data?.total_conversations}  icon={MessageSquare} color="#3b82f6" />
+        <StatCard label="Conversations"   value={data?.total_conversations}  icon={MessageSquare} color="#3b82f6"
+          subLabel="With messages" subValue={data?.conversations_with_messages ?? 0} />
         <StatCard label="Messages Sent"   value={data?.total_messages}       icon={Zap}           color="#10b981" />
         <StatCard label="Subjects"        value={data?.total_subjects}       icon={BookOpen}      color="#f59e0b" />
       </div>

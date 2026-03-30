@@ -65,6 +65,7 @@ export default function AdminConversations({ adminToken, onNavigate }) {
   const [faqs, setFaqs] = useState(null);
   const [faqLoading, setFaqLoading] = useState(false);
   const [sentiment, setSentiment] = useState(null);
+  const [filterMode, setFilterMode] = useState('all'); // 'all' | 'with_messages'
   const chatEndRef = useRef(null);
 
   useEffect(() => {
@@ -88,17 +89,19 @@ export default function AdminConversations({ adminToken, onNavigate }) {
   };
 
   const totalMessages = useMemo(() => conversations.reduce((sum, c) => sum + (c.messages || []).length, 0), [conversations]);
+  const withMessages = useMemo(() => conversations.filter(c => (c.messages || []).length > 0), [conversations]);
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return conversations;
+    let base = filterMode === 'with_messages' ? withMessages : conversations;
+    if (!search.trim()) return base;
     const q = search.toLowerCase();
-    return conversations.filter((c) =>
+    return base.filter((c) =>
       (c.title || '').toLowerCase().includes(q) ||
       (c.subject_name || '').toLowerCase().includes(q) ||
       (c.user_email || '').toLowerCase().includes(q) ||
       (c.user_name || '').toLowerCase().includes(q)
     );
-  }, [conversations, search]);
+  }, [conversations, withMessages, search, filterMode]);
 
   const selectedConv = useMemo(() => conversations.find(c => c.id === selected), [conversations, selected]);
 
@@ -192,9 +195,24 @@ export default function AdminConversations({ adminToken, onNavigate }) {
       {/* Left: Conversation list */}
       <div className={`${selected ? 'hidden lg:flex' : 'flex'} flex-col w-full lg:w-[380px] lg:min-w-[380px] border-r border-white/[0.06]`}>
         <div className="p-4 border-b border-white/[0.06] space-y-3">
-          <div>
-            <h2 className="text-slate-200 font-semibold">Conversations ({conversations.length})</h2>
-            <p className="text-xs text-slate-500">{totalMessages} total messages</p>
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <h2 className="text-slate-200 font-semibold">Conversations ({conversations.length})</h2>
+              <p className="text-xs text-slate-500">{withMessages.length} with messages · {totalMessages} total messages</p>
+            </div>
+            <div className="flex gap-1 flex-shrink-0">
+              {[
+                { id: 'all', label: 'All' },
+                { id: 'with_messages', label: 'With msgs' },
+              ].map(f => (
+                <button key={f.id} onClick={() => setFilterMode(f.id)}
+                  style={{ padding: '3px 10px', borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: 'pointer', border: 'none',
+                    background: filterMode === f.id ? '#7c3aed' : 'rgba(255,255,255,0.05)',
+                    color: filterMode === f.id ? '#fff' : 'rgba(232,232,232,0.4)' }}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
           </div>
           <div className="relative">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -215,7 +233,10 @@ export default function AdminConversations({ adminToken, onNavigate }) {
               <p className="text-sm">{search ? 'No conversations match' : 'No conversations yet'}</p>
             </div>
           )}
-          {filtered.map((conv) => (
+          {filtered.map((conv) => {
+            const msgCount = (conv.messages || []).length;
+            const hasMsgs = msgCount > 0;
+            return (
             <div
               key={conv.id}
               onClick={() => setSelected(conv.id)}
@@ -232,13 +253,18 @@ export default function AdminConversations({ adminToken, onNavigate }) {
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 truncate">{conv.user_name || 'Unknown'}</p>
-                <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
-                  {conv.subject_name && <span className="truncate">{conv.subject_name}</span>}
-                  <span>{(conv.messages || []).length} msgs</span>
+                <div className="flex items-center gap-2 mt-1 text-[10px]">
+                  {conv.subject_name && <span className="text-slate-500 truncate">{conv.subject_name}</span>}
+                  {hasMsgs ? (
+                    <span style={{ color: '#10b981', fontWeight: 700 }}>{msgCount} msgs</span>
+                  ) : (
+                    <span style={{ color: 'rgba(232,232,232,0.2)', fontStyle: 'italic' }}>no messages</span>
+                  )}
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
