@@ -16,6 +16,7 @@ import {
   Sparkles, Globe, CheckCircle, CreditCard,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import { isDegreeBoard } from '@/utils/courseTypes';
 import { useAuth } from '@/context/AuthContext';
 import { PageTitle } from '@/components/PageTitle';
 import { LogoMark } from '@/components/Logo';
@@ -159,8 +160,9 @@ export default function ProfilePage() {
   const getInitials = (name) =>
     (name || 'U').split(' ').map((n) => n[0]).join('').toUpperCase().slice(0, 2);
 
-  const plan = profile?.plan || 'free';
-  const planInfo = PLANS[plan] || PLANS.free;
+  const plan            = profile?.plan || 'free';
+  const planInfo        = PLANS[plan] || PLANS.free;
+  const isDegreeProfile = isDegreeBoard(profile?.board_name);
   const creditsUsed      = profile?.credits_used  ?? 0;
   const creditsLimit     = profile?.credits_limit ?? 0;
   const creditsRemaining = Math.max(0, profile?.credits_remaining ?? 0);
@@ -587,7 +589,7 @@ export default function ProfilePage() {
             { key: 'name',         label: 'Display Name', value: profile?.name,        icon: User,          placeholder: 'Your full name' },
             { key: 'board_name',   label: 'Board',        value: profile?.board_name,  icon: Globe,         placeholder: 'AssamBoard division (AHSEC, DEGREE or SEBA)' },
             { key: 'class_name',   label: 'Class / Sem',  value: profile?.class_name,  icon: GraduationCap, placeholder: 'e.g. Class 12, 2nd Sem' },
-            { key: 'stream_name',  label: 'Stream',       value: profile?.stream_name, icon: Layers,        placeholder: 'e.g. Science (PCM), B.Com' },
+            { key: 'stream_name',  label: isDegreeProfile ? 'Course Type' : 'Stream', value: profile?.stream_name, icon: Layers, placeholder: isDegreeProfile ? 'e.g. Major, Minor, MDC' : 'e.g. Science (PCM), B.Com' },
             { key: 'phone',        label: 'Phone',        value: profile?.phone,       icon: Phone,         placeholder: 'Optional phone number' },
           ].map(({ key, label, value, icon: Icon, placeholder }, i, arr) => (
             <button

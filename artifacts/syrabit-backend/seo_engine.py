@@ -550,14 +550,22 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
     class_name    = hierarchy.get("class", {}).get("name", "Class 12")
     subject_name  = hierarchy.get("subject", {}).get("name", "")
     chapter_title = hierarchy.get("chapter", {}).get("title", "")
+    stream_name   = hierarchy.get("stream", {}).get("name", "")
 
     # Resolve correct human-readable labels up-front
     grade_str     = _smart_grade_label(class_name, board_name)
     board_display = _smart_board_display(board_name)
     is_degree     = board_name.upper() in {"DEGREE", "NEP FYUGP", "FYUGP"}
-    prompt_class_label = (
-        f"{grade_str} (NEP FYUGP Degree)" if is_degree else f"{grade_str} {board_display}".strip()
-    )
+
+    # For DEGREE, stream IS the course type (Major/Minor/MDC/VAC/SEC/AEC)
+    _DEGREE_COURSE_TYPES = {"major", "minor", "mdc", "vac", "sec", "aec"}
+    is_degree_stream = stream_name.lower().strip() in _DEGREE_COURSE_TYPES
+
+    if is_degree or is_degree_stream:
+        course_type_suffix = f" — {stream_name} Course" if stream_name else ""
+        prompt_class_label = f"{grade_str} (NEP FYUGP Degree{course_type_suffix})"
+    else:
+        prompt_class_label = f"{grade_str} {board_display}".strip()
 
     prompt_template = PROMPTS.get(page_type)
     if not prompt_template:

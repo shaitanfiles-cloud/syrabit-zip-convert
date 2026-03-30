@@ -14,6 +14,7 @@ import { adminSeoExtractTopics } from '@/utils/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { TEMPLATES } from '@/utils/editorTemplates';
+import { isDegreeBoard } from '@/utils/courseTypes';
 import {
   MDXEditor,
   headingsPlugin, listsPlugin, quotePlugin, thematicBreakPlugin,
@@ -493,9 +494,12 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const filteredStreams = selClass ? streams.filter(s => s.class_id === selClass) : [];
   const filteredSubjects = selStream ? subjects.filter(s => s.stream_id === selStream) : subjects;
 
-  const boardData = boards.find(b => b.id === selBoard);
-  const classData = classes.find(c => c.id === selClass);
-  const streamData = streams.find(s => s.id === selStream);
+  const boardData    = boards.find(b => b.id === selBoard);
+  const classData    = classes.find(c => c.id === selClass);
+  const streamData   = streams.find(s => s.id === selStream);
+  const isBoardDegree = isDegreeBoard(boardData?.name);
+  const streamNodeLabel = isBoardDegree ? 'Courses' : 'Streams';
+  const streamPlaceholder = isBoardDegree ? 'Course Type' : 'Stream';
 
   const searchFiltered = searchQuery
     ? subjects.filter(s => s.name?.toLowerCase().includes(searchQuery.toLowerCase()) || s.description?.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -994,7 +998,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
                               {selClass === c.id && (
                                 <div className="ml-4 mt-1 space-y-1 border-l border-white/5 pl-3">
-                                  <p className="text-[10px] uppercase tracking-wider text-white/25 px-1 font-semibold">Streams</p>
+                                  <p className="text-[10px] uppercase tracking-wider text-white/25 px-1 font-semibold">{streamNodeLabel}</p>
                                   {filteredStreams.map(st => (
                                     <div key={st.id} className="flex items-center group">
                                       <button
@@ -1007,7 +1011,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                                       <button onClick={() => handleDelete('stream', st.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={10} /></button>
                                     </div>
                                   ))}
-                                  <InlineCreator placeholder="Stream" onCreate={handleCreateStream} icon={GitBranch} color="emerald" />
+                                  <InlineCreator placeholder={streamPlaceholder} onCreate={handleCreateStream} icon={GitBranch} color="emerald" />
                                 </div>
                               )}
                             </div>
@@ -1028,7 +1032,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     <div className="text-center max-w-md">
                       <Layers size={56} className="mx-auto text-white/15 mb-4" />
                       <h3 className="text-xl font-bold text-white mb-2">All-in-One Content Manager</h3>
-                      <p className="text-white/50 text-sm mb-2">Navigate the tree on the left: Board → Class → Stream → Subject</p>
+                      <p className="text-white/50 text-sm mb-2">Navigate the tree on the left: Board → Class → {streamPlaceholder} → Subject</p>
                       <p className="text-white/30 text-xs">Or use the search bar to find any subject</p>
                     </div>
                   </div>

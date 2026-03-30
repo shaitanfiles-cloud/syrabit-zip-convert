@@ -5,11 +5,10 @@ import { ChevronRight, ChevronLeft, Globe, BookOpen, GraduationCap, FlaskConical
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { getBoards, getClasses, getStreams, saveOnboarding } from '@/utils/api';
+import { isDegreeBoard, streamLabel, streamStepHint } from '@/utils/courseTypes';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { LogoMark } from '@/components/Logo';
-
-const STEPS = ['Board', 'Class', 'Stream'];
 
 const STREAM_ICONS = {
   'Science (PCM)': FlaskConical,
@@ -44,6 +43,10 @@ export default function OnboardingPage() {
   const [selectedBoard, setSelectedBoard] = useState(null);
   const [selectedClass, setSelectedClass] = useState(null);
   const [selectedStream, setSelectedStream] = useState(null);
+
+  const isDegreeSel = isDegreeBoard(selectedBoard?.name);
+  const step3Label  = isDegreeSel ? 'Course Type' : 'Stream';
+  const STEPS       = ['Board', 'Class', step3Label];
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -246,11 +249,11 @@ export default function OnboardingPage() {
                 </div>
               )}
 
-              {/* Step 2: Stream */}
+              {/* Step 2: Stream / Course Type */}
               {step === 2 && (
                 <div>
-                  <h2 className="text-lg font-semibold text-white mb-1">Select your Stream</h2>
-                  <p className="text-white/50 text-sm mb-6">What stream are you studying?</p>
+                  <h2 className="text-lg font-semibold text-white mb-1">Select your {step3Label}</h2>
+                  <p className="text-white/50 text-sm mb-6">{streamStepHint(selectedBoard?.name)}</p>
                   {loading ? (
                     <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-400" /></div>
                   ) : (
