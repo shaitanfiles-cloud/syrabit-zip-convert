@@ -210,6 +210,8 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [bulkGapGenerating, setBulkGapGenerating] = useState(false);
   const [bulkGapProgress, setBulkGapProgress]  = useState({ done: 0, total: 0 });
 
+  useEffect(() => { setSelectedChapters(new Set()); }, [selSubject]);
+
   const CONTENT_TYPES = [
     { value: 'notes', label: 'Notes', color: 'violet' },
     { value: 'pyq', label: 'PYQ', color: 'amber' },

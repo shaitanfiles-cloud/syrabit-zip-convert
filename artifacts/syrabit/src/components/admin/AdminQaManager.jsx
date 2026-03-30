@@ -103,12 +103,16 @@ export default function AdminQaManager({ adminToken }) {
   };
 
   const handleDelete = async (pair) => {
-    if (!confirm(`Delete "${pair.question.slice(0, 60)}…"?`)) return;
-    try {
-      await adminDeleteQaPair(adminToken, pair.id);
-      setPairs((prev) => prev.filter((p) => p.id !== pair.id));
-      toast.success('Deleted');
-    } catch { toast.error('Delete failed'); }
+    toast(`Delete "${pair.question.slice(0, 60)}…"?`, {
+      action: { label: 'Delete', onClick: async () => {
+        try {
+          await adminDeleteQaPair(adminToken, pair.id);
+          setPairs((prev) => prev.filter((p) => p.id !== pair.id));
+          toast.success('Deleted');
+        } catch { toast.error('Delete failed'); }
+      }},
+      cancel: { label: 'Cancel', onClick: () => {} },
+    });
   };
 
   const handleCreate = async () => {

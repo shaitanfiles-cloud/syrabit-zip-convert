@@ -151,7 +151,7 @@ function CmsPostsGrid({ board, classSlug }) {
       setTotal(data.total || 0);
       if (skip + POSTS_PER_PAGE >= (data.total || 0)) setDone(true);
       groupKey.current += 1;
-    } catch { /* silent */ }
+    } catch (err) { console.error('[CmsPostsGrid] fetchPage error:', err); }
     finally { setLoading(false); }
   }, [board, classSlug]);
 

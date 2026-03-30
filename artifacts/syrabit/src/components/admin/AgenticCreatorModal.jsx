@@ -104,6 +104,8 @@ export default function AgenticCreatorModal({
 
   const launch = async () => {
     if (enabled.size === 0) { toast.error('Select at least one step'); return; }
+    setStepStates(Object.fromEntries(STEPS.map(s => [s.key, STATE.idle])));
+    setStepResults({});
     setPhase('running');
     push(`Agent initialized for "${subjectName}" — ${chapterCount} chapters`, 'system');
     push(`Steps queued: ${[...enabled].map(k => STEPS.find(s => s.key === k).label).join(' → ')}`, 'system');

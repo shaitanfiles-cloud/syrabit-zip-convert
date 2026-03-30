@@ -125,8 +125,9 @@ function AnimatedStat({ value, label, icon: Icon }) {
   const animated = useRef(false);
 
   useEffect(() => {
-    const numeric = parseInt(value, 10);
-    const suffix = value.replace(String(numeric), '');
+    const strValue = String(value);
+    const numeric = parseInt(strValue, 10);
+    const suffix = strValue.replace(String(numeric), '');
     const observer = new IntersectionObserver(([entry]) => {
       if (entry.isIntersecting && !animated.current) {
         animated.current = true;

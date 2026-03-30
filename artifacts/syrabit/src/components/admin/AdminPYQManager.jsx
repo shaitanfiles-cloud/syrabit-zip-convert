@@ -36,7 +36,7 @@ function statusToStep(s) {
   if (s === 'ocr_running')            return { step: 1, done: 1, active: true  };
   if (s === 'ocr_done')               return { step: 2, done: 2, active: false };
   if (s === 'classifying')            return { step: 2, done: 2, active: true  };
-  if (s === 'done')                   return { step: 3, done: 4, active: false };
+  if (s === 'done')                   return { step: 3, done: 3, active: false };
   if (s.endsWith('_error') || s === 'fetch_error') return { step: -1, done: 0, active: false };
   return { step: 0, done: 1, active: false };
 }

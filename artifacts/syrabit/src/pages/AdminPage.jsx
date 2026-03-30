@@ -12,6 +12,7 @@ import {
   ChevronLeft, ChevronRight, Loader2, Globe,
   Crown, Cpu, Layers, Zap,
 } from 'lucide-react';
+import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
 
@@ -136,7 +137,7 @@ export default function AdminPage() {
     const checkStatus = async () => {
       try {
         const [healthRes, settingsRes] = await Promise.allSettled([
-          fetch(`${API_BASE}/health`).then(r => r.json()).then(data => ({ data })),
+          axios.get(`${API_BASE}/health`, { withCredentials: true }),
           adminGetSettings(adminToken),
         ]);
 
