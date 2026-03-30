@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { syllabusExtractPdf, syllabusConfirmImport, syllabusImportPdf, syllabusGetImports, syllabusDeleteImport, syllabusUpdateImport } from '@/utils/api';
+import AgenticSyllabusUploader from './AgenticSyllabusUploader';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -477,15 +478,25 @@ export default function AdminSyllabusManager({ adminToken, boards = [], classes 
         )}
       </div>
 
+      {/* ── Agentic Syllabus Uploader ── */}
+      <AgenticSyllabusUploader
+        adminToken={adminToken}
+        onComplete={(summary) => {
+          toast.success(`✅ ${summary.total_subjects} subjects imported — ${summary.total_chapters} chapters, ${summary.total_chunks} RAG chunks`);
+          loadImports();
+          if (onHubContext) onHubContext({ action: 'refresh_syllabus' });
+        }}
+      />
+
       {/* PDF Import Panel */}
       <div className="rounded-xl border p-4 space-y-4" style={{ background: 'rgba(139,92,246,0.05)', borderColor: 'rgba(139,92,246,0.20)' }}>
         {/* Header */}
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold text-white flex items-center gap-2">
-              <FileUp size={14} className="text-violet-400" /> PDF-to-Syllabus Importer
+              <FileUp size={14} className="text-violet-400" /> Manual PDF Importer (Preview mode)
             </p>
-            <p className="text-xs mt-0.5 text-white/40">Upload an official syllabus PDF — Gemini auto-extracts all subjects, chapters, and topics</p>
+            <p className="text-xs mt-0.5 text-white/40">Preview-only: Gemini extracts subjects — review before confirming. Use the Agentic Uploader above for fully automatic import.</p>
           </div>
           <input ref={pdfRef} type="file" accept=".pdf" className="hidden"
             onChange={e => { const f = e.target.files?.[0]; if (f) handlePdfImport(f); }} />

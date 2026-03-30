@@ -13544,6 +13544,414 @@ Rules:
 - Return ONLY a valid JSON array. No markdown fences, no explanations.
 """.strip()
 
+_CHAPTER_CONTENT_PROMPT = """You are an expert academic content writer for degree-level students in Assam, India.
+
+Generate comprehensive educational notes (Markdown format, 600–1000 words) for:
+Subject: {subject_name}
+Chapter: {chapter_title}
+Topics covered: {topics}
+Board/Semester: {board_semester}
+
+Structure the content as:
+## {chapter_title}
+### Introduction
+(2-3 paragraphs introducing the chapter)
+
+### Key Concepts
+(Define and explain each major concept)
+
+### {topic_sections}
+(One ### section per major topic — explain thoroughly with examples)
+
+### Summary
+(Bullet-point summary of key takeaways)
+
+Rules:
+- Write for undergraduate students (degree level, NEP FYUGP)
+- Use clear, simple language
+- Include real examples from Assam/Northeast India where applicable
+- Each concept must be fully explained
+- Do NOT use placeholder text — write actual educational content
+- Return ONLY the markdown content, no preamble
+""".strip()
+
+# ── Helper: generate chapter-level educational content via AI ─────────────────
+async def _agentic_generate_chapter_content(
+    subject_name: str,
+    chapter_title: str,
+    topics: list,
+    board_semester: str,
+) -> str:
+    """Use LLM pool to generate educational markdown for a chapter."""
+    topics_str = ", ".join(topics[:12]) if topics else "as listed in the chapter title"
+    # Build topic section headers
+    topic_sections = "\n".join([f"### {t}" for t in topics[:6]]) if topics else "### Core Content"
+    prompt = _CHAPTER_CONTENT_PROMPT.format(
+        subject_name=subject_name,
+        chapter_title=chapter_title,
+        topics=topics_str,
+        board_semester=board_semester,
+        topic_sections=topic_sections,
+    )
+    try:
+        result = await slm_pool.complete(
+            messages=[
+                {"role": "system", "content": "You are a precise educational content writer. Write structured, factual academic notes."},
+                {"role": "user",   "content": prompt},
+            ],
+            max_tokens=1800,
+            temperature=0.3,
+            task_hint="content_gen",
+        )
+        return (result or "").strip()
+    except Exception as exc:
+        logger.warning(f"[agentic_syllabus] chapter content gen failed for {chapter_title!r}: {exc}")
+        # Fallback: minimal structured content
+        return f"## {chapter_title}\n\n" + "\n\n".join([f"### {t}\n\n*Content for {t} in {subject_name}.*" for t in (topics[:5] or [chapter_title])])
+
+
+@api.post("/admin/agentic-syllabus/run")
+async def agentic_syllabus_run(
+    file: UploadFile = File(...),
+    paper_type: str  = Form("major"),
+    admin: dict      = Depends(get_admin_user),
+):
+    """
+    Agentic Syllabus Uploader — full autonomous pipeline, streamed as SSE.
+
+    Pipeline per subject:
+      PDF scan → identify subjects → for each subject:
+        hierarchy link (board→semester→stream→subject) →
+        chapter content generation (AI) →
+        auto-chunk →
+        embed (RAG) →
+        SEO/GEO topic tagging →
+        next subject
+
+    Returns: text/event-stream (SSE)
+    """
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files supported")
+    paper_type = paper_type.lower().strip()
+    if paper_type not in _VALID_PAPER_TYPES:
+        raise HTTPException(status_code=400, detail=f"paper_type must be one of: {', '.join(sorted(_VALID_PAPER_TYPES))}")
+
+    pdf_bytes  = await file.read()
+    filename   = file.filename
+    if len(pdf_bytes) > 20 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="PDF too large (max 20 MB)")
+
+    import base64 as _b64, httpx as _httpx
+    import vertex_services
+
+    def _sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    def _recover_json(text: str) -> list:
+        try:
+            r = json.loads(text)
+            return r if isinstance(r, list) else [r]
+        except Exception:
+            pass
+        last = text.rfind('}')
+        if last > 0:
+            partial = text[:last + 1]
+            cand = (partial + ']') if partial.lstrip().startswith('[') else ('[' + partial + ']')
+            try:
+                r = json.loads(cand)
+                return r if isinstance(r, list) else [r]
+            except Exception:
+                pass
+        objects, decoder, idx = [], json.JSONDecoder(), text.find('{')
+        while 0 <= idx < len(text):
+            try:
+                obj, end = decoder.raw_decode(text, idx)
+                objects.append(obj)
+                idx = text.find('{', end)
+            except Exception:
+                idx = text.find('{', idx + 1)
+        return objects
+
+    async def _pipeline():
+        # ── 1. SCAN: Extract subjects from PDF ───────────────────────────────
+        yield _sse("scan_start", {"filename": filename, "paper_type": paper_type})
+
+        extracted: list = []
+        try:
+            b64_pdf = _b64.b64encode(pdf_bytes).decode()
+            prompt  = _SYLLABUS_EXTRACT_PROMPT.format(paper_type=paper_type)
+            headers = await vertex_services._auth_headers()
+            body    = {
+                "contents": [{"parts": [
+                    {"text": prompt + "\n\nReturn ONLY valid JSON array. No markdown fences."},
+                    {"inline_data": {"mime_type": "application/pdf", "data": b64_pdf}},
+                ]}],
+                "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.1},
+            }
+            for _gmodel in ["gemini-2.0-flash", "gemini-2.0-flash-lite"]:
+                url = vertex_services._gen_url(_gmodel)
+                async with _httpx.AsyncClient(timeout=120) as c:
+                    r = await c.post(url, json=body, headers=headers)
+                if r.status_code in (403, 404):
+                    continue
+                r.raise_for_status()
+                raw     = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                cleaned = re.sub(r'^```(?:json)?\s*', '', raw.strip())
+                cleaned = re.sub(r'\s*```$', '', cleaned).strip()
+                extracted = _recover_json(cleaned)
+                break
+        except Exception as e:
+            # Fallback: text extraction
+            try:
+                import io
+                try:    from pypdf import PdfReader as _PR
+                except: from PyPDF2 import PdfReader as _PR  # type: ignore
+                reader    = _PR(io.BytesIO(pdf_bytes))
+                full_text = "\n".join((reader.pages[i].extract_text() or "") for i in range(len(reader.pages)))
+                resp = await slm_pool.complete(
+                    messages=[
+                        {"role": "system", "content": "Extract syllabus from text. Return JSON array."},
+                        {"role": "user",   "content": _SYLLABUS_EXTRACT_PROMPT.format(paper_type=paper_type) + f"\n\nPDF TEXT:\n{full_text[:12000]}"},
+                    ],
+                    max_tokens=4096, temperature=0.1, task_hint="classification",
+                )
+                extracted = _recover_json(resp or "[]")
+            except Exception as fe:
+                yield _sse("error", {"message": f"PDF scan failed: {fe}"})
+                return
+
+        if not extracted:
+            yield _sse("error", {"message": "No subjects found in PDF"})
+            return
+
+        yield _sse("scan_complete", {"subjects": [e.get("subject_name", "?") for e in extracted], "total": len(extracted)})
+
+        # ── 2. IMPORT each subject sequentially ──────────────────────────────
+        from syllabus_linker import SyllabusLinker, SyllabusEntry  # type: ignore
+        linker   = SyllabusLinker(db)
+        import_id = str(uuid.uuid4())
+        now_iso   = datetime.now(timezone.utc).isoformat()
+
+        total_chapters_all = 0
+        total_chunks_all   = 0
+        total_embedded     = 0
+
+        for subj_idx, entry_raw in enumerate(extracted):
+            subject_name = (entry_raw.get("subject_name") or entry_raw.get("subject") or "").strip()
+            if not subject_name:
+                continue
+
+            sem_raw  = entry_raw.get("semester", "") or ""
+            sem_num  = entry_raw.get("semester_number", 0) or 0
+            if sem_num and not sem_raw:
+                sem_raw = f"Semester {sem_num}"
+            board_semester = f"{entry_raw.get('board','DEGREE')} / {sem_raw or 'Semester 1'}"
+
+            # Normalise chapter list
+            raw_chaps = entry_raw.get("chapters", [])
+            chapter_details: list[dict] = []
+            for ch in raw_chaps:
+                if isinstance(ch, dict):
+                    title = (ch.get("title") or ch.get("name") or "").strip()
+                    if title:
+                        chapter_details.append({
+                            "title":       title,
+                            "description": (ch.get("description") or "").strip(),
+                            "topics":      [t for t in (ch.get("topics") or []) if isinstance(t, str)],
+                        })
+                elif isinstance(ch, str) and ch.strip():
+                    chapter_details.append({"title": ch.strip(), "description": "", "topics": []})
+
+            n_chapters = len(chapter_details)
+            yield _sse("subject_start", {
+                "name":    subject_name,
+                "index":   subj_idx,
+                "total":   len(extracted),
+                "chapters": n_chapters,
+                "semester": sem_raw,
+                "board":   entry_raw.get("board", "DEGREE"),
+            })
+
+            # ── 2a. Link hierarchy ────────────────────────────────────────────
+            entry = SyllabusEntry(
+                board_name      = (entry_raw.get("board") or "").strip(),
+                class_year      = (entry_raw.get("class_year") or "").strip(),
+                semester        = sem_raw.strip(),
+                subject_name    = subject_name,
+                paper_type      = paper_type,
+                stream_hint     = (entry_raw.get("stream_target") or "All").strip(),
+                chapters        = [ch["title"] for ch in chapter_details],
+                chapter_details = chapter_details,
+                topics          = [t for t in entry_raw.get("topics", []) if isinstance(t, str)][:20],
+                guidelines      = (entry_raw.get("guidelines") or "").strip(),
+                course_code     = (entry_raw.get("course_code") or "").strip(),
+                credits         = int(entry_raw.get("credits") or 0),
+            )
+            try:
+                link = await linker.link(entry)
+            except Exception as le:
+                logger.warning(f"[agentic_syllabus] linker failed for {subject_name}: {le}")
+                link = None
+
+            created_nodes = link.created_nodes if link else []
+            subject_ids   = link.subject_ids   if link else []
+            board_disp    = link.board_name     if link else entry_raw.get("board", "DEGREE")
+            class_disp    = link.class_name     if link else sem_raw
+
+            yield _sse("hierarchy", {
+                "board":         board_disp,
+                "class":         class_disp,
+                "stream":        (link.streams[0]["stream_name"] if link and link.streams else paper_type.upper()),
+                "subject":       subject_name,
+                "created_nodes": created_nodes,
+                "subject_ids":   subject_ids,
+            })
+
+            # ── 2b. For each chapter: generate content → chunk → embed ────────
+            chap_chunks_total = 0
+            all_chapter_ids: list[str] = []
+
+            # Fetch chapters just created by linker so we have real chapter_ids
+            ch_docs = []
+            if subject_ids:
+                ch_docs = await db.chapters.find(
+                    {"subject_id": {"$in": subject_ids}},
+                    {"id": 1, "title": 1, "content": 1, "topics": 1}
+                ).to_list(200)
+
+            ch_map = {doc["title"].lower().strip(): doc for doc in ch_docs}
+
+            for ch_idx, ch_detail in enumerate(chapter_details):
+                ch_title  = ch_detail["title"]
+                ch_topics = ch_detail.get("topics", [])
+
+                yield _sse("chapter_start", {
+                    "subject":  subject_name,
+                    "chapter":  ch_title,
+                    "index":    ch_idx,
+                    "total":    n_chapters,
+                })
+
+                # Find the real chapter doc from DB
+                ch_doc = ch_map.get(ch_title.lower().strip())
+                chapter_id  = ch_doc["id"]   if ch_doc else str(uuid.uuid4())
+                existing_content = (ch_doc.get("content") or "") if ch_doc else ""
+
+                # Generate content if chapter has no content yet
+                if len(existing_content.strip()) < 200:
+                    try:
+                        content = await _agentic_generate_chapter_content(
+                            subject_name=subject_name,
+                            chapter_title=ch_title,
+                            topics=ch_topics or entry.topics[:8],
+                            board_semester=board_semester,
+                        )
+                    except Exception:
+                        content = f"## {ch_title}\n\n" + "\n\n".join(f"### {t}\n\n*Content for {t}.*" for t in (ch_topics or [ch_title]))
+
+                    # Save content to chapter doc
+                    if ch_doc:
+                        await db.chapters.update_one(
+                            {"id": chapter_id},
+                            {"$set": {"content": content, "updated_at": datetime.now(timezone.utc).isoformat()}}
+                        )
+                    yield _sse("chapter_content", {"chapter": ch_title, "length": len(content)})
+                else:
+                    content = existing_content
+                    yield _sse("chapter_content", {"chapter": ch_title, "length": len(content), "existing": True})
+
+                # Auto-chunk
+                geo_tags = [board_disp, class_disp, subject_name, ch_title]
+                try:
+                    chunk_ids = await auto_chunk_content(
+                        chapter_id=chapter_id,
+                        content=content,
+                        subject_id=subject_ids[0] if subject_ids else None,
+                        geo_tags=geo_tags,
+                    )
+                    chap_chunks_total += len(chunk_ids)
+                    all_chapter_ids.append(chapter_id)
+                    yield _sse("chapter_chunked", {"chapter": ch_title, "chunks": len(chunk_ids)})
+                except Exception as ce:
+                    logger.warning(f"[agentic_syllabus] chunk failed {ch_title}: {ce}")
+                    yield _sse("chapter_chunked", {"chapter": ch_title, "chunks": 0, "error": str(ce)})
+
+                # Embed for RAG (syllabus_embeddings)
+                try:
+                    embed_ok = await _embed_and_store_chapter(chapter_id, content, ch_title)
+                    if embed_ok:
+                        total_embedded += 1
+                    yield _sse("chapter_embedded", {"chapter": ch_title, "ok": embed_ok})
+                except Exception as ee:
+                    yield _sse("chapter_embedded", {"chapter": ch_title, "ok": False})
+
+            total_chapters_all += n_chapters
+            total_chunks_all   += chap_chunks_total
+
+            # ── 2c. SEO/GEO topic tagging ─────────────────────────────────────
+            geo_phrase = f"{board_disp}, {class_disp}, {subject_name}, Assam"
+            if subject_ids:
+                await db.subjects.update_one(
+                    {"id": {"$in": subject_ids}},
+                    {"$set": {"geo_tags": geo_phrase, "seo_tagged": True}}
+                )
+            yield _sse("seo_tagged", {"subject": subject_name, "geo_phrase": geo_phrase})
+
+            # ── 2d. Save import record ────────────────────────────────────────
+            await db.syllabus_pdf_imports.insert_one({
+                "import_id":          import_id,
+                "filename":           filename,
+                "paper_type":         paper_type,
+                "board_name":         board_disp,
+                "class_name":         class_disp,
+                "class_year":         entry.class_year,
+                "semester":           sem_raw,
+                "subject_name":       subject_name,
+                "course_code":        entry.course_code,
+                "credits":            entry.credits,
+                "chapters":           [ch["title"] for ch in chapter_details],
+                "chapter_details":    chapter_details,
+                "topics":             entry.topics,
+                "guidelines":         entry.guidelines,
+                "linked_board_id":    link.board_id    if link else None,
+                "linked_class_id":    link.class_id    if link else None,
+                "linked_stream_ids":  [s["stream_id"] for s in link.streams] if link else [],
+                "linked_subject_ids": subject_ids,
+                "created_nodes":      created_nodes,
+                "source":             "agentic_import",
+                "status":             "agentic_complete",
+                "created_at":         now_iso,
+            })
+
+            yield _sse("subject_done", {
+                "name":           subject_name,
+                "chapters_done":  n_chapters,
+                "chunks_created": chap_chunks_total,
+                "subject_ids":    subject_ids,
+            })
+
+        # ── 3. Invalidate caches + reseed embedder ────────────────────────────
+        for cache_key in ("boards", "classes", "streams", "subjects", "chapters"):
+            _invalidate_content_cache(cache_key)
+        try:
+            asyncio.create_task(_reseed_syllabus_embeddings())
+        except Exception:
+            pass
+
+        yield _sse("complete", {
+            "import_id":        import_id,
+            "total_subjects":   len(extracted),
+            "total_chapters":   total_chapters_all,
+            "total_chunks":     total_chunks_all,
+            "total_embedded":   total_embedded,
+        })
+
+    return StreamingResponse(
+        _pipeline(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 
 @api.post("/admin/syllabus/import-pdf")
 async def syllabus_import_pdf(

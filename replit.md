@@ -4,6 +4,26 @@
 
 pnpm workspace monorepo. Primary artifact: **Syrabit.ai** — AI-powered educational platform for AHSEC Class 11/12 + Degree students in Assam.
 
+## Agentic Syllabus Uploader (added 2026-03-30)
+
+- **Backend**: `POST /api/admin/agentic-syllabus/run` — SSE streaming endpoint.  
+  Full autonomous pipeline: PDF upload → Gemini Vision scans all subjects → for each subject sequentially:  
+  1. `SyllabusLinker.link()` → auto-creates board/semester/stream/subject hierarchy in MongoDB  
+  2. `_agentic_generate_chapter_content()` → LLM generates 600–1000 word markdown notes per chapter  
+  3. `auto_chunk_content()` → splits content into RAG-ready chunks with geo_tags  
+  4. `_embed_and_store_chapter()` → embedds chapters into `syllabus_embeddings` for AI chat RAG  
+  5. SEO/GEO topic tagging per subject  
+  6. Saves import record to `syllabus_pdf_imports`  
+  7. Invalidates content caches + reseeds syllabus embedder  
+  Streams SSE events: `scan_start → scan_complete → subject_start → hierarchy → chapter_start → chapter_content → chapter_chunked → chapter_embedded → seo_tagged → subject_done → complete`
+- **Frontend**: `AgenticSyllabusUploader.jsx` — 3-phase wizard (Upload PDF → Running/Live log → Done summary).  
+  - PDF drag-and-drop zone + paper type picker (major/minor/mdc/vac/aec/sec/ge/cc)  
+  - Real-time per-subject subject cards with chapter-level progress (content/chunk/embed step dots)  
+  - Side-by-side layout: subjects list (left) + live log with colour-coded events (right)  
+  - Import Another / Cancel button for reset  
+- **Integration**: Added to `AdminSyllabusManager.jsx` above existing Manual PDF Importer. Calls `loadImports()` + `onHubContext` on completion.  
+- **Data flow**: topic → chapter → subject → stream → class/semester → board (MongoDB `subjects`, `chapters`, `topics`, `chunks`, `syllabus_embeddings`)
+
 ### Vertex AI / Gemini Integration (vertex_services.py)
 9 AI-powered services all driven by `GEMINI_API_KEY`:
 1. **Text Embeddings** (`text-embedding-004`) — semantic topic search
