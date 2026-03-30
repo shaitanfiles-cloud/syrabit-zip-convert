@@ -10402,9 +10402,9 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         logger.warning(f"Payment signature mismatch for user {user['id']}")
         raise HTTPException(400, "Payment verification failed — invalid signature.")
 
-    # Idempotency: check if already processed
+    # Idempotency: check if already processed successfully
     existing = await db.payments.find_one({"razorpay_payment_id": body.razorpay_payment_id})
-    if existing:
+    if existing and existing.get("status") == "completed":
         return {"success": True, "plan": plan, "credits_added": PLAN_CREDITS[plan], "message": "Payment already processed."}
 
     # Server-side validation: fetch order from Razorpay and verify amount + notes
@@ -10443,6 +10443,7 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         "user_id":            str(user_id),
         "plan":               plan,
         "provider":           "razorpay",
+        "status":             "completed",
         "amount_paise":       PLAN_PRICES_INR[plan],
         "razorpay_order_id":  body.razorpay_order_id,
         "razorpay_payment_id":body.razorpay_payment_id,
@@ -10514,7 +10515,10 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
                         prev_plan, credits, prev_doc, now_iso, user_id,
                     )
             if _payment_inserted:
-                await db.payments.delete_one({"razorpay_payment_id": body.razorpay_payment_id})
+                await db.payments.update_one(
+                    {"razorpay_payment_id": body.razorpay_payment_id},
+                    {"$set": {"status": "failed", "fail_reason": str(e), "failed_at": now_iso}},
+                )
         except Exception as rb_err:
             logger.error(
                 f"ROLLBACK FAILED for user {user_id}: {rb_err} — "
@@ -10605,7 +10609,7 @@ async def stripe_webhook(request: StarletteRequest2):
             stripe_session_id = session.get("id", "")
             if user_id and plan and plan in PLAN_CREDITS:
                 existing = await db.payments.find_one({"stripe_session_id": stripe_session_id})
-                if existing:
+                if existing and existing.get("status") == "completed":
                     logger.info(f"Stripe duplicate event ignored: session={stripe_session_id}")
                     return {"received": True}
                 credits = PLAN_CREDITS[plan]
@@ -10615,6 +10619,7 @@ async def stripe_webhook(request: StarletteRequest2):
                     "user_id": user_id,
                     "plan": plan,
                     "provider": "stripe",
+                    "status": "completed",
                     "stripe_session_id": stripe_session_id,
                     "amount_cents": session.get("amount_total", 0),
                     "currency": session.get("currency", "usd"),
@@ -10671,7 +10676,7 @@ async def razorpay_webhook(request: StarletteRequest2):
             if not user_id or not rp_payment_id:
                 return {"received": True}
             existing = await db.payments.find_one({"razorpay_payment_id": rp_payment_id})
-            if existing:
+            if existing and existing.get("status") in ("completed", "skipped"):
                 logger.info(f"Razorpay duplicate event ignored: payment={rp_payment_id}")
                 return {"received": True}
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -10682,6 +10687,7 @@ async def razorpay_webhook(request: StarletteRequest2):
                         "user_id": user_id,
                         "plan": "topup",
                         "provider": "razorpay",
+                        "status": "completed",
                         "razorpay_payment_id": rp_payment_id,
                         "amount_paise": entity.get("amount", 0),
                         "credits_added": topup_credits,
@@ -10713,6 +10719,7 @@ async def razorpay_webhook(request: StarletteRequest2):
                     )
                     await db.payments.insert_one({
                         "user_id": user_id, "plan": plan, "provider": "razorpay",
+                        "status": "skipped",
                         "razorpay_payment_id": rp_payment_id,
                         "amount_paise": entity.get("amount", 0),
                         "verified_at": now_iso, "activation_skipped": True,
@@ -10725,6 +10732,7 @@ async def razorpay_webhook(request: StarletteRequest2):
                     try:
                         await db.payments.insert_one({
                             "user_id": user_id, "plan": plan, "provider": "razorpay",
+                            "status": "completed",
                             "razorpay_payment_id": rp_payment_id,
                             "amount_paise": entity.get("amount", 0),
                             "verified_at": now_iso,
@@ -10766,7 +10774,10 @@ async def razorpay_webhook(request: StarletteRequest2):
                                         wh_current_plan, credits, now_iso, user_id,
                                     )
                             if _wh_payment_inserted:
-                                await db.payments.delete_one({"razorpay_payment_id": rp_payment_id})
+                                await db.payments.update_one(
+                                    {"razorpay_payment_id": rp_payment_id},
+                                    {"$set": {"status": "failed", "fail_reason": str(wh_err), "failed_at": now_iso}},
+                                )
                         except Exception as rb_err:
                             logger.error(f"Webhook rollback failed user={user_id}: {rb_err}")
         return {"received": True}
@@ -10845,7 +10856,7 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
         raise HTTPException(400, "Payment verification failed — invalid signature.")
     user_id = user["id"]
     existing = await db.payments.find_one({"razorpay_payment_id": body.razorpay_payment_id})
-    if existing:
+    if existing and existing.get("status") == "completed":
         return {"success": True, "credits_added": body.credits, "message": "Credits already applied."}
     # Server-side validation: verify order amount, user, and credits from Razorpay
     try:
@@ -10880,6 +10891,7 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
             "user_id": str(user_id),
             "plan": "topup",
             "provider": "razorpay",
+            "status": "completed",
             "razorpay_order_id": body.razorpay_order_id,
             "razorpay_payment_id": body.razorpay_payment_id,
             "amount_paise": TOPUP_PRICES_INR[body.credits],
@@ -10937,7 +10949,10 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
                         body.credits, now_iso, user_id,
                     )
             if _tu_payment_inserted:
-                await db.payments.delete_one({"razorpay_payment_id": body.razorpay_payment_id})
+                await db.payments.update_one(
+                    {"razorpay_payment_id": body.razorpay_payment_id},
+                    {"$set": {"status": "failed", "fail_reason": str(e), "failed_at": now_iso}},
+                )
         except Exception as rb_err:
             logger.error(f"Topup rollback failed for user {user_id}: {rb_err} — manual reconciliation needed")
         raise HTTPException(
