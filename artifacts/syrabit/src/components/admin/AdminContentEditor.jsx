@@ -563,6 +563,16 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
   useEffect(() => { load(true); }, [load]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await axios.get(`${API}/admin/content/cms-documents/merged-subject-ids`, authHeaders(adminToken));
+        const ids = new Set((res.data || []).filter(Boolean));
+        if (ids.size > 0) setMergedSubjectIds(prev => new Set([...prev, ...ids]));
+      } catch {}
+    })();
+  }, [adminToken]);
+
   // Read CMS → Editor handoff prefill on mount
   useEffect(() => {
     try {

@@ -11461,6 +11461,19 @@ class CMSDocumentUpdate(BaseModel):
     status: Optional[str] = None
     is_published: Optional[bool] = None
 
+@api.get("/admin/content/cms-documents/merged-subject-ids")
+async def get_merged_subject_ids(admin: dict = Depends(get_admin_user)):
+    """Return the set of subject IDs that already have a cms_documents entry."""
+    try:
+        if not await is_mongo_available():
+            return []
+        cursor = db.cms_documents.find({"subject_id": {"$exists": True, "$ne": ""}}, {"_id": 0, "subject_id": 1})
+        docs = await cursor.to_list(10000)
+        return list({d["subject_id"] for d in docs if d.get("subject_id")})
+    except Exception:
+        mark_mongo_down()
+        return []
+
 @api.get("/admin/content/cms-documents")
 async def get_cms_documents(admin: dict = Depends(get_admin_user)):
     """Get all CMS documents for admin"""
