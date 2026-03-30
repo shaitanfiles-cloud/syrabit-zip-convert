@@ -28,21 +28,64 @@ const CONTENT_TYPE_ICONS = {
 
 function ArticleJsonLd({ subject, title, url, wordCount }) {
   useEffect(() => {
-    const script   = document.createElement('script');
-    script.type    = 'application/ld+json';
-    script.id      = 'subject-article-jsonld';
-    script.text    = JSON.stringify({
-      '@context':   'https://schema.org',
-      '@type':      'Article',
-      headline:     title,
-      name:         title,
-      url,
-      author:       { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
-      publisher:    { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
-      educationalLevel: ((subject?.class_name || 'AHSEC') + ' ' + (subject?.stream_name || '')).trim(),
-      wordCount,
-      inLanguage:   'en-IN',
-    });
+    const eduLevel = ((subject?.class_name || '') + ' ' + (subject?.board_name || '') + ' ' + (subject?.stream_name || '')).replace(/\s+/g, ' ').trim() || 'FYUGP';
+    const description = subject?.description || `Complete ${subject?.name || title} notes and study material for ${eduLevel} students.`;
+    const published = subject?.created_at || new Date().toISOString();
+    const modified = subject?.updated_at || published;
+
+    const graphNodes = [
+      {
+        '@type': 'Article',
+        headline: title,
+        name: title,
+        description,
+        url,
+        author: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+        publisher: {
+          '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai',
+          logo: { '@type': 'ImageObject', url: 'https://syrabit.ai/icons/icon-192x192.png' },
+        },
+        datePublished: published,
+        dateModified: modified,
+        educationalLevel: eduLevel,
+        about: { '@type': 'Thing', name: subject?.name || title },
+        wordCount,
+        inLanguage: 'en-IN',
+        mainEntityOfPage: { '@type': 'WebPage', '@id': url },
+        isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
+        image: 'https://syrabit.ai/opengraph.jpg',
+      },
+      {
+        '@type': 'Course',
+        name: `${subject?.name || title} — ${eduLevel}`,
+        description,
+        provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
+        educationalLevel: eduLevel,
+        url,
+        inLanguage: 'en-IN',
+      },
+    ];
+
+    const chapters = subject?.chapters || [];
+    const faqEntries = [];
+    for (const ch of chapters) {
+      if (ch.title && ch.description && ch.description.length > 10) {
+        faqEntries.push({
+          '@type': 'Question',
+          name: `What is ${ch.title}?`,
+          acceptedAnswer: { '@type': 'Answer', text: ch.description },
+        });
+      }
+      if (faqEntries.length >= 10) break;
+    }
+    if (faqEntries.length >= 2) {
+      graphNodes.push({ '@type': 'FAQPage', mainEntity: faqEntries });
+    }
+
+    const script = document.createElement('script');
+    script.type = 'application/ld+json';
+    script.id = 'subject-article-jsonld';
+    script.text = JSON.stringify({ '@context': 'https://schema.org', '@graph': graphNodes });
     document.getElementById('subject-article-jsonld')?.remove();
     document.head.appendChild(script);
     return () => document.getElementById('subject-article-jsonld')?.remove();
@@ -277,44 +320,56 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
               </div>
             </AccordionTrigger>
             <AccordionContent className="pb-4">
-              {chapterSeoPath && (
-                <Link
-                  to={chapterSeoPath}
-                  className="block mb-3 px-4 py-3 rounded-xl bg-primary/5 border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-all group/ch"
-                  title={`${chapter.title} — ${subject.name} Notes & Study Material`}
-                >
-                  <div className="flex items-center gap-2">
-                    <FileText size={14} className="text-primary flex-shrink-0" />
-                    <span className="text-sm font-medium text-foreground group-hover/ch:text-primary transition-colors">
-                      {chapter.title} — Notes & Study Material
-                    </span>
-                    <ChevronRight size={14} className="ml-auto text-muted-foreground group-hover/ch:text-primary flex-shrink-0 transition-colors" />
+              <article
+                itemScope
+                itemType="https://schema.org/LearningResource"
+                aria-label={`${chapter.title} — ${subject.name} study material`}
+              >
+                <meta itemProp="name" content={chapter.title} />
+                <meta itemProp="educationalLevel" content={subject.class_name || ''} />
+                <meta itemProp="learningResourceType" content="Study Notes" />
+                <meta itemProp="inLanguage" content="en-IN" />
+                {chapter.description && <meta itemProp="description" content={chapter.description} />}
+                {chapterSeoPath && (
+                  <Link
+                    to={chapterSeoPath}
+                    className="block mb-3 px-4 py-3 rounded-xl bg-primary/5 border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-all group/ch"
+                    title={`${chapter.title} — ${subject.name} Notes & Study Material`}
+                    itemProp="url"
+                  >
+                    <div className="flex items-center gap-2">
+                      <FileText size={14} className="text-primary flex-shrink-0" />
+                      <span className="text-sm font-medium text-foreground group-hover/ch:text-primary transition-colors">
+                        {chapter.title} — Notes & Study Material
+                      </span>
+                      <ChevronRight size={14} className="ml-auto text-muted-foreground group-hover/ch:text-primary flex-shrink-0 transition-colors" />
+                    </div>
+                    {chapter.description && (
+                      <p className="text-xs text-muted-foreground mt-1 ml-6 line-clamp-2">{chapter.description}</p>
+                    )}
+                  </Link>
+                )}
+                {loadingChapter === chapter.id ? (
+                  <div className="flex justify-center py-4"><Loader2 size={20} className="animate-spin text-primary" /></div>
+                ) : chapter.content ? (
+                  <div className="px-4 py-2">
+                    <div className="md-content-light text-sm" itemProp="text">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{chapter.content}</ReactMarkdown>
+                    </div>
                   </div>
-                  {chapter.description && (
-                    <p className="text-xs text-muted-foreground mt-1 ml-6 line-clamp-2">{chapter.description}</p>
-                  )}
-                </Link>
-              )}
-              {loadingChapter === chapter.id ? (
-                <div className="flex justify-center py-4"><Loader2 size={20} className="animate-spin text-primary" /></div>
-              ) : chapter.content ? (
-                <div className="px-4 py-2">
-                  <div className="md-content-light text-sm">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{chapter.content}</ReactMarkdown>
+                ) : (
+                  <div className="text-center py-4">
+                    <p className="text-sm text-muted-foreground">No content added yet</p>
                   </div>
+                )}
+                <div className="mt-3">
+                  <Link to={`/chat?subject=${subjectId}`}>
+                    <Button size="sm" className="text-xs bg-primary hover:bg-primary/90 text-primary-foreground">
+                      Ask AI about this chapter
+                    </Button>
+                  </Link>
                 </div>
-              ) : (
-                <div className="text-center py-4">
-                  <p className="text-sm text-muted-foreground">No content added yet</p>
-                </div>
-              )}
-              <div className="mt-3">
-                <Link to={`/chat?subject=${subjectId}`}>
-                  <Button size="sm" className="text-xs bg-primary hover:bg-primary/90 text-primary-foreground">
-                    Ask AI about this chapter
-                  </Button>
-                </Link>
-              </div>
+              </article>
             </AccordionContent>
           </AccordionItem>
         );

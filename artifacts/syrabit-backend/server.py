@@ -3002,7 +3002,6 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
     seen = set()
     sources = []
 
-    # Content card attribution — prepend as first source when available
     _cc_meta = rag_ctx.get("content_card_meta")
     if _cc_meta and (_cc_meta.get("card_name") or _cc_meta.get("lesson_name")):
         sources.append({
@@ -3010,6 +3009,8 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
             "card_name":    _cc_meta.get("card_name", ""),
             "lesson_name":  _cc_meta.get("lesson_name", ""),
             "subject_name": _cc_meta.get("subject_name", ""),
+            "board_name":   _cc_meta.get("board_name", ""),
+            "class_name":   _cc_meta.get("class_name", ""),
             "slug":         "",
             "title":        _cc_meta.get("card_name", "") or _cc_meta.get("lesson_name", ""),
             "url":          "",
@@ -3099,14 +3100,12 @@ def build_rag_system_prompt(
     # Compute branded curriculum label once — used in all grounding tiers
     from prompts import _format_board_label as _fbl
     _board_raw = (context.get("board_name", "") or "").strip().upper()
-    _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard — AHSEC"
+    _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard"
     _curriculum_label = f"{_board_label} Curriculum"
 
-    # ── Mandatory answer intro header ────────────────────────────────────────────
-    # Derive subject and chapter from RAG context first, then fallback to user context
     _intro_subject = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
     _intro_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
-    _intro_parts = ["**AssamBoard Curriculum**"]
+    _intro_parts = [f"**{_curriculum_label}**"]
     if _intro_subject:
         _intro_parts.append(_intro_subject)
     if _intro_chapter:
@@ -7457,9 +7456,15 @@ async def admin_list_subjects(admin: dict = Depends(get_admin_user)):
 
 @api.get("/admin/content/chapters/{subject_id}")
 async def admin_list_chapters(subject_id: str, admin: dict = Depends(get_admin_user)):
-    """Admin chapter list — always reads live from DB, no caching, includes all statuses."""
+    """Admin chapter list — always reads live from DB, no caching, includes all statuses and coverage score."""
     chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(None)
-    return [{k: v for k, v in c.items() if k != "_id"} for c in chapters]
+    result = []
+    for c in chapters:
+        ch = {k: v for k, v in c.items() if k != "_id"}
+        if "coverage_score" not in ch:
+            ch["coverage_score"] = None
+        result.append(ch)
+    return result
 
 @api.post("/admin/content/boards")
 async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
@@ -8825,17 +8830,18 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 **Subject:** {subject_name or "Degree Course"} ({(paper_type or "").upper()} — {class_name or "FYUGP"})
 **Description:** {description or "No additional description provided."}
 
-**Syllabus Topics to cover:**
+**Syllabus Topics to cover (MANDATORY — every topic MUST be covered):**
 {topic_block}
 
 ---
 
 **INSTRUCTIONS:**
 - Write a brief **introduction** (2-3 sentences) about the chapter.
-- For EACH topic listed, write:
-  - A **## Heading** for the topic
+- You MUST cover EVERY topic listed above. For EACH topic listed, write:
+  - A **## Heading** matching the topic name
   - 3-5 sentence explanation in simple academic language
   - **Key Points** in 4-6 bullets with definitions/significance/**bold key terms**
+- Do NOT skip any topic from the list. If the syllabus lists N topics, your notes must have N corresponding sections.
 - End with a **Summary** section.
 - Use markdown. Do NOT add disclaimers. Start directly with the introduction.
 - Target: ~400-700 words.
@@ -8843,20 +8849,27 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
         try:
             generated = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
             if generated and len(generated.strip()) > 50:
+                gen_text = generated.strip()
+                if topics:
+                    cov = _compute_topic_coverage(topics, gen_text)
+                    if cov["missing"]:
+                        logger.warning(
+                            f"Notes generation for '{title}' missing topics ({cov['score']}%): {cov['missing'][:5]}"
+                        )
                 await db.chapters.update_one(
                     {"id": chapter_id},
                     {"$set": {
-                        "content": generated.strip(),
+                        "content": gen_text,
                         "content_type": "notes",
                         "notes_generated": True,
                         "notes_generated_at": datetime.now(timezone.utc).isoformat(),
                     }}
                 )
                 try:
-                    await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=subject_id)
+                    await auto_chunk_content(chapter_id=chapter_id, content=gen_text, subject_id=subject_id)
                 except Exception:
                     pass
-                results.append({"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": len(generated.split())})
+                results.append({"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": len(gen_text.split())})
             else:
                 results.append({"chapter_id": chapter_id, "title": title, "status": "error", "reason": "empty response"})
         except Exception as e:
@@ -9052,7 +9065,6 @@ async def _run_subject_content_pipeline(job_id: str, subject_id: str):
                 chapter_results.append(cr)
                 continue
 
-            # ── Step 2: Mark-wise important questions ──────────────────────────
             try:
                 topics     = chapter.get("topics") or []
                 description = (chapter.get("description") or "").strip()
@@ -9060,6 +9072,7 @@ async def _run_subject_content_pipeline(job_id: str, subject_id: str):
                 generate_prompt = f"""You are an expert exam question setter for {class_name} {subject_name}.
 
 Generate the MOST IMPORTANT exam questions for the chapter below, organised strictly by mark weight.
+Questions MUST collectively cover ALL of these syllabus topics: {topic_block}
 
 Chapter: {chapter_title}
 Topics: {topic_block}
@@ -9072,7 +9085,7 @@ Return ONLY valid JSON in this exact schema (no markdown, no explanation):
   "5_mark": [{{"question": "...", "type": "medium_answer"}},{{"question": "...", "type": "medium_answer"}},{{"question": "...", "type": "medium_answer"}}],
   "10_mark": [{{"question": "...", "type": "long_answer/essay"}},{{"question": "...", "type": "long_answer/essay"}},{{"question": "...", "type": "long_answer/essay"}}]
 }}
-Rules: 3 questions per mark bucket, total 15 questions. Specific to "{chapter_title}". Pure JSON only."""
+Rules: 3 questions per mark bucket, total 15 questions. Specific to "{chapter_title}". Every listed topic must be addressed by at least one question. Pure JSON only."""
                 raw_resp = await call_llm_api([{"role": "user", "content": generate_prompt}], max_tokens=1600)
                 json_match = _re.search(r'\{[\s\S]*\}', raw_resp or "")
                 if json_match:
@@ -9098,6 +9111,12 @@ Rules: 3 questions per mark bucket, total 15 questions. Specific to "{chapter_ti
                                     "source":     "ai_generated",
                                 })
                     if flat_questions:
+                        if topics:
+                            q_cov = _compute_topic_coverage(topics, "", flat_questions)
+                            if q_cov["missing"]:
+                                logger.warning(
+                                    f"Questions for '{chapter_title}' missing topics ({q_cov['score']}%): {q_cov['missing'][:5]}"
+                                )
                         pyq_doc = {
                             "id": str(uuid.uuid4()),
                             "subject_id": subject_id, "subject_name": subject_name,
@@ -9123,8 +9142,15 @@ Rules: 3 questions per mark bucket, total 15 questions. Specific to "{chapter_ti
 
             # ── Step 3: Memory-trick flashcards ────────────────────────────────
             try:
-                flashcards = await _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=25)
+                ch_topics = chapter.get("topics") or []
+                flashcards = await _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=25, topics=ch_topics or None)
                 if flashcards:
+                    if ch_topics:
+                        fc_cov = _compute_topic_coverage(ch_topics, "", flashcards=flashcards)
+                        if fc_cov["missing"]:
+                            logger.warning(
+                                f"Flashcards for '{chapter_title}' missing topics ({fc_cov['score']}%): {fc_cov['missing'][:5]}"
+                            )
                     fc_doc = {
                         "id": str(uuid.uuid4()),
                         "subject_id": subject_id, "subject_name": subject_name,
@@ -9341,7 +9367,7 @@ async def admin_generate_flashcards_bulk(subject_id: str, admin: dict = Depends(
             continue
 
         try:
-            flashcards = await _pipeline_generate_flashcards(content, subject_name, chapter_title, class_name, count=25)
+            flashcards = await _pipeline_generate_flashcards(content, subject_name, chapter_title, class_name, count=25, topics=chapter.get("topics"))
             if flashcards:
                 fc_doc = {
                     "id": str(uuid.uuid4()),
@@ -9807,6 +9833,82 @@ async def get_chapter_stats(chapter_id: str, admin: dict = Depends(get_admin_use
         "pyq_html_count": pyq_html_count,
         "notes_generated": bool(chapter.get("notes_generated") or content_len > 100),
     }
+
+
+def _compute_topic_coverage(topics: list, content: str, questions: list = None, flashcards: list = None) -> dict:
+    """Compute how many listed topics have meaningful representation in generated content."""
+    if not topics:
+        return {"score": 100, "total_topics": 0, "covered": 0, "missing": []}
+    content_lower = (content or "").lower()
+    q_text = " ".join(
+        (q.get("question", "") if isinstance(q, dict) else str(q))
+        for q in (questions or [])
+    ).lower()
+    fc_text = " ".join(
+        ((f.get("front", "") + " " + f.get("back", "")) if isinstance(f, dict) else str(f))
+        for f in (flashcards or [])
+    ).lower()
+    combined = content_lower + " " + q_text + " " + fc_text
+    covered = []
+    missing = []
+    for topic in topics:
+        t = str(topic).strip()
+        if not t:
+            continue
+        t_lower = t.lower()
+        if t_lower in combined:
+            covered.append(t)
+            continue
+        words = [w for w in re.split(r'\W+', t_lower) if w]
+        if not words:
+            covered.append(t)
+            continue
+        matched_words = sum(1 for w in words if w in combined)
+        threshold = max(1, len(words) * 0.4)
+        if matched_words >= threshold:
+            covered.append(t)
+        else:
+            missing.append(t)
+    total = len(covered) + len(missing)
+    score = round((len(covered) / total) * 100) if total > 0 else 100
+    return {"score": score, "total_topics": total, "covered": len(covered), "missing": missing}
+
+
+@api.get("/admin/content/chapters/{subject_id}/coverage")
+async def admin_subject_coverage(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """Compute per-chapter syllabus topic coverage scores for a subject."""
+    chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(None)
+    if not chapters:
+        raise HTTPException(status_code=404, detail="No chapters found")
+    chapter_ids = [c["id"] for c in chapters]
+    pyq_docs, fc_docs = await asyncio.gather(
+        db.ai_pyq_collections.find({"chapter_id": {"$in": chapter_ids}}, {"_id": 0}).to_list(None),
+        db.flashcard_collections.find({"chapter_id": {"$in": chapter_ids}}, {"_id": 0}).to_list(None),
+    )
+    pyq_map = {d["chapter_id"]: d.get("pyqs", []) for d in pyq_docs}
+    fc_map = {d["chapter_id"]: d.get("flashcards", []) for d in fc_docs}
+    results = []
+    for ch in chapters:
+        cid = ch["id"]
+        ch_questions = ch.get("important_questions") or pyq_map.get(cid, [])
+        ch_flashcards = ch.get("memory_tricks") or fc_map.get(cid, [])
+        cov = _compute_topic_coverage(
+            ch.get("topics", []),
+            ch.get("content", ""),
+            ch_questions,
+            ch_flashcards,
+        )
+        await db.chapters.update_one({"id": cid}, {"$set": {"coverage_score": cov["score"]}})
+        results.append({
+            "chapter_id": cid,
+            "title": ch.get("title", ""),
+            "coverage_score": cov["score"],
+            "total_topics": cov["total_topics"],
+            "covered": cov["covered"],
+            "missing": cov["missing"],
+            "flagged": cov["score"] < 60,
+        })
+    return {"subject_id": subject_id, "chapters": results}
 
 
 @api.post("/admin/content/chapters/{chapter_id}/attach-file")
@@ -16979,7 +17081,8 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 
 
 async def _pipeline_generate_mark_wise_pyq(
-    content: str, subject_name: str, chapter_title: str, class_name: str, paper_type: str = ""
+    content: str, subject_name: str, chapter_title: str, class_name: str, paper_type: str = "",
+    topics: list = None,
 ) -> dict:
     """
     Generate mark-wise important questions (1/2/3/5/10 marks) for a chapter.
@@ -16989,11 +17092,12 @@ async def _pipeline_generate_mark_wise_pyq(
     import re as _re
     if not content or len(content.strip()) < 100:
         return {}
-    topic_block = chapter_title
+    topic_block = ", ".join(str(t) for t in (topics or [])[:15]) if topics else chapter_title
     prompt = f"""You are an expert exam question setter for {class_name} {subject_name}.
 
 Generate the MOST IMPORTANT exam questions for the chapter below, organised strictly by mark weight.
 These should be high-probability questions a student must prepare.
+Questions MUST collectively cover ALL of these syllabus topics: {topic_block}
 
 Chapter: {chapter_title}
 Topics: {topic_block}
@@ -17034,6 +17138,7 @@ Rules:
 - 5-mark: medium answers with points/explanation
 - 10-mark: detailed essay or long-answer questions
 - Questions must be specific to "{chapter_title}", not generic
+- Every listed topic must be addressed by at least one question
 - Exactly 3 questions per mark bucket, total 15 questions
 - Pure JSON only, no markdown fences
 
@@ -17135,19 +17240,26 @@ Chapter content:
         return []
 
 
-async def _pipeline_generate_flashcards(content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 30) -> list:
+async def _pipeline_generate_flashcards(
+    content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 30,
+    topics: list = None,
+) -> list:
     """
     Generate memory-trick flashcards: mnemonics, mindmaps, shortcuts, hacks, and key-fact cards.
     Returns list of flashcard dicts.
     """
     if not content or len(content.strip()) < 100:
         return []
+    topic_instruction = ""
+    if topics:
+        topic_list = ", ".join(str(t) for t in topics[:15])
+        topic_instruction = f"\nFlashcards MUST collectively cover ALL of these syllabus topics: {topic_list}\nEnsure at least one flashcard per topic.\n"
     prompt = f"""You are an expert memory coach and study-hack creator for AHSEC/FYUGP students in Assam.
 
 Generate exactly {count} MEMORY-TRICK flashcards for:
 Subject: {subject_name} ({class_name})
 Chapter: {chapter_title}
-
+{topic_instruction}
 Each card must help a student REMEMBER, not just recall. Use:
 - Mnemonics (acronyms, rhymes, first-letter tricks)
 - Mindmap cues (central idea → branches)
@@ -17464,9 +17576,10 @@ async def _pipeline_process_one_chapter(
             mark_wise_result = None
             flashcards = None
         else:
+            ch_topics = chapter.get("topics") or []
             pyq_task = _pipeline_generate_topic_pyq(notes_content, subject_name, chapter_title, class_name, count=20)
-            mw_task  = _pipeline_generate_mark_wise_pyq(notes_content, subject_name, chapter_title, class_name, paper_type=paper_type)
-            fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30)
+            mw_task  = _pipeline_generate_mark_wise_pyq(notes_content, subject_name, chapter_title, class_name, paper_type=paper_type, topics=ch_topics)
+            fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30, topics=ch_topics)
             (topic_pyqs, pyq_err), (mark_wise_result, mw_err), (flashcards, fc_err) = await asyncio.gather(
                 _safe(pyq_task), _safe(mw_task), _safe(fc_task)
             )

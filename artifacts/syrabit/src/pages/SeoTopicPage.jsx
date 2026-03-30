@@ -271,6 +271,8 @@ export default function SeoTopicPage() {
         about: { '@type': 'Thing', name: page.topic_title },
         isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
         inLanguage: 'en-IN',
+        learningResourceType: PAGE_TYPE_META[currentType]?.label || 'Study Material',
+        wordCount: page.word_count || undefined,
       },
       {
         '@type': 'BreadcrumbList',
@@ -289,6 +291,11 @@ export default function SeoTopicPage() {
         educationalLevel: `${page.class_name || ''} ${page.board_name || ''}`.trim(),
         url: pageUrl,
         inLanguage: 'en-IN',
+        hasCourseInstance: {
+          '@type': 'CourseInstance',
+          courseMode: 'online',
+          courseWorkload: page.word_count ? `PT${Math.max(1, Math.ceil(page.word_count / 200))}M` : undefined,
+        },
       },
     ];
 

@@ -622,7 +622,16 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
   const refreshChapters = (subjectId) => {
     axios.get(`${API}/admin/content/chapters/${subjectId}`, authHeaders(adminToken))
-      .then(r => setChapters(r.data || []))
+      .then(r => {
+        setChapters(r.data || []);
+        axios.get(`${API}/admin/content/chapters/${subjectId}/coverage`, authHeaders(adminToken))
+          .then(covRes => {
+            const covMap = {};
+            (covRes.data?.chapters || []).forEach(c => { covMap[c.chapter_id] = c.coverage_score; });
+            setChapters(prev => prev.map(ch => ({ ...ch, coverage_score: covMap[ch.id] ?? ch.coverage_score ?? null })));
+          })
+          .catch(() => {});
+      })
       .catch(() => toast.error('Could not reload chapter list'));
   };
 
@@ -1657,6 +1666,21 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                                   <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
                                     style={{ background: 'rgba(236,72,153,0.10)', color: '#f9a8d4', border: '1px solid rgba(236,72,153,0.18)' }}>
                                     <Sparkles size={9} /> PYQ Page
+                                  </span>
+                                )}
+                                {ch.coverage_score != null && (
+                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                                    style={ch.coverage_score < 60
+                                      ? { background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.25)' }
+                                      : ch.coverage_score < 80
+                                      ? { background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.20)' }
+                                      : { background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }
+                                    }
+                                    title={ch.coverage_score < 60 ? 'Low syllabus coverage — consider regenerating' : `${ch.coverage_score}% of syllabus topics covered`}
+                                  >
+                                    {ch.coverage_score < 60 && <AlertTriangle size={9} />}
+                                    {ch.coverage_score >= 60 && <CheckCircle size={9} />}
+                                    {ch.coverage_score}% Coverage
                                   </span>
                                 )}
                                 {ch.slug && !hasPyqs && !hasFc && !hasBlogs && (

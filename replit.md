@@ -40,6 +40,17 @@ Admin endpoints: `/api/admin/vertex/*`
 Frontend panel: Admin → Gemini AI Studio (sidebar)
 CMS Editor: Translate button + AI Write (Gemini palette) in toolbar
 
+## GEO, Chat Sources & Syllabus Alignment Audit (Task #46)
+
+1. **JSON-LD GEO hardening**: LearnPage, SeoTopicPage, SubjectPage now use `@graph` with Article + Course + BreadcrumbList + FAQPage schemas. All fields use real data (datePublished/dateModified with fallbacks, educationalLevel from actual board/class, about from primary keyword). LearnPage and SubjectPage gained Course schema.
+2. **Semantic HTML**: SubjectPage chapter cards wrap content in `<article itemScope itemType="LearningResource">` with microdata (name, educationalLevel, learningResourceType, inLanguage, url). Heading hierarchy uses `<h3>` for chapter titles.
+3. **Chat source citation resilience**: MarkdownContent citation regex now normalizes both titles via fuzzy matching (strips punctuation/whitespace, tries substring containment) so slight title variations still resolve to links.
+4. **Dynamic board labels**: Removed hardcoded `AssamBoard — AHSEC` fallback in ChatPage and prompts.py. Board labels now use actual board data from user context. `_format_board_label` passes through non-Assam board names.
+5. **Source pill tooltips**: Pills show full Board → Class → Subject → Chapter breadcrumb in tooltip. Content card attribution breadcrumb now shows Board → Class → Subject → Chapter → Card.
+6. **Syllabus coverage scoring**: `_compute_topic_coverage()` function computes 0-100% score based on keyword matching of chapter topics against notes + questions + flashcards. Endpoint: `GET /api/admin/content/chapters/{subject_id}/coverage`. Stores `coverage_score` on each chapter document. Chapters below 60% are flagged.
+7. **Admin chapter list**: `GET /api/admin/content/chapters/{subject_id}` now always includes `coverage_score` field (null if not yet computed).
+8. **Tightened generation prompts**: Notes, important questions, and flashcard prompts now explicitly require coverage of EVERY listed syllabus topic. Post-generation check logs warnings for any missing topics.
+
 ## PYQ HTML Replica (Task #23)
 
 - **Backend**: `POST /api/admin/pyq/html-replica` — accepts a PDF + hierarchy metadata, runs Gemini Vision OCR, builds SEO HTML replica, persists to `pyq_html_pages` MongoDB collection. Returns `{ seo_url: "/pyq/{slug}" }`.

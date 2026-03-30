@@ -188,11 +188,24 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
       {hasNamedContentCard && (
         <div className="flex items-center gap-1.5 mb-2 px-1 mt-1 flex-wrap">
           <span className="text-[10px] font-semibold text-white/25 uppercase tracking-widest">From</span>
+          {contentCardSource.board_name && (
+            <>
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-md" style={{ background: 'rgba(34,197,94,0.07)', color: '#86efac' }}>
+                {contentCardSource.board_name}
+              </span>
+              <span className="text-[10px] text-white/20">›</span>
+            </>
+          )}
+          {contentCardSource.class_name && (
+            <>
+              <span className="text-[11px] font-medium px-2 py-0.5 rounded-md" style={{ background: 'rgba(234,179,8,0.07)', color: '#fde68a' }}>
+                {contentCardSource.class_name}
+              </span>
+              <span className="text-[10px] text-white/20">›</span>
+            </>
+          )}
           {contentCardSource.subject_name && (
-            <span
-              className="text-[11px] font-medium px-2 py-0.5 rounded-md"
-              style={{ background: 'rgba(59,130,246,0.07)', color: '#7dd3fc' }}
-            >
+            <span className="text-[11px] font-medium px-2 py-0.5 rounded-md" style={{ background: 'rgba(59,130,246,0.07)', color: '#7dd3fc' }}>
               {contentCardSource.subject_name}
             </span>
           )}
@@ -200,10 +213,7 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
             <span className="text-[10px] text-white/20">›</span>
           )}
           {contentCardSource.lesson_name && (
-            <span
-              className="text-[11px] font-medium px-2 py-0.5 rounded-md"
-              style={{ background: 'rgba(96,165,250,0.08)', color: '#93c5fd' }}
-            >
+            <span className="text-[11px] font-medium px-2 py-0.5 rounded-md" style={{ background: 'rgba(96,165,250,0.08)', color: '#93c5fd' }}>
               {contentCardSource.lesson_name}
             </span>
           )}
@@ -211,10 +221,7 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
             <span className="text-[10px] text-white/20">›</span>
           )}
           {contentCardSource.card_name && contentCardSource.card_name !== contentCardSource.lesson_name && (
-            <span
-              className="text-[11px] font-semibold px-2 py-0.5 rounded-md"
-              style={{ background: 'rgba(139,92,246,0.10)', color: '#a78bfa' }}
-            >
+            <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md" style={{ background: 'rgba(139,92,246,0.10)', color: '#a78bfa' }}>
               {contentCardSource.card_name}
             </span>
           )}
@@ -238,7 +245,7 @@ function SourcesCard({ sources, ragSource, ragChunks, ragSubjectId, ragSubjectNa
       {visibleSources.length > 0 && (
         <div className="source-pages">
           {visibleSources.map((src, i) => {
-            const tooltip = [src.title, src.slug].filter(Boolean).join(' — ') || src.url || 'View source';
+            const tooltip = [src.board_name, src.class_name, ragSubjectName || src.subject_name, src.chapter_name, src.title || src.slug].filter(Boolean).join(' › ') || src.url || 'View source';
             return (
               <button
                 key={i}
@@ -278,23 +285,37 @@ const MD_LINK_COMPONENTS = {
 };
 
 function MarkdownContent({ content, streaming, sources }) {
-  // Build lookup: title/slug → url from RAG sources so [PAGE: X] becomes a link
   const processed = useMemo(() => {
     if (!content) return content;
-    // Build map: lowercased title → url, lowercased slug → url
+    const normalize = (s) => (s || '').trim().toLowerCase().replace(/[\s\-_]+/g, ' ').replace(/[^a-z0-9 ]/g, '');
+    const toSlug = (s) => normalize(s).replace(/\s+/g, '-');
     const urlMap = new Map();
     for (const s of (sources || [])) {
       const url = s.url || '';
-      if (s.title) urlMap.set(s.title.trim().toLowerCase(), url);
-      if (s.slug)  urlMap.set(s.slug.trim().toLowerCase(),  url || `/learn/${s.slug}`);
+      if (s.title) {
+        urlMap.set(normalize(s.title), url);
+        urlMap.set(toSlug(s.title), url);
+      }
+      if (s.slug) {
+        urlMap.set(normalize(s.slug), url || `/learn/${s.slug}`);
+        urlMap.set(toSlug(s.slug), url || `/learn/${s.slug}`);
+      }
     }
-    // Replace [PAGE/CHAPTER/TOPIC/LESSON/SECTION: Title] with [Title](url) markdown links
+    const findUrl = (raw) => {
+      const norm = normalize(raw);
+      const slug = toSlug(raw);
+      if (urlMap.has(norm)) return urlMap.get(norm);
+      if (urlMap.has(slug)) return urlMap.get(slug);
+      if (norm.length >= 8) {
+        for (const [k, v] of urlMap) {
+          if (k.length >= 8 && (k.includes(norm) || norm.includes(k))) return v;
+        }
+      }
+      return '';
+    };
     return content.replace(/\[(PAGE|CHAPTER|TOPIC|LESSON|SECTION):\s*([^\]]+)\]/gi, (_, _type, rawTitle) => {
-      const title   = rawTitle.trim();
-      const key     = title.toLowerCase();
-      // Try exact title match, then slug-style key
-      const slugKey = key.replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-      const url = urlMap.get(key) || urlMap.get(slugKey) || '';
+      const title = rawTitle.trim();
+      const url = findUrl(title);
       return url ? `[${title}](${url})` : `**${title}**`;
     });
   }, [content, sources]);
@@ -438,9 +459,12 @@ const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, i
                       onClick={() => handlePillNav(pillUrl)}
                       className="source-mini-pill"
                       title={[
-                        msg.rag_source === 'document' ? 'Uploaded Document' : (subjectLabel || 'Syrabit Curriculum'),
+                        msg.rag_source === 'document' ? 'Uploaded Document' : null,
+                        msg.rag_source !== 'document' ? (msg.ctx_board_name || msg.rag_board_name || '') : null,
+                        msg.rag_source !== 'document' ? (msg.ctx_class_name || msg.rag_class_name || '') : null,
+                        subjectLabel,
                         chapterLabel,
-                      ].filter(Boolean).join(' › ')}
+                      ].filter(Boolean).join(' › ') || 'Syrabit Curriculum'}
                     >
                       <BookOpen size={10} className="shrink-0" />
                       <span className="pill-seg pill-brand">
@@ -622,11 +646,8 @@ export default function ChatPage() {
     if (subject.description) lines.push(`Description: ${subject.description}`);
     if (Array.isArray(subject.tags) && subject.tags.length)
       lines.push(`Topics covered: ${subject.tags.join(', ')}`);
-    const rawBoard = (user?.board_name || '').toUpperCase();
-    const CANONICAL_DIVISIONS = new Set(['AHSEC', 'DEGREE', 'SEBA']);
-    const boardLabel = rawBoard
-      ? `AssamBoard — ${CANONICAL_DIVISIONS.has(rawBoard) ? rawBoard : 'AHSEC'}`
-      : null;
+    const rawBoard = (user?.board_name || '').trim();
+    const boardLabel = rawBoard ? `${rawBoard}` : null;
     const parts = [boardLabel, user?.class_name, user?.stream_name].filter(Boolean);
     if (parts.length) lines.push(`Board/Class: ${parts.join(' | ')}`);
     if (scopedChapters.length) {

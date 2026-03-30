@@ -23,49 +23,69 @@ function buildToc(headingsJson) {
 }
 
 function SchemaOrg({ doc }) {
-  const schema = {
-    '@context': 'https://schema.org',
-    '@type': doc.schema_type || 'Article',
-    headline: doc.title,
-    description: doc.meta_description || doc.description || '',
-    author: { '@type': 'Organization', name: 'Syrabit.ai' },
-    publisher: {
-      '@type': 'Organization',
-      name: 'Syrabit.ai',
-      logo: { '@type': 'ImageObject', url: 'https://syrabit.ai/logo.png' },
-    },
-    datePublished: doc.created_at,
-    dateModified: doc.updated_at,
-    keywords: doc.seo_tags || '',
-    inLanguage: 'en-IN',
-    educationalLevel: doc.geo_tags || 'Class 11-12',
-    about: {
-      '@type': 'Thing',
-      name: doc.primary_keyword || doc.title,
-    },
-  };
+  const pageUrl = `https://syrabit.ai/learn/${doc.seo_slug}`;
+  const published = doc.created_at || doc.generated_at || new Date().toISOString();
+  const modified = doc.updated_at || published;
+  const eduLevel = doc.geo_tags || doc.class_name || 'Class 11-12';
+  const description = doc.meta_description || doc.description || '';
 
-  const breadcrumb = {
-    '@context': 'https://schema.org',
-    '@type': 'BreadcrumbList',
-    itemListElement: [
-      { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
-      { '@type': 'ListItem', position: 2, name: 'Browser', item: 'https://syrabit.ai/library' },
-      { '@type': 'ListItem', position: 3, name: doc.title, item: `https://syrabit.ai/learn/${doc.seo_slug}` },
-    ],
-  };
+  const graphNodes = [
+    {
+      '@type': 'Article',
+      headline: doc.title,
+      description,
+      author: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+      publisher: {
+        '@type': 'Organization',
+        name: 'Syrabit.ai',
+        url: 'https://syrabit.ai',
+        logo: { '@type': 'ImageObject', url: 'https://syrabit.ai/icons/icon-192x192.png' },
+      },
+      datePublished: published,
+      dateModified: modified,
+      keywords: doc.seo_tags || '',
+      inLanguage: 'en-IN',
+      educationalLevel: eduLevel,
+      about: { '@type': 'Thing', name: doc.primary_keyword || doc.title },
+      mainEntityOfPage: { '@type': 'WebPage', '@id': pageUrl },
+      isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
+      image: 'https://syrabit.ai/opengraph.jpg',
+    },
+    {
+      '@type': 'BreadcrumbList',
+      itemListElement: [
+        { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
+        { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
+        { '@type': 'ListItem', position: 3, name: doc.title, item: pageUrl },
+      ],
+    },
+    {
+      '@type': 'Course',
+      name: `${doc.title} — ${eduLevel}`,
+      description: description || `Study material for ${doc.title}`,
+      provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
+      educationalLevel: eduLevel,
+      url: pageUrl,
+      inLanguage: 'en-IN',
+    },
+  ];
+
+  if (Array.isArray(doc.qa_pairs) && doc.qa_pairs.length >= 2) {
+    graphNodes.push({
+      '@type': 'FAQPage',
+      mainEntity: doc.qa_pairs.map(q => ({
+        '@type': 'Question',
+        name: q.question,
+        acceptedAnswer: { '@type': 'Answer', text: q.answer },
+      })),
+    });
+  }
 
   return (
-    <>
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(schema) }}
-      />
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(breadcrumb) }}
-      />
-    </>
+    <script
+      type="application/ld+json"
+      dangerouslySetInnerHTML={{ __html: JSON.stringify({ '@context': 'https://schema.org', '@graph': graphNodes }) }}
+    />
   );
 }
 
