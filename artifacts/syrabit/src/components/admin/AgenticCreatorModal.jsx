@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   X, Sparkles, BookOpen, FileQuestion, Layers, CheckCircle2,
   AlertCircle, Loader2, Zap, Bot, TerminalSquare,
-  ArrowRight, CalendarDays,
+  ArrowRight, Target,
 } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -29,15 +29,15 @@ const STEPS = [
   },
   {
     key: 'pyqs',
-    label: 'Previous Year Questions',
-    icon: CalendarDays,
+    label: 'Important Questions',
+    icon: Target,
     color: '#f59e0b',
     bg: 'rgba(245,158,11,0.12)',
-    description: '12 exam-pattern PYQs per chapter with year tags [2015–2023]',
+    description: 'Mark-wise: 1M, 2M, 5M & 10M most important questions per chapter',
     unit: 'questions',
     endpoint: (id) => `/admin/subjects/${id}/generate-pyqs-bulk`,
     countKey: 'total_pyqs',
-    outputLabel: (data) => `${data.total_pyqs} PYQs`,
+    outputLabel: (data) => `${data.total_pyqs} questions`,
   },
   {
     key: 'flashcards',
@@ -106,27 +106,20 @@ export default function AgenticCreatorModal({
         const data = res.data;
         setStepResults(prev => ({ ...prev, [step.key]: data }));
 
-        // PYQ step: if no papers were found, treat as a warning not a hard error
-        if (step.key === 'pyqs' && data.total_pyqs === 0 && data.message?.startsWith('no_papers_found')) {
-          setStepStatus(step.key, STATE.error);
-          push(`⚠ Web search found no questions and no uploaded PYQ papers exist`, 'warn');
-          push(`  → This may be a very niche subject — try uploading actual PYQ PDFs`, 'warn');
-          push(`  → PYQ Manager tab → upload PDF → run "HTML Replica" → re-run Agentic Generate`, 'warn');
-          continue;
-        }
-
         setStepStatus(step.key, STATE.done);
 
-        // Extra stats for PYQ step
+        // Extra stats for Important Questions step
         if (step.key === 'pyqs') {
           const webN   = data.web_found   ?? 0;
           const localN = data.local_found ?? 0;
           const poolN  = data.pool_size   ?? 0;
           const parts  = [];
-          if (webN > 0)   parts.push(`${webN} from web search`);
+          if (webN > 0)   parts.push(`${webN} from web`);
           if (localN > 0) parts.push(`${localN} from uploaded papers`);
           if (parts.length)
-            push(`  Sources: ${parts.join(' · ')} (${poolN} unique in pool)`, 'detail');
+            push(`  Reference pool: ${parts.join(' · ')} (${poolN} unique)`, 'detail');
+          else
+            push(`  No reference pool — questions generated from chapter content`, 'detail');
         }
 
         const skipped = (data.results || []).filter(r => r.status === 'skipped').length;
@@ -234,7 +227,7 @@ export default function AgenticCreatorModal({
                             {step.key === 'pyqs' && (
                               <span className="text-[10px] px-1.5 py-0.5 rounded-full"
                                 style={{ background: 'rgba(245,158,11,0.12)', color: '#fbbf24' }}>
-                                with year tags
+                                1M · 2M · 5M · 10M
                               </span>
                             )}
                             {step.key === 'flashcards' && (
@@ -270,7 +263,7 @@ export default function AgenticCreatorModal({
                     <span className="font-mono" style={{ color: '#8b5cf6' }}>{chapterCount} notes</span>
                   )}
                   {enabled.has('pyqs') && (
-                    <span className="font-mono" style={{ color: '#f59e0b' }}>{chapterCount * 12} PYQs</span>
+                    <span className="font-mono" style={{ color: '#f59e0b' }}>{chapterCount * 12} imp. questions</span>
                   )}
                   {enabled.has('flashcards') && (
                     <span className="font-mono" style={{ color: '#10b981' }}>{chapterCount * 25} flashcards</span>
@@ -369,7 +362,7 @@ export default function AgenticCreatorModal({
                   {enabled.has('pyqs') && (
                     <div className="rounded-xl p-3 text-center" style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.20)' }}>
                       <p className="text-xl font-bold" style={{ color: '#fbbf24' }}>{totalPyqs}</p>
-                      <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>PYQs<br />generated</p>
+                      <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>imp. questions<br />generated</p>
                     </div>
                   )}
                   {enabled.has('flashcards') && (

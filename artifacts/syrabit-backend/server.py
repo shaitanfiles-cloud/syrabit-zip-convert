@@ -9006,16 +9006,15 @@ async def _gemini_web_search_pyqs(
 @api.post("/admin/subjects/{subject_id}/generate-pyqs-bulk")
 async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
     """
-    Lesson-wise PYQ assignment — PRIORITY: web search via Gemini grounding.
+    Mark-wise Most Important Questions Generator.
 
     Workflow:
-      1. [PRIORITY] Gemini Google Search grounding → real questions from the web.
-      2. [SUPPLEMENT] pyq_html_pages → questions from locally uploaded PDFs.
-      3. Merge both pools (web questions first).
-      4. If pool is empty → return early with actionable message.
-      5. Per chapter: AI classifies which questions from the merged pool belong
-         to that chapter (no question fabrication, only real ones).
-      6. Upsert per-chapter results into ai_pyq_collections.
+      1. [OPTIONAL] Gemini Google Search grounding → collect real past questions as reference.
+      2. [OPTIONAL] pyq_html_pages → questions from locally uploaded PDFs as reference.
+      3. Merge reference pool (web first).
+      4. Per chapter: AI generates 3×1M + 3×2M + 3×5M + 3×10M most important questions,
+         inspired by real PYQ pool (if any) but always generating chapter-specific questions.
+      5. Upsert per-chapter results into ai_pyq_collections with mark_wise structure.
     """
     import re as _re
 
@@ -9102,23 +9101,7 @@ async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_ad
             seen_texts.add(fingerprint)
             question_pool.append({**q, "idx": len(question_pool)})
 
-    if not question_pool:
-        return {
-            "subject_id":   subject_id,
-            "subject_name": subject_name,
-            "total":        len(chapters),
-            "generated":    0,
-            "total_pyqs":   0,
-            "results":      [],
-            "web_found":    0,
-            "local_found":  0,
-            "message":      (
-                "no_papers_found — web search returned no results and no uploaded PYQ papers found. "
-                "Upload PYQ PDFs via the PYQ Manager tab and process with HTML Replica."
-            ),
-        }
-
-    # Render the pool as a numbered list for the prompt (truncate each text)
+    # pool_text helper kept for potential future use (not used in mark-wise generation)
     def _pool_text(pool):
         lines = []
         for q in pool:
@@ -9128,9 +9111,16 @@ async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_ad
             lines.append(f"{q['idx']}. {text_trunc}{marks_str}{year_str}")
         return "\n".join(lines)
 
-    pool_text = _pool_text(question_pool)
+    # ── Step 3: Per-chapter mark-wise important question generation ───────────
+    # Build a reference pool snippet (first 60 real questions) to inspire AI
+    pool_snippet = ""
+    if question_pool:
+        sample = question_pool[:60]
+        pool_snippet = "\n".join(
+            f"- {q['text'][:180]}" + (f" [{q['marks']}M]" if q.get("marks") else "")
+            for q in sample
+        )
 
-    # ── Step 3: Per-chapter AI classification ─────────────────────────────────
     results = []
     for chapter in chapters:
         chapter_id    = chapter.get("id", "")
@@ -9150,65 +9140,97 @@ async def admin_generate_pyqs_bulk(subject_id: str, admin: dict = Depends(get_ad
         else:
             topic_block = chapter_title
 
-        classify_prompt = f"""You are an exam question classifier.
+        pool_ref = f"\n\nReference questions from past papers (use as inspiration, do NOT copy verbatim):\n{pool_snippet}" if pool_snippet else ""
 
-Below is a numbered list of questions extracted from real {subject_name} exam papers.
-Your task: identify which question numbers (0-indexed) are relevant to the chapter below.
+        generate_prompt = f"""You are an expert exam question setter for {class_name} {subject_name}.
+
+Generate the MOST IMPORTANT exam questions for the chapter below, organised strictly by mark weight.
+These should be high-probability questions a student must prepare.
 
 Chapter: {chapter_title}
-Topics covered: {topic_block}
+Topics: {topic_block}{pool_ref}
 
-Questions (index. text [marks] [year]):
-{pool_text}
+Return ONLY valid JSON in this exact schema (no markdown, no explanation):
+{{
+  "1_mark": [
+    {{"question": "...", "type": "MCQ/very_short_answer"}},
+    {{"question": "...", "type": "MCQ/very_short_answer"}},
+    {{"question": "...", "type": "MCQ/very_short_answer"}}
+  ],
+  "2_mark": [
+    {{"question": "...", "type": "short_answer"}},
+    {{"question": "...", "type": "short_answer"}},
+    {{"question": "...", "type": "short_answer"}}
+  ],
+  "5_mark": [
+    {{"question": "...", "type": "medium_answer"}},
+    {{"question": "...", "type": "medium_answer"}},
+    {{"question": "...", "type": "medium_answer"}}
+  ],
+  "10_mark": [
+    {{"question": "...", "type": "long_answer/essay"}},
+    {{"question": "...", "type": "long_answer/essay"}},
+    {{"question": "...", "type": "long_answer/essay"}}
+  ]
+}}
 
-Return ONLY a JSON array of integer indices for questions that clearly relate to this chapter.
-Example: [0, 3, 7, 12]
-If none match, return: []
-No explanation. Pure JSON array only."""
+Rules:
+- 1-mark: MCQ options OR one-word/one-line answers
+- 2-mark: short answers (2–3 sentences)
+- 5-mark: medium answers with points/explanation
+- 10-mark: detailed essay or long-answer questions
+- Questions must be specific to "{chapter_title}", not generic
+- Exactly 3 questions per mark bucket, total 12 questions
+- Pure JSON only, no markdown fences"""
 
         try:
             raw_resp = await call_llm_api(
-                [{"role": "user", "content": classify_prompt}],
-                max_tokens=400,
+                [{"role": "user", "content": generate_prompt}],
+                max_tokens=1200,
             )
             if not raw_resp:
                 results.append({"chapter_id": chapter_id, "title": chapter_title,
-                                 "status": "skipped", "reason": "empty classifier response"})
+                                 "status": "skipped", "reason": "empty generator response"})
                 continue
 
-            # Extract JSON array from response
-            arr_match = _re.search(r'\[[\d,\s]*\]', raw_resp)
-            if not arr_match:
+            # Extract JSON object from response
+            json_match = _re.search(r'\{[\s\S]*\}', raw_resp)
+            if not json_match:
                 results.append({"chapter_id": chapter_id, "title": chapter_title,
-                                 "status": "skipped", "reason": "no indices returned"})
+                                 "status": "skipped", "reason": "no JSON object returned"})
                 continue
 
-            indices = json.loads(arr_match.group())
-            if not isinstance(indices, list):
-                indices = []
+            parsed = json.loads(json_match.group())
 
-            # Collect the actual questions
-            matched = []
-            for idx in indices:
-                if isinstance(idx, int) and 0 <= idx < len(question_pool):
-                    q = question_pool[idx]
-                    marks_val = 0
-                    try:
-                        marks_val = int(q["marks"]) if q["marks"] else 0
-                    except (ValueError, TypeError):
-                        marks_val = 0
-                    matched.append({
-                        "question":   q["text"],
-                        "marks":      marks_val,
-                        "year":       q["year"],
-                        "paper_type": q["paper_type"],
-                        "sub_parts":  q["sub_parts"],
-                        "source":     "real_paper",
-                    })
+            # Flatten into a flat list with marks field (backward-compatible with LearnPage)
+            mark_wise = {
+                "1":  parsed.get("1_mark",  []),
+                "2":  parsed.get("2_mark",  []),
+                "5":  parsed.get("5_mark",  []),
+                "10": parsed.get("10_mark", []),
+            }
+            flat_questions = []
+            for marks_str, qs in mark_wise.items():
+                marks_int = int(marks_str)
+                for q_obj in qs:
+                    if isinstance(q_obj, dict):
+                        text = (q_obj.get("question") or "").strip()
+                    else:
+                        text = str(q_obj).strip()
+                    if text:
+                        flat_questions.append({
+                            "question":   text,
+                            "marks":      marks_int,
+                            "type":       q_obj.get("type", "") if isinstance(q_obj, dict) else "",
+                            "year":       0,
+                            "paper_type": paper_type,
+                            "sub_parts":  [],
+                            "source":     "ai_generated",
+                        })
 
-            if not matched:
+            if not flat_questions:
                 results.append({"chapter_id": chapter_id, "title": chapter_title,
-                                 "status": "skipped", "reason": "no matching questions in pool"})
+                                 "status": "skipped", "reason": "no questions generated"})
                 continue
 
             pyq_doc = {
@@ -9217,10 +9239,14 @@ No explanation. Pure JSON array only."""
                 "subject_name":  subject_name,
                 "chapter_id":    chapter_id,
                 "chapter_title": chapter_title,
-                "pyqs":          matched,
-                "total":         len(matched),
-                "source":        "real_papers",
-                "ai_generated":  False,
+                "pyqs":          flat_questions,
+                "mark_wise":     {k: [
+                    (q.get("question", q) if isinstance(q, dict) else q)
+                    for q in v
+                ] for k, v in mark_wise.items()},
+                "total":         len(flat_questions),
+                "source":        "ai_important_questions",
+                "ai_generated":  True,
                 "created_at":    now_iso,
                 "updated_at":    now_iso,
             }
@@ -9230,7 +9256,7 @@ No explanation. Pure JSON array only."""
                 upsert=True,
             )
             results.append({"chapter_id": chapter_id, "title": chapter_title,
-                             "status": "ok", "count": len(matched)})
+                             "status": "ok", "count": len(flat_questions)})
 
         except (json.JSONDecodeError, ValueError) as parse_err:
             results.append({"chapter_id": chapter_id, "title": chapter_title,
