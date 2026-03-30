@@ -258,6 +258,7 @@ def _vector_rag_cache_key(query: str, subject_id: Optional[str], top_k: int) -> 
     return _hashlib.md5(raw.encode()).hexdigest()
 
 REDIS_AI_CACHE_TTL = 3600
+REDIS_CASUAL_CACHE_TTL = 300
 REDIS_CHAT_CACHE_TTL = 600
 REDIS_SEARCH_CACHE_TTL = 300
 REDIS_SESSION_CACHE_TTL = 1800
@@ -266,8 +267,8 @@ REDIS_RATE_WINDOW = 60
 _redis_miss_count = 0
 _redis_hit_count = 0
 
-def _cache_key(query: str) -> str:
-    normalized = query.lower().strip()
+def _cache_key(query: str, subject_id: str = "", board_id: str = "") -> str:
+    normalized = f"{query.lower().strip()}|{subject_id or ''}|{board_id or ''}"
     return hashlib.md5(normalized.encode()).hexdigest()
 
 def _redis_get(prefix: str, key: str) -> Optional[str]:
@@ -6060,25 +6061,25 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     messages = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 
     # ── Cache check (Non-streaming) — Redis first, in-memory fallback ───────
-    cache_key = _cache_key(msg.message)
     is_casual = _classify_question(msg.message) == "casual"
+    cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "")
+    _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
     answer = None
 
-    if not is_casual:
-        answer = _redis_get_ai_cache(cache_key)
-        if answer:
-            logger.info(f"Redis cache HIT: {cache_key}")
-        elif cache_key in _ai_response_cache:
-            answer = _ai_response_cache[cache_key]
-            logger.info(f"Memory cache HIT: {cache_key}")
+    answer = _redis_get_ai_cache(cache_key)
+    if answer:
+        logger.info(f"Redis cache HIT: {cache_key}")
+    elif cache_key in _ai_response_cache:
+        answer = _ai_response_cache[cache_key]
+        logger.info(f"Memory cache HIT: {cache_key}")
 
     if answer is None:
         try:
             answer = await call_llm_api(messages, model=msg.model or LLM_MODEL, max_tokens=max_tokens)
-            if not is_casual:
-                _redis_set_ai_cache(cache_key, answer)
+            _redis_set("ai_cache", cache_key, answer, _cache_ttl)
+            if not redis_client:
                 _ai_response_cache[cache_key] = answer
-                logger.info(f"Cache MISS → stored: {cache_key}")
+            logger.info(f"Cache MISS → stored (ttl={_cache_ttl}s): {cache_key}")
         except HTTPException:
             raise
         except Exception as e:
@@ -6407,20 +6408,24 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             yield f"data: {json.dumps(_meta_event)}\n\n"
 
             # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
-            cache_key = _cache_key(msg.message)
             is_casual = _classify_question(msg.message) == "casual"
+            cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "")
+            _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
             cached_answer = None
 
-            if not is_casual:
-                cached_answer = _redis_get_ai_cache(cache_key)
-                if cached_answer:
-                    logger.info(f"Redis cache HIT (STREAM): {cache_key}")
-                elif cache_key in _ai_response_cache:
-                    cached_answer = _ai_response_cache[cache_key]
-                    logger.info(f"Memory cache HIT (STREAM): {cache_key}")
+            cached_answer = _redis_get_ai_cache(cache_key)
+            if cached_answer:
+                logger.info(f"Redis cache HIT (STREAM): {cache_key}")
+            elif cache_key in _ai_response_cache:
+                cached_answer = _ai_response_cache[cache_key]
+                logger.info(f"Memory cache HIT (STREAM): {cache_key}")
 
             if cached_answer:
-                yield f"data: {json.dumps({'content': cached_answer})}\n\n"
+                # Yield in small chunks to preserve streaming UX for cache hits
+                _CHUNK_SIZE = 50
+                for _ci in range(0, len(cached_answer), _CHUNK_SIZE):
+                    yield f"data: {json.dumps({'content': cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
+                    await asyncio.sleep(0.008)
                 full_response.append(cached_answer)
             else:
                 _bp_count = 0
@@ -6436,12 +6441,13 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                     if _bp_count % 20 == 0:
                         await asyncio.sleep(0)
 
-                if not is_casual and full_response:
+                if full_response:
                     answer_str = "".join(full_response)
                     if answer_str:
-                        _redis_set_ai_cache(cache_key, answer_str)
-                        _ai_response_cache[cache_key] = answer_str
-                        logger.info(f"Cache MISS → stored (STREAM): {cache_key}")
+                        _redis_set("ai_cache", cache_key, answer_str, _cache_ttl)
+                        if not redis_client:
+                            _ai_response_cache[cache_key] = answer_str
+                        logger.info(f"Cache MISS → stored (STREAM, ttl={_cache_ttl}s): {cache_key}")
 
             # Yield DONE immediately — DB writes happen in background
             answer = "".join(full_response)
