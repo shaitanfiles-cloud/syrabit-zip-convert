@@ -15207,9 +15207,10 @@ async def admin_pyq_upload(
             "is_pdf":        is_pdf,
             # pages array — for images keep one entry; frontend uses file_url
             "pages": [{"file_url": file_url, "filename": upload.filename}] if is_image else [],
-            "status":        "uploaded",
-            "created_at":    datetime.utcnow().isoformat(),
-            "created_by":    admin.get("username", "admin"),
+            "status":            "uploaded",
+            "processing_status": "uploaded",
+            "created_at":        datetime.utcnow().isoformat(),
+            "created_by":        admin.get("username", "admin"),
         }
         db["pyq_uploads"].insert_one(doc)
         saved_ids.append(doc_id)
@@ -15254,6 +15255,203 @@ async def admin_pyq_delete(pyq_id: str, admin: dict = Depends(get_admin_user)):
 
     db["pyq_uploads"].delete_one({"id": pyq_id})
     return {"status": "deleted", "id": pyq_id}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PYQ AGENTIC PROCESS — upload → OCR → classify pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+class _PYQAgenticRequest(BaseModel):
+    pyq_id: str
+
+
+@app.post("/api/admin/pyq/agentic-process")
+async def admin_pyq_agentic_process(
+    payload: _PYQAgenticRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Agentic PYQ pipeline for a single already-uploaded PDF:
+      1. Fetch PDF bytes from Supabase URL
+      2. Run Gemini OCR → extract questions
+      3. Build SEO HTML page → upsert into pyq_html_pages
+      4. Index questions into RAG chunks (background)
+    Updates processing_status on pyq_uploads throughout.
+    Returns {status, seo_url, question_count, subject_id}.
+    """
+    pyq_id = payload.pyq_id
+    _db = _get_db()
+    pyq = _db["pyq_uploads"].find_one({"id": pyq_id}, {"_id": 0})
+    if not pyq:
+        raise HTTPException(404, "PYQ not found")
+
+    if not pyq.get("is_pdf"):
+        raise HTTPException(400, "Agentic processing only supports PDF uploads")
+
+    file_url = pyq.get("file_url", "")
+    if not file_url or file_url.startswith("data:"):
+        raise HTTPException(400, "PDF not stored in Supabase — re-upload the file")
+
+    # Mark OCR as running
+    _db["pyq_uploads"].update_one(
+        {"id": pyq_id},
+        {"$set": {"processing_status": "ocr_running", "updated_at": datetime.utcnow().isoformat()}},
+    )
+
+    # Fetch PDF bytes from storage URL
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            resp = await client.get(file_url)
+            resp.raise_for_status()
+            raw = resp.content
+    except Exception as e:
+        _db["pyq_uploads"].update_one(
+            {"id": pyq_id},
+            {"$set": {"processing_status": "fetch_error", "error_msg": str(e)}},
+        )
+        raise HTTPException(502, f"Could not fetch PDF from storage: {e}")
+
+    # Resolve metadata from pyq doc
+    board_name   = pyq.get("board_name", "")
+    class_name   = pyq.get("class_name", "")
+    subject_name = pyq.get("subject_name", "")
+    stream_name  = pyq.get("stream_name", "")
+    exam_year    = int(pyq.get("exam_year") or datetime.utcnow().year)
+    paper_type   = pyq.get("paper_type", "major")
+    board_id     = pyq.get("board_id", "")
+    class_id     = pyq.get("class_id", "")
+    stream_id    = pyq.get("stream_id", "")
+    subject_id   = pyq.get("subject_id", "")
+
+    # Gemini Vision OCR
+    ocr_prompt = (
+        "You are an OCR engine for Assam Board (AHSEC/SEBA/Dibrugarh University) question papers.\n"
+        "Extract ALL questions from this PDF question paper.\n"
+        "Return ONLY valid JSON in this exact shape:\n"
+        '{"questions": [{"number": "1", "text": "...", "marks": "5", "sub_parts": []}], '
+        '"raw_text": "...", "word_count": 0}\n'
+        "- number: question number as a string\n"
+        "- text: full question text\n"
+        "- marks: marks as string (empty if not shown)\n"
+        "- sub_parts: list of sub-question strings (empty list if none)\n"
+        "- raw_text: all extracted text concatenated\n"
+        "Do not include any markdown fences or extra text outside the JSON."
+    )
+
+    try:
+        ocr_result_raw = await vertex_services.analyze_image(
+            raw, mime_type="application/pdf", prompt=ocr_prompt, max_output_tokens=8192
+        )
+    except Exception as e:
+        _db["pyq_uploads"].update_one(
+            {"id": pyq_id}, {"$set": {"processing_status": "ocr_error", "error_msg": str(e)}}
+        )
+        raise HTTPException(502, f"Gemini OCR failed: {e}")
+
+    if not ocr_result_raw:
+        _db["pyq_uploads"].update_one({"id": pyq_id}, {"$set": {"processing_status": "ocr_error"}})
+        raise HTTPException(502, "Gemini OCR returned empty response — check GEMINI_API_KEY")
+
+    # Parse OCR JSON
+    try:
+        cleaned = ocr_result_raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("```")[1]
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        ocr_data = json.loads(cleaned)
+    except Exception:
+        ocr_data = {"questions": [], "raw_text": ocr_result_raw, "word_count": len(ocr_result_raw.split())}
+
+    questions = ocr_data.get("questions") or []
+    raw_text  = ocr_data.get("raw_text") or ocr_result_raw or ""
+
+    # Build SEO metadata & HTML
+    geo_tags  = ["Dhemaji", "Jorhat", "Guwahati", "Assam"]
+    slug      = _pyq_html_slug(board_name, subject_name, exam_year, paper_type)
+    seo_title = (
+        f"{board_name} {subject_name} Previous Year Question Paper {exam_year} "
+        f"({paper_type.upper()}) — Dhemaji, Assam"
+    ).strip()
+    seo_desc = (
+        f"Download and study the {board_name} {subject_name} {paper_type.upper()} "
+        f"question paper from {exam_year}. Serving students in Dhemaji, Jorhat, "
+        f"Guwahati and across Assam."
+    )
+    schema_json = json.dumps({
+        "@context": "https://schema.org", "@type": "ExamPaper",
+        "name": seo_title, "description": seo_desc,
+        "about": {"@type": "Thing", "name": subject_name},
+        "educationalLevel": class_name or "Higher Secondary",
+        "provider": {"@type": "Organization", "name": board_name},
+        "dateCreated": str(exam_year),
+        "contentLocation": {
+            "@type": "Place", "name": "Assam, India",
+            "containedInPlace": [{"@type": "Place", "name": g} for g in geo_tags],
+        },
+    }, ensure_ascii=False)
+
+    html_content = _build_pyq_html(
+        questions=questions, raw_text=raw_text, seo_title=seo_title, seo_desc=seo_desc,
+        schema_json=schema_json, geo_tags=geo_tags, board_name=board_name,
+        subject_name=subject_name, exam_year=exam_year, paper_type=paper_type,
+    )
+
+    # Persist html page
+    now = datetime.utcnow().isoformat()
+    page_doc = {
+        "slug": slug, "html_content": html_content, "seo_title": seo_title,
+        "seo_description": seo_desc, "geo_tags": geo_tags, "schema_json": schema_json,
+        "subject_id": subject_id, "subject_name": subject_name, "board_id": board_id,
+        "board_name": board_name, "class_id": class_id, "class_name": class_name,
+        "stream_id": stream_id, "stream_name": stream_name, "exam_year": exam_year,
+        "paper_type": paper_type, "question_count": len(questions),
+        "questions": questions, "raw_text": raw_text[:5000],
+        "created_at": now, "updated_at": now, "created_by": admin.get("username", "admin"),
+    }
+    if db is not None:
+        await db.pyq_html_pages.update_one({"slug": slug}, {"$set": page_doc}, upsert=True)
+
+    # Index RAG chunks in background
+    if raw_text.strip():
+        asyncio.create_task(_index_pyq_rag_chunks(
+            raw_text=raw_text, questions=questions, subject_id=subject_id,
+            board_id=board_id, exam_year=exam_year, paper_type=paper_type, slug=slug,
+        ))
+
+    # Update pyq_uploads status to ocr_done
+    _db["pyq_uploads"].update_one(
+        {"id": pyq_id},
+        {"$set": {
+            "processing_status": "ocr_done",
+            "seo_url":           f"/pyq/{slug}",
+            "pyq_html_slug":     slug,
+            "question_count":    len(questions),
+            "updated_at":        now,
+        }},
+    )
+
+    return {
+        "status":         "ocr_done",
+        "seo_url":        f"/pyq/{slug}",
+        "slug":           slug,
+        "question_count": len(questions),
+        "subject_id":     subject_id,
+    }
+
+
+@app.get("/api/admin/pyq/{pyq_id}/status")
+async def admin_pyq_get_status(pyq_id: str, admin: dict = Depends(get_admin_user)):
+    """Lightweight status polling for the agentic pipeline."""
+    _db = _get_db()
+    doc = _db["pyq_uploads"].find_one(
+        {"id": pyq_id},
+        {"_id": 0, "processing_status": 1, "seo_url": 1, "question_count": 1,
+         "subject_id": 1, "pyq_html_slug": 1, "error_msg": 1},
+    )
+    if not doc:
+        raise HTTPException(404, "PYQ not found")
+    return doc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
