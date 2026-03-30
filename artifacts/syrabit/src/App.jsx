@@ -5,7 +5,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
 import { initGA4 } from "@/utils/analytics";
-import { Toaster } from "@/components/ui/sonner";
+import { Toaster } from "sonner";
 import { AuthProvider } from "@/context/AuthContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
