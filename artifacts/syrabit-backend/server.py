@@ -6636,34 +6636,68 @@ async def admin_verify(response: Response, admin: dict = Depends(get_admin_user)
 async def admin_dashboard(admin: dict = Depends(get_admin_user)):
     total_users = await supa_count_users()
 
-    # Count conversations from both PG and Supabase — take the larger (most complete) count
-    pg_conv_count = 0
-    supa_conv_count = 0
+    # ── Conversations + messages: merge PG and Supabase ──────────────────────
+    pg_conv_map: dict = {}   # id -> {"messages": [...]}
+    supa_conv_rows: list = []
+
     if pg_pool:
         try:
             async with pg_pool.acquire() as conn:
-                pg_conv_count = await conn.fetchval("SELECT COUNT(*) FROM conversations") or 0
+                rows = await conn.fetch(
+                    "SELECT id, messages, created_at FROM conversations ORDER BY created_at ASC"
+                )
+                for r in _pg_rows(rows):
+                    pg_conv_map[r["id"]] = r
         except Exception: pass
+
     if supa:
         try:
-            r = await _supa(lambda: supa.table("conversations").select("id", count="exact").execute())
-            supa_conv_count = r.count if r.count is not None else len(r.data or [])
-        except Exception: pass
-    total_convs = max(pg_conv_count, supa_conv_count)
+            all_supa: list = []
+            offset = 0
+            while True:
+                r = await _supa(lambda o=offset: supa.table("conversations")
+                    .select("id, messages, created_at, user_id")
+                    .order("created_at", desc=False)
+                    .range(o, o + 199).execute())
+                batch = r.data or []
+                if not batch:
+                    break
+                for row in batch:
+                    msgs = row.get("messages")
+                    if isinstance(msgs, str):
+                        try: row["messages"] = json.loads(msgs)
+                        except: row["messages"] = []
+                    elif msgs is None:
+                        row["messages"] = []
+                all_supa.extend(batch)
+                offset += 200
+                if len(batch) < 200:
+                    break
+            supa_conv_rows = all_supa
+        except Exception as e:
+            logger.warning(f"dashboard supa conv fetch: {e}")
 
-    # Messages: count from PG (real messages live there); fall back to supa
-    pg_all_convs: list = []
-    if pg_pool:
-        try:
-            async with pg_pool.acquire() as conn:
-                rows = await conn.fetch("SELECT messages FROM conversations")
-                pg_all_convs = _pg_rows(rows)
-        except Exception: pass
-    if pg_all_convs:
-        total_messages = sum(len(c.get("messages") or []) for c in pg_all_convs)
-    else:
-        all_convs = await supa_get_all_conversations(500)
-        total_messages = sum(len(c.get("messages") or []) for c in all_convs)
+    # Merge: PG rows take precedence (better message fidelity); Supabase fills the rest
+    merged_convs: dict = {}
+    for row in supa_conv_rows:
+        merged_convs[row["id"]] = row
+    for cid, row in pg_conv_map.items():
+        merged_convs[cid] = row   # PG overwrites supa for same id
+
+    total_convs = len(merged_convs)
+    pg_conv_count = len(pg_conv_map)
+    supa_conv_count = len(supa_conv_rows)
+
+    convs_with_messages = sum(1 for c in merged_convs.values() if len(c.get("messages") or []) > 0)
+    total_messages = sum(len(c.get("messages") or []) for c in merged_convs.values())
+
+    # Date range of conversations
+    all_dates = [c.get("created_at", "") for c in merged_convs.values() if c.get("created_at")]
+    oldest_conv = min(all_dates)[:10] if all_dates else None
+    newest_conv = max(all_dates)[:10] if all_dates else None
+
+    # Unique users who have ever chatted
+    unique_chatters = len({c.get("user_id") for c in supa_conv_rows if c.get("user_id")})
 
     try:
         total_subjects = await db.subjects.count_documents({}) if await is_mongo_available() else 0
@@ -6684,12 +6718,19 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
     return {
         "total_users": total_users,
         "total_conversations": total_convs,
-        "conversations_with_messages": pg_conv_count,
+        "conversations_with_messages": convs_with_messages,
         "total_messages": total_messages,
+        "unique_chatters": unique_chatters,
         "total_subjects": total_subjects,
         "plan_distribution": plan_dist,
         "visitor_stats": visitor_stats,
         "recent_events": recent_events,
+        "conversation_date_range": {
+            "oldest": oldest_conv,
+            "newest": newest_conv,
+        },
+        "pg_conversations": pg_conv_count,
+        "supa_conversations": supa_conv_count,
     }
 
 @api.get("/admin/users")

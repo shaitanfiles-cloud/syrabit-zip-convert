@@ -384,11 +384,28 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
       )}
 
+      {/* Data recovery summary banner */}
+      {data?.conversation_date_range?.oldest && (
+        <div style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.18)', borderRadius: 12, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: '#10b981', fontWeight: 700 }}>✓ Data Recovered</span>
+          <span style={{ fontSize: 12, color: 'rgba(232,232,232,0.55)' }}>
+            Conversations since <strong style={{ color: '#e8e8e8' }}>{data.conversation_date_range.oldest}</strong>
+            {' · '}PG: <strong style={{ color: '#60a5fa' }}>{data.pg_conversations}</strong>
+            {' + '}Supabase: <strong style={{ color: '#34d399' }}>{data.supa_conversations}</strong>
+            {' = '}<strong style={{ color: '#e8e8e8' }}>{data.total_conversations}</strong> total
+            {' · '}<strong style={{ color: '#e8e8e8' }}>{data.conversations_with_messages}</strong> with messages
+            {' · '}<strong style={{ color: '#e8e8e8' }}>{data.unique_chatters}</strong> unique chatters
+          </span>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard label="Total Users"     value={data?.total_users}          icon={Users}         color="#8b5cf6" />
+        <StatCard label="Total Users"     value={data?.total_users}          icon={Users}         color="#8b5cf6"
+          subLabel="Chatted" subValue={data?.unique_chatters ?? 0} />
         <StatCard label="Conversations"   value={data?.total_conversations}  icon={MessageSquare} color="#3b82f6"
           subLabel="With messages" subValue={data?.conversations_with_messages ?? 0} />
-        <StatCard label="Messages Sent"   value={data?.total_messages}       icon={Zap}           color="#10b981" />
+        <StatCard label="Messages (All)"  value={data?.total_messages}       icon={Zap}           color="#10b981"
+          subLabel="Since" subValue={data?.conversation_date_range?.oldest ?? '—'} />
         <StatCard label="Subjects"        value={data?.total_subjects}       icon={BookOpen}      color="#f59e0b" />
       </div>
 
