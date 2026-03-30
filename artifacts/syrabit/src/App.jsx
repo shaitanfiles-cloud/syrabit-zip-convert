@@ -52,6 +52,7 @@ const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
 const PaymentCancelPage  = lazy(() => import("@/pages/PaymentCancelPage"));
 const LearnPage          = lazy(() => import("@/pages/LearnPage"));
+const PYQReplicaPage     = lazy(() => import("@/pages/PYQReplicaPage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallback = () => (
@@ -183,6 +184,9 @@ function App() {
 
                   {/* ── CMS Learn pages ── */}
                   <Route path="/learn/:slug" element={<LearnPage />} />
+
+                  {/* ── PYQ HTML Replica pages ── */}
+                  <Route path="/pyq/:slug" element={<PYQReplicaPage />} />
 
                   {/* ── Programmatic SEO routes: /{board}/{class-N}/{subject}/{topic}/{type?} ── */}
                   <Route path="/:board/:classSlug/:subjectSlug/:topicSlug/:pageType" element={<SeoTopicPage />} />

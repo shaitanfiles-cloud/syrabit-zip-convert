@@ -20,6 +20,18 @@ Admin endpoints: `/api/admin/vertex/*`
 Frontend panel: Admin → Gemini AI Studio (sidebar)
 CMS Editor: Translate button + AI Write (Gemini palette) in toolbar
 
+## PYQ HTML Replica (Task #23)
+
+- **Backend**: `POST /api/admin/pyq/html-replica` — accepts a PDF + hierarchy metadata, runs Gemini Vision OCR, builds SEO HTML replica, persists to `pyq_html_pages` MongoDB collection. Returns `{ seo_url: "/pyq/{slug}" }`.
+- **Backend**: `GET /api/pyq/{slug}` — serves the stored HTML replica with correct content-type and cache headers.
+- **Backend**: `GET /api/pyq/list` — public list of all generated PYQ replica pages.
+- **RAG indexing**: Extracted question text is stored in `chunks` collection with `content_type="pyq"`, `priority=1`. RAG search sorts by priority so PYQ chunks surface first.
+- **Frontend**: `PYQReplicaPage.jsx` at route `/pyq/:slug` — fetches the HTML via API, renders with `dangerouslySetInnerHTML`, handles loading/404 states.
+- **Frontend**: `AdminPYQManager.jsx` — added "HTML Page" button on PDF cards. Clicking it fetches the PDF bytes from Supabase URL, sends to the replica endpoint, and on success shows a toast with the live URL and an "Open Page →" link.
+- **Slug format**: `{board}-{subject}-pyq-{year}-{paper_type}-dhemaji` (geo-anchored)
+- **SEO**: Schema.org `ExamPaper` JSON-LD, geo.placename meta tags for Dhemaji, Jorhat, Guwahati, Assam.
+- **HTML style**: white bg, black text, Times New Roman 14px, 2in 1.5in margins, marks floated right, mobile-responsive.
+
 ## Admin Panel — Upgrade Wave (All 12 + 5 Quick Wins COMPLETE)
 
 | # | Feature | Component | Status |

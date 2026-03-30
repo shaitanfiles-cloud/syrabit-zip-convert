@@ -276,8 +276,13 @@ async def translate_structured(content: dict, fields: List[str], target_lang: st
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg",
-                         prompt: str = "Describe this image in detail.") -> Optional[str]:
-    """Analyze an image with Gemini Vision. Returns text description."""
+                         prompt: str = "Describe this image in detail.",
+                         max_output_tokens: int = 1024) -> Optional[str]:
+    """Analyze an image with Gemini Vision. Returns text description.
+
+    max_output_tokens: increase for dense documents like full question papers
+    (up to 8192 for thorough extraction of all questions).
+    """
     if not _ok():
         return None
     b64 = base64.b64encode(image_bytes).decode()
@@ -288,10 +293,10 @@ async def analyze_image(image_bytes: bytes, mime_type: str = "image/jpeg",
             {"text": prompt},
             {"inline_data": {"mime_type": mime_type, "data": b64}},
         ]}],
-        "generationConfig": {"maxOutputTokens": 1024},
+        "generationConfig": {"maxOutputTokens": max_output_tokens},
     }
     try:
-        async with httpx.AsyncClient(timeout=30) as c:
+        async with httpx.AsyncClient(timeout=60) as c:
             r = await c.post(url, json=body, headers=headers)
             if r.status_code == 403:
                 _mark_forbidden()

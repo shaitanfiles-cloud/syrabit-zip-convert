@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Upload, Trash2, Loader2, BookOpen, Calendar, X, ChevronDown, ImagePlus, FileImage, ZoomIn, ExternalLink } from 'lucide-react';
+import { Upload, Trash2, Loader2, BookOpen, Calendar, X, ChevronDown, ImagePlus, FileImage, ZoomIn, ExternalLink, Globe } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { API_BASE } from '../../utils/api';
@@ -39,6 +39,9 @@ export default function AdminPYQManager({ adminToken, hubContext, onNavigate }) 
   const [files,       setFiles]       = useState([]);       // [{file, preview, id}]
   const [uploading,   setUploading]   = useState(false);
   const [dragging,    setDragging]    = useState(false);
+
+  // Generate HTML Replica state — tracks which pyq ID is currently processing
+  const [replicaLoading, setReplicaLoading] = useState({});   // { pyqId: true }
 
   // List state
   const [pyqList,  setPyqList]  = useState([]);
@@ -164,6 +167,62 @@ export default function AdminPYQManager({ adminToken, hubContext, onNavigate }) 
       toast.success('Deleted');
       loadPyqList();
     } catch { toast.error('Delete failed'); }
+  };
+
+  // Generate HTML replica from an already-uploaded PDF (has Supabase URL or stored file)
+  const handleGenerateReplica = async (pyq) => {
+    const pyqId = pyq.id;
+    // We need the actual PDF bytes — re-fetch from Supabase URL if available
+    const fileUrl = pyq.file_url;
+    if (!fileUrl || pyq.is_pdf === false) {
+      toast.error('HTML replica is only available for PDF uploads');
+      return;
+    }
+
+    setReplicaLoading(prev => ({ ...prev, [pyqId]: true }));
+    try {
+      // Fetch the PDF bytes from Supabase / storage URL
+      const pdfResp = await fetch(fileUrl);
+      if (!pdfResp.ok) throw new Error('Could not download PDF file');
+      const pdfBlob = await pdfResp.blob();
+
+      const fd = new FormData();
+      fd.append('file',       new File([pdfBlob], pyq.filename || 'paper.pdf', { type: 'application/pdf' }));
+      fd.append('paper_type', pyq.paper_type || 'major');
+      fd.append('exam_year',  String(pyq.exam_year));
+      if (pyq.board_id)   fd.append('board_id',   pyq.board_id);
+      if (pyq.class_id)   fd.append('class_id',   pyq.class_id);
+      if (pyq.stream_id)  fd.append('stream_id',  pyq.stream_id);
+      if (pyq.subject_id) fd.append('subject_id', pyq.subject_id);
+
+      const res = await axios.post(`${API_BASE}/admin/pyq/html-replica`, fd, {
+        ...authCfg,
+        headers: { ...authCfg.headers, 'Content-Type': 'multipart/form-data' },
+        timeout: 120000,
+      });
+
+      const seoUrl = res.data?.seo_url;
+      toast.success(
+        <div className="flex flex-col gap-1">
+          <span className="font-semibold">HTML Replica Generated!</span>
+          <span className="text-xs opacity-70">Live at: {seoUrl}</span>
+          <a
+            href={seoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs underline mt-0.5"
+            style={{ color: '#fbbf24' }}
+          >
+            Open Page →
+          </a>
+        </div>,
+        { duration: 8000 }
+      );
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'HTML replica generation failed');
+    } finally {
+      setReplicaLoading(prev => ({ ...prev, [pyqId]: false }));
+    }
   };
 
   // ── Select helpers ────────────────────────────────────────────────────────
@@ -299,6 +358,20 @@ export default function AdminPYQManager({ adminToken, hubContext, onNavigate }) 
               {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
               {uploading ? 'Uploading…' : `Upload ${files.length} File${files.length > 1 ? 's' : ''}`}
             </button>
+
+            {/* Generate HTML Replica for staged PDFs */}
+            {files.some(({ file }) => file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf')) && (
+              <StagedReplicaButtons
+                stagedFiles={files}
+                examYear={examYear}
+                paperType={paperType}
+                boardId={selectedBoard}
+                classId={selectedClass}
+                streamId={selectedStream}
+                subjectId={selectedSubject}
+                authCfg={authCfg}
+              />
+            )}
           </div>
         )}
 
@@ -342,7 +415,14 @@ export default function AdminPYQManager({ adminToken, hubContext, onNavigate }) 
         ) : (
           <div className="space-y-2">
             {pyqList.map(pyq => (
-              <PYQCard key={pyq.id} pyq={pyq} onDelete={handleDelete} onPreview={setLightbox} />
+              <PYQCard
+                key={pyq.id}
+                pyq={pyq}
+                onDelete={handleDelete}
+                onPreview={setLightbox}
+                onGenerateReplica={handleGenerateReplica}
+                replicaGenerating={!!replicaLoading[pyq.id]}
+              />
             ))}
           </div>
         )}
@@ -364,7 +444,7 @@ export default function AdminPYQManager({ adminToken, hubContext, onNavigate }) 
   );
 }
 
-function PYQCard({ pyq, onDelete, onPreview }) {
+function PYQCard({ pyq, onDelete, onPreview, onGenerateReplica, replicaGenerating }) {
   const [expanded, setExpanded] = useState(false);
 
   // Resolve image URL — prefer Supabase URL, fall back to data_url (legacy)
@@ -431,6 +511,24 @@ function PYQCard({ pyq, onDelete, onPreview }) {
 
         {/* Actions */}
         <div className="flex items-center gap-1 flex-shrink-0">
+          {isPdf && hasFile && (
+            <button
+              onClick={() => onGenerateReplica(pyq)}
+              disabled={replicaGenerating}
+              title="Generate SEO HTML Replica"
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition-all disabled:opacity-40"
+              style={{
+                background: replicaGenerating ? 'rgba(245,158,11,0.10)' : 'rgba(245,158,11,0.15)',
+                border: '1px solid rgba(245,158,11,0.30)',
+                color: '#fbbf24',
+              }}
+            >
+              {replicaGenerating
+                ? <Loader2 size={11} className="animate-spin" />
+                : <Globe size={11} />}
+              <span className="hidden sm:inline">{replicaGenerating ? 'Generating…' : 'HTML Page'}</span>
+            </button>
+          )}
           {pyq.pages?.length > 1 && (
             <button onClick={() => setExpanded(p => !p)}
               className="p-1.5 rounded-lg text-white/30 hover:text-white/70 transition-colors">
@@ -467,6 +565,84 @@ function PYQCard({ pyq, onDelete, onPreview }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+
+// ── Staged PDF replica buttons ────────────────────────────────────────────────
+function StagedReplicaButtons({ stagedFiles, examYear, paperType, boardId, classId, streamId, subjectId, authCfg }) {
+  const [loadingId, setLoadingId] = useState(null);
+
+  const pdfFiles = stagedFiles.filter(({ file }) =>
+    file.type === 'application/pdf' || file.name?.toLowerCase().endsWith('.pdf')
+  );
+
+  const handleStagedReplica = async ({ id, file }) => {
+    setLoadingId(id);
+    try {
+      const fd = new FormData();
+      fd.append('file',       file);
+      fd.append('paper_type', paperType);
+      fd.append('exam_year',  String(examYear));
+      if (boardId)   fd.append('board_id',   boardId);
+      if (classId)   fd.append('class_id',   classId);
+      if (streamId)  fd.append('stream_id',  streamId);
+      if (subjectId) fd.append('subject_id', subjectId);
+
+      const res = await axios.post(`${API_BASE}/admin/pyq/html-replica`, fd, {
+        ...authCfg,
+        headers: { ...authCfg.headers, 'Content-Type': 'multipart/form-data' },
+        timeout: 120000,
+      });
+
+      const seoUrl = res.data?.seo_url;
+      toast.success(
+        <div className="flex flex-col gap-1">
+          <span className="font-semibold">HTML Replica Generated!</span>
+          <span className="text-xs opacity-70">{seoUrl}</span>
+          <a
+            href={seoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs underline mt-0.5"
+            style={{ color: '#fbbf24' }}
+          >
+            Open Page →
+          </a>
+        </div>,
+        { duration: 8000 }
+      );
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'HTML replica generation failed');
+    } finally {
+      setLoadingId(null);
+    }
+  };
+
+  if (!pdfFiles.length) return null;
+
+  return (
+    <div className="space-y-1.5 mt-1">
+      <p className="text-[10px] text-white/30 uppercase tracking-wide">Generate SEO HTML Page</p>
+      {pdfFiles.map(({ id, file }) => (
+        <button
+          key={id}
+          onClick={() => handleStagedReplica({ id, file })}
+          disabled={loadingId !== null}
+          className="w-full flex items-center justify-center gap-2 py-2 rounded-xl text-xs font-semibold transition-all disabled:opacity-40"
+          style={{
+            background: 'rgba(99,102,241,0.15)',
+            border: '1px solid rgba(99,102,241,0.30)',
+            color: '#a5b4fc',
+          }}
+        >
+          {loadingId === id
+            ? <Loader2 size={12} className="animate-spin" />
+            : <Globe size={12} />}
+          {loadingId === id ? 'Generating HTML Replica…' : `Generate HTML Replica — ${file.name}`}
+        </button>
+      ))}
     </div>
   );
 }

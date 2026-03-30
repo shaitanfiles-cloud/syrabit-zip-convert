@@ -229,6 +229,35 @@ ${navLinks ? `<div class="related"><h2>Related Topics in ${page.subject_name}</h
 </html>`;
 }
 
+// ── PYQ HTML Replica page plugin ──────────────────────────────────────────────
+// Intercepts ALL requests to /pyq/* and serves the full SEO HTML document
+// directly from the backend (bypassing the React SPA wrapper).
+// This ensures bots and direct visitors get crawlable, rankable HTML.
+function pyqPagePlugin() {
+  return {
+    name: 'syrabit-pyq-page',
+    configureServer(server) {
+      return () => server.middlewares.use(async (req, res, next) => {
+        const rawPath = (req.url || '/').split('?')[0];
+        if (!rawPath.startsWith('/pyq/')) return next();
+        const slug = rawPath.slice(5); // strip leading "/pyq/"
+        if (!slug || slug.includes('/') || slug.includes('.')) return next();
+        try {
+          const backendRes = await fetch(`http://localhost:8000/api/pyq/${encodeURIComponent(slug)}`);
+          if (!backendRes.ok) return next();
+          const html = await backendRes.text();
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+          res.end(html);
+        } catch {
+          next();
+        }
+      });
+    },
+  };
+}
+
 function botRenderPlugin() {
   return {
     name: 'syrabit-bot-render',
@@ -292,6 +321,7 @@ export default defineConfig({
     react({
       include: /\.(js|jsx|ts|tsx)$/,
     }),
+    pyqPagePlugin(),
     botRenderPlugin(),
   ],
 
