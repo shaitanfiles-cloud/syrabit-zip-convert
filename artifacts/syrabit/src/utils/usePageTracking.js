@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useLocation, matchPath } from 'react-router-dom';
 import axios from 'axios';
 import { Analytics } from './analytics';
+import ReactGA from 'react-ga4';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -165,6 +166,11 @@ export function usePageTracking() {
     ).catch(() => {});
 
     Analytics.pageView(path, document.title);
+
+    // GA4 page_view — only when initialized
+    if (import.meta.env.VITE_GA4_ID) {
+      ReactGA.send({ hitType: 'pageview', page: path, title: document.title });
+    }
   }, [location.pathname]);
 }
 

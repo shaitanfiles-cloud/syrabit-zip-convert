@@ -23,6 +23,11 @@ import { PageTitle } from '@/components/PageTitle';
 import { LogoMark } from '@/components/Logo';
 import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp, cmsPersonalize, cmsListPlans } from '@/utils/api';
 import { toast } from 'sonner';
+import ReactGA from 'react-ga4';
+
+const _ga4Track = (name, params = {}) => {
+  if (import.meta.env.VITE_GA4_ID) ReactGA.event(name, params);
+};
 
 // ── Load Razorpay checkout.js script once ─────────────────────────────────────
 function loadRazorpay() {
@@ -318,6 +323,13 @@ export default function ProfilePage() {
         return;
       }
 
+      // GA4: user initiated checkout
+      _ga4Track('begin_checkout', {
+        currency: 'INR',
+        value: orderData.amount / 100,
+        items: [{ item_id: paymentPlan, item_name: `${paymentPlan}_plan`, item_category: 'subscription' }],
+      });
+
       // 3. Open Razorpay checkout — all payment methods
       const options = {
         key:          orderData.key_id,
@@ -343,6 +355,13 @@ export default function ProfilePage() {
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature:  response.razorpay_signature,
               plan:                paymentPlan,
+            });
+            // GA4: plan purchase confirmed
+            _ga4Track('purchase', {
+              transaction_id: response.razorpay_payment_id,
+              currency: 'INR',
+              value: orderData.amount / 100,
+              items: [{ item_id: paymentPlan, item_name: `${paymentPlan}_plan`, item_category: 'subscription' }],
             });
             toast.success(`🎉 ${PLANS[paymentPlan]?.label} plan activated!`, {
               description: `${PLANS[paymentPlan]?.credits.toLocaleString()} AI credits added to your account.`,
@@ -402,6 +421,14 @@ export default function ProfilePage() {
         setTopUpLoading(false);
         return;
       }
+
+      // GA4: topup checkout initiated
+      _ga4Track('begin_checkout', {
+        currency: 'INR',
+        value: orderData.amount / 100,
+        items: [{ item_id: 'credit_topup', item_name: `topup_${topUpCredits}`, item_category: 'credits', quantity: topUpCredits }],
+      });
+
       const options = {
         key: orderData.key_id,
         amount: orderData.amount,
@@ -423,6 +450,13 @@ export default function ProfilePage() {
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
               credits: topUpCredits,
+            });
+            // GA4: topup purchase confirmed
+            _ga4Track('purchase', {
+              transaction_id: response.razorpay_payment_id,
+              currency: 'INR',
+              value: orderData.amount / 100,
+              items: [{ item_id: 'credit_topup', item_name: `topup_${topUpCredits}`, item_category: 'credits', quantity: topUpCredits }],
             });
             toast.success(`${topUpCredits} credits added to your account!`);
             setShowTopUpModal(false);

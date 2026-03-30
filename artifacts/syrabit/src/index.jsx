@@ -2,6 +2,14 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App";
+import ReactGA from "react-ga4";
+
+const _ga4Id = import.meta.env.VITE_GA4_ID;
+if (_ga4Id) {
+  ReactGA.initialize(_ga4Id);
+} else if (import.meta.env.DEV) {
+  console.warn("[GA4] VITE_GA4_ID not set — Google Analytics disabled");
+}
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
