@@ -839,6 +839,7 @@ async def lifespan(app):
 
     asyncio.create_task(_load_ga4_from_db())
     asyncio.create_task(_exam_reminder_loop())
+    asyncio.create_task(_alerting_loop())
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
@@ -6158,6 +6159,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             prompt_tokens=max(1, _prompt_chars // 4),
             completion_tokens=max(1, _compl_chars // 4),
             provider="gemini",
+            user_id=str(user["id"]),
         )
     except Exception:
         pass
@@ -6500,6 +6502,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                     prompt_tokens=max(1, _pc // 4),
                     completion_tokens=max(1, len(answer) // 4) if answer else 1,
                     provider="gemini",
+                    user_id=str(user["id"]),
                 )
             except Exception:
                 pass
@@ -13202,6 +13205,156 @@ async def _bg_health_loop():
 
 
 # ─────────────────────────────────────────────
+# PRODUCTION ALERTING SYSTEM
+# ─────────────────────────────────────────────
+
+_ALERT_COOLDOWN_S = 1800   # 30 min between same alert type
+_alert_last_fired: dict = {}   # { "alert_key": timestamp }
+_ALERT_THRESHOLDS = {
+    "latency_p95_ms": 2000,
+    "error_rate_pct": 5.0,
+    "fallback_rate_pct": 50.0,
+}
+
+async def _dispatch_alert(alert_type: str, title: str, body: str):
+    """Send alert via email (Resend) and/or webhook. Respects cooldown."""
+    now = _time_mod.time()
+    if now - _alert_last_fired.get(alert_type, 0) < _ALERT_COOLDOWN_S:
+        return
+    _alert_last_fired[alert_type] = now
+    logger.warning(f"ALERT [{alert_type}] {title}: {body}")
+
+    # 1) Email alert via Resend (to admin)
+    try:
+        admin_email = os.environ.get("ALERT_EMAIL", "").strip()
+        resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+        if admin_email and resend_key:
+            import resend as _resend_sdk
+            _resend_sdk.api_key = resend_key
+            _resend_sdk.Emails.send({
+                "from": EMAIL_FROM,
+                "to": [admin_email],
+                "subject": f"🚨 Syrabit Alert: {title}",
+                "html": f"<h2>{title}</h2><p>{body}</p><p style='color:#888'>Alert type: {alert_type}<br>Cooldown: {_ALERT_COOLDOWN_S // 60} min</p>",
+            })
+    except Exception as e:
+        logger.debug(f"Alert email failed: {e}")
+
+    # 2) Webhook alert (Slack / Discord / generic)
+    try:
+        webhook_url = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
+        if webhook_url:
+            async with httpx.AsyncClient(timeout=10) as client:
+                await client.post(webhook_url, json={
+                    "text": f"🚨 *{title}*\n{body}",
+                    "alert_type": alert_type,
+                    "service": "syrabit-api",
+                })
+    except Exception as e:
+        logger.debug(f"Alert webhook failed: {e}")
+
+    # 3) Persist to db.alerts for admin dashboard visibility
+    try:
+        await db.alerts.insert_one({
+            "type": alert_type,
+            "title": title,
+            "body": body,
+            "fired_at": datetime.now(timezone.utc).isoformat(),
+            "acknowledged": False,
+        })
+    except Exception:
+        pass
+
+
+async def _alerting_loop():
+    """Background loop: checks metrics every 2 minutes for alert conditions."""
+    await asyncio.sleep(60)   # let startup + first metrics settle
+    _prev_errors = 0
+    _prev_requests = 0
+    _prev_fallbacks = 0
+    _prev_llm_calls = 0
+    while True:
+        try:
+            # ── 1. Error rate in last window ──
+            curr_errors = _metrics.error_count
+            curr_requests = _metrics.request_count
+            delta_err = curr_errors - _prev_errors
+            delta_req = curr_requests - _prev_requests
+            _prev_errors = curr_errors
+            _prev_requests = curr_requests
+            if delta_req > 20:   # need minimum sample
+                err_rate = (delta_err / delta_req) * 100
+                if err_rate > _ALERT_THRESHOLDS["error_rate_pct"]:
+                    await _dispatch_alert(
+                        "high_error_rate",
+                        "Error rate spike",
+                        f"{err_rate:.1f}% errors in last 2 min ({delta_err}/{delta_req} requests)",
+                    )
+
+            # ── 2. LLM latency (p95 from _chat_latencies ring buffer) ──
+            try:
+                recent_lats = [e["latency_ms"] for e in _chat_latencies[-100:]]
+                if len(recent_lats) >= 5:
+                    lats_sorted = sorted(recent_lats)
+                    p95 = lats_sorted[int(len(lats_sorted) * 0.95)]
+                    if p95 > _ALERT_THRESHOLDS["latency_p95_ms"]:
+                        await _dispatch_alert(
+                            "high_latency",
+                            "LLM latency spike",
+                            f"p95={int(p95)}ms (threshold: {_ALERT_THRESHOLDS['latency_p95_ms']}ms, sample={len(recent_lats)})",
+                        )
+            except Exception:
+                pass
+
+            # ── 3. Fallback rate (from cost log provider != primary) ──
+            recent_cost = _llm_cost_log[-100:]
+            if len(recent_cost) >= 10:
+                primary_model = LLM_MODEL
+                fallbacks = sum(1 for e in recent_cost if e.get("model") != primary_model)
+                fb_rate = (fallbacks / len(recent_cost)) * 100
+                if fb_rate > _ALERT_THRESHOLDS["fallback_rate_pct"]:
+                    await _dispatch_alert(
+                        "high_fallback_rate",
+                        "LLM fallback rate high",
+                        f"{fb_rate:.0f}% of last {len(recent_cost)} calls used fallback models "
+                        f"(primary: {primary_model})",
+                    )
+
+        except Exception as exc:
+            logger.debug(f"Alerting loop error: {exc}")
+
+        await asyncio.sleep(120)   # check every 2 minutes
+
+
+# Admin endpoints for alert management
+@api.get("/admin/alerts")
+async def admin_list_alerts(limit: int = 50, admin: dict = Depends(get_admin_user)):
+    """List recent alerts."""
+    items = await db.alerts.find({}).sort("fired_at", -1).limit(limit).to_list(limit)
+    for i in items:
+        i["id"] = str(i.pop("_id"))
+    return {"alerts": items, "thresholds": _ALERT_THRESHOLDS}
+
+@api.patch("/admin/alerts/{alert_id}/acknowledge")
+async def admin_acknowledge_alert(alert_id: str, admin: dict = Depends(get_admin_user)):
+    from bson import ObjectId as _ObjId
+    try:
+        oid = _ObjId(alert_id)
+    except Exception:
+        raise HTTPException(400, "Invalid alert_id")
+    await db.alerts.update_one({"_id": oid}, {"$set": {"acknowledged": True}})
+    return {"ok": True}
+
+@api.put("/admin/alerts/thresholds")
+async def admin_update_alert_thresholds(data: dict, admin: dict = Depends(get_admin_user)):
+    """Update alert thresholds at runtime. Keys: latency_p95_ms, error_rate_pct, fallback_rate_pct."""
+    for key in ("latency_p95_ms", "error_rate_pct", "fallback_rate_pct"):
+        if key in data:
+            _ALERT_THRESHOLDS[key] = float(data[key])
+    return {"thresholds": _ALERT_THRESHOLDS}
+
+
+# ─────────────────────────────────────────────
 # PHASE B: AI CONTENT STUDIO
 # ─────────────────────────────────────────────
 class StudioParseRequest(BaseModel):
@@ -14856,7 +15009,7 @@ COST_PER_1K_TOKENS = {
     "llama-3.1-8b-instant":   {"in": 0.00005,   "out": 0.00008},
 }
 
-def record_llm_cost(model: str, prompt_tokens: int, completion_tokens: int, provider: str = "gemini"):
+def record_llm_cost(model: str, prompt_tokens: int, completion_tokens: int, provider: str = "gemini", user_id: str = ""):
     rates = COST_PER_1K_TOKENS.get(model, {"in": 0.0001, "out": 0.0002})
     cost_usd = (prompt_tokens * rates["in"] + completion_tokens * rates["out"]) / 1000
     entry = {
@@ -14864,6 +15017,7 @@ def record_llm_cost(model: str, prompt_tokens: int, completion_tokens: int, prov
         "model": model, "provider": provider,
         "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
         "cost_usd": round(cost_usd, 8),
+        "user_id": user_id,
     }
     _llm_cost_log.append(entry)
     if len(_llm_cost_log) > _LLM_COST_MAX:
@@ -14898,6 +15052,16 @@ async def admin_llm_costs(days: int = 7, admin: dict = Depends(get_admin_user)):
     published = await db.seo_topics.count_documents({"status": "published"})
     cost_per_page = round(total_cost / max(published, 1), 6)
 
+    by_user: dict = {}
+    for e in recent:
+        uid = e.get("user_id", "anonymous") or "anonymous"
+        by_user.setdefault(uid, {"calls": 0, "cost_usd": 0, "tokens": 0})
+        by_user[uid]["calls"] += 1
+        by_user[uid]["cost_usd"] += e["cost_usd"]
+        by_user[uid]["tokens"] += e["prompt_tokens"] + e["completion_tokens"]
+
+    top_users = sorted(by_user.items(), key=lambda x: -x[1]["cost_usd"])[:20]
+
     return {
         "period_days": days,
         "total_cost_usd": round(total_cost, 6),
@@ -14906,6 +15070,7 @@ async def admin_llm_costs(days: int = 7, admin: dict = Depends(get_admin_user)):
         "total_calls": len(recent),
         "cost_per_published_page_usd": cost_per_page,
         "by_model": [{"model": m, **v, "cost_usd": round(v["cost_usd"], 6)} for m, v in by_model.items()],
+        "by_user": [{"user_id": uid, **v, "cost_usd": round(v["cost_usd"], 6)} for uid, v in top_users],
         "daily": daily,
     }
 
