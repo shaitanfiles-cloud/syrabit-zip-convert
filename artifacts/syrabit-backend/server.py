@@ -6537,7 +6537,7 @@ async def admin_login(data: AdminLoginReq, response: Response):
             "is_admin": True,
         },
         secret=ADMIN_JWT_SECRET,
-        expires_delta=60 * 8,   # 8-hour session
+        expires_delta=60 * 24,   # 24-hour session
     )
     response.set_cookie(
         key="syrabit_admin_session",
@@ -6545,7 +6545,7 @@ async def admin_login(data: AdminLoginReq, response: Response):
         httponly=True,
         secure=SECURE_COOKIES,
         samesite=COOKIE_SAMESITE,
-        max_age=60 * 8 * 60,
+        max_age=60 * 24 * 60,
     )
     return {
         "access_token": token,
@@ -6604,7 +6604,26 @@ async def admin_logout(response: Response):
     return {"message": "Logged out"}
 
 @api.get("/admin/verify")
-async def admin_verify(admin: dict = Depends(get_admin_user)):
+async def admin_verify(response: Response, admin: dict = Depends(get_admin_user)):
+    """Verify admin session and silently slide the cookie expiry forward (keep-alive)."""
+    refreshed = create_token(
+        {
+            "sub":      admin.get("email"),
+            "email":    admin.get("email"),
+            "name":     admin.get("name", "Admin"),
+            "is_admin": True,
+        },
+        secret=ADMIN_JWT_SECRET,
+        expires_delta=60 * 24,
+    )
+    response.set_cookie(
+        key="syrabit_admin_session",
+        value=refreshed,
+        httponly=True,
+        secure=SECURE_COOKIES,
+        samesite=COOKIE_SAMESITE,
+        max_age=60 * 24 * 60,
+    )
     return {"valid": True, "email": admin.get("email"), "name": admin.get("name", "Admin")}
 
 # ─────────────────────────────────────────────

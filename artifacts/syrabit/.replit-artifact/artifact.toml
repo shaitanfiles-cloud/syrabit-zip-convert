@@ -36,11 +36,11 @@ paths = [ "/api" ]
 localPort = 8000
 
 [services.development]
-run = "python3 -m uvicorn server:app --host 0.0.0.0 --port 8000 --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend"
+run = "cd /home/runner/workspace/artifacts/syrabit-backend && gunicorn server:app -c gunicorn.conf.py"
 
 [services.production]
 build = [ "sh", "-c", "PIP_USER=0 pip3 install --no-cache-dir --target=/home/runner/workspace/.python-deps -r /home/runner/workspace/artifacts/syrabit-backend/requirements.txt" ]
-run = [ "sh", "-c", "PYTHONPATH=/home/runner/workspace/.python-deps python3 -m uvicorn server:app --host 0.0.0.0 --port $PORT --workers 4 --no-access-log --app-dir /home/runner/workspace/artifacts/syrabit-backend" ]
+run = [ "sh", "-c", "cd /home/runner/workspace/artifacts/syrabit-backend && PYTHONPATH=/home/runner/workspace/.python-deps gunicorn server:app -c gunicorn.conf.py" ]
 
 [services.env]
 PORT = "8000"

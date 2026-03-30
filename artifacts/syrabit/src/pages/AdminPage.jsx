@@ -114,6 +114,19 @@ export default function AdminPage() {
       });
   }, [navigate]);
 
+  // ── Session keep-alive: ping /admin/verify every 20 min to slide cookie ──
+  useEffect(() => {
+    if (verifying) return;
+    const id = setInterval(() => {
+      adminVerify(null).catch(() => {
+        // Session truly expired while admin was idle — redirect
+        toast.error('Session expired. Please log in again.');
+        navigate('/admin/login');
+      });
+    }, 20 * 60 * 1000); // 20 minutes
+    return () => clearInterval(id);
+  }, [verifying, navigate]);
+
   // ── Dynamic system status ──────────────────────────────────────────────
   useEffect(() => {
     if (verifying) return;
