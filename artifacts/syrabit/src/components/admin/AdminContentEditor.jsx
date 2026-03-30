@@ -183,6 +183,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [generatingNotes, setGeneratingNotes] = useState(new Set());
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [showAgenticCreator, setShowAgenticCreator] = useState(false);
+  const [autoAgentic, setAutoAgentic] = useState(false);
   const fileInputRef = useRef(null);
   const thumbnailInputRef = useRef(null);
   const contentTextareaRef = useRef(null);
@@ -772,9 +773,15 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const res = await axios.post(`${API}/admin/content/chapters/${chapterId}/generate-notes`, {}, authHeaders(adminToken));
       const generated = res.data?.content;
+      const wordCount = res.data?.word_count;
       if (generated) {
-        setChapters(prev => prev.map(ch => ch.id === chapterId ? { ...ch, content: generated, content_type: 'notes', notes_generated: true } : ch));
-        toast.success(`Notes generated for "${chapterTitle}"`);
+        setChapters(prev => prev.map(ch => ch.id === chapterId
+          ? { ...ch, content: generated, content_type: 'notes', notes_generated: true, _word_count: wordCount }
+          : ch));
+        toast.success(`Notes generated for "${chapterTitle}"${wordCount ? ` — ${wordCount.toLocaleString()} words` : ''}`, {
+          action: autoAgentic ? undefined : { label: 'Run Agentic ⚡', onClick: () => setShowAgenticCreator(true) },
+        });
+        if (autoAgentic) setShowAgenticCreator(true);
       }
     } catch (e) {
       toast.error(e?.response?.data?.detail || `Failed to generate notes for "${chapterTitle}"`);
@@ -808,6 +815,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   if (selClass) breadcrumb.push({ label: classData?.name || selClass, onClick: () => { setSelStream(null); setSelSubject(null); setEditView(null); } });
   if (selStream) breadcrumb.push({ label: streamData?.name || selStream, onClick: () => { setSelSubject(null); setEditView(null); } });
   if (selSubject) breadcrumb.push({ label: subjectData?.name || selSubject, onClick: () => { setEditView(null); } });
+
+  const allChaptersHaveNotes = chapters.length > 0 && chapters.every(
+    ch => ch.notes_generated || (ch.content && ch.content.trim().length > 100)
+  );
 
   return (
     <div className="h-full flex flex-col bg-[#06060e]">
@@ -1227,16 +1238,20 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                           onClick={() => setShowPipeline(true)}
                           disabled={chapters.length === 0 || !seoTopicsGeneratedIds.has(selSubject)}
                           className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-bold disabled:opacity-40 transition-all hover:opacity-90"
-                          style={{ background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: 'white' }}
+                          style={allChaptersHaveNotes
+                            ? { background: 'linear-gradient(135deg,#0ea5e9,#7c3aed)', color: 'white' }
+                            : { background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: 'white' }}
                           title={
                             chapters.length === 0
                               ? 'Add chapters before running pipeline'
                               : !seoTopicsGeneratedIds.has(selSubject)
                               ? 'Generate SEO Topics first before running full pipeline'
-                              : 'Auto-Generate Full Subject — 1 click generates all content, MCQs, blogs & PYQ pages'
+                              : allChaptersHaveNotes
+                              ? 'SEO Polish — skips re-generation of existing notes/PYQs/flashcards, only publishes blogs & PYQ pages'
+                              : 'Auto-Generate Full Subject — generates all content, MCQs, blogs & PYQ pages'
                           }
                         >
-                          <Zap size={11} /> Auto-Generate Full Subject
+                          <Zap size={11} /> {allChaptersHaveNotes ? 'SEO Polish ⚡' : 'Auto-Generate Full Subject'}
                         </button>
                         <button
                           onClick={() => handlePublishAsBlog(selSubject, subjectData?.name || selSubject)}
@@ -1438,6 +1453,17 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                               Agentic Generate
                             </button>
                           )}
+                          <button
+                            onClick={() => setAutoAgentic(v => !v)}
+                            className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-medium transition-all"
+                            style={autoAgentic
+                              ? { background: 'rgba(245,158,11,0.20)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.35)' }
+                              : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)' }}
+                            title={autoAgentic ? 'Auto-Agentic ON — notes generation will auto-trigger Agentic Generate' : 'Auto-Agentic OFF — click to enable auto-cascade after notes generation'}
+                          >
+                            <Zap size={9} className={autoAgentic ? 'text-amber-400' : ''} />
+                            Auto-Agentic {autoAgentic ? 'ON' : 'OFF'}
+                          </button>
                         </div>
                       </div>
 
@@ -1525,10 +1551,15 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                                 <button
                                   onClick={() => handleGenerateNotes(ch.id, ch.title)}
                                   disabled={generatingNotes.has(ch.id) || bulkGenerating}
-                                  className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400 disabled:opacity-40 transition-colors"
-                                  title="Generate AI notes for this chapter"
+                                  className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-semibold disabled:opacity-40 transition-all hover:brightness-110"
+                                  style={hasNotes
+                                    ? { background: 'rgba(16,185,129,0.15)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.25)' }
+                                    : { background: 'linear-gradient(135deg,rgba(124,58,237,0.35),rgba(79,70,229,0.35))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.35)' }}
+                                  title={hasNotes ? 'Regenerate AI notes for this chapter' : 'Generate AI notes for this chapter'}
                                 >
-                                  {generatingNotes.has(ch.id) ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                                  {generatingNotes.has(ch.id)
+                                    ? <><Loader2 size={10} className="animate-spin" /> Generating…</>
+                                    : <><Sparkles size={10} /> {hasNotes ? 'Regen' : 'AI ⚡'}</>}
                                 </button>
                                 <button onClick={() => setViewerItem(ch)} className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-white/30 hover:text-emerald-400" title="Preview lesson" data-testid={`open-chapter-${ch.id}`}><Eye size={13} /></button>
                                 <button onClick={() => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1 }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
@@ -1691,6 +1722,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
           adminToken={adminToken}
           subjectId={selSubject}
           subjectName={subjectData?.name || selSubject}
+          skipExisting={allChaptersHaveNotes}
           onClose={() => setShowPipeline(false)}
           onComplete={(summary) => {
             const total = (summary.total_blogs || 0) + (summary.total_topic_pyqs || 0) + (summary.total_flashcards || 0) + (summary.total_pyq_pages || 0);

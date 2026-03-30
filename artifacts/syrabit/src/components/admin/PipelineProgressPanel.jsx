@@ -21,7 +21,7 @@ const STEP_LABELS = [
   { icon: Sparkles,   label: 'PYQ HTML Page',       color: '#ec4899' },
 ];
 
-export default function PipelineProgressPanel({ adminToken, subjectId, subjectName, onClose, onComplete }) {
+export default function PipelineProgressPanel({ adminToken, subjectId, subjectName, skipExisting, onClose, onComplete }) {
   const [status, setStatus]     = useState('idle');
   const [summary, setSummary]   = useState(null);
   const [error, setError]       = useState('');
@@ -79,7 +79,7 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
     setJobId(null);
     setPollData(null);
     try {
-      const res = await adminPipelineAutoGenerate(adminToken, subjectId);
+      const res = await adminPipelineAutoGenerate(adminToken, subjectId, skipExisting);
       const data = res.data;
 
       if (data.job_id) {
@@ -129,9 +129,19 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
               <Zap size={16} className="text-violet-300" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-white">Auto-Generate Full Subject</h2>
+              <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
+                {skipExisting ? 'SEO Polish ⚡' : 'Auto-Generate Full Subject'}
+                {skipExisting && (
+                  <span className="text-[10px] font-normal px-1.5 py-0.5 rounded-full"
+                    style={{ background: 'rgba(14,165,233,0.20)', color: '#7dd3fc' }}>
+                    skip existing
+                  </span>
+                )}
+              </h2>
               <p className="text-xs text-white/40 mt-0.5 truncate max-w-[360px]">
-                {subjectName || 'Selected Subject'} — all chapters, MCQs, blogs & PYQ pages
+                {subjectName || 'Selected Subject'} — {skipExisting
+                  ? 'reuses existing notes/PYQs, publishes blogs & PYQ pages'
+                  : 'all chapters, MCQs, blogs & PYQ pages'}
               </p>
             </div>
           </div>

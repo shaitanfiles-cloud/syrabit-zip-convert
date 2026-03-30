@@ -15472,6 +15472,7 @@ def _pipeline_job_gc():
 
 class PipelineAutoGenerateRequest(BaseModel):
     subject_id: str
+    skip_existing: bool = False
 
 
 @api.get("/admin/pipeline/status/{job_id}")
@@ -15483,10 +15484,10 @@ async def admin_pipeline_status(job_id: str, admin: dict = Depends(get_admin_use
     return job
 
 
-async def _pipeline_auto_generate_worker(job_id: str, subject_id: str):
+async def _pipeline_auto_generate_worker(job_id: str, subject_id: str, skip_existing: bool = False):
     """Background worker: runs the full pipeline and updates _pipeline_jobs[job_id]."""
     try:
-        result = await _pipeline_auto_generate_core(subject_id, job_id)
+        result = await _pipeline_auto_generate_core(subject_id, job_id, skip_existing=skip_existing)
         _pipeline_jobs[job_id].update({
             "status": "complete",
             "progress": 100,
@@ -15531,7 +15532,7 @@ async def admin_pipeline_auto_generate(body: PipelineAutoGenerateRequest, backgr
         "result": None,
         "started_at": datetime.now(timezone.utc).timestamp(),
     }
-    background_tasks.add_task(_pipeline_auto_generate_worker, job_id, subject_id)
+    background_tasks.add_task(_pipeline_auto_generate_worker, job_id, subject_id, body.skip_existing)
     return {"job_id": job_id, "status": "running"}
 
 
@@ -15550,8 +15551,11 @@ async def _pipeline_process_one_chapter(
     done_counter: dict,
     total_chapters: int,
     job_id: str,
+    skip_existing: bool = False,
 ) -> dict:
-    """Process a single chapter: notes → MCQs → flashcards → geo-blogs (parallel) → PYQ."""
+    """Process a single chapter: notes → MCQs → flashcards → geo-blogs (parallel) → PYQ.
+    If skip_existing=True, reuses existing notes/PYQs/flashcards and only runs blogs+PYQ HTML+sitemap.
+    """
     async with semaphore:
         chapter_id    = chapter.get("id", "")
         chapter_title = (chapter.get("title") or "").strip()
@@ -15571,29 +15575,33 @@ async def _pipeline_process_one_chapter(
         if not chapter_title:
             return {"skipped": True, "result": chapter_result}
 
-        # ── Step 1: Notes (Redis-cached) ─────────────────────────────────────
+        # ── Step 1: Notes ─────────────────────────────────────────────────────
         existing_content = (chapter.get("content") or "").strip()
         notes_content = existing_content
-        try:
-            generated = await _pipeline_generate_chapter_notes(chapter, subject_name, class_name, paper_type)
-            if generated:
-                notes_content = generated
-                await db.chapters.update_one(
-                    {"id": chapter_id},
-                    {"$set": {
-                        "content": generated,
-                        "content_type": "notes",
-                        "notes_generated": True,
-                        "notes_generated_at": now_iso,
-                    }}
-                )
-                chapter_result["notes_generated"] = True
-                try:
-                    await auto_chunk_content(chapter_id=chapter_id, content=generated, subject_id=subject_id)
-                except Exception:
-                    pass
-        except Exception as e:
-            chapter_result["errors"].append(f"notes: {str(e)[:80]}")
+        if skip_existing and len(existing_content) > 100:
+            # Reuse existing notes — skip LLM call
+            chapter_result["notes_generated"] = False
+        else:
+            try:
+                generated = await _pipeline_generate_chapter_notes(chapter, subject_name, class_name, paper_type)
+                if generated:
+                    notes_content = generated
+                    await db.chapters.update_one(
+                        {"id": chapter_id},
+                        {"$set": {
+                            "content": generated,
+                            "content_type": "notes",
+                            "notes_generated": True,
+                            "notes_generated_at": now_iso,
+                        }}
+                    )
+                    chapter_result["notes_generated"] = True
+                    try:
+                        await auto_chunk_content(chapter_id=chapter_id, content=generated, subject_id=subject_id)
+                    except Exception:
+                        pass
+            except Exception as e:
+                chapter_result["errors"].append(f"notes: {str(e)[:80]}")
 
         if not notes_content:
             done_counter["done"] += 1
@@ -15603,11 +15611,26 @@ async def _pipeline_process_one_chapter(
             return {"skipped": True, "result": chapter_result}
 
         # ── Steps 2 & 3: Topic PYQs + Flashcards (parallel) ────────────────
-        pyq_task = _pipeline_generate_topic_pyq(notes_content, subject_name, chapter_title, class_name, count=20)
-        fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30)
-        (topic_pyqs, pyq_err), (flashcards, fc_err) = await asyncio.gather(
-            _safe(pyq_task), _safe(fc_task)
-        )
+        # If skip_existing, check DB first — only generate if absent
+        pyq_err = None
+        fc_err  = None
+        _existing_pyqs = None
+        _existing_fc   = None
+        if skip_existing:
+            _existing_pyqs = await db.topic_pyq_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1})
+            _existing_fc   = await db.flashcard_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1})
+
+        if skip_existing and _existing_pyqs and _existing_fc:
+            chapter_result["topic_pyq_count"]  = _existing_pyqs.get("total", 0)
+            chapter_result["flashcards_count"]  = _existing_fc.get("total", 0)
+            topic_pyqs = None
+            flashcards = None
+        else:
+            pyq_task = _pipeline_generate_topic_pyq(notes_content, subject_name, chapter_title, class_name, count=20)
+            fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30)
+            (topic_pyqs, pyq_err), (flashcards, fc_err) = await asyncio.gather(
+                _safe(pyq_task), _safe(fc_task)
+            )
 
         if topic_pyqs:
             try:
@@ -15726,7 +15749,7 @@ async def _safe(coro):
         return None, e
 
 
-async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
+async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_existing: bool = False):
     """Core pipeline logic — extracted so it can run as a background task."""
     subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
     if not subject:
@@ -15787,6 +15810,7 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
             now_iso=now_iso, pyq_docs=pyq_docs,
             semaphore=semaphore, done_counter=done_counter,
             total_chapters=total_chapters, job_id=job_id,
+            skip_existing=skip_existing,
         )
         for ch in chapters
     ]
