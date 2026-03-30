@@ -448,12 +448,14 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
             boards={boards} classes={classes} streams={streams} subjects={subjects}
             hierarchyLoading={hierarchyLoading}
             adminToken={adminToken}
+            autoRun={autoFlow}
           />
         )}
         {state.step === 2 && (
           <Step2DraftContent
             state={state} set={set} goNext={goNext} goPrev={goPrev}
             adminToken={adminToken}
+            autoRun={autoFlow}
           />
         )}
         {state.step === 3 && (
@@ -474,6 +476,7 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
           <Step5ReviewPublish
             state={state} set={set} goPrev={goPrev}
             adminToken={adminToken}
+            autoRun={autoFlow}
           />
         )}
       </div>
@@ -496,10 +499,11 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 1 — Target & Scope
 // ─────────────────────────────────────────────────────────────────────────────
-function Step1TargetScope({ state, set, goNext, boards, classes, streams, subjects, hierarchyLoading, adminToken }) {
+function Step1TargetScope({ state, set, goNext, boards, classes, streams, subjects, hierarchyLoading, adminToken, autoRun }) {
   const [saving, setSaving] = useState(false);
   const [linkingScope, setLinkingScope] = useState(false);
   const [linkError, setLinkError] = useState(false);
+  const autoRunFired1 = useRef(false);
 
   const filteredClasses = state.boardId ? classes.filter(c => c.board_id === state.boardId) : [];
   const filteredStreams = state.classId ? streams.filter(s => s.class_id === state.classId) : [];
@@ -513,6 +517,15 @@ function Step1TargetScope({ state, set, goNext, boards, classes, streams, subjec
     : [];
 
   const canContinue = state.subjectId && state.primaryKeyword.trim();
+
+  useEffect(() => {
+    if (!autoRun || autoRunFired1.current || saving || linkingScope) return;
+    if (!canContinue || !state.boardId) return;
+    autoRunFired1.current = true;
+    const t = setTimeout(() => handleContinue(), 600);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, canContinue, state.boardId, saving, linkingScope]);
 
   const handleContinue = async () => {
     if (!canContinue) return;
@@ -722,12 +735,13 @@ function Step1TargetScope({ state, set, goNext, boards, classes, streams, subjec
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 2 — Draft Content
 // ─────────────────────────────────────────────────────────────────────────────
-function Step2DraftContent({ state, set, goNext, goPrev, adminToken }) {
+function Step2DraftContent({ state, set, goNext, goPrev, adminToken, autoRun }) {
   const [saving, setSaving] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
   const editorRef = useRef(null);
   const pdfRef = useRef(null);
+  const autoRunFired2 = useRef(false);
 
   const wc = wordCount(state.draftContent);
   const canContinue = wc >= 150;
@@ -735,6 +749,15 @@ function Step2DraftContent({ state, set, goNext, goPrev, adminToken }) {
   const handleContentChange = (val) => {
     set({ draftContent: val });
   };
+
+  useEffect(() => {
+    if (!autoRun || autoRunFired2.current || saving) return;
+    if (!canContinue || !state.docId) return;
+    autoRunFired2.current = true;
+    const t = setTimeout(() => handleContinue(), 600);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, canContinue, state.docId, saving]);
 
   const handlePdfUpload = async () => {
     const file = pdfRef.current?.files?.[0];
@@ -905,7 +928,7 @@ function Step3AiEnrichment({ state, set, goNext, goPrev, adminToken, autoRun }) 
     setLocalBlocks(updated);
   };
 
-  // Auto-trigger when arriving from Content Editor handoff
+  // Auto-trigger enrichment when arriving from Content Editor handoff
   useEffect(() => {
     if (!autoRun || autoRunFired3.current || localBlocks || !state.draftContent) return;
     autoRunFired3.current = true;
@@ -913,6 +936,16 @@ function Step3AiEnrichment({ state, set, goNext, goPrev, adminToken, autoRun }) 
     return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-accept enrichment once blocks are ready in autoRun mode
+  const autoAcceptFired = useRef(false);
+  useEffect(() => {
+    if (!autoRun || autoAcceptFired.current || !localBlocks?.length || enriching || saving) return;
+    autoAcceptFired.current = true;
+    const t = setTimeout(() => handleAccept(), 800);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, localBlocks, enriching, saving]);
 
   return (
     <div className="p-6 max-w-3xl mx-auto">
@@ -1300,6 +1333,16 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-continue to Step 5 once SEO fields are filled in autoRun mode
+  const autoContFired4 = useRef(false);
+  useEffect(() => {
+    if (!autoRun || autoContFired4.current || !requiredFilled || !state.docId || generating || saving) return;
+    autoContFired4.current = true;
+    const t = setTimeout(() => handleContinue(), 800);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, requiredFilled, state.docId, generating, saving]);
+
   const inp = (err) => `w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border outline-none focus:border-violet-500 transition ${err ? 'border-red-500/50' : 'border-white/10'}`;
   const lbl = 'text-xs font-semibold text-white/50 mb-1 block';
 
@@ -1440,10 +1483,11 @@ function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, autoRun }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Step 5 — Review & Publish
 // ─────────────────────────────────────────────────────────────────────────────
-function Step5ReviewPublish({ state, set, goPrev, adminToken }) {
+function Step5ReviewPublish({ state, set, goPrev, adminToken, autoRun }) {
   const [saving, setSaving] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const autoRunFired5 = useRef(false);
 
   const wc = wordCount(state.enrichedContent || state.draftContent);
   const metaLen = (state.metaDescription || '').length;
@@ -1461,6 +1505,15 @@ function Step5ReviewPublish({ state, set, goPrev, adminToken }) {
   ];
 
   const allGreen = checks.every(c => c.ok);
+
+  useEffect(() => {
+    if (!autoRun || autoRunFired5.current || publishing) return;
+    if (!allGreen || !state.docId) return;
+    autoRunFired5.current = true;
+    const t = setTimeout(() => handlePublishToggle(), 800);
+    return () => clearTimeout(t);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRun, allGreen, state.docId, publishing]);
 
   const handleSaveDraft = async () => {
     if (!state.docId) return;

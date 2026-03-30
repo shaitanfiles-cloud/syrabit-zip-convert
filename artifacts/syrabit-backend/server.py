@@ -9962,12 +9962,20 @@ async def get_cms_post_by_subject(subject_id: str):
     try:
         if not await is_mongo_available():
             raise HTTPException(status_code=503, detail="Content service unavailable")
-        post = await db.cms_posts.find_one(
+        doc = await db.cms_documents.find_one(
             {"subject_id": subject_id, "status": "published"},
             {"_id": 0, "merged_md": 0}
         )
-        if post:
-            return post
+        if doc:
+            return {
+                "subject_id": subject_id,
+                "title":      doc.get("title", ""),
+                "subject_merged_html": doc.get("content", ""),
+                "headings":   doc.get("headings", ""),
+                "word_count": doc.get("word_count", 0),
+                "status":     "published",
+                "seo_slug":   doc.get("seo_slug", ""),
+            }
         # Generate on the fly (not cached yet)
         merged_md = await merge_subject_content(subject_id)
         if not merged_md:
@@ -9993,7 +10001,7 @@ async def get_cms_post_by_subject(subject_id: str):
 
 @api.post("/admin/cms/merge/{subject_id}")
 async def admin_merge_subject(subject_id: str, admin: dict = Depends(get_admin_user)):
-    """Merge subject chapters+chunks → cms_posts (admin). Returns word count + headings."""
+    """Merge subject chapters+chunks → cms_documents. Returns word count + headings."""
     if not await is_mongo_available():
         raise HTTPException(status_code=503, detail="Content service unavailable")
     merged_md = await merge_subject_content(subject_id)
@@ -10004,31 +10012,48 @@ async def admin_merge_subject(subject_id: str, admin: dict = Depends(get_admin_u
     word_count    = len(re.sub(r'<[^>]+>', '', content_html).split())
     subject       = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
     now           = datetime.now(timezone.utc).isoformat()
-    post_data = {
+    subject_name  = subject.get("name", "") if subject else ""
+    subject_slug  = subject.get("slug", subject_id) if subject else subject_id
+
+    # ── Primary: write to cms_documents ─────────────────────────────────────
+    cms_doc_data = {
         "subject_id":          subject_id,
-        "title":               (subject.get("name", "") if subject else ""),
-        "slug":                (subject.get("slug", subject_id) if subject else subject_id),
+        "title":               subject_name,
+        "seo_slug":            subject_slug,
         "board_slug":          (subject.get("board_slug", "") if subject else ""),
         "class_slug":          (subject.get("class_slug", "") if subject else ""),
+        "content":             content_html,
         "merged_md":           merged_md,
-        "subject_merged_html": content_html,
         "headings":            headings_json,
         "word_count":          word_count,
         "status":              "published",
+        "schema_type":         "Article",
+        "primary_keyword":     subject_name,
         "updated_at":          now,
     }
-    await db.cms_posts.update_one(
-        {"subject_id": subject_id},
-        {"$set": post_data, "$setOnInsert": {"created_at": now}},
-        upsert=True
-    )
+    existing_doc = await db.cms_documents.find_one({"subject_id": subject_id}, {"_id": 0, "id": 1})
+    if existing_doc:
+        await db.cms_documents.update_one(
+            {"subject_id": subject_id},
+            {"$set": cms_doc_data},
+        )
+        doc_id = existing_doc.get("id", "")
+    else:
+        cms_doc_data["id"] = str(uuid.uuid4())
+        cms_doc_data["created_at"] = now
+        await db.cms_documents.insert_one(cms_doc_data)
+        doc_id = cms_doc_data["id"]
+
     headings = json.loads(headings_json) if headings_json else []
     return {
         "subject_id":  subject_id,
+        "doc_id":      doc_id,
         "word_count":  word_count,
         "headings":    headings,
-        "slug":        post_data["slug"],
-        "title":       post_data["title"],
+        "slug":        subject_slug,
+        "title":       subject_name,
+        "merged_md":   merged_md,
+        "content":     content_html,
         "board_slug":  subject.get("board_slug", "")   if subject else "",
         "class_slug":  subject.get("class_slug", "")   if subject else "",
         "class_name":  subject.get("class_name", "")   if subject else "",
@@ -10045,19 +10070,19 @@ async def list_cms_posts(
     limit:      int = 20,
     skip:       int = 0,
 ):
-    """Paginated published cms_posts for Library infinite scroll."""
+    """Paginated published cms content for Library infinite scroll — reads from cms_documents."""
     try:
         if not await is_mongo_available():
             return {"items": [], "total": 0}
-        query: dict = {"status": "published"}
+        query: dict = {"status": "published", "subject_id": {"$exists": True, "$ne": None}}
         if board:      query["board_slug"]  = board
         if class_slug: query["class_slug"]  = class_slug
         if subject_id: query["subject_id"]  = subject_id
         limit = min(max(limit, 1), 50)
-        items = await db.cms_posts.find(
-            query, {"_id": 0, "merged_md": 0, "subject_merged_html": 0}
+        items = await db.cms_documents.find(
+            query, {"_id": 0, "merged_md": 0, "content": 0}
         ).sort("updated_at", -1).skip(skip).limit(limit).to_list(limit)
-        total = await db.cms_posts.count_documents(query)
+        total = await db.cms_documents.count_documents(query)
         return {"items": items, "total": total}
     except Exception:
         mark_mongo_down()
@@ -10066,32 +10091,27 @@ async def list_cms_posts(
 
 @api.post("/admin/content/regenerate-sitemap")
 async def regenerate_sitemap(admin: dict = Depends(get_admin_user)):
-    """Regenerate sitemap.xml — includes cms_documents AND cms_posts slugs."""
+    """Regenerate sitemap.xml — reads from cms_documents only."""
     try:
         sitemap_entries = []
-        # CMS standalone documents
+        # All published CMS documents (standalone + subject-merged)
         docs = await db.cms_documents.find(
             {"status": "published"},
-            {"_id": 0, "seo_slug": 1, "id": 1, "category": 1, "updated_at": 1}
-        ).to_list(1000)
+            {"_id": 0, "seo_slug": 1, "id": 1, "category": 1, "subject_id": 1, "updated_at": 1}
+        ).to_list(3000)
         for doc in docs:
             slug = doc.get("seo_slug") or doc.get("id", "")
+            # Subject-merged docs use /subject/ path; standalone blogs use /learn/
+            if doc.get("subject_id") and not doc.get("category"):
+                path = f"/subject/{doc.get('subject_id', slug)}"
+                priority = "0.7"
+            else:
+                path = f"/learn/{slug}"
+                priority = "0.8"
             sitemap_entries.append({
-                "url":     f"/learn/{slug}",
+                "url":     path,
                 "lastmod": doc.get("updated_at", ""),
-                "priority": "0.8",
-            })
-        # CMS subject-merged posts
-        posts = await db.cms_posts.find(
-            {"status": "published"},
-            {"_id": 0, "slug": 1, "subject_id": 1, "updated_at": 1}
-        ).to_list(2000)
-        for post in posts:
-            slug = post.get("slug") or post.get("subject_id", "")
-            sitemap_entries.append({
-                "url":     f"/subject/{post.get('subject_id', slug)}",
-                "lastmod": post.get("updated_at", ""),
-                "priority": "0.7",
+                "priority": priority,
             })
         logger.info(f"Sitemap regenerated: {len(sitemap_entries)} entries")
         return {"message": f"Sitemap generated with {len(sitemap_entries)} entries", "count": len(sitemap_entries)}
@@ -14198,22 +14218,61 @@ async def _pipeline_generate_pyq_html(chapter: dict, subject_name: str, pyq_docs
 </div>"""
 
 
+# ── Pipeline background job store ─────────────────────────────────────────────
+# Simple in-memory store for pipeline job status (TTL ~1 hour).
+# Keys are job UUIDs. Values: { status, progress, message, result, started_at }
+_pipeline_jobs: dict = {}
+
+def _pipeline_job_gc():
+    """Remove jobs older than 1 hour."""
+    cutoff = datetime.now(timezone.utc).timestamp() - 3600
+    stale = [k for k, v in _pipeline_jobs.items() if v.get("started_at", 0) < cutoff]
+    for k in stale:
+        _pipeline_jobs.pop(k, None)
+
+
 class PipelineAutoGenerateRequest(BaseModel):
     subject_id: str
 
 
+@api.get("/admin/pipeline/status/{job_id}")
+async def admin_pipeline_status(job_id: str, admin: dict = Depends(get_admin_user)):
+    """Poll the status of a background pipeline job."""
+    job = _pipeline_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
+    return job
+
+
+async def _pipeline_auto_generate_worker(job_id: str, subject_id: str):
+    """Background worker: runs the full pipeline and updates _pipeline_jobs[job_id]."""
+    try:
+        result = await _pipeline_auto_generate_core(subject_id, job_id)
+        _pipeline_jobs[job_id].update({
+            "status": "complete",
+            "progress": 100,
+            "message": "Pipeline finished",
+            "result": result,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as exc:
+        _pipeline_jobs[job_id].update({
+            "status": "error",
+            "progress": 100,
+            "message": str(exc)[:200],
+            "result": None,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        })
+        logger.error(f"Pipeline job {job_id} failed: {exc}")
+    finally:
+        _pipeline_job_gc()
+
+
 @api.post("/admin/pipeline/auto-generate")
-async def admin_pipeline_auto_generate(body: PipelineAutoGenerateRequest, admin: dict = Depends(get_admin_user)):
+async def admin_pipeline_auto_generate(body: PipelineAutoGenerateRequest, background_tasks: BackgroundTasks, admin: dict = Depends(get_admin_user)):
     """
-    1-Click Full Subject Pipeline.
-    For a given subject_id, generates for every chapter:
-      1. Chapter notes (via LLM)
-      2. 25 MCQs
-      3. 30 Flashcards
-      4. 5 geo-targeted SEO blog variants (Assam cities)
-      5. PYQ HTML page using uploaded PYQs
-    Bulk-inserts all assets, regenerates sitemap, pings Google.
-    Returns a structured summary.
+    1-Click Full Subject Pipeline (async).
+    Returns job_id immediately; poll /admin/pipeline/status/{job_id} for progress.
     """
     subject_id = body.subject_id.strip()
     if not subject_id:
@@ -14222,6 +14281,26 @@ async def admin_pipeline_auto_generate(body: PipelineAutoGenerateRequest, admin:
     subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
+
+    job_id = str(uuid.uuid4())
+    _pipeline_jobs[job_id] = {
+        "job_id": job_id,
+        "subject_id": subject_id,
+        "status": "running",
+        "progress": 0,
+        "message": "Pipeline starting…",
+        "result": None,
+        "started_at": datetime.now(timezone.utc).timestamp(),
+    }
+    background_tasks.add_task(_pipeline_auto_generate_worker, job_id, subject_id)
+    return {"job_id": job_id, "status": "running"}
+
+
+async def _pipeline_auto_generate_core(subject_id: str, job_id: str = ""):
+    """Core pipeline logic — extracted so it can run as a background task."""
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise ValueError(f"Subject {subject_id} not found")
 
     subject_name = subject.get("name", "")
     paper_type   = subject.get("paper_type", "")
@@ -14278,8 +14357,17 @@ async def admin_pipeline_auto_generate(body: PipelineAutoGenerateRequest, admin:
     }
 
     cms_docs_to_insert = []
+    total_chapters = len(chapters)
 
-    for chapter in chapters:
+    for ch_idx, chapter in enumerate(chapters):
+        # Update job progress
+        if job_id and job_id in _pipeline_jobs:
+            pct = int(5 + (ch_idx / max(total_chapters, 1)) * 90)
+            _pipeline_jobs[job_id].update({
+                "progress": pct,
+                "message": f"Processing chapter {ch_idx + 1}/{total_chapters}…",
+            })
+
         chapter_id    = chapter.get("id", "")
         chapter_title = (chapter.get("title") or "").strip()
         if not chapter_title:

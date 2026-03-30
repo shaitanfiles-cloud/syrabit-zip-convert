@@ -392,3 +392,9 @@ export const adminGetPlanTiers = (token) =>
 
 export const adminUpdatePlanTier = (token, plan, data) =>
   axios.patch(`${API_BASE}/admin/plan-config/${plan}`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminPipelineAutoGenerate = (token, subjectId) =>
+  axios.post(`${API_BASE}/admin/pipeline/auto-generate`, { subject_id: subjectId }, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminPipelineStatus = (token, jobId) =>
+  axios.get(`${API_BASE}/admin/pipeline/status/${jobId}`, { headers: adminHeaders(token), withCredentials: true });

@@ -1,21 +1,17 @@
 /**
  * PipelineProgressPanel — Modal overlay for 1-Click Full Subject Pipeline
- * Shows live progress as each chapter is processed, then displays a summary.
+ * Starts a background job immediately, then polls /api/admin/pipeline/status/{job_id}
+ * every 3 seconds for live progress updates.
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   X, Loader2, CheckCircle2, AlertCircle, Zap, Globe, BookOpen,
   HelpCircle, FileText, ExternalLink, Sparkles,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import axios from 'axios';
+import { adminPipelineAutoGenerate, adminPipelineStatus } from '@/utils/api';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
-
-function authHeaders(token) {
-  const isRealJwt = token && token.split('.').length === 3;
-  return { headers: isRealJwt ? { Authorization: `Bearer ${token}` } : {}, withCredentials: true };
-}
 
 const STEP_LABELS = [
   { icon: BookOpen,   label: 'Chapter Notes',      color: '#8b5cf6' },
@@ -29,6 +25,48 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
   const [status, setStatus]     = useState('idle');
   const [summary, setSummary]   = useState(null);
   const [error, setError]       = useState('');
+  const [jobId, setJobId]       = useState(null);
+  const [pollData, setPollData] = useState(null);
+  const pollRef = useRef(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback((jid) => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await adminPipelineStatus(adminToken, jid);
+        const data = res.data;
+        setPollData(data);
+        if (data.status === 'done' || data.status === 'complete') {
+          stopPolling();
+          setSummary(data.result || data);
+          setStatus('done');
+          onComplete?.(data.result || data);
+          toast.success(`Pipeline complete — ${(data.result || data).total_blogs || 0} blogs published!`);
+        } else if (data.status === 'error') {
+          stopPolling();
+          const detail = data.error || data.message || 'Pipeline failed';
+          setError(detail);
+          setStatus('error');
+          toast.error(`Pipeline error: ${detail}`);
+        }
+      } catch (e) {
+        if (e?.response?.status === 404) {
+          stopPolling();
+          setError('Job not found or expired');
+          setStatus('error');
+        }
+      }
+    }, 3000);
+  }, [adminToken, onComplete, stopPolling]);
+
+  useEffect(() => () => stopPolling(), [stopPolling]);
 
   const runPipeline = useCallback(async () => {
     if (!subjectId) {
@@ -38,28 +76,38 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
     setStatus('running');
     setError('');
     setSummary(null);
+    setJobId(null);
+    setPollData(null);
     try {
-      const res = await axios.post(
-        `${API}/admin/pipeline/auto-generate`,
-        { subject_id: subjectId },
-        {
-          ...authHeaders(adminToken),
-          timeout: 600000,
-        },
-      );
-      setSummary(res.data);
-      setStatus('done');
-      onComplete?.(res.data);
-      toast.success(`Pipeline complete — ${res.data.total_blogs || 0} blogs published!`);
+      const res = await adminPipelineAutoGenerate(adminToken, subjectId);
+      const data = res.data;
+
+      if (data.job_id) {
+        setJobId(data.job_id);
+        toast.success('Pipeline started — tracking progress…');
+        startPolling(data.job_id);
+      } else if (data.status === 'done' || data.total_blogs != null) {
+        setSummary(data);
+        setStatus('done');
+        onComplete?.(data);
+        toast.success(`Pipeline complete — ${data.total_blogs || 0} blogs published!`);
+      } else {
+        setError('Unexpected response from pipeline endpoint');
+        setStatus('error');
+      }
     } catch (e) {
       const detail = e?.response?.data?.detail || e?.message || 'Pipeline failed';
       setError(detail);
       setStatus('error');
       toast.error(`Pipeline error: ${detail}`);
     }
-  }, [subjectId, adminToken, onComplete]);
+  }, [subjectId, adminToken, onComplete, startPolling]);
 
   const firstBlogUrl = summary?.blog_urls?.[0] || '';
+
+  const pct = pollData
+    ? Math.min(99, pollData.progress || 0)
+    : 0;
 
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
@@ -119,15 +167,15 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
                 })}
               </div>
               <p className="text-xs text-white/30 pt-1">
-                This runs sequentially per chapter and may take several minutes for subjects with many chapters.
-                All assets are published immediately on completion.
+                Runs as a background job — you can close this panel and check back later.
+                Progress updates every few seconds.
               </p>
             </div>
           )}
 
           {/* Running */}
           {status === 'running' && (
-            <div className="flex flex-col items-center gap-5 py-8">
+            <div className="flex flex-col items-center gap-5 py-6">
               <div className="relative w-20 h-20">
                 <div className="absolute inset-0 rounded-full"
                   style={{ background: 'rgba(139,92,246,0.15)', border: '2px solid rgba(139,92,246,0.30)' }} />
@@ -136,12 +184,31 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
                 </div>
               </div>
               <div className="text-center">
-                <p className="text-sm font-semibold text-white/80">Pipeline Running…</p>
+                <p className="text-sm font-semibold text-white/80">
+                  {jobId ? 'Pipeline Running…' : 'Starting Pipeline…'}
+                </p>
+                {jobId && (
+                  <p className="text-[10px] font-mono text-white/25 mt-1">job {jobId.slice(-8)}</p>
+                )}
                 <p className="text-xs text-white/35 mt-1.5 max-w-sm">
                   Generating chapter notes, MCQs, flashcards, geo-SEO blogs, and PYQ pages for all chapters.
-                  Please keep this window open.
                 </p>
               </div>
+
+              {/* Progress bar when polling data available */}
+              {pollData && (
+                <div className="w-full space-y-2">
+                  <div className="flex items-center justify-between text-xs text-white/40">
+                    <span>{pollData.message || 'Processing…'}</span>
+                    <span>{pct}%</span>
+                  </div>
+                  <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                    <div className="h-full rounded-full transition-all duration-500"
+                      style={{ width: `${pct}%`, background: 'linear-gradient(90deg,#7c3aed,#5b21b6)' }} />
+                  </div>
+                </div>
+              )}
+
               <div className="w-full space-y-2">
                 {STEP_LABELS.map((s, i) => {
                   const Icon = s.icon;
@@ -281,7 +348,9 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
             </>
           )}
           {status === 'running' && (
-            <span className="text-xs text-white/30 italic">Please wait — do not close this window…</span>
+            <span className="text-xs text-white/30 italic">
+              {jobId ? 'Pipeline running in background — updates every 3 seconds' : 'Starting pipeline…'}
+            </span>
           )}
           {(status === 'done' || status === 'error') && (
             <>

@@ -9,6 +9,7 @@ import {
 import PipelineProgressPanel from './PipelineProgressPanel';
 import { toast } from 'sonner';
 import axios from 'axios';
+import { adminSeoExtractTopics } from '@/utils/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { TEMPLATES } from '@/utils/editorTemplates';
@@ -189,6 +190,8 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [bulkMerging, setBulkMerging]           = useState(false);
   const [showPreview, setShowPreview]           = useState(false);
   const [mergedSubjectIds, setMergedSubjectIds] = useState(new Set());
+  const [seoTopicsGeneratedIds, setSeoTopicsGeneratedIds] = useState(new Set());
+  const [generatingSeoTopics, setGeneratingSeoTopics]     = useState(false);
   const [editorKey, setEditorKey]               = useState(0);
   const [showPipeline, setShowPipeline]         = useState(false);
 
@@ -385,6 +388,29 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       setBulkMerging(false);
     }
   }, [adminToken, selSubject, subjectData, selectedChapters, onNavigate]);
+
+  const handleGenerateSeoTopics = useCallback(async () => {
+    if (!selSubject) return;
+    const subjectName = subjects.find(s => s.id === selSubject)?.name || selSubject;
+    setGeneratingSeoTopics(true);
+    toast.loading(`Extracting SEO topics for "${subjectName}"…`, { id: 'seo-extract' });
+    try {
+      const res = await adminSeoExtractTopics(adminToken, selSubject, false);
+      const d = res.data || {};
+      setSeoTopicsGeneratedIds(prev => new Set([...prev, selSubject]));
+      toast.success(
+        `Created ${d.created || 0} SEO topics for "${subjectName}"` +
+        (d.skipped ? ` · ${d.skipped} already existed` : '') +
+        (d.errors ? ` · ${d.errors} AI errors` : ''),
+        { id: 'seo-extract' }
+      );
+      onNavigate?.('seomanager', { subjectId: selSubject, subjectName });
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'SEO topic extraction failed', { id: 'seo-extract' });
+    } finally {
+      setGeneratingSeoTopics(false);
+    }
+  }, [adminToken, selSubject, subjects, onNavigate]);
 
   const load = useCallback(async (bustCache = false) => {
     try {
@@ -1096,43 +1122,44 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                               <Sparkles size={11} /> Send to AI Studio
                             </button>
                             <button
-                              onClick={() => {
-                                try {
-                                  const ctx = {
-                                    subjectId:   selSubject  || '',
-                                    subjectName: subjectData?.name || '',
-                                    className:   selClass    || '',
-                                    boardName:   selBoard    || '',
-                                    streamName:  selStream   || '',
-                                    _ts: Date.now(),
-                                  };
-                                  localStorage.setItem('syrabit_hub_ctx', JSON.stringify(ctx));
-                                } catch {}
-                                onNavigate('seomanager');
-                              }}
-                              disabled={!selSubject}
+                              onClick={handleGenerateSeoTopics}
+                              disabled={!selSubject || generatingSeoTopics || chapters.length === 0}
                               className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
                               style={{ background: 'rgba(6,182,212,0.12)', color: '#67e8f9', border: '1px solid rgba(6,182,212,0.28)' }}
-                              title="Generate SEO topics for this subject in SEO Manager"
+                              title={chapters.length === 0 ? 'Add chapters before generating SEO topics' : 'Extract SEO topics for this subject using AI'}
                             >
-                              <Globe size={11} /> Generate SEO Topics →
+                              {generatingSeoTopics ? <Loader2 size={11} className="animate-spin" /> : <Globe size={11} />}
+                              {generatingSeoTopics ? 'Extracting…' : seoTopicsGeneratedIds.has(selSubject) ? 'SEO Topics ✓' : 'Generate SEO Topics'}
                             </button>
                           </>
                         )}
                         <button
                           onClick={() => setShowPipeline(true)}
-                          disabled={chapters.length === 0}
+                          disabled={chapters.length === 0 || !seoTopicsGeneratedIds.has(selSubject)}
                           className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-bold disabled:opacity-40 transition-all hover:opacity-90"
                           style={{ background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: 'white' }}
-                          title="Auto-Generate Full Subject — 1 click generates all content, MCQs, blogs & PYQ pages"
+                          title={
+                            chapters.length === 0
+                              ? 'Add chapters before running pipeline'
+                              : !seoTopicsGeneratedIds.has(selSubject)
+                              ? 'Generate SEO Topics first before running full pipeline'
+                              : 'Auto-Generate Full Subject — 1 click generates all content, MCQs, blogs & PYQ pages'
+                          }
                         >
                           <Zap size={11} /> Auto-Generate Full Subject
                         </button>
                         <button
                           onClick={() => handlePublishAsBlog(selSubject, subjectData?.name || selSubject)}
-                          disabled={publishingBlog || chapters.length === 0}
+                          disabled={publishingBlog || chapters.length === 0 || !mergedSubjectIds.has(selSubject)}
                           className="flex items-center gap-1.5 h-8 px-4 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
                           style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: 'white', boxShadow: '0 2px 8px rgba(124,58,237,0.28)' }}
+                          title={
+                            chapters.length === 0
+                              ? 'Add chapters first'
+                              : !mergedSubjectIds.has(selSubject)
+                              ? 'Run "Auto-Generate Full Subject" first to merge content'
+                              : 'Publish merged content as a blog post'
+                          }
                         >
                           {publishingBlog ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />}
                           Publish as Blog
@@ -1403,6 +1430,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
           onClose={() => setShowPipeline(false)}
           onComplete={(summary) => {
             toast.success(`${summary.total_blogs} blogs published for "${subjectData?.name}"`);
+            setMergedSubjectIds(prev => new Set([...prev, selSubject]));
           }}
         />
       )}

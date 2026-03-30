@@ -167,6 +167,7 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
 
   // ── Hub context (active subject from Content Hub) ─────────────────────────
   const [hubCtx, setHubCtx] = useState(readHubCtx);
+  const prevHubSubjectId = useRef('');
   // Refresh hub context whenever the tab is focused
   useEffect(() => {
     const onFocus = () => setHubCtx(readHubCtx());
@@ -174,6 +175,14 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
     return () => window.removeEventListener('focus', onFocus);
   }, []);
   const [scopeSubjectOnly, setScopeSubjectOnly] = useState(false);
+
+  // Auto-enable subject scope filter when navigated from Content Editor with a subject context
+  useEffect(() => {
+    if (hubCtx?.subjectId && hubCtx.subjectId !== prevHubSubjectId.current) {
+      prevHubSubjectId.current = hubCtx.subjectId;
+      setScopeSubjectOnly(true);
+    }
+  }, [hubCtx?.subjectId]);
 
   // Internal Links
   const [linksData, setLinksData]     = useState(null);
