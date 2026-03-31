@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "Y2mSdAbqYBwX4fb2nKmb2"
+uri = "file://.local/audit_report.md"
+type = "text"
+title = "Syrabit.ai Full Functionality Audit Report"

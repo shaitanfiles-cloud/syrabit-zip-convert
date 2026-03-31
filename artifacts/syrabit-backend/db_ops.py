@@ -1,5 +1,5 @@
 """Syrabit.ai — Database operations: supa_*, pg_* helpers."""
-import json, asyncio, logging, concurrent.futures as _cf
+import json, asyncio, logging, uuid, concurrent.futures as _cf
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from fastapi import HTTPException
