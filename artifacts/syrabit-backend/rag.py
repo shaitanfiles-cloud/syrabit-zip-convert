@@ -3,7 +3,7 @@ import re, asyncio, time, uuid, hashlib, logging
 from typing import Optional, Dict
 from datetime import datetime, timezone
 from fastapi import HTTPException
-from deps import db, logger as _dep_logger
+from deps import db, logger as _dep_logger, _assert_not_cms_context
 from cache import (
     _rag_cache, _rag_cache_key, _vector_rag_cache, _vector_rag_cache_key,
     _content_card_cache, _content_card_cache_key,
