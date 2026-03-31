@@ -105,7 +105,7 @@ Addresses Google "unhelpful content" signals from templated meta/titles/structur
 - **Bot-Aware Pre-Rendering**: `BotRenderMiddleware` in `server.py` detects 20+ bot user-agents (Googlebot, Bingbot, GPTBot, PerplexityBot, ClaudeBot, etc.) and serves pre-rendered HTML instead of SPA shell. Covers: homepage (`/`), library (`/library`), subject landings (`/{board}/{class}/{subject}`), topic pages (4-5 segments), PYQ pages (`/pyq/{slug}`). 1-hour TTL cache (512 entries). Bots see full content, meta tags, Schema.org, internal links.
 - **Subject Landing Pages**: `GET /api/seo/html/subject/{board}/{class}/{subject}` — generates HTML listing all published topics grouped by chapter, with CollectionPage + ItemList + BreadcrumbList Schema.org. Added to sitemap-subjects.xml.
 - **Homepage Pre-Render**: `GET /api/seo/html/homepage` — dynamic HTML with subject listing, stats, WebSite + Organization + EducationalOrganization Schema.org, SearchAction, geo meta (IN-AS).
-- **Production Build**: `build_frontend.sh` builds Vite → copies to `frontend/build/` for Python backend to serve via `serve_spa` catch-all route.
+- **Production Build**: Vite build + Python backend serve via `serve_spa` catch-all route.
 
 ## Admin Panel — Upgrade Wave (All 12 + 5 Quick Wins COMPLETE)
 
@@ -173,35 +173,6 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 
 ## Packages
 
-### `lib/db` (`@workspace/db`)
-
-Database layer using Drizzle ORM with PostgreSQL. Exports a Drizzle client instance and schema models.
-
-- `src/index.ts` — creates a `Pool` + Drizzle instance, exports schema
-- `src/schema/index.ts` — barrel re-export of all models
-- `src/schema/<modelname>.ts` — table definitions with `drizzle-zod` insert schemas (no models definitions exist right now)
-- `drizzle.config.ts` — Drizzle Kit config (requires `DATABASE_URL`, automatically provided by Replit)
-- Exports: `.` (pool, db, schema), `./schema` (schema only)
-
-Production migrations are handled by Replit when publishing. In development, we just use `pnpm --filter @workspace/db run push`, and we fallback to `pnpm --filter @workspace/db run push-force`.
-
-### `lib/api-spec` (`@workspace/api-spec`)
-
-Owns the OpenAPI 3.1 spec (`openapi.yaml`) and the Orval config (`orval.config.ts`). Running codegen produces output into two sibling packages:
-
-1. `lib/api-client-react/src/generated/` — React Query hooks + fetch client
-2. `lib/api-zod/src/generated/` — Zod schemas
-
-Run codegen: `pnpm --filter @workspace/api-spec run codegen`
-
-### `lib/api-zod` (`@workspace/api-zod`)
-
-Generated Zod schemas from the OpenAPI spec (e.g. `HealthCheckResponse`). Used by `api-server` for response validation.
-
-### `lib/api-client-react` (`@workspace/api-client-react`)
-
-Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHealthCheck`, `healthCheck`).
-
 ### `artifacts/syrabit` (`@workspace/syrabit`) + `artifacts/syrabit-backend`
 
 **Syrabit.ai** — AI-powered educational platform for AHSEC Class 11/12 and Degree students in Assam, India.
@@ -264,8 +235,7 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 - **RAG latency tracking**: `rag_search()` uses `_rag_t0 = time.time()` at function entry; `_record_rag_event(quality, round((time.time()-_rag_t0)*1000,1), query)` on cache-miss exit — actual ms now recorded instead of hardcoded 0
 - **Admin dashboard auth**: `/admin/dashboard/metrics` uses `adminHdr(adminToken)` (JWT Bearer) — fixed from bare `headers` (withCredentials-only) which caused 401 when cookie not set
 - **Dashboard UX fixes**: Latency bar threshold 100ms→300ms (remote APIs); MRR formatted with `Math.round().toLocaleString('en-IN')`; alert states distinguish API failure (yellow) from data alerts; fallback rate shows "Could not load" on error vs "no data" on empty; vector coverage widget shows VERTEX_SERVICE_ACCOUNT guidance when 0 items embedded
-- **Testing**: pytest suite in `tests/` (17 tests: health, auth, API, security headers); run `cd artifacts/syrabit-backend && python3 -m pytest tests/ -v`
-- **Docker**: `Dockerfile` (Python 3.11-slim, non-root user, healthcheck) + `docker-compose.yml` with resource limits
+- **Docker**: `Dockerfile` (Python 3.11-slim, non-root user, healthcheck) for Railway/container deployment
 - **Endpoints**: 139 API endpoints total (as of Phase 8 completion)
 - **Deployment**: Root `pyproject.toml` and `uv.lock` removed entirely to prevent platform auto-detection from running `uv sync`; Python deps installed via `PIP_USER=0 pip3 install --target=.python-deps` (avoids Nix pip `user=yes` config that breaks virtualenvs); run uses `PYTHONPATH=.python-deps`; `path-to-regexp` pinned to 8.4.0 via pnpm override
 
