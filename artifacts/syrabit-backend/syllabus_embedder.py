@@ -188,7 +188,7 @@ class SyllabusEmbedder:
           2. MongoDB `chapters` collection (from PDF imports)
         """
         try:
-            from server import SEED_DATA           # type: ignore
+            from config import SEED_DATA            # type: ignore
             from vertex_services import embed_text  # type: ignore
         except ImportError as exc:
             logger.warning(f"Cannot seed — import error: {exc}")

@@ -8,6 +8,7 @@ import {
   GitBranch, Cpu,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import axios from 'axios';
 import {
   adminSeoStats, adminSeoListTopics, adminSeoExtractTopics,
   adminSeoGenerate, adminSeoListPages, adminSeoUpdatePageStatus,
@@ -19,6 +20,8 @@ import {
   adminSeoRefreshMeta, adminSeoReviewQueue, adminSeoBulkReviewAction,
   adminSeoFlagLowQuality,
 } from '@/utils/api';
+
+const API = (import.meta.env.VITE_BACKEND_URL || '') + '/api';
 
 const PAGE_TYPES = [
   { id: 'notes',               label: 'Notes',               color: '#7c3aed' },

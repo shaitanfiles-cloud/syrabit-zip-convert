@@ -1,0 +1,431 @@
+"""Syrabit.ai — Admin notifications, push, exam schedule, export, rate policies"""
+import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+from typing import Optional, List, Dict, Any, Union
+from datetime import datetime, timezone, timedelta
+from fastapi import (
+    APIRouter, HTTPException, Depends, Query, Body, Path,
+    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
+    Form, Header, status,
+)
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field, EmailStr
+import mistune as _mistune
+
+from models import (
+    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
+    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
+    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
+    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
+    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+)
+from config import *
+from deps import *
+from cache import *
+from auth_deps import (
+    get_current_user, get_admin_user, create_access_token, create_refresh_token,
+    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
+    get_current_user_optional,
+)
+from db_ops import *
+from llm import call_llm_api, call_llm_api_stream
+from rag import *
+from utils import *
+from analytics_helpers import *
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+@router.get("/admin/notifications")
+async def admin_get_notifications(admin: dict = Depends(get_admin_user)):
+    notifs = await supa_get_notifications()
+    return notifs
+
+@router.post("/admin/notifications")
+async def admin_create_notification(data: dict, admin: dict = Depends(get_admin_user)):
+    notif = {
+        "id": str(uuid.uuid4()),
+        "title": data.get("title", ""),
+        "message": data.get("message", ""),
+        "type": data.get("type", "info"),
+        "channel": data.get("channel", "push"),
+        "audience": data.get("audience", "all"),
+        "status": data.get("status", "draft"),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "sent_at": datetime.now(timezone.utc).isoformat() if data.get("status") == "sent" else None,
+    }
+    await supa_insert_notification(notif)
+    # Dispatch web-push immediately when status is "sent"
+    if notif["status"] == "sent" and notif.get("channel", "push") == "push":
+        asyncio.create_task(_dispatch_push_to_all({
+            "title": notif["title"],
+            "body":  notif["message"],
+            "url":   data.get("url", "/"),
+        }))
+    return notif
+
+@router.delete("/admin/notifications/{notif_id}")
+async def admin_delete_notification(notif_id: str, admin: dict = Depends(get_admin_user)):
+    await supa_delete_notification(notif_id)
+    return {"message": "Deleted"}
+
+
+# ─────────────────────────────────────────────
+# PUSH NOTIFICATIONS — VAPID + Subscriptions
+# ─────────────────────────────────────────────
+
+async def _get_or_create_vapid_keys() -> dict:
+    """Return VAPID key pair from db.api_config, generating once if absent."""
+    cfg = await db.api_config.find_one({}, {"push_vapid": 1})
+    existing = (cfg or {}).get("push_vapid", {})
+    if existing.get("public_key") and existing.get("private_key_pem"):
+        return existing
+    try:
+        from py_vapid import Vapid
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding, PrivateFormat, PublicFormat, NoEncryption
+        )
+        v = Vapid()
+        v.generate_keys()
+        private_pem = v.private_key.private_bytes(
+            Encoding.PEM, PrivateFormat.TraditionalOpenSSL, NoEncryption()
+        ).decode()
+        # Public key as uncompressed EC point, urlsafe-base64 (what browsers expect)
+        pub_raw = v.public_key.public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
+        pub_b64 = base64.urlsafe_b64encode(pub_raw).rstrip(b"=").decode()
+        keys = {"public_key": pub_b64, "private_key_pem": private_pem}
+        await db.api_config.update_one({}, {"$set": {"push_vapid": keys}}, upsert=True)
+        logger.info("VAPID keys generated and stored in db.api_config")
+        return keys
+    except Exception as e:
+        logger.error(f"VAPID key generation failed: {e}")
+        return {}
+
+
+async def _dispatch_push_to_all(payload: dict):
+    """Send a web-push to every stored subscription. Fire-and-forget."""
+    try:
+        from pywebpush import webpush, WebPushException
+        vapid = await _get_or_create_vapid_keys()
+        private_pem = vapid.get("private_key_pem", "")
+        if not private_pem:
+            logger.warning("Push dispatch skipped — VAPID private key missing")
+            return
+        subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
+        sent = failed = 0
+        for sub in subs:
+            try:
+                webpush(
+                    subscription_info=sub["subscription_info"],
+                    data=json.dumps(payload),
+                    vapid_private_key=private_pem,
+                    vapid_claims={"sub": "mailto:admin@syrabit.ai"},
+                )
+                sent += 1
+            except WebPushException as e:
+                # 410 Gone = subscription expired; clean it up
+                if e.response and e.response.status_code in (404, 410):
+                    await db.push_subscriptions.delete_one({"endpoint": sub.get("endpoint")})
+                failed += 1
+            except Exception:
+                failed += 1
+        logger.info(f"Push dispatch: sent={sent} failed={failed} total={len(subs)}")
+    except Exception as e:
+        logger.error(f"Push dispatch error: {e}")
+
+
+@router.get("/push/vapid-public-key")
+async def push_vapid_public_key():
+    """Return the VAPID public key so the browser can subscribe."""
+    keys = await _get_or_create_vapid_keys()
+    pub = keys.get("public_key", "")
+    if not pub:
+        raise HTTPException(503, "Push not configured — VAPID key generation failed")
+    return {"public_key": pub}
+
+
+@router.post("/push/subscribe")
+async def push_subscribe(data: dict, user: dict = Depends(get_current_user)):
+    """Store a browser push subscription for the authenticated user."""
+    subscription_info = data.get("subscription")
+    if not subscription_info or not subscription_info.get("endpoint"):
+        raise HTTPException(400, "Missing subscription object")
+    endpoint = subscription_info["endpoint"]
+    doc = {
+        "user_id":           str(user["id"]),
+        "endpoint":          endpoint,
+        "subscription_info": subscription_info,
+        "subscribed_at":     datetime.now(timezone.utc).isoformat(),
+    }
+    await db.push_subscriptions.update_one(
+        {"endpoint": endpoint}, {"$set": doc}, upsert=True
+    )
+    return {"ok": True}
+
+
+@router.delete("/push/subscribe")
+async def push_unsubscribe(data: dict, user: dict = Depends(get_current_user)):
+    """Remove a push subscription for the authenticated user."""
+    endpoint = (data or {}).get("endpoint", "")
+    if endpoint:
+        await db.push_subscriptions.delete_one({"endpoint": endpoint, "user_id": str(user["id"])})
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────
+# EXAM REMINDER LOOP + ADMIN SCHEDULE
+# ─────────────────────────────────────────────
+
+async def _exam_reminder_loop():
+    """
+    Runs every 6 hours. Queries db.exam_schedule for exams 1 day, 3 days, or
+    on the date of the exam (IST), then dispatches push notifications.
+    Wakes every 6 hours so it never misses a window even after restart.
+    """
+    import zoneinfo
+    from datetime import timedelta as _td
+    IST = zoneinfo.ZoneInfo("Asia/Kolkata")
+    await asyncio.sleep(30)   # let startup settle
+    while True:
+        try:
+            now_ist   = datetime.now(IST)
+            today_str = now_ist.date().isoformat()
+
+            targets = {
+                "today":      today_str,
+                "1_day_away": (now_ist.date() + _td(days=1)).isoformat(),
+                "3_day_away": (now_ist.date() + _td(days=3)).isoformat(),
+            }
+
+            exams = await db.exam_schedule.find(
+                {"exam_date": {"$in": list(targets.values())}, "active": True},
+                {"_id": 1, "board": 1, "class_name": 1, "subject": 1, "exam_date": 1, "notified_for": 1}
+            ).to_list(200)
+
+            for exam in exams:
+                eid      = str(exam["_id"])
+                board    = exam.get("board", "")
+                subject  = exam.get("subject", "")
+                klass    = exam.get("class_name", "")
+                edate    = exam.get("exam_date", "")
+                notified = set(exam.get("notified_for", []))
+
+                trigger = None
+                for label, dstr in targets.items():
+                    if dstr == edate and label not in notified:
+                        trigger = label
+                        break
+
+                if trigger is None:
+                    continue
+
+                if trigger == "today":
+                    title = f"📋 {subject} exam is TODAY"
+                    body  = f"{board} Class {klass} — Best of luck! You've got this."
+                elif trigger == "1_day_away":
+                    title = f"⏰ {subject} exam tomorrow"
+                    body  = f"{board} Class {klass} — Quick revision time!"
+                else:
+                    title = f"📅 {subject} exam in 3 days"
+                    body  = f"{board} Class {klass} — Keep revising!"
+
+                asyncio.create_task(_dispatch_push_to_all({
+                    "title": title,
+                    "body":  body,
+                    "icon":  "/icons/icon-192.png",
+                    "url":   "/library",
+                    "tag":   f"exam-{eid}-{trigger}",
+                }))
+                logger.info(f"Exam reminder dispatched: {subject} ({trigger})")
+
+                await db.exam_schedule.update_one(
+                    {"_id": exam["_id"]},
+                    {"$addToSet": {"notified_for": trigger}}
+                )
+
+        except Exception as exc:
+            logger.error(f"Exam reminder loop error: {exc}")
+
+        await asyncio.sleep(6 * 3600)   # check every 6 hours
+
+
+@router.get("/admin/exam-schedule")
+async def admin_exam_schedule_list(admin: dict = Depends(get_admin_user)):
+    """List all exam dates in the schedule."""
+    items = await db.exam_schedule.find(
+        {}, {"_id": 1, "board": 1, "class_name": 1, "subject": 1, "exam_date": 1, "active": 1, "notified_for": 1, "created_at": 1}
+    ).sort("exam_date", 1).to_list(500)
+    for i in items:
+        i["id"] = str(i.pop("_id"))
+    return {"exams": items}
+
+
+@router.post("/admin/exam-schedule")
+async def admin_exam_schedule_add(data: dict, admin: dict = Depends(get_admin_user)):
+    """Add an exam date. Body: { board, class_name, subject, exam_date (YYYY-MM-DD) }"""
+    board   = (data.get("board") or "").strip()
+    klass   = (data.get("class_name") or "").strip()
+    subject = (data.get("subject") or "").strip()
+    edate   = (data.get("exam_date") or "").strip()
+    if not all([board, klass, subject, edate]):
+        raise HTTPException(400, "board, class_name, subject, and exam_date are required")
+    try:
+        datetime.strptime(edate, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(400, "exam_date must be YYYY-MM-DD")
+    doc = {
+        "board":        board,
+        "class_name":   klass,
+        "subject":      subject,
+        "exam_date":    edate,
+        "active":       data.get("active", True),
+        "notified_for": [],
+        "created_at":   datetime.now(timezone.utc).isoformat(),
+    }
+    result = await db.exam_schedule.insert_one(doc)
+    return {"id": str(result.inserted_id), "message": "Exam date added"}
+
+
+@router.delete("/admin/exam-schedule/{exam_id}")
+async def admin_exam_schedule_delete(exam_id: str, admin: dict = Depends(get_admin_user)):
+    """Delete an exam date entry."""
+    from bson import ObjectId as _ObjId
+    try:
+        oid = _ObjId(exam_id)
+    except Exception:
+        raise HTTPException(400, "Invalid exam_id")
+    result = await db.exam_schedule.delete_one({"_id": oid})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Exam not found")
+    return {"ok": True}
+
+
+@router.patch("/admin/exam-schedule/{exam_id}")
+async def admin_exam_schedule_toggle(exam_id: str, data: dict, admin: dict = Depends(get_admin_user)):
+    """Toggle active flag or reset notification history for an exam entry."""
+    from bson import ObjectId as _ObjId
+    try:
+        oid = _ObjId(exam_id)
+    except Exception:
+        raise HTTPException(400, "Invalid exam_id")
+    update = {}
+    if "active" in data:
+        update["active"] = bool(data["active"])
+    if data.get("reset_notifications"):
+        update["notified_for"] = []
+    if not update:
+        raise HTTPException(400, "Nothing to update")
+    await db.exam_schedule.update_one({"_id": oid}, {"$set": update})
+    return {"ok": True}
+
+
+# ─────────────────────────────────────────────
+# ADMIN EXPORT — CSV/JSON
+# ─────────────────────────────────────────────
+import csv
+import io as _io
+
+@router.get("/admin/export/users")
+async def admin_export_users(format: str = "json", admin: dict = Depends(get_admin_user)):
+    users = await supa_list_users()
+    if format == "csv":
+        if not users:
+            return Response(content="", media_type="text/csv")
+        output = _io.StringIO()
+        writer = csv.DictWriter(output, fieldnames=[k for k in users[0].keys() if k != "password_hash"])
+        writer.writeheader()
+        for u in users:
+            row = {k: v for k, v in u.items() if k != "password_hash"}
+            writer.writerow(row)
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=users_export.csv"},
+        )
+    return [({k: v for k, v in u.items() if k != "password_hash"}) for u in users]
+
+@router.get("/admin/export/analytics")
+async def admin_export_analytics(format: str = "json", days: int = 30, admin: dict = Depends(get_admin_user)):
+    start = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    docs = await db.analytics.find({"timestamp": {"$gte": start}}, {"_id": 0}).sort("timestamp", -1).to_list(10000)
+    if format == "csv" and docs:
+        output = _io.StringIO()
+        all_keys = sorted(set().union(*(d.keys() for d in docs)))
+        writer = csv.DictWriter(output, fieldnames=all_keys)
+        writer.writeheader()
+        for d in docs:
+            writer.writerow({k: d.get(k, "") for k in all_keys})
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=analytics_export.csv"},
+        )
+    return docs
+
+@router.get("/admin/export/conversations")
+async def admin_export_conversations(format: str = "json", limit: int = 500, admin: dict = Depends(get_admin_user)):
+    convs = await supa_get_all_conversations(limit)
+    if format == "csv" and convs:
+        output = _io.StringIO()
+        keys = ["id", "user_id", "title", "subject_name", "created_at", "updated_at", "preview"]
+        writer = csv.DictWriter(output, fieldnames=keys)
+        writer.writeheader()
+        for c in convs:
+            writer.writerow({k: c.get(k, "") for k in keys})
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=conversations_export.csv"},
+        )
+    return convs
+
+
+# ─────────────────────────────────────────────
+# BULK SEO GENERATION PROGRESS TRACKING
+# ─────────────────────────────────────────────
+_seo_generation_progress: Dict[str, dict] = {}
+
+@router.get("/admin/seo/generation-progress")
+async def seo_generation_progress(admin: dict = Depends(get_admin_user)):
+    return _seo_generation_progress
+
+@router.get("/admin/seo/generation-progress/{job_id}")
+async def seo_generation_progress_detail(job_id: str, admin: dict = Depends(get_admin_user)):
+    if job_id not in _seo_generation_progress:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return _seo_generation_progress[job_id]
+
+
+# ─────────────────────────────────────────────
+# RATE LIMIT POLICIES
+# ─────────────────────────────────────────────
+DEFAULT_RATE_POLICIES = {
+    "free":       {"req_per_min": 5,  "credits_per_day": 0,    "max_tokens": 1024, "req_per_min_ip": 20},
+    "starter":    {"req_per_min": 15, "credits_per_day": 300,  "max_tokens": 2048, "req_per_min_ip": 50},
+    "pro":        {"req_per_min": 30, "credits_per_day": 4000, "max_tokens": 4096, "req_per_min_ip": 100},
+    "enterprise": {"req_per_min": 60, "credits_per_day": 99999,"max_tokens": 8192, "req_per_min_ip": 200},
+}
+
+@router.get("/admin/rate-policies")
+async def admin_get_rate_policies(admin: dict = Depends(get_admin_user)):
+    saved = await db.rate_policies.find_one({}, {"_id": 0})
+    return saved if saved else DEFAULT_RATE_POLICIES
+
+@router.put("/admin/rate-policies")
+async def admin_update_rate_policies(data: dict, admin: dict = Depends(get_admin_user)):
+    await db.rate_policies.replace_one({}, data, upsert=True)
+    return {"message": "Rate policies updated"}
+
+@router.get("/admin/rate-stats")
+async def admin_get_rate_stats(admin: dict = Depends(get_admin_user)):
+    total_users = await supa_count_users()
+    users = await supa_list_users()
+    total_tokens = sum(u.get("credits_used", 0) * 300 for u in users)
+    return {
+        "active_requests": 0,
+        "tokens_today": total_tokens,
+        "daily_budget": 2_000_000,
+        "cost_degraded": False,
+    }
+

@@ -1,0 +1,1247 @@
+"""Syrabit.ai — Admin content CRUD & thumbnails"""
+import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+from typing import Optional, List, Dict, Any, Union
+from datetime import datetime, timezone, timedelta
+from fastapi import (
+    APIRouter, HTTPException, Depends, Query, Body, Path,
+    File, UploadFile, Response, Request, Cookie, BackgroundTasks,
+    Form, Header, status,
+)
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import BaseModel, Field, EmailStr
+import mistune as _mistune
+
+from models import (
+    UserCreate, UserLogin, UserOut, TokenOut, OnboardingData, ChatMessage,
+    ConversationCreate, AdminLoginReq, SubjectCreate, ChapterCreate, ChunkCreate,
+    DocumentUpload, ProfileUpdate, PasswordResetReq, PasswordResetConfirm,
+    UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
+    LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
+)
+from config import *
+from deps import *
+from cache import *
+from auth_deps import (
+    get_current_user, get_admin_user, create_access_token, create_refresh_token,
+    decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
+    get_current_user_optional,
+)
+from db_ops import *
+from llm import call_llm_api, call_llm_api_stream
+from rag import *
+from utils import *
+from analytics_helpers import *
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+@router.get("/admin/content/boards")
+async def admin_list_boards(admin: dict = Depends(get_admin_user)):
+    return await get_boards()
+
+@router.get("/admin/content/classes")
+async def admin_list_classes(admin: dict = Depends(get_admin_user)):
+    return await get_classes()
+
+@router.get("/admin/content/streams")
+async def admin_list_streams(admin: dict = Depends(get_admin_user)):
+    return await get_streams()
+
+@router.get("/admin/content/subjects")
+async def admin_list_subjects(admin: dict = Depends(get_admin_user)):
+    return await get_subjects()
+
+@router.get("/admin/content/chapters/{subject_id}")
+async def admin_list_chapters(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """Admin chapter list — always reads live from DB, no caching, includes all statuses and coverage score."""
+    chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(None)
+    result = []
+    for c in chapters:
+        ch = {k: v for k, v in c.items() if k != "_id"}
+        if "coverage_score" not in ch:
+            ch["coverage_score"] = None
+        result.append(ch)
+    return result
+
+@router.post("/admin/content/boards")
+async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(status_code=503, detail="MongoDB unavailable - cannot create content")
+        board_id = str(uuid.uuid4())[:8]
+        board = {
+            "id": board_id,
+            "name": data["name"],
+            "slug": data["name"].lower().replace(" ", "-"),
+            "description": data.get("description", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.boards.insert_one(board)
+        _invalidate_content_cache("boards")
+        return {k: v for k, v in board.items() if k != "_id"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        mark_mongo_down()
+        raise HTTPException(status_code=503, detail="Database error")
+
+@router.patch("/admin/content/boards/{board_id}")
+async def admin_update_board(board_id: str, data: dict, admin: dict = Depends(get_admin_user)):
+    allowed = {k: v for k, v in data.items() if k in ["name", "description"]}
+    if "name" in allowed:
+        allowed["slug"] = allowed["name"].lower().replace(" ", "-")
+    if allowed:
+        await db.boards.update_one({"id": board_id}, {"$set": allowed})
+        _invalidate_content_cache("boards")
+    return {"message": "Board updated"}
+
+@router.delete("/admin/content/boards/{board_id}")
+async def admin_delete_board(board_id: str, admin: dict = Depends(get_admin_user)):
+    await db.boards.delete_one({"id": board_id})
+    _invalidate_content_cache("boards")
+    return {"message": "Board deleted"}
+
+@router.post("/admin/content/classes")
+async def admin_create_class(data: dict, admin: dict = Depends(get_admin_user)):
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(status_code=503, detail="MongoDB unavailable - cannot create content")
+        class_id = str(uuid.uuid4())[:8]
+        cls = {
+            "id": class_id,
+            "board_id": data["board_id"],
+            "name": data["name"],
+            "slug": data["name"].lower().replace(" ", "-"),
+            "description": data.get("description", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.classes.insert_one(cls)
+        _invalidate_content_cache("classes")
+        return {k: v for k, v in cls.items() if k != "_id"}
+    except HTTPException:
+        raise
+    except Exception:
+        mark_mongo_down()
+        raise HTTPException(status_code=503, detail="Database error")
+
+@router.patch("/admin/content/classes/{class_id}")
+async def admin_update_class(class_id: str, data: dict, admin: dict = Depends(get_admin_user)):
+    allowed = {k: v for k, v in data.items() if k in ["name", "description"]}
+    if "name" in allowed:
+        allowed["slug"] = allowed["name"].lower().replace(" ", "-")
+    if allowed:
+        await db.classes.update_one({"id": class_id}, {"$set": allowed})
+        _invalidate_content_cache("classes")
+    return {"message": "Class updated"}
+
+@router.delete("/admin/content/classes/{class_id}")
+async def admin_delete_class(class_id: str, admin: dict = Depends(get_admin_user)):
+    await db.classes.delete_one({"id": class_id})
+    _invalidate_content_cache("classes")
+    return {"message": "Class deleted"}
+
+@router.post("/admin/content/streams")
+async def admin_create_stream(data: dict, admin: dict = Depends(get_admin_user)):
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(status_code=503, detail="MongoDB unavailable - cannot create content")
+        stream_id = str(uuid.uuid4())[:8]
+        stream = {
+            "id": stream_id,
+            "class_id": data["class_id"],
+            "name": data["name"],
+            "slug": data["name"].lower().replace(" ", "-"),
+            "description": data.get("description", ""),
+            "icon": data.get("icon", "📚"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.streams.insert_one(stream)
+        _invalidate_content_cache("streams")
+        return {k: v for k, v in stream.items() if k != "_id"}
+    except HTTPException:
+        raise
+    except Exception:
+        mark_mongo_down()
+        raise HTTPException(status_code=503, detail="Database error")
+
+@router.patch("/admin/content/streams/{stream_id}")
+async def admin_update_stream(stream_id: str, data: dict, admin: dict = Depends(get_admin_user)):
+    allowed = {k: v for k, v in data.items() if k in ["name", "description", "icon"]}
+    if "name" in allowed:
+        allowed["slug"] = allowed["name"].lower().replace(" ", "-")
+    if allowed:
+        await db.streams.update_one({"id": stream_id}, {"$set": allowed})
+        _invalidate_content_cache("streams")
+    return {"message": "Stream updated"}
+
+@router.delete("/admin/content/streams/{stream_id}")
+async def admin_delete_stream(stream_id: str, admin: dict = Depends(get_admin_user)):
+    await db.streams.delete_one({"id": stream_id})
+    _invalidate_content_cache("streams")
+    return {"message": "Stream deleted"}
+
+
+# ─────────────────────────────────────────────
+# ADMIN — FYUGP Auto-Assign
+# Re-links subjects from PDF imports into pre-built FYUGP semester/stream slots
+# ─────────────────────────────────────────────
+@router.post("/admin/fyugp/auto-assign")
+async def admin_fyugp_auto_assign(admin: dict = Depends(get_admin_user)):
+    """
+    Scans every subject that has paper_type + class_name data (from PDF imports)
+    and re-links them to the canonical FYUGP Semester 1-4 classes (c7-c10) and
+    their 6 pre-built course-type streams (Major/Minor/MDC/VAC/AEC/SEC).
+    Safe to run multiple times — idempotent.
+    """
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="MongoDB unavailable")
+
+    from syllabus_linker import _parse_semester_number, NEP_COURSE_STREAMS
+
+    # FYUGP canonical class map: slug → id
+    fyugp_classes = {
+        "semester-1": "c7", "semester-2": "c8",
+        "semester-3": "c9", "semester-4": "c10",
+    }
+    # Stream slug → canonical stream id per class
+    fyugp_streams = {
+        "c7":  {"major": "s30", "minor": "s31", "mdc": "s32", "vac": "s33", "aec": "s34", "sec": "s35"},
+        "c8":  {"major": "s36", "minor": "s37", "mdc": "s38", "vac": "s39", "aec": "s40", "sec": "s41"},
+        "c9":  {"major": "s42", "minor": "s43", "mdc": "s44", "vac": "s45", "aec": "s46", "sec": "s47"},
+        "c10": {"major": "s48", "minor": "s49", "mdc": "s50", "vac": "s51", "aec": "s52", "sec": "s53"},
+    }
+
+    subjects = await db.subjects.find(
+        {"source": "pdf_import", "paper_type": {"$exists": True, "$ne": ""}},
+        {"_id": 0}
+    ).to_list(5000)
+
+    reassigned = 0
+    skipped = 0
+
+    for subj in subjects:
+        paper_type = (subj.get("paper_type") or "").lower().strip()
+        if paper_type not in NEP_COURSE_STREAMS:
+            skipped += 1
+            continue
+
+        # Determine semester from class_name or class_slug
+        sem_text = subj.get("className") or subj.get("class_slug") or ""
+        sem_num  = _parse_semester_number(sem_text)
+        if not sem_num or sem_num > 4:
+            skipped += 1
+            continue
+
+        class_slug = f"semester-{sem_num}"
+        class_id   = fyugp_classes.get(class_slug)
+        stream_id  = fyugp_streams.get(class_id, {}).get(paper_type)
+        if not class_id or not stream_id:
+            skipped += 1
+            continue
+
+        # Already correct — skip
+        if subj.get("stream_id") == stream_id:
+            continue
+
+        # Fetch stream + class metadata for denorm fields
+        stream_doc = await db.streams.find_one({"id": stream_id}, {"_id": 0})
+        class_doc  = await db.classes.find_one({"id": class_id}, {"_id": 0})
+        stream_name = stream_doc.get("name", paper_type.upper()) if stream_doc else paper_type.upper()
+        class_name  = class_doc.get("name", f"Semester {sem_num}") if class_doc else f"Semester {sem_num}"
+
+        await db.subjects.update_one(
+            {"id": subj["id"]},
+            {"$set": {
+                "stream_id":   stream_id,
+                "stream_slug": paper_type,
+                "class_slug":  class_slug,
+                "class_id":    class_id,
+                "className":   class_name,
+                "streamName":  stream_name,
+                "boardId":     "b2",
+                "boardName":   "DEGREE",
+                "board_slug":  "degree",
+            }}
+        )
+        reassigned += 1
+
+    _invalidate_content_cache("subjects")
+    _invalidate_content_cache("streams")
+    _invalidate_content_cache("classes")
+    return {
+        "message": f"FYUGP auto-assign complete",
+        "reassigned": reassigned,
+        "skipped": skipped,
+        "total_scanned": len(subjects),
+    }
+
+
+# ─────────────────────────────────────────────
+# ADMIN CONTENT MANAGEMENT — Subjects
+# ─────────────────────────────────────────────
+@router.post("/admin/content/subjects")
+async def admin_create_subject(data: SubjectCreate, admin: dict = Depends(get_admin_user)):
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(status_code=503, detail="MongoDB unavailable - cannot create content")
+        
+        stream_name_val = ""
+        board_id_val = ""
+        board_name_val = ""
+        class_name_val = ""
+        stream_id_val = data.stream_id or ""
+
+        if data.stream_id:
+            stream = await db.streams.find_one({"id": data.stream_id}, {"_id": 0})
+            if not stream:
+                raise HTTPException(status_code=404, detail="Stream not found")
+            stream_name_val = stream.get("name", "")
+            class_obj = await db.classes.find_one({"id": stream.get("class_id")}, {"_id": 0})
+            board = await db.boards.find_one({"id": class_obj.get("board_id") if class_obj else None}, {"_id": 0})
+            board_id_val = board.get("id", "") if board else ""
+            board_name_val = board.get("name", "") if board else ""
+            class_name_val = class_obj.get("name", "") if class_obj else ""
+        elif data.stream_name:
+            stream_name_val = data.stream_name.strip()
+        else:
+            raise HTTPException(status_code=400, detail="Stream selection or custom stream name is required")
+        
+        subject_id = str(uuid.uuid4())
+        subj = {
+            "id": subject_id,
+            "name": data.name,
+            "stream_id": stream_id_val,
+            "streamName": stream_name_val,
+            "boardId": board_id_val,
+            "boardName": board_name_val,
+            "className": class_name_val,
+            "description": data.description,
+            "tags": data.tags,
+            "thumbnailUrl": data.thumbnail_url,
+            "status": data.status,
+            "slug": data.name.lower().replace(" ", "-"),
+            "chapter_count": 0,
+            "gradient": "math",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.subjects.insert_one(subj)
+        _invalidate_content_cache("subjects")
+        return {k: v for k, v in subj.items() if k != "_id"}
+    except HTTPException:
+        raise
+    except Exception:
+        mark_mongo_down()
+        raise HTTPException(status_code=503, detail="Database error")
+
+@router.put("/admin/content/subjects/{subject_id}")
+async def admin_update_subject(subject_id: str, data: dict, admin: dict = Depends(get_admin_user)):
+    if "thumbnail_url" in data:
+        data["thumbnailUrl"] = data.pop("thumbnail_url")
+    allowed = {k: v for k, v in data.items() if k in ["name", "description", "tags", "status", "thumbnailUrl"]}
+    allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.subjects.update_one({"id": subject_id}, {"$set": allowed})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    _invalidate_content_cache("subjects")
+    return {"message": "Updated"}
+
+@router.patch("/admin/content/subjects/{subject_id}")
+async def admin_patch_subject(subject_id: str, data: dict, admin: dict = Depends(get_admin_user)):
+    """Update subject (PATCH method)"""
+    if "thumbnail_url" in data:
+        data["thumbnailUrl"] = data.pop("thumbnail_url")
+    allowed = {k: v for k, v in data.items() if k in ["name", "description", "tags", "status", "thumbnailUrl"]}
+    allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
+    result = await db.subjects.update_one({"id": subject_id}, {"$set": allowed})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    _invalidate_content_cache("subjects")
+    return {"message": "Subject updated"}
+
+
+
+@router.post("/admin/content/subjects/{subject_id}/thumbnail")
+async def upload_subject_thumbnail(
+    subject_id: str,
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    subj = await db.subjects.find_one({"id": subject_id})
+    if not subj:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    allowed_types = {"image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml"}
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail=f"Unsupported image type: {file.content_type}")
+    file_content = await file.read()
+    max_size = 2 * 1024 * 1024
+    if len(file_content) > max_size:
+        raise HTTPException(status_code=400, detail="Image must be under 2 MB")
+    import base64
+    b64 = base64.b64encode(file_content).decode("utf-8")
+    data_url = f"data:{file.content_type};base64,{b64}"
+    await db.subjects.update_one(
+        {"id": subject_id},
+        {"$set": {"thumbnailUrl": data_url, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    return {"thumbnailUrl": data_url}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AI THUMBNAIL GENERATOR — Vision analysis + PIL abstract variant generation
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _hex_to_rgb(h: str) -> tuple:
+    h = h.lstrip('#')
+    if len(h) == 3:
+        h = ''.join(c*2 for c in h)
+    try:
+        return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+    except Exception:
+        return (100, 80, 200)
+
+
+def _extract_dominant_colors(img_bytes: bytes, n: int = 5) -> list:
+    """Fast dominant color extraction using PIL pixel sampling."""
+    from PIL import Image
+    import io as _io
+    img = Image.open(_io.BytesIO(img_bytes)).convert('RGB').resize((120, 180))
+    pixels = list(img.getdata())
+    buckets: dict = {}
+    for r, g, b in pixels:
+        key = (r // 48 * 48, g // 48 * 48, b // 48 * 48)
+        buckets[key] = buckets.get(key, 0) + 1
+    top = sorted(buckets.items(), key=lambda x: -x[1])[:n]
+    return [f'#{r:02x}{g:02x}{b:02x}' for (r, g, b), _ in top]
+
+
+async def _analyze_with_groq_vision(b64_img: str, mime: str = "image/jpeg") -> dict:
+    """Call Groq vision model to get color/style analysis of a cover image."""
+    if not _GROQ_KEY:
+        return {}
+    try:
+        import httpx as _httpx
+        async with _httpx.AsyncClient(timeout=25) as _c:
+            resp = await _c.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {_GROQ_KEY}", "Content-Type": "application/json"},
+                json={
+                    "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                    "messages": [{
+                        "role": "user",
+                        "content": [
+                            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64_img}"}},
+                            {"type": "text", "text": (
+                                "Analyze this book cover. Return ONLY valid JSON (no extra text):\n"
+                                "{\"dominant_colors\":[\"#hex1\",\"#hex2\",\"#hex3\"],"
+                                "\"secondary_colors\":[\"#hex4\",\"#hex5\"],"
+                                "\"style\":\"minimalist|bold|academic|colorful|dark|light\","
+                                "\"mood\":\"serious|vibrant|calm|educational|professional\","
+                                "\"bg_is_dark\":true,"
+                                "\"accent_color\":\"#hex\"}"
+                            )}
+                        ]
+                    }],
+                    "max_tokens": 250,
+                    "temperature": 0.05,
+                },
+            )
+        if resp.status_code == 200:
+            raw = resp.json()["choices"][0]["message"]["content"]
+            m = re.search(r'\{.*\}', raw, re.DOTALL)
+            if m:
+                return json.loads(m.group())
+    except Exception as _ve:
+        logger.warning(f"Vision analysis failed: {_ve}")
+    return {}
+
+
+def _generate_abstract_variant(colors: list, variant: int, size=(400, 600)) -> str:
+    """
+    Generate a copyright-safe abstract educational background using PIL.
+    Returns a PNG data URL (~120-200 KB).
+    """
+    from PIL import Image, ImageDraw, ImageFilter
+    import io as _io, math as _math
+
+    W, H = size
+    palette = [_hex_to_rgb(c) for c in (colors or ['#7c3aed', '#1e1b4b', '#f8fafc'])]
+    while len(palette) < 5:
+        palette.append(palette[-1])
+
+    img = Image.new('RGB', (W, H))
+    draw = ImageDraw.Draw(img, 'RGBA')
+
+    if variant == 0:
+        # ── Gradient Wash + bokeh ──────────────────────────────────────────
+        c1, c2 = palette[0], palette[1]
+        for y in range(H):
+            t = y / H
+            r = int(c1[0] * (1 - t) + c2[0] * t)
+            g = int(c1[1] * (1 - t) + c2[1] * t)
+            b = int(c1[2] * (1 - t) + c2[2] * t)
+            draw.line([(0, y), (W, y)], fill=(r, g, b))
+        # bokeh circles
+        spots = [(80, 120, 110), (320, 480, 150), (200, 300, 80), (350, 100, 60)]
+        for (cx, cy, rad), col in zip(spots, [palette[2], palette[3], palette[4], palette[1]]):
+            draw.ellipse([cx - rad, cy - rad, cx + rad, cy + rad], fill=(*col, 55))
+        img = img.filter(ImageFilter.GaussianBlur(2))
+
+    elif variant == 1:
+        # ── Geometric Blocks ───────────────────────────────────────────────
+        img.paste(palette[1], [0, 0, W, H])
+        # upper band
+        draw.rectangle([0, 0, W, H // 3], fill=(*palette[0], 255))
+        # diagonal cut
+        draw.polygon([(0, H // 3), (W, H // 4), (W, H // 3), (0, H // 3 + 40)], fill=(*palette[2], 200))
+        # accent rectangles
+        rects = [(30, H // 2, 120, H // 2 + 90), (W - 140, 60, W - 30, 160), (150, H - 160, 280, H - 40)]
+        for rx0, ry0, rx1, ry1 in rects:
+            draw.rectangle([rx0, ry0, rx1, ry1], fill=(*palette[3], 100))
+        # thin lines
+        for i in range(0, W, 35):
+            draw.line([(i, 0), (i + 60, H)], fill=(*palette[4], 40), width=1)
+        img = img.filter(ImageFilter.GaussianBlur(1))
+
+    elif variant == 2:
+        # ── Layered Abstract Circles ──────────────────────────────────────
+        img.paste(palette[0], [0, 0, W, H])
+        circles = [
+            (W * 0.75, H * 0.25, 220, palette[1], 130),
+            (W * 0.20, H * 0.65, 180, palette[2], 110),
+            (W * 0.55, H * 0.55, 150, palette[3], 90),
+            (W * 0.10, H * 0.15, 100, palette[4], 70),
+            (W * 0.85, H * 0.80, 130, palette[1], 80),
+        ]
+        for (cx, cy, r, col, alpha) in circles:
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*col, alpha))
+        img = img.filter(ImageFilter.GaussianBlur(3))
+        # sharp geometric overlay
+        overlay_draw = ImageDraw.Draw(img)
+        overlay_draw.rectangle([0, H * 0.72, W, H], fill=(*palette[0], 180))
+
+    buf = _io.BytesIO()
+    img.save(buf, format='PNG', optimize=True)
+    buf.seek(0)
+    b64 = base64.b64encode(buf.read()).decode()
+    return f'data:image/png;base64,{b64}'
+
+
+@router.post("/admin/thumbnail/generate-cms")
+async def generate_cms_thumbnails(
+    doc_id: str = Form(...),
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Upload a cover image → Groq Vision color-DNA analysis → 3 abstract copyright-safe variants.
+    Works with CMS documents (doc_id) instead of subject_id.
+    Returns: {original_url, variants:[v1,v2,v3], analysis:{colors,style,mood}}
+    """
+    img_bytes = await file.read()
+    mime_type = file.content_type or "image/png"
+
+    if len(img_bytes) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Image must be under 3 MB")
+
+    # ── Resize for Vision ───────────────────────────────────────────────────
+    from PIL import Image as _PILImage
+    import io as _io
+    try:
+        src_img = _PILImage.open(_io.BytesIO(img_bytes)).convert('RGB')
+        src_img.thumbnail((400, 600), _PILImage.LANCZOS)
+        buf = _io.BytesIO()
+        src_img.save(buf, format='PNG')
+        buf.seek(0)
+        img_bytes_resized = buf.read()
+    except Exception as _pe:
+        logger.warning(f"PIL resize failed: {_pe}")
+        img_bytes_resized = img_bytes
+
+    b64_src = base64.b64encode(img_bytes_resized).decode()
+    original_url = f"data:image/png;base64,{b64_src}"
+
+    # ── Vision analysis + PIL fallback ──────────────────────────────────────
+    analysis = await _analyze_with_groq_vision(b64_src, "image/png")
+    pil_colors = _extract_dominant_colors(img_bytes_resized)
+
+    if analysis.get("dominant_colors"):
+        colors = analysis["dominant_colors"][:3] + analysis.get("secondary_colors", [])[:2]
+        colors = (colors + pil_colors)[:5]
+    else:
+        colors = pil_colors[:5]
+        analysis = {"dominant_colors": colors, "style": "educational", "mood": "academic"}
+
+    # ── Generate 3 abstract variants in parallel ────────────────────────────
+    loop = asyncio.get_event_loop()
+    variants = await asyncio.gather(
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 0),
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 1),
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 2),
+    )
+
+    # ── Persist thumbnail_variants to cms_documents ─────────────────────────
+    await db.cms_documents.update_one(
+        {"id": doc_id},
+        {"$set": {
+            "thumbnail_variants": {
+                "original_url":  original_url,
+                "variant1_url":  variants[0],
+                "variant2_url":  variants[1],
+                "variant3_url":  variants[2],
+                "analysis":      analysis,
+                "generated_at":  datetime.now(timezone.utc).isoformat(),
+            },
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    logger.info(f"CMS thumbnail variants generated for doc {doc_id}: {len(colors)} colors")
+    return {
+        "original_url":  original_url,
+        "variants":      list(variants),
+        "analysis":      analysis,
+        "auto_selected": 0,
+    }
+
+
+@router.post("/admin/thumbnail/generate")
+async def generate_ai_thumbnails(
+    subject_id: str = Form(...),
+    file: Optional[UploadFile] = File(default=None),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Upload a book cover (or use existing thumbnailUrl) → Vision analysis → 3 abstract variants.
+    Returns: {original_url, variants:[v1,v2,v3], analysis:{colors,style,mood}, auto_selected:0}
+    """
+    # ── Get or read the source image ──────────────────────────────────────
+    subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subj:
+        raise HTTPException(404, "Subject not found")
+
+    img_bytes: Optional[bytes] = None
+    mime_type = "image/png"
+
+    if file and file.filename:
+        img_bytes = await file.read()
+        mime_type = file.content_type or "image/png"
+    elif subj.get("thumbnailUrl", "").startswith("data:"):
+        # decode existing base64 thumbnail
+        data_url = subj["thumbnailUrl"]
+        header, b64_str = data_url.split(",", 1)
+        mime_type = header.split(":")[1].split(";")[0]
+        img_bytes = base64.b64decode(b64_str)
+
+    if not img_bytes:
+        raise HTTPException(400, "No source image: upload a file or ensure the subject has an existing thumbnail")
+
+    if len(img_bytes) > 3 * 1024 * 1024:
+        raise HTTPException(400, "Image must be under 3 MB")
+
+    # ── Resize source to 400×600 for Vision ───────────────────────────────
+    from PIL import Image as _PILImage
+    import io as _io
+    try:
+        src_img = _PILImage.open(_io.BytesIO(img_bytes)).convert('RGB')
+        src_img.thumbnail((400, 600), _PILImage.LANCZOS)
+        buf = _io.BytesIO()
+        src_img.save(buf, format='PNG')
+        buf.seek(0)
+        img_bytes_resized = buf.read()
+    except Exception as _pe:
+        logger.warning(f"PIL resize failed: {_pe}")
+        img_bytes_resized = img_bytes
+
+    b64_src = base64.b64encode(img_bytes_resized).decode()
+    original_url = f"data:{mime_type};base64,{b64_src}"
+
+    # ── Step 1: Groq Vision analysis (best-effort) ────────────────────────
+    analysis = await _analyze_with_groq_vision(b64_src, "image/png")
+
+    # ── Step 2: PIL color extraction (always-on fallback) ─────────────────
+    pil_colors = _extract_dominant_colors(img_bytes_resized)
+
+    if analysis.get("dominant_colors"):
+        colors = analysis["dominant_colors"][:3] + analysis.get("secondary_colors", [])[:2]
+        colors = (colors + pil_colors)[:5]
+    else:
+        colors = pil_colors[:5]
+        analysis = {"dominant_colors": colors, "style": "educational", "mood": "academic"}
+
+    # ── Step 3: Generate 3 abstract variants ──────────────────────────────
+    loop = asyncio.get_event_loop()
+    variants = await asyncio.gather(
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 0),
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 1),
+        loop.run_in_executor(None, _generate_abstract_variant, colors, 2),
+    )
+
+    # ── Step 4: Persist to MongoDB ─────────────────────────────────────────
+    thumbnails_data = {
+        "original_url":    original_url,
+        "variant1_url":    variants[0],
+        "variant2_url":    variants[1],
+        "variant3_url":    variants[2],
+        "analysis":        analysis,
+        "generated_at":    datetime.now(timezone.utc).isoformat(),
+        "auto_selected":   0,
+    }
+    await db.subjects.update_one(
+        {"id": subject_id},
+        {"$set": {
+            "thumbnail_variants": thumbnails_data,
+            "thumbnailUrl": original_url,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    logger.info(f"AI thumbnails generated for subject {subject_id}: {len(colors)} colors extracted")
+    return {
+        "original_url":  original_url,
+        "variants":      list(variants),
+        "analysis":      analysis,
+        "auto_selected": 0,
+    }
+
+
+@router.post("/admin/thumbnail/apply")
+async def apply_thumbnail_variant(
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Set the active thumbnailUrl for a subject to one of the generated variants."""
+    subject_id    = data.get("subject_id", "")
+    variant_index = data.get("variant_index")
+    if not subject_id or variant_index is None:
+        raise HTTPException(400, "subject_id and variant_index required")
+    try:
+        variant_index = int(variant_index)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "variant_index must be an integer 0, 1, or 2")
+    if variant_index not in (0, 1, 2):
+        raise HTTPException(400, "variant_index must be 0, 1, or 2")
+    subject = await db.subjects.find_one({"id": subject_id})
+    if not subject:
+        raise HTTPException(404, f"Subject '{subject_id}' not found")
+    variants = subject.get("thumbnail_variants") or {}
+    variant_key = f"variant{variant_index + 1}_url"
+    thumb_url = variants.get(variant_key)
+    if not thumb_url:
+        raise HTTPException(400, f"Variant '{variant_key}' not found for subject '{subject_id}'")
+    await db.subjects.update_one(
+        {"id": subject_id},
+        {"$set": {"thumbnailUrl": thumb_url, "updated_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    _invalidate_content_cache("subjects")
+    return {"success": True}
+
+
+@router.post("/admin/thumbnail/generate-bulk")
+async def generate_ai_thumbnails_bulk(
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Bulk generate AI thumbnail variants for up to 50 subjects that already have a thumbnailUrl.
+    Returns streaming-style progress list.
+    """
+    subject_ids = data.get("subject_ids", [])[:50]
+    if not subject_ids:
+        raise HTTPException(400, "subject_ids required")
+
+    results = []
+    for sid in subject_ids:
+        subj = await db.subjects.find_one({"id": sid}, {"_id": 0, "thumbnailUrl": 1, "name": 1})
+        if not subj or not subj.get("thumbnailUrl", "").startswith("data:"):
+            results.append({"subject_id": sid, "status": "skipped", "reason": "no thumbnail"})
+            continue
+        try:
+            data_url = subj["thumbnailUrl"]
+            _, b64_str = data_url.split(",", 1)
+            img_bytes = base64.b64decode(b64_str)
+            colors    = _extract_dominant_colors(img_bytes)
+            from PIL import Image as _PILImage
+            import io as _io
+            src_img = _PILImage.open(_io.BytesIO(img_bytes)).convert('RGB')
+            src_img.thumbnail((400, 600), _PILImage.LANCZOS)
+            buf = _io.BytesIO(); src_img.save(buf, format='PNG'); buf.seek(0)
+            img_bytes_r = buf.read()
+            pil_colors = _extract_dominant_colors(img_bytes_r)
+            b64_src = base64.b64encode(img_bytes_r).decode()
+            analysis = await _analyze_with_groq_vision(b64_src, "image/png")
+            all_colors = (analysis.get("dominant_colors", [])[:3] + pil_colors)[:5] or pil_colors
+            loop = asyncio.get_event_loop()
+            variants = await asyncio.gather(
+                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 0),
+                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 1),
+                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 2),
+            )
+            thumbnails_data = {
+                "original_url": data_url,
+                "variant1_url": variants[0],
+                "variant2_url": variants[1],
+                "variant3_url": variants[2],
+                "analysis": analysis,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.subjects.update_one(
+                {"id": sid},
+                {"$set": {"thumbnail_variants": thumbnails_data, "updated_at": datetime.now(timezone.utc).isoformat()}}
+            )
+            results.append({"subject_id": sid, "name": subj.get("name",""), "status": "done"})
+        except Exception as _be:
+            logger.error(f"Bulk thumb error for {sid}: {_be}")
+            results.append({"subject_id": sid, "status": "failed", "error": str(_be)})
+
+    return {"results": results, "total": len(subject_ids), "done": sum(1 for r in results if r["status"] == "done")}
+
+
+@router.delete("/admin/content/subjects/{subject_id}")
+async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_user)):
+    result = await db.subjects.delete_one({"id": subject_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    await db.chapters.delete_many({"subject_id": subject_id})
+    _invalidate_content_cache("subjects")
+    _invalidate_content_cache("chapters")
+    return {"message": "Deleted"}
+
+@router.post("/admin/content/chapters")
+async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_admin_user)):
+    chapter_id = str(uuid.uuid4())
+    _order = data.order or data.order_index or 1
+    _slug = data.slug.strip() if data.slug else ""
+    if not _slug:
+        _slug = re.sub(r'[^a-z0-9]+', '-', data.title.lower()).strip('-')
+    existing = await db.chapters.find_one({"subject_id": data.subject_id, "slug": _slug})
+    if existing:
+        _slug = f"{_slug}-{chapter_id[:6]}"
+    chap = {
+        "id": chapter_id,
+        "subject_id": data.subject_id,
+        "title": data.title,
+        "slug": _slug,
+        "description": data.description,
+        "content": data.content,
+        "content_type": data.content_type or "notes",
+        "chapter_number": data.chapter_number,
+        "order": _order,
+        "order_index": _order,
+        "status": data.status,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.chapters.insert_one(chap)
+    
+    # Mark subject as having content
+    await db.subjects.update_one(
+        {"id": data.subject_id}, 
+        {"$inc": {"chapter_count": 1}, "$set": {"has_document": True}}
+    )
+    
+    # 🆕 AUTO-CHUNK CONTENT
+    chunks_created = []
+    if data.content and len(data.content.strip()) > 100:
+        try:
+            chunks_created = await auto_chunk_content(
+                chapter_id=chapter_id,
+                content=data.content,
+                subject_id=data.subject_id
+            )
+            logger.info(f"✅ Auto-chunked new chapter '{data.title}': {len(chunks_created)} chunks")
+        except Exception as chunk_error:
+            logger.error(f"❌ Auto-chunking failed for chapter {chapter_id}: {chunk_error}")
+    
+    result = {k: v for k, v in chap.items() if k != "_id"}
+    result["chunks_created"] = len(chunks_created)
+    _invalidate_content_cache("chapters")
+    _invalidate_content_cache("subjects")
+    return result
+
+@router.post("/admin/content/chunks")
+async def admin_create_chunk(data: ChunkCreate, admin: dict = Depends(get_admin_user)):
+    """Create content chunk"""
+    chunk_id = str(uuid.uuid4())
+    chunk = {
+        "id": chunk_id,
+        "chapter_id": data.chapter_id,
+        "content": data.content,
+        "content_type": data.content_type,
+        "tags": data.tags,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    result = await db.chunks.insert_one(chunk)
+    chunk["_id"] = str(result.inserted_id)
+    return chunk
+
+
+# Generic content upload endpoints
+@router.post("/admin/content/upload")
+async def upload_content_file(
+    file: UploadFile = File(...),
+    subject_id: str = Form(...),
+    content_type: str = Form("document"),
+    title: str = Form(None),
+    description: str = Form(""),
+    tags: str = Form(""),
+    year: str = Form(""),
+    admin: dict = Depends(get_admin_user)
+):
+    """Upload content file - stores PDFs as base64, text as plain text"""
+    content_id = str(uuid.uuid4())
+    
+    # Read file
+    file_content = await file.read()
+    file_ext = file.filename.split('.')[-1].lower() if '.' in file.filename else 'txt'
+    
+    # Handle different file types
+    if file_ext == 'pdf':
+        # Store PDF as base64 for easy retrieval
+        import base64
+        pdf_base64 = base64.b64encode(file_content).decode('utf-8')
+        text_content = ""  # Can't extract text easily without extra libs
+        file_url = f"data:application/pdf;base64,{pdf_base64}"
+    else:
+        # Text files
+        text_content = file_content.decode('utf-8', errors='ignore')
+        file_url = ""
+    
+    upload_data = {
+        "id": content_id,
+        "subject_id": subject_id,
+        "content_type": content_type,
+        "title": title or file.filename.replace(f'.{file_ext}', ''),
+        "description": description,
+        "tags": tags,
+        "year": year,
+        "file_name": file.filename,
+        "file_ext": file_ext,
+        "file_size": len(file_content),
+        "file_url": file_url,
+        "content": text_content,
+        "uploaded_at": datetime.now(timezone.utc).isoformat(),
+        "uploaded_by": admin.get("email"),
+        "status": "published",
+    }
+    
+    await db.content_uploads.insert_one(upload_data)
+    
+    # Mark subject as having document
+    await db.subjects.update_one(
+        {"id": subject_id},
+        {"$set": {"has_document": True, "document_type": file_ext}}
+    )
+    
+    logger.info(f"Content uploaded: {file.filename} ({file_ext}) for subject {subject_id}")
+    return {"id": content_id, "message": "Upload successful", "file_type": file_ext}
+
+@router.post("/admin/reset-and-seed-content")
+async def reset_and_seed_content(admin: dict = Depends(get_admin_user)):
+    """Delete all content and seed with 1000+ char dummy chapters"""
+    # Delete all chapters
+    await db.chapters.delete_many({})
+    await db.content_uploads.delete_many({})
+    
+    # Get first subject to seed
+    subjects = await db.subjects.find({"status": "published"}, {"_id": 0}).limit(3).to_list(3)
+    
+    if not subjects:
+        raise HTTPException(status_code=404, detail="No subjects found - create subjects first")
+    
+    seeded_count = 0
+    for subject in subjects:
+        # Create 3 chapters with 1000+ char content
+        chapters_data = [
+            {
+                "title": "Introduction and Basic Concepts",
+                "content": f"""# Introduction to {subject.get('name', 'Subject')}
+
+## Overview
+This chapter covers fundamental concepts and provides a strong foundation for understanding {subject.get('name', 'this subject')}. We'll explore key definitions, important principles, and practical applications that are crucial for AssamBoard students.
+
+## Key Concepts
+Understanding the basics is essential. This subject involves:
+- Theoretical foundations that build conceptual clarity
+- Practical applications in real-world scenarios
+- Problem-solving techniques for exam preparation
+- Important formulas and their derivations
+- Common mistakes to avoid during exams
+
+## Fundamental Principles
+The core principles include systematic study of:
+
+1. **Definition and Scope**: Understanding what this field encompasses
+2. **Historical Development**: How knowledge evolved over time
+3. **Modern Applications**: Relevance in today's world
+4. **Interdisciplinary Connections**: Links with other subjects
+
+## Important Points for Exams
+- Focus on conceptual clarity over rote learning
+- Practice numerical problems regularly
+- Understand derivations, don't just memorize
+- Make concise notes for quick revision
+- Solve previous year questions (PYQs)
+
+## Study Tips
+Allocate time systematically: 40% theory, 30% numericals, 30% revision.
+Create mind maps for interconnected topics.
+Practice explaining concepts to solidify understanding.
+
+**Exam Tip**: Always read questions twice before answering. Time management is crucial in board exams.
+
+**Character Count**: 1200+
+"""
+            },
+            {
+                "title": "Advanced Topics and Applications",
+                "content": f"""# Advanced Topics in {subject.get('name', 'Subject')}
+
+## Complex Concepts Explained
+Building on fundamentals, we now explore advanced ideas that require deeper analytical thinking. These topics frequently appear in AHSEC board exams and competitive examinations.
+
+## Theoretical Framework
+Advanced study requires:
+- Strong foundation in basics (revisit previous chapter if needed)
+- Analytical reasoning and critical thinking skills
+- Ability to connect multiple concepts simultaneously
+- Mathematical proficiency for problem-solving
+- Visualization of abstract concepts
+
+## Key Advanced Topics
+
+### Topic 1: Detailed Analysis
+This involves understanding mechanisms, patterns, and underlying principles. Students must grasp:
+- Cause and effect relationships
+- Step-by-step processes
+- Conditions and exceptions
+- Practical implications
+
+### Topic 2: Problem-Solving Strategies
+Approach problems systematically:
+1. Read and understand the question
+2. Identify given data and what's asked
+3. Choose appropriate formula/method
+4. Solve step-by-step with units
+5. Verify answer makes sense
+
+### Topic 3: Applications
+Real-world applications help remember concepts better. This topic has applications in:
+- Industry and technology
+- Environmental science
+- Medical field
+- Daily life phenomena
+
+## Common Exam Questions
+- Derivation-based questions (5 marks)
+- Numerical problems (3 marks)
+- Short answer questions (2 marks)
+- Very short answers (1 mark)
+
+## Preparation Strategy
+- Solve at least 50 problems before exam
+- Practice derivations until you can do them with eyes closed
+- Make formula sheets for quick revision
+- Group study helps clarify doubts
+
+**Exam Tip**: In numericals, always write the formula first, then substitute values. This gets you partial marks even if the final answer is wrong.
+
+**Character Count**: 1400+
+"""
+            },
+            {
+                "title": "Exam Preparation and Practice Questions",
+                "content": f"""# Exam Preparation Guide - {subject.get('name', 'Subject')}
+
+## Complete Revision Strategy
+Last-minute preparation requires smart work, not just hard work. Follow this proven strategy used by AHSEC toppers.
+
+## Week-wise Plan (4 Weeks Before Exam)
+
+### Week 1: Concepts Revision
+- Read all chapters once quickly
+- Make short notes of important points
+- List all formulas in one place
+- Identify weak topics for extra focus
+
+### Week 2: Problem Practice
+- Solve 10 numericals daily
+- Focus on previous year questions (PYQs)
+- Time yourself while solving
+- Review mistakes and redo wrong problems
+
+### Week 3: Deep Dive Weak Areas
+- Spend 70% time on difficult topics
+- Watch video explanations if concepts unclear
+- Discuss with teachers/peers
+- Practice derivations thoroughly
+
+### Week 4: Final Revision
+- Revise notes daily
+- Solve sample papers under exam conditions
+- Don't start new topics
+- Focus on high-weightage chapters
+
+## Important Formulas
+(This section would list 10-15 key formulas with explanations)
+
+## Previous Year Questions (PYQs)
+
+**2024 Question**: [Sample question text here]
+**Answer**: Detailed step-by-step solution with explanation.
+
+**2023 Question**: [Another sample question]
+**Answer**: Complete solution with diagrams if needed.
+
+**2022 Question**: [Third sample question]
+**Answer**: Answer with exam tips included.
+
+## Common Mistakes to Avoid
+1. Not reading questions carefully
+2. Skipping steps in derivations
+3. Forgetting units in numerical answers
+4. Poor time management
+5. Leaving questions unattempted
+
+## Exam Day Tips
+- Reach 30 minutes early
+- Read paper completely in first 15 minutes
+- Start with questions you're most confident about
+- Allocate time per question based on marks
+- Reserve last 15 minutes for review
+
+## Mark Distribution Strategy
+- 1-mark questions: 30 seconds each
+- 2-mark questions: 2 minutes each
+- 3-mark questions: 4 minutes each
+- 5-mark questions: 7-8 minutes each
+
+**Final Tip**: Stay calm, attempt all questions, neat handwriting gets extra marks!
+
+**Character Count**: 1600+
+"""
+            }
+        ]
+        
+        for i, chapter_data in enumerate(chapters_data, 1):
+            chapter_id = str(uuid.uuid4())
+            chapter = {
+                "id": chapter_id,
+                "subject_id": subject["id"],
+                "title": chapter_data["title"],
+                "description": f"Chapter {i} - Essential concepts and exam preparation",
+                "content": chapter_data["content"],
+                "order": i,
+                "status": "published",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.chapters.insert_one(chapter)
+            seeded_count += 1
+        
+        # Mark subject as having content
+        await db.subjects.update_one(
+            {"id": subject["id"]},
+            {"$set": {"has_document": True, "chapter_count": 3}}
+        )
+    
+    logger.info(f"Content reset and seeded: {seeded_count} chapters across {len(subjects)} subjects")
+    return {"message": f"Reset complete! Seeded {seeded_count} chapters with 1000+ chars each", "chapters": seeded_count}
+
+
+@router.post("/admin/content/uploads/manual")
+async def create_content_manual(data: dict, admin: dict = Depends(get_admin_user)):
+    """Create content manually (not file upload)"""
+    content_id = str(uuid.uuid4())
+    
+    content_data = {
+        "id": content_id,
+        "subject_id": data.get("subject_id"),
+        "content_type": data.get("content_type", "chapter"),
+        "title": data.get("title"),
+        "description": data.get("description", ""),
+        "content": data.get("content", ""),
+        "tags": data.get("tags", ""),
+        "year": data.get("year", ""),
+        "exam_type": data.get("exam_type", ""),
+        "category": data.get("category", ""),
+        "order": data.get("order", 1),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_by": admin.get("email"),
+        "status": data.get("status", "published"),
+    }
+    
+    await db.content_uploads.insert_one(content_data)
+    content_data.pop("_id", None)
+    return content_data
+
+@router.get("/admin/content/uploads")
+async def get_content_uploads(
+    subject_id: str = None,
+    type: str = None,
+    admin: dict = Depends(get_admin_user)
+):
+    """Get uploaded content filtered by subject and type"""
+    try:
+        if not await is_mongo_available():
+            return []
+        query = {}
+        if subject_id:
+            query["subject_id"] = subject_id
+        if type:
+            query["content_type"] = type
+        
+        uploads = await db.content_uploads.find(query, {"_id": 0}).sort("uploaded_at", -1).limit(100).to_list(100)
+        return uploads
+    except Exception:
+        mark_mongo_down()
+        return []
+
+@router.delete("/admin/content/uploads/{content_id}")
+async def delete_content_upload(content_id: str, admin: dict = Depends(get_admin_user)):
+    """Delete uploaded content"""
+    result = await db.content_uploads.delete_one({"id": content_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Content not found")
+    return {"message": "Content deleted"}
+
+
+@router.patch("/admin/content/chapters/{chapter_id}")
+async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depends(get_admin_user)):
+    """Update existing chapter - auto-rechunks if content changed"""
+    allowed = {k: v for k, v in data.items() if k in ["title", "slug", "description", "content", "content_type", "order", "status", "attached_files"]}
+    if "slug" in allowed:
+        allowed["slug"] = re.sub(r'[^a-z0-9]+', '-', (allowed["slug"] or "").lower()).strip('-')
+    if "title" in allowed and not allowed.get("slug"):
+        allowed["slug"] = re.sub(r'[^a-z0-9]+', '-', allowed["title"].lower()).strip('-')
+    if allowed.get("slug"):
+        chapter = await db.chapters.find_one({"id": chapter_id}, {"subject_id": 1})
+        if chapter:
+            dup = await db.chapters.find_one({"subject_id": chapter["subject_id"], "slug": allowed["slug"], "id": {"$ne": chapter_id}})
+            if dup:
+                allowed["slug"] = f"{allowed['slug']}-{chapter_id[:6]}"
+    allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    # Check if content is being updated
+    content_updated = "content" in allowed and allowed["content"]
+    
+    result = await db.chapters.update_one({"id": chapter_id}, {"$set": allowed})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    
+    # 🆕 AUTO RE-CHUNK if content was updated
+    chunks_info = {}
+    if content_updated:
+        try:
+            rechunk_result = await rechunk_chapter(chapter_id)
+            chunks_info = {
+                "chunks_deleted": rechunk_result["chunks_deleted"],
+                "chunks_created": rechunk_result["chunks_created"]
+            }
+            logger.info(f"✅ Re-chunked updated chapter {chapter_id}: {chunks_info}")
+        except Exception as chunk_error:
+            logger.error(f"❌ Re-chunking failed for chapter {chapter_id}: {chunk_error}")
+            chunks_info = {"error": str(chunk_error)}
+    
+    _invalidate_content_cache("chapters")
+    _invalidate_content_cache("subjects")
+    return {"message": "Chapter updated", **chunks_info}
+

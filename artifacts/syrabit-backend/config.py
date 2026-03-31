@@ -1,0 +1,247 @@
+"""Syrabit.ai — Configuration constants and environment variables."""
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / '.env')
+
+MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017').strip().strip('"').strip("'")
+DB_NAME      = os.environ.get('DB_NAME', 'test_database')
+JWT_SECRET   = os.environ.get('JWT_SECRET') or os.urandom(48).hex()
+JWT_ALGORITHM    = 'HS256'
+JWT_ACCESS_EXPIRE_MINUTES = int(os.environ.get('JWT_ACCESS_EXPIRE_MINUTES', '60'))
+JWT_REFRESH_EXPIRE_MINUTES = int(os.environ.get('JWT_REFRESH_EXPIRE_MINUTES', str(60 * 24 * 30)))
+JWT_EXPIRE_MINUTES = JWT_ACCESS_EXPIRE_MINUTES
+ADMIN_JWT_SECRET = os.environ.get('ADMIN_JWT_SECRET') or os.urandom(48).hex()
+
+# ── Email Configuration ───────────────────────────────────────────────────────
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
+EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@syrabit.ai').strip()
+FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rstrip('/')
+
+# ── LLM Configuration ─────────────────────────────────────────────────────────
+_GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
+_GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+_XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
+_OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
+_FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '')
+_SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
+_EXPLICIT_PROVIDER = os.environ.get('LLM_PROVIDER', '').strip().lower()
+_AWS_ACCESS_KEY = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
+_AWS_SECRET_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '').strip()
+_AWS_REGION = os.environ.get('AWS_REGION', 'us-east-1').strip()
+
+if _EXPLICIT_PROVIDER == 'sarvam' and _SARVAM_LLM_KEY:
+    LLM_PROVIDER = 'sarvam'
+    LLM_API_KEY = _SARVAM_LLM_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'sarvam-m')
+elif _EXPLICIT_PROVIDER == 'fireworksai' and _FIREWORKS_KEY:
+    LLM_PROVIDER = 'fireworksai'
+    LLM_API_KEY = _FIREWORKS_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/qwen2p5-72b-instruct')
+elif _EXPLICIT_PROVIDER == 'openai' and _OPENAI_KEY and _OPENAI_KEY != 'x':
+    LLM_PROVIDER = 'openai'
+    LLM_API_KEY = _OPENAI_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'gpt-4o-mini')
+elif _EXPLICIT_PROVIDER == 'groq' and _GROQ_KEY and _GROQ_KEY != 'x':
+    LLM_PROVIDER = 'groq'
+    LLM_API_KEY = _GROQ_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'llama-3.1-8b-instant')
+elif _SARVAM_LLM_KEY:
+    LLM_PROVIDER = 'sarvam'
+    LLM_API_KEY = _SARVAM_LLM_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'sarvam-m')
+elif _FIREWORKS_KEY:
+    LLM_PROVIDER = 'fireworksai'
+    LLM_API_KEY = _FIREWORKS_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/qwen2p5-72b-instruct')
+elif _GROQ_KEY and _GROQ_KEY != 'x':
+    LLM_PROVIDER = 'groq'
+    LLM_API_KEY = _GROQ_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'llama-3.1-8b-instant')
+elif _OPENAI_KEY and _OPENAI_KEY != 'x':
+    LLM_PROVIDER = 'openai'
+    LLM_API_KEY = _OPENAI_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'gpt-4o-mini')
+else:
+    LLM_PROVIDER = 'groq'
+    LLM_API_KEY = ''
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'llama-3.1-8b-instant')
+OPENAI_API_KEY = LLM_API_KEY
+
+# ── Sarvam AI Configuration ──────────────────────────────────────────────────
+SARVAM_API_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
+SARVAM_BASE_URL = 'https://api.sarvam.ai'
+
+# ── Redis (Upstash) ──────────────────────────────────────────────────────────
+_upstash_url   = os.environ.get('UPSTASH_REDIS_REST_URL', '').strip().strip('"').strip("'")
+_upstash_token = os.environ.get('UPSTASH_REDIS_REST_TOKEN', '').strip().strip('"').strip("'")
+_fallback_url  = os.environ.get('REDIS_URL', '').strip().strip('"').strip("'")
+# Auto-detect swap: if URL doesn't start with http but TOKEN does, swap them
+if not _upstash_url.startswith('http') and _upstash_token.startswith('http'):
+    _upstash_url, _upstash_token = _upstash_token, _upstash_url
+REDIS_URL   = _upstash_url if _upstash_url.startswith('http') else _fallback_url
+REDIS_TOKEN = _upstash_token
+REDIS_AI_CACHE_TTL = 3600
+REDIS_CASUAL_CACHE_TTL = 300
+REDIS_CHAT_CACHE_TTL = 600
+REDIS_SEARCH_CACHE_TTL = 300
+REDIS_SESSION_CACHE_TTL = 1800
+REDIS_RATE_WINDOW = 60
+
+# ── Slow-query logging ────────────────────────────────────────────────────────
+SLOW_QUERY_THRESHOLD_MS = float(os.environ.get("SLOW_QUERY_THRESHOLD_MS", "200"))
+
+# ── Supabase ──────────────────────────────────────────────────────────────────
+SUPABASE_URL         = os.environ.get('SUPABASE_URL', '')
+SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '') or os.environ.get('SUPABASE_KEY', '')
+SUPABASE_ANON_KEY    = os.environ.get('SUPABASE_ANON_KEY', '') or os.environ.get('SUPABASE_KEY', '')
+
+# ── Cookie security (set SECURE_COOKIES=false in dev to allow HTTP) ───────────
+SECURE_COOKIES  = os.environ.get('SECURE_COOKIES', 'true').lower() not in ('false', '0', 'no')
+COOKIE_SAMESITE = "none" if SECURE_COOKIES else "lax"
+
+_cors_raw = os.environ.get('CORS_ORIGINS', '').strip().strip('"').strip("'")
+if not _cors_raw or _cors_raw == '*':
+    CORS_ORIGINS = ["http://localhost", "http://localhost:80", "http://localhost:25144"]
+    for _rd in os.environ.get('REPLIT_DOMAINS', '').split(','):
+        _rd = _rd.strip()
+        if _rd:
+            CORS_ORIGINS.append(f"https://{_rd}")
+    _CORS_ALLOW_CREDENTIALS = True
+else:
+    CORS_ORIGINS = [o.strip() for o in _cors_raw.split(',') if o.strip()]
+    for _rd in os.environ.get('REPLIT_DOMAINS', '').split(','):
+        _rd = _rd.strip()
+        if _rd and f"https://{_rd}" not in CORS_ORIGINS:
+            CORS_ORIGINS.append(f"https://{_rd}")
+    _CORS_ALLOW_CREDENTIALS = True
+
+# ── Admin accounts ────────────────────────────────────────────────────────────
+# Admin accounts loaded from environment (no credentials in source code)
+def _load_admin_accounts():
+    emails    = [e.strip() for e in os.environ.get('ADMIN_EMAILS', '').split(',') if e.strip()]
+    passwords = [p.strip().strip('"').strip("'") for p in os.environ.get('ADMIN_PASSWORDS', '').split(',') if p.strip()]
+    names     = [n.strip() for n in os.environ.get('ADMIN_NAMES', '').split(',') if n.strip()]
+    max_len = max(len(emails), len(passwords), len(names)) if emails else 0
+    return [{"email": emails[i], "password": passwords[i], "name": names[i]}
+            for i in range(min(len(emails), len(passwords), len(names)))]
+
+ADMIN_ACCOUNTS = _load_admin_accounts()
+ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
+ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
+
+_PG_DSN = os.environ.get("DATABASE_URL", "")
+
+SARVAM_THINK_BUFFER = 80
+
+CONTENT_CACHE_SECONDS = 600
+REDIS_CONTENT_PREFIX = "content:"
+
+# ── Plan configuration ────────────────────────────────────────────────────────
+# FREE: 30 credits ONCE (lifetime, no reset)
+# STARTER / PRO: one-time purchase, no reset
+PLAN_LIMITS = {
+    "free":    {"lifetime_credits": 30,   "max_tokens": 1024, "document_access": "zero"},
+    "starter": {"lifetime_credits": 300,  "max_tokens": 2048, "document_access": "limited"},
+    "pro":     {"lifetime_credits": 4000, "max_tokens": 4096, "document_access": "full"},
+}
+PLAN_PRICES = {
+    "free":    {"price": 0,   "label": "Free",    "description": "30 one-time credits · zero document access"},
+    "starter": {"price": 99,  "label": "Starter", "description": "300 credits · limited document access (one-time)"},
+    "pro":     {"price": 999, "label": "Pro",      "description": "4000 credits · full document access (one-time)"},
+}
+
+SEED_DATA = {
+    "boards": [
+        {"id": "b1", "name": "AHSEC", "slug": "ahsec", "group_name": "AssamBoard", "description": "AssamBoard — AHSEC (Class 11–12)", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "b2", "name": "DEGREE", "slug": "degree", "group_name": "AssamBoard", "description": "AssamBoard — Degree (B.A / B.Com / B.Sc)", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "b3", "name": "SEBA", "slug": "seba", "group_name": "AssamBoard", "description": "AssamBoard — SEBA (Secondary Education)", "created_at": "2024-01-01T00:00:00Z"},
+    ],
+    "classes": [
+        # AHSEC classes
+        {"id": "c1", "board_id": "b1", "name": "HS 1st Year", "slug": "hs-1st-year", "description": "Class 11 — AHSEC", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c2", "board_id": "b1", "name": "HS 2nd Year", "slug": "hs-2nd-year", "description": "Class 12 — AHSEC", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE legacy classes (kept for backward compat)
+        {"id": "c3", "board_id": "b2", "name": "2nd Sem", "slug": "2nd-sem", "description": "Degree 2nd Semester", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c4", "board_id": "b2", "name": "4th Sem", "slug": "4th-sem", "description": "Degree 4th Semester", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE — FYUGP (NEP) Semesters 1–4 (pre-built, linker-discoverable by slug)
+        {"id": "c7",  "board_id": "b2", "name": "Semester 1", "slug": "semester-1", "description": "FYUGP 1st Semester — NEP", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c8",  "board_id": "b2", "name": "Semester 2", "slug": "semester-2", "description": "FYUGP 2nd Semester — NEP", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c9",  "board_id": "b2", "name": "Semester 3", "slug": "semester-3", "description": "FYUGP 3rd Semester — NEP", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c10", "board_id": "b2", "name": "Semester 4", "slug": "semester-4", "description": "FYUGP 4th Semester — NEP", "created_at": "2024-01-01T00:00:00Z"},
+        # SEBA classes
+        {"id": "c5", "board_id": "b3", "name": "Class 9",  "slug": "class-9",  "description": "SEBA Class 9 — Secondary", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "c6", "board_id": "b3", "name": "Class 10", "slug": "class-10", "description": "SEBA Class 10 — Secondary", "created_at": "2024-01-01T00:00:00Z"},
+    ],
+    "streams": [
+        # AHSEC HS 1st Year streams
+        {"id": "s13", "class_id": "c1", "name": "Science (PCM)", "slug": "science-pcm", "description": "Physics, Chemistry, Mathematics", "icon": "⚗️", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s14", "class_id": "c1", "name": "Science (PCB)", "slug": "science-pcb", "description": "Physics, Chemistry, Biology",    "icon": "🧬", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s15", "class_id": "c1", "name": "Arts",          "slug": "arts",        "description": "Political Science, History, Economics, Geography", "icon": "📖", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s16", "class_id": "c1", "name": "Commerce",      "slug": "commerce",    "description": "Accountancy, Business Studies, Economics",          "icon": "💼", "created_at": "2024-01-01T00:00:00Z"},
+        # AHSEC HS 2nd Year streams
+        {"id": "s17", "class_id": "c2", "name": "Science (PCM)", "slug": "science-pcm", "description": "Physics, Chemistry, Mathematics", "icon": "⚗️", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s18", "class_id": "c2", "name": "Science (PCB)", "slug": "science-pcb", "description": "Physics, Chemistry, Biology",    "icon": "🧬", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s19", "class_id": "c2", "name": "Arts",          "slug": "arts",        "description": "Political Science, History, Economics, Geography", "icon": "📖", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s20", "class_id": "c2", "name": "Commerce",      "slug": "commerce",    "description": "Accountancy, Business Studies, Economics",          "icon": "💼", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE 2nd Sem legacy streams
+        {"id": "s7",  "class_id": "c3", "name": "B.Com", "slug": "bcom", "description": "Bachelor of Commerce", "icon": "💼", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s8",  "class_id": "c3", "name": "B.A",   "slug": "ba",   "description": "Bachelor of Arts",     "icon": "📖", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s9",  "class_id": "c3", "name": "B.Sc",  "slug": "bsc",  "description": "Bachelor of Science",  "icon": "🔬", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE 4th Sem legacy streams
+        {"id": "s10", "class_id": "c4", "name": "B.Com", "slug": "bcom", "description": "Bachelor of Commerce", "icon": "💼", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s11", "class_id": "c4", "name": "B.A",   "slug": "ba",   "description": "Bachelor of Arts",     "icon": "📖", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s12", "class_id": "c4", "name": "B.Sc",  "slug": "bsc",  "description": "Bachelor of Science",  "icon": "🔬", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE FYUGP Semester 1 — 6 NEP course-type streams
+        {"id": "s30", "class_id": "c7",  "name": "Major", "slug": "major", "description": "Major Discipline Course",               "icon": "🎯", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s31", "class_id": "c7",  "name": "Minor", "slug": "minor", "description": "Minor Elective Course",                 "icon": "📘", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s32", "class_id": "c7",  "name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s33", "class_id": "c7",  "name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                    "icon": "✨", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s34", "class_id": "c7",  "name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s35", "class_id": "c7",  "name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE FYUGP Semester 2 — 6 NEP course-type streams
+        {"id": "s36", "class_id": "c8",  "name": "Major", "slug": "major", "description": "Major Discipline Course",               "icon": "🎯", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s37", "class_id": "c8",  "name": "Minor", "slug": "minor", "description": "Minor Elective Course",                 "icon": "📘", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s38", "class_id": "c8",  "name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s39", "class_id": "c8",  "name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                    "icon": "✨", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s40", "class_id": "c8",  "name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s41", "class_id": "c8",  "name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE FYUGP Semester 3 — 6 NEP course-type streams
+        {"id": "s42", "class_id": "c9",  "name": "Major", "slug": "major", "description": "Major Discipline Course",               "icon": "🎯", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s43", "class_id": "c9",  "name": "Minor", "slug": "minor", "description": "Minor Elective Course",                 "icon": "📘", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s44", "class_id": "c9",  "name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s45", "class_id": "c9",  "name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                    "icon": "✨", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s46", "class_id": "c9",  "name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s47", "class_id": "c9",  "name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡", "created_at": "2024-01-01T00:00:00Z"},
+        # DEGREE FYUGP Semester 4 — 6 NEP course-type streams
+        {"id": "s48", "class_id": "c10", "name": "Major", "slug": "major", "description": "Major Discipline Course",               "icon": "🎯", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s49", "class_id": "c10", "name": "Minor", "slug": "minor", "description": "Minor Elective Course",                 "icon": "📘", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s50", "class_id": "c10", "name": "MDC",   "slug": "mdc",   "description": "Multidisciplinary Course",              "icon": "🌐", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s51", "class_id": "c10", "name": "VAC",   "slug": "vac",   "description": "Value-Added Course",                    "icon": "✨", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s52", "class_id": "c10", "name": "AEC",   "slug": "aec",   "description": "Ability Enhancement Compulsory Course", "icon": "🧠", "created_at": "2024-01-01T00:00:00Z"},
+        {"id": "s53", "class_id": "c10", "name": "SEC",   "slug": "sec",   "description": "Skill Enhancement Course",              "icon": "⚡", "created_at": "2024-01-01T00:00:00Z"},
+        # SEBA Class 9 streams
+        {"id": "s21", "class_id": "c5", "name": "General", "slug": "general", "description": "General stream — SEBA Class 9", "icon": "📚", "created_at": "2024-01-01T00:00:00Z"},
+        # SEBA Class 10 streams
+        {"id": "s22", "class_id": "c6", "name": "General", "slug": "general", "description": "General stream — SEBA Class 10", "icon": "📚", "created_at": "2024-01-01T00:00:00Z"},
+    ],
+    "subjects": [],
+    "chapters": [],
+}
+
+def _generate_chapters():
+    return []  # Chapters cleared — upload new syllabus via Admin panel
+
+SEED_DATA["chapters"] = _generate_chapters()
+
+def _fix_chapter_counts():
+    ch_count = {}
+    for ch in SEED_DATA["chapters"]:
+        sid = ch["subject_id"]
+        ch_count[sid] = ch_count.get(sid, 0) + 1
+    for subj in SEED_DATA["subjects"]:
+        subj["chapter_count"] = ch_count.get(subj["id"], 0)
+
+_fix_chapter_counts()

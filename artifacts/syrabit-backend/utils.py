@@ -1,0 +1,221 @@
+"""Syrabit.ai — Utility functions: bot detection, device type, country, keywords, etc."""
+import re, time as _time_mod, logging, asyncio, hashlib
+from typing import Optional
+import httpx
+from config import SLOW_QUERY_THRESHOLD_MS
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "_BOT_PATTERNS", "_SlowQueryTimer", "_extract_keywords", "_get_device_type",
+    "_ip_country_cache", "_is_bot", "_resolve_country", "_slow_query",
+    "get_library_analytics", "track_library_event",
+]
+
+try:
+    from user_agents import parse as _parse_ua
+except ImportError:
+    _parse_ua = None
+
+class _SlowQueryTimer:
+    __slots__ = ("_label", "_t0")
+    def __init__(self, label: str):
+        self._label = label
+        self._t0 = 0.0
+    async def __aenter__(self):
+        self._t0 = _time_mod.time()
+        return self
+    async def __aexit__(self, *exc):
+        elapsed_ms = (_time_mod.time() - self._t0) * 1000
+        if elapsed_ms > SLOW_QUERY_THRESHOLD_MS:
+            logger.warning(f"SLOW_QUERY {self._label} took {elapsed_ms:.0f}ms (threshold={SLOW_QUERY_THRESHOLD_MS}ms)")
+
+def _slow_query(label: str) -> _SlowQueryTimer:
+    return _SlowQueryTimer(label)
+
+def _extract_keywords(query: str) -> list:
+    """Extract meaningful search keywords, removing stop-words."""
+    stop_words = {
+        "what", "which", "when", "where", "that", "this", "with", "from",
+        "have", "will", "your", "some", "they", "been", "more", "also",
+        "into", "than", "then", "there", "about", "give", "explain", "the",
+        "and", "for", "are", "how", "why", "who", "can", "its", "was",
+        "let", "define", "describe", "state", "write", "list",
+    }
+    raw = [w.strip('?.,!;:()[]"\'').lower() for w in query.split()]
+    return [w for w in raw if len(w) >= 3 and w not in stop_words][:8]
+
+
+# ─────────────────────────────────────────────
+# LIBRARY ANALYTICS TRACKING
+# ─────────────────────────────────────────────
+
+async def track_library_event(
+    event_type: str,
+    subject_id: str = None,
+    chapter_id: str = None,
+    user_id: str = None,
+    search_query: str = None,
+    metadata: dict = None
+):
+    """
+    Track library user interactions for analytics.
+    
+    Event types:
+    - 'search': User searched in library
+    - 'subject_view': User opened a subject
+    - 'chapter_view': User viewed a chapter
+    - 'ask_ai_click': User clicked Ask AI button
+    - 'document_open': User opened document viewer
+    """
+    try:
+        event = {
+            "id": str(uuid.uuid4()),
+            "event_type": event_type,
+            "subject_id": subject_id,
+            "chapter_id": chapter_id,
+            "user_id": user_id,
+            "search_query": search_query,
+            "metadata": metadata or {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.analytics.insert_one(event)
+        logger.debug(f"📊 Analytics tracked: {event_type} | subject: {subject_id}")
+    except Exception as e:
+        logger.error(f"Analytics tracking failed: {e}")
+
+
+async def get_library_analytics(days: int = 30):
+    """Get library analytics summary"""
+    if not await is_mongo_available():
+        return {"period_days": days, "top_searches": [], "most_viewed_subjects": [], "most_ask_ai_subjects": [], "document_opens": 0, "events_by_type": {}}
+    try:
+        start_date = datetime.now(timezone.utc) - timedelta(days=days)
+        start_iso = start_date.isoformat()
+        
+        search_pipeline = [
+            {"$match": {"event_type": "search", "timestamp": {"$gte": start_iso}}},
+            {"$group": {"_id": "$search_query", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 10}
+        ]
+        top_searches = await db.analytics.aggregate(search_pipeline).to_list(10)
+        
+        subject_view_pipeline = [
+            {"$match": {"event_type": "subject_view", "timestamp": {"$gte": start_iso}, "subject_id": {"$ne": None}}},
+            {"$group": {"_id": "$subject_id", "view_count": {"$sum": 1}}},
+            {"$sort": {"view_count": -1}},
+            {"$limit": 10}
+        ]
+        top_subjects_raw = await db.analytics.aggregate(subject_view_pipeline).to_list(10)
+        
+        if top_subjects_raw:
+            subject_ids = [item["_id"] for item in top_subjects_raw]
+            subjects = await db.subjects.find({"id": {"$in": subject_ids}}, {"_id": 0, "id": 1, "name": 1, "description": 1}).to_list(20)
+            subject_map = {s["id"]: s for s in subjects}
+            top_subjects = []
+            for item in top_subjects_raw:
+                subj = subject_map.get(item["_id"])
+                if subj:
+                    top_subjects.append({"subject_id": item["_id"], "name": subj["name"], "view_count": item["view_count"]})
+        else:
+            top_subjects = []
+        
+        ask_ai_pipeline = [
+            {"$match": {"event_type": "ask_ai_click", "timestamp": {"$gte": start_iso}, "subject_id": {"$ne": None}}},
+            {"$group": {"_id": "$subject_id", "ask_count": {"$sum": 1}}},
+            {"$sort": {"ask_count": -1}},
+            {"$limit": 10}
+        ]
+        top_ask_ai_raw = await db.analytics.aggregate(ask_ai_pipeline).to_list(10)
+        
+        if top_ask_ai_raw:
+            ask_subject_ids = [item["_id"] for item in top_ask_ai_raw]
+            ask_subjects = await db.subjects.find({"id": {"$in": ask_subject_ids}}, {"_id": 0, "id": 1, "name": 1}).to_list(20)
+            ask_subject_map = {s["id"]: s["name"] for s in ask_subjects}
+            top_ask_ai = []
+            for item in top_ask_ai_raw:
+                name = ask_subject_map.get(item["_id"], "Unknown")
+                top_ask_ai.append({"subject_id": item["_id"], "name": name, "ask_count": item["ask_count"]})
+        else:
+            top_ask_ai = []
+        
+        doc_open_count = await db.analytics.count_documents({"event_type": "document_open", "timestamp": {"$gte": start_iso}})
+        
+        event_type_pipeline = [
+            {"$match": {"timestamp": {"$gte": start_iso}}},
+            {"$group": {"_id": "$event_type", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}}
+        ]
+        events_by_type = await db.analytics.aggregate(event_type_pipeline).to_list(20)
+        
+        return {
+            "period_days": days,
+            "top_searches": [{"query": item["_id"], "count": item["count"]} for item in top_searches if item["_id"]],
+            "most_viewed_subjects": top_subjects,
+            "most_ask_ai_subjects": top_ask_ai,
+            "document_opens": doc_open_count,
+            "events_by_type": {item["_id"]: item["count"] for item in events_by_type},
+        }
+    except Exception:
+        return {"period_days": days, "top_searches": [], "most_viewed_subjects": [], "most_ask_ai_subjects": [], "document_opens": 0, "events_by_type": {}}
+
+
+# ── Bot/crawler User-Agent patterns ───────────────────────────────────────────
+_BOT_PATTERNS = re.compile(
+    r'(googlebot|bingbot|yandexbot|duckduckbot|baiduspider|facebookexternalhit|'
+    r'twitterbot|rogerbot|linkedinbot|embedly|quora link preview|showyoubot|'
+    r'outbrain|pinterest/0\.|developers\.google\.com/\+/web/snippet|slackbot|'
+    r'vkshare|w3c_validator|redditbot|applebot|whatsapp|googleweblight|'
+    r'ia_archiver|curl|wget|python-requests|go-http-client|okhttp|'
+    r'scrapy|heritrix|nmap|masscan|zgrab)',
+    re.IGNORECASE,
+)
+
+def _is_bot(user_agent: str) -> bool:
+    if not user_agent:
+        return False
+    return bool(_BOT_PATTERNS.search(user_agent))
+
+def _get_device_type(user_agent: str) -> str:
+    if not user_agent:
+        return 'desktop'
+    if _parse_ua:
+        try:
+            ua = _parse_ua(user_agent)
+            if ua.is_mobile:
+                return 'mobile'
+            if ua.is_tablet:
+                return 'tablet'
+            return 'desktop'
+        except Exception:
+            pass
+    ua_lower = user_agent.lower()
+    if any(k in ua_lower for k in ('mobile', 'android', 'iphone', 'ipod', 'windows phone')):
+        return 'mobile'
+    if any(k in ua_lower for k in ('ipad', 'tablet')):
+        return 'tablet'
+    return 'desktop'
+
+_ip_country_cache: dict = {}
+
+async def _resolve_country(ip: str) -> str:
+    """Resolve IP to country code using ip-api.com free tier."""
+    if not ip or ip in ('127.0.0.1', '::1', 'unknown'):
+        return ''
+    if ip in _ip_country_cache:
+        return _ip_country_cache[ip]
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            r = await client.get(f'http://ip-api.com/json/{ip}?fields=countryCode,status')
+            data = r.json()
+            if data.get('status') == 'success':
+                country = data.get('countryCode', '')
+                _ip_country_cache[ip] = country
+                if len(_ip_country_cache) > 2000:
+                    oldest = list(_ip_country_cache.keys())[:500]
+                    for k in oldest:
+                        _ip_country_cache.pop(k, None)
+                return country
+    except Exception:
+        pass

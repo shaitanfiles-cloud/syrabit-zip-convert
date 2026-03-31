@@ -4,6 +4,35 @@
 
 pnpm workspace monorepo. Primary artifact: **Syrabit.ai** — AI-powered educational platform for AHSEC Class 11/12 + Degree students in Assam.
 
+## Backend Module Structure (refactored from monolith server.py)
+
+The backend (`artifacts/syrabit-backend/`) is split into modular files:
+
+**Entry point:** `server.py` (~480 lines) — app factory, lifespan, middleware, router mounts, exception handlers.
+
+**Shared modules:**
+- `config.py` — env vars, plan limits, CORS config, seed data (pure constants)
+- `deps.py` — mutable state: MongoDB, Redis, Supabase, PG pool, Sarvam clients, logger
+- `cache.py` — Redis + in-memory caching (TTLCache wrappers, invalidation)
+- `auth_deps.py` — JWT helpers, get_current_user, get_admin_user, rate limiting
+- `middleware.py` — SecurityHeadersMiddleware, GlobalRateLimitMiddleware
+- `utils.py` — bot detection, device type, country resolution, keyword extraction
+- `db_ops.py` — all supa_*/pg_* database operations
+- `llm.py` — LLM batching, SmartKeyPool, call_llm_api, streaming
+- `rag.py` — RAG search, vector search, web search, chat helpers, telemetry
+- `analytics_helpers.py` — page view tracking, visitor stats, library analytics
+- `seed.py` — database seeding logic
+- `metrics.py` — MetricsStore, health check infrastructure
+- `models.py` — Pydantic request/response models
+
+**Route modules** (`routes/`): 16 files, each with own APIRouter
+- `auth.py`, `content.py`, `syllabus.py`, `ai_chat.py`, `conversations.py`, `user.py`
+- `admin_auth_users.py`, `analytics.py`, `admin_content.py`, `admin_pipeline.py`
+- `admin_settings.py`, `admin_notifications.py`, `admin_monetization.py`
+- `cms_sarvam_health.py`, `admin_advanced.py`, `pyq.py`
+
+**Dependency hierarchy:** config → deps → cache → auth_deps → db_ops → llm/rag/utils → routes → server.py
+
 ## Agentic Syllabus Uploader (added 2026-03-30)
 
 - **Backend**: `POST /api/admin/agentic-syllabus/run` — SSE streaming endpoint.  
