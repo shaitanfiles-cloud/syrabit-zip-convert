@@ -1968,19 +1968,19 @@ async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends
 
 @router.post("/admin/seo/generate")
 async def generate_seo_metadata(data: dict = Body(...), admin: dict = Depends(get_admin_user)):
-    """Generate maximum SEO + GEO-rich page title and meta description using AI."""
+    """Generate syllabus-anchored, thick-page SEO + GEO metadata using AI."""
     title          = (data.get("title") or "").strip()
     content_snippet= (data.get("content") or "")[:3000].strip()
     primary_keyword= (data.get("primary_keyword") or "").strip()
     seo_tags       = (data.get("seo_tags") or "").strip()
     linked_scope   = (data.get("linked_scope") or "").strip()
-    board          = (data.get("board") or "AHSEC").strip()
+    board          = (data.get("board") or "Assamboard").strip()
     class_name     = (data.get("class_name") or "").strip()
     subject        = (data.get("subject") or "").strip()
 
-    prompt = f"""You are an expert SEO strategist and GEO (Generative Engine Optimization) specialist for Syrabit.ai, an educational platform serving AHSEC/SCERT Class 11 & 12 and Degree students in Assam, India.
+    prompt = f"""You are an expert SEO + GEO (Generative Engine Optimization) strategist for Syrabit.ai, the educational browser for Assamboard students (AHSEC Class 11-12, SEBA, Degree: B.Com/B.A/B.Sc) in Assam, India.
 
-Your task: generate maximum-impact SEO and GEO metadata for a single educational page.
+GOAL: Generate high-impact, syllabus-anchored SEO & GEO metadata. Every page must be THICK and authoritative — no thin pages. One page should comprehensively cover one syllabus topic with notes + definitions + PYQ patterns + solved examples + MCQs so it ranks as the single best result for that topic.
 
 Page context:
 - Title/Topic:       {title or '(not set)'}
@@ -1992,37 +1992,47 @@ Page context:
 - Existing tags:     {seo_tags or '(none)'}
 - Content snippet:   {content_snippet[:600] or '(not provided)'}
 
-Rules for SEO Title (55–65 characters):
-- Primary keyword FIRST (exact match for query alignment)
-- Include board identifier: "AHSEC" or "Class 11/12" as relevant
-- Include content type: Notes / PYQ / Guide / Explained / MCQ
-- Power word from: Complete, Free, Best, Official, Detailed, Easy, Quick
-- End exactly with " | Syrabit" (saves chars vs "Syrabit.ai")
-- Total: 55–65 characters, never truncated by Google
+BRAND RULE: Use "Assamboard" (one word, capital A) as the primary brand term in titles and descriptions. Use "AHSEC" / "SEBA" / "Degree" only as secondary qualifiers for search matching.
 
-Rules for Meta Description (148–158 characters — this range triggers full-length snippets):
-- Open with the primary keyword or question students actually search
-- Mention content types covered: notes, definitions, examples, PYQ, MCQs
-- Include one board-authority signal: "per AHSEC {board} syllabus" or "NCERT-aligned"
-- Include one action verb: Access, Download, Study, Get, Master
-- End with a micro-CTA: "Free on Syrabit." or "Syrabit.ai — free."
-- 148–158 characters EXACTLY (count carefully)
+Rules for SEO Title (55-65 characters):
+- Primary keyword FIRST — match exactly what Assam students search
+- Include "Assamboard" as the board identifier
+- Include content depth signal: "Complete Notes" / "Full Chapter" / "Solved PYQ" / "Detailed Guide"
+- Power word: Complete, Free, Detailed, Solved, Official, Comprehensive
+- End exactly with " | Syrabit"
+- Total: 55-65 characters, never truncated by Google
+- Example: "Photosynthesis Complete Notes Assamboard Class 12 | Syrabit"
 
-Rules for Primary Keyword (for <meta name="keywords"> and schema):
-- 4–7 words, exact-match the most-searched student query
-- Format: "[Subject] [topic] [board] [class]" or "AHSEC [subject] [topic] notes"
+Rules for Meta Description (148-158 characters):
+- Open with the primary syllabus topic + what the page covers comprehensively
+- Signal page depth: "covers definitions, derivations, solved PYQ, MCQs, and board exam tips"
+- Include authority signal: "per Assamboard syllabus" or "NCERT + Assamboard aligned"
+- End with CTA: "Free on Syrabit." or "Study free on Syrabit."
+- 148-158 characters EXACTLY (count carefully)
 
-Rules for SEO Tags (8–12 comma-separated tags):
-- Mix: exact-match head terms + long-tail variants + board-specific + question-format
-- Include: board name, class, subject, topic, "notes", "PYQ", "Assam", "AHSEC 2024-25"
+Rules for Primary Keyword (4-7 words):
+- Exact-match what Assam students type in Google
+- Format: "[topic] [subject] Assamboard [class] notes" or "[topic] class 12 Assamboard notes"
+- Must be syllabus-anchored — the topic must exist in the official syllabus
 
-Rules for GEO Authority Phrases (3 phrases, for AI citation eligibility):
-- Start with "According to", "As per", "Based on" followed by a recognized source
-- Examples: "As per AHSEC 2024–25 syllabus", "According to NCERT textbook", "Based on SCERT Assam guidelines"
-- Must sound like authoritative citations an AI would quote
+Rules for SEO Tags (8-12 comma-separated):
+- Mix: syllabus topic exact match, "Assamboard [subject] notes", "[topic] class [X]", "[topic] PYQ", "[topic] MCQ", "Assam board exam", long-tail question variants
+- Always include: Assamboard, the class, the subject, "notes", "Assam"
+
+Rules for GEO Authority Phrases (3 phrases for AI citation):
+- Must sound like authoritative syllabus citations an AI engine would quote
+- Reference real curriculum sources: "As per Assamboard {class_name or ''} syllabus 2024-25", "According to NCERT/SCERT Assam prescribed textbook", "Based on AHSEC board exam pattern analysis"
+- These phrases get embedded in content for Perplexity/ChatGPT citation eligibility
+
+Rules for Schema Type:
+- "Article" for chapter notes/guides
+- "FAQPage" for PYQ/FAQ-heavy pages
+- "HowTo" for step-by-step derivations/solved problems
+- "Course" for full subject overview pages
+- Choose the BEST fit based on content type
 
 Return ONLY valid JSON — no markdown fences, no commentary:
-{{"seo_title":"...","meta_description":"...","primary_keyword":"...","seo_tags":"tag1, tag2, tag3, tag4, tag5, tag6, tag7, tag8","geo_phrases":["...","...","..."],"char_counts":{{"title":0,"meta":0}}}}"""
+{{"seo_title":"...","meta_description":"...","primary_keyword":"...","seo_tags":"tag1, tag2, tag3, tag4, tag5, tag6, tag7, tag8, tag9, tag10","geo_phrases":["...","...","..."],"schema_type":"Article","char_counts":{{"title":0,"meta":0}}}}"""
 
     try:
         result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=700)

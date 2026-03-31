@@ -34,7 +34,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
         primary_keyword: state.primaryKeyword,
         seo_tags: state.seoTags,
         linked_scope: [state.boardName, state.className, state.streamName, state.subjectName].filter(Boolean).join('/'),
-        board: state.boardName || 'AHSEC',
+        board: state.boardName || 'Assamboard',
         class_name: state.className,
         subject: state.subjectName,
       };
@@ -123,7 +123,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
         <div>
           <label className={lbl}>SEO Slug *</label>
           <input className={inp(!state.seoSlug && saving)}
-            placeholder="my-topic-ahsec-class-12"
+            placeholder="my-topic-assamboard-class-12"
             value={state.seoSlug}
             onChange={e => set({ seoSlug: autoSlug(e.target.value) })} />
           {state.canonicalUrl && (
@@ -134,7 +134,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
         <div>
           <label className={lbl}>SEO Title * <span className="text-white/25 font-normal">({(state.seoTitle || '').length}/65 chars)</span></label>
           <input className={inp(!state.seoTitle && saving)}
-            placeholder="Primary Keyword — Board Content Type | Syrabit"
+            placeholder="Topic Complete Notes Assamboard Class 12 | Syrabit"
             value={state.seoTitle}
             onChange={e => set({ seoTitle: e.target.value })} />
         </div>
@@ -146,7 +146,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
           <textarea
             className={`w-full px-3 py-2 rounded-lg text-sm text-white bg-white/5 border outline-none focus:border-violet-500 transition resize-none ${!metaValid && metaLen > 0 ? 'border-red-500/50' : 'border-white/10'}`}
             rows={3}
-            placeholder="Primary keyword opens. Notes, definitions, PYQ covered. Per AHSEC syllabus. Free on Syrabit."
+            placeholder="Topic covers definitions, solved PYQ, MCQs per Assamboard syllabus. Free on Syrabit."
             value={state.metaDescription}
             onChange={e => set({ metaDescription: e.target.value })}
           />
@@ -167,7 +167,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
         <div>
           <label className={lbl}>Primary Keyword *</label>
           <input className={inp(!state.primaryKeyword && saving)}
-            placeholder="photosynthesis class 12 ahsec notes"
+            placeholder="photosynthesis class 12 assamboard notes"
             value={state.primaryKeyword}
             onChange={e => set({ primaryKeyword: e.target.value })} />
         </div>
@@ -179,7 +179,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
 
         <div>
           <label className={lbl}>GEO Tags / Authority Phrases</label>
-          <TagChips value={state.geoTags} onChange={v => set({ geoTags: v })} placeholder="e.g. As per AHSEC 2024 syllabus…" />
+          <TagChips value={state.geoTags} onChange={v => set({ geoTags: v })} placeholder="e.g. As per Assamboard 2024-25 syllabus…" />
         </div>
 
         <div>

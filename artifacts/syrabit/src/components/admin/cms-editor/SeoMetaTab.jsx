@@ -231,7 +231,7 @@ export default function SeoMetaTab({
           <input
             value={form.primary_keyword}
             onChange={e => setForm(f => ({ ...f, primary_keyword: e.target.value }))}
-            placeholder="e.g. AHSEC Class 12 Physics Notes"
+            placeholder="e.g. Assamboard Class 12 Physics Notes"
             className="w-full h-10 px-4 rounded-xl text-sm outline-none"
             style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
           />
@@ -242,7 +242,7 @@ export default function SeoMetaTab({
           <input
             value={form.seo_tags}
             onChange={e => setForm(f => ({ ...f, seo_tags: e.target.value }))}
-            placeholder="ahsec, class 12, physics, optics, notes"
+            placeholder="assamboard, class 12, physics, optics, notes"
             className="w-full h-10 px-4 rounded-xl text-sm outline-none"
             style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
           />
