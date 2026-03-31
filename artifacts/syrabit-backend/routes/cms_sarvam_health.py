@@ -36,6 +36,7 @@ from llm import call_llm_api, call_llm_api_stream, _LLM_PROVIDERS, _llm_batcher
 from cache import _content_cache, _ai_response_cache, _redis_hit_count, _redis_miss_count
 from metrics import _metrics
 from rag import *
+from seo_engine import _md_to_html
 from utils import *
 from analytics_helpers import *
 

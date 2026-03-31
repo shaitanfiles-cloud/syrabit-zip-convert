@@ -30,6 +30,7 @@ from auth_deps import (
 from db_ops import *
 from llm import call_llm_api, call_llm_api_stream
 from rag import *
+from seo_engine import _md_to_html, _smart_board_display, _smart_grade_label
 from utils import *
 from analytics_helpers import *
 
