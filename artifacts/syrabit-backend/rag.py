@@ -18,7 +18,7 @@ __all__ = [
     "_HISTORY_MAX_TURNS", "_HISTORY_TOKEN_BUDGET", "_LATENCY_MAX", "_RAG_TELEM_MAX",
     "_chat_latencies", "_ddg_news_search", "_ddg_text_search",
     "_embed_and_store_chapter", "_embed_and_store_page", "_embed_cms_document", "_extract_relevant_sections",
-    "_fetch_content_card", "_rag_telemetry", "_record_chat_latency",
+    "_fetch_content_card", "_fetch_enrichment_blocks", "_rag_telemetry", "_record_chat_latency",
     "_record_rag_event", "_sources_from_rag_ctx", "_trim_history",
     "auto_chunk_content", "build_rag_system_prompt", "rag_search", "rechunk_chapter",
     "resolve_rag_context", "syrabit_library_search", "vector_rag_search",
@@ -407,7 +407,11 @@ async def _fetch_content_card(
                 _top_card_name = topic_title
                 _top_lesson_name = p.get("chapter_title") or ""
                 _top_subject_name = p.get("subject_name") or subject_name or ""
-            header = f"[Content: {topic_title}]" if topic_title else "[Content Page]"
+            page_type = p.get("page_type", "")
+            if topic_title:
+                header = f"[Content: {topic_title} | type={page_type}]" if page_type else f"[Content: {topic_title}]"
+            else:
+                header = f"[Content Page | type={page_type}]" if page_type else "[Content Page]"
             relevant = _extract_relevant_sections(content, keywords, max_chars=2000)
             cards.append(f"{header}\n{relevant}")
 
@@ -433,7 +437,7 @@ async def _fetch_content_card(
                 continue
             if not _top_lesson_name:
                 _top_lesson_name = ch.get("title") or ""
-            header = f"[Chapter: {ch.get('title', '')}]"
+            header = f"[Chapter: {ch.get('title', '')} | type=lesson]"
             relevant = _extract_relevant_sections(content, keywords, max_chars=1200)
             cards.append(f"{header}\n{relevant}")
 
@@ -607,6 +611,7 @@ async def vector_rag_search(
                     "content": content_snippet,
                     "score":   sim,
                     "source":  "page",
+                    "page_type": p.get("page_type", ""),
                 })
         for ch in chapters:
             vec = ch.get("embedding")
@@ -954,11 +959,120 @@ async def syrabit_library_search(
     return final
 
 
+async def _fetch_enrichment_blocks(
+    intent: str,
+    subject_id: Optional[str] = None,
+    chapter_title: Optional[str] = None,
+) -> str:
+    try:
+        if not await is_mongo_available():
+            return ""
+        blocks = []
+
+        ch_filter: dict = {}
+        if subject_id:
+            ch_filter["subject_id"] = subject_id
+        if chapter_title:
+            ch_filter["title"] = {"$regex": re.escape(chapter_title), "$options": "i"}
+
+        if intent in ("important_questions", "lesson_questions", "marks_wise"):
+            _proj = {
+                "_id": 0, "title": 1, "mark_wise_questions": 1,
+                "important_questions": 1, "subject_id": 1,
+            }
+            chapters = await db.chapters.find(
+                {**ch_filter, "$or": [
+                    {"mark_wise_questions": {"$exists": True, "$ne": {}}},
+                    {"important_questions": {"$exists": True, "$ne": []}},
+                ]},
+                _proj,
+            ).limit(5).to_list(5)
+
+            for ch in chapters:
+                ch_title = ch.get("title", "Chapter")
+                mw = ch.get("mark_wise_questions", {})
+                imp = ch.get("important_questions", [])
+                if not mw and not imp:
+                    continue
+                block = f"**[CHAPTER QUESTIONS: {ch_title}]**\n"
+                if mw and isinstance(mw, dict):
+                    for mark_val, questions in sorted(mw.items(), key=lambda x: str(x[0])):
+                        block += f"### {mark_val}-mark questions\n"
+                        for qi, q in enumerate(questions[:10], 1):
+                            q_text = q.get("question", q) if isinstance(q, dict) else str(q)
+                            block += f"{qi}. {q_text}\n"
+                if imp:
+                    block += "### Important Questions\n"
+                    for qi, q in enumerate(imp[:15], 1):
+                        q_text = q.get("question", q) if isinstance(q, dict) else str(q)
+                        block += f"{qi}. {q_text}\n"
+                blocks.append(block)
+
+        if intent == "flashcards":
+            _proj = {"_id": 0, "title": 1, "memory_tricks": 1}
+            chapters = await db.chapters.find(
+                {**ch_filter, "memory_tricks": {"$exists": True, "$ne": []}},
+                _proj,
+            ).limit(3).to_list(3)
+
+            for ch in chapters:
+                ch_title = ch.get("title", "Chapter")
+                tricks = ch.get("memory_tricks", [])
+                if not tricks:
+                    continue
+                block = f"**[FLASHCARDS: {ch_title}]**\n"
+                for fi, fc in enumerate(tricks[:20], 1):
+                    if isinstance(fc, dict):
+                        q = fc.get("question", fc.get("front", fc.get("q", "")))
+                        a = fc.get("answer", fc.get("back", fc.get("a", "")))
+                        block += f"Q{fi}: {q}\nA{fi}: {a}\n\n"
+                    else:
+                        block += f"{fi}. {fc}\n"
+                blocks.append(block)
+
+        if intent in ("pyq", "solved_pyq"):
+            pyq_filter: dict = {}
+            if subject_id:
+                pyq_filter["subject_id"] = subject_id
+            pyq_pages = await db.pyq_html_pages.find(
+                pyq_filter,
+                {"_id": 0, "subject_name": 1, "exam_year": 1, "questions": 1,
+                 "paper_type": 1},
+            ).sort("exam_year", -1).limit(3).to_list(3)
+
+            for pyq in pyq_pages:
+                subj = pyq.get("subject_name", "")
+                year = pyq.get("exam_year", "")
+                questions = pyq.get("questions", [])
+                if not questions:
+                    continue
+                block = f"**[PYQ PAPER: {subj} {year}]**\n"
+                for q in questions[:20]:
+                    num = q.get("number", "")
+                    text = q.get("text", "")
+                    marks = q.get("marks", "")
+                    marks_label = f" [{marks} marks]" if marks else ""
+                    block += f"{num}. {text}{marks_label}\n"
+                    sub_parts = q.get("sub_parts", [])
+                    for sp in sub_parts[:5]:
+                        block += f"   - {sp}\n"
+                blocks.append(block)
+
+        result = "\n\n".join(blocks)
+        if result:
+            logger.info(f"Enrichment blocks fetched for intent={intent}: {len(blocks)} blocks, {len(result)} chars")
+        return result
+    except Exception as e:
+        logger.error(f"Enrichment block fetch error: {e}")
+        return ""
+
+
 async def resolve_rag_context(
     query: str,
     subject_id: Optional[str] = None,
     subject_name: Optional[str] = None,
-    document_text: Optional[str] = None,   # Tier 0 — uploaded document (highest)
+    document_text: Optional[str] = None,
+    intent: Optional[str] = None,
 ) -> dict:
     """
     Master RAG resolver — 4-tier priority chain:
@@ -996,6 +1110,7 @@ async def resolve_rag_context(
         else:
             relevant = document_text[:3000]
 
+        _resolved_intent_t0 = intent or "general"
         return {
             "chunks": [],
             "chapters": [],
@@ -1004,6 +1119,7 @@ async def resolve_rag_context(
             "document_full": document_text[:3000],
             "source":  "document",
             "quality": "tier0",
+            "intent":  _resolved_intent_t0,
         }
     cached_rag, _card_result, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
@@ -1035,16 +1151,40 @@ async def resolve_rag_context(
             rag_ctx["source"] = "rag"
         logger.info(f"RAG resolve: vector hits={len(deduped)} (deduped from {len(vector_hits)}, best_sim={deduped[0]['score']:.3f}) | query: {query[:50]}" if deduped else f"RAG resolve: vector hits=0 (all deduped by content card)")
 
-    if rag_ctx["quality"] == "high":
-        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(rag_ctx.get('vector_hits', []))}, card: {'yes' if content_card_text else 'no'}) | query: {query[:50]}")
-        return rag_ctx
+    from prompts import ENRICHMENT_INTENTS
+    _resolved_intent = intent or "general"
+    if _resolved_intent in ENRICHMENT_INTENTS and rag_ctx.get("quality") in ("high", "medium", None, "none"):
+        _chapter_hint = ""
+        _chs = rag_ctx.get("chapters", [])
+        if _chs:
+            _chapter_hint = _chs[0].get("title", "")
+        enrichment = await _fetch_enrichment_blocks(
+            _resolved_intent,
+            subject_id=subject_id,
+            chapter_title=_chapter_hint,
+        )
+        if enrichment:
+            rag_ctx["enrichment_blocks"] = enrichment
+            if rag_ctx["quality"] == "none":
+                rag_ctx["quality"] = "high"
+                rag_ctx["source"] = "rag"
 
-    if rag_ctx["quality"] == "medium":
-        logger.info(f"RAG resolve: MEDIUM metadata only | query: {query[:50]}")
-        return rag_ctx
+    _final_quality = rag_ctx["quality"]
+    rag_ctx["intent"] = _resolved_intent
 
-    logger.info(f"RAG resolve: NO CONTEXT — AI uses training knowledge | query: {query[:50]}")
-    return {"chunks": [], "chapters": [], "subjects": [], "vector_hits": [], "source": "none", "quality": "none"}
+    if _final_quality == "high":
+        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(rag_ctx.get('vector_hits', []))}, card: {'yes' if content_card_text else 'no'}, intent: {_resolved_intent}) | query: {query[:50]}")
+    elif _final_quality == "medium":
+        logger.info(f"RAG resolve: MEDIUM metadata only | intent: {_resolved_intent} | query: {query[:50]}")
+    else:
+        logger.info(f"RAG resolve: NO CONTEXT — AI uses training knowledge | intent: {_resolved_intent} | query: {query[:50]}")
+        rag_ctx = {"chunks": [], "chapters": [], "subjects": [], "vector_hits": [], "source": "none", "quality": "none", "intent": _resolved_intent}
+
+    try:
+        _record_rag_event(_final_quality, 0, query, intent=_resolved_intent)
+    except Exception:
+        pass
+    return rag_ctx
 
 
 
@@ -1269,7 +1409,7 @@ def build_rag_system_prompt(
       Tier 2 — Subject metadata (descriptions, tags, chapter titles)
       Tier 3 — Web search results (fallback when library has no content)
     """
-    from prompts import build_system_prompt, _classify_question, _format_board_label as _fbl
+    from prompts import build_system_prompt, _classify_question, _classify_intent, _format_board_label as _fbl, get_intent_extraction_rules
     base_prompt = build_system_prompt(context, user_info=user_info, query=query)
     source      = rag_context.get("source",  "none")
     quality     = rag_context.get("quality", "none")
@@ -1282,7 +1422,8 @@ def build_rag_system_prompt(
     _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard"
     _curriculum_label = f"{_board_label} Curriculum"
 
-    _is_casual = _classify_question(query) == "casual" if query else False
+    _intent = _classify_intent(query) if query else "general"
+    _is_casual = _intent == "casual"
 
     if not _is_casual:
         _src_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
@@ -1377,13 +1518,24 @@ def build_rag_system_prompt(
                     title = hit.get("title", slug)
                     content = hit.get("content", "")
                     score = hit.get("score", 0)
-                    grounding += f"[PAGE: {slug}] — {title} (relevance: {score:.2f})\n{content}\n\n"
+                    _pt = hit.get("page_type", "")
+                    _pt_label = f" | type={_pt}" if _pt else ""
+                    grounding += f"[PAGE: {slug}{_pt_label}] — {title} (relevance: {score:.2f})\n{content}\n\n"
 
             if content_card:
                 grounding += f"**[CONTENT CARD — Full page content]:**\n{content_card}\n\n"
             for i, c in enumerate(chunks, 1):
                 title = c.get("content_type", "content").capitalize()
                 grounding += f"**[BLOCK {i} — {title}]:**\n{c.get('content', '')[:1500]}\n\n"
+
+            _enrichment = rag_context.get("enrichment_blocks", "")
+            if _enrichment:
+                grounding += f"{_enrichment}\n\n"
+
+            _extraction_rules = get_intent_extraction_rules(_intent)
+            if _extraction_rules:
+                grounding += f"\n**INTENT-SPECIFIC GUIDANCE ({_intent}):**\n{_extraction_rules}\n\n"
+
             grounding += (
                 "---\n"
                 "**ACCURACY LOCK:**\n"
@@ -1429,6 +1581,14 @@ def build_rag_system_prompt(
                     if ch_content and not desc:
                         grounding += f": {ch_content[:400]}"
                     grounding += "\n"
+
+            _enrichment_med = rag_context.get("enrichment_blocks", "")
+            if _enrichment_med:
+                grounding += f"\n{_enrichment_med}\n\n"
+
+            _extraction_rules_med = get_intent_extraction_rules(_intent)
+            if _extraction_rules_med:
+                grounding += f"\n**INTENT-SPECIFIC GUIDANCE ({_intent}):**\n{_extraction_rules_med}\n\n"
 
             grounding += (
                 "\n---\n"
@@ -1523,14 +1683,17 @@ _RAG_TELEM_MAX = 20_000
 _chat_latencies: list = []         # {"ts", "latency_ms"}
 _LATENCY_MAX = 10_000
 
-def _record_rag_event(quality: str, latency_ms: float, query: str = ""):
+def _record_rag_event(quality: str, latency_ms: float, query: str = "", intent: str = ""):
     """Called from the RAG pipeline to log each retrieval attempt."""
-    _rag_telemetry.append({
+    event = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "quality": quality,       # "high" | "medium" | "none"
+        "quality": quality,
         "latency_ms": round(latency_ms, 1),
         "query": query[:200],
-    })
+    }
+    if intent:
+        event["intent"] = intent
+    _rag_telemetry.append(event)
     if len(_rag_telemetry) > _RAG_TELEM_MAX:
         _rag_telemetry.pop(0)
 

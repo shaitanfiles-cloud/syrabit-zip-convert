@@ -1,5 +1,5 @@
 import pytest
-from prompts import _classify_question, _is_out_of_scope_response
+from prompts import _classify_question, _classify_intent, _is_out_of_scope_response
 
 
 class TestClassifyQuestion:
@@ -34,6 +34,61 @@ class TestClassifyQuestion:
     def test_empty_query(self):
         result = _classify_question("")
         assert result in ("casual", "concise")
+
+
+class TestClassifyIntent:
+    @pytest.mark.parametrize("query,expected", [
+        ("MCQ", "mcq"),
+        ("PYQ", "pyq"),
+        ("mcq", "mcq"),
+        ("pyq", "pyq"),
+        ("notes", "notes"),
+        ("MCQ on photosynthesis", "mcq"),
+        ("PYQ 2024", "pyq"),
+        ("notes for chapter 1", "notes"),
+    ])
+    def test_short_form_intents(self, query, expected):
+        assert _classify_intent(query) == expected
+
+    @pytest.mark.parametrize("query,expected", [
+        ("hi", "casual"),
+        ("hello", "casual"),
+        ("thanks", "casual"),
+        ("good morning", "casual"),
+        ("...", "casual"),
+    ])
+    def test_casual_intents(self, query, expected):
+        assert _classify_intent(query) == expected
+
+    @pytest.mark.parametrize("query,expected", [
+        ("syllabus of business studies", "syllabus"),
+        ("previous year question paper 2024", "pyq"),
+        ("solve question 3 from 2023 pyq", "solved_pyq"),
+        ("important questions for exam", "important_questions"),
+        ("important topics", "important_topics"),
+        ("questions from chapter 2", "lesson_questions"),
+        ("flashcard for revision", "flashcards"),
+        ("exam pattern of physics", "exam_pattern"),
+        ("5 mark questions list", "marks_wise"),
+        ("explain the law of demand", "explain"),
+        ("solve x^2 + 5x = 0", "solve"),
+    ])
+    def test_academic_intents(self, query, expected):
+        assert _classify_intent(query) == expected
+
+    @pytest.mark.parametrize("query,expected", [
+        ("hi, give me PYQ for 2024", "pyq"),
+        ("hello can you explain photosynthesis", "explain"),
+        ("hey give me important questions", "important_questions"),
+    ])
+    def test_mixed_greeting_academic(self, query, expected):
+        assert _classify_intent(query) == expected
+
+    def test_empty_returns_general(self):
+        assert _classify_intent("") == "general"
+
+    def test_general_queries(self):
+        assert _classify_intent("what is DNA") == "general"
 
 
 class TestOutOfScopeDetection:

@@ -33,7 +33,7 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
-from prompts import _classify_question, _is_out_of_scope_response
+from prompts import _classify_intent, _is_out_of_scope_response
 from subject_router import build_search_scope
 from qa_engine import log_chat_message as _log_chat_message
 
@@ -135,7 +135,8 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             logger.error(f"Failed to fetch syllabus: {e}")
 
     # ── Internal-content-first: MongoDB RAG → web fallback ──────────────
-    _is_casual_sync = _classify_question(msg.message) == "casual"
+    _detected_intent = _classify_intent(msg.message)
+    _is_casual_sync = _detected_intent == "casual"
 
     if _is_casual_sync:
         web_results = []
@@ -155,6 +156,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             subject_id=msg.subject_id,
             subject_name=msg.subject_name,
             document_text=document_text,
+            intent=_detected_intent,
         )
         _ns_rag_quality = rag_ctx.get("quality", "none")
         if _ns_rag_quality in ("high", "tier0"):
@@ -239,7 +241,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     messages = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 
     # ── Cache check (Non-streaming) — Redis first, in-memory fallback ───────
-    is_casual = _classify_question(msg.message) == "casual"
+    is_casual = _detected_intent == "casual"
     cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
     _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
     answer = None
@@ -457,17 +459,16 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             return None
         return await supa_get_conversation(msg.conversation_id, user["id"])
 
-    _is_casual = _classify_question(msg.message) == "casual"
+    _stream_intent = _classify_intent(msg.message)
+    _is_casual = _stream_intent == "casual"
 
     if _is_casual:
-        # Casual chat: no web search, no RAG — just history
         web_results = []
         _sr_route = None
         raw_conv = await _fetch_history()
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
-        # Step 0: SubjectRouter — get curriculum-scoped query (Tier 0-3) + fetch history
         _sr_scoped_query, _sr_route = await build_search_scope(
             msg.message,
             board_name=ctx_board_name,
@@ -479,7 +480,8 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         rag_ctx, raw_conv = await asyncio.gather(
             resolve_rag_context(
                 msg.message, subject_id=msg.subject_id,
-                subject_name=msg.subject_name, document_text=document_text
+                subject_name=msg.subject_name, document_text=document_text,
+                intent=_stream_intent,
             ),
             _fetch_history(),
         )
@@ -608,7 +610,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             yield f"data: {json.dumps(_meta_event)}\n\n"
 
             # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
-            is_casual = _classify_question(msg.message) == "casual"
+            is_casual = _stream_intent == "casual"
             cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
             _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
             cached_answer = None
