@@ -403,7 +403,7 @@ def _detect_board_key(board_name: str) -> str:
     )
     if any(k in n for k in _degree_signals):
         return "degree"
-    return "degree"
+    return "unknown"
 
 
 def _resolve_stream_keys(stream_hint: str, paper_type: str, board_id: str) -> list[str]:

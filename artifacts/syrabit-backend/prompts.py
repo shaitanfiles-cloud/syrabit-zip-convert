@@ -54,6 +54,32 @@ _CONVERSATIONAL_SIGNALS = {
 }
 
 
+_OUT_OF_SCOPE_PHRASES = [
+    "outside the scope",
+    "out of scope",
+    "beyond the scope",
+    "not part of the curriculum",
+    "not covered in the curriculum",
+    "cannot help with",
+    "not related to",
+    "i'm designed to help with",
+    "i am designed to help with",
+    "falls outside",
+    "beyond my expertise",
+    "not within my scope",
+    "i specialize in",
+    "academic subjects only",
+    "curriculum-related",
+]
+
+
+def _is_out_of_scope_response(answer: str) -> bool:
+    if not answer:
+        return False
+    lower = answer[:500].lower()
+    return any(phrase in lower for phrase in _OUT_OF_SCOPE_PHRASES)
+
+
 _ACADEMIC_SHORT_RE = re.compile(
     r'^(?:'
     r'[A-Z]{2,6}'       # true all-caps abbreviations: DNA, ATP, RNA, RBC

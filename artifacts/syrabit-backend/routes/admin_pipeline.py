@@ -278,6 +278,140 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
     }
 
 
+@router.get("/admin/content/thin-chapters")
+async def admin_list_thin_chapters(
+    min_words: int = Query(default=500, description="Chapters below this word count are thin"),
+    admin: dict = Depends(get_admin_user),
+):
+    pipeline = [
+        {"$match": {"content": {"$exists": True, "$ne": ""}}},
+        {"$project": {
+            "id": 1, "title": 1, "subject_id": 1, "content": 1,
+            "needs_review": 1, "order_index": 1, "_id": 0,
+        }},
+    ]
+    chapters = await db.chapters.aggregate(pipeline).to_list(500)
+
+    thin = []
+    for ch in chapters:
+        wc = len((ch.get("content") or "").split())
+        if wc < min_words:
+            thin.append({
+                "id": ch.get("id"),
+                "title": ch.get("title", ""),
+                "subject_id": ch.get("subject_id", ""),
+                "word_count": wc,
+                "needs_review": ch.get("needs_review", False),
+            })
+    thin.sort(key=lambda x: x["word_count"])
+    return {"total": len(thin), "min_words": min_words, "chapters": thin}
+
+
+@router.post("/admin/content/regenerate-thin")
+async def admin_regenerate_thin_chapters(
+    min_words: int = Query(default=500, description="Regenerate chapters below this word count"),
+    limit: int = Query(default=10, description="Max chapters to regenerate per call"),
+    admin: dict = Depends(get_admin_user),
+):
+    pipeline = [
+        {"$match": {"content": {"$exists": True, "$ne": ""}}},
+        {"$project": {"id": 1, "title": 1, "subject_id": 1, "content": 1, "topics": 1, "_id": 0}},
+    ]
+    all_chapters = await db.chapters.aggregate(pipeline).to_list(500)
+
+    thin = [ch for ch in all_chapters if len((ch.get("content") or "").split()) < min_words]
+    thin.sort(key=lambda x: len((x.get("content") or "").split()))
+    thin = thin[:limit]
+
+    results = []
+    for chapter in thin:
+        chapter_id = chapter.get("id", "")
+        title = (chapter.get("title") or "").strip()
+        if not title:
+            results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
+            continue
+
+        subject = await db.subjects.find_one({"id": chapter.get("subject_id", "")}, {"_id": 0}) or {}
+        subject_name = subject.get("name", "")
+        topics = chapter.get("topics") or []
+        topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else f"  {title}"
+
+        prompt = f"""You are an expert academic content writer for Indian degree students (NEP/FYUGP).
+
+Generate detailed study notes for:
+**Chapter:** {title}
+**Subject:** {subject_name or "Degree Course"}
+
+**Topics to cover:**
+{topic_block}
+
+**INSTRUCTIONS:**
+- Write 800-1200 words of detailed, well-structured notes
+- Use ## headings for each topic, ### for subtopics
+- Include key definitions in **bold**, bullet points for key facts
+- End with a brief Summary section
+- Use markdown formatting throughout
+- Start directly with content, no preamble"""
+
+        try:
+            generated = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4000)
+            if generated and len(generated.split()) >= 200:
+                wc = len(generated.split())
+                update_fields = {
+                    "content": generated.strip(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if wc >= min_words:
+                    update_fields["needs_review"] = False
+                else:
+                    update_fields["needs_review"] = True
+                await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
+                try:
+                    await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"))
+                except Exception:
+                    pass
+                results.append({"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": wc})
+            else:
+                results.append({"chapter_id": chapter_id, "title": title, "status": "error", "reason": "AI returned too-short content"})
+        except Exception as e:
+            results.append({"chapter_id": chapter_id, "title": title, "status": "error", "reason": str(e)})
+
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    return {
+        "total_thin": len(thin),
+        "regenerated": ok_count,
+        "results": results,
+    }
+
+
+@router.get("/admin/content/needs-review")
+async def admin_needs_review_chapters(admin: dict = Depends(get_admin_user)):
+    chapters = await db.chapters.find(
+        {"needs_review": True},
+        {"_id": 0, "id": 1, "title": 1, "subject_id": 1, "content": 1}
+    ).to_list(100)
+    items = []
+    for ch in chapters:
+        items.append({
+            "id": ch.get("id"),
+            "title": ch.get("title", ""),
+            "subject_id": ch.get("subject_id", ""),
+            "word_count": len((ch.get("content") or "").split()),
+        })
+    return {"total": len(items), "chapters": items}
+
+
+@router.post("/admin/content/chapters/{chapter_id}/approve")
+async def admin_approve_chapter(chapter_id: str, admin: dict = Depends(get_admin_user)):
+    result = await db.chapters.update_one(
+        {"id": chapter_id},
+        {"$set": {"needs_review": False, "reviewed_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=404, detail="Chapter not found or already approved")
+    return {"chapter_id": chapter_id, "status": "approved"}
+
+
 @router.post("/admin/subjects/{subject_id}/sync-content-bulk")
 async def admin_sync_content_bulk(subject_id: str, admin: dict = Depends(get_admin_user)):
     """

@@ -25,23 +25,27 @@ __all__ = [
     "web_search_with_fallback",
 ]
 
-_HEADING_RE = re.compile(r'^#{1,4}\s+', re.MULTILINE)
+_HEADING_RE = re.compile(r'^(#{1,4})\s+(.+)$', re.MULTILINE)
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
 _CHUNK_TARGET = 600
 _CHUNK_MAX = 1200
 _CHUNK_MIN = 80
 _OVERLAP_SENTENCES = 2
+_VECTOR_SIM_THRESHOLD = 0.30
 
 def _split_into_sections(content: str) -> list[dict]:
-    parts = _HEADING_RE.split(content)
-    headings = _HEADING_RE.findall(content)
     sections = []
-    for i, part in enumerate(parts):
-        text = part.strip()
-        if not text:
-            continue
-        heading = headings[i - 1].strip().strip('#').strip() if i > 0 and i - 1 < len(headings) else ""
-        sections.append({"heading": heading, "text": text})
+    last_end = 0
+    current_heading = ""
+    for m in _HEADING_RE.finditer(content):
+        before = content[last_end:m.start()].strip()
+        if before:
+            sections.append({"heading": current_heading, "text": before})
+        current_heading = m.group(2).strip()
+        last_end = m.end()
+    trailing = content[last_end:].strip()
+    if trailing:
+        sections.append({"heading": current_heading, "text": trailing})
     if not sections and content.strip():
         sections.append({"heading": "", "text": content.strip()})
     return sections
@@ -65,29 +69,29 @@ def _merge_short_sections(sections: list[dict], target: int = _CHUNK_TARGET) -> 
 
 def _sentence_split_with_overlap(text: str, target: int = _CHUNK_TARGET, max_len: int = _CHUNK_MAX, overlap: int = _OVERLAP_SENTENCES) -> list[str]:
     sentences = _SENTENCE_SPLIT_RE.split(text)
+    sentences = [s for s in sentences if s.strip()]
     if not sentences:
         return [text] if text.strip() else []
     chunks = []
-    i = 0
-    while i < len(sentences):
+    start = 0
+    while start < len(sentences):
         current = []
         current_len = 0
-        while i < len(sentences) and current_len + len(sentences[i]) <= max_len:
-            current.append(sentences[i])
-            current_len += len(sentences[i]) + 1
-            i += 1
+        end = start
+        while end < len(sentences):
+            slen = len(sentences[end])
+            if current and current_len + slen + 1 > max_len:
+                break
+            current.append(sentences[end])
+            current_len += slen + (1 if current_len else 0)
+            end += 1
             if current_len >= target:
                 break
-        if not current and i < len(sentences):
-            current.append(sentences[i])
-            i += 1
         chunk_text = " ".join(current).strip()
         if chunk_text:
             chunks.append(chunk_text)
-        if overlap and i < len(sentences):
-            i = max(i - overlap, i - len(current) + 1) if len(current) > overlap else i
-            if i <= len(chunks) - 1:
-                i = max(i, len(chunks))
+        advance = max(1, len(current) - overlap)
+        start += advance
     return chunks
 
 async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None, chapter_title: str = None) -> list:
@@ -555,12 +559,11 @@ async def vector_rag_search(
                 })
 
         scored.sort(key=lambda x: -x["score"])
-        # 0.25 cosine threshold — filter out low-relevance noise before sending to AI
-        top = [r for r in scored if r["score"] >= 0.25][:top_k]
+        top = [r for r in scored if r["score"] >= _VECTOR_SIM_THRESHOLD][:top_k]
         logger.info(
             f"Vector RAG: query='{query[:40]}' → {len(top)} results "
-            f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}], threshold=0.25)" if top else
-            f"Vector RAG: query='{query[:40]}' → no results above threshold (0.25)"
+            f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}], threshold={_VECTOR_SIM_THRESHOLD})" if top else
+            f"Vector RAG: query='{query[:40]}' → no results above threshold ({_VECTOR_SIM_THRESHOLD})"
         )
         # Store in cache — future identical/similar queries skip the embed API call
         _vector_rag_cache[_vk] = top

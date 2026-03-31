@@ -33,7 +33,7 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
-from prompts import _classify_question
+from prompts import _classify_question, _is_out_of_scope_response
 from subject_router import build_search_scope
 from qa_engine import log_chat_message as _log_chat_message
 
@@ -689,9 +689,12 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             except Exception:
                 pass
 
-            # Fire background: save messages (credit already deducted before stream started)
-            if answer:
-                _credit_saved = True  # mark credit as legitimately consumed
+            if answer and _is_out_of_scope_response(answer) and rag_source_saved == "none":
+                logger.info(f"[GUARD] Out-of-scope response detected — refunding credit for user {user['id']}")
+                _credit_saved = False
+
+            if answer and (not _is_out_of_scope_response(answer) or rag_source_saved != "none"):
+                _credit_saved = True
                 asyncio.create_task(_persist_chat_turn(
                     conv_id, user["id"],
                     user_msg_saved, answer,
