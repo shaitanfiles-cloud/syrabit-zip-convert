@@ -30,7 +30,7 @@ export function EmptyState({ subject, scopedChapters, documentId, defaultPrompts
             ? 'Document loaded as primary source. Ask any question.'
             : subject
             ? `${scopedChapters.length} chapters loaded — syllabus-first answers.`
-            : 'Ask anything about your syllabus — I\'ll help you study.'
+            : ''
           }
         </p>
       </div>
