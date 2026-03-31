@@ -12,7 +12,8 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { getChunks, apiClient } from '@/utils/api';
+import { getChunks, apiClient, createShare } from '@/utils/api';
+import { Analytics } from '@/utils/analytics';
 import { useSubject, useChapters } from '@/hooks/useContent';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { toast } from 'sonner';
@@ -241,10 +242,21 @@ function BlogView({ subject, subjectId }) {
               <span className="flex items-center gap-1"><Hash size={11} />{headings.filter(h => h.level === 2).length} sections</span>
             )}
             <button
-              className="ml-auto flex items-center gap-1 transition-colors"
-              onClick={() => {
-                navigator.share?.({ title: post.title, url: window.location.href })
-                  .catch(() => {});
+              className="ml-auto flex items-center gap-1 transition-colors text-emerald-600 hover:text-emerald-500"
+              onClick={async () => {
+                const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
+                try {
+                  const res = await createShare(post.slug || post.id, post.title, window.location.pathname);
+                  const referralUrl = res.data.referral_url;
+                  try { Analytics.subjectShared(post.title, referralUrl, res.data.code); } catch {}
+                  const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
+                  const text = `📚 ${post.title} on Syrabit.ai!\n${shareUrl}`;
+                  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+                } catch {
+                  const fallback = `${window.location.origin}${window.location.pathname}?${utmParams}`;
+                  const text = `📚 ${post.title} on Syrabit.ai!\n${fallback}`;
+                  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+                }
               }}
             >
               <Share2 size={11} /> Share

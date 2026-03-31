@@ -10,6 +10,7 @@ class UserCreate(BaseModel):
     name: str
     email: EmailStr
     password: str
+    referral_code: Optional[str] = None
 
 
 class UserLogin(BaseModel):

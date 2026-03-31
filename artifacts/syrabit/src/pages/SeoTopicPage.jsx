@@ -1,9 +1,10 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import { Analytics } from '@/utils/analytics';
 import { BookOpen, ChevronRight, ArrowLeft, ArrowRight, FileText, HelpCircle,
-  Calculator, BookMarked, Home, Sparkles, GraduationCap, Lightbulb, List, Clock, ChevronDown } from 'lucide-react';
+  Calculator, BookMarked, Home, Sparkles, GraduationCap, Lightbulb, List, Clock, ChevronDown, Share2, Loader2 } from 'lucide-react';
+import { createShare } from '@/utils/api';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getSeoPage, getSeoPageTypes, getSeoRelated, getChapterBySlug } from '@/utils/api';
@@ -334,6 +335,31 @@ export default function SeoTopicPage() {
   const subjectPath = `/${board}/${classSlug}/${subjectSlug}`;
   const canonicalUrl = `https://syrabit.ai${basePath}${currentType !== 'notes' ? `/${currentType}` : ''}`;
 
+  const [sharing, setSharing] = useState(false);
+  const handleShare = useCallback(async () => {
+    if (sharing) return;
+    setSharing(true);
+    const subjectId = page?.subject_slug || subjectSlug;
+    const subjectName = page?.topic_title || topicSlug;
+    const sharePath = basePath;
+    const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
+    try {
+      const res = await createShare(subjectId, subjectName, sharePath);
+      const referralUrl = res.data.referral_url;
+      Analytics.subjectShared(subjectName, referralUrl, res.data.code);
+      const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
+      const text = `📚 ${subjectName} — ${page?.subject_name || ''} notes on Syrabit.ai!\n${shareUrl}`;
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+    } catch {
+      try { Analytics.subjectShared(subjectName, sharePath, 'error'); } catch {}
+      const fallback = `${window.location.origin}${sharePath}?${utmParams}`;
+      const text = `📚 ${subjectName} — ${page?.subject_name || ''} notes on Syrabit.ai!\n${fallback}`;
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+    } finally {
+      setSharing(false);
+    }
+  }, [sharing, page, subjectSlug, topicSlug, basePath]);
+
   const readTimeMin = useMemo(() => {
     if (!page?.word_count) return 0;
     return Math.max(1, Math.ceil(page.word_count / 200));
@@ -443,6 +469,14 @@ export default function SeoTopicPage() {
                 · Updated {new Date(page.updated_at || page.generated_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}
               </span>
             )}
+            <button
+              onClick={handleShare}
+              disabled={sharing}
+              className="ml-auto flex items-center gap-1 text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-50"
+            >
+              {sharing ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
+              Share
+            </button>
           </div>
         </div>
       </header>

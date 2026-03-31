@@ -57,8 +57,11 @@ export default function SignupPage() {
     }
     setLoading(true);
     try {
-      await signup(name, email, password);
+      const result = await signup(name, email, password);
       toast.success('Account created! Welcome to Syrabit.ai!');
+      if (result.referral_bonus > 0) {
+        toast.success(`🎉 Referral bonus! You earned ${result.referral_bonus} extra credits!`, { duration: 6000 });
+      }
       navigate('/onboarding');
     } catch (err) {
       setError(err.response?.data?.detail || 'Signup failed. Please try again.');

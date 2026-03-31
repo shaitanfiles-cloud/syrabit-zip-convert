@@ -320,7 +320,11 @@ async def lifespan(app):
             await db.shares.create_index("code", unique=True)
             await db.shares.create_index("subject_id")
             await db.shares.create_index("created_at")
-            logger.info("Shares collection indexes created/verified")
+            await db.referral_rewards.create_index(
+                [("new_user_id", 1), ("referral_code", 1)], unique=True
+            )
+            await db.referral_rewards.create_index("created_at")
+            logger.info("Shares/referral indexes created/verified")
     except Exception as e:
         logger.warning(f"Shares index creation skipped: {e}")
     _deps_mod._rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())

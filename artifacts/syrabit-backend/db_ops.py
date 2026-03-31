@@ -147,9 +147,10 @@ async def supa_insert_user(user: dict):
                     """INSERT INTO users (id, name, email, password_hash, plan, credits_used,
                        credits_limit, document_access, onboarding_done, is_admin, status,
                        bio, phone, avatar_url, saved_subjects, has_free_credits_issued,
-                       board_id, board_name, class_id, class_name, stream_id, stream_name, created_at)
+                       board_id, board_name, class_id, class_name, stream_id, stream_name,
+                       referred_by_code, referred_by_user_id, created_at)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,
-                               $17,$18,$19,$20,$21,$22,$23)
+                               $17,$18,$19,$20,$21,$22,$23,$24,$25)
                        ON CONFLICT (id) DO NOTHING""",
                     user.get("id",""), user.get("name",""), user.get("email",""),
                     user.get("password_hash",""), user.get("plan","free"),
@@ -161,6 +162,7 @@ async def supa_insert_user(user: dict):
                     user.get("board_id"), user.get("board_name"),
                     user.get("class_id"), user.get("class_name"),
                     user.get("stream_id"), user.get("stream_name"),
+                    user.get("referred_by_code"), user.get("referred_by_user_id"),
                     user.get("created_at","")
                 )
             _supa_mirror(lambda: supa.table("users").upsert(user).execute())
@@ -182,6 +184,7 @@ _ALLOWED_USER_COLUMNS = frozenset({
     "last_seen", "onboarding_done",
     "board_id", "board_name", "class_id", "class_name",
     "stream_id", "stream_name",
+    "referred_by_code", "referred_by_user_id",
 })
 
 _ALLOWED_CONV_COLUMNS = frozenset({

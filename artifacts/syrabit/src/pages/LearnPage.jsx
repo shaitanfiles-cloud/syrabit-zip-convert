@@ -213,22 +213,24 @@ export default function LearnPage() {
   const handleShare = async () => {
     if (sharing) return;
     setSharing(true);
+    const subjectId = doc?.linked_subject_id || doc?.subject_id || slug;
+    const subjectName = doc?.subject_name || doc?.title || slug;
+    const subjectPath = `/learn/${slug}`;
+    const fallbackUrl = `${window.location.origin}${subjectPath}`;
+    const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
     try {
-      const subjectId = doc?.linked_subject_id || doc?.subject_id || slug;
-      const subjectName = doc?.subject_name || doc?.title || slug;
-      const subjectPath = `/learn/${slug}`;
       const res = await createShare(subjectId, subjectName, subjectPath);
-      const referralUrl = res.data.referral_url;
+      const referralUrl = `${res.data.referral_url}`;
       const code = res.data.code;
       Analytics.subjectShared(subjectName, referralUrl, code);
-      const text = `📚 ${doc?.title || 'Study'} on Syrabit.ai — AI-powered notes & practice!\n${referralUrl}`;
+      const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
+      const text = `📚 ${doc?.title || 'Study'} on Syrabit.ai — AI-powered notes & practice!\n${shareUrl}`;
       window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-    } catch {
-      if (navigator.share) {
-        navigator.share({ title: doc?.title, url: window.location.href });
-      } else {
-        navigator.clipboard?.writeText(window.location.href);
-      }
+    } catch (err) {
+      try { Analytics.subjectShared(subjectName, fallbackUrl, 'error'); } catch {}
+      const shareUrl = `${fallbackUrl}?${utmParams}`;
+      const text = `📚 ${doc?.title || 'Study'} on Syrabit.ai — AI-powered notes & practice!\n${shareUrl}`;
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
     } finally {
       setSharing(false);
     }

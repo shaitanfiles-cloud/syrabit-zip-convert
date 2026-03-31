@@ -49,15 +49,18 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
     e.preventDefault();
     if (sharing) return;
     setSharing(true);
+    const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
     try {
       const res = await createShare(sub.id, sub.name, subjectLandingPath);
       const referralUrl = res.data.referral_url;
       const code = res.data.code;
       Analytics.subjectShared(sub.name, referralUrl, code);
-      const text = `📚 Study ${sub.name} on Syrabit.ai — AI-powered notes & practice for AssamBoard students!\n${referralUrl}`;
+      const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
+      const text = `📚 Study ${sub.name} on Syrabit.ai — AI-powered notes & practice for AssamBoard students!\n${shareUrl}`;
       window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-    } catch {
-      const fullUrl = `https://syrabit.ai${subjectLandingPath}`;
+    } catch (err) {
+      try { Analytics.subjectShared(sub.name, subjectLandingPath, 'error'); } catch {}
+      const fullUrl = `${window.location.origin}${subjectLandingPath}?${utmParams}`;
       const text = `📚 Study ${sub.name} on Syrabit.ai — AI-powered notes & practice for AssamBoard students!\n${fullUrl}`;
       window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
     } finally {

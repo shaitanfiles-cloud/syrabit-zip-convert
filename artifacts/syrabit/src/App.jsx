@@ -88,8 +88,15 @@ const PageFallback = () => (
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
-  // Initialise Google Analytics 4 once on mount (no-op if env var not set)
   useEffect(() => { initGA4(); }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const ref = params.get('ref');
+    if (ref && /^[a-z0-9]{5,20}$/.test(ref)) {
+      localStorage.setItem('syrabit_ref', ref);
+    }
+  }, []);
 
   // Nuke Emergent badge completely — fast interval + all hiding properties
   useEffect(() => {
