@@ -43,7 +43,7 @@ redis>=5.0.0
 
 PyPDF2==3.0.1
 razorpay>=1.4.0
-Pillow>=10.0.0
+Pillow>=10.2.0
 duckduckgo-search>=6.1.0
 pywebpush>=2.0.0
 resend>=2.0.0

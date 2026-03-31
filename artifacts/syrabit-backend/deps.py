@@ -198,11 +198,14 @@ async def _init_pg_pool():
         pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=10, max_size=50)
         async with pg_pool.acquire() as conn:
             await conn.execute(_PG_INIT_SQL)
-            for col in ("referred_by_code TEXT", "referred_by_user_id TEXT"):
-                try:
-                    await conn.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col}")
-                except Exception:
-                    pass
+            try:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_code TEXT")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_user_id TEXT")
+            except Exception:
+                pass
         logging.getLogger(__name__).info("Replit PostgreSQL pool ready — tables created/verified")
     except Exception as _pg_err:
         pg_pool = None

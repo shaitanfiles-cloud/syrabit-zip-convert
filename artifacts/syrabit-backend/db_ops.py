@@ -196,6 +196,10 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
     "registrations_open", "maintenance_mode", "app_name", "tagline",
 })
 
+def _quote_ident(name: str) -> str:
+    """Double-quote a SQL identifier to prevent injection (defense-in-depth on top of allowlists)."""
+    return '"' + name.replace('"', '""') + '"'
+
 async def supa_update_user(uid: str, updates: dict):
     _invalidate_user_cache(uid)  # always bust cache before touching DB
     if _deps_mod.pg_pool and updates:
@@ -206,11 +210,12 @@ async def supa_update_user(uid: str, updates: dict):
             cols = []
             vals = []
             for i, (k, v) in enumerate(updates.items(), start=1):
+                qi = _quote_ident(k)
                 if k == "saved_subjects":
-                    cols.append(f"{k} = ${i}::jsonb")
+                    cols.append(f"{qi} = ${i}::jsonb")
                     vals.append(json.dumps(v))
                 else:
-                    cols.append(f"{k} = ${i}")
+                    cols.append(f"{qi} = ${i}")
                     vals.append(v)
             vals.append(uid)
             sql = f"UPDATE users SET {', '.join(cols)} WHERE id = ${len(vals)}"
@@ -520,7 +525,7 @@ async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
                 raise ValueError(f"supa_update_conversation: disallowed column(s): {unknown}")
             if isinstance(u.get("messages"), list): u["messages"] = json.dumps(u["messages"])
             if u:
-                cols = [f"{k} = ${i}" for i, k in enumerate(u.keys(), start=1)]
+                cols = [f"{_quote_ident(k)} = ${i}" for i, k in enumerate(u.keys(), start=1)]
                 vals = list(u.values()) + [conv_id, uid]
                 sql = f"UPDATE conversations SET {', '.join(cols)} WHERE id = ${len(vals)-1} AND user_id = ${len(vals)}"
                 async with _deps_mod.pg_pool.acquire() as conn:
@@ -627,7 +632,7 @@ async def supa_update_settings(updates: dict):
             unknown = set(updates) - _ALLOWED_SETTINGS_COLUMNS
             if unknown:
                 raise ValueError(f"supa_update_settings: disallowed column(s): {unknown}")
-            cols = [f"{k} = ${i}" for i, k in enumerate(updates.keys(), start=1)]
+            cols = [f"{_quote_ident(k)} = ${i}" for i, k in enumerate(updates.keys(), start=1)]
             vals = list(updates.values())
             sql = f"UPDATE app_settings SET {', '.join(cols)} WHERE id = 1"
             async with _deps_mod.pg_pool.acquire() as conn:
