@@ -1,8 +1,10 @@
 """Syrabit.ai — Utility functions: bot detection, device type, country, keywords, etc."""
-import re, time as _time_mod, logging, asyncio, hashlib
+import re, time as _time_mod, logging, asyncio, hashlib, uuid
 from typing import Optional
+from datetime import datetime, timezone, timedelta
 import httpx
 from config import SLOW_QUERY_THRESHOLD_MS
+from deps import db, is_mongo_available
 
 logger = logging.getLogger(__name__)
 

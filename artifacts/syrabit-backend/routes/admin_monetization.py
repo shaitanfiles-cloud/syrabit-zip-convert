@@ -1,5 +1,5 @@
 """Syrabit.ai — Payments, plan config, API config, webhooks, credit topup"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod, hmac
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -33,6 +33,7 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
+import email_templates
 
 logger = logging.getLogger(__name__)
 

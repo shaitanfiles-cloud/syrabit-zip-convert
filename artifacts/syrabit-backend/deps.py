@@ -22,6 +22,7 @@ try:
     from supabase import create_client as _create_supa
 except ImportError:
     _create_supa = None
+from fastapi import HTTPException
 from passlib.context import CryptContext
 from fastapi.security import HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorClient

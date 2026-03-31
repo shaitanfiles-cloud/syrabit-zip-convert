@@ -33,6 +33,7 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
+import email_templates
 
 logger = logging.getLogger(__name__)
 

@@ -32,6 +32,7 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
+from routes.content import get_boards, get_classes, get_streams, get_subjects
 
 logger = logging.getLogger(__name__)
 

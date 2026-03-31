@@ -48,6 +48,7 @@ from seo_engine import _md_to_html
 from utils import *
 from analytics_helpers import *
 import ga4_client
+import vertex_services
 
 logger = logging.getLogger(__name__)
 

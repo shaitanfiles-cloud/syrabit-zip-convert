@@ -26,7 +26,7 @@ from cache import *
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     create_token, decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user_optional, JWTError,
 )
 from db_ops import *
 from llm import call_llm_api, call_llm_api_stream
