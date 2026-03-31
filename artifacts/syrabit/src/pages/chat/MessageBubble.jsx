@@ -153,7 +153,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           {courseLabel && (
                             <>
                               <span className="text-[11px] text-muted-foreground/60">·</span>
-                              <span className="text-[11px] text-muted-foreground/60">
+                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>
                                 {courseLabel}
                               </span>
                             </>
