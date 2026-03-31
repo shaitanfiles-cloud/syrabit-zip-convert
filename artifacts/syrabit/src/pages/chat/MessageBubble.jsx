@@ -1,6 +1,6 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, BookOpen } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe } from 'lucide-react';
 import { log } from '@/utils/logger';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
@@ -184,42 +184,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
                     </div>
                   )}
-                  {msg.sources && msg.sources.length > 0 && (() => {
-                    const seen = new Set();
-                    const unique = msg.sources.filter((src) => {
-                      const label = (src.title || src.slug || '').replace(/\s*—\s*.+$/, '').trim();
-                      if (!label || seen.has(label)) return false;
-                      seen.add(label);
-                      return true;
-                    });
-                    if (!unique.length) return null;
-                    return (
-                      <div className="mt-3 rounded-xl overflow-hidden" style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.12)', maxWidth: '100%' }}>
-                        <div className="px-3 py-2">
-                          <div className="flex items-center gap-1.5 mb-1.5">
-                            <BookOpen size={13} style={{ color: '#a78bfa' }} />
-                            <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: '#a78bfa' }}>Sources</span>
-                          </div>
-                          <div className="flex flex-wrap gap-1.5">
-                            {unique.map((src, i) => {
-                              const label = (src.title || src.slug || '').replace(/\s*—\s*.+$/, '').trim();
-                              const url = src.url || '';
-                              return (
-                                <button
-                                  key={i}
-                                  onClick={() => url && navigate(url)}
-                                  className={`text-[12px] px-2 py-1 rounded-lg transition-colors ${url ? 'cursor-pointer hover:bg-primary/15' : 'cursor-default'}`}
-                                  style={{ background: 'rgba(139,92,246,0.1)', color: 'hsl(var(--foreground))', border: '1px solid rgba(139,92,246,0.15)' }}
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
                   <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     {timeStr && (
                       <span className="text-[11px] text-muted-foreground">{timeStr}</span>
