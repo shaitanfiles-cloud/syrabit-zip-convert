@@ -278,7 +278,7 @@ export default function ChatPage() {
       } else { setConversationId(newConvId); }
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
-          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, rag_board_name: ragBoardName, rag_class_name: ragClassName, rag_stream_name: ragStreamName, rag_topic_name: ragTopicName, ctx_subject_name: subject?.name || null, sources: libSources }
+          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, rag_board_name: ragBoardName, rag_class_name: ragClassName, rag_stream_name: ragStreamName, rag_topic_name: ragTopicName, ctx_subject_name: subject?.name || null, ctx_subject_icon: subject?.icon || null, ctx_subject_gradient: subject?.gradient || null, sources: libSources }
           : m
       ));
       setSyncState('idle');

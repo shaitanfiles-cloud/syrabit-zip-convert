@@ -1,6 +1,6 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, ExternalLink, BookOpen, FileText, Globe } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe } from 'lucide-react';
 import { log } from '@/utils/logger';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
@@ -110,6 +110,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const boardLabel = msg.rag_board_name || null;
               const classLabel = msg.rag_class_name || null;
               const subjectUrl = msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null;
+              const subjectIcon = msg.ctx_subject_icon || '📚';
               const handleCardNav = () => {
                 if (!subjectUrl) return;
                 navigate(subjectUrl);
@@ -118,71 +119,93 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const isWeb = msg.rag_source === 'web';
               const hasContext = boardLabel || subjectLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
 
-              const pills = [];
-              if (boardLabel) pills.push(boardLabel);
-              if (classLabel) pills.push(classLabel);
-              if (courseLabel) pills.push(courseLabel);
-
-              let sourceIcon = <BookOpen size={16} style={{ color: '#4ade80' }} />;
-              let sourceTitle = subjectLabel;
-              let sourceBg = 'rgba(34,197,94,0.08)';
-              let sourceBorder = 'rgba(34,197,94,0.18)';
-              let sourceColor = '#4ade80';
-              let clickable = !!subjectUrl;
-
-              if (isDocument) {
-                sourceIcon = <FileText size={16} style={{ color: '#a78bfa' }} />;
-                sourceTitle = 'Uploaded Document';
-                sourceBg = 'rgba(139,92,246,0.08)';
-                sourceBorder = 'rgba(139,92,246,0.18)';
-                sourceColor = '#a78bfa';
-                clickable = false;
-              } else if (isWeb) {
-                sourceIcon = <Globe size={16} style={{ color: '#60a5fa' }} />;
-                sourceTitle = 'Web Search';
-                sourceBg = 'rgba(59,130,246,0.08)';
-                sourceBorder = 'rgba(59,130,246,0.18)';
-                sourceColor = '#60a5fa';
-                clickable = false;
-              }
+              const GRAD_MAP = {
+                math:      ['#4f46e5', '#7c3aed'],
+                physics:   ['#2563eb', '#0891b2'],
+                chemistry: ['#059669', '#0d9488'],
+                biology:   ['#16a34a', '#15803d'],
+                arts:      ['#d97706', '#b45309'],
+                science:   ['#7c3aed', '#4f46e5'],
+              };
+              const gradKey = msg.ctx_subject_gradient || 'arts';
+              const thumbColors = GRAD_MAP[gradKey] || GRAD_MAP.arts;
 
               return (
                 <>
-                  {hasContext && sourceTitle && (
+                  {hasContext && subjectLabel && !isDocument && !isWeb && (
                     <div
-                      onClick={clickable ? handleCardNav : undefined}
-                      className={`flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl ${clickable ? 'cursor-pointer hover:opacity-85 transition-opacity' : ''}`}
+                      onClick={subjectUrl ? handleCardNav : undefined}
+                      className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
                       style={{
-                        background: sourceBg,
-                        border: `1px solid ${sourceBorder}`,
+                        background: 'var(--card, rgba(20,20,30,0.9))',
+                        border: '1px solid rgba(139,92,246,0.10)',
                         maxWidth: 'fit-content',
+                        minWidth: '220px',
                       }}
-                      role={clickable ? 'link' : undefined}
-                      aria-label={clickable ? `View ${sourceTitle}` : undefined}
+                      role={subjectUrl ? 'link' : undefined}
+                      aria-label={subjectUrl ? `View ${subjectLabel}` : undefined}
                     >
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: `${sourceColor}18` }}>
-                        {sourceIcon}
-                      </div>
-                      <div className="flex flex-col gap-0.5 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[13px] font-bold text-foreground truncate" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                            {sourceTitle}
-                          </span>
-                          {clickable && <ExternalLink size={11} style={{ color: sourceColor, flexShrink: 0 }} />}
+                      <div className="flex items-start gap-3 px-3 py-2.5">
+                        <div
+                          className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+                          style={{
+                            background: `linear-gradient(135deg, ${thumbColors[0]}30, ${thumbColors[1]}20)`,
+                            border: `1px solid ${thumbColors[0]}30`,
+                          }}
+                        >
+                          {subjectIcon}
                         </div>
-                        {pills.length > 0 && (
-                          <div className="flex items-center gap-1 flex-wrap">
-                            {pills.map((p, i) => (
-                              <span key={i} className="flex items-center gap-1">
-                                {i > 0 && <span className="text-[9px]" style={{ color: 'rgba(255,255,255,0.25)' }}>·</span>}
-                                <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-md" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.55)' }}>
-                                  {p}
-                                </span>
+                        <div className="min-w-0 flex-1">
+                          <h4
+                            className="text-foreground font-bold leading-tight truncate"
+                            style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}
+                          >
+                            {subjectLabel}
+                          </h4>
+                          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1">
+                            {boardLabel && (
+                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))' }}>
+                                {boardLabel}
                               </span>
-                            ))}
+                            )}
+                            {classLabel && (
+                              <span className="text-[11px] text-muted-foreground">
+                                {classLabel}
+                              </span>
+                            )}
+                            {courseLabel && (
+                              <>
+                                <span className="text-[11px] text-muted-foreground/60">·</span>
+                                <span className="text-[11px] text-muted-foreground/60">
+                                  {courseLabel}
+                                </span>
+                              </>
+                            )}
                           </div>
-                        )}
+                        </div>
                       </div>
+                    </div>
+                  )}
+                  {hasContext && isDocument && (
+                    <div
+                      className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl"
+                      style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.18)', maxWidth: 'fit-content' }}
+                    >
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(167,139,250,0.15)' }}>
+                        <FileText size={16} style={{ color: '#a78bfa' }} />
+                      </div>
+                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Uploaded Document</span>
+                    </div>
+                  )}
+                  {hasContext && isWeb && (
+                    <div
+                      className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl"
+                      style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.18)', maxWidth: 'fit-content' }}
+                    >
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(96,165,250,0.15)' }}>
+                        <Globe size={16} style={{ color: '#60a5fa' }} />
+                      </div>
+                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
                     </div>
                   )}
                   <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
