@@ -239,6 +239,10 @@ class SyllabusEmbedder:
                 logger.warning(f"Embed failed for {chapter_title[:40]}: {exc}")
                 vec = None
 
+            try:
+                from vertex_services import _EMBED_MODEL as _current_embed_model
+            except ImportError:
+                _current_embed_model = "unknown"
             doc = {
                 "chapter_id":     ch_id,
                 "subject_id":     subj_id,
@@ -250,6 +254,7 @@ class SyllabusEmbedder:
                 "chapter_number": chapter.get("chapter_number", 0),
                 "embed_text":     embed_text_input,
                 "embedding":      vec,
+                "embedding_model": _current_embed_model,
                 "status":         "active",
                 "created_at":     __import__("datetime").datetime.utcnow().isoformat(),
             }
@@ -314,6 +319,10 @@ class SyllabusEmbedder:
                     logger.warning(f"Embed (mongo) failed for {chapter_title[:40]}: {exc}")
                     vec = None
 
+                try:
+                    from vertex_services import _EMBED_MODEL as _current_embed_model2
+                except ImportError:
+                    _current_embed_model2 = "unknown"
                 doc = {
                     "chapter_id":     ch_id,
                     "subject_id":     subj_id,
@@ -325,6 +334,7 @@ class SyllabusEmbedder:
                     "chapter_number": chapter.get("chapter_number", 0),
                     "embed_text":     embed_text_input,
                     "embedding":      vec,
+                    "embedding_model": _current_embed_model2,
                     "description":    description,
                     "topics":         topics,
                     "status":         "active",

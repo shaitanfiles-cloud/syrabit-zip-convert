@@ -262,8 +262,11 @@ class SyllabusLinker:
         slug = _slugify(entry.subject_name)
         doc = await self._db.subjects.find_one({"stream_id": stream_id, "slug": slug})
         if doc:
-            # Patch missing navigation slugs on existing docs
             missing = {}
+            if not doc.get("board_id") and ctx.get("board_id"):
+                missing["board_id"] = ctx["board_id"]
+            if not doc.get("class_id") and ctx.get("class_id"):
+                missing["class_id"] = ctx["class_id"]
             if not doc.get("board_slug") and ctx.get("board_slug"):
                 missing["board_slug"] = ctx["board_slug"]
             if not doc.get("class_slug") and ctx.get("class_slug"):
@@ -293,6 +296,8 @@ class SyllabusLinker:
         new_id = str(uuid.uuid4())
         await self._db.subjects.insert_one({
             "id": new_id, "stream_id": stream_id,
+            "board_id": ctx.get("board_id", ""),
+            "class_id": ctx.get("class_id", ""),
             "name": entry.subject_name, "slug": slug,
             "description": f"{entry.subject_name} — {entry.class_year} {entry.paper_type.upper()}",
             "tags": entry.topics[:5],
@@ -305,11 +310,9 @@ class SyllabusLinker:
             "status": "published",
             "source": "pdf_import",
             "nep": True,
-            # Navigation slugs for chapter deep-links
             "board_slug": ctx.get("board_slug", ""),
             "class_slug": ctx.get("class_slug", ""),
             "stream_slug": stream_slug,
-            # Display context
             "boardId": ctx.get("board_id", ""),
             "boardName": ctx.get("board_name", ""),
             "className": ctx.get("class_name", ""),

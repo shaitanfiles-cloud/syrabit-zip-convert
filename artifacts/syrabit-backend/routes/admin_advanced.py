@@ -790,68 +790,89 @@ def _get_extract_prompt(board: str, paper_type: str = "", stream: str = "") -> s
 
 _CHAPTER_CONTENT_PROMPT_DEGREE = """You are an expert academic content writer for degree-level students in Assam, India (NEP / FYUGP curriculum).
 
-Generate comprehensive educational notes (Markdown format, 600–1000 words) for:
+Generate comprehensive, exam-ready study notes (Markdown format, **800–1200 words minimum**) for:
 Subject: {subject_name}
-Chapter: {chapter_title}
-Topics covered: {topics}
+Chapter/Unit: {chapter_title}
+Topics to cover: {topics}
 Board/Semester: {board_semester}
 
-Structure the content as:
+Structure the content EXACTLY as:
 ## {chapter_title}
-### Introduction
-(2-3 paragraphs introducing the chapter)
 
-### Key Concepts
-(Define and explain each major concept)
+### Introduction
+(2-3 paragraphs introducing the chapter — why this topic matters, its scope, and relevance to Assam/Northeast India)
+
+### Key Concepts & Definitions
+(Define EVERY important term. Use bold for terms. Give 2-3 sentence explanations per concept with real-world examples.)
 
 ### {topic_sections}
-(One ### section per major topic — explain thoroughly with examples)
+(One ### section per topic listed above. Each section MUST be 100-200 words minimum. Include:
+  - Clear explanation with examples
+  - Real-world applications, especially from Assam/NE India context
+  - Important facts, data, or case studies
+  - Diagrams or process descriptions where applicable)
+
+### Important Questions (Previous Year Pattern)
+(Write 6-10 likely exam questions: mix of 2-mark short, 5-mark descriptive, and 10-mark long-answer questions with brief answer hints)
 
 ### Summary
-(Bullet-point summary of key takeaways)
+(Bullet-point summary of 8-12 key takeaways from this chapter)
 
-Rules:
+CRITICAL Rules:
+- You MUST write at least 800 words of actual educational content — shorter responses are unacceptable
 - Write for undergraduate students (degree level, NEP FYUGP)
-- Use clear, simple language
-- Include real examples from Assam/Northeast India where applicable
-- Each concept must be fully explained
-- Do NOT use placeholder text — write actual educational content
-- Return ONLY the markdown content, no preamble
+- Use clear, simple language; explain jargon when first introduced
+- Include real examples from Assam/Northeast India where applicable (e.g., Kaziranga for ecology, Brahmaputra for geography, tea gardens for economics)
+- Each concept must be FULLY explained — do not write one-line summaries
+- Do NOT use placeholder text like "Content for X" — write actual educational content
+- Include specific facts, dates, statistics, and named examples
+- Return ONLY the markdown content, no preamble or meta-commentary
 """.strip()
 
 _CHAPTER_CONTENT_PROMPT_SCHOOL = """You are an expert educational content writer creating study notes for {board_label} students in Assam, India.
 
-Generate comprehensive study notes (Markdown format, 600–1000 words) for:
+Generate comprehensive, exam-ready study notes (Markdown format, **800–1200 words minimum**) for:
 Subject: {subject_name}
 Chapter: {chapter_title}
-Topics covered: {topics}
+Topics to cover: {topics}
 Class/Board: {board_semester}
 
-Structure the content as:
+Structure the content EXACTLY as:
 ## {chapter_title}
+
 ### Introduction
-(2-3 paragraphs introducing the chapter in simple language)
+(2-3 paragraphs introducing the chapter in simple language — why this topic matters and how it connects to daily life)
 
 ### Key Concepts & Definitions
-(Define and explain each major concept clearly)
+(Define EVERY important term in bold. Give 2-3 sentence explanations per concept with simple examples a student can relate to.)
 
 ### {topic_sections}
-(One ### section per major topic — explain with examples, diagrams descriptions)
+(One ### section per topic listed above. Each section MUST be 100-200 words minimum. Include:
+  - Clear explanation with relatable examples
+  - Real-world applications from Assam/NE India context
+  - Important facts, data, named examples
+  - Diagrams or process descriptions where applicable)
 
 ### Important Questions (Previous Year Pattern)
-(5-8 likely exam questions based on Assamboard pattern)
+(Write 8-10 likely exam questions based on Assamboard pattern:
+  - 3 short-answer questions (1-2 marks) with brief answers
+  - 4 descriptive questions (3-5 marks) with answer hints
+  - 3 long-answer questions (7-10 marks) with key points to cover)
 
 ### Summary
-(Bullet-point summary of key takeaways)
+(Bullet-point summary of 8-12 key takeaways from this chapter)
 
-Rules:
+CRITICAL Rules:
+- You MUST write at least 800 words of actual educational content — shorter responses are unacceptable
 - Write for {level_desc}
 - Use clear, simple language appropriate for the level
-- Include real examples from Assam/Northeast India where applicable
-- Cover NCERT + Assamboard syllabus points
+- Include real examples from Assam/Northeast India where applicable (Kaziranga, Brahmaputra, tea gardens, Bihu, etc.)
+- Cover NCERT + Assamboard syllabus points thoroughly
 - Include exam-oriented tips and important definitions
-- Do NOT use placeholder text — write actual educational content
-- Return ONLY the markdown content, no preamble
+- Each concept must be FULLY explained — do not write one-line summaries
+- Do NOT use placeholder text like "Content for X" — write actual educational content
+- Include specific facts, dates, statistics, and named examples
+- Return ONLY the markdown content, no preamble or meta-commentary
 """.strip()
 
 def _get_content_prompt(board: str) -> str:
@@ -896,11 +917,11 @@ async def _agentic_generate_chapter_content(
     try:
         result = await slm_pool.complete(
             messages=[
-                {"role": "system", "content": "You are a precise educational content writer. Write structured, factual academic notes."},
+                {"role": "system", "content": "You are an expert educational content writer specializing in Assam board curricula. Write detailed, exam-ready study notes with real examples. Every chapter must have at least 800 words of actual content."},
                 {"role": "user",   "content": prompt},
             ],
-            max_tokens=1800,
-            temperature=0.1,
+            max_tokens=4000,
+            temperature=0.2,
             task_hint="content_gen",
         )
         return (result or "").strip()
@@ -1127,8 +1148,8 @@ async def agentic_syllabus_run(
                 "subject_ids":   subject_ids,
             })
 
-            # ── 2b. For each chapter: generate content → chunk → embed ────────
             chap_chunks_total = 0
+            subject_embedded = 0
             all_chapter_ids: list[str] = []
 
             # Fetch chapters just created by linker so we have real chapter_ids
@@ -1192,6 +1213,7 @@ async def agentic_syllabus_run(
                         content=content,
                         subject_id=subject_ids[0] if subject_ids else None,
                         geo_tags=geo_tags,
+                        chapter_title=ch_title,
                     )
                     chap_chunks_total += len(chunk_ids)
                     all_chapter_ids.append(chapter_id)
@@ -1205,6 +1227,7 @@ async def agentic_syllabus_run(
                     embed_ok = await _embed_and_store_chapter(chapter_id, content, ch_title)
                     if embed_ok:
                         total_embedded += 1
+                        subject_embedded += 1
                     yield _sse("chapter_embedded", {"chapter": ch_title, "ok": embed_ok})
                 except Exception as ee:
                     yield _sse("chapter_embedded", {"chapter": ch_title, "ok": False})
@@ -1287,11 +1310,12 @@ async def agentic_syllabus_run(
                 )
             yield _sse("seo_tagged", {"subject": subject_name, "geo_phrase": geo_phrase})
 
-            # ── 2d. Save import record ────────────────────────────────────────
             await db.syllabus_pdf_imports.insert_one({
+                "id":                 str(uuid.uuid4()),
                 "import_id":          import_id,
                 "filename":           filename,
                 "paper_type":         paper_type,
+                "board":              board,
                 "board_name":         board_disp,
                 "class_name":         class_disp,
                 "class_year":         entry.class_year,
@@ -1299,6 +1323,10 @@ async def agentic_syllabus_run(
                 "subject_name":       subject_name,
                 "course_code":        entry.course_code,
                 "credits":            entry.credits,
+                "total_subjects":     1,
+                "total_chapters":     n_chapters,
+                "total_chunks":       chap_chunks_total,
+                "total_embedded":     subject_embedded,
                 "chapters":           [ch["title"] for ch in chapter_details],
                 "chapter_details":    chapter_details,
                 "topics":             entry.topics,

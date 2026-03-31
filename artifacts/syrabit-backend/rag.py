@@ -25,7 +25,7 @@ __all__ = [
     "web_search_with_fallback",
 ]
 
-async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None) -> list:
+async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None, chapter_title: str = None) -> list:
     """
     Automatically split chapter content into searchable chunks.
     
@@ -41,8 +41,9 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
     if not content or len(content.strip()) < 100:
         logger.warning(f"Content too short for chunking (chapter {chapter_id}): {len(content)} chars")
         return []
-    
-    # Clean content
+
+    old_chunk_ids = [doc["_id"] async for doc in db.chunks.find({"chapter_id": chapter_id}, {"_id": 1})]
+
     content = content.strip()
     
     # Split by double newlines (paragraphs) or single newlines if no double
@@ -101,6 +102,7 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
                             "id": str(uuid.uuid4()),
                             "chapter_id": chapter_id,
                             "subject_id": subject_id,
+                            "chapter_title": chapter_title or "",
                             "content": chunk_text,
                             "content_type": "notes",
                             "chunk_index": len(chunks_created),
@@ -116,7 +118,6 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
                         chunks_created.append(chunk["id"])
                     sub_chunk = []
             
-            # Add remaining
             if sub_chunk:
                 chunk_text = ' '.join(sub_chunk).strip()
                 if len(chunk_text) >= 50:
@@ -125,6 +126,7 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
                         "id": str(uuid.uuid4()),
                         "chapter_id": chapter_id,
                         "subject_id": subject_id,
+                        "chapter_title": chapter_title or "",
                         "content": chunk_text,
                         "content_type": "notes",
                         "chunk_index": len(chunks_created),
@@ -145,6 +147,7 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
                 "id": str(uuid.uuid4()),
                 "chapter_id": chapter_id,
                 "subject_id": subject_id,
+                "chapter_title": chapter_title or "",
                 "content": para_clean,
                 "content_type": "notes",
                 "chunk_index": i,
@@ -159,6 +162,10 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
             await db.chunks.insert_one(chunk)
             chunks_created.append(chunk["id"])
     
+    if chunks_created and old_chunk_ids:
+        deleted = await db.chunks.delete_many({"_id": {"$in": old_chunk_ids}})
+        logger.info(f"Dedup: removed {deleted.deleted_count} old chunks for chapter {chapter_id}")
+
     logger.info(f"Auto-chunked chapter {chapter_id}: {len(chunks_created)} chunks from {len(content)} chars")
     return chunks_created
 
