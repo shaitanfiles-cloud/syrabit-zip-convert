@@ -604,6 +604,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')
+                _meta_event['content_card_subject'] = content_card_meta.get('subject_name', '')
             yield f"data: {json.dumps(_meta_event)}\n\n"
 
             # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
