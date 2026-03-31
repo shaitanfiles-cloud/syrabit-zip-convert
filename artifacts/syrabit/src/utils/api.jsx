@@ -6,10 +6,29 @@ export const API_BASE = `${BACKEND_URL}/api`;
 
 const authConfig = () => ({ withCredentials: true });
 
-// Global 401 interceptor — redirect admin to login on session expiry
+const RETRY_CODES = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 1000;
+
 axios.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const config = error.config;
+    if (
+      config &&
+      !config._retryCount &&
+      error.response &&
+      RETRY_CODES.has(error.response.status) &&
+      (!config.method || config.method.toLowerCase() === 'get')
+    ) {
+      config._retryCount = (config._retryCount || 0) + 1;
+      if (config._retryCount <= MAX_RETRIES) {
+        const delay = RETRY_DELAY_MS * config._retryCount;
+        await new Promise(r => setTimeout(r, delay));
+        return axios(config);
+      }
+    }
+
     if (error.response?.status === 401) {
       const isAdminRoute = window.location.pathname.startsWith('/admin') &&
         !window.location.pathname.startsWith('/admin/login');
@@ -396,3 +415,12 @@ export const createShare = (subjectId, subjectName, subjectPath) =>
 
 export const adminGetShareAnalytics = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/shares?days=${days}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminIntelligenceOverview = (token) =>
+  axios.get(`${API_BASE}/admin/intelligence/overview`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminContentAutoHeal = (token) =>
+  axios.post(`${API_BASE}/admin/content/auto-heal`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminContentVersionHistory = (token, chapterId) =>
+  axios.get(`${API_BASE}/admin/content/version-history/${chapterId}`, { headers: adminHeaders(token), withCredentials: true });

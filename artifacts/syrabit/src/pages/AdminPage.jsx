@@ -10,7 +10,7 @@ import {
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, Globe,
-  Crown, Cpu, Layers, Zap,
+  Crown, Cpu, Layers, Zap, BarChart2,
 } from 'lucide-react';
 import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
@@ -35,8 +35,8 @@ import AdminSeoManager       from '@/components/admin/AdminSeoManager';
 import AdminMonetization     from '@/components/admin/AdminMonetization';
 import AdminVertexPanel      from '@/components/admin/AdminVertexPanel';
 import AdminAutomation       from '@/components/admin/AdminAutomation';
+import AdminIntelligence     from '@/components/admin/AdminIntelligence';
 
-// ── Section registry ──────────────────────────────────────────────────────────
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
   { id: 'roadmap',       icon: GitBranch,       label: 'Roadmap',           group: 'main'     },
@@ -49,6 +49,7 @@ const SECTIONS = [
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
   { id: 'monetization',  icon: Crown,           label: 'Monetization',      group: 'insights' },
   { id: 'plans',         icon: CreditCard,      label: 'Plans & Credits',   group: 'insights' },
+  { id: 'intelligence',  icon: BarChart2,       label: 'Intelligence',      group: 'insights' },
   { id: 'notifications', icon: Bell,            label: 'Notifications',     group: 'comms'    },
   { id: 'apiconfig',     icon: Key,             label: 'API Config',        group: 'system'   },
   { id: 'googleauth',    icon: Shield,          label: 'Google Auth',       group: 'system'   },
@@ -88,6 +89,7 @@ const SECTION_COMPONENTS = {
   activitylog:   AdminActivityLog,
   health:        AdminHealth,
   vertex:        AdminVertexPanel,
+  intelligence:  AdminIntelligence,
 };
 
 // ── AdminPage ─────────────────────────────────────────────────────────────────

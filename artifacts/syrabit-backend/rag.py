@@ -23,6 +23,8 @@ __all__ = [
     "auto_chunk_content", "build_rag_system_prompt", "rag_search", "rechunk_chapter",
     "resolve_rag_context", "syrabit_library_search", "vector_rag_search",
     "web_search_with_fallback",
+    "get_vector_search_stats", "get_pipeline_stats", "record_pipeline_run",
+    "_record_vector_search",
 ]
 
 _HEADING_RE = re.compile(r'^(#{1,4})\s+(.+)$', re.MULTILINE)
@@ -32,6 +34,79 @@ _CHUNK_MAX = 1200
 _CHUNK_MIN = 80
 _OVERLAP_SENTENCES = 2
 _VECTOR_SIM_THRESHOLD = 0.30
+
+_VECTOR_SIM_METRICS: list = []
+_VECTOR_SIM_MAX = 10_000
+
+def _record_vector_search(query: str, num_results: int, scores: list, below_threshold: int, total_candidates: int):
+    _VECTOR_SIM_METRICS.append({
+        "ts": time.time(),
+        "query": query[:120],
+        "num_results": num_results,
+        "best_score": round(max(scores), 4) if scores else 0.0,
+        "avg_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+        "worst_score": round(min(scores), 4) if scores else 0.0,
+        "below_threshold": below_threshold,
+        "total_candidates": total_candidates,
+    })
+    if len(_VECTOR_SIM_METRICS) > _VECTOR_SIM_MAX:
+        del _VECTOR_SIM_METRICS[:500]
+
+def get_vector_search_stats(window_seconds: int = 3600) -> dict:
+    cutoff = time.time() - window_seconds
+    recent = [m for m in _VECTOR_SIM_METRICS if m["ts"] >= cutoff]
+    if not recent:
+        return {"total_searches": 0, "has_data": False}
+    all_best = [m["best_score"] for m in recent if m["best_score"] > 0]
+    all_avg = [m["avg_score"] for m in recent if m["avg_score"] > 0]
+    total_below = sum(m["below_threshold"] for m in recent)
+    total_candidates = sum(m["total_candidates"] for m in recent)
+    zero_result = sum(1 for m in recent if m["num_results"] == 0)
+    return {
+        "total_searches": len(recent),
+        "avg_best_score": round(sum(all_best) / len(all_best), 4) if all_best else 0,
+        "avg_score_overall": round(sum(all_avg) / len(all_avg), 4) if all_avg else 0,
+        "pct_below_threshold": round(total_below / max(total_candidates, 1) * 100, 1),
+        "zero_result_pct": round(zero_result / len(recent) * 100, 1),
+        "window_seconds": window_seconds,
+        "has_data": True,
+    }
+
+_PIPELINE_RUNS: list = []
+_PIPELINE_RUNS_MAX = 500
+
+def record_pipeline_run(action: str, subject: str, success: bool, chapters: int = 0, chunks: int = 0, embeddings: int = 0, duration_ms: float = 0, error: str = ""):
+    _PIPELINE_RUNS.append({
+        "ts": time.time(),
+        "action": action,
+        "subject": subject[:100],
+        "success": success,
+        "chapters": chapters,
+        "chunks": chunks,
+        "embeddings": embeddings,
+        "duration_ms": round(duration_ms, 1),
+        "error": error[:200],
+    })
+    if len(_PIPELINE_RUNS) > _PIPELINE_RUNS_MAX:
+        del _PIPELINE_RUNS[:50]
+
+def get_pipeline_stats(window_seconds: int = 86400) -> dict:
+    cutoff = time.time() - window_seconds
+    recent = [r for r in _PIPELINE_RUNS if r["ts"] >= cutoff]
+    if not recent:
+        return {"total_runs": 0, "has_data": False}
+    successes = sum(1 for r in recent if r["success"])
+    return {
+        "total_runs": len(recent),
+        "successes": successes,
+        "failures": len(recent) - successes,
+        "success_rate": round(successes / len(recent) * 100, 1),
+        "total_chapters": sum(r["chapters"] for r in recent),
+        "total_chunks": sum(r["chunks"] for r in recent),
+        "total_embeddings": sum(r["embeddings"] for r in recent),
+        "recent": recent[-10:],
+        "has_data": True,
+    }
 
 def _split_into_sections(content: str) -> list[dict]:
     sections = []
@@ -560,12 +635,14 @@ async def vector_rag_search(
 
         scored.sort(key=lambda x: -x["score"])
         top = [r for r in scored if r["score"] >= _VECTOR_SIM_THRESHOLD][:top_k]
+        all_scores = [r["score"] for r in scored]
+        below = sum(1 for s in all_scores if s < _VECTOR_SIM_THRESHOLD)
+        _record_vector_search(query, len(top), [r["score"] for r in top] if top else [], below, len(scored))
         logger.info(
             f"Vector RAG: query='{query[:40]}' → {len(top)} results "
             f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}], threshold={_VECTOR_SIM_THRESHOLD})" if top else
             f"Vector RAG: query='{query[:40]}' → no results above threshold ({_VECTOR_SIM_THRESHOLD})"
         )
-        # Store in cache — future identical/similar queries skip the embed API call
         _vector_rag_cache[_vk] = top
         return top
     except Exception as e:

@@ -14,6 +14,60 @@ from cache import _cache_key
 logger = logging.getLogger(__name__)
 
 _LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 20)))
+
+_LLM_PROVIDER_METRICS: list = []
+_LLM_PROVIDER_METRICS_MAX = 20_000
+
+def _record_llm_call(provider: str, model: str, duration_ms: float, success: bool, tokens_approx: int = 0, fallback: bool = False, error_type: str = ""):
+    _LLM_PROVIDER_METRICS.append({
+        "ts": time.time(),
+        "provider": provider,
+        "model": model,
+        "duration_ms": round(duration_ms, 1),
+        "success": success,
+        "tokens_approx": tokens_approx,
+        "fallback": fallback,
+        "error_type": error_type,
+    })
+    if len(_LLM_PROVIDER_METRICS) > _LLM_PROVIDER_METRICS_MAX:
+        del _LLM_PROVIDER_METRICS[:1000]
+
+def get_llm_provider_stats(window_seconds: int = 3600) -> dict:
+    cutoff = time.time() - window_seconds
+    recent = [m for m in _LLM_PROVIDER_METRICS if m["ts"] >= cutoff]
+    by_provider: dict = {}
+    for m in recent:
+        p = m["provider"]
+        if p not in by_provider:
+            by_provider[p] = {"calls": 0, "successes": 0, "failures": 0, "total_ms": 0, "tokens": 0, "models": set()}
+        by_provider[p]["calls"] += 1
+        by_provider[p]["tokens"] += m["tokens_approx"]
+        by_provider[p]["total_ms"] += m["duration_ms"]
+        by_provider[p]["models"].add(m["model"])
+        if m["success"]:
+            by_provider[p]["successes"] += 1
+        else:
+            by_provider[p]["failures"] += 1
+    result = {}
+    for p, s in by_provider.items():
+        result[p] = {
+            "calls": s["calls"],
+            "success_rate": round(s["successes"] / max(s["calls"], 1) * 100, 1),
+            "failures": s["failures"],
+            "avg_latency_ms": round(s["total_ms"] / max(s["calls"], 1), 1),
+            "tokens_approx": s["tokens"],
+            "models": list(s["models"]),
+        }
+    total_calls = sum(s["calls"] for s in by_provider.values())
+    total_success = sum(s["successes"] for s in by_provider.values())
+    fallback_calls = sum(1 for m in recent if m["fallback"])
+    return {
+        "providers": result,
+        "total_calls": total_calls,
+        "overall_success_rate": round(total_success / max(total_calls, 1) * 100, 1),
+        "fallback_rate": round(fallback_calls / max(total_calls, 1) * 100, 1),
+        "window_seconds": window_seconds,
+    }
 _LLM_BATCH_WINDOW_MS = int(os.environ.get("LLM_BATCH_WINDOW_MS", 15))
 
 class _LlmBatcher:
@@ -278,7 +332,7 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     if not primary_key and not _LLM_PROVIDERS:
         raise HTTPException(status_code=503, detail="LLM API key not configured")
 
-    tried: set = set()  # tracks (provider, model) tuples — allows multiple models per provider
+    tried: set = set()
     last_err = None
 
     provider, key = primary_provider, primary_key
@@ -288,9 +342,13 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
         _t0 = _t.perf_counter()
         result = await _call_single_provider(messages, provider, key, try_model, max_tokens)
         _dur = int((_t.perf_counter() - _t0) * 1000)
-        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={len(result.split())}")
+        tok = len(result.split())
+        _record_llm_call(provider, try_model, _dur, True, tok, False)
+        logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
         return result
     except Exception as e:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
         last_err = e
         logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
 
@@ -303,9 +361,13 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
             _t0 = _t.perf_counter()
             result = await _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens)
             _dur = int((_t.perf_counter() - _t0) * 1000)
-            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={len(result.split())} fallback=true")
+            tok = len(result.split())
+            _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
+            logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
             return result
         except Exception as e:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
             last_err = e
             logger.warning(f"LLM fallback failed ({fallback['provider']}/{fb_model}): {type(e).__name__}: {str(e)[:150]}")
 

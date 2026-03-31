@@ -111,9 +111,42 @@ export class ErrorBoundary extends Component {
   }
 }
 
-/**
- * RouteErrorBoundary — wraps individual routes for per-route error isolation.
- */
 export const RouteErrorBoundary = ({ children }) => (
   <ErrorBoundary>{children}</ErrorBoundary>
 );
+
+export class SectionErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, errorInfo) {
+    log.error('[SectionErrorBoundary] Widget crash', {
+      section: this.props.name || 'unknown',
+      error: error.message,
+    });
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-center" role="alert">
+        <AlertTriangle size={20} className="text-red-400 mx-auto mb-2" />
+        <p className="text-sm text-red-300 font-medium mb-1">
+          {this.props.name || 'Section'} failed to load
+        </p>
+        <button
+          onClick={() => this.setState({ hasError: false, error: null })}
+          className="text-xs text-violet-400 hover:text-violet-300 underline"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+}

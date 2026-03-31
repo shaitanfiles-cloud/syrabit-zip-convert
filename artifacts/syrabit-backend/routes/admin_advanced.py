@@ -3646,3 +3646,160 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
     return summary
 
 
+@router.get("/admin/intelligence/overview")
+async def admin_intelligence_overview(admin: dict = Depends(get_admin_user)):
+    from llm import get_llm_provider_stats
+    from rag import get_vector_search_stats, get_pipeline_stats
+
+    llm_stats = get_llm_provider_stats(3600)
+    vector_stats = get_vector_search_stats(3600)
+    pipeline_stats = get_pipeline_stats(86400)
+
+    total_chapters = await db.chapters.count_documents({})
+    chapters_with_content = await db.chapters.count_documents({"content": {"$exists": True, "$ne": ""}})
+    chapters_embedded = await db.chapters.count_documents({"embedding": {"$exists": True}})
+    total_chunks = await db.chunks.count_documents({})
+
+    thin_chapters = []
+    thin_cursor = db.chapters.find(
+        {"content": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "id": 1, "title": 1, "content": 1, "subject_id": 1, "needs_review": 1}
+    )
+    async for ch in thin_cursor:
+        wc = len((ch.get("content") or "").split())
+        if wc < 600:
+            chunk_count = await db.chunks.count_documents({"chapter_id": ch["id"]})
+            thin_chapters.append({
+                "id": ch["id"],
+                "title": ch.get("title", ""),
+                "word_count": wc,
+                "chunk_count": chunk_count,
+                "has_embedding": False,
+                "needs_review": ch.get("needs_review", False),
+            })
+
+    no_embed = await db.chapters.count_documents({
+        "content": {"$exists": True, "$ne": ""},
+        "embedding": {"$exists": False},
+    })
+    low_chunk = []
+    for tc in thin_chapters:
+        if tc["chunk_count"] < 3:
+            low_chunk.append(tc["id"])
+
+    return {
+        "llm_health": llm_stats,
+        "vector_search": vector_stats,
+        "pipeline": pipeline_stats,
+        "content": {
+            "total_chapters": total_chapters,
+            "with_content": chapters_with_content,
+            "embedded": chapters_embedded,
+            "total_chunks": total_chunks,
+            "chunks_per_chapter": round(total_chunks / max(chapters_with_content, 1), 1),
+            "embedding_coverage_pct": round(chapters_embedded / max(chapters_with_content, 1) * 100, 1),
+        },
+        "content_health": {
+            "thin_chapters": thin_chapters[:50],
+            "thin_count": len(thin_chapters),
+            "no_embedding_count": no_embed,
+            "low_chunk_ids": low_chunk[:20],
+        },
+    }
+
+
+@router.post("/admin/content/auto-heal")
+async def admin_content_auto_heal(admin: dict = Depends(get_admin_user)):
+    from llm import call_llm_api
+    from rag import auto_chunk_content, record_pipeline_run
+    import time as _t
+
+    t0 = _t.perf_counter()
+    thin_cursor = db.chapters.find(
+        {"content": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "id": 1, "title": 1, "content": 1, "subject_id": 1, "description": 1, "topics": 1}
+    )
+
+    regen_results = []
+    async for ch in thin_cursor:
+        wc = len((ch.get("content") or "").split())
+        if wc >= 600:
+            continue
+
+        title = ch.get("title", "")
+        desc = ch.get("description", "")
+        topics = ch.get("topics") or []
+        topic_text = ", ".join(t if isinstance(t, str) else t.get("name", "") for t in topics)
+
+        prompt = (
+            f"Write comprehensive, exam-focused study notes for the chapter: **{title}**.\n"
+            f"Subject context: {desc}\n"
+            f"Topics to cover: {topic_text}\n\n"
+            "Requirements:\n"
+            "- Minimum 800 words\n"
+            "- Use markdown headings, bullet points, examples\n"
+            "- Include key definitions, formulas, and exam tips\n"
+            "- Write in clear, student-friendly language"
+        )
+        try:
+            new_content = await call_llm_api(
+                [{"role": "system", "content": "You are an expert educational content writer for Indian university students."},
+                 {"role": "user", "content": prompt}],
+                model="gemini-2.5-flash", max_tokens=4096
+            )
+            new_wc = len(new_content.split())
+            if new_wc >= 500:
+                old_content = ch.get("content", "")
+                await db.chapters.update_one(
+                    {"id": ch["id"]},
+                    {"$set": {
+                        "content": new_content,
+                        "needs_review": False,
+                        "content_version": {
+                            "previous_word_count": wc,
+                            "new_word_count": new_wc,
+                            "regenerated_at": datetime.now(timezone.utc).isoformat(),
+                            "reason": "auto_heal_thin_content",
+                            "previous_content_hash": hashlib.md5(old_content.encode()).hexdigest(),
+                        },
+                    }}
+                )
+                chunks = await auto_chunk_content(ch["id"], new_content, ch.get("subject_id"))
+                regen_results.append({"id": ch["id"], "title": title, "old_wc": wc, "new_wc": new_wc, "chunks": len(chunks), "status": "regenerated"})
+            else:
+                await db.chapters.update_one({"id": ch["id"]}, {"$set": {"needs_review": True}})
+                regen_results.append({"id": ch["id"], "title": title, "old_wc": wc, "new_wc": new_wc, "status": "still_thin"})
+        except Exception as e:
+            regen_results.append({"id": ch["id"], "title": title, "old_wc": wc, "status": "error", "error": str(e)[:100]})
+
+    dur = int((_t.perf_counter() - t0) * 1000)
+    record_pipeline_run(
+        "auto_heal", "all",
+        success=any(r["status"] == "regenerated" for r in regen_results),
+        chapters=len(regen_results),
+        duration_ms=dur,
+    )
+
+    return {
+        "healed": sum(1 for r in regen_results if r["status"] == "regenerated"),
+        "still_thin": sum(1 for r in regen_results if r["status"] == "still_thin"),
+        "errors": sum(1 for r in regen_results if r["status"] == "error"),
+        "details": regen_results,
+        "duration_ms": dur,
+    }
+
+
+@router.get("/admin/content/version-history/{chapter_id}")
+async def admin_content_version_history(chapter_id: str, admin: dict = Depends(get_admin_user)):
+    ch = await db.chapters.find_one({"id": chapter_id}, {"_id": 0, "id": 1, "title": 1, "content": 1, "content_version": 1, "needs_review": 1})
+    if not ch:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return {
+        "chapter_id": ch["id"],
+        "title": ch.get("title", ""),
+        "current_word_count": len((ch.get("content") or "").split()),
+        "needs_review": ch.get("needs_review", False),
+        "version_info": ch.get("content_version"),
+    }
+
+
