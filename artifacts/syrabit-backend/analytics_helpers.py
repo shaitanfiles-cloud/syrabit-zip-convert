@@ -429,8 +429,10 @@ async def get_visitor_stats() -> dict:
 async def get_recent_user_events(limit: int = 10) -> list:
     """Return recent user-facing events: signups, conversations started, AI chats."""
     events = []
+    user_map: dict = {}
     try:
         users = await supa_list_users()
+        user_map = {u.get("id"): u.get("name") or u.get("email") or "Unknown" for u in users if u.get("id")}
         users_sorted = sorted(users, key=lambda u: u.get("created_at", ""), reverse=True)
         for u in users_sorted[:5]:
             events.append({
@@ -448,10 +450,14 @@ async def get_recent_user_events(limit: int = 10) -> list:
         convs = await supa_get_all_conversations(20)
         convs_sorted = sorted(convs, key=lambda c: c.get("updated_at") or c.get("created_at", ""), reverse=True)
         for c in convs_sorted[:5]:
+            uid = c.get("user_id", "")
+            user_label = user_map.get(uid, "")
+            title = c.get("title") or "Untitled conversation"
+            msg = f"{user_label} — {title}" if user_label else f"AI chat: {title}"
             events.append({
                 "type": "conversation",
                 "icon": "💬",
-                "message": f"AI chat: {c.get('title') or 'Untitled conversation'}",
+                "message": msg,
                 "details": c.get("subject_name", ""),
                 "timestamp": c.get("updated_at") or c.get("created_at", ""),
                 "level": "info",
@@ -466,29 +472,34 @@ async def get_recent_user_events(limit: int = 10) -> list:
             ).sort("timestamp", -1).limit(10).to_list(10)
             for ev in recent_analytics:
                 etype = ev.get("event_type", "")
+                uid = ev.get("user_id", "")
+                user_label = user_map.get(uid, "")
                 if etype == "search" and ev.get("search_query"):
+                    prefix = f"{user_label} searched" if user_label else "Library search"
                     events.append({
                         "type": "search",
                         "icon": "🔍",
-                        "message": f"Library search: \"{ev.get('search_query')}\"",
+                        "message": f"{prefix}: \"{ev.get('search_query')}\"",
                         "details": "",
                         "timestamp": ev.get("timestamp", ""),
                         "level": "info",
                     })
                 elif etype == "subject_view":
+                    msg = f"{user_label} opened a subject" if user_label else "Subject opened in Library"
                     events.append({
                         "type": "subject_view",
                         "icon": "📖",
-                        "message": "Subject opened in Library",
+                        "message": msg,
                         "details": "",
                         "timestamp": ev.get("timestamp", ""),
                         "level": "info",
                     })
                 elif etype == "ask_ai_click":
+                    msg = f"{user_label} clicked Ask AI" if user_label else "Ask AI clicked on a subject"
                     events.append({
                         "type": "ai_click",
                         "icon": "🤖",
-                        "message": "Ask AI clicked on a subject",
+                        "message": msg,
                         "details": "",
                         "timestamp": ev.get("timestamp", ""),
                         "level": "info",
@@ -496,7 +507,6 @@ async def get_recent_user_events(limit: int = 10) -> list:
     except Exception:
         pass
 
-    # Sort all events by timestamp descending
     events_sorted = sorted(
         [e for e in events if e.get("timestamp")],
         key=lambda x: x.get("timestamp", ""),
