@@ -272,6 +272,11 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     now = datetime.now(timezone.utc).isoformat()
     _rag_subject_ids = list({s["id"] for s in rag_ctx.get("subjects", []) if s.get("id")})
     _rag_subject_names = list({s.get("name","") for s in rag_ctx.get("subjects", []) if s.get("name")})
+    _src_sid = _rag_subject_ids[0] if _rag_subject_ids else msg.subject_id
+    _src_ctx = await _resolve_subject_context(_src_sid) if _src_sid else {}
+    _src_board = _src_ctx.get("board_name") or ctx_board_name or ""
+    _src_class = _src_ctx.get("class_name") or ctx_class_name or ""
+    _src_stream = _src_ctx.get("stream_name") or ctx_stream_name or ""
     new_messages = [
         {"role": "user", "content": msg.message, "timestamp": now},
         {"role": "assistant", "content": answer, "timestamp": now,
@@ -280,9 +285,9 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
          "sources": lib_sources,
          "rag_subject_id": _rag_subject_ids[0] if _rag_subject_ids else None,
          "rag_subject_name": _rag_subject_names[0] if _rag_subject_names else msg.subject_name,
-         "rag_board_name": ctx_board_name or "",
-         "rag_class_name": ctx_class_name or "",
-         "rag_stream_name": ctx_stream_name or ""},
+         "rag_board_name": _src_board,
+         "rag_class_name": _src_class,
+         "rag_stream_name": _src_stream},
     ]
     # Update conversation in Supabase
     conv = await supa_get_conversation(conv_id, user["id"])
@@ -626,12 +631,18 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     # Derive sources from the same RAG context sent to the LLM (no mismatch)
     rag_sources = _sources_from_rag_ctx(rag_ctx)
 
+    _src_sid_s = rag_subject_id or msg.subject_id
+    _src_ctx_s = await _resolve_subject_context(_src_sid_s) if _src_sid_s else {}
+    _src_board_s = _src_ctx_s.get("board_name") or ctx_board_name or ""
+    _src_class_s = _src_ctx_s.get("class_name") or ctx_class_name or ""
+    _src_stream_s = _src_ctx_s.get("stream_name") or ctx_stream_name or ""
+
     async def event_stream():
         nonlocal full_response
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
             # Send RAG metadata with full quality info + subject link data + web search flag
-            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': ctx_board_name or '', 'ctx_class_name': ctx_class_name or '', 'ctx_stream_name': ctx_stream_name or ''}
+            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': _src_board_s, 'ctx_class_name': _src_class_s, 'ctx_stream_name': _src_stream_s}
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')
@@ -734,9 +745,9 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                     sources=rag_sources,
                     rag_subject_id=rag_subject_id,
                     rag_subject_name=rag_subject_name,
-                    rag_board_name=ctx_board_name or "",
-                    rag_class_name=ctx_class_name or "",
-                    rag_stream_name=ctx_stream_name or "",
+                    rag_board_name=_src_board_s,
+                    rag_class_name=_src_class_s,
+                    rag_stream_name=_src_stream_s,
                 ))
                 asyncio.create_task(_log_chat_message(
                     user_id=user["id"],
