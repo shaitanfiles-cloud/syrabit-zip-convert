@@ -535,6 +535,75 @@ async def get_public_cms_document(doc_id: str):
 # POST /cms/personalize        — generate a new personalized plan via Gemini
 # ──────────────────────────────────────────────────────────────────────────────
 
+@router.get("/cms/posts")
+async def list_cms_posts(
+    board:      Optional[str] = None,
+    class_slug: Optional[str] = None,
+    subject_id: Optional[str] = None,
+    limit:      int = 20,
+    skip:       int = 0,
+):
+    """Paginated published cms content for Library infinite scroll — reads from cms_documents."""
+    try:
+        if not await is_mongo_available():
+            return {"items": [], "total": 0}
+        query: dict = {"status": "published", "subject_id": {"$exists": True, "$ne": None}}
+        if board:      query["board_slug"]  = board
+        if class_slug: query["class_slug"]  = class_slug
+        if subject_id: query["subject_id"]  = subject_id
+        limit = min(max(limit, 1), 50)
+        items = await db.cms_documents.find(
+            query, {"_id": 0, "merged_md": 0, "content": 0}
+        ).sort("updated_at", -1).skip(skip).limit(limit).to_list(limit)
+        total = await db.cms_documents.count_documents(query)
+        return {"items": items, "total": total}
+    except Exception:
+        mark_mongo_down()
+        return {"items": [], "total": 0}
+
+
+@router.get("/cms/post/{subject_id}")
+async def get_cms_post_by_subject(subject_id: str):
+    """Get merged blog post for a subject (public). Returns cache or generates on-the-fly."""
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(status_code=503, detail="Content service unavailable")
+        doc = await db.cms_documents.find_one(
+            {"subject_id": subject_id, "status": "published"},
+            {"_id": 0, "merged_md": 0}
+        )
+        if doc:
+            return {
+                "subject_id": subject_id,
+                "title":      doc.get("title", ""),
+                "subject_merged_html": doc.get("content", ""),
+                "headings":   doc.get("headings", ""),
+                "word_count": doc.get("word_count", 0),
+                "status":     "published",
+                "seo_slug":   doc.get("seo_slug", ""),
+            }
+        merged_md = await merge_subject_content(subject_id)
+        if not merged_md:
+            raise HTTPException(status_code=404, detail="Subject not found or empty")
+        content_html = _md_to_html(merged_md)
+        headings     = _extract_headings_json(merged_md)
+        word_count   = len(re.sub(r'<[^>]+>', '', content_html).split())
+        subject      = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+        return {
+            "subject_id": subject_id,
+            "title":      (subject.get("name", "") if subject else ""),
+            "subject_merged_html": content_html,
+            "headings":   headings,
+            "word_count": word_count,
+            "status":     "live",
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        mark_mongo_down()
+        raise HTTPException(status_code=503, detail="Content service unavailable")
+
+
 _PLAN_IS_PAID = {"starter", "pro"}
 
 @router.get("/cms/{user_id}")
@@ -679,53 +748,6 @@ async def generate_personalized_plan(body: PersonalizePlanRequest, user: dict = 
     }
 
 
-# ──────────────────────────────────────────────
-# CMS POSTS — subject-merged blog posts
-# ──────────────────────────────────────────────
-
-@router.get("/cms/post/{subject_id}")
-async def get_cms_post_by_subject(subject_id: str):
-    """Get merged blog post for a subject (public). Returns cache or generates on-the-fly."""
-    try:
-        if not await is_mongo_available():
-            raise HTTPException(status_code=503, detail="Content service unavailable")
-        doc = await db.cms_documents.find_one(
-            {"subject_id": subject_id, "status": "published"},
-            {"_id": 0, "merged_md": 0}
-        )
-        if doc:
-            return {
-                "subject_id": subject_id,
-                "title":      doc.get("title", ""),
-                "subject_merged_html": doc.get("content", ""),
-                "headings":   doc.get("headings", ""),
-                "word_count": doc.get("word_count", 0),
-                "status":     "published",
-                "seo_slug":   doc.get("seo_slug", ""),
-            }
-        # Generate on the fly (not cached yet)
-        merged_md = await merge_subject_content(subject_id)
-        if not merged_md:
-            raise HTTPException(status_code=404, detail="Subject not found or empty")
-        content_html = _md_to_html(merged_md)
-        headings     = _extract_headings_json(merged_md)
-        word_count   = len(re.sub(r'<[^>]+>', '', content_html).split())
-        subject      = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
-        return {
-            "subject_id": subject_id,
-            "title":      (subject.get("name", "") if subject else ""),
-            "subject_merged_html": content_html,
-            "headings":   headings,
-            "word_count": word_count,
-            "status":     "live",
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        mark_mongo_down()
-        raise HTTPException(status_code=503, detail="Content service unavailable")
-
-
 @router.post("/admin/cms/merge/{subject_id}")
 async def admin_merge_subject(subject_id: str, admin: dict = Depends(get_admin_user)):
     """Merge subject chapters+chunks → cms_documents. Returns word count + headings."""
@@ -787,33 +809,6 @@ async def admin_merge_subject(subject_id: str, admin: dict = Depends(get_admin_u
         "stream_name": subject.get("stream_name", "")  if subject else "",
         "stream_slug": subject.get("stream_slug", "")  if subject else "",
     }
-
-
-@router.get("/cms/posts")
-async def list_cms_posts(
-    board:      Optional[str] = None,
-    class_slug: Optional[str] = None,
-    subject_id: Optional[str] = None,
-    limit:      int = 20,
-    skip:       int = 0,
-):
-    """Paginated published cms content for Library infinite scroll — reads from cms_documents."""
-    try:
-        if not await is_mongo_available():
-            return {"items": [], "total": 0}
-        query: dict = {"status": "published", "subject_id": {"$exists": True, "$ne": None}}
-        if board:      query["board_slug"]  = board
-        if class_slug: query["class_slug"]  = class_slug
-        if subject_id: query["subject_id"]  = subject_id
-        limit = min(max(limit, 1), 50)
-        items = await db.cms_documents.find(
-            query, {"_id": 0, "merged_md": 0, "content": 0}
-        ).sort("updated_at", -1).skip(skip).limit(limit).to_list(limit)
-        total = await db.cms_documents.count_documents(query)
-        return {"items": items, "total": total}
-    except Exception:
-        mark_mongo_down()
-        return {"items": [], "total": 0}
 
 
 @router.post("/admin/content/regenerate-sitemap")
@@ -1746,10 +1741,13 @@ class CmsNoIndexMiddleware(BaseHTTPMiddleware):
         r"bingbot|googlebot|yandexbot|duckduckbot",
         re.IGNORECASE,
     )
+    _CMS_PUBLIC_PATHS = ("/api/cms/posts", "/api/cms/post/")
 
     async def dispatch(self, request: StarletteRequest, call_next):
         path = request.url.path
         if not path.startswith("/api/cms/"):
+            return await call_next(request)
+        if any(path.startswith(p) for p in self._CMS_PUBLIC_PATHS):
             return await call_next(request)
         ua = request.headers.get("user-agent", "")
         if ua and self._CMS_BOT_UA_RE.search(ua):
