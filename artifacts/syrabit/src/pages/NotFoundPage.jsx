@@ -9,7 +9,7 @@ export default function NotFoundPage() {
   const navigate = useNavigate();
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background futuristic-bg">
+    <div className="min-h-screen flex items-center justify-center bg-background">
       <div className="text-center max-w-sm px-4" data-testid="not-found-page">
         {/* Logo with orbit ring */}
         <div className="relative inline-flex mb-8">

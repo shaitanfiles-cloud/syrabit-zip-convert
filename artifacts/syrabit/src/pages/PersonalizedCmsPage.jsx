@@ -39,7 +39,7 @@ export default function PersonalizedCmsPage() {
   if (loading) {
     return (
       <AppLayout>
-        <div className="min-h-screen flex items-center justify-center futuristic-bg">
+        <div className="min-h-screen flex items-center justify-center ">
           <Loader2 className="animate-spin text-violet-400" size={32} />
         </div>
       </AppLayout>
@@ -49,7 +49,7 @@ export default function PersonalizedCmsPage() {
   if (payError) {
     return (
       <AppLayout>
-        <div className="min-h-screen flex flex-col items-center justify-center gap-0 futuristic-bg px-4">
+        <div className="min-h-screen flex flex-col items-center justify-center gap-0  px-4">
           <div className="w-full max-w-md rounded-2xl overflow-hidden"
             style={{ border: '1px solid rgba(139,92,246,0.25)', background: 'var(--card)' }}>
             <div className="px-6 pt-6 pb-4" style={{ borderBottom: '1px solid rgba(139,92,246,0.10)' }}>
@@ -84,7 +84,7 @@ export default function PersonalizedCmsPage() {
   if (error === 'forbidden') {
     return (
       <AppLayout>
-        <div className="min-h-screen flex flex-col items-center justify-center gap-4 futuristic-bg">
+        <div className="min-h-screen flex flex-col items-center justify-center gap-4 ">
           <Lock size={36} className="text-amber-400" />
           <h1 className="text-xl font-bold text-white">Private Plan</h1>
           <p className="text-white/50 text-sm">This study plan belongs to another account.</p>
@@ -99,7 +99,7 @@ export default function PersonalizedCmsPage() {
   if (error === 'not-found') {
     return (
       <AppLayout>
-        <div className="min-h-screen flex flex-col items-center justify-center gap-4 futuristic-bg">
+        <div className="min-h-screen flex flex-col items-center justify-center gap-4 ">
           <AlertCircle size={40} className="text-amber-400" />
           <h1 className="text-xl font-bold text-white">Plan Not Found</h1>
           <p className="text-white/50 text-sm">This study plan doesn't exist or was deleted.</p>
@@ -114,7 +114,7 @@ export default function PersonalizedCmsPage() {
   if (error) {
     return (
       <AppLayout>
-        <div className="min-h-screen flex flex-col items-center justify-center gap-4 futuristic-bg">
+        <div className="min-h-screen flex flex-col items-center justify-center gap-4 ">
           <AlertCircle size={40} className="text-red-400" />
           <p className="text-white/50 text-sm">Failed to load plan. Please try again.</p>
           <button onClick={() => window.location.reload()} className="h-9 px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm">
@@ -135,7 +135,7 @@ export default function PersonalizedCmsPage() {
         <meta name="robots" content="noindex, nofollow" />
       </Helmet>
 
-      <div className="max-w-4xl mx-auto px-4 py-8 futuristic-bg min-h-screen">
+      <div className="max-w-4xl mx-auto px-4 py-8  min-h-screen">
         {/* Breadcrumb */}
         <nav className="flex items-center gap-2 text-xs text-white/40 mb-6">
           <Link to="/profile" className="hover:text-white/70 transition-colors">My Plans</Link>

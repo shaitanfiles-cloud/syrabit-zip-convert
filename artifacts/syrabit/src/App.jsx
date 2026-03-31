@@ -55,7 +55,7 @@ const PersonalizedCmsPage    = lazy(() => import("@/pages/PersonalizedCmsPage"))
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallback = () => (
   <div
-    className="min-h-screen flex items-center justify-center bg-background futuristic-bg"
+    className="min-h-screen flex items-center justify-center bg-background"
     role="status"
     aria-label="Loading Syrabit.ai"
   >

@@ -53,7 +53,7 @@ export class ErrorBoundary extends Component {
 
     return (
       <div
-        className="min-h-screen flex items-center justify-center bg-background futuristic-bg"
+        className="min-h-screen flex items-center justify-center bg-background"
         role="alert"
         aria-live="assertive"
       >

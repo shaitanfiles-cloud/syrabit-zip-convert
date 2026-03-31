@@ -219,7 +219,7 @@ export default function LearnPage() {
   if (loading) {
     return (
       <AppLayout>
-        <div className="min-h-screen flex items-center justify-center futuristic-bg">
+        <div className="min-h-screen flex items-center justify-center">
           <Loader2 size={28} className="animate-spin text-violet-400" />
         </div>
       </AppLayout>
@@ -229,7 +229,7 @@ export default function LearnPage() {
   if (error === 'not-found') {
     return (
       <AppLayout>
-        <div className="min-h-screen flex flex-col items-center justify-center gap-4 futuristic-bg">
+        <div className="min-h-screen flex flex-col items-center justify-center gap-4">
           <AlertCircle size={40} className="text-amber-400" />
           <h1 className="text-xl font-bold text-white">Page Not Found</h1>
           <p className="text-white/50 text-sm">This study resource doesn't exist or hasn't been published yet.</p>
@@ -244,7 +244,7 @@ export default function LearnPage() {
   if (error) {
     return (
       <AppLayout>
-        <div className="min-h-screen flex flex-col items-center justify-center gap-4 futuristic-bg">
+        <div className="min-h-screen flex flex-col items-center justify-center gap-4">
           <AlertCircle size={40} className="text-red-400" />
           <p className="text-white/50 text-sm">Failed to load content. Please try again.</p>
           <button onClick={() => window.location.reload()} className="h-9 px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm">
@@ -276,7 +276,7 @@ export default function LearnPage() {
         </>
       )}
 
-      <div className="min-h-screen futuristic-bg pb-20">
+      <div className="min-h-screen pb-20">
         <div className="max-w-6xl mx-auto px-4 md:px-6 pt-6">
 
           {/* Breadcrumb */}

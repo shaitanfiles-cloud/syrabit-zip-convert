@@ -112,7 +112,7 @@ export default function OnboardingPage() {
   const getStreamColor = (name) => STREAM_COLORS[name] || 'from-violet-500/20 to-purple-500/20 border-violet-500/30';
 
   return (
-    <div className="min-h-screen bg-[#06060e] futuristic-bg grid-overlay flex items-center justify-center p-4">
+    <div className="min-h-screen bg-[#06060e] flex items-center justify-center p-4">
       <Toaster richColors position="top-right" />
       <div className="w-full max-w-md">
         {/* Header */}

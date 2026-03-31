@@ -6,7 +6,7 @@ export const AuthGuard = ({ children }) => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background futuristic-bg grid-overlay">
+      <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-5">
           {/* Boot splash — spec § 10 */}
           <div className="relative">
