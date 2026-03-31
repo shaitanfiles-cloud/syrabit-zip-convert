@@ -59,6 +59,7 @@ class CMSDocument(BaseModel):
     headings: Optional[str] = ""  # JSON string of extracted headings
     geo_tags: Optional[str] = ""  # board/class/subject/topic for GEO targeting
     schema_type: Optional[str] = "Article"  # Article, FAQPage, HowTo
+    canonical_url: Optional[str] = ""
     status: str = "draft"
 
 class CMSDocumentUpdate(BaseModel):
@@ -77,6 +78,7 @@ class CMSDocumentUpdate(BaseModel):
     headings: Optional[str] = None
     geo_tags: Optional[str] = None
     schema_type: Optional[str] = None
+    canonical_url: Optional[str] = None
     status: Optional[str] = None
     is_published: Optional[bool] = None
 
@@ -190,6 +192,7 @@ async def create_cms_document(doc: CMSDocument, admin: dict = Depends(get_admin_
         "category": doc.category,
         "headings": headings_json,
         "schema_type": doc.schema_type,
+        "canonical_url": doc.canonical_url,
         "status": doc.status,
         "word_count": word_count,
         "rag_processed": False,
@@ -249,15 +252,51 @@ async def put_cms_document(doc_id: str, doc: CMSDocumentUpdate, admin: dict = De
 
 @router.post("/admin/content/cms-documents/{doc_id}/publish")
 async def publish_cms_document(doc_id: str, admin: dict = Depends(get_admin_user)):
-    """Toggle document status between published/draft"""
-    doc = await db.cms_documents.find_one({"id": doc_id}, {"_id": 0, "status": 1})
+    """Toggle document status between published/draft. Auto-generates JSON-LD breadcrumb on publish."""
+    doc = await db.cms_documents.find_one({"id": doc_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
     new_status = "published" if doc.get("status") != "published" else "draft"
-    await db.cms_documents.update_one(
-        {"id": doc_id},
-        {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}}
-    )
+    now = datetime.now(timezone.utc).isoformat()
+    updates = {"status": new_status, "updated_at": now}
+    if new_status == "published":
+        updates["published_at"] = now
+        breadcrumb_items = [{"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"}]
+        pos = 2
+        if doc.get("linked_board_name"):
+            breadcrumb_items.append({"@type": "ListItem", "position": pos, "name": doc["linked_board_name"],
+                                     "item": f"https://syrabit.ai/{_slugify(doc['linked_board_name'])}"})
+            pos += 1
+        if doc.get("linked_class_name"):
+            class_path = f"https://syrabit.ai/{_slugify(doc.get('linked_board_name', ''))}/{_slugify(doc['linked_class_name'])}"
+            breadcrumb_items.append({"@type": "ListItem", "position": pos, "name": doc["linked_class_name"], "item": class_path})
+            pos += 1
+        if doc.get("linked_subject_name"):
+            subject_path = f"https://syrabit.ai/{_slugify(doc.get('linked_board_name', ''))}/{_slugify(doc.get('linked_class_name', ''))}/{_slugify(doc['linked_subject_name'])}"
+            breadcrumb_items.append({"@type": "ListItem", "position": pos, "name": doc["linked_subject_name"], "item": subject_path})
+            pos += 1
+        breadcrumb_items.append({"@type": "ListItem", "position": pos, "name": doc.get("title", "")})
+        updates["json_ld_breadcrumb"] = {
+            "@context": "https://schema.org",
+            "@type": "BreadcrumbList",
+            "itemListElement": breadcrumb_items,
+        }
+        schema_type = doc.get("schema_type", "Article")
+        updates["json_ld_article"] = {
+            "@context": "https://schema.org",
+            "@type": schema_type,
+            "headline": doc.get("title", ""),
+            "description": doc.get("meta_description", ""),
+            "author": {"@type": "Organization", "name": "Syrabit.ai"},
+            "publisher": {"@type": "Organization", "name": "Syrabit.ai"},
+            "datePublished": now,
+            "dateModified": now,
+        }
+        if doc.get("canonical_url"):
+            updates["json_ld_article"]["mainEntityOfPage"] = doc["canonical_url"]
+        if doc.get("thumbnail_url"):
+            updates["json_ld_article"]["image"] = doc["thumbnail_url"]
+    await db.cms_documents.update_one({"id": doc_id}, {"$set": updates})
     return {"status": new_status}
 
 

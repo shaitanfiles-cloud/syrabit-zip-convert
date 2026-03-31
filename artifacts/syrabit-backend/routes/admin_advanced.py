@@ -342,7 +342,7 @@ async def seo_inject_schema_bulk(admin: dict = Depends(get_admin_user)):
 
 @router.get("/admin/seo/pipeline-status")
 async def seo_pipeline_status(admin: dict = Depends(get_admin_user)):
-    """Get real-time content pipeline statistics."""
+    """Get real-time content pipeline statistics with thin-page and sitemap tracking."""
     try:
         total         = await db.seo_topics.count_documents({})
         published     = await db.seo_topics.count_documents({"status": "published"})
@@ -357,7 +357,31 @@ async def seo_pipeline_status(admin: dict = Depends(get_admin_user)):
             "status": "published",
             "published_at": {"$gte": today.isoformat()}
         })
-        pages_total = await db.seo_pages.count_documents({})
+        pages_total     = await db.seo_pages.count_documents({})
+        pages_published = await db.seo_pages.count_documents({"status": "published"})
+        pages_draft     = await db.seo_pages.count_documents({"status": "draft"})
+        pages_rejected  = await db.seo_pages.count_documents({"status": "rejected"})
+
+        thin_pages = await db.seo_pages.count_documents({
+            "status": {"$in": ["published", "draft"]},
+            "$or": [
+                {"quality.word_count": {"$lt": 300}},
+                {"word_count": {"$lt": 300}, "quality": {"$exists": False}},
+            ]
+        })
+        high_quality = await db.seo_pages.count_documents({
+            "status": "published",
+            "$or": [
+                {"quality.score": {"$gte": 70}},
+                {"quality_score.score": {"$gte": 70}, "quality": {"$exists": False}},
+            ]
+        })
+
+        cms_total     = await db.cms_documents.count_documents({})
+        cms_published = await db.cms_documents.count_documents({"status": "published"})
+        cms_with_jsonld = await db.cms_documents.count_documents({"json_ld_breadcrumb": {"$exists": True}})
+
+        sitemap_indexed = await db.seo_pages.count_documents({"in_sitemap": True})
 
         return {
             "total_topics": total,
@@ -366,11 +390,21 @@ async def seo_pipeline_status(admin: dict = Depends(get_admin_user)):
             "archived": archived,
             "has_content": has_content,
             "pages_total": pages_total,
+            "pages_published": pages_published,
+            "pages_draft": pages_draft,
+            "pages_rejected": pages_rejected,
             "published_today": published_today,
             "needs_schema": no_schema,
             "needs_internal_links": no_links,
+            "thin_pages": thin_pages,
+            "high_quality_pages": high_quality,
+            "cms_total": cms_total,
+            "cms_published": cms_published,
+            "cms_with_jsonld": cms_with_jsonld,
+            "sitemap_indexed": sitemap_indexed,
             "publish_rate_pct": round(published / max(total, 1) * 100, 1),
             "content_rate_pct": round(has_content / max(total, 1) * 100, 1),
+            "quality_rate_pct": round(high_quality / max(pages_published, 1) * 100, 1),
         }
     except Exception as e:
         logger.warning(f"pipeline-status failed: {e}")
@@ -2363,7 +2397,19 @@ async def admin_content_coverage(admin: dict = Depends(get_admin_user)):
 # POST /admin/pipeline/auto-generate
 # ═══════════════════════════════════════════════════════════════════════════
 
-GEO_CITIES = ["dhemaji", "jorhat", "guwahati", "silchar", "tezpur"]
+GEO_CITIES = ["guwahati", "jorhat", "silchar", "tezpur", "pathsala"]
+
+ASSAM_COLLEGES = [
+    "Cotton University, Guwahati",
+    "Darrang College, Tezpur",
+    "Bhattadev University, Pathsala",
+    "B. Borooah College, Guwahati",
+    "Gauhati Commerce College, Guwahati",
+    "Jagannath Barooah (J.B.) University, Jorhat",
+    "Handique Girls' College, Guwahati",
+    "Gurucharan College, Silchar",
+]
+ASSAM_COLLEGES_STR = ", ".join(ASSAM_COLLEGES)
 
 
 def _pipeline_slugify(text: str) -> str:
@@ -2706,21 +2752,28 @@ async def _pipeline_generate_geo_seo_blog(
     chapter_slug: str,
 ) -> dict:
     """Generate a geo-optimized SEO blog post for a specific Assam city."""
-    prompt = f"""You are an expert SEO content writer for Syrabit.ai, an educational platform for AHSEC/SEBA students in Assam, India.
+    local_colleges = [c for c in ASSAM_COLLEGES if geo_location.title() in c]
+    college_mention = ", ".join(local_colleges) if local_colleges else ASSAM_COLLEGES_STR
+
+    prompt = f"""You are an expert SEO content writer for Syrabit.ai, an educational platform for AHSEC/SEBA/Degree students in Assam, India.
 
 Write a geo-optimized SEO blog article for students in {geo_location.title()}, Assam.
 
 Topic: {chapter_title} — {subject_name}
 Target City: {geo_location.title()}, Assam
-Board: AHSEC/SEBA
+Board: AHSEC/SEBA/Degree (NEP/FYUGP)
+
+**Top Colleges in Assam (mention naturally in the article):**
+{college_mention}
 
 Requirements:
 1. Title (55-65 chars): Include chapter name, subject, "{geo_location.title()} students", "AHSEC"
 2. Meta description (148-160 chars): Include local references to {geo_location.title()}, action verb, "free on Syrabit"
 3. Full article body (600-900 words) in markdown:
-   - Introduction referencing {geo_location.title()} students specifically
+   - Introduction referencing {geo_location.title()} students and nearby colleges
    - Key concepts from the chapter
    - 3-4 important exam questions with answers
+   - Mention how students at {college_mention} study this subject
    - Local study tips for {geo_location.title()} students
    - Conclusion with CTA to Syrabit.ai
 4. SEO keywords list (5-8 keywords including "{geo_location} {subject_name.lower()}", "AHSEC {chapter_title.lower()}")

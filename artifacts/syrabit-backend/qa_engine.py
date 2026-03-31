@@ -260,3 +260,92 @@ async def delete_qa_pair(qa_id: str, _admin: dict = Depends(_require_admin)):
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="QA pair not found")
     return {"ok": True}
+
+
+@admin_router.post("/qa/promote-to-seo")
+async def promote_qa_to_seo_faq(_admin: dict = Depends(_require_admin)):
+    """Batch-promote all published QA pairs into SEO FAQ page content.
+
+    Groups published QA pairs by topic_slug, generates FAQPage JSON-LD
+    schema, and upserts into seo_pages as page_type='faq'.
+    """
+    if _db is None:
+        raise HTTPException(status_code=503, detail="Database not initialized")
+
+    published_pairs = await _db.qa_pairs.find(
+        {"status": "published"},
+        {"_id": 0},
+    ).sort("upvotes", -1).to_list(5000)
+
+    if not published_pairs:
+        return {"message": "No published QA pairs to promote", "promoted": 0}
+
+    from collections import defaultdict
+    grouped: dict[str, list] = defaultdict(list)
+    for pair in published_pairs:
+        key = f"{pair.get('board_slug', '')}|{pair.get('class_slug', '')}|{pair.get('subject_slug', '')}|{pair.get('topic_slug', '')}"
+        grouped[key].append(pair)
+
+    promoted = 0
+    now = datetime.now(timezone.utc).isoformat()
+
+    for scope_key, pairs in grouped.items():
+        if not pairs or not pairs[0].get("topic_slug"):
+            continue
+
+        board_slug, class_slug, subject_slug, topic_slug = scope_key.split("|")
+
+        faq_entries = []
+        md_lines = ["## Frequently Asked Questions\n"]
+        for p in pairs[:30]:
+            faq_entries.append({
+                "@type": "Question",
+                "name": p["question"],
+                "acceptedAnswer": {
+                    "@type": "Answer",
+                    "text": p["answer"][:2000],
+                }
+            })
+            md_lines.append(f"### {p['question']}\n")
+            md_lines.append(f"{p['answer']}\n")
+
+        faq_schema = {
+            "@context": "https://schema.org",
+            "@type": "FAQPage",
+            "mainEntity": faq_entries,
+        }
+
+        slug = f"{board_slug}/{class_slug}/{subject_slug}/{topic_slug}/faq"
+        content = "\n".join(md_lines)
+        word_count = len(content.split())
+
+        page = {
+            "topic_slug": topic_slug,
+            "chapter_slug": "",
+            "subject_slug": subject_slug,
+            "class_slug": class_slug,
+            "board_slug": board_slug,
+            "page_type": "faq",
+            "title": f"FAQ — {topic_slug.replace('-', ' ').title()}",
+            "content": content,
+            "meta_description": f"Frequently asked questions about {topic_slug.replace('-', ' ')} for {board_slug.upper()} students.",
+            "word_count": word_count,
+            "schema_org": faq_schema,
+            "quality": {"score": min(70 + len(faq_entries) * 2, 100), "word_count": word_count},
+            "status": "published" if len(faq_entries) >= 3 else "draft",
+            "in_sitemap": len(faq_entries) >= 3,
+            "source": "qa_promotion",
+            "qa_pair_count": len(faq_entries),
+            "generated_at": now,
+            "updated_at": now,
+        }
+
+        await _db.seo_pages.update_one(
+            {"topic_slug": topic_slug, "page_type": "faq", "board_slug": board_slug,
+             "class_slug": class_slug, "subject_slug": subject_slug},
+            {"$set": page, "$setOnInsert": {"id": f"faq-{uuid.uuid4().hex[:8]}"}},
+            upsert=True,
+        )
+        promoted += 1
+
+    return {"message": f"Promoted QA pairs into {promoted} FAQ pages", "promoted": promoted, "total_pairs": len(published_pairs)}

@@ -102,6 +102,7 @@ def _robust_parse_json_array(raw: str) -> list[str]:
 
 
 PAGE_TYPES = ["notes", "definition", "important-questions", "mcqs", "examples"]
+ALL_PAGE_TYPES = PAGE_TYPES + ["faq"]
 AUTO_PAGE_TYPES = ["notes", "mcqs"]
 
 def _topic_hash(topic_title: str, page_type: str, n_variants: int) -> int:
@@ -766,26 +767,35 @@ async def extract_topics_from_chapters(
         # ── AI extraction from chapter content ───────────────────────────
         topic_titles: list[str] = []
 
+        subject_name = ch.get("subject_name", "")
+        board_name = ch.get("board_name", "AHSEC/SEBA")
+
         if _call_llm and len(content.strip()) > 150:
             try:
                 messages = [
                     {
                         "role": "system",
                         "content": (
-                            "You are an expert educational curriculum analyst. "
-                            "Given a chapter title and its text content, extract a list of "
-                            "granular study topics that a student would search for. "
-                            "Each topic must be a clear, concise term (2-7 words). "
-                            "Do NOT include the chapter title itself as a topic. "
+                            "You are an expert SEO strategist for educational content in Assam, India. "
+                            "Given a chapter title and its content, extract HIGH-INTENT landing page topics "
+                            "that students actively search for on Google. "
+                            "Focus on 3 levels: subject-level concepts, lesson-level summaries, and topic-level specifics. "
+                            "Each topic must be a clear, searchable phrase (2-8 words) that would make "
+                            "a strong standalone SEO page title. "
+                            "Do NOT include the chapter title itself. "
+                            "Prioritise topics that: (a) students search before exams, "
+                            "(b) have clear learning intent, (c) can sustain 500+ words of quality content. "
                             "Return ONLY a valid JSON array of strings, e.g.: "
-                            '["Topic One", "Topic Two", "Topic Three"]. '
-                            "Aim for 4-10 distinct topics."
+                            '["Definition of Supply", "Law of Demand Explained", "Types of Market Structure"]. '
+                            "Aim for 5-10 distinct topics. Quality over quantity — no thin or overlapping topics."
                         ),
                     },
                     {
                         "role": "user",
                         "content": (
-                            f"Chapter: {title}\n\n"
+                            f"Chapter: {title}\n"
+                            f"Subject: {subject_name}\n"
+                            f"Board: {board_name}\n\n"
                             f"Content (first 4000 chars):\n{content[:4000]}"
                         ),
                     },
@@ -810,22 +820,37 @@ async def extract_topics_from_chapters(
 
         # ── Persist each extracted topic ──────────────────────────────────
         base_order = ch.get("order_index", ch.get("chapter_number", 0))
+        topic_ids_for_chapter = []
         for idx, topic_title in enumerate(topic_titles):
+            topic_id = f"topic-{uuid.uuid4().hex[:8]}"
+            topic_slug = _slug(topic_title)
+            primary_kw = f"{topic_title.lower()} {subject_name.lower()} {board_name}".strip()
             topic = {
-                "id":            f"topic-{uuid.uuid4().hex[:8]}",
-                "chapter_id":    ch["id"],
-                "subject_id":    ch.get("subject_id", ""),
-                "chapter_title": title,
-                "title":         topic_title,
-                "slug":          _slug(topic_title),
-                "definition":    "",
-                "examples":      "",
-                "order":         base_order * 100 + idx,
-                "status":        "published",
-                "created_at":    datetime.now(timezone.utc).isoformat(),
+                "id":              topic_id,
+                "chapter_id":      ch["id"],
+                "subject_id":      ch.get("subject_id", ""),
+                "chapter_title":   title,
+                "subject_name":    subject_name,
+                "board_name":      board_name,
+                "title":           topic_title,
+                "slug":            topic_slug,
+                "primary_keyword": primary_kw[:120],
+                "search_intent":   "informational",
+                "definition":      "",
+                "examples":        "",
+                "order":           base_order * 100 + idx,
+                "status":          "published",
+                "created_at":      datetime.now(timezone.utc).isoformat(),
             }
             await _db.topics.insert_one(topic)
+            topic_ids_for_chapter.append(topic_id)
             created += 1
+
+        if topic_ids_for_chapter:
+            await _db.chapters.update_one(
+                {"id": ch["id"]},
+                {"$set": {"linked_topic_ids": topic_ids_for_chapter}}
+            )
 
     subject_label = ""
     if subject_id:
@@ -981,6 +1006,10 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         f"relevant to Assam (tea gardens, Brahmaputra river, Kaziranga, Bihu festival, silk/muga, "
         f"flood management, biodiversity, local industries) where naturally applicable to the topic. "
         f"Do not force regional examples if they don't fit the subject matter.\n"
+        f"Top colleges whose students use this platform: Cotton University (Guwahati), "
+        f"Darrang College (Tezpur), Bhattadev University (Pathsala), B. Borooah College (Guwahati), "
+        f"Gauhati Commerce College, J.B. University (Jorhat), Handique Girls' College (Guwahati), "
+        f"Gurucharan College (Silchar). Mention these naturally when discussing study strategies or exam prep.\n"
         f"--- END CONTEXT ---\n"
     )
 
@@ -1022,8 +1051,10 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         return None
 
     word_count = len(content.split())
-    if word_count < 300:
-        logger.warning(f"Generated content too short ({word_count} words) for {topic['title']} / {page_type} — minimum 300")
+    min_words = {"notes": 400, "definition": 300, "important-questions": 350, "mcqs": 400, "examples": 350}
+    required_min = min_words.get(page_type, 350)
+    if word_count < required_min:
+        logger.warning(f"Generated content too short ({word_count} words, min {required_min}) for {topic['title']} / {page_type} — rejecting thin page")
         return None
 
     title_templates = TITLE_TEMPLATES.get(page_type, ["{topic} — {board} {grade} {subject}"])
@@ -1097,7 +1128,9 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "prompt_variant": variant_idx,
         "title_variant": title_idx,
         "quality_score": quality_score,
+        "quality": {"score": q_score, "word_count": word_count},
         "status": page_status,
+        "in_sitemap": page_status == "published",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1304,9 +1337,14 @@ async def list_seo_pages(
 async def update_page_status(page_id: str, status: str = "published", _admin: dict = Depends(_require_admin)):
     if status not in ("published", "draft", "archived", "rejected"):
         raise HTTPException(status_code=400, detail="Invalid status")
+    updates = {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}
+    if status == "published":
+        updates["in_sitemap"] = True
+    elif status in ("archived", "rejected"):
+        updates["in_sitemap"] = False
     result = await _db.seo_pages.update_one(
         {"id": page_id},
-        {"$set": {"status": status, "updated_at": datetime.now(timezone.utc).isoformat()}}
+        {"$set": updates}
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Page not found")
@@ -1445,7 +1483,7 @@ async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, t
 
 @router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}")
 async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, topic_slug: str, page_type: str):
-    if page_type not in PAGE_TYPES:
+    if page_type not in ALL_PAGE_TYPES:
         raise HTTPException(status_code=404, detail="Invalid page type")
     page = await _db.seo_pages.find_one(
         {
@@ -2067,7 +2105,7 @@ async def get_seo_html_default(board: str, class_slug: str, subject_slug: str, t
 
 @router.get("/html/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}", response_class=HTMLResponse)
 async def get_seo_html_typed(board: str, class_slug: str, subject_slug: str, topic_slug: str, page_type: str):
-    if page_type not in PAGE_TYPES:
+    if page_type not in ALL_PAGE_TYPES:
         raise HTTPException(status_code=404, detail="Invalid page type")
     page = await _db.seo_pages.find_one(
         {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
