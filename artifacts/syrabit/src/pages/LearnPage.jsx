@@ -581,7 +581,7 @@ export default function LearnPage() {
           <div className="mt-8 rounded-2xl border border-white/10 p-6 flex flex-col sm:flex-row items-center gap-4" style={{ background: 'rgba(139,92,246,0.06)' }}>
             <div className="flex-1 text-center sm:text-left">
               <p className="text-white font-semibold mb-1">Want AI-powered answers on this topic?</p>
-              <p className="text-white/45 text-sm">Ask Syrabit — your AHSEC exam tutor — any question about this content.</p>
+              <p className="text-white/45 text-sm">Ask Syrabit — your Assamboard exam tutor — any question about this content.</p>
             </div>
             <Link
               to="/chat"

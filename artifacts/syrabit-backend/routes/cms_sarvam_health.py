@@ -50,6 +50,13 @@ from analytics_helpers import *
 
 logger = logging.getLogger(__name__)
 
+def _slugify(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r'[^\w\s-]', '', text)
+    text = re.sub(r'[\s_]+', '-', text)
+    text = re.sub(r'-+', '-', text).strip('-')
+    return text
+
 router = APIRouter()
 
 class CMSDocument(BaseModel):

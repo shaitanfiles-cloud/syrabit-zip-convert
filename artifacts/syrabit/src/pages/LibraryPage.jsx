@@ -155,7 +155,7 @@ export default function LibraryPage() {
     script.text = JSON.stringify({
       '@context': 'https://schema.org',
       '@type': 'ItemList',
-      name: 'AHSEC Subject Library',
+      name: 'Assamboard Subject Library',
       itemListElement: filteredSubjects.map((s, i) => ({
         '@type': 'ListItem',
         position: i + 1,
@@ -190,8 +190,8 @@ export default function LibraryPage() {
     return (
       <AppLayout pageTitle="Library" hideNavbar>
         <PageMeta
-          title="AHSEC Subject Library"
-          description="Explore AHSEC Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
+          title="Assamboard Subject Library"
+          description="Explore Assamboard Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
           url="https://syrabit.ai/library"
         />
         <LibrarySkeleton />
@@ -203,8 +203,8 @@ export default function LibraryPage() {
     <AppLayout pageTitle="Library" hideNavbar>
       <Toaster richColors position="top-right" />
       <PageMeta
-        title="AHSEC Subject Library"
-        description="Explore AHSEC Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
+        title="Assamboard Subject Library"
+        description="Explore Assamboard Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
         url="https://syrabit.ai/library"
       />
       <div className="flex flex-col h-full w-full overflow-hidden">
