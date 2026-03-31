@@ -26,7 +26,7 @@ from config import *
 from deps import *
 import deps
 from cache import *
-from routes.admin_monetization import merge_subject_content, _md_to_html as _blog_md_to_html, _extract_headings_json
+from routes.admin_monetization import merge_subject_content, _md_to_html as _blog_md_to_html, _extract_headings_json, preprocess_markdown
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
@@ -856,16 +856,24 @@ async def admin_merge_by_chapter(subject_id: str, admin: dict = Depends(get_admi
         ch_heading = f"Chapter {ch_num}: {ch_title}" if ch_num else ch_title
 
         parts = [f"# {ch_heading}\n\n"]
-        if chapter.get("description"):
-            parts.append(f"{chapter['description']}\n\n")
+        ch_desc = (chapter.get("description") or "").strip()
+        if ch_desc:
+            parts.append(f"{ch_desc}\n\n")
 
         cks = await db.chunks.find(
             {"chapter_id": ch_id}, {"_id": 0}
         ).sort("order", 1).to_list(500)
+        seen_content = set()
+        if ch_desc:
+            seen_content.add(ch_desc.lower().strip()[:300])
         for ck in cks:
             content = (ck.get("content") or "").strip()
             if not content:
                 continue
+            content_key = content.lower().strip()[:300]
+            if content_key in seen_content:
+                continue
+            seen_content.add(content_key)
             ctype = (ck.get("type") or "").lower()
             if ctype == "pyq":
                 parts.append(f"> **Past Year Question**\n>\n> {content}\n\n")
@@ -876,7 +884,7 @@ async def admin_merge_by_chapter(subject_id: str, admin: dict = Depends(get_admi
             else:
                 parts.append(f"{content}\n\n")
 
-        chapter_md = "".join(parts)
+        chapter_md = preprocess_markdown("".join(parts))
         if len(chapter_md.strip()) < 50:
             continue
 

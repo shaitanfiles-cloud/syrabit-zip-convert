@@ -911,13 +911,16 @@ async def merge_subject_content(subject_id: str) -> str:
         if subject.get("description"):
             parts.append(f"{subject['description']}\n\n")
 
+        seen_global = set()
         for chapter in chapters:
             num   = chapter.get("chapter_number", "")
             title = chapter.get("title", "")
             heading = f"Chapter {num}: {title}" if num else title
             parts.append(f"\n## {heading}\n\n")
-            if chapter.get("description"):
-                parts.append(f"{chapter['description']}\n\n")
+            ch_desc = (chapter.get("description") or "").strip()
+            if ch_desc:
+                parts.append(f"{ch_desc}\n\n")
+                seen_global.add(ch_desc.lower().strip()[:300])
             cks = await db.chunks.find(
                 {"chapter_id": chapter["id"]}, {"_id": 0}
             ).sort("order", 1).to_list(500)
@@ -925,6 +928,10 @@ async def merge_subject_content(subject_id: str) -> str:
                 content = (ck.get("content") or "").strip()
                 if not content:
                     continue
+                content_key = content.lower().strip()[:300]
+                if content_key in seen_global:
+                    continue
+                seen_global.add(content_key)
                 ctype = (ck.get("type") or "").lower()
                 if ctype == "pyq":
                     parts.append(f"> 📋 **Past Year Question**\n>\n> {content}\n\n")
