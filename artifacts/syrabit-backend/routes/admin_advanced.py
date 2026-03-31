@@ -2378,7 +2378,6 @@ async def _pipeline_generate_chapter_notes(chapter: dict, subject_name: str, cla
     topics = chapter.get("topics") or []
     chapter_id = chapter.get("id", "")
 
-    # ── Redis cache check ────────────────────────────────────────────────────
     cache_key = f"pipeline_notes:{chapter_id}:{hash(title + subject_name)}"
     cached = _redis_get("pipeline_notes", cache_key)
     if cached and len(cached.strip()) > 100:
@@ -2386,7 +2385,6 @@ async def _pipeline_generate_chapter_notes(chapter: dict, subject_name: str, cla
 
     topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else (f"  {description}" if description else f"  {title}")
 
-    # ── SEO keyword seeds from extracted topics ───────────────────────────────
     seo_seed_block = ""
     try:
         seo_topic_docs = await db.seo_topics.find(
@@ -2406,29 +2404,30 @@ async def _pipeline_generate_chapter_notes(chapter: dict, subject_name: str, cla
     except Exception:
         pass
 
-    prompt = f"""You are an expert academic content writer for AHSEC/SEBA board students in Assam, India.
+    prompt = f"""You are a top-tier academic content writer specialising in AHSEC, SEBA, and Degree (NEP/FYUGP) curricula for students in Assam, India.
 
-Generate **detailed, topic-wise summary notes** for the following chapter. These notes will be the primary study material for students.
+Write **exam-focused, topic-wise summary notes** for the chapter below. These are the PRIMARY study notes students will rely on.
 
 **Chapter:** {title}
 **Subject:** {subject_name or "General"} ({(paper_type or "").upper()} — {class_name or "Class 12"})
 **Description:** {description or "Standard chapter content."}
 
-**Syllabus Topics to cover:**
+**Syllabus Topics (MANDATORY — cover EVERY topic):**
 {topic_block}{seo_seed_block}
 
 ---
 
-**INSTRUCTIONS:**
-- Write a brief **introduction** (2-3 sentences) about the chapter.
-- For EACH topic listed, write:
-  - A **## Heading** for the topic
-  - 3-5 sentence explanation in simple academic language
-  - **Key Points** in 4-6 bullets with definitions/significance/**bold key terms**
-- If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
-- End with a **Summary** section.
-- Use markdown. Do NOT add disclaimers. Start directly with the introduction.
-- Target: ~500-800 words.
+**QUALITY GUIDELINES:**
+1. Open with a crisp **introduction** (2-3 sentences) — state the chapter's exam relevance.
+2. For EACH syllabus topic above:
+   - **## Topic Heading** (match topic name exactly)
+   - 3-5 sentence explanation using simple, precise academic language
+   - **Key Points** as 4-6 bullets: definitions in **bold**, significance, and facts examiners look for
+   - Where applicable, include a brief real-world example or Assam-specific context
+3. End with a **Summary** section listing the 5-7 most exam-critical takeaways.
+4. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
+5. Quality over length — target 400-700 words of dense, high-value content.
+6. Write as though every word costs marks — no filler, no repetition.
 """
     try:
         result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
@@ -2440,54 +2439,88 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
         return ""
 
 
+async def _pipeline_web_search_pyqs(subject_name: str, chapter_title: str, class_name: str) -> str:
+    """Search the web for real PYQs and important questions related to this chapter."""
+    try:
+        from rag import _ddg_text_search
+        queries = [
+            f"{chapter_title} {subject_name} AHSEC previous year questions",
+            f"{chapter_title} {subject_name} {class_name} important questions marks",
+        ]
+        all_snippets = []
+        for q in queries:
+            results = await _ddg_text_search(q, 5)
+            for r in results:
+                snippet = (r.get("body") or r.get("snippet") or "").strip()
+                if snippet and len(snippet) > 30:
+                    all_snippets.append(snippet[:400])
+        combined = "\n---\n".join(all_snippets[:8])
+        return combined[:3000] if combined else ""
+    except Exception as e:
+        logger.warning(f"Web PYQ search failed for '{chapter_title}': {e}")
+        return ""
+
+
 async def _pipeline_generate_mark_wise_pyq(
     content: str, subject_name: str, chapter_title: str, class_name: str, paper_type: str = "",
     topics: list = None,
 ) -> dict:
     """
     Generate mark-wise important questions (1/2/3/5/10 marks) for a chapter.
+    First searches the web for real PYQs, then generates AI questions informed by actual exam patterns.
     Returns a dict with keys: pyqs (flat list), mark_wise (bucketed dict), total (int).
-    Stores nothing — caller is responsible for persisting the result.
     """
     import re as _re
     if not content or len(content.strip()) < 100:
         return {}
     topic_block = ", ".join(str(t) for t in (topics or [])[:15]) if topics else chapter_title
-    prompt = f"""You are an expert exam question setter for {class_name} {subject_name}.
 
-Generate the MOST IMPORTANT exam questions for the chapter below, organised strictly by mark weight.
-These should be high-probability questions a student must prepare.
+    web_pyq_context = await _pipeline_web_search_pyqs(subject_name, chapter_title, class_name)
+    web_block = ""
+    if web_pyq_context:
+        web_block = f"""
+
+**REAL EXAM QUESTIONS & PATTERNS found from web (use these as reference for style, phrasing, and difficulty):**
+{web_pyq_context}
+
+Incorporate any genuine PYQs you find above (mark them source:"web_pyq"). Generate remaining questions to fill each bucket to exactly 3.
+"""
+
+    prompt = f"""You are an expert exam question setter for {class_name} {subject_name} (AHSEC/SEBA/Degree board, Assam).
+
+Generate the MOST IMPORTANT and HIGH-PROBABILITY exam questions for the chapter below, organised strictly by mark weight.
+These must be the questions a student CANNOT afford to skip.
 Questions MUST collectively cover ALL of these syllabus topics: {topic_block}
 
 Chapter: {chapter_title}
 Topics: {topic_block}
-
+{web_block}
 Return ONLY valid JSON in this exact schema (no markdown, no explanation):
 {{
   "1_mark": [
-    {{"question": "...", "type": "MCQ/very_short_answer"}},
-    {{"question": "...", "type": "MCQ/very_short_answer"}},
-    {{"question": "...", "type": "MCQ/very_short_answer"}}
+    {{"question": "...", "type": "MCQ/very_short_answer", "source": "ai_generated"}},
+    {{"question": "...", "type": "MCQ/very_short_answer", "source": "ai_generated"}},
+    {{"question": "...", "type": "MCQ/very_short_answer", "source": "ai_generated"}}
   ],
   "2_mark": [
-    {{"question": "...", "type": "short_answer"}},
-    {{"question": "...", "type": "short_answer"}},
-    {{"question": "...", "type": "short_answer"}}
+    {{"question": "...", "type": "short_answer", "source": "ai_generated"}},
+    {{"question": "...", "type": "short_answer", "source": "ai_generated"}},
+    {{"question": "...", "type": "short_answer", "source": "ai_generated"}}
   ],
   "3_mark": [
-    {{"question": "...", "type": "brief_answer"}},
-    {{"question": "...", "type": "brief_answer"}},
-    {{"question": "...", "type": "brief_answer"}}
+    {{"question": "...", "type": "brief_answer", "source": "ai_generated"}},
+    {{"question": "...", "type": "brief_answer", "source": "ai_generated"}},
+    {{"question": "...", "type": "brief_answer", "source": "ai_generated"}}
   ],
   "5_mark": [
-    {{"question": "...", "type": "medium_answer"}},
-    {{"question": "...", "type": "medium_answer"}},
-    {{"question": "...", "type": "medium_answer"}}
+    {{"question": "...", "type": "medium_answer", "source": "ai_generated"}},
+    {{"question": "...", "type": "medium_answer", "source": "ai_generated"}},
+    {{"question": "...", "type": "medium_answer", "source": "ai_generated"}}
   ],
   "10_mark": [
-    {{"question": "...", "type": "long_answer/essay"}},
-    {{"question": "...", "type": "long_answer/essay"}},
-    {{"question": "...", "type": "long_answer/essay"}}
+    {{"question": "...", "type": "long_answer/essay", "source": "ai_generated"}},
+    {{"question": "...", "type": "long_answer/essay", "source": "ai_generated"}},
+    {{"question": "...", "type": "long_answer/essay", "source": "ai_generated"}}
   ]
 }}
 
@@ -2500,6 +2533,7 @@ Rules:
 - Questions must be specific to "{chapter_title}", not generic
 - Every listed topic must be addressed by at least one question
 - Exactly 3 questions per mark bucket, total 15 questions
+- If you found real PYQs from web data above, use "web_pyq" as source; otherwise "ai_generated"
 - Pure JSON only, no markdown fences
 
 Chapter content for context:
@@ -2535,7 +2569,7 @@ Chapter content for context:
                         "year":       0,
                         "paper_type": paper_type,
                         "sub_parts":  [],
-                        "source":     "ai_generated",
+                        "source":     q_obj.get("source", "ai_generated") if isinstance(q_obj, dict) else "ai_generated",
                     })
         if not flat_questions:
             return {}
@@ -2601,12 +2635,12 @@ Chapter content:
 
 
 async def _pipeline_generate_flashcards(
-    content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 30,
+    content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 15,
     topics: list = None,
 ) -> list:
     """
-    Generate memory-trick flashcards: mnemonics, mindmaps, shortcuts, hacks, and key-fact cards.
-    Returns list of flashcard dicts.
+    Generate high-quality memory-trick flashcards: mnemonics, mindmaps, shortcuts, hacks.
+    Quality over quantity — 15 focused cards instead of 30 generic ones.
     """
     if not content or len(content.strip()) < 100:
         return []
@@ -2614,26 +2648,23 @@ async def _pipeline_generate_flashcards(
     if topics:
         topic_list = ", ".join(str(t) for t in topics[:15])
         topic_instruction = f"\nFlashcards MUST collectively cover ALL of these syllabus topics: {topic_list}\nEnsure at least one flashcard per topic.\n"
-    prompt = f"""You are an expert memory coach and study-hack creator for AHSEC/FYUGP students in Assam.
+    prompt = f"""You are an expert memory coach for AHSEC/SEBA/Degree students in Assam. Quality matters more than quantity.
 
-Generate exactly {count} MEMORY-TRICK flashcards for:
+Generate exactly {count} HIGH-IMPACT memory-trick flashcards for:
 Subject: {subject_name} ({class_name})
 Chapter: {chapter_title}
 {topic_instruction}
-Each card must help a student REMEMBER, not just recall. Use:
-- Mnemonics (acronyms, rhymes, first-letter tricks)
-- Mindmap cues (central idea → branches)
-- Memory palaces / vivid associations
-- Shortcut formulas or patterns
-- "Because" hooks ("X happens BECAUSE...")
-- One-line exam tips
+Each card must make a concept STICK in the student's mind permanently. Focus on:
+- The hardest-to-remember facts that frequently appear in exams
+- Concepts students commonly confuse or forget
+- Key definitions, formulas, or lists that need memorisation
 
-Mix these types equally:
-1. "mnemonic"   — acronym or rhyme to remember a list
-2. "mindmap"    — central concept with 3-5 branch keywords
-3. "shortcut"   — quick rule or formula pattern to remember
-4. "memory_hack"— vivid story, analogy, or association
-5. "key_fact"   — single crucial fact + why it matters in exam
+Card types (distribute evenly):
+1. "mnemonic"    — powerful acronym, rhyme, or first-letter trick to remember a list/sequence
+2. "mindmap"     — central concept with 3-5 branch keywords showing relationships
+3. "shortcut"    — quick formula pattern, comparison trick, or calculation shortcut
+4. "memory_hack" — vivid analogy, real-world connection, or "imagine this" story
+5. "key_fact"    — one critical fact + WHY examiners ask it + expected mark range
 
 Return ONLY valid JSON (no markdown fences):
 {{"flashcards": [
@@ -2652,7 +2683,7 @@ Chapter content to base cards on:
 {content[:4500]}
 """
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4000)
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -2834,6 +2865,7 @@ async def admin_pipeline_auto_generate(body: PipelineAutoGenerateRequest, backgr
         "progress": 0,
         "message": "Pipeline starting…",
         "result": None,
+        "chapter_progress": {},
         "started_at": datetime.now(timezone.utc).timestamp(),
     }
     background_tasks.add_task(_pipeline_auto_generate_worker, job_id, subject_id, body.skip_existing)
@@ -2858,8 +2890,17 @@ async def _pipeline_process_one_chapter(
     skip_existing: bool = False,
 ) -> dict:
     """Process a single chapter: notes → MCQs → flashcards → geo-blogs (parallel) → PYQ.
+    All generated content is collected first, then written atomically at the end.
     If skip_existing=True, reuses existing notes/PYQs/flashcards and only runs blogs+PYQ HTML+sitemap.
     """
+    def _update_stage(stage: str, detail: str = ""):
+        if job_id and job_id in _pipeline_jobs:
+            job = _pipeline_jobs[job_id]
+            ch_progress = job.get("chapter_progress", {})
+            ch_progress[chapter.get("id", "")] = {"title": (chapter.get("title") or "")[:40], "stage": stage, "detail": detail}
+            pct = int(5 + (done_counter["done"] / max(total_chapters, 1)) * 88)
+            job.update({"progress": pct, "message": f"Chapter {done_counter['done']}/{total_chapters}: {stage}", "chapter_progress": ch_progress})
+
     async with semaphore:
         chapter_id    = chapter.get("id", "")
         chapter_title = (chapter.get("title") or "").strip()
@@ -2880,46 +2921,35 @@ async def _pipeline_process_one_chapter(
         if not chapter_title:
             return {"skipped": True, "result": chapter_result}
 
-        # ── Step 1: Notes ─────────────────────────────────────────────────────
+        _update_stage("notes", "Generating notes…")
+
         existing_content = (chapter.get("content") or "").strip()
         notes_content = existing_content
+        generated_notes = None
         if skip_existing and len(existing_content) > 100:
-            # Reuse existing notes — skip LLM call
             chapter_result["notes_generated"] = False
         else:
             try:
-                generated = await _pipeline_generate_chapter_notes(chapter, subject_name, class_name, paper_type)
-                if generated:
-                    notes_content = generated
-                    await db.chapters.update_one(
-                        {"id": chapter_id},
-                        {"$set": {
-                            "content": generated,
-                            "content_type": "notes",
-                            "notes_generated": True,
-                            "notes_generated_at": now_iso,
-                        }}
-                    )
+                generated_notes = await _pipeline_generate_chapter_notes(chapter, subject_name, class_name, paper_type)
+                if generated_notes:
+                    notes_content = generated_notes
                     chapter_result["notes_generated"] = True
-                    try:
-                        await auto_chunk_content(chapter_id=chapter_id, content=generated, subject_id=subject_id)
-                    except Exception:
-                        pass
             except Exception as e:
                 chapter_result["errors"].append(f"notes: {str(e)[:80]}")
 
         if not notes_content:
             done_counter["done"] += 1
-            if job_id and job_id in _pipeline_jobs:
-                pct = int(5 + (done_counter["done"] / max(total_chapters, 1)) * 88)
-                _pipeline_jobs[job_id].update({"progress": pct, "message": f"Chapter {done_counter['done']}/{total_chapters} processed"})
+            _update_stage("skipped", "No content")
             return {"skipped": True, "result": chapter_result}
 
-        # ── Steps 2, 2b & 3: Topic PYQs + Mark-wise PYQs + Flashcards (parallel) ─
-        # If skip_existing, check DB first — only generate if absent
+        _update_stage("questions", "Generating questions & flashcards…")
+
         pyq_err = None
         mw_err  = None
         fc_err  = None
+        topic_pyqs = None
+        mark_wise_result = None
+        flashcards = None
         _existing_pyqs = None
         _existing_mw   = None
         _existing_fc   = None
@@ -2932,88 +2962,25 @@ async def _pipeline_process_one_chapter(
             chapter_result["topic_pyq_count"]   = _existing_pyqs.get("total", 0)
             chapter_result["mark_wise_count"]    = _existing_mw.get("total", 0)
             chapter_result["flashcards_count"]   = _existing_fc.get("total", 0)
-            topic_pyqs = None
-            mark_wise_result = None
-            flashcards = None
         else:
             ch_topics = chapter.get("topics") or []
             pyq_task = _pipeline_generate_topic_pyq(notes_content, subject_name, chapter_title, class_name, count=20)
             mw_task  = _pipeline_generate_mark_wise_pyq(notes_content, subject_name, chapter_title, class_name, paper_type=paper_type, topics=ch_topics)
-            fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=30, topics=ch_topics)
+            fc_task  = _pipeline_generate_flashcards(notes_content, subject_name, chapter_title, class_name, count=15, topics=ch_topics)
             (topic_pyqs, pyq_err), (mark_wise_result, mw_err), (flashcards, fc_err) = await asyncio.gather(
                 _safe(pyq_task), _safe(mw_task), _safe(fc_task)
             )
+            if pyq_err:
+                chapter_result["errors"].append(f"topic-pyqs: {str(pyq_err)[:60]}")
+            if mw_err:
+                chapter_result["errors"].append(f"mark-wise: {str(mw_err)[:60]}")
+            if fc_err:
+                chapter_result["errors"].append(f"flashcards: {str(fc_err)[:60]}")
 
-        if topic_pyqs:
-            try:
-                await db.topic_pyq_collections.update_one(
-                    {"chapter_id": chapter_id, "pipeline_generated": True},
-                    {"$set": {
-                        "id": str(uuid.uuid4()),
-                        "subject_id": subject_id, "subject_name": subject_name,
-                        "chapter_id": chapter_id, "chapter_title": chapter_title,
-                        "pyqs": topic_pyqs, "total": len(topic_pyqs),
-                        "pipeline_generated": True, "created_at": now_iso,
-                    }},
-                    upsert=True,
-                )
-                chapter_result["topic_pyq_count"] = len(topic_pyqs)
-            except Exception as e:
-                chapter_result["errors"].append(f"topic-pyq-save: {str(e)[:60]}")
-        elif pyq_err:
-            chapter_result["errors"].append(f"topic-pyqs: {str(pyq_err)[:60]}")
+        _update_stage("blogs", "Generating geo-SEO blogs…")
 
-        # ── Step 2b: Persist mark-wise questions into ai_pyq_collections ──────
-        if mark_wise_result and mark_wise_result.get("pyqs"):
-            try:
-                mw_doc = {
-                    "id":            str(uuid.uuid4()),
-                    "subject_id":    subject_id,
-                    "subject_name":  subject_name,
-                    "chapter_id":    chapter_id,
-                    "chapter_title": chapter_title,
-                    "pyqs":          mark_wise_result["pyqs"],
-                    "mark_wise":     mark_wise_result["mark_wise"],
-                    "total":         mark_wise_result["total"],
-                    "source":        "pipeline_mark_wise",
-                    "ai_generated":  True,
-                    "pipeline_generated": True,
-                    "created_at":    now_iso,
-                    "updated_at":    now_iso,
-                }
-                await db.ai_pyq_collections.update_one(
-                    {"chapter_id": chapter_id},
-                    {"$set": mw_doc},
-                    upsert=True,
-                )
-                chapter_result["mark_wise_count"] = mark_wise_result["total"]
-            except Exception as e:
-                chapter_result["errors"].append(f"mark-wise-save: {str(e)[:60]}")
-        elif mw_err:
-            chapter_result["errors"].append(f"mark-wise: {str(mw_err)[:60]}")
-
-        if flashcards:
-            try:
-                await db.flashcard_collections.update_one(
-                    {"chapter_id": chapter_id, "pipeline_generated": True},
-                    {"$set": {
-                        "id": str(uuid.uuid4()),
-                        "subject_id": subject_id, "subject_name": subject_name,
-                        "chapter_id": chapter_id, "chapter_title": chapter_title,
-                        "flashcards": flashcards, "total": len(flashcards),
-                        "pipeline_generated": True, "created_at": now_iso,
-                    }},
-                    upsert=True,
-                )
-                chapter_result["flashcards_count"] = len(flashcards)
-            except Exception as e:
-                chapter_result["errors"].append(f"flashcards-save: {str(e)[:60]}")
-        elif fc_err:
-            chapter_result["errors"].append(f"flashcards: {str(fc_err)[:60]}")
-
-        # ── Step 4: Geo-SEO Blogs (all 5 cities in parallel) ────────────────
-        # skip_existing: skip if all geo-blogs already exist in CMS for this chapter
         _existing_geo_count = 0
+        geo_blog_urls = []
         if skip_existing:
             try:
                 _existing_geo_count = await db.cms_documents.count_documents({
@@ -3024,7 +2991,6 @@ async def _pipeline_process_one_chapter(
         if skip_existing and _existing_geo_count >= len(GEO_CITIES):
             logger.info(f"[Pipeline] Skipping geo-blogs for '{chapter_title}' — {_existing_geo_count} already exist")
             chapter_result["blogs_count"] = _existing_geo_count
-            geo_blog_urls = []
         else:
             blog_tasks = [
                 _safe(_pipeline_generate_geo_seo_blog(
@@ -3035,7 +3001,6 @@ async def _pipeline_process_one_chapter(
                 for city in GEO_CITIES
             ]
             blog_results = await asyncio.gather(*blog_tasks)
-            geo_blog_urls = []
             for city, (blog_data, blog_err) in zip(GEO_CITIES, blog_results):
                 if blog_err or not blog_data:
                     chapter_result["errors"].append(f"geo-blog-{city}: {str(blog_err)[:60]}" if blog_err else f"geo-blog-{city}: empty")
@@ -3065,7 +3030,101 @@ async def _pipeline_process_one_chapter(
                 except Exception as e:
                     chapter_result["errors"].append(f"geo-blog-{city}-save: {str(e)[:60]}")
 
-        # ── Step 5: PYQ HTML Page ────────────────────────────────────────────
+        _update_stage("saving", "Atomic write…")
+
+        # ── ATOMIC CHAPTER UPDATE: write notes + questions + flashcards in one operation ──
+        chapter_atomic_update = {"updated_at": now_iso}
+        if generated_notes:
+            chapter_atomic_update.update({
+                "content": generated_notes,
+                "content_type": "notes",
+                "notes_generated": True,
+                "notes_generated_at": now_iso,
+            })
+        if mark_wise_result and mark_wise_result.get("pyqs"):
+            chapter_atomic_update["has_important_questions"] = True
+            chapter_atomic_update["mark_wise_questions"] = mark_wise_result["mark_wise"]
+            chapter_atomic_update["mark_wise_count"] = mark_wise_result["total"]
+        if flashcards:
+            chapter_atomic_update["has_flashcards"] = True
+            chapter_atomic_update["flashcard_summary"] = [
+                {"front": fc.get("front", "")[:100], "type": fc.get("type", "")}
+                for fc in (flashcards or [])[:5]
+            ]
+            chapter_atomic_update["flashcard_count"] = len(flashcards)
+        chapter_atomic_update["content_synced_at"] = now_iso
+
+        try:
+            await db.chapters.update_one({"id": chapter_id}, {"$set": chapter_atomic_update})
+        except Exception as e:
+            chapter_result["errors"].append(f"atomic-save: {str(e)[:60]}")
+
+        if generated_notes:
+            try:
+                await auto_chunk_content(chapter_id=chapter_id, content=generated_notes, subject_id=subject_id)
+            except Exception:
+                pass
+
+        if topic_pyqs:
+            try:
+                await db.topic_pyq_collections.update_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True},
+                    {"$set": {
+                        "id": str(uuid.uuid4()),
+                        "subject_id": subject_id, "subject_name": subject_name,
+                        "chapter_id": chapter_id, "chapter_title": chapter_title,
+                        "pyqs": topic_pyqs, "total": len(topic_pyqs),
+                        "pipeline_generated": True, "created_at": now_iso,
+                    }},
+                    upsert=True,
+                )
+                chapter_result["topic_pyq_count"] = len(topic_pyqs)
+            except Exception as e:
+                chapter_result["errors"].append(f"topic-pyq-save: {str(e)[:60]}")
+
+        if mark_wise_result and mark_wise_result.get("pyqs"):
+            try:
+                mw_doc = {
+                    "id":            str(uuid.uuid4()),
+                    "subject_id":    subject_id,
+                    "subject_name":  subject_name,
+                    "chapter_id":    chapter_id,
+                    "chapter_title": chapter_title,
+                    "pyqs":          mark_wise_result["pyqs"],
+                    "mark_wise":     mark_wise_result["mark_wise"],
+                    "total":         mark_wise_result["total"],
+                    "source":        "pipeline_mark_wise",
+                    "ai_generated":  True,
+                    "pipeline_generated": True,
+                    "created_at":    now_iso,
+                    "updated_at":    now_iso,
+                }
+                await db.ai_pyq_collections.update_one(
+                    {"chapter_id": chapter_id},
+                    {"$set": mw_doc},
+                    upsert=True,
+                )
+                chapter_result["mark_wise_count"] = mark_wise_result["total"]
+            except Exception as e:
+                chapter_result["errors"].append(f"mark-wise-save: {str(e)[:60]}")
+
+        if flashcards:
+            try:
+                await db.flashcard_collections.update_one(
+                    {"chapter_id": chapter_id, "pipeline_generated": True},
+                    {"$set": {
+                        "id": str(uuid.uuid4()),
+                        "subject_id": subject_id, "subject_name": subject_name,
+                        "chapter_id": chapter_id, "chapter_title": chapter_title,
+                        "flashcards": flashcards, "total": len(flashcards),
+                        "pipeline_generated": True, "created_at": now_iso,
+                    }},
+                    upsert=True,
+                )
+                chapter_result["flashcards_count"] = len(flashcards)
+            except Exception as e:
+                chapter_result["errors"].append(f"flashcards-save: {str(e)[:60]}")
+
         try:
             pyq_html = await _pipeline_generate_pyq_html(chapter, subject_name, pyq_docs)
             pyq_slug = f"pyq-{board_slug}-{class_slug}-{chapter_slug}"
@@ -3089,9 +3148,7 @@ async def _pipeline_process_one_chapter(
             chapter_result["errors"].append(f"pyq-page: {str(e)[:80]}")
 
         done_counter["done"] += 1
-        if job_id and job_id in _pipeline_jobs:
-            pct = int(5 + (done_counter["done"] / max(total_chapters, 1)) * 88)
-            _pipeline_jobs[job_id].update({"progress": pct, "message": f"Chapter {done_counter['done']}/{total_chapters} complete"})
+        _update_stage("done", "Complete")
 
         return {"skipped": False, "result": chapter_result, "blog_urls": geo_blog_urls, "mcqs": len(topic_pyqs or []), "flashcards": len(flashcards or []), "pyq": chapter_result["pyq_page"]}
 

@@ -797,6 +797,111 @@ async def generate_ai_thumbnails_bulk(
     return {"results": results, "total": len(subject_ids), "done": sum(1 for r in results if r["status"] == "done")}
 
 
+def _generate_chapter_card_wallpaper(chapter_title: str, subject_name: str, variant: int = 0, size=(400, 225)) -> str:
+    from PIL import Image as _PILImage, ImageDraw as _Draw
+    import io as _io, hashlib as _hl, struct as _st, math as _math
+
+    seed = int(_hl.md5(f"{chapter_title}:{subject_name}:{variant}".encode()).hexdigest()[:8], 16)
+    palette_sets = [
+        [(99, 58, 237), (139, 92, 246), (59, 130, 246)],
+        [(16, 185, 129), (6, 182, 212), (59, 130, 246)],
+        [(236, 72, 153), (168, 85, 247), (99, 58, 237)],
+        [(245, 158, 11), (249, 115, 22), (239, 68, 68)],
+        [(20, 184, 166), (56, 189, 248), (99, 102, 241)],
+    ]
+    colors = palette_sets[(seed + variant) % len(palette_sets)]
+    img = _PILImage.new('RGB', size, colors[0])
+    draw = _Draw.Draw(img)
+    rng_state = seed + variant * 7
+    for i in range(8 + variant * 3):
+        rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+        x = rng_state % size[0]
+        rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+        y = rng_state % size[1]
+        rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+        r = 30 + rng_state % 80
+        c = colors[(i + variant) % len(colors)]
+        alpha_c = tuple(min(255, v + 30) for v in c)
+        draw.ellipse([x - r, y - r, x + r, y + r], fill=alpha_c)
+    for i in range(3 + variant):
+        rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+        x1 = rng_state % size[0]
+        rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+        y1 = rng_state % size[1]
+        rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+        x2 = rng_state % size[0]
+        rng_state = (rng_state * 1103515245 + 12345) & 0x7FFFFFFF
+        y2 = rng_state % size[1]
+        c = colors[(i + 1) % len(colors)]
+        draw.line([(x1, y1), (x2, y2)], fill=c, width=2 + i)
+    draw.rectangle([0, size[1] - 60, size[0], size[1]], fill=(0, 0, 0))
+    buf = _io.BytesIO()
+    img.save(buf, format='JPEG', quality=85)
+    buf.seek(0)
+    return f"data:image/jpeg;base64,{base64.b64encode(buf.read()).decode()}"
+
+
+@router.post("/admin/thumbnail/generate-chapter-cards")
+async def generate_chapter_card_thumbnails(
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Generate abstract educational wallpaper thumbnails for chapters within a subject.
+    Creates 3 colour variants per chapter using deterministic seeded generation.
+    """
+    subject_id = data.get("subject_id", "")
+    chapter_ids = data.get("chapter_ids", [])[:100]
+    if not subject_id:
+        raise HTTPException(400, "subject_id required")
+
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "name": 1})
+    if not subject:
+        raise HTTPException(404, "Subject not found")
+    subject_name = subject.get("name", "")
+
+    query = {"subject_id": subject_id}
+    if chapter_ids:
+        query["id"] = {"$in": chapter_ids}
+    chapters = await db.chapters.find(query, {"_id": 0, "id": 1, "title": 1}).to_list(100)
+
+    loop = asyncio.get_event_loop()
+    results = []
+    for ch in chapters:
+        ch_id = ch.get("id", "")
+        ch_title = ch.get("title", "")
+        try:
+            variants = await asyncio.gather(
+                loop.run_in_executor(None, _generate_chapter_card_wallpaper, ch_title, subject_name, 0),
+                loop.run_in_executor(None, _generate_chapter_card_wallpaper, ch_title, subject_name, 1),
+                loop.run_in_executor(None, _generate_chapter_card_wallpaper, ch_title, subject_name, 2),
+            )
+            thumb_data = {
+                "variant1_url": variants[0],
+                "variant2_url": variants[1],
+                "variant3_url": variants[2],
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            await db.chapters.update_one(
+                {"id": ch_id},
+                {"$set": {
+                    "card_thumbnails": thumb_data,
+                    "thumbnailUrl": variants[0],
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }}
+            )
+            results.append({"chapter_id": ch_id, "title": ch_title, "status": "done"})
+        except Exception as _e:
+            logger.error(f"Chapter card thumb error for {ch_id}: {_e}")
+            results.append({"chapter_id": ch_id, "title": ch_title, "status": "failed", "error": str(_e)[:80]})
+
+    return {
+        "results": results,
+        "total": len(chapters),
+        "done": sum(1 for r in results if r["status"] == "done"),
+    }
+
+
 @router.delete("/admin/content/subjects/{subject_id}")
 async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_user)):
     result = await db.subjects.delete_one({"id": subject_id})

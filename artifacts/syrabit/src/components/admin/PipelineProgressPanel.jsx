@@ -1,8 +1,3 @@
-/**
- * PipelineProgressPanel — Modal overlay for 1-Click Full Subject Pipeline
- * Starts a background job immediately, then polls /api/admin/pipeline/status/{job_id}
- * every 3 seconds for live progress updates.
- */
 import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   X, Loader2, CheckCircle2, AlertCircle, Zap, Globe, BookOpen,
@@ -11,16 +6,52 @@ import {
 import { toast } from 'sonner';
 import { adminPipelineAutoGenerate, adminPipelineStatus } from '@/utils/api';
 
-const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
-
 const STEP_LABELS = [
   { icon: BookOpen,   label: 'Chapter Notes',              color: '#8b5cf6' },
   { icon: HelpCircle, label: '20 Topic PYQs',              color: '#f59e0b' },
   { icon: HelpCircle, label: '15 Mark-Wise Questions',     color: '#f97316' },
-  { icon: FileText,   label: '30 Flashcards',              color: '#10b981' },
+  { icon: FileText,   label: '15 Flashcards',              color: '#10b981' },
   { icon: Globe,      label: '5 Geo-SEO Blogs',            color: '#3b82f6' },
   { icon: Sparkles,   label: 'PYQ HTML Page',              color: '#ec4899' },
 ];
+
+const STAGE_ICONS = {
+  notes:     { icon: BookOpen,   color: '#8b5cf6' },
+  questions: { icon: HelpCircle, color: '#f59e0b' },
+  blogs:     { icon: Globe,      color: '#3b82f6' },
+  saving:    { icon: Sparkles,   color: '#ec4899' },
+  done:      { icon: CheckCircle2, color: '#10b981' },
+  skipped:   { icon: AlertCircle, color: '#6b7280' },
+};
+
+function ChapterStageRow({ chId, info }) {
+  const stage = info?.stage || 'pending';
+  const stageInfo = STAGE_ICONS[stage] || STAGE_ICONS.notes;
+  const Icon = stageInfo.icon;
+  const isDone = stage === 'done';
+  const isSkipped = stage === 'skipped';
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg"
+      style={{ background: isDone ? 'rgba(16,185,129,0.06)' : 'rgba(255,255,255,0.025)' }}>
+      {isDone ? (
+        <CheckCircle2 size={12} style={{ color: '#10b981' }} className="flex-shrink-0" />
+      ) : isSkipped ? (
+        <AlertCircle size={12} style={{ color: '#6b7280' }} className="flex-shrink-0" />
+      ) : (
+        <Loader2 size={12} style={{ color: stageInfo.color }} className="animate-spin flex-shrink-0" />
+      )}
+      <span className="text-xs text-white/60 truncate flex-1">{info?.title || chId}</span>
+      <span className="text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0"
+        style={{
+          background: `${stageInfo.color}18`,
+          color: stageInfo.color,
+        }}>
+        {info?.detail || stage}
+      </span>
+    </div>
+  );
+}
 
 export default function PipelineProgressPanel({ adminToken, subjectId, subjectName, skipExisting, onClose, onComplete }) {
   const [status, setStatus]     = useState('idle');
@@ -116,6 +147,9 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
     ? Math.min(99, pollData.progress || 0)
     : 0;
 
+  const chapterProgress = pollData?.chapter_progress || {};
+  const chapterEntries = Object.entries(chapterProgress);
+
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
       <div className="absolute inset-0 bg-black/75 backdrop-blur-sm" />
@@ -127,7 +161,6 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
         }}
         onClick={e => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b"
           style={{ borderColor: 'rgba(255,255,255,0.07)', background: 'rgba(139,92,246,0.08)' }}>
           <div className="flex items-center gap-2.5">
@@ -137,7 +170,7 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
             </div>
             <div>
               <h2 className="text-sm font-bold text-white flex items-center gap-1.5">
-                {skipExisting ? 'SEO Polish ⚡' : 'Auto-Generate Full Subject'}
+                {skipExisting ? 'SEO Polish' : 'Auto-Generate Full Subject'}
                 {skipExisting && (
                   <span className="text-[10px] font-normal px-1.5 py-0.5 rounded-full"
                     style={{ background: 'rgba(14,165,233,0.20)', color: '#7dd3fc' }}>
@@ -158,10 +191,8 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
           </button>
         </div>
 
-        {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
 
-          {/* What will be generated */}
           {status === 'idle' && (
             <div className="space-y-3">
               <p className="text-xs text-white/50">
@@ -190,14 +221,13 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
             </div>
           )}
 
-          {/* Running */}
           {status === 'running' && (
-            <div className="flex flex-col items-center gap-5 py-6">
-              <div className="relative w-20 h-20">
+            <div className="flex flex-col items-center gap-5 py-4">
+              <div className="relative w-16 h-16">
                 <div className="absolute inset-0 rounded-full"
                   style={{ background: 'rgba(139,92,246,0.15)', border: '2px solid rgba(139,92,246,0.30)' }} />
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <Loader2 size={32} className="text-violet-400 animate-spin" />
+                  <Loader2 size={28} className="text-violet-400 animate-spin" />
                 </div>
               </div>
               <div className="text-center">
@@ -207,12 +237,8 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
                 {jobId && (
                   <p className="text-[10px] font-mono text-white/25 mt-1">job {jobId.slice(-8)}</p>
                 )}
-                <p className="text-xs text-white/35 mt-1.5 max-w-sm">
-                  Generating chapter notes, MCQs, flashcards, geo-SEO blogs, and PYQ pages for all chapters.
-                </p>
               </div>
 
-              {/* Progress bar when polling data available */}
               {pollData && (
                 <div className="w-full space-y-2">
                   <div className="flex items-center justify-between text-xs text-white/40">
@@ -226,22 +252,32 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
                 </div>
               )}
 
-              <div className="w-full space-y-2">
-                {STEP_LABELS.map((s, i) => {
-                  const Icon = s.icon;
-                  return (
-                    <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-lg"
-                      style={{ background: 'rgba(255,255,255,0.025)' }}>
-                      <Loader2 size={12} style={{ color: s.color }} className="animate-spin flex-shrink-0" />
-                      <span className="text-xs text-white/45">{s.label} — processing…</span>
-                    </div>
-                  );
-                })}
-              </div>
+              {chapterEntries.length > 0 ? (
+                <div className="w-full space-y-1.5 max-h-[240px] overflow-y-auto pr-1">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-white/25 px-1 mb-1">
+                    Per-Chapter Progress ({chapterEntries.filter(([,v]) => v?.stage === 'done').length}/{chapterEntries.length})
+                  </p>
+                  {chapterEntries.map(([chId, info]) => (
+                    <ChapterStageRow key={chId} chId={chId} info={info} />
+                  ))}
+                </div>
+              ) : (
+                <div className="w-full space-y-2">
+                  {STEP_LABELS.map((s, i) => {
+                    const Icon = s.icon;
+                    return (
+                      <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-lg"
+                        style={{ background: 'rgba(255,255,255,0.025)' }}>
+                        <Loader2 size={12} style={{ color: s.color }} className="animate-spin flex-shrink-0" />
+                        <span className="text-xs text-white/45">{s.label} — processing…</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Error */}
           {status === 'error' && (
             <div className="flex flex-col items-center gap-4 py-6 text-center">
               <AlertCircle size={40} className="text-red-400" />
@@ -259,7 +295,6 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
             </div>
           )}
 
-          {/* Done — Summary */}
           {status === 'done' && summary && (
             <div className="space-y-4">
               <div className="flex items-center gap-2">
@@ -267,7 +302,6 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
                 <p className="text-sm font-bold text-emerald-300">Pipeline Complete!</p>
               </div>
 
-              {/* Stats grid */}
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {[
                   { label: 'Chapters', value: summary.chapters_processed, color: '#8b5cf6' },
@@ -285,7 +319,6 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
                 ))}
               </div>
 
-              {/* PYQ + Sitemap ping */}
               <div className="flex items-center gap-3 flex-wrap">
                 <span className="flex items-center gap-1.5 text-xs text-white/50">
                   <Sparkles size={11} className="text-pink-400" />
@@ -297,7 +330,6 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
                 </span>
               </div>
 
-              {/* Blog URLs preview */}
               {summary.blog_urls?.length > 0 && (
                 <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.07)' }}>
                   <p className="text-[10px] font-bold uppercase tracking-wider text-white/30 px-3 py-2"
@@ -327,7 +359,6 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
                 </div>
               )}
 
-              {/* Chapter errors summary */}
               {summary.chapter_results?.some(r => r.errors?.length > 0) && (
                 <div className="rounded-xl p-3 text-xs"
                   style={{ background: 'rgba(248,113,113,0.06)', border: '1px solid rgba(248,113,113,0.15)' }}>
@@ -346,7 +377,6 @@ export default function PipelineProgressPanel({ adminToken, subjectId, subjectNa
           )}
         </div>
 
-        {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t"
           style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.015)' }}>
           {status === 'idle' && (
