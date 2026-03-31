@@ -49,6 +49,7 @@ export const getBoards = () => axios.get(`${API_BASE}/content/boards`);
 export const getClasses = (boardId) => axios.get(`${API_BASE}/content/classes?board_id=${boardId}`);
 export const getStreams = (classId) => axios.get(`${API_BASE}/content/streams?class_id=${classId}`);
 export const getAllSubjects = () => axios.get(`${API_BASE}/content/subjects`);
+export const getSubjectsByCourseType = (boardId) => axios.get(`${API_BASE}/content/subjects-by-course-type?board_id=${boardId}`);
 export const getSubject = (id) => axios.get(`${API_BASE}/content/subjects/${id}`);
 export const getChapters = (subjectId) => axios.get(`${API_BASE}/content/chapters/${subjectId}`);
 export const getChunks = (chapterId) => axios.get(`${API_BASE}/content/chunks/${chapterId}`);

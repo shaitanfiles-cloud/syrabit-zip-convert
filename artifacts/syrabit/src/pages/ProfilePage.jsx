@@ -254,7 +254,8 @@ export default function ProfilePage() {
           deletionPending={deletionPending} getDeletionHoursLeft={getDeletionHoursLeft}
           cancellingDelete={cancellingDelete} handleCancelDeletion={handleCancelDeletion}
         />
-        <AcademicDetails profile={profile} isDegreeProfile={isDegreeProfile} openEdit={openEdit} />
+        <AcademicDetails profile={profile} isDegreeProfile={isDegreeProfile} openEdit={openEdit}
+          onProfileUpdate={(updates) => setProfile((p) => ({ ...p, ...updates }))} />
         <AiCredits
           stats={stats} creditsRemaining={creditsRemaining} creditsUsed={creditsUsed}
           creditsLimit={creditsLimit} creditPercent={creditPercent} isLowCredits={isLowCredits}

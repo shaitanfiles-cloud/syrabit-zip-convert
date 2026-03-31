@@ -40,15 +40,22 @@ router = APIRouter()
 
 @router.post("/user/onboarding")
 async def save_onboarding(data: OnboardingData, user: dict = Depends(get_current_user)):
-    await supa_update_user(user["id"], {
+    update_data = {
         "onboarding_done": True,
         "board_id": data.board_id,
         "board_name": data.board_name,
         "class_id": data.class_id,
         "class_name": data.class_name,
-        "stream_id": data.stream_id,
-        "stream_name": data.stream_name,
-    })
+    }
+    if data.stream_id:
+        update_data["stream_id"] = data.stream_id
+    if data.stream_name:
+        update_data["stream_name"] = data.stream_name
+    if data.course_type:
+        update_data["course_type"] = data.course_type
+    if data.selected_subjects:
+        update_data["selected_subjects"] = data.selected_subjects
+    await supa_update_user(user["id"], update_data)
     return {"message": "Onboarding complete"}
 
 @router.get("/user/profile")
@@ -67,9 +74,14 @@ async def get_profile(user: dict = Depends(get_current_user)):
         "document_access": credits_info["document_access"],
         "onboarding_done": user.get("onboarding_done", False),
         "is_admin": user.get("is_admin", False),
+        "board_id": user.get("board_id", ""),
         "board_name": user.get("board_name", ""),
+        "class_id": user.get("class_id", ""),
         "class_name": user.get("class_name", ""),
+        "stream_id": user.get("stream_id", ""),
         "stream_name": user.get("stream_name", ""),
+        "course_type": user.get("course_type", ""),
+        "selected_subjects": user.get("selected_subjects", []),
         "saved_subjects": user.get("saved_subjects", []),
         "created_at": user.get("created_at", ""),
         "avatar_url": user.get("avatar_url", ""),
@@ -87,6 +99,8 @@ async def update_profile(data: ProfileUpdate, user: dict = Depends(get_current_u
     if data.board_name is not None: update["board_name"] = data.board_name
     if data.class_name is not None: update["class_name"] = data.class_name
     if data.stream_name is not None: update["stream_name"] = data.stream_name
+    if data.course_type is not None: update["course_type"] = data.course_type
+    if data.selected_subjects is not None: update["selected_subjects"] = data.selected_subjects
     if data.avatar_url is not None:
         if data.avatar_url and not data.avatar_url.startswith("data:image/"):
             raise HTTPException(status_code=400, detail="Invalid avatar URL format")

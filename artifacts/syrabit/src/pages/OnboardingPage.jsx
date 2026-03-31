@@ -4,7 +4,7 @@ import { ChevronRight, ChevronLeft, Globe, BookOpen, GraduationCap, FlaskConical
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { getBoards, getClasses, getStreams, saveOnboarding } from '@/utils/api';
-import { isDegreeBoard, streamLabel, streamStepHint } from '@/utils/courseTypes';
+import { isDegreeBoard, streamStepHint } from '@/utils/courseTypes';
 import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/sonner';
 import { LogoMark } from '@/components/Logo';
@@ -43,8 +43,8 @@ export default function OnboardingPage() {
   const [selectedStream, setSelectedStream] = useState(null);
 
   const isDegreeSel = isDegreeBoard(selectedBoard?.name);
-  const step3Label  = isDegreeSel ? 'Course Type' : 'Stream';
-  const STEPS       = ['Board', 'Class', step3Label];
+  const totalSteps = isDegreeSel ? 2 : 3;
+  const STEPS = isDegreeSel ? ['Board', 'Semester'] : ['Board', 'Class', 'Stream'];
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -67,16 +67,18 @@ export default function OnboardingPage() {
   }, [selectedBoard]);
 
   useEffect(() => {
-    if (selectedClass) {
+    if (selectedClass && !isDegreeSel) {
       setLoading(true);
       getStreams(selectedClass.id)
         .then((res) => setStreams(res.data))
         .finally(() => setLoading(false));
     }
-  }, [selectedClass]);
+  }, [selectedClass, isDegreeSel]);
 
   const goNext = () => setStep((s) => s + 1);
   const goBack = () => setStep((s) => s - 1);
+
+  const isLastStep = step === totalSteps - 1;
 
   const handleFinish = async () => {
     setSaving(true);
@@ -86,11 +88,12 @@ export default function OnboardingPage() {
         board_name: selectedBoard.name,
         class_id: selectedClass.id,
         class_name: selectedClass.name,
-        stream_id: selectedStream.id,
-        stream_name: selectedStream.name,
       };
+      if (!isDegreeSel && selectedStream) {
+        onboardingData.stream_id = selectedStream.id;
+        onboardingData.stream_name = selectedStream.name;
+      }
       await saveOnboarding(onboardingData);
-      // Persist for getOnboardingProfile() synchronous reads (Library auto-filter)
       localStorage.setItem('syrabit:onboarding', JSON.stringify(onboardingData));
       await refreshUser();
       toast.success('Setup complete! Welcome to Syrabit.ai');
@@ -102,10 +105,10 @@ export default function OnboardingPage() {
     }
   };
 
-  const canGoNext = [
+  const canProceed = [
     selectedBoard !== null,
     selectedClass !== null,
-    selectedStream !== null,
+    !isDegreeSel ? selectedStream !== null : true,
   ];
 
   const getStreamIcon = (name) => STREAM_ICONS[name] || FlaskConical;
@@ -115,7 +118,6 @@ export default function OnboardingPage() {
     <div className="min-h-screen bg-[#06060e] flex items-center justify-center p-4">
       <Toaster richColors position="top-right" />
       <div className="w-full max-w-md">
-        {/* Header */}
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
             <LogoMark size="xl" className="anim-float" />
@@ -124,7 +126,6 @@ export default function OnboardingPage() {
           <p className="text-white/50 text-sm">Tell us about your studies so we can personalize your experience</p>
         </div>
 
-        {/* Progress */}
         <div className="flex items-center gap-2 mb-8">
           {STEPS.map((label, i) => (
             <div key={label} className="flex items-center gap-2 flex-1">
@@ -147,10 +148,8 @@ export default function OnboardingPage() {
           ))}
         </div>
 
-        {/* Step content */}
         <div className="glass-card rounded-2xl p-6 border border-white/10 min-h-[300px]">
             <div>
-              {/* Step 0: Board */}
               {step === 0 && (
                 <div>
                   <h2 className="text-lg font-semibold text-white mb-1">Select your Division</h2>
@@ -186,11 +185,10 @@ export default function OnboardingPage() {
                 </div>
               )}
 
-              {/* Step 1: Class */}
               {step === 1 && (
                 <div>
-                  <h2 className="text-lg font-semibold text-white mb-1">Select your Class</h2>
-                  <p className="text-white/50 text-sm mb-6">Which class are you currently in?</p>
+                  <h2 className="text-lg font-semibold text-white mb-1">Select your {isDegreeSel ? 'Semester' : 'Class'}</h2>
+                  <p className="text-white/50 text-sm mb-6">{isDegreeSel ? 'Which semester are you currently in?' : 'Which class are you currently in?'}</p>
                   {loading ? (
                     <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-400" /></div>
                   ) : (
@@ -225,10 +223,9 @@ export default function OnboardingPage() {
                 </div>
               )}
 
-              {/* Step 2: Stream / Course Type */}
-              {step === 2 && (
+              {step === 2 && !isDegreeSel && (
                 <div>
-                  <h2 className="text-lg font-semibold text-white mb-1">Select your {step3Label}</h2>
+                  <h2 className="text-lg font-semibold text-white mb-1">Select your Stream</h2>
                   <p className="text-white/50 text-sm mb-6">{streamStepHint(selectedBoard?.name)}</p>
                   {loading ? (
                     <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-400" /></div>
@@ -266,7 +263,6 @@ export default function OnboardingPage() {
             </div>
         </div>
 
-        {/* Navigation */}
         <div className="flex items-center justify-between mt-6">
           {step > 0 ? (
             <Button
@@ -279,10 +275,10 @@ export default function OnboardingPage() {
             </Button>
           ) : <div />}
 
-          {step < 2 ? (
+          {!isLastStep ? (
             <Button
               onClick={goNext}
-              disabled={!canGoNext[step]}
+              disabled={!canProceed[step]}
               className="bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40"
               data-testid="onboarding-next-button"
             >
@@ -291,7 +287,7 @@ export default function OnboardingPage() {
           ) : (
             <Button
               onClick={handleFinish}
-              disabled={!canGoNext[2] || saving}
+              disabled={!canProceed[step] || saving}
               className="bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40"
               data-testid="onboarding-finish-button"
             >

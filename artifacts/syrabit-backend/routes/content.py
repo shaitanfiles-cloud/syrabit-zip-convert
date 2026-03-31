@@ -157,6 +157,54 @@ async def get_streams(class_id: Optional[str] = None, nocache: Optional[str] = N
     except Exception:
         return []
 
+@router.get("/content/subjects-by-course-type")
+async def get_subjects_by_course_type(board_id: str, nocache: Optional[str] = None, response: Response = None):
+    ck = f"subjects_by_course_type:{board_id}"
+    if not nocache:
+        cached = _get_content_cache(ck)
+        if cached:
+            if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+            return cached
+    try:
+        if not await is_mongo_available():
+            return []
+        all_classes = await db.classes.find({"board_id": board_id}, {"_id": 0}).to_list(50)
+        class_ids = [c["id"] for c in all_classes]
+        all_streams = await db.streams.find({"class_id": {"$in": class_ids}}, {"_id": 0}).to_list(200)
+        stream_ids = [s["id"] for s in all_streams]
+        all_subjects = await db.subjects.find({"stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0}).to_list(1000)
+        for s in all_subjects:
+            if "thumbnail_url" in s and "thumbnailUrl" not in s:
+                s["thumbnailUrl"] = s.pop("thumbnail_url")
+        stream_map = {s["id"]: s for s in all_streams}
+        COURSE_TYPES = [
+            {"slug": "major", "name": "Major", "description": "Major Discipline Course", "icon": "target"},
+            {"slug": "minor", "name": "Minor", "description": "Minor Elective Course", "icon": "book"},
+            {"slug": "sec",   "name": "SEC",   "description": "Skill Enhancement Course", "icon": "zap"},
+            {"slug": "vac",   "name": "VAC",   "description": "Value-Added Course", "icon": "sparkles"},
+            {"slug": "mdc",   "name": "MDC",   "description": "Multidisciplinary Course", "icon": "globe"},
+            {"slug": "aec",   "name": "AEC",   "description": "Ability Enhancement Course", "icon": "brain"},
+        ]
+        result = []
+        for ct in COURSE_TYPES:
+            matching_stream_ids = [s["id"] for s in all_streams if s.get("slug") == ct["slug"]]
+            ct_subjects = []
+            seen_names = set()
+            for subj in all_subjects:
+                if subj.get("stream_id") in matching_stream_ids:
+                    name_key = subj.get("name", "").strip().lower()
+                    if name_key not in seen_names:
+                        seen_names.add(name_key)
+                        stream_info = stream_map.get(subj.get("stream_id"), {})
+                        ct_subjects.append({**subj, "stream_name": stream_info.get("name", ""), "stream_slug": stream_info.get("slug", "")})
+            result.append({**ct, "subjects": ct_subjects, "subject_count": len(ct_subjects)})
+        _set_content_cache(ck, result)
+        if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return result
+    except Exception as e:
+        logger.error(f"Failed to fetch subjects by course type: {e}")
+        return []
+
 @router.get("/content/subjects")
 async def get_subjects(stream_id: Optional[str] = None, class_id: Optional[str] = None, nocache: Optional[str] = None, response: Response = None):
     ck = f"subjects:{stream_id or ''}:{class_id or ''}"

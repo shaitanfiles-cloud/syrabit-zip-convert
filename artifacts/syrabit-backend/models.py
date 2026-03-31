@@ -42,8 +42,10 @@ class OnboardingData(BaseModel):
     board_name: str
     class_id: str
     class_name: str
-    stream_id: str
-    stream_name: str
+    stream_id: Optional[str] = None
+    stream_name: Optional[str] = None
+    course_type: Optional[str] = None
+    selected_subjects: Optional[list] = None
 
 
 class ChatMessage(BaseModel):
@@ -119,6 +121,8 @@ class ProfileUpdate(BaseModel):
     board_name: Optional[str] = None
     class_name: Optional[str] = None
     stream_name: Optional[str] = None
+    course_type: Optional[str] = None
+    selected_subjects: Optional[list] = None
 
 
 class PasswordResetReq(BaseModel):

@@ -49,6 +49,8 @@ export default function LibraryPage() {
   const { data: savedSubjects = [] } = useSavedSubjects(user);
   const toggleSaved = useToggleSavedSubject();
 
+  const [showOtherSubjects, setShowOtherSubjects] = useState(false);
+
   const onboardingApplied = useRef(false);
   useEffect(() => {
     if (onboardingApplied.current || !streams.length) return;
@@ -121,6 +123,8 @@ export default function LibraryPage() {
 
   const allFilterChips = useMemo(() => [...FILTER_CHIPS, ...dynamicStreamChips], [dynamicStreamChips]);
 
+  const userBoardId = user?.board_id || getOnboardingProfile()?.board_id;
+
   const filteredSubjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const seen = new Set();
@@ -149,6 +153,22 @@ export default function LibraryPage() {
       return true;
     });
   }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, selectedBoardSlug, selectedClassSlug, chaptersBySubject]);
+
+  const { mySubjects, otherSubjects } = useMemo(() => {
+    if (!userBoardId) return { mySubjects: filteredSubjects, otherSubjects: [] };
+    const mine = [];
+    const other = [];
+    for (const sub of filteredSubjects) {
+      const stream = streamMap.get(sub.stream_id);
+      const cls = classMap.get(stream?.class_id);
+      if (cls?.board_id === userBoardId) {
+        mine.push(sub);
+      } else {
+        other.push(sub);
+      }
+    }
+    return { mySubjects: mine, otherSubjects: other };
+  }, [filteredSubjects, userBoardId, streamMap, classMap]);
 
   useEffect(() => {
     if (!filteredSubjects.length) return;
@@ -371,22 +391,83 @@ export default function LibraryPage() {
                 )}
               </div>
             ) : (
-              <div
-                className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
-                data-testid="library-subject-grid"
-              >
-                {filteredSubjects.map((sub, index) => (
-                  <SubjectCard
-                    key={sub.id}
-                    sub={sub}
-                    chapters={chaptersBySubject.get(sub.id) || []}
-                    isSaved={savedSubjects.includes(sub.id)}
-                    onToggleSave={(id) => toggleSaved.mutate(id)}
-                    onAskAI={handleAskAI}
-                    index={index}
-                  />
-                ))}
-              </div>
+              <>
+                {mySubjects.length > 0 && (
+                  <>
+                    {otherSubjects.length > 0 && (
+                      <div className="flex items-center gap-2 mb-4">
+                        <h2 className="text-sm font-semibold text-foreground">Your Syllabus</h2>
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium">{mySubjects.length}</span>
+                      </div>
+                    )}
+                    <div
+                      className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
+                      data-testid="library-subject-grid"
+                    >
+                      {mySubjects.map((sub, index) => (
+                        <SubjectCard
+                          key={sub.id}
+                          sub={sub}
+                          chapters={chaptersBySubject.get(sub.id) || []}
+                          isSaved={savedSubjects.includes(sub.id)}
+                          onToggleSave={(id) => toggleSaved.mutate(id)}
+                          onAskAI={handleAskAI}
+                          index={index}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {otherSubjects.length > 0 && (
+                  <div className="mt-8">
+                    <button
+                      onClick={() => setShowOtherSubjects(!showOtherSubjects)}
+                      className="flex items-center gap-2 mb-4 group"
+                    >
+                      <h2 className="text-sm font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
+                        Explore Other Subjects
+                      </h2>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">{otherSubjects.length}</span>
+                      <svg className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${showOtherSubjects ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
+                    </button>
+                    {showOtherSubjects && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+                        {otherSubjects.map((sub, index) => (
+                          <SubjectCard
+                            key={sub.id}
+                            sub={sub}
+                            chapters={chaptersBySubject.get(sub.id) || []}
+                            isSaved={savedSubjects.includes(sub.id)}
+                            onToggleSave={(id) => toggleSaved.mutate(id)}
+                            onAskAI={handleAskAI}
+                            index={mySubjects.length + index}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {mySubjects.length === 0 && otherSubjects.length === 0 && (
+                  <div
+                    className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
+                    data-testid="library-subject-grid"
+                  >
+                    {filteredSubjects.map((sub, index) => (
+                      <SubjectCard
+                        key={sub.id}
+                        sub={sub}
+                        chapters={chaptersBySubject.get(sub.id) || []}
+                        isSaved={savedSubjects.includes(sub.id)}
+                        onToggleSave={(id) => toggleSaved.mutate(id)}
+                        onAskAI={handleAskAI}
+                        index={index}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
             )}
           </div>
           <CmsDocsSection />
