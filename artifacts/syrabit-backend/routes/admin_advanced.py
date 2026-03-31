@@ -1256,12 +1256,15 @@ async def agentic_syllabus_run(
                         "updated_at": _now_iso,
                     }
                     existing_blog = await db.cms_documents.find_one(
-                        {"subject_id": subject_ids[0], "chapter_id": ch_chapter_id}, {"_id": 0, "id": 1}
+                        {"$or": [
+                            {"subject_id": subject_ids[0], "chapter_id": ch_chapter_id},
+                            {"seo_slug": ch_slug_val},
+                        ]}, {"_id": 0, "id": 1}
                     )
                     if existing_blog:
                         await db.cms_documents.update_one(
-                            {"subject_id": subject_ids[0], "chapter_id": ch_chapter_id},
-                            {"$set": blog_doc}
+                            {"id": existing_blog["id"]},
+                            {"$set": {**blog_doc, "subject_id": subject_ids[0], "linked_subject_id": subject_ids[0]}}
                         )
                     else:
                         blog_doc["id"] = str(uuid.uuid4())
