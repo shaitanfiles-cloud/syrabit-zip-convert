@@ -12,3 +12,9 @@ id = "H9qMoTdB7zzDYlTFWyfj5"
 uri = "file://artifacts/syrabit/public/audit-report.md"
 type = "text"
 title = "Syrabit.ai Platform Audit Report — B+ (82/100)"
+
+[[outputs]]
+id = "h3KGt1aqTURO4u9B50-Ir"
+uri = "file://audit-report.md"
+type = "text"
+title = "Syrabit.ai Platform Audit Report — 100/100"
