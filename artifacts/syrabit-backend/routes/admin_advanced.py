@@ -902,7 +902,7 @@ async def _agentic_generate_chapter_content(
                 {"role": "user",   "content": prompt},
             ],
             max_tokens=1800,
-            temperature=0.3,
+            temperature=0.1,
             task_hint="content_gen",
         )
         return (result or "").strip()
@@ -1250,7 +1250,8 @@ async def agentic_syllabus_run(
                         "content": ch_html,
                         "merged_md": ch_content,
                         "word_count": ch_wc,
-                        "status": "draft",
+                        "status": "published",
+                        "content_html": ch_html,
                         "schema_type": "Article",
                         "primary_keyword": f"{ch_t} {subject_name} Assamboard notes",
                         "updated_at": _now_iso,
@@ -1268,6 +1269,10 @@ async def agentic_syllabus_run(
                         blog_doc["created_at"] = _now_iso
                         await db.cms_documents.insert_one(blog_doc)
                     blog_drafts_created += 1
+                    try:
+                        await _embed_cms_document(ch_slug_val, ch_html, f"{ch_t} — {subject_name}")
+                    except Exception as emb_err:
+                        logger.warning(f"[agentic_syllabus] cms embed failed for slug={ch_slug_val}: {emb_err}")
                 if blog_drafts_created:
                     yield _sse("blog_drafts_created", {"subject": subject_name, "count": blog_drafts_created})
 
@@ -1316,7 +1321,7 @@ async def agentic_syllabus_run(
             })
 
         # ── 3. Invalidate caches + reseed embedder ────────────────────────────
-        for cache_key in ("boards", "classes", "streams", "subjects", "chapters"):
+        for cache_key in ("boards", "classes", "streams", "subjects", "chapters", "library-bundle"):
             _invalidate_content_cache(cache_key)
         try:
             asyncio.create_task(_trigger_reseed())

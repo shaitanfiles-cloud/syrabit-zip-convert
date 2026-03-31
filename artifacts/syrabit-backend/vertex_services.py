@@ -420,7 +420,7 @@ async def generate_flashcards(text: str, subject: str = "", count: int = 10,
         f"For each card: {{id, front, back, type, difficulty: easy/medium/hard, tags: []}}\n"
         f"Return ONLY a JSON object: {{flashcards: [...], subject, total_cards}}"
     )
-    raw = await _generate(prompt, max_tokens=3000, temperature=0.2)
+    raw = await _generate(prompt, max_tokens=3000, temperature=0.1)
     if not raw:
         return {"error": "Flashcard generation failed"}
     try:
@@ -677,7 +677,7 @@ async def extract_from_document(pdf_bytes: bytes, task: str = "extract_mcqs") ->
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def _generate(prompt: str, model: str = _GEN_MODEL,
-                    max_tokens: int = 2048, temperature: float = 0.3) -> Optional[str]:
+                    max_tokens: int = 2048, temperature: float = 0.1) -> Optional[str]:
     if not _ok():
         return None
     url = _gen_url(model)
