@@ -1133,6 +1133,13 @@ async def web_search_with_fallback(
         f"Dual web search: {len(text_results)} base (scoped: {curriculum_query[:60]!r}) + "
         f"{len(news_results)} polish (open) | raw: {query[:50]}"
     )
+
+    try:
+        from web_content import enrich_search_results
+        combined = await enrich_search_results(combined)
+    except Exception as e:
+        logger.warning(f"Web content enrichment failed (using snippets only): {e}")
+
     return combined
 
 
@@ -1448,18 +1455,26 @@ def build_rag_system_prompt(
                 "Always prefer citing internal [PAGE: slug] sources over external web links.\n\n"
             )
 
+        _any_enriched = any(r.get("_enriched") for r in web_results)
+
         if base_results:
             if not _has_internal:
+                _quality_note = (
+                    "Full page content has been extracted from these sources — use the detailed text to build a thorough, accurate answer. "
+                    if _any_enriched else ""
+                )
                 web_block += (
                     "**WEB SEARCH — BASE LAYER (browser results, primary facts):**\n"
+                    f"{_quality_note}"
                     "Build the core of your answer from these results. "
                     "Use them as the factual foundation — definitions, explanations, data points.\n\n"
                 )
             for i, r in enumerate(base_results, 1):
                 title   = r.get("title", "")
                 url     = r.get("url", "")
-                snippet = r.get("snippet", "")
-                web_block += f"[Base {i}] {title}\n{snippet}\nSource: {url}\n\n"
+                content = r.get("full_content") or r.get("snippet", "")
+                _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
+                web_block += f"[Base {i}] {_tag} {title}\n{content}\nSource: {url}\n\n"
 
         if polish_results:
             if not _has_internal:
@@ -1471,8 +1486,9 @@ def build_rag_system_prompt(
             for i, r in enumerate(polish_results, 1):
                 title   = r.get("title", "")
                 url     = r.get("url", "")
-                snippet = r.get("snippet", "")
-                web_block += f"[Polish {i}] {title}\n{snippet}\nSource: {url}\n\n"
+                content = r.get("full_content") or r.get("snippet", "")
+                _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
+                web_block += f"[Polish {i}] {_tag} {title}\n{content}\nSource: {url}\n\n"
 
         if _has_internal:
             web_block += (
@@ -1483,9 +1499,14 @@ def build_rag_system_prompt(
                 "Do not fabricate facts beyond what the sources contain.*\n"
             )
         else:
+            _enriched_note = (
+                "Results marked [Full Content] contain detailed page text — rely on these heavily for accuracy. "
+                if _any_enriched else ""
+            )
             web_block += (
                 "---\n"
-                "*INSTRUCTION: Build the answer from the Base layer first. "
+                f"*INSTRUCTION: {_enriched_note}"
+                "Build the answer from the Base layer first. "
                 "Then enrich it with relevant details from the Polish layer. "
                 "Do not fabricate facts beyond what the results contain.*\n"
             )
