@@ -50,8 +50,8 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) navigate('/login');
-    if (user?.onboarding_done) navigate('/library');
+    if (!user) navigate('/login', { replace: true });
+    if (user?.onboarding_done) navigate('/library', { replace: true });
   }, [user, authLoading, navigate]);
 
   useEffect(() => {
@@ -98,7 +98,7 @@ export default function OnboardingPage() {
       localStorage.setItem('syrabit:onboarding', JSON.stringify(onboardingData));
       await refreshUser();
       toast.success('Setup complete! Welcome to Syrabit.ai');
-      navigate('/library');
+      navigate('/library', { replace: true });
     } catch (err) {
       toast.error('Failed to save preferences');
     } finally {

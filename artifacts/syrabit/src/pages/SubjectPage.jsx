@@ -155,6 +155,7 @@ function BlogView({ subject, subjectId }) {
   const articleRef = useRef(null);
   const [activeId,  setActiveId]  = useState('');
   const [merging,   setMerging]   = useState(false);
+  const [sharing,   setSharing]   = useState(false);
 
   const headings = useMemo(() => {
     if (!post?.headings) return [];
@@ -242,8 +243,11 @@ function BlogView({ subject, subjectId }) {
               <span className="flex items-center gap-1"><Hash size={11} />{headings.filter(h => h.level === 2).length} sections</span>
             )}
             <button
-              className="ml-auto flex items-center gap-1 transition-colors text-emerald-600 hover:text-emerald-500"
+              className="ml-auto flex items-center gap-1 transition-colors text-emerald-600 hover:text-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={sharing}
               onClick={async () => {
+                if (sharing) return;
+                setSharing(true);
                 const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
                 try {
                   const res = await createShare(post.slug || post.id, post.title, `/subject/${subjectId}`);
@@ -256,10 +260,12 @@ function BlogView({ subject, subjectId }) {
                   const fallback = `${window.location.origin}/subject/${subjectId}?${utmParams}`;
                   const text = `📚 ${post.title} on Syrabit.ai!\n${fallback}`;
                   window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+                } finally {
+                  setSharing(false);
                 }
               }}
             >
-              <Share2 size={11} /> Share
+              {sharing ? <Loader2 size={11} className="animate-spin" /> : <Share2 size={11} />} Share
             </button>
           </div>
 
