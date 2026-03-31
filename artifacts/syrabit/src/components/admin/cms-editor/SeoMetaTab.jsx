@@ -148,7 +148,7 @@ export default function SeoMetaTab({
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-semibold mb-1" style={{ color: '#e2e8f0' }}>
                   {form.primary_keyword
-                    ? `${form.primary_keyword} — AHSEC Study Guide`
+                    ? `${form.primary_keyword} — Assamboard Study Guide`
                     : form.title || 'Your document title will appear here as the AI answer heading'}
                 </p>
                 <p className="text-[11px] leading-relaxed mb-2" style={{ color: '#94a3b8' }}>

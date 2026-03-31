@@ -27,7 +27,7 @@ function SchemaOrg({ doc }) {
   const pageUrl = `https://syrabit.ai/learn/${doc.seo_slug}`;
   const published = doc.created_at || doc.generated_at || new Date().toISOString();
   const modified = doc.updated_at || published;
-  const eduLevel = doc.geo_tags || doc.class_name || 'Class 11-12';
+  const eduLevel = doc.class_name || doc.board_name || doc.geo_tags || 'Assamboard';
   const description = doc.meta_description || doc.description || '';
 
   const graphNodes = [

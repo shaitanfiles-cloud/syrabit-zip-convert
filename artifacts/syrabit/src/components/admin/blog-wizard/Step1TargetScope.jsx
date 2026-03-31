@@ -3,6 +3,7 @@ import { ChevronRight, Loader2, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { API, authHeaders, autoSlug } from '@/utils/adminHelpers';
+import { isDegreeBoard } from '@/utils/courseTypes';
 
 const CONTENT_TYPES = ['Article', 'FAQPage', 'StudyNotes'];
 
@@ -12,6 +13,9 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
   const [linkError, setLinkError] = useState(false);
   const autoRunFired1 = useRef(false);
 
+  const selectedBoard = boards.find(b => b.id === state.boardId);
+  const isBoardDeg = isDegreeBoard(selectedBoard?.name);
+  const streamFieldLabel = isBoardDeg ? 'Course Type' : 'Stream';
   const filteredClasses = state.boardId ? classes.filter(c => c.board_id === state.boardId) : [];
   const filteredStreams = state.classId ? streams.filter(s => s.class_id === state.classId) : [];
   const classStreamIds = filteredStreams.map(s => s.id);
@@ -135,13 +139,13 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
 
         {filteredStreams.length > 0 && (
           <div>
-            <label className={lbl}>Stream</label>
+            <label className={lbl}>{streamFieldLabel}</label>
             <select className={sel} value={state.streamId}
               onChange={e => {
                 const s = filteredStreams.find(x => x.id === e.target.value);
                 set({ streamId: e.target.value, streamName: s?.name || '', subjectId: '', subjectName: '' });
               }}>
-              <option value="">Select Stream…</option>
+              <option value="">Select {streamFieldLabel}…</option>
               {filteredStreams.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </div>
@@ -161,14 +165,14 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
 
         <div>
           <label className={lbl}>Working Title</label>
-          <input className={inp} placeholder="e.g. Photosynthesis — Complete Notes AHSEC 2024"
+          <input className={inp} placeholder="e.g. Photosynthesis — Complete Notes Assamboard 2024"
             value={state.workingTitle}
             onChange={e => set({ workingTitle: e.target.value })} />
         </div>
 
         <div>
           <label className={lbl}>Primary Keyword *</label>
-          <input className={inp} placeholder="e.g. photosynthesis class 12 ahsec"
+          <input className={inp} placeholder="e.g. photosynthesis class 12 assamboard"
             value={state.primaryKeyword}
             onChange={e => set({ primaryKeyword: e.target.value })} />
           <p className="text-[10px] text-white/25 mt-1">4–7 words. This is the core search query you're targeting.</p>

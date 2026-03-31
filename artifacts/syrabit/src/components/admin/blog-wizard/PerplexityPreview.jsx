@@ -12,7 +12,7 @@ export default function PerplexityPreview({ title, slug, metaDescription }) {
             {title || 'Your page title as the AI answer heading'}
           </p>
           <p className="text-[11px] leading-relaxed mb-2" style={{ color: '#94a3b8' }}>
-            {metaDescription || 'Your meta description appears as the AI-generated excerpt. Perplexity cites pages with clear educational intent and AHSEC-aligned content.'}
+            {metaDescription || 'Your meta description appears as the AI-generated excerpt. Perplexity cites pages with clear educational intent and Assamboard-aligned content.'}
           </p>
           <div className="flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px]" style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa' }}>

@@ -380,7 +380,7 @@ export default function useCmsEditor(adminToken, onNavigate, hubContext) {
         title: form.title, content: form.content?.slice(0, 3000) || '',
         primary_keyword: form.primary_keyword, seo_tags: form.seo_tags,
         linked_scope: editDoc?.linked_scope || '',
-        board: editDoc?.geo_tags?.includes('ahsec') ? 'AHSEC' : 'AHSEC',
+        board: editDoc?.board_name || ((editDoc?.geo_tags || '').toLowerCase().includes('seba') ? 'SEBA' : (editDoc?.geo_tags || '').toLowerCase().includes('degree') ? 'DEGREE' : 'AHSEC'),
         subject: form.category || form.seo_tags?.split(',')[0] || '',
       };
       const { data } = await axios.post(`${API}/admin/seo/generate`, payload, authHeaders(adminToken));

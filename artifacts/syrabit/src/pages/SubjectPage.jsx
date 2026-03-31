@@ -270,7 +270,7 @@ function BlogView({ subject, subjectId }) {
           {/* AI Tutor CTA */}
           <div className="blog-ai-cta" style={{ background: '#f5f0ff', border: '1px solid #c4b0f0', marginTop: '2.5rem', padding: '1.25rem 1.5rem', borderRadius: '12px' }}>
             <p className="text-sm mb-1" style={{ color: '#5b35a8', fontWeight: 600 }}>Have a question about this topic?</p>
-            <p className="text-xs mb-3" style={{ color: '#7c5cbf' }}>Get AHSEC-aligned answers instantly from Syra.</p>
+            <p className="text-xs mb-3" style={{ color: '#7c5cbf' }}>Get Assamboard-aligned answers instantly from Syra.</p>
             <Link to={`/chat?subject=${subjectId}`}>
               <Button size="sm" style={{ background: 'hsl(258 60% 68%)', color: 'white' }}>Ask Syra</Button>
             </Link>
@@ -409,9 +409,11 @@ export default function SubjectPage() {
   const subjectUrl  = subject.board_slug && subject.class_slug && subject.stream_slug && subject.slug
     ? `${SITE_ORIGIN}/${subject.board_slug}/${subject.class_slug}/${subject.stream_slug}/${subject.slug}`
     : `${SITE_ORIGIN}/subject/${subjectId}`;
-  const subjectTitle = (subject.name + ' Notes — ' + (subject.class_name || 'AHSEC') + ' ' + (subject.stream_name || '')).trim();
+  const boardLabel = subject.board_name || 'Assamboard';
+  const classLabel = subject.class_name || '';
+  const subjectTitle = (subject.name + ' Notes — ' + (classLabel || boardLabel) + ' ' + (subject.stream_name || '')).trim();
   const subjectDesc  = subject.description
-    || ('Complete ' + subject.name + ' notes, chapters, and AI explanations for ' + (subject.class_name || 'AHSEC') + ' ' + (subject.stream_name || '') + ' students.');
+    || ('Complete ' + subject.name + ' notes, chapters, and AI explanations for ' + (classLabel || boardLabel) + ' ' + (subject.stream_name || '') + ' students.');
 
   const TABS = [
     { id: 'blog',    label: 'Blog View',       icon: BookText },
