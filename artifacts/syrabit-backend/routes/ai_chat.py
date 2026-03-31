@@ -597,7 +597,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
             # Send RAG metadata with full quality info + subject link data + web search flag
-            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used}
+            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': ctx_board_name or '', 'ctx_class_name': ctx_class_name or '', 'ctx_stream_name': ctx_stream_name or ''}
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')

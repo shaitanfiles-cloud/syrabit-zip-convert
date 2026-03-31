@@ -208,6 +208,7 @@ export default function ChatPage() {
       let ragBoardName = null;
       let ragClassName = null;
       let ragTopicName = null;
+      let ragStreamName = null;
       let libSources = [];
       let hasError = false;
 
@@ -239,6 +240,7 @@ export default function ChatPage() {
             if (parsed.rag_chapter_name) ragChapterName = parsed.rag_chapter_name;
             if (parsed.ctx_board_name) ragBoardName = parsed.ctx_board_name;
             if (parsed.ctx_class_name) ragClassName = parsed.ctx_class_name;
+            if (parsed.ctx_stream_name) ragStreamName = parsed.ctx_stream_name;
             if (parsed.rag_topic_name) ragTopicName = parsed.rag_topic_name;
             if (parsed.content_card_name && !ragTopicName) ragTopicName = parsed.content_card_name;
             if (parsed.content_card_board && !ragBoardName) ragBoardName = parsed.content_card_board;
@@ -277,7 +279,7 @@ export default function ChatPage() {
       } else { setConversationId(newConvId); }
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
-          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, rag_board_name: ragBoardName, rag_class_name: ragClassName, rag_topic_name: ragTopicName, ctx_subject_name: subject?.name || null, sources: libSources }
+          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, rag_board_name: ragBoardName, rag_class_name: ragClassName, rag_stream_name: ragStreamName, rag_topic_name: ragTopicName, ctx_subject_name: subject?.name || null, sources: libSources }
           : m
       ));
       setSyncState('idle');

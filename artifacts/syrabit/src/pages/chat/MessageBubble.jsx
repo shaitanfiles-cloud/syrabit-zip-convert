@@ -47,11 +47,11 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
     ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '';
 
-  // Strip trailing "Sources: [PAGE/CHAPTER: ...] ..." line the AI appends — shown separately below
   const cleanContent = useMemo(() => {
     if (!msg.content) return msg.content;
     return msg.content
       .replace(/\n*\n?Sources?:\s*((\[(PAGE|CHAPTER):[^\]]+\][,\s]*)+\.?\s*)$/gi, '')
+      .replace(/\n*\n?SOURCE\s*:\s*.+$/i, '')
       .trim();
   }, [msg.content]);
 
@@ -115,13 +115,11 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
             )}
 
             {!msg.streaming && msg.content && (() => {
-              const boardLabel = msg.rag_board_name || null;
-              const classLabel = msg.rag_class_name || null;
-              const subjectLabel = msg.rag_subject_name || msg.ctx_subject_name || null;
               const chapterLabel = msg.rag_chapter_name || null;
-              const topicLabel = msg.rag_topic_name || null;
+              const subjectLabel = msg.rag_subject_name || msg.ctx_subject_name || null;
+              const courseLabel = msg.rag_stream_name || null;
+              const boardLabel = msg.rag_board_name || null;
               const subjectUrl = msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null;
-              const firstSourceUrl = msg.sources?.find(s => s.type !== 'content_card' && s.url)?.url || msg.sources?.[0]?.url || null;
               const handlePillNav = (url) => {
                 if (!url) return;
                 if (url.startsWith('http')) window.open(url, '_blank', 'noopener,noreferrer');
@@ -129,36 +127,36 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               };
               const isDocument = msg.rag_source === 'document';
               const isWeb = msg.rag_source === 'web';
-              const hasContext = boardLabel || classLabel || subjectLabel || chapterLabel || topicLabel || (msg.rag_source && msg.rag_source !== 'none');
+              const hasContext = boardLabel || subjectLabel || chapterLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
 
               const crumbs = [];
               if (isDocument) {
                 crumbs.push({ label: 'Uploaded Document', color: '#a78bfa', bg: 'rgba(139,92,246,0.10)' });
               } else if (isWeb) {
-                crumbs.push({ label: 'Web Search', color: '#60a5fa', bg: 'rgba(59,130,246,0.08)', url: null });
+                crumbs.push({ label: 'Web Search', color: '#60a5fa', bg: 'rgba(59,130,246,0.08)' });
               } else {
-                if (boardLabel) crumbs.push({ label: boardLabel, color: '#86efac', bg: 'rgba(34,197,94,0.07)' });
-                if (classLabel) crumbs.push({ label: classLabel, color: '#fde68a', bg: 'rgba(234,179,8,0.07)' });
+                if (chapterLabel) crumbs.push({ label: chapterLabel, color: '#93c5fd', bg: 'rgba(96,165,250,0.08)', url: subjectUrl });
                 if (subjectLabel) crumbs.push({ label: subjectLabel, color: '#7dd3fc', bg: 'rgba(59,130,246,0.07)', url: subjectUrl });
-                if (chapterLabel) crumbs.push({ label: chapterLabel, color: '#93c5fd', bg: 'rgba(96,165,250,0.08)' });
-                if (topicLabel && topicLabel !== chapterLabel) crumbs.push({ label: topicLabel, color: '#a78bfa', bg: 'rgba(139,92,246,0.10)', url: firstSourceUrl });
+                if (courseLabel) crumbs.push({ label: courseLabel, color: '#fde68a', bg: 'rgba(234,179,8,0.07)' });
+                if (boardLabel) crumbs.push({ label: boardLabel, color: '#86efac', bg: 'rgba(34,197,94,0.07)' });
               }
 
               return (
-                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                <>
                   {hasContext && crumbs.length > 0 && (
-                    <div className="flex items-center gap-1 flex-wrap">
-                      <BookOpen size={10} className="shrink-0" style={{ color: '#60a5fa' }} />
+                    <div className="flex items-center gap-1 mt-2 flex-wrap">
+                      <span className="text-[11px] font-semibold mr-0.5" style={{ color: 'rgba(255,255,255,0.40)' }}>SOURCE</span>
                       {crumbs.map((c, i) => (
                         <span key={i} className="flex items-center gap-1">
-                          {i > 0 && <span className="text-[9px]" style={{ color: 'rgba(255,255,255,0.20)' }}>›</span>}
+                          {i > 0 && <span className="text-[9px]" style={{ color: 'rgba(255,255,255,0.20)' }}>·</span>}
                           {c.url ? (
                             <button
                               onClick={() => handlePillNav(c.url)}
-                              className="text-[11px] font-medium px-1.5 py-0.5 rounded-md hover:opacity-80 transition-opacity cursor-pointer"
+                              className="text-[11px] font-medium px-1.5 py-0.5 rounded-md hover:opacity-80 transition-opacity cursor-pointer flex items-center gap-0.5"
                               style={{ background: c.bg, color: c.color }}
                             >
                               {c.label}
+                              <ExternalLink size={9} />
                             </button>
                           ) : (
                             <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-md" style={{ background: c.bg, color: c.color }}>
@@ -169,7 +167,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       ))}
                     </div>
                   )}
-                  <div className="flex items-center gap-1.5 ml-auto opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     {timeStr && (
                       <span className="text-[11px] text-muted-foreground">{timeStr}</span>
                     )}
@@ -192,7 +190,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       </button>
                     )}
                   </div>
-                </div>
+                </>
               );
             })()}
           </div>
