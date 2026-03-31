@@ -1,6 +1,6 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, ExternalLink } from 'lucide-react';
+import { RefreshCw, Copy, Check, ExternalLink, BookOpen, FileText, Globe } from 'lucide-react';
 import { log } from '@/utils/logger';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
@@ -105,56 +105,84 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
             )}
 
             {!msg.streaming && msg.content && (() => {
-              const chapterLabel = msg.rag_chapter_name || null;
               const subjectLabel = msg.rag_subject_name || msg.ctx_subject_name || null;
               const courseLabel = msg.rag_stream_name || null;
               const boardLabel = msg.rag_board_name || null;
+              const classLabel = msg.rag_class_name || null;
               const subjectUrl = msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null;
-              const handlePillNav = (url) => {
-                if (!url) return;
-                if (url.startsWith('http')) window.open(url, '_blank', 'noopener,noreferrer');
-                else navigate(url);
+              const handleCardNav = () => {
+                if (!subjectUrl) return;
+                navigate(subjectUrl);
               };
               const isDocument = msg.rag_source === 'document';
               const isWeb = msg.rag_source === 'web';
-              const hasContext = boardLabel || subjectLabel || chapterLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
+              const hasContext = boardLabel || subjectLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
 
-              const crumbs = [];
+              const pills = [];
+              if (boardLabel) pills.push(boardLabel);
+              if (classLabel) pills.push(classLabel);
+              if (courseLabel) pills.push(courseLabel);
+
+              let sourceIcon = <BookOpen size={16} style={{ color: '#4ade80' }} />;
+              let sourceTitle = subjectLabel;
+              let sourceBg = 'rgba(34,197,94,0.08)';
+              let sourceBorder = 'rgba(34,197,94,0.18)';
+              let sourceColor = '#4ade80';
+              let clickable = !!subjectUrl;
+
               if (isDocument) {
-                crumbs.push({ label: 'Uploaded Document', color: '#a78bfa', bg: 'rgba(139,92,246,0.10)' });
+                sourceIcon = <FileText size={16} style={{ color: '#a78bfa' }} />;
+                sourceTitle = 'Uploaded Document';
+                sourceBg = 'rgba(139,92,246,0.08)';
+                sourceBorder = 'rgba(139,92,246,0.18)';
+                sourceColor = '#a78bfa';
+                clickable = false;
               } else if (isWeb) {
-                crumbs.push({ label: 'Web Search', color: '#60a5fa', bg: 'rgba(59,130,246,0.08)' });
-              } else {
-                if (chapterLabel) crumbs.push({ label: chapterLabel, color: '#93c5fd', bg: 'rgba(96,165,250,0.08)', url: subjectUrl });
-                if (subjectLabel) crumbs.push({ label: subjectLabel, color: '#7dd3fc', bg: 'rgba(59,130,246,0.07)', url: subjectUrl });
-                if (courseLabel) crumbs.push({ label: courseLabel, color: '#fde68a', bg: 'rgba(234,179,8,0.07)' });
-                if (boardLabel) crumbs.push({ label: boardLabel, color: '#86efac', bg: 'rgba(34,197,94,0.07)' });
+                sourceIcon = <Globe size={16} style={{ color: '#60a5fa' }} />;
+                sourceTitle = 'Web Search';
+                sourceBg = 'rgba(59,130,246,0.08)';
+                sourceBorder = 'rgba(59,130,246,0.18)';
+                sourceColor = '#60a5fa';
+                clickable = false;
               }
 
               return (
                 <>
-                  {hasContext && crumbs.length > 0 && (
-                    <div className="flex items-center gap-1 mt-2 flex-wrap">
-                      <span className="text-[11px] font-semibold mr-0.5" style={{ color: 'rgba(255,255,255,0.40)' }}>SOURCE</span>
-                      {crumbs.map((c, i) => (
-                        <span key={i} className="flex items-center gap-1">
-                          {i > 0 && <span className="text-[9px]" style={{ color: 'rgba(255,255,255,0.20)' }}>·</span>}
-                          {c.url ? (
-                            <button
-                              onClick={() => handlePillNav(c.url)}
-                              className="text-[11px] font-medium px-1.5 py-0.5 rounded-md hover:opacity-80 transition-opacity cursor-pointer flex items-center gap-0.5"
-                              style={{ background: c.bg, color: c.color }}
-                            >
-                              {c.label}
-                              <ExternalLink size={9} />
-                            </button>
-                          ) : (
-                            <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-md" style={{ background: c.bg, color: c.color }}>
-                              {c.label}
-                            </span>
-                          )}
-                        </span>
-                      ))}
+                  {hasContext && sourceTitle && (
+                    <div
+                      onClick={clickable ? handleCardNav : undefined}
+                      className={`flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl ${clickable ? 'cursor-pointer hover:opacity-85 transition-opacity' : ''}`}
+                      style={{
+                        background: sourceBg,
+                        border: `1px solid ${sourceBorder}`,
+                        maxWidth: 'fit-content',
+                      }}
+                      role={clickable ? 'link' : undefined}
+                      aria-label={clickable ? `View ${sourceTitle}` : undefined}
+                    >
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: `${sourceColor}18` }}>
+                        {sourceIcon}
+                      </div>
+                      <div className="flex flex-col gap-0.5 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[13px] font-bold text-foreground truncate" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                            {sourceTitle}
+                          </span>
+                          {clickable && <ExternalLink size={11} style={{ color: sourceColor, flexShrink: 0 }} />}
+                        </div>
+                        {pills.length > 0 && (
+                          <div className="flex items-center gap-1 flex-wrap">
+                            {pills.map((p, i) => (
+                              <span key={i} className="flex items-center gap-1">
+                                {i > 0 && <span className="text-[9px]" style={{ color: 'rgba(255,255,255,0.25)' }}>·</span>}
+                                <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-md" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.55)' }}>
+                                  {p}
+                                </span>
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                   <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
