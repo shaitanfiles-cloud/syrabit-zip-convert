@@ -823,7 +823,7 @@ async def _gemini_web_search_pyqs(
 
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"gemini-2.0-flash:generateContent?key={gemini_key}"
+        f"gemini-2.5-flash:generateContent?key={gemini_key}"
     )
     payload = {
         "contents": [{"parts": [{"text": search_prompt}]}],

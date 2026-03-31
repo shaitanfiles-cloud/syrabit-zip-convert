@@ -546,9 +546,7 @@ _llm_cost_log: list = []   # in-memory ring buffer (max 10k entries)
 _LLM_COST_MAX = 10_000
 
 COST_PER_1K_TOKENS = {
-    "gemini-2.5-flash-preview-05-20": {"in": 0.0001875, "out": 0.0006},
-    "gemini-2.0-flash":       {"in": 0.000075, "out": 0.0003},
-    "gemini-2.0-flash-lite":  {"in": 0.0000375, "out": 0.00015},
+    "gemini-2.5-flash":       {"in": 0.00015, "out": 0.0006},
     "gemini-1.5-pro":         {"in": 0.00125,   "out": 0.005},
     "llama-3.3-70b-versatile":{"in": 0.00059,   "out": 0.00079},
     "llama-3.1-8b-instant":   {"in": 0.00005,   "out": 0.00008},
@@ -1004,9 +1002,9 @@ async def agentic_syllabus_run(
                 ]}],
                 "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.1},
             }
-            for _gmodel in ["gemini-2.0-flash", "gemini-2.0-flash-lite"]:
+            for _gmodel in ["gemini-2.5-flash", "gemini-2.0-flash"]:
                 url = vertex_services._gen_url(_gmodel)
-                async with httpx.AsyncClient(timeout=120) as c:
+                async with _httpx.AsyncClient(timeout=120) as c:
                     r = await c.post(url, json=body, headers=headers)
                 if r.status_code in (403, 404):
                     continue
@@ -1015,6 +1013,7 @@ async def agentic_syllabus_run(
                 cleaned = re.sub(r'^```(?:json)?\s*', '', raw.strip())
                 cleaned = re.sub(r'\s*```$', '', cleaned).strip()
                 extracted = _recover_json(cleaned)
+                logger.info(f"[agentic_syllabus] {_gmodel}: extracted {len(extracted)} subjects from {len(raw)} chars")
                 break
         except Exception as e:
             # Fallback: text extraction
@@ -1408,9 +1407,8 @@ async def syllabus_import_pdf(
     extracted: list = []
     _used_gemini = False
     _GEMINI_PDF_MODELS = [
-        vertex_services._PRO_MODEL,   # gemini-2.5-flash-preview-05-20
-        "gemini-2.0-flash",
-        "gemini-2.0-flash-lite",
+        vertex_services._PRO_MODEL,
+        "gemini-2.5-flash",
     ]
     try:
         if not vertex_services._ok():

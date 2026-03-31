@@ -91,7 +91,21 @@ export default function CurriculumMap() {
 
   const tree = useMemo(() => {
     if (!data) return [];
-    const { boards = [], classes = [], streams = [], subjects = [] } = data;
+    const { boards = [], classes = [], streams = [], subjects = [], chapters = [] } = data;
+
+    const chaptersBySubject = {};
+    for (const ch of chapters) {
+      const sid = ch.subject_id;
+      if (sid) {
+        if (!chaptersBySubject[sid]) chaptersBySubject[sid] = [];
+        chaptersBySubject[sid].push(ch);
+      }
+    }
+
+    const enrichedSubjects = subjects.map((s) => ({
+      ...s,
+      chapters: chaptersBySubject[s.id] || [],
+    }));
 
     return boards.map((board) => {
       const boardClasses = classes.filter((c) => c.board_id === board.id);
@@ -103,7 +117,7 @@ export default function CurriculumMap() {
             ...cls,
             streams: clsStreams.map((st) => ({
               ...st,
-              subjects: subjects.filter((sub) => sub.stream_id === st.id),
+              subjects: enrichedSubjects.filter((sub) => sub.stream_id === st.id),
             })),
           };
         }),
@@ -112,10 +126,7 @@ export default function CurriculumMap() {
   }, [data]);
 
   const totalSubjects = data?.subjects?.length ?? 0;
-  const totalChapters = useMemo(
-    () => (data?.subjects || []).reduce((acc, s) => acc + (s.chapters?.length || 0), 0),
-    [data],
-  );
+  const totalChapters = data?.chapters?.length ?? 0;
 
   return (
     <div className="min-h-screen text-white" style={{ background: '#06060e' }}>

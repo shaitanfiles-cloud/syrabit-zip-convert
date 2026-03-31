@@ -73,7 +73,7 @@ _llm_batcher = _LlmBatcher()
 _LLM_PROVIDERS = []
 # Gemini first — most reliable right now (Fireworks suspended, Groq rate-limited)
 if _GEMINI_KEY:
-    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash-preview-05-20"})
+    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
 if _FIREWORKS_KEY:
@@ -121,12 +121,8 @@ _MODEL_ALIAS_MAP = {
 #  Bedrock     amazon.nova-micro-v1:0  — free tier: 30 RPM cap, lowest latency on Bedrock
 #                                        paid tier: 66.7 RPS / 33K TPS (no cap)
 _SLM_SLOT_CANDIDATES = [
-    # Gemini 2.5 Flash Preview — primary: best accuracy + reasoning
-    ("gemini",      "gemini-2.5-flash-preview-05-20",                    6),
-    # Gemini 2.0 Flash — fallback: high TPS when primary is rate-limited
-    ("gemini",      "gemini-2.0-flash",                                  6),
-    # Gemini 2.0 Flash Lite — hot fallback: highest TPS, lowest latency
-    ("gemini",      "gemini-2.0-flash-lite",                             8),
+    # Gemini 2.5 Flash — primary: best accuracy + reasoning
+    ("gemini",      "gemini-2.5-flash",                                  6),
     # Groq as secondary (rate-limited but fast when available)
     ("groq",        "llama-3.3-70b-versatile",                           8),
     ("groq",        "llama-3.1-8b-instant",                              4),

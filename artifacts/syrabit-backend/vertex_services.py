@@ -31,10 +31,10 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # ── Model names ───────────────────────────────────────────────────────────────
-_EMBED_MODEL  = "text-embedding-004"
-_GEN_MODEL    = "gemini-2.5-flash-preview-05-20"
-_PRO_MODEL    = "gemini-2.5-flash-preview-05-20"
-_VISION_MODEL = "gemini-2.5-flash-preview-05-20"
+_EMBED_MODEL  = "gemini-embedding-001"
+_GEN_MODEL    = "gemini-2.5-flash"
+_PRO_MODEL    = "gemini-2.5-flash"
+_VISION_MODEL = "gemini-2.5-flash"
 
 # ── Auth: detect key type at import time ──────────────────────────────────────
 # Priority:
@@ -142,14 +142,13 @@ def _headers() -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
-    """Return 768-dim embedding vector for text. Returns None on failure.
-    Tries text-embedding-004 first, falls back to embedding-001 on 404."""
+    """Return embedding vector for text. Returns None on failure.
+    Uses gemini-embedding-001 (3072-dim) as primary model."""
     if not _ok() or not text:
         return None
     headers = await _auth_headers()
 
     if _SA_CREDS is not None:
-        # Vertex AI predict format — single URL
         url  = _embed_url()
         body = {"instances": [{"content": text[:8000], "task_type": task_type}]}
         try:
@@ -164,8 +163,7 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
             logger.warning(f"embed_text (Vertex) failed: {e}")
             return None
 
-    # Google AI Studio mode — try primary model, fall back to embedding-001 on 404
-    for model in (_EMBED_MODEL, "embedding-001"):
+    for model in (_EMBED_MODEL, "text-embedding-004"):
         url  = f"{_BASE}/models/{model}:embedContent"
         body = {
             "model":   f"models/{model}",

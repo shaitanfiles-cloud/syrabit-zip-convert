@@ -423,7 +423,7 @@ async def _embed_and_store_page(page_slug: str, content: str) -> bool:
         if vec:
             await db.seo_pages.update_one(
                 {"topic_slug": page_slug},
-                {"$set": {"embedding": vec, "embedding_model": "text-embedding-004"}},
+                {"$set": {"embedding": vec, "embedding_model": vertex_services._EMBED_MODEL}},
             )
             logger.info(f"Page embedded: {page_slug} (dim={len(vec)})")
             return True
@@ -440,7 +440,7 @@ async def _embed_and_store_chapter(chapter_id: str, content: str, title: str = "
         if vec:
             await db.chapters.update_one(
                 {"id": chapter_id},
-                {"$set": {"embedding": vec, "embedding_model": "text-embedding-004"}},
+                {"$set": {"embedding": vec, "embedding_model": vertex_services._EMBED_MODEL}},
             )
             return True
     except Exception as e:
@@ -456,7 +456,7 @@ async def _embed_cms_document(seo_slug: str, content: str, title: str = "") -> b
         if vec:
             await db.cms_documents.update_one(
                 {"seo_slug": seo_slug},
-                {"$set": {"embedding": vec, "embedding_model": "text-embedding-004"}},
+                {"$set": {"embedding": vec, "embedding_model": vertex_services._EMBED_MODEL}},
             )
             logger.info(f"CMS doc embedded: {seo_slug} (dim={len(vec)})")
             return True
@@ -519,9 +519,10 @@ async def vector_rag_search(
         ).limit(100).to_list(100)
 
         scored = []
+        q_dim = len(query_vec)
         for p in pages:
             vec = p.get("embedding")
-            if vec:
+            if vec and len(vec) == q_dim:
                 sim = vertex_services.cosine_similarity(query_vec, vec)
                 slug = p.get("topic_slug", "")
                 title = p.get("topic_title") or p.get("chapter_title") or slug
@@ -535,7 +536,7 @@ async def vector_rag_search(
                 })
         for ch in chapters:
             vec = ch.get("embedding")
-            if vec:
+            if vec and len(vec) == q_dim:
                 sim = vertex_services.cosine_similarity(query_vec, vec)
                 content_snippet = _extract_relevant_sections(ch.get("content", ""), [], max_chars=1500)
                 scored.append({
@@ -547,7 +548,7 @@ async def vector_rag_search(
                 })
         for cms in cms_docs:
             vec = cms.get("embedding")
-            if vec:
+            if vec and len(vec) == q_dim:
                 sim = vertex_services.cosine_similarity(query_vec, vec)
                 content_snippet = _extract_relevant_sections(cms.get("content", ""), [], max_chars=1500)
                 scored.append({

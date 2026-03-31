@@ -2,337 +2,58 @@
 
 ## Overview
 
-pnpm workspace monorepo. Primary artifact: **Syrabit.ai** — AI-powered educational platform for AHSEC Class 11/12 + Degree students in Assam.
+Syrabit.ai is an AI-powered educational platform designed for AHSEC Class 11/12 and Degree students in Assam, India. The platform aims to provide comprehensive learning resources across 2 boards (AHSEC, Degree) and 55 subjects with chapter-level RAG chunks. Key capabilities include AI-driven content generation, syllabus management, SEO optimization, and a robust admin panel for managing content, users, and analytics. The project's vision is to make high-quality, localized educational content accessible, leveraging AI to personalize learning experiences and enhance content delivery.
 
-## Backend Module Structure (refactored from monolith server.py)
+## User Preferences
 
-The backend (`artifacts/syrabit-backend/`) is split into modular files:
+I prefer iterative development with clear communication on major changes. I value detailed explanations for complex features and architectural decisions. Please ensure that the development process prioritizes modularity and maintainability.
 
-**Entry point:** `server.py` (~480 lines) — app factory, lifespan, middleware, router mounts, exception handlers.
+## System Architecture
 
-**Shared modules:**
-- `config.py` — env vars, plan limits, CORS config, seed data (pure constants)
-- `deps.py` — mutable state: MongoDB, Redis, Supabase, PG pool, Sarvam clients, logger
-- `cache.py` — Redis + in-memory caching (TTLCache wrappers, invalidation)
-- `auth_deps.py` — JWT helpers, get_current_user, get_admin_user, rate limiting
-- `middleware.py` — SecurityHeadersMiddleware, GlobalRateLimitMiddleware
-- `utils.py` — bot detection, device type, country resolution, keyword extraction
-- `db_ops.py` — all supa_*/pg_* database operations
-- `llm.py` — LLM batching, SmartKeyPool, call_llm_api, streaming
-- `rag.py` — RAG search, vector search, web search, chat helpers, telemetry
-- `analytics_helpers.py` — page view tracking, visitor stats, library analytics
-- `seed.py` — database seeding logic
-- `metrics.py` — MetricsStore, health check infrastructure
-- `models.py` — Pydantic request/response models
+The project is a pnpm workspace monorepo comprising a React + Vite frontend (`artifacts/syrabit`) and a FastAPI Python backend (`artifacts/syrabit-backend`).
 
-**Route modules** (`routes/`): 16 files, each with own APIRouter
-- `auth.py`, `content.py`, `syllabus.py`, `ai_chat.py`, `conversations.py`, `user.py`
-- `admin_auth_users.py`, `analytics.py`, `admin_content.py`, `admin_pipeline.py`
-- `admin_settings.py`, `admin_notifications.py`, `admin_monetization.py`
-- `cms_sarvam_health.py`, `admin_advanced.py`, `pyq.py`
+**Backend Architecture:**
+- **Modular Design:** The backend is organized into an app factory (`server.py`), shared modules (e.g., `config.py`, `deps.py`, `cache.py`, `db_ops.py`, `llm.py`, `rag.py`), and route modules for clear separation of concerns.
+- **Dependency Hierarchy:** `config` → `deps` → `cache` → `auth_deps` → `db_ops` → `llm/rag/utils` → `routes` → `server.py`.
+- **AI-Powered Syllabus Uploader:** An agentic pipeline handles PDF uploads, extracts syllabus information using Gemini Vision, generates board-aware LLM notes, chunks content for RAG, embeds chapters, creates CMS blog drafts, and performs SEO/GEO tagging. This process streams SSE events to the frontend for real-time progress.
+- **Vertex AI / Gemini Integration:** Nine AI services are integrated via `vertex_services.py`, including text embeddings, translation, vision analysis, content enhancement, quality scoring, topic suggestion, SEO meta generation, content gap finding, and long document reading (Gemini 1.5 Pro).
+- **SEO & Content Quality:** Implemented prompt variants for content generation, title diversification, and content-derived meta descriptions. A quality scoring system tracks word count, heading count, unique ratio, and feature presence (FAQ, PYQ, examples) to prevent thin content. Anti-thin-page gates enforce minimum word counts.
+- **PYQ HTML Replica:** A backend endpoint processes PYQ PDFs, uses Gemini Vision OCR to build SEO-optimized HTML replicas, stores them in MongoDB, and serves them. These replicas are RAG-indexed with high priority.
+- **RAG Pipeline:** A 4-way parallel search mechanism combines keyword chunks, chapter keywords, subject keywords, and vector cosine similarity. Grounding now includes `[PAGE: slug]` citation headers. Embeddings are generated on content publish.
+- **Monetization:** Supports free, starter, and pro plans with credit-based usage. Integrates Razorpay (INR) and Stripe (USD) for payments, with webhook handlers for transaction verification.
+- **Security:** Utilizes ASGI-native `SecurityHeadersMiddleware` for HSTS, CSP, and X-Frame-Options.
+- **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection. SEO prompts include specific citations (AHSEC exam year, NCERT/SCERT) and generate FAQ blocks.
 
-**Dependency hierarchy:** config → deps → cache → auth_deps → db_ops → llm/rag/utils → routes → server.py
+**Frontend Architecture:**
+- **UI/UX:** React + Vite, React Router, and Tailwind CSS. Employs a mobile-first responsive design using `100svh` and safe-area insets.
+- **Admin Panel:** A comprehensive admin interface with 20 sections, including Dashboard, Syllabus, Content Editor, Content Studio, SEO Manager, QA Review, Automation, Users, Conversations, Analytics, Monetization, and Health. Significant upgrades include internal linking engines, quality gates, FAQ auto-extraction, conversion funnels, and schema.org auto-injection.
+- **Component Refactoring:** Large frontend files are split into sub-components for better maintainability (e.g., `admin/`, `pages/`, `utils/`).
+- **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` detects search engine bots and serves pre-rendered HTML for key pages (homepage, library, subject landings, topic pages, PYQ pages) with a 1-hour TTL cache, ensuring full content, meta tags, and Schema.org are available to crawlers.
+- **Content Display:** Library page features browser-window style subject cards. Subject Landing Pages list chapters with search and topic chips. Lesson Pages (`SeoTopicPage`) have a blog-style layout with reading progress, sticky TOC, and improved typography.
+- **Chat Interface:** Chat responses use a standardized 0.1 temperature for all LLMs. RAG chunk size is increased to 1,200 characters to preserve academic concepts.
 
-## Agentic Syllabus Uploader (updated 2026-03-31)
+**Monorepo Structure:**
+- `artifacts/`: Deployable applications (syrabit frontend, syrabit-backend, mockup-sandbox).
+- `lib/`: Shared libraries (API spec, React Query hooks, Zod schemas, Drizzle ORM schema).
+- `scripts/`: Utility scripts.
+- `pnpm-workspace.yaml`, `tsconfig.base.json`, `tsconfig.json`, `package.json` for pnpm workspace management.
 
-- **Backend**: `POST /api/admin/agentic-syllabus/run` — SSE streaming endpoint.  
-  Supports 3 boards: **AHSEC**, **SEBA**, **Degree** with board-specific extraction prompts and content generation.  
-  Accepts form params: `file`, `board` (ahsec/seba/degree), `paper_type` (degree only), `stream` (ahsec/seba: science/arts/commerce).  
-  Full autonomous pipeline: PDF upload → Gemini Vision scans all subjects → for each subject sequentially:  
-  1. `SyllabusLinker.link()` → auto-creates board/class/stream/subject hierarchy in MongoDB  
-  2. `_agentic_generate_chapter_content()` → board-aware LLM notes (degree=academic, AHSEC/SEBA=exam-oriented with PYQ patterns)  
-  3. `auto_chunk_content()` → splits content into RAG-ready chunks with geo_tags  
-  4. `_embed_and_store_chapter()` → embeds chapters into `syllabus_embeddings` for AI chat RAG  
-  5. Flags `notes_generated` on each chapter doc  
-  6. Creates chapter-wise CMS blog drafts in `cms_documents`  
-  7. SEO/GEO topic tagging per subject  
-  8. Saves import record to `syllabus_pdf_imports`  
-  9. Invalidates content caches + reseeds syllabus embedder  
-  Streams SSE events: `scan_start → scan_complete → subject_start → hierarchy → chapter_start → chapter_content → chapter_chunked → chapter_embedded → blog_drafts_created → seo_tagged → subject_done → complete`
-- **Frontend**: `AgenticSyllabusUploader.jsx` — 3-phase wizard (Upload PDF → Running/Live log → Done summary).  
-  - Board selector (Degree/AHSEC/SEBA) with adaptive sub-selectors:  
-    - Degree → paper type picker (major/minor/mdc/vac/aec/sec/ge/cc)  
-    - AHSEC/SEBA → stream picker (Science/Arts/Commerce)  
-  - Dynamic pipeline steps diagram updates based on board  
-  - Real-time per-subject subject cards with chapter-level progress (content/chunk/embed step dots)  
-  - Blog draft count shown per subject  
-  - Side-by-side layout: subjects list (left) + live log with colour-coded events (right)  
-  - Import Another / Cancel button for reset  
-- **Integration**: Added to `AdminSyllabusManager.jsx` above existing Manual PDF Importer. Calls `loadImports()` + `onHubContext` on completion.  
-- **Data flow**: topic → chapter → subject → stream → class/semester → board (MongoDB `subjects`, `chapters`, `topics`, `chunks`, `syllabus_embeddings`)
+## External Dependencies
 
-### Vertex AI / Gemini Integration (vertex_services.py)
-9 AI-powered services all driven by `GEMINI_API_KEY`:
-1. **Text Embeddings** (`text-embedding-004`) — semantic topic search
-2. **Translation** (Gemini multilingual) — Assamese, Hindi, Bengali, Bodo
-3. **Vision Analysis** (Gemini Vision) — thumbnail analysis
-4. **Content Enhancer** — improve generated notes/MCQs
-5. **Quality Scorer** — score content before publishing
-6. **Topic Suggester** — find missing high-value topics
-7. **SEO Meta Generator** — title/description/keywords/OG tags
-8. **Content Gap Finder** — cross-references searches vs published pages
-9. **Long Doc Reader** (Gemini 1.5 Pro 1M ctx) — extract from AHSEC PDFs
-
-Admin endpoints: `/api/admin/vertex/*`
-Frontend panel: Admin → Gemini AI Studio (sidebar)
-CMS Editor: Translate button + AI Write (Gemini palette) in toolbar
-
-## GEO, Chat Sources & Syllabus Alignment Audit (Task #46)
-
-1. **JSON-LD GEO hardening**: LearnPage, SeoTopicPage, SubjectPage now use `@graph` with Article + Course + BreadcrumbList + FAQPage schemas. All fields use real data (datePublished/dateModified with fallbacks, educationalLevel from actual board/class, about from primary keyword). LearnPage and SubjectPage gained Course schema.
-2. **Semantic HTML**: SubjectPage chapter cards wrap content in `<article itemScope itemType="LearningResource">` with microdata (name, educationalLevel, learningResourceType, inLanguage, url). Heading hierarchy uses `<h3>` for chapter titles.
-3. **Chat source citation resilience**: MarkdownContent citation regex now normalizes both titles via fuzzy matching (strips punctuation/whitespace, tries substring containment) so slight title variations still resolve to links.
-4. **Dynamic board labels**: Removed hardcoded `AssamBoard — AHSEC` fallback in ChatPage and prompts.py. Board labels now use actual board data from user context. `_format_board_label` passes through non-Assam board names.
-5. **Source pill tooltips**: Pills show full Board → Class → Subject → Chapter breadcrumb in tooltip. Content card attribution breadcrumb now shows Board → Class → Subject → Chapter → Card.
-6. **Syllabus coverage scoring**: `_compute_topic_coverage()` function computes 0-100% score based on keyword matching of chapter topics against notes + questions + flashcards. Endpoint: `GET /api/admin/content/chapters/{subject_id}/coverage`. Stores `coverage_score` on each chapter document. Chapters below 60% are flagged.
-7. **Admin chapter list**: `GET /api/admin/content/chapters/{subject_id}` now always includes `coverage_score` field (null if not yet computed).
-8. **Tightened generation prompts**: Notes, important questions, and flashcard prompts now explicitly require coverage of EVERY listed syllabus topic. Post-generation check logs warnings for any missing topics.
-
-## PYQ HTML Replica (Task #23)
-
-- **Backend**: `POST /api/admin/pyq/html-replica` — accepts a PDF + hierarchy metadata, runs Gemini Vision OCR, builds SEO HTML replica, persists to `pyq_html_pages` MongoDB collection. Returns `{ seo_url: "/pyq/{slug}" }`.
-- **Backend**: `GET /api/pyq/{slug}` — serves the stored HTML replica with correct content-type and cache headers.
-- **Backend**: `GET /api/pyq/list` — public list of all generated PYQ replica pages.
-- **RAG indexing**: Extracted question text is stored in `chunks` collection with `content_type="pyq"`, `priority=1`. RAG search sorts by priority so PYQ chunks surface first.
-- **Frontend**: `PYQReplicaPage.jsx` at route `/pyq/:slug` — fetches the HTML via API, renders with `dangerouslySetInnerHTML`, handles loading/404 states.
-- **Frontend**: `AdminPYQManager.jsx` — added "HTML Page" button on PDF cards. Clicking it fetches the PDF bytes from Supabase URL, sends to the replica endpoint, and on success shows a toast with the live URL and an "Open Page →" link.
-- **Slug format**: `{board}-{subject}-pyq-{year}-{paper_type}-dhemaji` (geo-anchored)
-- **SEO**: Schema.org `ExamPaper` JSON-LD, geo.placename meta tags for Dhemaji, Jorhat, Guwahati, Assam.
-- **HTML style**: white bg, black text, Times New Roman 14px, 2in 1.5in margins, marks floated right, mobile-responsive.
-
-## SEO Content Quality & Ranking Fix
-
-Addresses Google "unhelpful content" signals from templated meta/titles/structure.
-
-- **Prompt Variants**: `PROMPT_VARIANTS` dict in `seo_engine.py` — 2-3 structural variants per page type (notes/definition/important-questions/mcqs/examples). Deterministic hash-based selection via `_topic_hash()` ensures stable regeneration.
-- **Title Diversification**: `TITLE_TEMPLATES` — 3-4 title templates per page type, hash-selected. Stored as `title_variant` on each page.
-- **Content-Derived Meta Descriptions**: `_extract_summary_from_content()` extracts the Summary section (or first meaningful paragraph as fallback) from generated content. No more identical templated descriptions.
-- **Quality Scoring**: `_compute_quality_score()` stores per-page: `word_count`, `heading_count`, `unique_ratio`, `has_faq`, `has_pyq`, `has_examples`, and composite `score` (0-100). Displayed in admin pages list with color-coded badges.
-- **Anti-Thin-Page Gates**: Per-page-type minimum word counts (notes=400, definition=300, important-questions=350, mcqs=400, examples=350). Pages below threshold are rejected. Score≥70→published, 50-69→draft, <50→rejected.
-- **Quality tracking**: Normalized `quality` field (`{score, word_count}`) stored on every generated page alongside `quality_score` for backward compatibility.
-- **`in_sitemap` flag**: Set on pages when published, cleared on archive/reject. Pipeline-status tracks sitemap-indexed count.
-- **FAQ page type**: `ALL_PAGE_TYPES` includes `faq` in addition to standard 5 types. QA-promoted FAQ pages accessible via public routes.
-- **Bulk Meta Refresh**: `POST /api/seo/refresh-meta` — iterates all published pages, re-extracts meta descriptions, diversifies titles, recomputes quality scores. Zero LLM cost. Button in Admin SEO Manager → Sitemap tab.
-- **QA → SEO FAQ Promotion**: `POST /api/admin/qa/promote-to-seo` — batch-promotes published QA pairs into FAQPage JSON-LD seo_pages grouped by topic. Requires ≥3 QA pairs per topic for auto-publish.
-- **GEO-SEO Colleges**: 8 Assam colleges injected into SEO page generation prompts (Cotton University, Darrang College, Bhattadev University, B. Borooah College, Gauhati Commerce College, J.B. University, Handique Girls' College, Gurucharan College).
-- **CMS JSON-LD**: Auto-generates BreadcrumbList + Article/FAQPage JSON-LD schema on publish. Canonical URL field on CMSDocument model. Full breadcrumb hierarchy with URLs for all levels.
-- **Content Cards**: `GET /admin/content/subject/{subject_id}/chapter-cards` — batch endpoint returning per-chapter card data: notes status, mark-wise question breakdown (1/2/5/10-mark counts), flashcard count, linked SEO topics with keywords, SEO page types (notes/defs/mcqs/examples/faq), blog count, coverage score. Frontend ChapterList displays expandable details panel per chapter with linked topics and SEO page type breakdown. Bulk-loaded on subject selection.
-- **Segmented Sitemaps**: Split by content type for GSC diagnostic visibility (sitemap-pages/subjects/notes/mcqs/pyqs/examples/definitions.xml + sitemap-index.xml). All listed in robots.txt.
-- **Bot-Aware Pre-Rendering**: `BotRenderMiddleware` in `server.py` detects 20+ bot user-agents (Googlebot, Bingbot, GPTBot, PerplexityBot, ClaudeBot, etc.) and serves pre-rendered HTML instead of SPA shell. Covers: homepage (`/`), library (`/library`), subject landings (`/{board}/{class}/{subject}`), topic pages (4-5 segments), PYQ pages (`/pyq/{slug}`). 1-hour TTL cache (512 entries). Bots see full content, meta tags, Schema.org, internal links.
-- **Subject Landing Pages**: `GET /api/seo/html/subject/{board}/{class}/{subject}` — generates HTML listing all published topics grouped by chapter, with CollectionPage + ItemList + BreadcrumbList Schema.org. Added to sitemap-subjects.xml.
-- **Homepage Pre-Render**: `GET /api/seo/html/homepage` — dynamic HTML with subject listing, stats, WebSite + Organization + EducationalOrganization Schema.org, SearchAction, geo meta (IN-AS).
-- **Production Build**: Vite build + Python backend serve via `serve_spa` catch-all route.
-
-## Admin Panel — Upgrade Wave (All 12 + 5 Quick Wins COMPLETE)
-
-| # | Feature | Component | Status |
-|---|---------|-----------|--------|
-| T001 | Internal Linking Engine | AdminSeoManager → "🔗 Int. Links" tab | ✅ Done |
-| T002 | Quality Gate in Content Studio | AdminContentHub (Content Editor) → auto-score + warning banner | ✅ Done |
-| T003 | FAQ Auto-Extractor | AdminConversations → Extract FAQs button | ✅ Done |
-| T004 | Conversion Funnel + Drop-Off Rates | AdminMonetization → Funnel tab | ✅ Done |
-| T005 | PDF-to-Syllabus Importer | AdminSyllabusManager → PDF Import panel | ✅ Done |
-| T006 | Schema.org Auto-Injection | AdminSeoManager → "🧬 Schema" tab | ✅ Done |
-| T007 | Inline Gemini Writing (AI Palette) | AdminCmsDocEditor → AI Write toolbar button + palette | ✅ Done |
-| T008 | Dashboard Content Pipeline Tracker | AdminDashboard → Pipeline widget | ✅ Done |
-| T009 | Page-Level Conversion Tracker | AdminAnalytics → "📄 Page Conversions" tab | ✅ Done |
-| T010 | Churn Risk Scoring | AdminUsers → Risk badge on user rows | ✅ Done |
-| T011 | LLM Cost Tracker | AdminHealth → "💸 LLM Costs" tab | ✅ Done |
-| T012 | Notification Trigger Builder | AdminNotifications → Rule editor | ✅ Done |
-| T013 | Sitemap Validator | AdminSeoManager → "🗺 Sitemap" tab | ✅ Done |
-
-## Stack
-
-- **Monorepo tool**: pnpm workspaces
-- **Node.js version**: 24
-- **Package manager**: pnpm
-- **TypeScript version**: 5.9
-- **API framework**: Express 5
-- **Database**: PostgreSQL + Drizzle ORM
-- **Validation**: Zod (`zod/v4`), `drizzle-zod`
-- **API codegen**: Orval (from OpenAPI spec)
-- **Build**: esbuild (CJS bundle)
-
-## Structure
-
-```text
-artifacts-monorepo/
-├── artifacts/              # Deployable applications
-│   ├── syrabit/            # React + Vite frontend (primary)
-│   ├── syrabit-backend/    # FastAPI Python backend
-│   └── mockup-sandbox/     # Component preview server
-├── lib/                    # Shared libraries (scaffolded, not actively used)
-│   ├── api-spec/           # OpenAPI spec + Orval codegen config
-│   ├── api-client-react/   # Generated React Query hooks
-│   ├── api-zod/            # Generated Zod schemas from OpenAPI
-│   └── db/                 # Drizzle ORM schema + DB connection
-├── scripts/                # Utility scripts (single workspace package)
-│   └── src/                # Individual .ts scripts, run via `pnpm --filter @workspace/scripts run <script>`
-├── pnpm-workspace.yaml     # pnpm workspace (artifacts/*, lib/*, lib/integrations/*, scripts)
-├── tsconfig.base.json      # Shared TS options (composite, bundler resolution, es2022)
-├── tsconfig.json           # Root TS project references
-└── package.json            # Root package with hoisted devDeps
-```
-
-## TypeScript & Composite Projects
-
-Every package extends `tsconfig.base.json` which sets `composite: true`. The root `tsconfig.json` lists all packages as project references. This means:
-
-- **Always typecheck from the root** — run `pnpm run typecheck` (which runs `tsc --build --emitDeclarationOnly`). This builds the full dependency graph so that cross-package imports resolve correctly. Running `tsc` inside a single package will fail if its dependencies haven't been built yet.
-- **`emitDeclarationOnly`** — we only emit `.d.ts` files during typecheck; actual JS bundling is handled by esbuild/tsx/vite...etc, not `tsc`.
-- **Project references** — when package A depends on package B, A's `tsconfig.json` must list B in its `references` array. `tsc --build` uses this to determine build order and skip up-to-date packages.
-
-## Root Scripts
-
-- `pnpm run build` — runs `typecheck` first, then recursively runs `build` in all packages that define it
-- `pnpm run typecheck` — runs `tsc --build --emitDeclarationOnly` using project references
-
-## Packages
-
-### `artifacts/syrabit` (`@workspace/syrabit`) + `artifacts/syrabit-backend`
-
-**Syrabit.ai** — AI-powered educational platform for AHSEC Class 11/12 and Degree students in Assam, India.
-
-- **Scope**: 2 boards — AHSEC (HS 1st & 2nd Year) + DEGREE (2nd & 4th Sem)
-- **Content**: 14 streams, **55 subjects** with chapter-level RAG chunks
-- **AHSEC streams**: Science (PCM), Science (PCB), Arts, Commerce — for both HS 1st and 2nd Year
-- **DEGREE streams**: B.Com, B.A, B.Sc — for 2nd Sem and 4th Sem
-- **Chapter ID scheme**: DEGREE uses `ch_1..ch_N`, AHSEC uses `ach_5000..ach_N` (avoids collision)
-- **Frontend**: React + Vite (JSX files, `.jsx` extension required), React Router, Tailwind CSS
-- **Backend**: FastAPI (`server.py`) at port 8000; `emergentintegrations/` is a local module
-- **Databases**: PostgreSQL (users/auth), Supabase (mirror), MongoDB `test_database` (content/RAG)
-- **Auth**: `syrabit_session` httpOnly cookie OR Bearer token; admin uses `syrabit_admin_session`; admin credentials in `ADMIN_EMAILS`/`ADMIN_PASSWORDS`/`ADMIN_NAMES` env vars
-- **Caches**: `_user_cache` (120s), `_conv_cache` (60s), `_rag_cache` (600s), `_ai_response_cache` (1h), `_syllabus_cache` (30min)
-- **LLM SLM Pool (6 slots)**: gemini-2.5-flash-preview-05-20 (c6, PRIMARY), Gemini 2.0-flash (c6), Gemini flash-lite (c8), Groq llama-3.3-70b (c8), Groq llama-3.1-8b (c4), Fireworks deepseek-v3p2 (c8) — Bedrock skipped (no AWS creds)
-- **Temperature**: ALL providers locked at 0.05 (deterministic, grounding-only mode) — `_stream_gemini`, `_stream_xai`, `_stream_bedrock`, `_call_sarvam_llm`
-- **RAG**: 4-way parallel search — keyword chunks + chapter keyword + subject keyword + **vector cosine similarity** (`vector_rag_search`)
-  - Chunk scoring: +5/match, chapter keyword +3, subject keyword +1, exact name +8
-  - Vector tier: `embed_text(query, task_type="RETRIEVAL_QUERY")` → cosine similarity vs stored page/chapter embeddings → top-12 by score
-  - Grounding now includes `[PAGE: slug]` citation headers on each vector hit block
-- **Vector RAG pipeline**: `vector_rag_search()` in `server.py` — embeds query, fetches up to 200 seo_pages + 100 chapters with embeddings, ranks by `cosine_similarity`, returns top-12
-- **Embed-on-publish**: `_embed_and_store_page()` called as `asyncio.create_task()` (non-blocking) on every Studio publish — stores 768-dim `embedding` + `embedding_model: text-embedding-004` in seo_pages
-- **Admin vector endpoints**: `POST /admin/vector/batch-embed` (backfill all un-embedded pages+chapters), `GET /admin/vector/stats` (coverage %)
-- **Citation format**: Answers end with `Sources: [PAGE: slug1], [PAGE: slug2]` from grounding slugs; fallback: "Not found in Syrabit library. Based on standard curriculum:"
-- **Answer structure (prompts.py)**:
-  - Concise mode: Direct Answer → Key Points → Example → Sources
-  - Structured mode: Explanation → Key Points → Examples → PYQs Tip → Sources
-  - "Not found in Syrabit library" is the explicit fallback (no silent hallucination)
-- **Monetization**: Free (30 credits), Starter ₹99/US$1.99 (300 credits), Pro ₹999/US$12.99 (4000 credits) — Razorpay + Stripe dual gateway; webhook handlers at `/api/webhooks/razorpay` and `/api/webhooks/stripe`; credit top-up (100/500/1000); usage tracking at `/api/usage/me`
-- **Email**: Resend API for password reset; set `RESEND_API_KEY`, `EMAIL_FROM`, `FRONTEND_URL` in env; falls back to log-only when key missing
-- **Security**: ASGI-native `SecurityHeadersMiddleware` (not BaseHTTPMiddleware); HSTS, CSP, X-Frame-Options headers
-- **Admin Panel (20 sections)**: Dashboard (live health + latency), Roadmap, Syllabus, Content Editor, **Content Studio** (AI parse/publish), SEO Manager, QA Review, **Automation** (content gap detection + auto-generate), Users, Conversations, Analytics (funnel/heatmap tabs), **Monetization** (revenue analytics, referral config, pricing), Plans & Credits, Notifications, API Config, Google Auth, Settings, Rate Limits, Activity Log, Health
-- **Admin Endpoints (new)**: `/admin/dashboard/metrics`, `/admin/studio/parse`, `/admin/studio/publish`, `/admin/analytics/funnel`, `/admin/analytics/content-heatmap`, `/admin/analytics/revenue`, `/admin/analytics/predictor`, `/admin/automation/insights`, `/admin/automation/auto-generate`, `/admin/monetization/overview`, `/admin/monetization/referrals`, `/admin/monetization/referral-config`
-- **Content Editor upgrades**: Chapters now have `slug` (auto-generated from title, unique per subject), `content_type` (notes/pyq/formula/summary/solution/reference); AI Parse button in toolbar sends content to `/admin/studio/parse` for auto-structuring; file attach uploads PDF/TXT/MD to chapters with text extraction and auto-rechunking; per-chapter stats panel shows chunk count, content length, slug status, and attached files; API endpoints: `GET /admin/content/chapters/{id}/stats`, `POST /admin/content/chapters/{id}/attach-file`
-- **WordPress-parity admin upgrades (T001–T004)**:
-  - `SharedMdxEditor.jsx` — forwardRef MDXEditor with `getMarkdown()`/`insertText()` + TEMPLATES re-export (from `src/utils/editorTemplates.js`)
-  - `AdminContentEditor` — "Publish as Blog" button on subject cards (POST merge → `syrabit_cms_prefill` localStorage → navigate to CMS); inline MDXEditor (directly imported, no wrapper, avoids duplicate-React error); split blog-preview pane; Template Library shortcode row; bulk-select checkboxes + bulk merge action bar; Workflow Tracker strip (Chapters → Merged → Published)
-  - `AdminCmsDocEditor` — full WordPress/Gutenberg-parity CMS editor: left-panel type filter (All/Live/Draft/Syllabus/Revisions); toolbar with Live Preview split-pane toggle (iframe → `/learn/{slug}`), Save as Revision button (`POST /admin/content/cms-documents/{id}/revisions`), Hand Off to Content Editor (seeds `syrabit_content_prefill` localStorage → navigates to content tab), Publish/Unpublish toggle; Content tab: 7 template insert buttons incl. Syllabus Intro + Chapter Link, expandable Insert Syllabus picker (cascading Board→Class→Stream→Subject fetched from public content API, inserts syllabus block into editor); SEO tab: Google SERP preview + Perplexity AI citation simulator (dark card with [1] badge), Canonical URL display with copy button, Auto-fill primary keyword (Zap button), 160-char meta progress bar; GEO tab: Link to Syllabus Scope picker (cascading selectors, calls `POST /admin/content/cms-documents/{id}/link-syllabus` to resolve names + set canonical_url + geo_tags), Auto-extract authority phrases, live GEO URL preview, preset quick-links; reads `syrabit_cms_prefill` localStorage prefill on mount (10-min expiry)
-  - `AdminContentStudio` — full Studio→CMS→library pipeline with full automation: Board/Class dropdowns → publish path `/{board_slug}/{class_slug}/{subject_slug}/{chapter_slug}`; "Load Subject Syllabus" picker → inserts `type:"syllabus"` block; **Auto-mode** (triggered by "Send to AI Studio" from ContentEditor): `prefillRef` stores boardId/classId/streamId/subjectId so cascade effects (board→class→stream→subject) restore prefill IDs instead of clearing to '' — fixes the race condition where cascades overwrote prefill state; `autoParseRef` + `autoSeoRef` one-shot guards fire auto-parse immediately, then `autoSeoFnRef` (stable fn ref to avoid stale closure) runs `handleAutoSeoAndApply` to generate+apply SEO title+meta in one pass without user interaction; subject/chapter/rawText/selectedSylSubjectId set directly from prefill (not via cascade) so auto-parse has correct context even before cascades complete; **always-visible live SERP + Perplexity preview cards** rendered directly in Editor tab (not just Preview tab) with real-time title/meta binding + inline SEO title + meta description quick-edit fields + ⚡ AI regenerate button; auto-processing banner shows during parse→SEO pipeline; header sub-label toggles to green-dot "Auto-mode" state; Next Steps guide labels update dynamically (Auto-Parsing / AI Parsing… / Blocks Ready, Auto-SEO / Generating SEO… / SEO Ready); Gap Fill tab: subjects <3 chapters, bulk auto-gen; Publish Pipeline: URL preview, Publish Page/Revision, Save Draft; backend auto-creates CMS stub on publish
-  - MDX dark CSS moved to `src/index.css` (globally available, no per-component `<style>` injection needed)
-- **Payment workflow**: Razorpay (INR) + Stripe (USD) dual gateway; server-side order validation (amount, plan/credits, user ownership) in both verify endpoints; HMAC signature verification; idempotency via `razorpay_payment_id`/`stripe_session_id` unique indexes; session cache invalidation after payment; credit top-up flow (100/500/1000 packs) with dedicated create+verify endpoints; Stripe checkout redirects to `/payment/success` and `/payment/cancel` pages; `get_user_credits` uses actual DB `credits_limit` (supports top-ups + admin adjustments)
-- **Payment endpoints**: `POST /payments/create-order`, `POST /payments/verify`, `POST /payments/stripe/create-checkout`, `POST /payments/credit-topup`, `POST /payments/credit-topup/verify`, `POST /webhooks/razorpay`, `POST /webhooks/stripe`
-- **Admin**: `ADMIN_EMAILS=admin@syrabit.ai`; watchfiles watches `/artifacts/syrabit` — server.py edits require workflow restart
-- **Form accessibility**: All inputs have proper `autocomplete` attributes (email, current-password, new-password, name)
-- **SEO & GEO**: `seo_engine.py` handles SEO routes; bot-readable HTML endpoints at `/api/seo/html/{board}/{class}/{subject}/{topic}` serve pre-rendered HTML with JSON-LD (Article, Course, BreadcrumbList, FAQPage), Dublin Core, and citation meta tags; `robots.txt` allows all major AI crawlers; sitemap includes both SPA and HTML bot URLs; `llms.txt` endpoint at `/api/llms.txt` describes site structure for LLM crawlers
-- **GEO (Generative Engine Optimization)**: Syllabi have `geo_phrases` field (authority phrases injected into AI answers); SEO prompts include FAQ sections, AHSEC exam year citations, and NCERT/SCERT references; automation auto-generate attaches `geo_meta` with suggested GEO sections; studio/parse prompt generates FAQ blocks and board exam frequency citations; chunks store `syllabus_id` and `geo_tags` metadata
-- **Mobile Responsiveness (COMPLETE)**: Full mobile-first responsive layout across all breakpoints:
-  - `AppLayout` main uses `.app-main-scroll` CSS class — adds `max(4rem, calc(4rem + env(safe-area-inset-bottom, 0px)))` bottom padding on mobile (0 on md+)
-  - `BottomNav` has `paddingBottom: env(safe-area-inset-bottom, 0px)` for iPhone home-indicator clearance
-  - `ChatPage` uses `.chat-viewport-height` CSS class with `100svh` (dynamic viewport units for iOS Safari toolbar) and safe-area inset bottom
-  - `HistoryPage` `⋯` action button: `opacity-100 md:opacity-0 md:group-hover:opacity-100` — always visible on touch, hover-only on desktop
-  - `SubjectPage` article padding: `clamp(1.25rem, 5vw, 2.5rem)` — responsive, not hardcoded
-  - `LibraryPage` masonry helper `.masonry-grid-mobile` added to `index.css`; card grid already responsive
-  - CSS helpers in `src/index.css`: `.app-main-scroll`, `.chat-viewport-height` use `@media` breakpoints + CSS env() for iOS safe area
-- **Library Page**: Browser-window style subject cards with colored dots + monospace URL bar, always-visible chapter lesson links (up to 6), Ask AI / Save / Browse action buttons, 3-column grid; Board/Class dropdown filters + dynamic stream chips; search autocomplete across name/tags/class/stream/board
-- **Subject Landing Page**: `/:board/:classSlug/:subjectSlug` shows all chapters with search, topic chips, AI CTA; uses `resolve-subject` endpoint (no stream_slug needed)
-- **Lesson Pages (SeoTopicPage)**: Blog-style layout with reading progress bar, sticky sidebar TOC on xl screens (IntersectionObserver active-heading tracking), mobile collapsible TOC, improved typography (`text-[15px] leading-[1.8]`); breadcrumb, content type tabs, related topics, prev/next navigation; fallback to chapter content when no SEO page exists
-- **Content Fallback**: `GET /content/chapter-by-slug/{board}/{class}/{subject}/{chapter}` resolves chapters by slug or auto-generated slug from title; returns assembled chunk content with `is_fallback: true` flag; chapters without explicit slugs get auto-generated slugs from title (via regex slugify)
-- **Token spend tracking**: `record_llm_cost()` called in both `chat` and `chat_stream` endpoints (~4 chars/token estimation; provider hardcoded to `"gemini"`, refine later to detect actual slot)
-- **RAG latency tracking**: `rag_search()` uses `_rag_t0 = time.time()` at function entry; `_record_rag_event(quality, round((time.time()-_rag_t0)*1000,1), query)` on cache-miss exit — actual ms now recorded instead of hardcoded 0
-- **Admin dashboard auth**: `/admin/dashboard/metrics` uses `adminHdr(adminToken)` (JWT Bearer) — fixed from bare `headers` (withCredentials-only) which caused 401 when cookie not set
-- **Dashboard UX fixes**: Latency bar threshold 100ms→300ms (remote APIs); MRR formatted with `Math.round().toLocaleString('en-IN')`; alert states distinguish API failure (yellow) from data alerts; fallback rate shows "Could not load" on error vs "no data" on empty; vector coverage widget shows VERTEX_SERVICE_ACCOUNT guidance when 0 items embedded
-- **Docker**: `Dockerfile` (Python 3.11-slim, non-root user, healthcheck) for Railway/container deployment
-- **Endpoints**: 139 API endpoints total (as of Phase 8 completion)
-- **Deployment**: Root `pyproject.toml` and `uv.lock` removed entirely to prevent platform auto-detection from running `uv sync`; Python deps installed via `PIP_USER=0 pip3 install --target=.python-deps` (avoids Nix pip `user=yes` config that breaks virtualenvs); run uses `PYTHONPATH=.python-deps`; `path-to-regexp` pinned to 8.4.0 via pnpm override
-
-## Enterprise Pipeline Audit — Full Fix (2026-03-30)
-
-### API Crash Fix
-- `CmsNoIndexMiddleware.dispatch` used unresolved `Request` type — fixed to `StarletteRequest` (imported alias on line 13)
-
-### Collection Mismatch Fix (CRITICAL)
-- `generate-pyqs-bulk` and `run-content-pipeline` write to `ai_pyq_collections`
-- `topic-pyqs` endpoint previously only read from `topic_pyq_collections` → questions **never showed on LearnPage**
-- Fixed: endpoint now checks `ai_pyq_collections` first, falls back to `topic_pyq_collections`
-- Endpoint now also returns `mark_wise` dict (grouped by 1M/2M/3M/5M/10M) alongside flat `pyqs[]`
-- If `pyqs[]` is empty but `mark_wise` has data, auto-flattens with `marks` field
-
-### Chapter Stats Endpoint — Full Asset Counts
-- `/admin/content/chapters/{id}/stats` now returns `pyq_count`, `mark_wise_counts`, `flashcard_count`, `geo_blog_count`, `pyq_html_count`, `notes_generated`
-- Queries `ai_pyq_collections` (primary) + `topic_pyq_collections` (fallback) + `flashcard_collections` + `seo_pages` + `pyq_html_pages` in parallel
-
-### AdminContentEditor — Persistent Asset Badges
-- `loadChapterStats()` now also updates `chapterAssets` state from the new stats response
-- Badges (PYQs, flashcards, blogs) now survive page reload — previously only populated after pipeline runs in the same session
-- Stats panel in edit view now shows: chunks · chars · Slug ✓ · Qs with mark-wise breakdown · cards · blogs · files
-
-### Chat Source Breadcrumb (3-level)
-- `_sources_from_rag_ctx` now includes `subject_name` in the content_card source object (was already in `content_card_meta` but not forwarded)
-- `SourcesCard` in ChatPage now shows full breadcrumb: **Subject › Chapter › Topic** with colour-coded pills (blue › lightblue › violet)
-
-### LearnPage — Mark-wise Grouped Display
-- New `markWise` state stores the `mark_wise` dict from the topic-pyqs response
-- When mark_wise data present: questions are grouped under `1 Mark / 2 Marks / 3 Marks / 5 Marks / 10 Marks` dividers
-- "Show all" toggle reveals all mark groups (default: first 3 groups visible)
-- Section label changed from "Topic PYQs — Previous Year Questions" → **"Important Questions — mark-wise for exam"**
-- Flashcard section label updated to **"Memory Tricks & Flashcards"**
-
-## Frontend Component Architecture (Task #49 Refactoring)
-
-All large frontend files have been split into sub-components. Sub-component directories:
-
-**Admin components** (`src/components/admin/`):
-- `content-editor/` — 8 sub-components for AdminContentEditor
-- `blog-wizard/` — 10 sub-components for BlogPublishWizard (Step1-5, SerpPreview, PerplexityPreview, TagChips, ThumbnailUploader, DocsDrawer)
-- `seo-manager/` — 14 sub-components for AdminSeoManager (tab panels + StatCard, JobProgress, InsightCard, useSeoManager hook)
-- `syllabus-manager/` — 6 sub-components for AdminSyllabusManager (NepStatsBanner, ManualPdfImport, PreviewEditPanel, SyllabusSelection, EditorForm, ImportsHistory)
-- `cms-editor/` — 7 sub-components for AdminCmsDocEditor (MdxToolbar, DocumentList, EditorToolbar, ContentTab, SeoMetaTab, GeoTagsTab, useCmsEditor hook)
-- `vertex-panel/` — 12 sub-components for AdminVertexPanel (9 service cards + shared, StatusHeader, McqGeneratorCard)
-- `analytics/` — 9 sub-components for AdminAnalytics (8 tab panels + shared)
-
-**Page components** (`src/pages/`):
-- `profile/` — 11 sub-components for ProfilePage (ProfileHeader, AcademicDetails, AiCredits, SubscriptionPlans, DangerZone, dialogs, modals, shared)
-- `chat/` — 7 sub-components for ChatPage (ThinkingIndicator, SourcesCard, MarkdownContent, MessageBubble, EmptyState, InputBar, ModelSelector)
-- `library/` — 7 sub-components for LibraryPage (CmsDocCard, CmsDocsSection, CmsPostCard, CmsPostsGrid, SubjectCard, LibrarySkeleton, FilterChip)
-- `landing/` — 9 sub-components for LandingPage (FloatingParticles, GlowOrb, AnimatedStat, Reveal, HeroSection, FeaturesGrid, PricingSection, TestimonialsFooter, shared)
-
-**Shared utilities** (`src/utils/adminHelpers.js`): `API`, `authHeaders`, `autoSlug`, `wordCount`
-
-**CSS** (`src/styles/`): index.css split into `tokens.css`, `animations.css`, `utilities.css`, `components.css`, `chat.css`, `article.css`
-
-## RAG Pipeline Data Flow (updated 2026-03-31)
-
-Content Hub pipeline now feeds ALL three RAG search paths:
-- **Keyword search**: `chunks` collection (via `auto_chunk_content`) — keyword/regex matching
-- **Content card search**: `seo_pages` + `chapters` + `cms_documents` (via `_fetch_content_card`) — `$text` index + `$regex` fallback
-- **Vector search**: `seo_pages` + `chapters` + `cms_documents` (via `vector_rag_search`) — Gemini `text-embedding-004` cosine similarity
-
-Pipeline writes to 6 collections: `chapters`, `chunks`, `cms_documents` (geo-blogs + PYQ replicas), `topic_pyq_collections`, `ai_pyq_collections`, `flashcard_collections`.
-
-After content generation, pipeline calls: `auto_chunk_content` → `_embed_and_store_chapter` → `_embed_cms_document` (for each geo-blog and PYQ page).
-
-CMS document indexes: `linked_subject_id`, `(status, linked_subject_id)`, `(status, embedding)`, plus text index on `(title×10, content×1, meta_description×5)`.
-
-## Chat Response Quality Settings (updated 2026-03-31)
-
-- **Free plan tokens**: 1,536 (was 1,024) — prevents mid-sentence truncation on essay answers
-- **Starter**: 2,048 · **Pro**: 4,096 (unchanged)
-- **Temperature**: Standardized to 0.1 across all LLM providers (Gemini, Sarvam, Groq, OpenAI, Fireworks, xAI, Bedrock)
-- **Casual mode**: SOURCE citation line is skipped entirely for greetings/small-talk (no injection in `build_rag_system_prompt`)
-- **RAG chunk ceiling**: 1,200 chars (was 800), sub-chunks at 600 chars (was 400) — preserves full academic concepts
-- **Document text limit**: 3,000 chars (was 1,500) for uploaded PDF context in Tier 0 RAG
-- **Cache key**: Includes `conversation_id` to prevent stale cached answers in multi-turn conversations
-
-### `scripts` (`@workspace/scripts`)
-
-Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.
+- **Database:** PostgreSQL (for users/auth) and MongoDB (for content/RAG).
+- **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers.
+- **Caching:** Redis (distributed cache) and in-memory caching.
+- **LLM Providers:**
+    - Google Gemini (gemini-2.5-flash, Gemini Vision, gemini-embedding-001) - primary.
+    - Groq (llama-3.3-70b, llama-3.1-8b).
+    - Fireworks (deepseek-v3p2).
+    - Sarvam clients.
+- **Payment Gateways:** Razorpay (INR) and Stripe (USD).
+- **Email Service:** Resend API (for password resets).
+- **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.
+- **ORM:** Drizzle ORM (for PostgreSQL).
+- **API Framework:** FastAPI (Python backend), Express 5 (Node.js for some utilities).
+- **Schema Validation:** Zod.
+- **API Codegen:** Orval (from OpenAPI spec).
+- **Build Tools:** esbuild, pnpm.
+- **Containerization:** Docker.
