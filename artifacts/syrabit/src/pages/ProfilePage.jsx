@@ -4,7 +4,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { isDegreeBoard } from '@/utils/courseTypes';
 import { useAuth } from '@/context/AuthContext';
 import { PageTitle } from '@/components/PageTitle';
-import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp, cmsPersonalize, cmsListPlans } from '@/utils/api';
+import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp } from '@/utils/api';
 import { toast } from 'sonner';
 import { PLANS, loadRazorpay, ga4Track } from './profile/shared';
 import ProfileHeader from './profile/ProfileHeader';
@@ -16,7 +16,6 @@ import EditFieldDialog from './profile/EditFieldDialog';
 import DeleteConfirmDialog from './profile/DeleteConfirmDialog';
 import PaymentModal from './profile/PaymentModal';
 import TopUpModal from './profile/TopUpModal';
-import GeneratePlanModal from './profile/GeneratePlanModal';
 
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth();
@@ -42,12 +41,6 @@ export default function ProfilePage() {
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpCredits, setTopUpCredits]     = useState(null);
   const [topUpLoading, setTopUpLoading]     = useState(false);
-  const [myPlans, setMyPlans]               = useState([]);
-  const [plansLoading, setPlansLoading]     = useState(false);
-  const [genLoading, setGenLoading]         = useState(false);
-  const [showGenModal, setShowGenModal]     = useState(false);
-  const [genForm, setGenForm]               = useState({ subject_name: '', context: '', days: 7 });
-
   const editInputRef = useRef(null);
 
   useEffect(() => {
@@ -69,50 +62,6 @@ export default function ProfilePage() {
       .catch(() => toast.error('Failed to load profile'))
       .finally(() => setLoading(false));
   }, [user]);
-
-  useEffect(() => {
-    if (!profile || !['starter', 'pro'].includes(profile.plan)) return;
-    setPlansLoading(true);
-    cmsListPlans(profile.id)
-      .then(r => setMyPlans(r.data?.plans || []))
-      .catch(() => {})
-      .finally(() => setPlansLoading(false));
-  }, [profile]);
-
-  const handleGeneratePlan = async () => {
-    if (!genForm.subject_name.trim() && !genForm.context.trim()) {
-      toast.error('Enter a subject or describe your weak areas.');
-      return;
-    }
-    setGenLoading(true);
-    try {
-      const res = await cmsPersonalize({
-        subject_name: genForm.subject_name,
-        context:      genForm.context,
-        days:         Number(genForm.days) || 7,
-        board_name:   profile?.board_name || '',
-        class_name:   profile?.class_name || '',
-      });
-      const { url, title, id: docId, slug } = res.data;
-      toast.success(`Plan created: "${title}"`, { description: 'Opening now…' });
-      setMyPlans(prev => [res.data.doc, ...prev]);
-      setShowGenModal(false);
-      setGenForm({ subject_name: '', context: '', days: 7 });
-      navigate(`/cms/${profile.id}/${slug}`);
-    } catch (e) {
-      const status = e.response?.status;
-      if (status === 402) {
-        toast.error('Upgrade to Starter or Pro to generate personalized plans.');
-        setShowGenModal(false);
-        setShowPaymentModal(true);
-        setPaymentPlan('starter');
-      } else {
-        toast.error(e.response?.data?.detail || 'Plan generation failed. Try again.');
-      }
-    } finally {
-      setGenLoading(false);
-    }
-  };
 
   useEffect(() => {
     const upgradePlan = searchParams.get('upgrade');
@@ -314,7 +263,6 @@ export default function ProfilePage() {
         <SubscriptionPlans
           plan={plan} planInfo={planInfo} profile={profile}
           setPaymentPlan={setPaymentPlan} setShowPaymentModal={setShowPaymentModal}
-          myPlans={myPlans} plansLoading={plansLoading} setShowGenModal={setShowGenModal}
         />
         <DangerZone
           profile={profile} deletionPending={deletionPending}
@@ -339,10 +287,6 @@ export default function ProfilePage() {
         showTopUpModal={showTopUpModal} topUpCredits={topUpCredits} setTopUpCredits={setTopUpCredits}
         topUpLoading={topUpLoading} planInfo={planInfo} creditsRemaining={creditsRemaining}
         setShowTopUpModal={setShowTopUpModal} handleTopUpCheckout={handleTopUpCheckout}
-      />
-      <GeneratePlanModal
-        showGenModal={showGenModal} genForm={genForm} setGenForm={setGenForm}
-        genLoading={genLoading} handleGeneratePlan={handleGeneratePlan} setShowGenModal={setShowGenModal}
       />
     </AppLayout>
   );

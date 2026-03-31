@@ -1,15 +1,10 @@
-import { Link } from 'react-router-dom';
-import {
-  Check, CheckCircle, Zap, Lock, Sparkles, Loader2,
-  FileText, Target, Calendar, ChevronRight, Plus,
-} from 'lucide-react';
+import { Check, CheckCircle } from 'lucide-react';
 import { PLANS, PLAN_RANK, PLAN_FEATURES } from './shared';
 import { DOC_ACCESS_CONFIG } from '@/utils/plans';
 
 export default function SubscriptionPlans({
   plan, planInfo, profile,
   setPaymentPlan, setShowPaymentModal,
-  myPlans, plansLoading, setShowGenModal,
 }) {
   return (
     <>
@@ -130,96 +125,6 @@ export default function SubscriptionPlans({
         </div>
       </div>
 
-      <div className="glass-card rounded-2xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">My Study Plans</p>
-            <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
-              style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))', border: '1px solid rgba(139,92,246,0.20)' }}>
-              AI-Generated
-            </span>
-          </div>
-          {['starter', 'pro'].includes(plan) ? (
-            <button
-              onClick={() => setShowGenModal(true)}
-              className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-semibold text-white hover:opacity-90 transition-all"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)' }}>
-              <Plus size={12} /> Generate Plan
-            </button>
-          ) : (
-            <button
-              onClick={() => { setPaymentPlan('starter'); setShowPaymentModal(true); }}
-              className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-semibold hover:opacity-90 transition-all"
-              style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))', border: '1px solid rgba(139,92,246,0.20)' }}>
-              <Lock size={11} /> Starter only
-            </button>
-          )}
-        </div>
-
-        <div className="p-4">
-          {!['starter', 'pro'].includes(plan) ? (
-            <div className="text-center py-6 space-y-3">
-              <div className="w-10 h-10 rounded-xl mx-auto flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.10)' }}>
-                <Sparkles size={18} className="text-violet-400" />
-              </div>
-              <p className="text-sm font-medium text-foreground">Personalized Exam Plans</p>
-              <p className="text-xs text-muted-foreground max-w-xs mx-auto">
-                AI generates a custom day-by-day sprint based on your weak topics.
-                Available on Starter &amp; Pro.
-              </p>
-              <button
-                onClick={() => { setPaymentPlan('starter'); setShowPaymentModal(true); }}
-                className="inline-flex items-center gap-2 h-9 px-5 rounded-xl text-sm font-semibold text-white hover:opacity-90 transition-all"
-                style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', boxShadow: '0 4px 16px rgba(124,58,237,0.30)' }}>
-                <Zap size={13} /> Upgrade — ₹99
-              </button>
-            </div>
-          ) : plansLoading ? (
-            <div className="flex items-center justify-center py-6">
-              <Loader2 size={20} className="animate-spin text-violet-400" />
-            </div>
-          ) : myPlans.length === 0 ? (
-            <div className="text-center py-6 space-y-3">
-              <FileText size={28} className="mx-auto text-white/20" />
-              <p className="text-sm text-muted-foreground">No plans yet. Generate your first!</p>
-              <button
-                onClick={() => setShowGenModal(true)}
-                className="inline-flex items-center gap-2 h-9 px-5 rounded-xl text-sm font-semibold text-white hover:opacity-90 transition-all"
-                style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', boxShadow: '0 4px 16px rgba(124,58,237,0.30)' }}>
-                <Sparkles size={13} /> Generate My First Plan
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {myPlans.slice(0, 5).map(p => (
-                <Link
-                  key={p.id}
-                  to={`/cms/${profile?.id}/${p.slug}`}
-                  className="flex items-center gap-3 p-3 rounded-xl hover:opacity-90 transition-all group"
-                  style={{ background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.12)' }}>
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: 'rgba(139,92,246,0.12)' }}>
-                    <Target size={14} className="text-violet-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">{p.title}</p>
-                    <p className="text-xs text-muted-foreground flex items-center gap-2 mt-0.5">
-                      {p.subject_name && <span>{p.subject_name}</span>}
-                      {p.created_at && (
-                        <span className="flex items-center gap-1">
-                          <Calendar size={10} />
-                          {new Date(p.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                  <ChevronRight size={14} className="text-white/20 group-hover:text-white/50 transition-colors flex-shrink-0" />
-                </Link>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
     </>
   );
 }
