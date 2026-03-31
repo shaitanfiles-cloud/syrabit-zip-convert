@@ -126,7 +126,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
                       style={{
                         background: 'var(--card, rgba(20,20,30,0.9))',
-                        border: '1px solid rgba(139,92,246,0.10)',
+                        border: '1px solid rgba(74,222,128,0.15)',
                         maxWidth: 'fit-content',
                       }}
                       role={subjectUrl ? 'link' : undefined}
@@ -134,8 +134,8 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     >
                       <div className="px-3 py-2.5">
                         <h4
-                          className="text-foreground font-bold leading-tight truncate"
-                          style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}
+                          className="font-bold leading-tight truncate"
+                          style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: '#4ade80' }}
                         >
                           {subjectLabel}
                         </h4>
