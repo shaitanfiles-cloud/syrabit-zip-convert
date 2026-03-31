@@ -262,17 +262,97 @@ function botRenderPlugin() {
   return {
     name: 'syrabit-bot-render',
     configureServer(server) {
-      return () => server.middlewares.use(async (req, res, next) => {
+      server.middlewares.use(async (req, res, next) => {
         const ua = req.headers['user-agent'] || '';
         if (!BOT_UA.test(ua)) return next();
 
         const rawPath = (req.url || '/').split('?')[0];
         const parts = rawPath.split('/').filter(Boolean);
 
-        if (parts.length < 4 || SKIP_ROUTES.has(parts[0])) return next();
+        if (parts.length < 3 || SKIP_ROUTES.has(parts[0])) return next();
         if (parts[0].includes('.')) return next();
 
         const [board, classSlug, subjectSlug, topicSlug, pageTypePart] = parts;
+
+        if (parts.length === 3) {
+          try {
+            const apiBase = `http://localhost:8000/api/content`;
+            const subjectRes = await fetch(`${apiBase}/resolve-subject/${board}/${classSlug}/${subjectSlug}`);
+            if (!subjectRes.ok) return next();
+            const subject = await subjectRes.json();
+            const chaptersRes = await fetch(`${apiBase}/chapters/${subject.id}`);
+            const chapters = chaptersRes.ok ? await chaptersRes.json() : [];
+            const canonical = `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}`;
+            const title = `${subject.name} — ${classSlug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} | Syrabit.ai`;
+            const desc = subject.description || `Study ${subject.name} for ${board.toUpperCase()} students. Notes, PYQs, MCQs and AI-powered learning.`;
+
+            const courseSchema = {
+              '@context': 'https://schema.org',
+              '@type': 'Course',
+              name: subject.name,
+              description: desc,
+              provider: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+              hasCourseInstance: chapters.map(ch => ({
+                '@type': 'CourseInstance', name: ch.title || ch.name,
+              })),
+            };
+            const breadcrumbSchema = {
+              '@context': 'https://schema.org', '@type': 'BreadcrumbList',
+              itemListElement: [
+                { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
+                { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
+                { '@type': 'ListItem', position: 3, name: subject.name, item: canonical },
+              ],
+            };
+            const itemListSchema = {
+              '@context': 'https://schema.org', '@type': 'ItemList',
+              name: `${subject.name} Chapters`,
+              itemListElement: chapters.map((ch, i) => ({
+                '@type': 'ListItem', position: i + 1, name: ch.title || ch.name,
+                url: `${canonical}/${ch.slug || ''}`,
+              })),
+            };
+
+            const chapterLinks = chapters.map(ch =>
+              `<li><a href="/${board}/${classSlug}/${subjectSlug}/${ch.slug}">${ch.title || ch.name}</a></li>`
+            ).join('');
+
+            const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<title>${title}</title>
+<meta name="description" content="${desc}"/>
+<meta name="robots" content="index, follow"/>
+<link rel="canonical" href="${canonical}"/>
+<meta property="og:type" content="website"/>
+<meta property="og:title" content="${title}"/>
+<meta property="og:description" content="${desc}"/>
+<meta property="og:url" content="${canonical}"/>
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg"/>
+<meta name="twitter:card" content="summary_large_image"/>
+<meta name="twitter:title" content="${title}"/>
+<meta name="twitter:description" content="${desc}"/>
+<script type="application/ld+json">${JSON.stringify(courseSchema)}</script>
+<script type="application/ld+json">${JSON.stringify(breadcrumbSchema)}</script>
+<script type="application/ld+json">${JSON.stringify(itemListSchema)}</script>
+</head><body>
+<h1>${subject.name}</h1>
+<p>${desc}</p>
+<h2>Chapters</h2>
+<ol>${chapterLinks}</ol>
+<nav><a href="/library">Back to Library</a></nav>
+</body></html>`;
+
+            res.statusCode = 200;
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+            res.setHeader('X-Bot-Rendered', '1');
+            res.setHeader('Cache-Control', 'public, max-age=3600, s-maxage=86400');
+            return res.end(html);
+          } catch (err) {
+            return next();
+          }
+        }
+
         const currentType = pageTypePart || 'notes';
         const VALID_TYPES = new Set(['notes', 'definition', 'important-questions', 'mcqs', 'examples']);
         if (pageTypePart && !VALID_TYPES.has(pageTypePart)) return next();

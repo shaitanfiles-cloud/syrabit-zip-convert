@@ -2362,11 +2362,32 @@ async def get_sitemap_subjects():
             "_id": {"board": "$board_slug", "cls": "$class_slug", "subj": "$subject_slug"},
         }},
     ]).to_list(500)
-    entries = [
-        {"loc": f"{BASE_URL}/{s['_id']['board']}/{s['_id']['cls']}/{s['_id']['subj']}",
-         "lastmod": today, "pri": "0.7", "freq": "weekly"}
-        for s in subjects
-    ]
+    seen_keys = set()
+    entries = []
+    for s in subjects:
+        key = (s['_id']['board'], s['_id']['cls'], s['_id']['subj'])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            entries.append({
+                "loc": f"{BASE_URL}/{key[0]}/{key[1]}/{key[2]}",
+                "lastmod": today, "pri": "0.7", "freq": "weekly",
+            })
+    lib_subjects = await _db.subjects.find({}, {"_id": 0}).to_list(500)
+    lib_streams = {s["id"]: s for s in await _db.streams.find({}, {"_id": 0}).to_list(500)}
+    lib_classes = {c["id"]: c for c in await _db.classes.find({}, {"_id": 0}).to_list(500)}
+    lib_boards = {b["id"]: b for b in await _db.boards.find({}, {"_id": 0}).to_list(500)}
+    for sub in lib_subjects:
+        stream = lib_streams.get(sub.get("stream_id", ""))
+        cls = lib_classes.get(stream.get("class_id", "")) if stream else None
+        board = lib_boards.get(cls.get("board_id", "")) if cls else None
+        if board and cls and sub.get("slug"):
+            key = (board.get("slug", ""), cls.get("slug", ""), sub["slug"])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                entries.append({
+                    "loc": f"{BASE_URL}/{key[0]}/{key[1]}/{key[2]}",
+                    "lastmod": today, "pri": "0.7", "freq": "weekly",
+                })
     return _xml_response(_build_urlset(entries))
 
 
