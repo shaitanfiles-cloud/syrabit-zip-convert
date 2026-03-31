@@ -1190,19 +1190,21 @@ async def admin_rechunk_chapter(chapter_id: str, admin: dict = Depends(get_admin
 
 @router.get("/admin/content/chapters/{chapter_id}/stats")
 async def get_chapter_stats(chapter_id: str, admin: dict = Depends(get_admin_user)):
-    """Get chunk, content, question and flashcard stats for a single chapter."""
+    """Get chunk, content, question, flashcard, and SEO stats for a single chapter."""
     chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
-    # Run all count queries in parallel
-    chunk_count, pyq_doc, fc_doc, geo_blog_count, pyq_html_count = await asyncio.gather(
+    ch_slug = chapter.get("slug", "")
+    seo_page_query = {"chapter_slug": ch_slug, "status": "published"} if ch_slug else {"_no_match_": True}
+    chunk_count, pyq_doc, fc_doc, geo_blog_count, pyq_html_count, seo_topic_count, seo_pages_list = await asyncio.gather(
         db.chunks.count_documents({"chapter_id": chapter_id}),
         db.ai_pyq_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1, "mark_wise": 1}),
-        db.flashcard_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1}),
+        db.flashcard_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1, "cards": 1, "flashcards": 1}),
         db.seo_pages.count_documents({"linked_chapter_id": chapter_id, "type": "geo_blog"}),
         db.pyq_html_pages.count_documents({"chapter_id": chapter_id}),
+        db.seo_topics.count_documents({"linked_chapter_id": chapter_id}),
+        db.seo_pages.find(seo_page_query, {"_id": 0, "page_type": 1, "title": 1, "quality": 1}).to_list(100),
     )
-    # Fallback to topic_pyq_collections if ai_pyq_collections is empty
     if not pyq_doc:
         pyq_doc = await db.topic_pyq_collections.find_one({"chapter_id": chapter_id}, {"_id": 0, "total": 1})
     content_len = len(chapter.get("content", "") or "")
@@ -1210,8 +1212,26 @@ async def get_chapter_stats(chapter_id: str, admin: dict = Depends(get_admin_use
     pyq_count = pyq_doc.get("total", 0) if pyq_doc else 0
     if pyq_count == 0 and mark_wise:
         pyq_count = sum(len(v) for v in mark_wise.values())
+    fc_total = fc_doc.get("total", 0) if fc_doc else 0
+    if fc_total == 0 and fc_doc:
+        fc_total = len(fc_doc.get("cards") or fc_doc.get("flashcards") or [])
+
+    seo_page_types = {}
+    for sp in seo_pages_list:
+        pt = sp.get("page_type", "unknown")
+        seo_page_types[pt] = seo_page_types.get(pt, 0) + 1
+
+    linked_topic_ids = chapter.get("linked_topic_ids", [])
+    linked_topics = []
+    if linked_topic_ids:
+        linked_topics = await db.seo_topics.find(
+            {"id": {"$in": linked_topic_ids}},
+            {"_id": 0, "id": 1, "title": 1, "slug": 1, "status": 1, "primary_keyword": 1}
+        ).to_list(50)
+
     return {
         "chapter_id": chapter_id,
+        "chapter_title": chapter.get("title", ""),
         "content_length": content_len,
         "chunk_count": chunk_count,
         "has_slug": bool(chapter.get("slug")),
@@ -1219,11 +1239,133 @@ async def get_chapter_stats(chapter_id: str, admin: dict = Depends(get_admin_use
         "attached_files": chapter.get("attached_files", []),
         "pyq_count": pyq_count,
         "mark_wise_counts": {k: len(v) for k, v in mark_wise.items()} if mark_wise else {},
-        "flashcard_count": fc_doc.get("total", 0) if fc_doc else 0,
+        "flashcard_count": fc_total,
         "geo_blog_count": geo_blog_count,
         "pyq_html_count": pyq_html_count,
         "notes_generated": bool(chapter.get("notes_generated") or content_len > 100),
+        "seo_topic_count": seo_topic_count,
+        "seo_page_types": seo_page_types,
+        "seo_pages_published": len(seo_pages_list),
+        "linked_topics": linked_topics,
     }
+
+
+@router.get("/admin/content/subject/{subject_id}/chapter-cards")
+async def get_subject_chapter_cards(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """Return content-card data for every chapter in a subject — single batch call.
+
+    Each card includes: notes status, mark-wise question counts, flashcard count,
+    linked SEO topics, published SEO page types, and blog count.
+    """
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id},
+        {"_id": 0, "id": 1, "title": 1, "slug": 1, "content": 1, "notes_generated": 1,
+         "linked_topic_ids": 1, "order_index": 1, "description": 1, "coverage_score": 1,
+         "content_type": 1}
+    ).sort("order_index", 1).to_list(200)
+    if not chapters:
+        return {"cards": [], "subject_id": subject_id}
+
+    ch_ids = [c["id"] for c in chapters]
+    ch_slugs = [c.get("slug", "") for c in chapters if c.get("slug")]
+
+    pyq_docs, fc_docs, seo_topic_docs, seo_pages_raw, blog_counts = await asyncio.gather(
+        db.ai_pyq_collections.find(
+            {"chapter_id": {"$in": ch_ids}},
+            {"_id": 0, "chapter_id": 1, "total": 1, "mark_wise": 1}
+        ).to_list(200),
+        db.flashcard_collections.find(
+            {"chapter_id": {"$in": ch_ids}},
+            {"_id": 0, "chapter_id": 1, "total": 1, "cards": 1, "flashcards": 1}
+        ).to_list(200),
+        db.seo_topics.find(
+            {"linked_chapter_id": {"$in": ch_ids}},
+            {"_id": 0, "id": 1, "linked_chapter_id": 1, "title": 1, "slug": 1, "status": 1, "primary_keyword": 1}
+        ).to_list(1000),
+        db.seo_pages.find(
+            {"chapter_slug": {"$in": ch_slugs}, "status": "published"},
+            {"_id": 0, "chapter_slug": 1, "page_type": 1}
+        ).to_list(5000),
+        db.seo_pages.aggregate([
+            {"$match": {"linked_chapter_id": {"$in": ch_ids}, "type": "geo_blog"}},
+            {"$group": {"_id": "$linked_chapter_id", "count": {"$sum": 1}}}
+        ]).to_list(200),
+    )
+
+    fallback_pyq_ids = [cid for cid in ch_ids if not any(p["chapter_id"] == cid for p in pyq_docs)]
+    fallback_pyqs = []
+    if fallback_pyq_ids:
+        fallback_pyqs = await db.topic_pyq_collections.find(
+            {"chapter_id": {"$in": fallback_pyq_ids}},
+            {"_id": 0, "chapter_id": 1, "total": 1}
+        ).to_list(200)
+
+    pyq_map = {}
+    for p in pyq_docs:
+        mark_wise = p.get("mark_wise", {})
+        total = p.get("total", 0)
+        if total == 0 and mark_wise:
+            total = sum(len(v) for v in mark_wise.values())
+        pyq_map[p["chapter_id"]] = {
+            "total": total,
+            "mark_wise": {k: len(v) for k, v in mark_wise.items()} if mark_wise else {},
+        }
+    for fp in fallback_pyqs:
+        if fp["chapter_id"] not in pyq_map:
+            pyq_map[fp["chapter_id"]] = {"total": fp.get("total", 0), "mark_wise": {}}
+
+    fc_map = {}
+    for f in fc_docs:
+        total = f.get("total", 0)
+        if total == 0:
+            total = len(f.get("cards") or f.get("flashcards") or [])
+        fc_map[f["chapter_id"]] = total
+
+    topic_map: dict[str, list] = {}
+    for t in seo_topic_docs:
+        ch_id = t.get("linked_chapter_id", "")
+        if ch_id:
+            topic_map.setdefault(ch_id, []).append({
+                "id": t["id"], "title": t["title"], "slug": t.get("slug", ""),
+                "status": t.get("status", ""), "primary_keyword": t.get("primary_keyword", ""),
+            })
+
+    seo_pages_by_slug: dict[str, dict] = {}
+    for sp in seo_pages_raw:
+        slug = sp.get("chapter_slug", "")
+        if slug:
+            pt = sp.get("page_type", "unknown")
+            seo_pages_by_slug.setdefault(slug, {})
+            seo_pages_by_slug[slug][pt] = seo_pages_by_slug[slug].get(pt, 0) + 1
+
+    blog_map = {b["_id"]: b["count"] for b in blog_counts}
+
+    cards = []
+    for ch in chapters:
+        content_len = len(ch.get("content", "") or "")
+        has_notes = bool(ch.get("notes_generated") or content_len > 100)
+        pyq_info = pyq_map.get(ch["id"], {"total": 0, "mark_wise": {}})
+        cards.append({
+            "chapter_id": ch["id"],
+            "title": ch.get("title", ""),
+            "slug": ch.get("slug", ""),
+            "description": ch.get("description", ""),
+            "order_index": ch.get("order_index", 0),
+            "content_type": ch.get("content_type", "notes"),
+            "notes_generated": has_notes,
+            "word_count": len((ch.get("content", "") or "").split()) if has_notes else 0,
+            "coverage_score": ch.get("coverage_score"),
+            "pyq_count": pyq_info["total"],
+            "mark_wise_counts": pyq_info["mark_wise"],
+            "flashcard_count": fc_map.get(ch["id"], 0),
+            "blog_count": blog_map.get(ch["id"], 0),
+            "seo_topic_count": len(topic_map.get(ch["id"], [])),
+            "linked_topics": topic_map.get(ch["id"], []),
+            "seo_page_types": seo_pages_by_slug.get(ch.get("slug", ""), {}),
+            "seo_pages_published": sum(seo_pages_by_slug.get(ch.get("slug", ""), {}).values()),
+        })
+
+    return {"cards": cards, "subject_id": subject_id, "total": len(cards)}
 
 
 def _compute_topic_coverage(topics: list, content: str, questions: list = None, flashcards: list = None) -> dict:

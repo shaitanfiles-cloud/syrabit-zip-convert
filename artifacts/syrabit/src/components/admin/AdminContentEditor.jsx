@@ -84,12 +84,50 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     : null;
   const allChaptersHaveNotes = chapters.length > 0 && chapters.every(ch => ch.notes_generated || (ch.content && ch.content.trim().length > 100));
 
+  const loadChapterCards = useCallback(async (subjectId) => {
+    if (!subjectId) return;
+    try {
+      const res = await axios.get(`${API}/admin/content/subject/${subjectId}/chapter-cards`, authHeaders(adminToken));
+      const cardsMap = {};
+      for (const c of (res.data?.cards || [])) {
+        cardsMap[c.chapter_id] = {
+          notesGenerated: c.notes_generated,
+          pyqCount: c.pyq_count,
+          markWiseCounts: c.mark_wise_counts || {},
+          flashcardCount: c.flashcard_count,
+          blogCount: c.blog_count,
+          seoTopicCount: c.seo_topic_count || 0,
+          linkedTopics: c.linked_topics || [],
+          seoPageTypes: c.seo_page_types || {},
+          seoPagesPublished: c.seo_pages_published || 0,
+          pyqPage: false,
+          wordCount: c.word_count || 0,
+        };
+      }
+      setChapterAssets(cardsMap);
+    } catch { /* fallback: individual stats calls via loadChapterStats */ }
+  }, [adminToken]);
+
+  useEffect(() => { if (selSubject) loadChapterCards(selSubject); }, [selSubject, loadChapterCards]);
+
   const loadChapterStats = useCallback(async (chapterId) => {
     try {
       const res = await axios.get(`${API}/admin/content/chapters/${chapterId}/stats`, authHeaders(adminToken));
       setChapterStats(res.data);
       if (chapterId) {
-        setChapterAssets(prev => ({ ...prev, [chapterId]: { ...prev[chapterId], notesGenerated: res.data.notes_generated, pyqCount: res.data.pyq_count || 0, flashcardCount: res.data.flashcard_count || 0, blogCount: res.data.geo_blog_count || 0, pyqPage: res.data.pyq_html_count > 0 } }));
+        setChapterAssets(prev => ({ ...prev, [chapterId]: {
+          ...prev[chapterId],
+          notesGenerated: res.data.notes_generated,
+          pyqCount: res.data.pyq_count || 0,
+          markWiseCounts: res.data.mark_wise_counts || {},
+          flashcardCount: res.data.flashcard_count || 0,
+          blogCount: res.data.geo_blog_count || 0,
+          pyqPage: res.data.pyq_html_count > 0,
+          seoTopicCount: res.data.seo_topic_count || 0,
+          linkedTopics: res.data.linked_topics || [],
+          seoPageTypes: res.data.seo_page_types || {},
+          seoPagesPublished: res.data.seo_pages_published || 0,
+        }}));
       }
     } catch { setChapterStats(null); }
   }, [adminToken]);
@@ -490,8 +528,24 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
             setAssetsGeneratedIds(prev => new Set([...prev, selSubject]));
             setMergedSubjectIds(prev => new Set([...prev, selSubject]));
             if (summary.chapter_results?.length > 0) {
-              setChapterAssets(prev => { const next = { ...prev }; for (const r of summary.chapter_results) { if (r.chapter_id) { next[r.chapter_id] = { notesGenerated: r.notes_generated, pyqCount: r.topic_pyq_count || 0, flashcardCount: r.flashcards_count || 0, blogCount: r.blogs_count || 0, pyqPage: r.pyq_page || false }; } } return next; });
+              setChapterAssets(prev => {
+                const next = { ...prev };
+                for (const r of summary.chapter_results) {
+                  if (r.chapter_id) {
+                    next[r.chapter_id] = {
+                      ...next[r.chapter_id],
+                      notesGenerated: r.notes_generated,
+                      pyqCount: r.topic_pyq_count || 0,
+                      flashcardCount: r.flashcards_count || 0,
+                      blogCount: r.blogs_count || 0,
+                      pyqPage: r.pyq_page || false,
+                    };
+                  }
+                }
+                return next;
+              });
             }
+            if (selSubject) loadChapterCards(selSubject);
           }}
         />
       )}

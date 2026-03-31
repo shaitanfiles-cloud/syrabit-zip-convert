@@ -1,8 +1,18 @@
 import {
   Sparkles, Loader2, Eye, Edit2, Trash2,
   CheckCircle, FileText, Layers, Globe, AlertTriangle,
-  Zap, BookOpen,
+  Zap, BookOpen, Hash, Search, ChevronDown, ChevronUp,
 } from 'lucide-react';
+import { useState } from 'react';
+
+const MARK_COLORS = {
+  '1': { bg: 'rgba(59,130,246,0.12)', text: '#93c5fd', border: 'rgba(59,130,246,0.20)' },
+  '2': { bg: 'rgba(16,185,129,0.12)', text: '#6ee7b7', border: 'rgba(16,185,129,0.20)' },
+  '5': { bg: 'rgba(245,158,11,0.12)', text: '#fcd34d', border: 'rgba(245,158,11,0.20)' },
+  '10': { bg: 'rgba(236,72,153,0.12)', text: '#f9a8d4', border: 'rgba(236,72,153,0.18)' },
+};
+
+const SEO_TYPE_LABELS = { notes: 'Notes', definition: 'Defs', 'important-questions': 'ImpQ', mcqs: 'MCQs', examples: 'Ex', faq: 'FAQ' };
 
 export default function ChapterList({
   chapters, chapterAssets, selectedChapters, setSelectedChapters,
@@ -14,6 +24,7 @@ export default function ChapterList({
   onBulkMerge, bulkMerging,
   selSubject, subjectData, onCreateNew,
 }) {
+  const [expandedCard, setExpandedCard] = useState(null);
   return (
     <>
       <button
@@ -92,6 +103,10 @@ export default function ChapterList({
           const hasPyqs   = (assets.pyqCount || 0) > 0;
           const hasFc     = (assets.flashcardCount || 0) > 0;
           const hasBlogs  = (assets.blogCount || 0) > 0;
+          const hasSeoTopics = (assets.seoTopicCount || 0) > 0;
+          const hasSeoPages  = (assets.seoPagesPublished || 0) > 0;
+          const markWise  = assets.markWiseCounts || {};
+          const seoTypes  = assets.seoPageTypes || {};
           const isSelected = selectedChapters.has(ch.id);
           return (
             <div key={ch.id}
@@ -157,55 +172,126 @@ export default function ChapterList({
                   <button onClick={() => onDeleteChapter(ch.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400" title="Delete chapter"><Trash2 size={13} /></button>
                 </div>
               </div>
-              {(hasNotes || hasPyqs || hasFc || hasBlogs || ch.slug) && (
-                <div className="flex items-center gap-1.5 px-3 pb-2.5 flex-wrap">
-                  {hasNotes && (
-                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                      style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>
-                      <CheckCircle size={9} /> Notes
-                    </span>
-                  )}
-                  {hasPyqs && (
-                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                      style={{ background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.20)' }}>
-                      <FileText size={9} /> {assets.pyqCount} PYQs
-                    </span>
-                  )}
-                  {hasFc && (
-                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                      style={{ background: 'rgba(16,185,129,0.10)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.18)' }}>
-                      <Layers size={9} /> {assets.flashcardCount} Flashcards
-                    </span>
-                  )}
-                  {hasBlogs && (
-                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                      style={{ background: 'rgba(59,130,246,0.12)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.20)' }}>
-                      <Globe size={9} /> {assets.blogCount} Blogs
-                    </span>
-                  )}
-                  {assets.pyqPage && (
-                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                      style={{ background: 'rgba(236,72,153,0.10)', color: '#f9a8d4', border: '1px solid rgba(236,72,153,0.18)' }}>
-                      <Sparkles size={9} /> PYQ Page
-                    </span>
-                  )}
-                  {ch.coverage_score != null && (
-                    <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                      style={ch.coverage_score < 60
-                        ? { background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.25)' }
-                        : ch.coverage_score < 80
-                        ? { background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.20)' }
-                        : { background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }
-                      }
-                      title={ch.coverage_score < 60 ? 'Low syllabus coverage — consider regenerating' : `${ch.coverage_score}% of syllabus topics covered`}
-                    >
-                      {ch.coverage_score < 60 && <AlertTriangle size={9} />}
-                      {ch.coverage_score >= 60 && <CheckCircle size={9} />}
-                      {ch.coverage_score}% Coverage
-                    </span>
-                  )}
-                  {ch.slug && !hasPyqs && !hasFc && !hasBlogs && (
-                    <span className="text-[9px] text-white/20 font-mono">/{ch.slug}</span>
+              {(hasNotes || hasPyqs || hasFc || hasBlogs || hasSeoTopics || hasSeoPages || ch.slug) && (
+                <div className="px-3 pb-2.5 space-y-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    {hasNotes && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                        style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>
+                        <CheckCircle size={9} /> Notes
+                      </span>
+                    )}
+                    {hasPyqs && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                        style={{ background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.20)' }}>
+                        <FileText size={9} /> {assets.pyqCount} PYQs
+                      </span>
+                    )}
+                    {hasFc && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                        style={{ background: 'rgba(16,185,129,0.10)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.18)' }}>
+                        <Layers size={9} /> {assets.flashcardCount} FC
+                      </span>
+                    )}
+                    {hasBlogs && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                        style={{ background: 'rgba(59,130,246,0.12)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.20)' }}>
+                        <Globe size={9} /> {assets.blogCount} Blogs
+                      </span>
+                    )}
+                    {hasSeoTopics && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                        style={{ background: 'rgba(139,92,246,0.12)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.20)' }}>
+                        <Search size={9} /> {assets.seoTopicCount} SEO Topics
+                      </span>
+                    )}
+                    {hasSeoPages && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                        style={{ background: 'rgba(99,102,241,0.12)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.20)' }}>
+                        <Hash size={9} /> {assets.seoPagesPublished} SEO Pages
+                      </span>
+                    )}
+                    {ch.coverage_score != null && (
+                      <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                        style={ch.coverage_score < 60
+                          ? { background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.25)' }
+                          : ch.coverage_score < 80
+                          ? { background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.20)' }
+                          : { background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }
+                        }
+                        title={ch.coverage_score < 60 ? 'Low syllabus coverage — consider regenerating' : `${ch.coverage_score}% of syllabus topics covered`}
+                      >
+                        {ch.coverage_score < 60 && <AlertTriangle size={9} />}
+                        {ch.coverage_score >= 60 && <CheckCircle size={9} />}
+                        {ch.coverage_score}% Coverage
+                      </span>
+                    )}
+                    {(hasPyqs || hasSeoTopics || hasSeoPages) && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setExpandedCard(expandedCard === ch.id ? null : ch.id); }}
+                        className="ml-auto flex items-center gap-0.5 text-[9px] text-white/25 hover:text-white/50 transition"
+                      >
+                        {expandedCard === ch.id ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                        Details
+                      </button>
+                    )}
+                  </div>
+
+                  {expandedCard === ch.id && (
+                    <div className="rounded-lg p-2.5 space-y-2"
+                      style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+
+                      {Object.keys(markWise).length > 0 && (
+                        <div>
+                          <p className="text-[9px] text-white/30 font-semibold uppercase tracking-wider mb-1">Mark-wise Questions</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {Object.entries(markWise).sort(([a], [b]) => Number(a) - Number(b)).map(([mark, count]) => {
+                              const mc = MARK_COLORS[mark] || MARK_COLORS['1'];
+                              return (
+                                <span key={mark} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
+                                  style={{ background: mc.bg, color: mc.text, border: `1px solid ${mc.border}` }}>
+                                  {mark}-mark: {count}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {assets.linkedTopics?.length > 0 && (
+                        <div>
+                          <p className="text-[9px] text-white/30 font-semibold uppercase tracking-wider mb-1">Linked SEO Topics</p>
+                          <div className="flex flex-wrap gap-1">
+                            {assets.linkedTopics.map(t => (
+                              <span key={t.id} className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px]"
+                                style={{
+                                  background: t.status === 'published' ? 'rgba(139,92,246,0.10)' : 'rgba(255,255,255,0.04)',
+                                  color: t.status === 'published' ? '#c4b5fd' : 'rgba(255,255,255,0.35)',
+                                  border: `1px solid ${t.status === 'published' ? 'rgba(139,92,246,0.20)' : 'rgba(255,255,255,0.08)'}`,
+                                }}>
+                                {t.status === 'published' && <CheckCircle size={8} />}
+                                {t.title}
+                                {t.primary_keyword && <span className="text-white/20 ml-0.5">({t.primary_keyword})</span>}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {Object.keys(seoTypes).length > 0 && (
+                        <div>
+                          <p className="text-[9px] text-white/30 font-semibold uppercase tracking-wider mb-1">SEO Pages by Type</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {Object.entries(seoTypes).map(([type, count]) => (
+                              <span key={type} className="px-2 py-0.5 rounded text-[9px] font-medium"
+                                style={{ background: 'rgba(99,102,241,0.10)', color: '#a5b4fc', border: '1px solid rgba(99,102,241,0.15)' }}>
+                                {SEO_TYPE_LABELS[type] || type}: {count}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
