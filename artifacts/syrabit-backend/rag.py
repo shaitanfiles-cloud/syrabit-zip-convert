@@ -1111,6 +1111,7 @@ def build_rag_system_prompt(
       Tier 2 — Subject metadata (descriptions, tags, chapter titles)
       Tier 3 — Web search results (fallback when library has no content)
     """
+    from prompts import build_system_prompt, _format_board_label as _fbl
     base_prompt = build_system_prompt(context, user_info=user_info, query=query)
     source      = rag_context.get("source",  "none")
     quality     = rag_context.get("quality", "none")
@@ -1119,9 +1120,6 @@ def build_rag_system_prompt(
     subjects    = rag_context.get("subjects", [])
     document_text = rag_context.get("document_text", "")
     vector_hits = rag_context.get("vector_hits", [])
-
-    # Compute branded curriculum label once — used in all grounding tiers
-    from prompts import _format_board_label as _fbl
     _board_raw = (context.get("board_name", "") or "").strip().upper()
     _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard"
     _curriculum_label = f"{_board_label} Curriculum"
