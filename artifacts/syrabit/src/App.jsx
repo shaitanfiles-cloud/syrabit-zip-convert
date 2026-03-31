@@ -1,5 +1,4 @@
 import "./App.css";
-import '@uiw/react-md-editor/markdown-editor.css';
 
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { lazy, Suspense, useEffect } from "react";

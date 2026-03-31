@@ -6,12 +6,12 @@
  * correct label so DEGREE students see "Course Type" and school students see "Stream".
  */
 
-export const DEGREE_COURSE_SLUGS = new Set(['major', 'minor', 'mdc', 'vac', 'sec', 'aec']);
+const DEGREE_COURSE_SLUGS = new Set(['major', 'minor', 'mdc', 'vac', 'sec', 'aec']);
 
 export const isDegreeBoard = (boardName) =>
   (boardName || '').trim().toUpperCase() === 'DEGREE';
 
-export const isDegreeStream = (streamName) =>
+const isDegreeStream = (streamName) =>
   DEGREE_COURSE_SLUGS.has((streamName || '').toLowerCase().trim());
 
 /**
@@ -22,14 +22,6 @@ export const isDegreeStream = (streamName) =>
 export const streamLabel = (boardName, streamName = '') => {
   if (isDegreeBoard(boardName) || isDegreeStream(streamName)) return 'Course Type';
   return 'Stream';
-};
-
-/**
- * Returns the correct plural label.
- */
-export const streamsLabel = (boardName, streamName = '') => {
-  if (isDegreeBoard(boardName) || isDegreeStream(streamName)) return 'Course Types';
-  return 'Streams';
 };
 
 /**

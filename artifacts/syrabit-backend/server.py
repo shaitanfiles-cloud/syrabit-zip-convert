@@ -415,7 +415,7 @@ api.include_router(admin_advanced_router)
 from llm import call_llm_api
 from auth_deps import get_admin_user
 
-from seo_engine import router as seo_router, init_seo_engine, _smart_grade_label, _smart_board_display
+from seo_engine import router as seo_router, init_seo_engine
 init_seo_engine(db, call_llm_api, get_admin_user, log_activity_fn=supa_insert_activity_log)
 api.include_router(seo_router)
 

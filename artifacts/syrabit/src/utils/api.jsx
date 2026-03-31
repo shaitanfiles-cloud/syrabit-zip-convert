@@ -98,8 +98,6 @@ export const adminGetGA4Status = (token) =>
 export const adminGetGA4AuthUrl = (token, redirectUri) =>
   axios.get(`${API_BASE}/admin/ga4/auth-url`, { headers: adminHeaders(token), withCredentials: true, params: { redirect_uri: redirectUri } });
 
-export const adminConnectGA4 = (token, code, redirectUri) =>
-  axios.post(`${API_BASE}/admin/ga4/connect`, { code, redirect_uri: redirectUri }, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminTestGA4 = (token) =>
   axios.get(`${API_BASE}/admin/ga4/test`, { headers: adminHeaders(token), withCredentials: true });
@@ -122,14 +120,6 @@ export const adminCreateRoadmapItem = (token, data) =>
 export const adminDeleteRoadmapItem = (token, id) =>
   axios.delete(`${API_BASE}/admin/roadmap/${id}`, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminDeleteSubject = (token, id) =>
-  axios.delete(`${API_BASE}/admin/content/subjects/${id}`, { headers: adminHeaders(token), withCredentials: true });
-
-export const adminDeleteChapter = (token, id) =>
-  axios.delete(`${API_BASE}/admin/content/chapters/${id}`, { headers: adminHeaders(token), withCredentials: true });
-
-export const adminReseed = (token) =>
-  axios.post(`${API_BASE}/admin/seed`, {}, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminGetPlanConfig = (token) =>
   axios.get(`${API_BASE}/admin/plan-config`, { headers: adminHeaders(token), withCredentials: true });
@@ -175,8 +165,6 @@ export const adminSeoListTopics = (token, params = {}) =>
 export const adminSeoCreateTopic = (token, data) =>
   axios.post(`${API_BASE}/seo/topics`, data, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminSeoUpdateTopic = (token, topicId, data) =>
-  axios.patch(`${API_BASE}/seo/topics/${topicId}`, data, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminSeoDeleteTopic = (token, topicId) =>
   axios.delete(`${API_BASE}/seo/topics/${topicId}`, { headers: adminHeaders(token), withCredentials: true });
@@ -259,30 +247,7 @@ export const adminSeoBulkReviewAction = (token, action, pageIds = [], minScore =
 export const adminSeoFlagLowQuality = (token) =>
   axios.post(`${API_BASE}/seo/flag-low-quality`, {}, { headers: adminHeaders(token), withCredentials: true });
 
-export const adminSeoPagePreview = (token, pageId) =>
-  axios.get(`${API_BASE}/seo/page/${pageId}/preview`, { headers: adminHeaders(token), withCredentials: true });
 
-// ── QA Engine ─────────────────────────────────────────────────────────────────
-export const getTopicQa = (board, classSlug, subjectSlug, topicSlug) =>
-  axios.get(`${API_BASE}/seo/qa/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
-
-export const adminListChatMessages = (token, params = {}) =>
-  axios.get(`${API_BASE}/admin/chat-messages`, { headers: adminHeaders(token), withCredentials: true, params });
-
-export const adminListQaPairs = (token, params = {}) =>
-  axios.get(`${API_BASE}/admin/qa`, { headers: adminHeaders(token), withCredentials: true, params });
-
-export const adminCreateQaPair = (token, data) =>
-  axios.post(`${API_BASE}/admin/qa`, data, { headers: adminHeaders(token), withCredentials: true });
-
-export const adminUpdateQaStatus = (token, qaId, status) =>
-  axios.patch(`${API_BASE}/admin/qa/${qaId}/status`, { status }, { headers: adminHeaders(token), withCredentials: true });
-
-export const adminDeleteQaPair = (token, qaId) =>
-  axios.delete(`${API_BASE}/admin/qa/${qaId}`, { headers: adminHeaders(token), withCredentials: true });
-
-export const adminPromoteChatToQa = (token, msgId) =>
-  axios.post(`${API_BASE}/admin/qa/from-chat/${msgId}`, {}, { headers: adminHeaders(token), withCredentials: true });
 
 // ── Payments ─────────────────────────────────────────────────────────────────
 
@@ -298,9 +263,6 @@ export const createCreditTopUp = (credits) =>
 export const verifyCreditTopUp = (data) =>
   axios.post(`${API_BASE}/payments/credit-topup/verify`, data, authConfig());
 
-export const createStripeCheckout = (plan, successUrl, cancelUrl) =>
-  axios.post(`${API_BASE}/payments/stripe/create-checkout`, { plan, success_url: successUrl, cancel_url: cancelUrl }, authConfig());
-
 // ── Vertex AI / Gemini Services ──────────────────────────────────────────────
 export const vertexHealth = (token) =>
   axios.get(`${API_BASE}/admin/vertex/health`, { headers: adminHeaders(token), withCredentials: true });
@@ -310,9 +272,6 @@ export const vertexTranslate = (token, text, target_lang = 'as', source_lang = '
 
 export const vertexSemanticSearch = (token, query, top_k = 10) =>
   axios.post(`${API_BASE}/admin/vertex/semantic-search`, { query, top_k }, { headers: adminHeaders(token), withCredentials: true });
-
-export const vertexEnhance = (token, content, page_type, subject, topic, class_name) =>
-  axios.post(`${API_BASE}/admin/vertex/enhance`, { content, page_type, subject, topic, class_name }, { headers: adminHeaders(token), withCredentials: true });
 
 export const vertexQualityScore = (token, content, page_type, topic, subject) =>
   axios.post(`${API_BASE}/admin/vertex/quality-score`, { content, page_type, topic, subject }, { headers: adminHeaders(token), withCredentials: true });
@@ -425,18 +384,6 @@ export const cmsPersonalize = (body) =>
 
 export const cmsListPlans = (userId) =>
   apiClient().get(`/cms/${userId}`);
-
-export const cmsGetPlan = (userId, slug) =>
-  apiClient().get(`/cms/${userId}/${slug}`);
-
-export const adminSearchUsers = (token, params = {}) =>
-  axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true, params });
-
-export const adminGetPlanTiers = (token) =>
-  axios.get(`${API_BASE}/admin/plan-config`, { headers: adminHeaders(token), withCredentials: true });
-
-export const adminUpdatePlanTier = (token, plan, data) =>
-  axios.patch(`${API_BASE}/admin/plan-config/${plan}`, data, { headers: adminHeaders(token), withCredentials: true });
 
 export const adminPipelineAutoGenerate = (token, subjectId, skipExisting = false) =>
   axios.post(`${API_BASE}/admin/pipeline/auto-generate`, { subject_id: subjectId, skip_existing: skipExisting }, { headers: adminHeaders(token), withCredentials: true });
