@@ -2,6 +2,7 @@
  * Service Worker — Syrabit.ai
  * Network-first for HTML/JS/CSS, cache-first for images/icons only.
  * Excludes /api/ai/chat/stream (never cached - real-time AI).
+ * Excludes /api/cms/ (bypasses SW to avoid body-stream errors).
  * Serves /offline.html when navigation fails with no cached fallback.
  */
 
@@ -43,7 +44,7 @@ self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  if (url.pathname.includes('/ai/chat/stream') || url.pathname.includes('/ai/chat')) {
+  if (url.pathname.includes('/ai/chat/stream') || url.pathname.includes('/ai/chat') || url.pathname.startsWith('/api/cms/')) {
     return;
   }
 

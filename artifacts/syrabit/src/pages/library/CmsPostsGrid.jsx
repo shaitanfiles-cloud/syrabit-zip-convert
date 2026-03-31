@@ -21,6 +21,10 @@ export default function CmsPostsGrid({ board, classSlug }) {
       if (board)      params.append('board',      board);
       if (classSlug)  params.append('class_slug', classSlug);
       const res  = await fetch(`${CMS_API}/cms/posts?${params}`);
+      if (!res.ok) {
+        log.error('CMS posts fetch non-ok', { status: res.status, route: '/api/cms/posts', skip });
+        return;
+      }
       const data = await res.json();
       const newItems = (data.items || []).map(p => ({ ...p, groupKey: groupKey.current }));
       setItems(prev => skip === 0 ? newItems : [...prev, ...newItems]);
