@@ -74,13 +74,19 @@ function loadPersistedCtx() {
 
 const INTERNAL_TABS = new Set(['editor', 'syllabus', 'cms', 'blog']);
 
-export default function AdminContentHub({ adminToken, onNavigate: topNavigate }) {
-  const [activeTab, setActiveTab] = useState('syllabus');
+export default function AdminContentHub({ adminToken, onNavigate: topNavigate, navContext }) {
+  const [activeTab, setActiveTab] = useState(navContext?.initialTab || 'syllabus');
   const [boards, setBoards]       = useState([]);
   const [classes, setClasses]     = useState([]);
   const [streams, setStreams]     = useState([]);
   const [subjects, setSubjects]   = useState([]);
   const [loading, setLoading]     = useState(true);
+
+  useEffect(() => {
+    if (navContext?.initialTab && INTERNAL_TABS.has(navContext.initialTab)) {
+      setActiveTab(navContext.initialTab);
+    }
+  }, [navContext]);
 
   const [hubContext, setHubContextRaw] = useState(loadPersistedCtx);
   const [showPipeline, setShowPipeline] = useState(false);

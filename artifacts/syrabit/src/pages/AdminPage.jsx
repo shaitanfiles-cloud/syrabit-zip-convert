@@ -336,8 +336,16 @@ export default function AdminPage() {
           <ActiveComponent
             adminToken={adminToken}
             adminName={adminName}
-            onNavigate={(section, ctx = null) => { setNavContext(ctx); setActiveSection(section); }}
-            navContext={activeSection === 'users' ? navContext : null}
+            onNavigate={(section, ctx = null) => {
+              if (section === 'blog') {
+                setNavContext({ initialTab: 'blog' });
+                setActiveSection('contenthub');
+              } else {
+                setNavContext(ctx);
+                setActiveSection(section);
+              }
+            }}
+            navContext={activeSection === 'users' || activeSection === 'contenthub' ? navContext : null}
           />
         </main>
       </div>
