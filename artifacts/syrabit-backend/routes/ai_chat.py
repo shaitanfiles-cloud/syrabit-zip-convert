@@ -270,11 +270,19 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     lib_sources = _sources_from_rag_ctx(rag_ctx)
 
     now = datetime.now(timezone.utc).isoformat()
+    _rag_subject_ids = list({s["id"] for s in rag_ctx.get("subjects", []) if s.get("id")})
+    _rag_subject_names = list({s.get("name","") for s in rag_ctx.get("subjects", []) if s.get("name")})
     new_messages = [
         {"role": "user", "content": msg.message, "timestamp": now},
         {"role": "assistant", "content": answer, "timestamp": now,
          "rag_source": rag_ctx.get("source", "none"),
-         "rag_chunks": len(rag_ctx.get("chunks", []))},
+         "rag_chunks": len(rag_ctx.get("chunks", [])),
+         "sources": lib_sources,
+         "rag_subject_id": _rag_subject_ids[0] if _rag_subject_ids else None,
+         "rag_subject_name": _rag_subject_names[0] if _rag_subject_names else msg.subject_name,
+         "rag_board_name": ctx_board_name or "",
+         "rag_class_name": ctx_class_name or "",
+         "rag_stream_name": ctx_stream_name or ""},
     ]
     # Update conversation in Supabase
     conv = await supa_get_conversation(conv_id, user["id"])
@@ -365,14 +373,35 @@ async def _persist_chat_turn(
     rag_source: str, rag_chunks: int,
     credits_used_before: int,
     deduct_credit: bool = False,
+    sources: list | None = None,
+    rag_subject_id: str | None = None,
+    rag_subject_name: str | None = None,
+    rag_board_name: str | None = None,
+    rag_class_name: str | None = None,
+    rag_stream_name: str | None = None,
 ):
     """Background: save conversation messages. Optionally deduct 1 credit. Non-blocking."""
     try:
         now = datetime.now(timezone.utc).isoformat()
+        assistant_msg = {
+            "role": "assistant", "content": answer, "timestamp": now,
+            "rag_source": rag_source, "rag_chunks": rag_chunks,
+        }
+        if sources:
+            assistant_msg["sources"] = sources
+        if rag_subject_id:
+            assistant_msg["rag_subject_id"] = rag_subject_id
+        if rag_subject_name:
+            assistant_msg["rag_subject_name"] = rag_subject_name
+        if rag_board_name:
+            assistant_msg["rag_board_name"] = rag_board_name
+        if rag_class_name:
+            assistant_msg["rag_class_name"] = rag_class_name
+        if rag_stream_name:
+            assistant_msg["rag_stream_name"] = rag_stream_name
         new_msgs = [
             {"role": "user", "content": user_msg, "timestamp": now},
-            {"role": "assistant", "content": answer, "timestamp": now,
-             "rag_source": rag_source, "rag_chunks": rag_chunks},
+            assistant_msg,
         ]
         conv = await supa_get_conversation(conv_id, user_id)
         if conv:
@@ -702,6 +731,12 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                     user_msg_saved, answer,
                     rag_source_saved, rag_chunks_count,
                     credits_info["used"],
+                    sources=rag_sources,
+                    rag_subject_id=rag_subject_id,
+                    rag_subject_name=rag_subject_name,
+                    rag_board_name=ctx_board_name or "",
+                    rag_class_name=ctx_class_name or "",
+                    rag_stream_name=ctx_stream_name or "",
                 ))
                 asyncio.create_task(_log_chat_message(
                     user_id=user["id"],
