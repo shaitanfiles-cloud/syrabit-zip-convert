@@ -46,7 +46,7 @@ export const PublicNavbar = () => {
           </Link>
 
           {/* ─── Desktop Nav Links ─── */}
-          <div className="hidden md:flex items-center gap-0.5">
+          <div className="hidden lg:flex items-center gap-0.5">
             {navLinks.map((link) =>
               link.internal ? (
                 <Link
@@ -69,7 +69,7 @@ export const PublicNavbar = () => {
           </div>
 
           {/* ─── Desktop CTAs ─── */}
-          <div className="hidden md:flex items-center gap-2">
+          <div className="hidden lg:flex items-center gap-2">
             <Link
               to="/admin/login"
               className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-violet-400/80 border border-violet-500/20 hover:bg-violet-500/10 hover:border-violet-500/40 hover:text-violet-300 transition-all duration-150"
@@ -105,7 +105,7 @@ export const PublicNavbar = () => {
 
           {/* ─── Mobile Hamburger ─── */}
           <button
-            className="md:hidden w-9 h-9 rounded-xl text-white/70 hover:text-white hover:bg-white/[0.08] flex items-center justify-center transition-all"
+            className="lg:hidden w-9 h-9 rounded-xl text-white/70 hover:text-white hover:bg-white/[0.08] flex items-center justify-center transition-all"
             onClick={() => setMenuOpen(!menuOpen)}
             aria-label="Toggle menu"
             data-testid="mobile-menu-button"
@@ -118,7 +118,7 @@ export const PublicNavbar = () => {
       {/* ─── Mobile Menu ─── */}
       {menuOpen && (
         <div
-          className="md:hidden px-5 py-4 space-y-1"
+          className="lg:hidden px-5 py-4 space-y-1"
           style={{
             background: 'rgba(5,4,14,0.97)',
             backdropFilter: 'blur(28px)',

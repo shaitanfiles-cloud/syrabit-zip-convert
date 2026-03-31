@@ -141,10 +141,10 @@ export default function FeaturesGrid() {
           whileInView="visible"
           viewport={{ once: true, margin: '-60px' }}
           variants={staggerContainer}
-          className="grid md:grid-cols-3 gap-8 relative"
+          className="grid sm:grid-cols-3 gap-8 relative"
         >
           <div
-            className="hidden md:block absolute top-8 left-[20%] right-[20%] h-px pointer-events-none"
+            className="hidden sm:block absolute top-8 left-[20%] right-[20%] h-px pointer-events-none"
             style={{ background: 'linear-gradient(to right,transparent,rgba(139,92,246,0.25),transparent)' }}
           />
 

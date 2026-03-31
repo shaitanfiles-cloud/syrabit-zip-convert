@@ -113,7 +113,7 @@ export default function PricingPage() {
         </div>
 
         {/* Plans */}
-        <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-6" data-testid="pricing-page">
+        <div className="max-w-5xl mx-auto grid grid-cols-1 lg:grid-cols-3 gap-6" data-testid="pricing-page">
           {PLANS.map((plan) => {
             const Icon = plan.icon;
             return (

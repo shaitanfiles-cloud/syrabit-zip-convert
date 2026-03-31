@@ -237,7 +237,7 @@ export default function HeroSection() {
           whileInView="visible"
           viewport={{ once: true, margin: '-60px' }}
           variants={staggerContainer}
-          className="max-w-4xl mx-auto px-5 grid grid-cols-2 md:grid-cols-4 gap-8"
+          className="max-w-4xl mx-auto px-5 grid grid-cols-1 sm:grid-cols-3 gap-8"
         >
           {STATS.map((s, i) => (
             <motion.div key={s.label} variants={fadeUp(i * 0.07)}>
