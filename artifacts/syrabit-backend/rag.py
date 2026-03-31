@@ -1316,8 +1316,9 @@ def build_rag_system_prompt(
             grounding += f"**Key topics:** {syllabus_topics}\n\n"
         grounding += (
             "---\n"
-            f"*INSTRUCTION: Keep your answer within the scope of the {_curriculum_label}. "
-            "Do not introduce concepts beyond the standard curriculum unless explicitly requested. "
+            f"*INSTRUCTION: Use the {_curriculum_label} syllabus above as reference context for the student's enrolled programme. "
+            "However, if the student asks about a topic covered in the grounding context below (even from a different board/stream), "
+            "answer it from the grounding — our library serves all Assam boards. "
             "Prioritize accuracy over breadth. "
             f"When referencing the curriculum by name, always call it '{_curriculum_label}'. "
             "When relevant, cite specific board exam stats, PYQ frequency data, and authoritative syllabus references.*\n"
