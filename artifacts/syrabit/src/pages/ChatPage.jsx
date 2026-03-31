@@ -6,7 +6,6 @@
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { AnimatePresence } from 'framer-motion';
 import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { getConversation, getSubject, getChapters, API_BASE, apiClient } from '@/utils/api';
@@ -338,11 +337,9 @@ export default function ChatPage() {
             {messages.length === 0 && (
               <EmptyState subject={subject} scopedChapters={scopedChapters} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
             )}
-            <AnimatePresence initial={false}>
               {messages.map((msg, i) => (
                 <MessageBubble key={msg.id || i} msg={msg} isLast={i === messages.length - 1} onCopy={() => setCopiedMsgId(msg.id)} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} />
               ))}
-            </AnimatePresence>
             <div ref={messagesEndRef} />
           </div>
         </div>

@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
 import { ChevronRight, ChevronLeft, Globe, BookOpen, GraduationCap, FlaskConical, Leaf, Feather, Loader2, Sparkles, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
@@ -34,7 +33,6 @@ export default function OnboardingPage() {
   const navigate = useNavigate();
   const { user, refreshUser } = useAuth();
   const [step, setStep] = useState(0);
-  const [direction, setDirection] = useState(1);
 
   const [boards, setBoards] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -77,15 +75,8 @@ export default function OnboardingPage() {
     }
   }, [selectedClass]);
 
-  const goNext = () => {
-    setDirection(1);
-    setStep((s) => s + 1);
-  };
-
-  const goBack = () => {
-    setDirection(-1);
-    setStep((s) => s - 1);
-  };
+  const goNext = () => setStep((s) => s + 1);
+  const goBack = () => setStep((s) => s - 1);
 
   const handleFinish = async () => {
     setSaving(true);
@@ -109,12 +100,6 @@ export default function OnboardingPage() {
     } finally {
       setSaving(false);
     }
-  };
-
-  const variants = {
-    enter: (dir) => ({ x: dir * 48, opacity: 0 }),
-    center: { x: 0, opacity: 1 },
-    exit: (dir) => ({ x: dir * -48, opacity: 0 }),
   };
 
   const canGoNext = [
@@ -164,16 +149,7 @@ export default function OnboardingPage() {
 
         {/* Step content */}
         <div className="glass-card rounded-2xl p-6 border border-white/10 min-h-[300px]">
-          <AnimatePresence mode="wait" custom={direction}>
-            <motion.div
-              key={step}
-              custom={direction}
-              variants={variants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={{ duration: 0.22, ease: 'easeInOut' }}
-            >
+            <div>
               {/* Step 0: Board */}
               {step === 0 && (
                 <div>
@@ -287,8 +263,7 @@ export default function OnboardingPage() {
                   )}
                 </div>
               )}
-            </motion.div>
-          </AnimatePresence>
+            </div>
         </div>
 
         {/* Navigation */}

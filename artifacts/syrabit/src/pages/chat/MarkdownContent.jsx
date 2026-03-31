@@ -1,5 +1,4 @@
 import { useMemo } from 'react';
-import { motion } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -59,11 +58,9 @@ export function MarkdownContent({ content, streaming, sources }) {
         {processed}
       </ReactMarkdown>
       {streaming && (
-        <motion.span
+        <span
           className="inline-block rounded-full align-middle"
           style={{ width: 2, height: '1em', marginLeft: 2, background: 'hsl(var(--primary))' }}
-          animate={{ opacity: [1, 0, 1] }}
-          transition={{ duration: 0.65, repeat: Infinity }}
         />
       )}
     </div>

@@ -1,5 +1,4 @@
 import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 
 const THINKING_STEPS = [
   'Searching in AssamBoard Syllabus…',
@@ -26,34 +25,23 @@ export function ThinkingIndicator() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{ display: 'flex', gap: 4 }}>
           {[0, 1, 2].map((i) => (
-            <motion.span
+            <span
               key={i}
-              style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c3aed', display: 'block' }}
-              animate={{ y: [0, -5, 0], opacity: [0.4, 1, 0.4] }}
-              transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.18, ease: 'easeInOut' }}
+              style={{ width: 6, height: 6, borderRadius: '50%', background: '#7c3aed', display: 'block', opacity: 0.7 }}
             />
           ))}
         </div>
-        <AnimatePresence mode="wait">
-          <motion.span
-            key={stepIdx}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.3 }}
-            style={{ fontSize: 13, color: 'var(--muted-foreground)', fontStyle: 'italic' }}
-          >
-            {THINKING_STEPS[stepIdx]}{dots}
-          </motion.span>
-        </AnimatePresence>
+        <span
+          style={{ fontSize: 13, color: 'var(--muted-foreground)', fontStyle: 'italic' }}
+        >
+          {THINKING_STEPS[stepIdx]}{dots}
+        </span>
       </div>
       {elapsed > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 2 }}>
           <div style={{ height: 2, flex: 1, maxWidth: 140, borderRadius: 4, background: 'rgba(124,58,237,0.12)', overflow: 'hidden' }}>
-            <motion.div
-              style={{ height: '100%', borderRadius: 4, background: 'linear-gradient(90deg,#7c3aed,#a78bfa)' }}
-              animate={{ x: ['-100%', '200%'] }}
-              transition={{ duration: 1.6, repeat: Infinity, ease: 'easeInOut' }}
+            <div
+              style={{ height: '100%', width: '50%', borderRadius: 4, background: 'linear-gradient(90deg,#7c3aed,#a78bfa)' }}
             />
           </div>
           <span style={{ fontSize: 11, color: 'var(--muted-foreground)', opacity: 0.55 }}>

@@ -362,33 +362,19 @@
     animation: borderGlow 10s ease-in-out infinite;
   }
 
-  /* ── Scroll reveal ── */
+  /* ── Scroll reveal (animations disabled) ── */
   .reveal {
-    opacity: 0;
-    transform: translateY(32px);
+    opacity: 1;
   }
   .reveal.revealed {
-    animation: revealUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    opacity: 1;
   }
 
-  /* ── Stagger children delay helpers ── */
-  .stagger-1 { animation-delay: 0.08s !important; }
-  .stagger-2 { animation-delay: 0.16s !important; }
-  .stagger-3 { animation-delay: 0.24s !important; }
-  .stagger-4 { animation-delay: 0.32s !important; }
-  .stagger-5 { animation-delay: 0.40s !important; }
-  .stagger-6 { animation-delay: 0.48s !important; }
+  .stagger-1, .stagger-2, .stagger-3, .stagger-4, .stagger-5, .stagger-6 {}
 
-  /* ── Auth page entrance animations ── */
-  .anim-slide-left {
-    animation: slideInLeft 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
-  }
-  .anim-slide-right {
-    animation: slideInRight 0.7s cubic-bezier(0.16, 1, 0.3, 1) both;
-  }
-  .anim-scale-in {
-    /* scale animation removed */
-  }
+  .anim-slide-left {}
+  .anim-slide-right {}
+  .anim-scale-in {}
 
   /* ── Input focus glow ── */
   .input-glow:focus {

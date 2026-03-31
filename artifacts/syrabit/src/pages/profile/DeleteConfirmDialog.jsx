@@ -1,88 +1,77 @@
-import { AnimatePresence, motion } from 'framer-motion';
 import { AlertTriangle, Loader2, Trash2 } from 'lucide-react';
 
 export default function DeleteConfirmDialog({
   showDeleteConfirm, deleteText, setDeleteText,
   deleting, handleDeleteAccount, setShowDeleteConfirm,
 }) {
+  if (!showDeleteConfirm) return null;
   return (
-    <AnimatePresence>
-      {showDeleteConfirm && (
-        <motion.div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-        >
-          <motion.div
-            className="w-full max-w-sm rounded-2xl p-5 space-y-4"
-            style={{ background: 'hsl(var(--card))', border: '1px solid rgba(239,68,68,0.25)' }}
-            initial={{ opacity: 0, scale: 0.95, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            transition={{ duration: 0.18 }}
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)' }}
+    >
+      <div
+        className="w-full max-w-sm rounded-2xl p-5 space-y-4"
+        style={{ background: 'hsl(var(--card))', border: '1px solid rgba(239,68,68,0.25)' }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center"
+            style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.20)' }}>
+            <AlertTriangle size={18} className="text-red-400" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-foreground">Delete Account?</h3>
+            <p className="text-xs text-muted-foreground">This cannot be undone after 72 hours</p>
+          </div>
+        </div>
+
+        <div className="rounded-xl p-3" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
+          <p className="text-xs text-amber-400 font-medium">72-hour grace period</p>
+          <p className="text-xs text-muted-foreground/70 mt-0.5">
+            You can cancel deletion within 72 hours. After that, all data is permanently erased.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          {['Your profile and credentials', 'All chat conversations', 'Saved subjects', 'Credits and plan'].map((item) => (
+            <div key={item} className="flex items-center gap-2 text-xs text-muted-foreground/70">
+              <div className="w-1.5 h-1.5 rounded-full bg-red-400/60" />
+              {item}
+            </div>
+          ))}
+        </div>
+
+        <div>
+          <label className="text-xs text-muted-foreground mb-1.5 block">
+            Type <span className="font-mono font-bold text-red-400">DELETE</span> to confirm
+          </label>
+          <input
+            type="text"
+            value={deleteText}
+            onChange={(e) => setDeleteText(e.target.value)}
+            placeholder="DELETE"
+            className="w-full h-10 px-3 rounded-xl text-sm text-foreground outline-none"
+            style={{ background: 'hsl(var(--input))', border: '1px solid rgba(239,68,68,0.30)' }}
+          />
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={() => { setShowDeleteConfirm(false); setDeleteText(''); }}
+            className="flex-1 h-9 rounded-xl text-sm font-medium text-muted-foreground border border-border hover:bg-accent/40 transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleDeleteAccount}
+            disabled={deleteText !== 'DELETE' || deleting}
+            className="flex-1 h-9 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-all disabled:opacity-40"
+            style={{ background: 'linear-gradient(135deg,#dc2626,#ef4444)' }}
+            data-testid="confirm-delete-button"
           >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center"
-                style={{ background: 'rgba(239,68,68,0.10)', border: '1px solid rgba(239,68,68,0.20)' }}>
-                <AlertTriangle size={18} className="text-red-400" />
-              </div>
-              <div>
-                <h3 className="font-semibold text-foreground">Delete Account?</h3>
-                <p className="text-xs text-muted-foreground">This cannot be undone after 72 hours</p>
-              </div>
-            </div>
-
-            <div className="rounded-xl p-3" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
-              <p className="text-xs text-amber-400 font-medium">72-hour grace period</p>
-              <p className="text-xs text-muted-foreground/70 mt-0.5">
-                You can cancel deletion within 72 hours. After that, all data is permanently erased.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              {['Your profile and credentials', 'All chat conversations', 'Saved subjects', 'Credits and plan'].map((item) => (
-                <div key={item} className="flex items-center gap-2 text-xs text-muted-foreground/70">
-                  <div className="w-1.5 h-1.5 rounded-full bg-red-400/60" />
-                  {item}
-                </div>
-              ))}
-            </div>
-
-            <div>
-              <label className="text-xs text-muted-foreground mb-1.5 block">
-                Type <span className="font-mono font-bold text-red-400">DELETE</span> to confirm
-              </label>
-              <input
-                type="text"
-                value={deleteText}
-                onChange={(e) => setDeleteText(e.target.value)}
-                placeholder="DELETE"
-                className="w-full h-10 px-3 rounded-xl text-sm text-foreground outline-none"
-                style={{ background: 'hsl(var(--input))', border: '1px solid rgba(239,68,68,0.30)' }}
-              />
-            </div>
-
-            <div className="flex gap-2">
-              <button onClick={() => { setShowDeleteConfirm(false); setDeleteText(''); }}
-                className="flex-1 h-9 rounded-xl text-sm font-medium text-muted-foreground border border-border hover:bg-accent/40 transition-colors">
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteAccount}
-                disabled={deleteText !== 'DELETE' || deleting}
-                className="flex-1 h-9 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-all disabled:opacity-40"
-                style={{ background: 'linear-gradient(135deg,#dc2626,#ef4444)' }}
-                data-testid="confirm-delete-button"
-              >
-                {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                Schedule Deletion
-              </button>
-            </div>
-          </motion.div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+            {deleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+            Schedule Deletion
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

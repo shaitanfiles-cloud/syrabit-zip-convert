@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import {
   ShieldCheck, ChevronRight, AlertTriangle, Trash2,
   Clock, Loader2,
@@ -11,9 +10,7 @@ export function DeletionBanner({
 }) {
   if (!deletionPending) return null;
   return (
-    <motion.div
-      initial={{ opacity: 0, y: -8 }}
-      animate={{ opacity: 1, y: 0 }}
+    <div
       className="rounded-2xl p-4"
       style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.25)' }}
     >
@@ -34,7 +31,7 @@ export function DeletionBanner({
           {cancellingDelete ? <Loader2 size={12} className="animate-spin" /> : 'Cancel Deletion'}
         </button>
       </div>
-    </motion.div>
+    </div>
   );
 }
 

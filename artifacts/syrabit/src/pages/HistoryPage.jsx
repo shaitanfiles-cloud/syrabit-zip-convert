@@ -7,7 +7,6 @@
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
   MessageSquare, Star, Trash2, Clock, Search, Loader2,
   Archive, Sparkles, MoreHorizontal, Plus, Pencil,
@@ -100,13 +99,7 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
   }, [menuOpen]);
 
   return (
-    <motion.div
-      layout
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, x: -20 }}
-      transition={{ duration: 0.22 }}
-      className="group relative"
+    <div className="group relative"
     >
       {/* Main card row */}
       <div
@@ -197,13 +190,8 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
           </button>
 
           {/* Dropdown menu */}
-          <AnimatePresence>
-            {menuOpen && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: -4 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: -4 }}
-                transition={{ duration: 0.12 }}
+          {menuOpen && (
+              <div
                 className="absolute right-0 top-8 z-50 rounded-xl overflow-hidden shadow-xl min-w-[160px]"
                 style={{
                   background: 'var(--popover-glass, hsl(var(--popover)))',
@@ -261,12 +249,11 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
                     </button>
                   </div>
                 ))}
-              </motion.div>
+              </div>
             )}
-          </AnimatePresence>
         </div>
       </div>
-    </motion.div>
+    </div>
   );
 }
 
@@ -274,26 +261,18 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
 function Dialog({ open, onClose, title, description, children, footer }) {
   if (!open) return null;
   return (
-    <AnimatePresence>
-      <motion.div
+      <div
         className="fixed inset-0 z-50 flex items-center justify-center p-4"
         style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
         onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
       >
-        <motion.div
+        <div
           className="w-full max-w-sm rounded-2xl p-5 space-y-4"
           style={{
             background: 'hsl(var(--card))',
             border: '1px solid rgba(139,92,246,0.20)',
             boxShadow: '0 24px 80px rgba(0,0,0,0.45)',
           }}
-          initial={{ opacity: 0, scale: 0.96, y: 8 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          exit={{ opacity: 0, scale: 0.96 }}
-          transition={{ duration: 0.18 }}
           role="dialog"
           aria-modal="true"
           aria-labelledby="dialog-title"
@@ -313,9 +292,8 @@ function Dialog({ open, onClose, title, description, children, footer }) {
           </div>
           {children}
           {footer && <div className="flex gap-2 pt-1">{footer}</div>}
-        </motion.div>
-      </motion.div>
-    </AnimatePresence>
+        </div>
+      </div>
   );
 }
 
@@ -573,9 +551,7 @@ export default function HistoryPage() {
 
           {/* ── Empty state ── */}
           {!loading && totalFiltered === 0 && (
-            <motion.div
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
+            <div
               className="flex flex-col items-center justify-center py-20 text-center"
             >
               <div
@@ -623,7 +599,7 @@ export default function HistoryPage() {
                   Reset filters
                 </button>
               )}
-            </motion.div>
+            </div>
           )}
 
           {/* ── Grouped conversations ── */}
@@ -661,7 +637,6 @@ export default function HistoryPage() {
                         boxShadow: '0 4px 24px rgba(0,0,0,0.15)',
                       }}
                     >
-                      <AnimatePresence mode="popLayout">
                         {items.map((conv) => (
                           <ConversationCard
                             key={conv.id}
@@ -673,7 +648,6 @@ export default function HistoryPage() {
                             onRename={handleRenameOpen}
                           />
                         ))}
-                      </AnimatePresence>
                     </div>
                   </div>
                 );
