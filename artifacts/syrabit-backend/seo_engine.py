@@ -768,7 +768,19 @@ async def extract_topics_from_chapters(
         topic_titles: list[str] = []
 
         subject_name = ch.get("subject_name", "")
-        board_name = ch.get("board_name", "AHSEC/SEBA")
+        board_name = ch.get("board_name", "")
+        if not board_name:
+            try:
+                _subj = await _db.subjects.find_one({"id": ch.get("subject_id", "")}, {"_id": 0, "stream_id": 1, "name": 1})
+                if _subj:
+                    if not subject_name:
+                        subject_name = _subj.get("name", "")
+                    _strm = await _db.streams.find_one({"id": _subj.get("stream_id", "")}, {"_id": 0, "class_id": 1}) if _subj.get("stream_id") else None
+                    _cls = await _db.classes.find_one({"id": _strm.get("class_id", "")}, {"_id": 0, "board_id": 1}) if _strm and _strm.get("class_id") else None
+                    _brd = await _db.boards.find_one({"id": _cls.get("board_id", "")}, {"_id": 0, "name": 1}) if _cls and _cls.get("board_id") else None
+                    board_name = _brd.get("name", "Assamboard") if _brd else "Assamboard"
+            except Exception:
+                board_name = "Assamboard"
 
         if _call_llm and len(content.strip()) > 150:
             try:

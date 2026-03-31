@@ -3060,7 +3060,7 @@ async def _pipeline_generate_pyq_html(chapter: dict, subject_name: str, pyq_docs
   <div class="pyq-list">
 {pyq_block}
   </div>
-  <p class="pyq-note">All previous year question papers are sourced from official AHSEC/SEBA board examinations.</p>
+  <p class="pyq-note">All previous year question papers are sourced from official board examinations.</p>
 </div>"""
 
 
@@ -3152,6 +3152,7 @@ async def _pipeline_process_one_chapter(
     class_name: str,
     paper_type: str,
     board_slug: str,
+    board_display: str = "Assamboard",
     class_slug: str,
     now_iso: str,
     pyq_docs: list,
@@ -3406,7 +3407,7 @@ async def _pipeline_process_one_chapter(
                     "id": str(uuid.uuid4()),
                     "title": f"PYQ: {chapter_title} — {subject_name}",
                     "seo_slug": pyq_slug,
-                    "meta_description": f"Previous year questions for {chapter_title} ({subject_name}) — AHSEC/SEBA board exams. Download PYQ papers on Syrabit.ai.",
+                    "meta_description": f"Previous year questions for {chapter_title} ({subject_name}) — {board_display} board exams. Download PYQ papers on Syrabit.ai.",
                     "content": pyq_html, "content_html": pyq_html,
                     "linked_subject_id": subject_id, "linked_subject_name": subject_name,
                     "linked_chapter_id": chapter_id, "linked_chapter_title": chapter_title,
@@ -3443,9 +3444,9 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
     paper_type   = subject.get("paper_type", "")
     class_name   = subject.get("className", "") or subject.get("class_name", "")
 
-    # Resolve board/class/stream slugs for URL construction
     stream_id = subject.get("stream_id", "")
-    board_slug = "ahsec"
+    board_slug = "assamboard"
+    board_display = "Assamboard"
     class_slug = _pipeline_slugify(class_name or "class-12")
 
     if stream_id:
@@ -3461,6 +3462,7 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
                         board_doc = await db.boards.find_one({"id": board_id}, {"_id": 0})
                         if board_doc:
                             board_slug = board_doc.get("slug") or _pipeline_slugify(board_doc.get("name", ""))
+                            board_display = board_doc.get("name", "Assamboard")
 
     # Load chapters
     chapters = await db.chapters.find(
@@ -3490,7 +3492,8 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
             ch,
             subject_id=subject_id, subject_name=subject_name,
             class_name=class_name, paper_type=paper_type,
-            board_slug=board_slug, class_slug=class_slug,
+            board_slug=board_slug, board_display=board_display,
+            class_slug=class_slug,
             now_iso=now_iso, pyq_docs=pyq_docs,
             semaphore=semaphore, done_counter=done_counter,
             total_chapters=total_chapters, job_id=job_id,
