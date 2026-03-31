@@ -1126,18 +1126,20 @@ def build_rag_system_prompt(
 
     _intro_subject = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
     _intro_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
-    _intro_parts = [f"**{_curriculum_label}**"]
-    if _intro_subject:
-        _intro_parts.append(_intro_subject)
+    _source_parts = []
     if _intro_chapter:
-        _intro_parts.append(_intro_chapter)
-    _intro_header = " · ".join(_intro_parts)
+        _source_parts.append(f"{_intro_chapter} (unit name)")
+    if _intro_subject:
+        _source_parts.append(f"{_intro_subject} (subject name)")
+    _board_course = _board_label or "AssamBoard"
+    _source_parts.append(f"{_board_course} (course name)")
+    _source_line = " · ".join(_source_parts)
     base_prompt += (
-        f"\n\nMANDATORY INTRO: Every academic answer MUST begin with this exact header "
-        f"on its own line, followed immediately by the answer:\n"
-        f"{_intro_header}\n"
-        f"Do not add a blank line between the header and the answer. "
-        f"Casual greetings and small-talk skip this header."
+        f"\n\nSOURCE CITATION RULE: Do NOT mention source, subject name, unit name, "
+        f"or course name anywhere in your answer body. Answer the question directly first. "
+        f"Then, at the very end of your response, on its own line, add:\n"
+        f"SOURCE : {_source_line}\n"
+        f"Casual greetings and small-talk skip this source line."
     )
 
     grounding = ""
@@ -1200,7 +1202,7 @@ def build_rag_system_prompt(
                 "\n\n---\n"
                 "**GROUNDING CONTEXT (Syrabit Library — 97% Accuracy Mode):**\n"
                 "The following is the COMPLETE content from the student's actual curriculum database. "
-                "Every answer MUST cite sources using [PAGE: slug] format. "
+                "Answer the question directly from this content. "
                 "Quote verbatim where possible.\n\n"
             )
             # Vector hits — highest confidence (semantic similarity ranked)
@@ -1221,11 +1223,10 @@ def build_rag_system_prompt(
             grounding += (
                 "---\n"
                 "**ACCURACY LOCK:**\n"
-                "1. Answer ONLY from the grounding above. Structure: Explanation → Key Points → Examples → Sources\n"
-                "2. End every answer with: 'Sources: [PAGE: slug1], [PAGE: slug2]' citing which pages you used.\n"
+                "1. Answer ONLY from the grounding above. Structure: Explanation → Key Points → Examples.\n"
+                "2. Do NOT add source citations inline — the system appends the SOURCE line automatically.\n"
                 "3. If the answer is NOT in the grounding: check for Tier 3 web search results below — "
-                f"use those and label 'From web search:'. If those are absent, answer from {_curriculum_label} "
-                f"knowledge and note 'Based on {_curriculum_label} knowledge:'. Never stop without an answer.\n"
+                "use those. If those are absent, answer from general curriculum knowledge. Never stop without an answer.\n"
                 "4. NEVER hallucinate. NEVER invent facts not present in the grounding or web results.\n"
                 "5. Temperature is 0.05 — be deterministic and precise.*"
             )
@@ -1320,8 +1321,8 @@ def build_rag_system_prompt(
             web_block += (
                 "---\n"
                 "*INSTRUCTION: Your answer MUST prioritize internal Syrabit content above. "
-                "Cite internal pages using [PAGE: slug] format first. "
                 "Web results are supplementary — use them only to fill gaps or add context. "
+                "Do not add source citations inline — the system appends the SOURCE line automatically. "
                 "Do not fabricate facts beyond what the sources contain.*\n"
             )
         else:

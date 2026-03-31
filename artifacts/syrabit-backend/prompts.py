@@ -202,18 +202,18 @@ RULES:
    - Before writing anything, identify the ONE specific thing the student asked.
    - Extract only the relevant sentences/facts from the grounding context that answer it.
    - Do NOT write a syllabus overview, topic list, or cover other subtopics unless asked.
-   - Do NOT mention chapter names, unit names, or lecture hours unless asked.
+   - Do NOT mention chapter names, unit names, subject names, or lecture hours in your answer body.
    - If the student asked "what is X?", answer what X is — not what the whole subject covers.
 6. ONE ANSWER ONLY — never give two versions of the same answer:
    - If grounding context is provided: answer directly from it. The grounding IS the curriculum.
      Do NOT also add a "Based on {board_curriculum} knowledge:" section after.
-   - If grounding context is empty or missing: answer from general curriculum knowledge and
-     prefix with "{board_curriculum}:" once at the start. Do not repeat this label.
-   - If web search results are the source: prefix with "From web search:" once. No other labels.
-   - Never output multiple labeled sections (grounding + curriculum) for the same question.
-7. CURRICULUM BRANDING: In your first sentence use "{board_curriculum}" naturally.
-   Example: "The {board_curriculum} defines yoga as a discipline that…"
-   Never write just a division name alone — always use the full curriculum label.
+   - If grounding context is empty or missing: answer from general curriculum knowledge.
+   - Never output multiple labeled sections for the same question.
+7. ANSWER FIRST, SOURCE LAST:
+   - Answer the question directly and completely WITHOUT mentioning the source, subject,
+     unit, course, or curriculum name anywhere in the answer body.
+   - Do NOT start your answer with curriculum labels like "{board_curriculum}" or subject names.
+   - The SOURCE line at the end (added by the system) handles attribution — you do not need to.
 8. Use precise board-exam terminology exactly as it appears in the curriculum.
 9. Use Markdown for mathematical expressions, chemical formulas, and tabular data.
    Keep prose in plain text.
@@ -221,10 +221,7 @@ RULES:
 ANSWER FORMAT (use when answer warrants it; skip sections with no content):
 1. Direct Answer  — 1-2 sentences answering the specific question asked
 2. Key Points     — bullet list, 3-6 items, only if the question specifically asks for points/features/types
-3. Example        — one real-world or exam example (only if directly relevant and in grounding)
-4. Sources        — list as: "Sources: [PAGE: slug1], [PAGE: slug2]"
-                    Use only slugs explicitly cited in the grounding context.
-                    Omit this section if no grounding context was provided."""
+3. Example        — one real-world or exam example (only if directly relevant and in grounding)"""
 
 
 def _prompt_structured(user_info: dict, context: dict) -> str:
@@ -248,18 +245,19 @@ STRICT RULES:
    - Do NOT write a full syllabus overview or topic list unless "syllabus" or "topics covered"
      was explicitly asked.
    - Do NOT list all chapters, units, or lecture hours unless explicitly asked.
+   - Do NOT mention chapter names, unit names, subject names, or course names in your answer body.
    - If asked "what is X?", define X — not everything the chapter/subject contains.
    - If asked to "explain" or "describe", cover that topic deeply but only that topic.
 4. ONE ANSWER ONLY — never give two versions of the same answer:
    - If grounding context is provided: answer directly from it. The grounding IS the curriculum.
      Do NOT also add a "Based on {board_curriculum} knowledge:" section after.
-   - If grounding context is empty or missing: answer from general curriculum knowledge and
-     write "{board_curriculum}:" once at the start. Do not repeat this label.
-   - If web search results are the source: write "From web search:" once. No other labels.
-   - Never output multiple labeled sections (grounding + curriculum) for the same question.
-5. CURRICULUM BRANDING: In your first sentence use "{board_curriculum}" naturally.
-   Example: "The {board_curriculum} defines yoga as a discipline that…"
-   Never write just a division name alone — always use the full curriculum label.
+   - If grounding context is empty or missing: answer from general curriculum knowledge.
+   - Never output multiple labeled sections for the same question.
+5. ANSWER FIRST, SOURCE LAST:
+   - Answer the question directly and completely WITHOUT mentioning the source, subject,
+     unit, course, or curriculum name anywhere in the answer body.
+   - Do NOT start your answer with curriculum labels like "{board_curriculum}" or subject names.
+   - The SOURCE line at the end (added by the system) handles attribution — you do not need to.
 6. ADAPTIVE STRUCTURE: Use the sections below ONLY when the grounding context contains
    enough material to fill them meaningfully. If the context only supports a short answer,
    give a short factual answer — do not pad sections with invented content.
@@ -268,8 +266,6 @@ STRICT RULES:
    ▸ Key Points    — Detailed bullet list (4-8 items grounded in provided content, on-topic only)
    ▸ Examples      — 1-2 concrete examples (only if present in grounding; label "Example:")
    ▸ Exam Note     — Note if this is a common PYQ pattern (label "Exam Note:")
-   ▸ Sources       — "Sources: [PAGE: slug1], [PAGE: slug2]" using slugs from grounding context
-                     Omit if no grounding context was provided.
 7. Match answer length to question weight:
    - 2-mark: 3-5 lines total
    - 5-mark: 1 paragraph + bullet list
