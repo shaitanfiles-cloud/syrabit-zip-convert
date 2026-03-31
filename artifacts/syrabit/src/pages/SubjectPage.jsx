@@ -246,14 +246,14 @@ function BlogView({ subject, subjectId }) {
               onClick={async () => {
                 const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
                 try {
-                  const res = await createShare(post.slug || post.id, post.title, window.location.pathname);
+                  const res = await createShare(post.slug || post.id, post.title, `/subject/${subjectId}`);
                   const referralUrl = res.data.referral_url;
                   try { Analytics.subjectShared(post.title, referralUrl, res.data.code); } catch {}
                   const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
                   const text = `📚 ${post.title} on Syrabit.ai!\n${shareUrl}`;
                   window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
                 } catch {
-                  const fallback = `${window.location.origin}${window.location.pathname}?${utmParams}`;
+                  const fallback = `${window.location.origin}/subject/${subjectId}?${utmParams}`;
                   const text = `📚 ${post.title} on Syrabit.ai!\n${fallback}`;
                   window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
                 }

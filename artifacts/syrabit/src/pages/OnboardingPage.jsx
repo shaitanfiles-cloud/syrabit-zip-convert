@@ -31,7 +31,7 @@ const STREAM_COLORS = {
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
-  const { user, refreshUser } = useAuth();
+  const { user, loading: authLoading, refreshUser } = useAuth();
   const [step, setStep] = useState(0);
 
   const [boards, setBoards] = useState([]);
@@ -49,9 +49,10 @@ export default function OnboardingPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (authLoading) return;
     if (!user) navigate('/login');
     if (user?.onboarding_done) navigate('/library');
-  }, [user, navigate]);
+  }, [user, authLoading, navigate]);
 
   useEffect(() => {
     getBoards().then((res) => setBoards(res.data));
