@@ -48,7 +48,7 @@ export function InputBar({
                 ? 'No credits remaining — upgrade to continue'
                 : subject
                 ? `Ask about ${subject.name}…`
-                : 'Ask anything...'
+                : 'Ask anything about your Syllabus...'
             }
             disabled={isOutOfCredits}
             rows={1}
