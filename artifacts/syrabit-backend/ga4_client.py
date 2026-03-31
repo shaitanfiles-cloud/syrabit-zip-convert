@@ -11,6 +11,26 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+_db_token_cache: dict = {"token": None, "loaded": False}
+
+async def _load_db_refresh_token() -> str:
+    """Load GA4 refresh token from MongoDB api_config (persisted by /admin/ga4/connect)."""
+    if _db_token_cache["loaded"]:
+        return _db_token_cache["token"] or ""
+    try:
+        from deps import db, is_mongo_available
+        if db is not None and await is_mongo_available():
+            cfg = await db.api_config.find_one({}, {"ga4": 1})
+            token = (cfg or {}).get("ga4", {}).get("refresh_token", "")
+            if token:
+                _db_token_cache["token"] = token
+                os.environ["GA4_REFRESH_TOKEN"] = token
+            _db_token_cache["loaded"] = True
+            return token
+    except Exception as e:
+        logger.debug(f"GA4 db token load: {e}")
+    return ""
+
 def _cfg():
     """Read GA4 credentials from environment at call time (never cached at module level)."""
     return {
@@ -23,11 +43,21 @@ def _cfg():
 
 def _is_configured() -> bool:
     c = _cfg()
-    return bool(c["property_id"] and c["client_id"] and c["client_secret"] and c["refresh_token"])
+    return bool(c["property_id"] and c["client_secret"] and c["refresh_token"])
+
+
+async def _ensure_configured() -> bool:
+    """Check config; if refresh_token missing, try loading from DB."""
+    if _is_configured():
+        return True
+    await _load_db_refresh_token()
+    return _is_configured()
 
 
 async def _get_access_token() -> Optional[str]:
     """Exchange refresh token for an access token."""
+    if not await _ensure_configured():
+        return None
     c = _cfg()
     if not c["refresh_token"]:
         return None
@@ -54,7 +84,7 @@ async def run_report(dimensions: list, metrics: list,
                      date_ranges: list, order_bys: list = None,
                      limit: int = 30) -> Optional[dict]:
     """Run a GA4 Data API report. Returns raw response or None."""
-    if not _is_configured():
+    if not await _ensure_configured():
         return None
     token = await _get_access_token()
     if not token:
@@ -84,7 +114,7 @@ async def get_visitor_stats_ga4(days: int = 7) -> Optional[dict]:
     Fetch daily visitors + page views from GA4.
     Returns None if GA4 not configured.
     """
-    if not _is_configured():
+    if not await _ensure_configured():
         return None
 
     today = datetime.now(timezone.utc)
@@ -147,7 +177,7 @@ async def get_visitor_stats_ga4(days: int = 7) -> Optional[dict]:
 
 async def get_top_pages_ga4(limit: int = 20) -> Optional[list]:
     """Fetch top pages from GA4 by page views."""
-    if not _is_configured():
+    if not await _ensure_configured():
         return None
     resp = await run_report(
         dimensions=["pagePath"],
@@ -170,7 +200,7 @@ async def get_top_pages_ga4(limit: int = 20) -> Optional[list]:
 
 async def get_top_referrers_ga4(limit: int = 15) -> Optional[list]:
     """Fetch top traffic sources from GA4."""
-    if not _is_configured():
+    if not await _ensure_configured():
         return None
     resp = await run_report(
         dimensions=["sessionSource"],

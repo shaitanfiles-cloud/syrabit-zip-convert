@@ -1,6 +1,6 @@
 import React from 'react';
 import AdminQuickLinks from './AdminQuickLinks';
-import { Loader2, RefreshCw, Play } from 'lucide-react';
+import { Loader2, RefreshCw, Play, BookOpen, CheckCircle2, FileText, Globe, Activity } from 'lucide-react';
 import StatCard from './seo-manager/StatCard';
 import JobProgress from './seo-manager/JobProgress';
 import ReviewTab from './seo-manager/ReviewTab';
@@ -66,11 +66,11 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          <StatCard icon={s.BookOpen}     label="Topics"          value={s.topics.length}      color="rgba(255,255,255,0.70)" />
-          <StatCard icon={s.CheckCircle2} label="Published"       value={s.publishedCount}     color="#34d399" />
-          <StatCard icon={s.FileText}     label="Drafts"          value={s.draftCount}         color="#fbbf24" />
-          <StatCard icon={s.Globe}        label="Sitemap URLs"    value={s.stats?.sitemap_urls ?? s.publishedCount} color="#a78bfa" />
-          <StatCard icon={s.Activity}     label="Coverage"        value={`${s.coverage}%`}     color={s.coverage >= 80 ? '#34d399' : s.coverage >= 40 ? '#fbbf24' : '#f87171'}
+          <StatCard icon={BookOpen}     label="Topics"          value={s.topics.length}      color="rgba(255,255,255,0.70)" />
+          <StatCard icon={CheckCircle2} label="Published"       value={s.publishedCount}     color="#34d399" />
+          <StatCard icon={FileText}     label="Drafts"          value={s.draftCount}         color="#fbbf24" />
+          <StatCard icon={Globe}        label="Sitemap URLs"    value={s.stats?.sitemap_urls ?? s.publishedCount} color="#a78bfa" />
+          <StatCard icon={Activity}     label="Coverage"        value={`${s.coverage}%`}     color={s.coverage >= 80 ? '#34d399' : s.coverage >= 40 ? '#fbbf24' : '#f87171'}
             sub={`${s.topics.length} topics × 5 types`} />
         </div>
       )}

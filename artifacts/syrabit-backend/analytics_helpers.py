@@ -2,9 +2,14 @@
 import re, asyncio, logging, uuid, time, hashlib
 from typing import Optional
 from datetime import datetime, timezone, timedelta
+import httpx
 import deps
 from deps import db, logger as _dep_logger
 from utils import _is_bot, _get_device_type, _resolve_country
+try:
+    from user_agents import parse as _parse_ua
+except ImportError:
+    _parse_ua = None
 
 logger = logging.getLogger(__name__)
 

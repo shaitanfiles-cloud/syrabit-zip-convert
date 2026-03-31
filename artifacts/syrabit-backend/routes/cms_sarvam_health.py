@@ -47,6 +47,7 @@ from rag import *
 from seo_engine import _md_to_html
 from utils import *
 from analytics_helpers import *
+import ga4_client
 
 logger = logging.getLogger(__name__)
 
@@ -2556,6 +2557,8 @@ async def ga4_connect(
     await db.api_config.update_one({}, {"$set": {"ga4.refresh_token": refresh_token}}, upsert=True)
     # Also update current process env so GA4 works immediately without restart
     os.environ["GA4_REFRESH_TOKEN"] = refresh_token
+    ga4_client._db_token_cache["token"] = refresh_token
+    ga4_client._db_token_cache["loaded"] = True
     logger.info("GA4 refresh token stored in db.api_config and os.environ")
     return {
         "status": "connected",
