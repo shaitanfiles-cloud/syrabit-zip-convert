@@ -85,14 +85,13 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
             continue
         
         # If paragraph is too long, split it further
-        if len(para_clean) > 800:
-            # Split into smaller chunks of ~400 chars at sentence boundaries
+        if len(para_clean) > 1200:
             import re
             sentences = re.split(r'(?<=[.!?])\s+', para_clean)
             sub_chunk = []
             for sent in sentences:
                 sub_chunk.append(sent)
-                if len(' '.join(sub_chunk)) > 400:
+                if len(' '.join(sub_chunk)) > 600:
                     chunk_text = ' '.join(sub_chunk).strip()
                     if len(chunk_text) >= 50:
                         # Extract keywords for this chunk
@@ -841,17 +840,16 @@ async def resolve_rag_context(
 
         if selected_indices:
             relevant = "\n".join(lines[i] for i in sorted(selected_indices))
-            relevant = relevant[:1500]
+            relevant = relevant[:3000]
         else:
-            # No keyword match → use first 1500 chars of document
-            relevant = document_text[:1500]
+            relevant = document_text[:3000]
 
         return {
             "chunks": [],
             "chapters": [],
             "subjects": [],
             "document_text": relevant,
-            "document_full": document_text[:1500],
+            "document_full": document_text[:3000],
             "source":  "document",
             "quality": "tier0",
         }
@@ -1112,7 +1110,7 @@ def build_rag_system_prompt(
       Tier 2 — Subject metadata (descriptions, tags, chapter titles)
       Tier 3 — Web search results (fallback when library has no content)
     """
-    from prompts import build_system_prompt, _format_board_label as _fbl
+    from prompts import build_system_prompt, _classify_question, _format_board_label as _fbl
     base_prompt = build_system_prompt(context, user_info=user_info, query=query)
     source      = rag_context.get("source",  "none")
     quality     = rag_context.get("quality", "none")
@@ -1125,26 +1123,28 @@ def build_rag_system_prompt(
     _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard"
     _curriculum_label = f"{_board_label} Curriculum"
 
-    _src_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
-    _src_subject = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
-    _src_course  = (context.get("stream_name", "") or "").strip()
-    _src_board   = _board_label or "AssamBoard"
-    _source_parts = []
-    if _src_chapter:
-        _source_parts.append(f"{_src_chapter} (unit name)")
-    if _src_subject:
-        _source_parts.append(f"{_src_subject} (subject name)")
-    if _src_course:
-        _source_parts.append(f"{_src_course} (course name)")
-    _source_parts.append(f"{_src_board} (board name)")
-    _source_line = " · ".join(_source_parts)
-    base_prompt += (
-        f"\n\nSOURCE CITATION RULE: Do NOT mention source, subject name, unit name, "
-        f"course name, or board name anywhere in your answer body. Answer the question directly first. "
-        f"Then, at the very end of your response, on its own line, add:\n"
-        f"SOURCE : {_source_line}\n"
-        f"Casual greetings and small-talk skip this source line."
-    )
+    _is_casual = _classify_question(query) == "casual" if query else False
+
+    if not _is_casual:
+        _src_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
+        _src_subject = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
+        _src_course  = (context.get("stream_name", "") or "").strip()
+        _src_board   = _board_label or "AssamBoard"
+        _source_parts = []
+        if _src_chapter:
+            _source_parts.append(f"{_src_chapter} (unit name)")
+        if _src_subject:
+            _source_parts.append(f"{_src_subject} (subject name)")
+        if _src_course:
+            _source_parts.append(f"{_src_course} (course name)")
+        _source_parts.append(f"{_src_board} (board name)")
+        _source_line = " · ".join(_source_parts)
+        base_prompt += (
+            f"\n\nSOURCE CITATION RULE: Do NOT mention source, subject name, unit name, "
+            f"course name, or board name anywhere in your answer body. Answer the question directly first. "
+            f"Then, at the very end of your response, on its own line, add:\n"
+            f"SOURCE : {_source_line}"
+        )
 
     grounding = ""
 
@@ -1232,7 +1232,7 @@ def build_rag_system_prompt(
                 "3. If the answer is NOT in the grounding: check for Tier 3 web search results below — "
                 "use those. If those are absent, answer from general curriculum knowledge. Never stop without an answer.\n"
                 "4. NEVER hallucinate. NEVER invent facts not present in the grounding or web results.\n"
-                "5. Temperature is 0.05 — be deterministic and precise.*"
+                "5. Be deterministic and precise — prioritize accuracy over creativity.*"
             )
 
         else:

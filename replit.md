@@ -310,6 +310,16 @@ All large frontend files have been split into sub-components. Sub-component dire
 
 **CSS** (`src/styles/`): index.css split into `tokens.css`, `animations.css`, `utilities.css`, `components.css`, `chat.css`, `article.css`
 
+## Chat Response Quality Settings (updated 2026-03-31)
+
+- **Free plan tokens**: 1,536 (was 1,024) — prevents mid-sentence truncation on essay answers
+- **Starter**: 2,048 · **Pro**: 4,096 (unchanged)
+- **Temperature**: Standardized to 0.1 across all LLM providers (Gemini, Sarvam, Groq, OpenAI, Fireworks, xAI, Bedrock)
+- **Casual mode**: SOURCE citation line is skipped entirely for greetings/small-talk (no injection in `build_rag_system_prompt`)
+- **RAG chunk ceiling**: 1,200 chars (was 800), sub-chunks at 600 chars (was 400) — preserves full academic concepts
+- **Document text limit**: 3,000 chars (was 1,500) for uploaded PDF context in Tier 0 RAG
+- **Cache key**: Includes `conversation_id` to prevent stale cached answers in multi-turn conversations
+
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.

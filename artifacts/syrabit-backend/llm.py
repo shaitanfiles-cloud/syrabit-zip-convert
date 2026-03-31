@@ -235,7 +235,7 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
         "model": model,
         "messages": messages,
         "max_tokens": api_max,
-        "temperature": 0.05,
+        "temperature": 0.1,
         "stream": False,
     }
     client = sarvam_llm_client
@@ -353,8 +353,8 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         "model": model,
         "messages": patched,
         "max_tokens": api_max,
-        "temperature": 0.0,
-        "top_p": 1.0,
+        "temperature": 0.1,
+        "top_p": 0.95,
         "frequency_penalty": 0,
         "presence_penalty": 0,
         "stream": True,
@@ -390,7 +390,7 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     )
     stream = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.05,
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
     )
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
@@ -405,7 +405,7 @@ async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int)
         base_url="https://api.x.ai/v1",
     )
     stream = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.05,
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
     )
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
@@ -446,7 +446,7 @@ async def _stream_bedrock(messages: list, model: str, max_tokens: int):
             kwargs = dict(
                 modelId=model,
                 messages=converse_messages,
-                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.05},
+                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.1},
             )
             if system_parts:
                 kwargs["system"] = system_parts

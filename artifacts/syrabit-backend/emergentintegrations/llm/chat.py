@@ -106,8 +106,8 @@ class LlmChat:
             messages=messages,
             max_tokens=max_tokens,
             stream=True,
-            temperature=0.7,
-            top_p=0.9,
+            temperature=0.1,
+            top_p=0.95,
         )
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -131,6 +131,8 @@ class LlmChat:
             messages=messages,
             max_tokens=max_tokens,
             stream=True,
+            temperature=0.1,
+            top_p=0.95,
         )
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
@@ -160,6 +162,8 @@ class LlmChat:
             messages=messages,
             max_tokens=max_tokens,
             stream=True,
+            temperature=0.1,
+            top_p=0.95,
         )
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None

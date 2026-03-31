@@ -79,8 +79,8 @@ REDIS_RATE_WINDOW = 60
 _redis_miss_count = 0
 _redis_hit_count = 0
 
-def _cache_key(query: str, subject_id: str = "", board_id: str = "") -> str:
-    normalized = f"{query.lower().strip()}|{subject_id or ''}|{board_id or ''}"
+def _cache_key(query: str, subject_id: str = "", board_id: str = "", conversation_id: str = "") -> str:
+    normalized = f"{query.lower().strip()}|{subject_id or ''}|{board_id or ''}|{conversation_id or ''}"
     return hashlib.md5(normalized.encode()).hexdigest()
 
 def _redis_get(prefix: str, key: str) -> Optional[str]:

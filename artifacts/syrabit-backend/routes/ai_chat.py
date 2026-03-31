@@ -240,7 +240,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     # ── Cache check (Non-streaming) — Redis first, in-memory fallback ───────
     is_casual = _classify_question(msg.message) == "casual"
-    cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "")
+    cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
     _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
     answer = None
 
@@ -609,7 +609,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
             # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
             is_casual = _classify_question(msg.message) == "casual"
-            cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "")
+            cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
             _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
             cached_answer = None
 
