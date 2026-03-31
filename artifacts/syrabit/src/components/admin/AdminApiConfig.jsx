@@ -13,6 +13,7 @@ const adminHeaders = (token) => {
 };
 
 const SERVICES = [
+  { id: 'emergent',icon: Zap,        label: 'Emergent AI',      accent: 'amber',  desc: 'Universal LLM key — highest priority' },
   { id: 'groq',    icon: Zap,        label: 'Groq AI',          accent: 'violet', desc: 'Llama 3.1 — AI brain' },
   { id: 'supabase',icon: Database,   label: 'Supabase',         accent: 'cyan',   desc: 'Users & conversations DB' },
   { id: 'payment', icon: CreditCard, label: 'Payments',          accent: 'emerald', desc: 'Razorpay / Stripe' },
@@ -23,6 +24,7 @@ const SERVICES = [
 ];
 
 const ACCENT = {
+  amber:   { text: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-500/30',   btn: 'bg-amber-600 hover:bg-amber-700'   },
   violet: { text: 'text-violet-400', bg: 'bg-violet-500/10', border: 'border-violet-500/30', btn: 'bg-violet-600 hover:bg-violet-700' },
   cyan:    { text: 'text-cyan-400',    bg: 'bg-cyan-500/10',    border: 'border-cyan-500/30',    btn: 'bg-cyan-600 hover:bg-cyan-700'    },
   emerald: { text: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', btn: 'bg-emerald-600 hover:bg-emerald-700' },
@@ -47,7 +49,7 @@ function SecretInput({ value, onChange, placeholder }) {
 
 export default function AdminApiConfig({ adminToken, onNavigate }) {
   const [active, setActive] = useState('groq');
-  const [creds, setCreds] = useState({ groqKey: '', supabaseUrl: '', supabaseServiceKey: '', supabaseAnonKey: '', razorpayKeyId: '', razorpayKeySecret: '', razorpayWebhookSecret: '', resendKey: '', oneSignalKey: '', posthogKey: '', googleClientId: '', googleClientSecret: '' });
+  const [creds, setCreds] = useState({ emergentKey: '', emergentBaseUrl: '', groqKey: '', supabaseUrl: '', supabaseServiceKey: '', supabaseAnonKey: '', razorpayKeyId: '', razorpayKeySecret: '', razorpayWebhookSecret: '', resendKey: '', oneSignalKey: '', posthogKey: '', googleClientId: '', googleClientSecret: '' });
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -58,6 +60,8 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
       .then((res) => {
         const cfg = res.data;
         setCreds({
+          emergentKey: cfg.emergent?.key || '',
+          emergentBaseUrl: cfg.emergent?.base_url || '',
           groqKey: cfg.groq?.key || '',
           supabaseUrl: cfg.supabase?.url || '',
           supabaseServiceKey: cfg.supabase?.service_key || '',
@@ -80,6 +84,7 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
   const colors = ACCENT[ac?.accent || 'violet'];
 
   const buildPayload = () => ({
+    emergent: { key: creds.emergentKey, base_url: creds.emergentBaseUrl },
     groq: { key: creds.groqKey },
     supabase: { url: creds.supabaseUrl, service_key: creds.supabaseServiceKey, anon_key: creds.supabaseAnonKey },
     payment: { razorpay_key_id: creds.razorpayKeyId, razorpay_key_secret: creds.razorpayKeySecret, razorpay_webhook_secret: creds.razorpayWebhookSecret },
@@ -114,6 +119,9 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
       if (active === 'supabase') {
         const res = await adminAxios('post', '/admin/supabase/test', { url: creds.supabaseUrl, service_key: creds.supabaseServiceKey });
         setTestResult({ ok: res.data.ok, data: res.data.message, error: res.data.error });
+      } else if (active === 'emergent') {
+        const hasKey = !!creds.emergentKey;
+        setTestResult({ ok: hasKey, data: hasKey ? 'Emergent API key is configured (used for admin AI generation)' : 'No Emergent API key configured — other providers will be used as fallback' });
       } else if (active === 'groq') {
         const res = await adminAxios('get', '/health');
         const llmStatus = res.data?.dependencies?.llm?.status;
@@ -188,6 +196,17 @@ export default function AdminApiConfig({ adminToken, onNavigate }) {
               </div>
               <div><label className="text-xs text-white/40 block mb-1" data-testid="label-supabase-anon-key">Anon Key (public)</label>
                 <SecretInput value={creds.supabaseAnonKey} onChange={(e) => setCreds((c) => ({...c, supabaseAnonKey: e.target.value}))} placeholder="eyJhbGci..." />
+              </div>
+            </div>
+          )}
+          {active === 'emergent' && (
+            <div className="space-y-3">
+              <p className="text-xs text-white/50">Emergent universal API key — powers all admin AI content generation (content hub, SEO, GEO). Highest priority provider; other keys serve as fallbacks.</p>
+              <div><label className="text-xs text-white/40 block mb-1">EMERGENT_API_KEY</label>
+                <SecretInput value={creds.emergentKey} onChange={(e) => setCreds((c) => ({...c, emergentKey: e.target.value}))} placeholder="em_..." />
+              </div>
+              <div><label className="text-xs text-white/40 block mb-1">Base URL (optional)</label>
+                <input value={creds.emergentBaseUrl} onChange={(e) => setCreds((c) => ({...c, emergentBaseUrl: e.target.value}))} placeholder="https://api.emergent.sh/v1" className="w-full h-9 px-3 rounded-xl text-sm text-white font-mono outline-none" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.10)' }} />
               </div>
             </div>
           )}

@@ -29,7 +29,7 @@ from auth_deps import (
     get_current_user_optional,
 )
 from db_ops import *
-from llm import call_llm_api, call_llm_api_stream
+from llm import call_llm_api, call_llm_api_chat, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
@@ -255,7 +255,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     if answer is None:
         try:
-            answer = await call_llm_api(messages, model=msg.model or LLM_MODEL, max_tokens=max_tokens)
+            answer = await call_llm_api_chat(messages, model=msg.model or LLM_MODEL, max_tokens=max_tokens)
             _redis_set("ai_cache", cache_key, answer, _cache_ttl)
             if not redis_client:
                 _ai_response_cache[cache_key] = answer

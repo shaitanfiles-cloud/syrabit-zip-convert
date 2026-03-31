@@ -6,7 +6,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
     _GROQ_KEY, _GEMINI_KEY, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
-    _SARVAM_LLM_KEY, _EMERGENT_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    _SARVAM_LLM_KEY, _EMERGENT_KEY, _EMERGENT_BASE_URL, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
 )
 from deps import sarvam_llm_client, logger as _dep_logger
 from cache import _cache_key
@@ -80,9 +80,10 @@ class _LlmBatcher:
         self._lock = asyncio.Lock()
         self._stats = {"batched": 0, "deduped": 0, "solo": 0, "errors": 0}
 
-    async def call(self, messages: list, model: str = None, max_tokens: int = 1024) -> str:
+    async def call(self, messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
+        provider_tag = "chat" if provider_list is _LLM_PROVIDERS_CHAT else "all"
         batch_key = _cache_key(
-            "".join(m.get("content", "") for m in messages if m.get("role") in ("user", "system"))
+            provider_tag + ":" + "".join(m.get("content", "") for m in messages if m.get("role") in ("user", "system"))
         )
 
         async with self._lock:
@@ -95,7 +96,7 @@ class _LlmBatcher:
                 future = asyncio.get_event_loop().create_future()
                 self._pending[batch_key] = future
                 self._stats["batched"] += 1
-                asyncio.ensure_future(self._execute(batch_key, messages, model, max_tokens, future))
+                asyncio.ensure_future(self._execute(batch_key, messages, model, max_tokens, future, provider_list))
 
         try:
             return await asyncio.wait_for(future, timeout=120)
@@ -103,12 +104,12 @@ class _LlmBatcher:
             logger.error(f"LLM batch TIMEOUT: {batch_key}")
             raise HTTPException(status_code=504, detail="AI response timed out. Please try again.")
 
-    async def _execute(self, batch_key: str, messages: list, model: str, max_tokens: int, future: asyncio.Future):
+    async def _execute(self, batch_key: str, messages: list, model: str, max_tokens: int, future: asyncio.Future, provider_list=None):
         await asyncio.sleep(_LLM_BATCH_WINDOW_MS / 1000.0)
 
         try:
             async with _LLM_SEMAPHORE:
-                result = await _call_llm_raw(messages, model, max_tokens)
+                result = await _call_llm_raw(messages, model, max_tokens, provider_list=provider_list)
             future.set_result(result)
         except Exception as e:
             self._stats["errors"] += 1
@@ -125,13 +126,14 @@ class _LlmBatcher:
 _llm_batcher = _LlmBatcher()
 
 _LLM_PROVIDERS = []
-# Fallback chain: Gemini (primary) → Groq → Emergent → Fireworks → Sarvam → xAI → OpenAI
+# Emergent first — universal key with highest priority (admin content generation only)
+if _EMERGENT_KEY:
+    _LLM_PROVIDERS.append({"provider": "emergent",    "key": _EMERGENT_KEY,   "default_model": "openai/gpt-4o-mini"})
+# Fallback chain: Gemini → Groq → Fireworks → Sarvam → xAI → OpenAI
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
-if _EMERGENT_KEY:
-    _LLM_PROVIDERS.append({"provider": "emergent",    "key": _EMERGENT_KEY,   "default_model": "gemini-2.5-flash"})
 if _FIREWORKS_KEY:
     _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _SARVAM_LLM_KEY:
@@ -140,6 +142,8 @@ if _XAI_KEY:
     _LLM_PROVIDERS.append({"provider": "xai",         "key": _XAI_KEY,        "default_model": "grok-3-fast"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
+
+_LLM_PROVIDERS_CHAT = [p for p in _LLM_PROVIDERS if p["provider"] != "emergent"]
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -271,14 +275,15 @@ class _SmartKeyPool:
 
 _slm_pool = _SmartKeyPool(_SLM_SLOT_CANDIDATES)
 
-def _resolve_provider_for_model(model: str):
+def _resolve_provider_for_model(model: str, provider_list=None):
+    plist = _LLM_PROVIDERS if provider_list is None else provider_list
     preferred = _MODEL_PROVIDER_MAP.get(model)
     if preferred:
-        for p in _LLM_PROVIDERS:
+        for p in plist:
             if p["provider"] == preferred:
                 return p["provider"], p["key"]
-    if _LLM_PROVIDERS:
-        return _LLM_PROVIDERS[0]["provider"], _LLM_PROVIDERS[0]["key"]
+    if plist:
+        return plist[0]["provider"], plist[0]["key"]
     return LLM_PROVIDER, OPENAI_API_KEY
 
 async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens: int) -> str:
@@ -324,7 +329,7 @@ async def _call_emergent(messages: list, api_key: str, model: str, max_tokens: i
     import openai as _oai
     client = _oai.AsyncOpenAI(
         api_key=api_key,
-        base_url=os.environ.get("EMERGENT_BASE_URL", "https://api.emergentmind.com/v1"),
+        base_url=_EMERGENT_BASE_URL,
     )
     resp = await client.chat.completions.create(
         model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
@@ -358,12 +363,13 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
     response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
     return response
 
-async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024) -> str:
+async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
     import time as _t
+    providers = _LLM_PROVIDERS if provider_list is None else provider_list
     use_model = model or LLM_MODEL
-    primary_provider, primary_key = _resolve_provider_for_model(use_model)
+    primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
 
-    if not primary_key and not _LLM_PROVIDERS:
+    if not primary_key and not providers:
         raise HTTPException(status_code=503, detail="LLM API key not configured")
 
     tried: set = set()
@@ -386,7 +392,7 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
         last_err = e
         logger.warning(f"LLM primary failed ({provider}/{try_model}): {type(e).__name__}: {str(e)[:150]}")
 
-    for fallback in _LLM_PROVIDERS:
+    for fallback in providers:
         fb_model = fallback["default_model"]
         if (fallback["provider"], fb_model) in tried:
             continue
@@ -409,8 +415,13 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     raise HTTPException(status_code=503, detail="AI service temporarily unavailable. Please try again.")
 
 async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048) -> str:
-    """Smart-batched LLM call: deduplicates identical requests, limits concurrency."""
+    """Smart-batched LLM call: deduplicates identical requests, limits concurrency.
+    Uses all providers including Emergent (admin content generation)."""
     return await _llm_batcher.call(messages, model, max_tokens)
+
+async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
+    """LLM call for student chat — excludes Emergent provider (admin-only)."""
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
 
 
 _THINK_BUDGET_HINT = "/think in one sentence. Answer immediately.\n"
@@ -589,12 +600,12 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     use_model_raw = model or LLM_MODEL
     # Resolve display-alias → real API model name (e.g. openai/gpt-oss-20b → llama-3.3-70b-versatile)
     use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
-    provider, key = _resolve_provider_for_model(use_model_resolved)
+    provider, key = _resolve_provider_for_model(use_model_resolved, _LLM_PROVIDERS_CHAT)
     if use_model_raw != use_model_resolved:
         logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
     # If still not a known API model, fall back to provider default
     if use_model_resolved not in _MODEL_PROVIDER_MAP:
-        matched = next((p for p in _LLM_PROVIDERS if p["provider"] == provider), None)
+        matched = next((p for p in _LLM_PROVIDERS_CHAT if p["provider"] == provider), None)
         use_model = matched["default_model"] if matched else LLM_MODEL
         logger.info(f"Unknown model '{use_model_resolved}' → provider default '{use_model}' ({provider})")
     else:

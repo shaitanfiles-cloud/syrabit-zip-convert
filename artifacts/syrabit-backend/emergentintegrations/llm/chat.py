@@ -62,7 +62,9 @@ class LlmChat:
             messages.append({"role": "system", "content": self.system_message})
         messages.append({"role": "user", "content": message.text})
 
-        if self._provider == "openai":
+        if self._provider == "emergent":
+            return await self._call_emergent(messages)
+        elif self._provider == "openai":
             return await self._call_openai(messages)
         elif self._provider == "fireworksai":
             return await self._call_fireworks(messages)
@@ -70,7 +72,9 @@ class LlmChat:
             return await self._call_groq(messages)
 
     async def send_messages(self, messages: list) -> str:
-        if self._provider == "openai":
+        if self._provider == "emergent":
+            return await self._call_emergent(messages)
+        elif self._provider == "openai":
             return await self._call_openai(messages)
         elif self._provider == "fireworksai":
             return await self._call_fireworks(messages)
@@ -78,7 +82,10 @@ class LlmChat:
             return await self._call_groq(messages)
 
     async def stream_messages(self, messages: list, max_tokens: int = 2048):
-        if self._provider == "openai":
+        if self._provider == "emergent":
+            async for token in self._stream_emergent(messages, max_tokens):
+                yield token
+        elif self._provider == "openai":
             async for token in self._stream_openai(messages, max_tokens):
                 yield token
         elif self._provider == "fireworksai":
@@ -156,6 +163,39 @@ class LlmChat:
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
             base_url="https://api.fireworks.ai/inference/v1"
+        )
+        stream = await client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            max_tokens=max_tokens,
+            stream=True,
+            temperature=0.1,
+            top_p=0.95,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
+    async def _call_emergent(self, messages: list) -> str:
+        import openai, os
+        base_url = os.environ.get('EMERGENT_BASE_URL', 'https://api.emergent.sh/v1').strip()
+        client = openai.AsyncOpenAI(
+            api_key=self.api_key,
+            base_url=base_url,
+        )
+        response = await client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+        )
+        return response.choices[0].message.content or ""
+
+    async def _stream_emergent(self, messages: list, max_tokens: int = 1024):
+        import openai, os
+        base_url = os.environ.get('EMERGENT_BASE_URL', 'https://api.emergent.sh/v1').strip()
+        client = openai.AsyncOpenAI(
+            api_key=self.api_key,
+            base_url=base_url,
         )
         stream = await client.chat.completions.create(
             model=self._model,
