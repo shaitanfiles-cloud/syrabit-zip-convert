@@ -1,157 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { log } from '@/utils/logger';
-import {
-  Search, Plus, Save, Trash2, X, BookOpen, Loader2,
-  FolderPlus, FilePlus, Edit2, FileText, Book,
-  CheckCircle, AlertCircle, AlertTriangle, Layers, Eye, Upload, Paperclip, Link2, BarChart3, Sparkles, RefreshCw,
-  ChevronRight, ChevronLeft, ChevronDown, GraduationCap, Building2, GitBranch, ArrowLeft,
-  Globe, LayoutTemplate, Wand2, Zap
-} from 'lucide-react';
+import { Search, Layers, ChevronRight, CheckCircle, Trash2, Globe, Loader2 } from 'lucide-react';
 import PipelineProgressPanel from './PipelineProgressPanel';
 import AgenticCreatorModal from './AgenticCreatorModal';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { adminSeoExtractTopics } from '@/utils/api';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { TEMPLATES } from '@/utils/editorTemplates';
 import { isDegreeBoard } from '@/utils/courseTypes';
-import {
-  MDXEditor,
-  headingsPlugin, listsPlugin, quotePlugin, thematicBreakPlugin,
-  markdownShortcutPlugin, codeBlockPlugin, codeMirrorPlugin, tablePlugin,
-  linkPlugin, diffSourcePlugin, toolbarPlugin,
-  UndoRedo, BoldItalicUnderlineToggles, BlockTypeSelect,
-  CreateLink, CodeToggle, InsertTable, InsertThematicBreak,
-  ListsToggle, Separator, DiffSourceToggleWrapper, InsertCodeBlock,
-} from '@mdxeditor/editor';
-import '@mdxeditor/editor/style.css';
+import { API, authHeaders, autoSlug } from '@/utils/adminHelpers';
 
-
-const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
-
-function authHeaders(token) {
-  const isRealJwt = token && token.split('.').length === 3;
-  return { headers: isRealJwt ? { Authorization: `Bearer ${token}` } : {}, withCredentials: true };
-}
-
-function ContentViewerPopup({ item, onClose }) {
-  if (!item) return null;
-  const wordCount = (item.content || '').trim().split(/\s+/).filter(Boolean).length;
-  const readMin = Math.max(1, Math.ceil(wordCount / 200));
-  return (
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-      <div
-        className="relative flex flex-col rounded-2xl overflow-hidden shadow-2xl"
-        style={{ width: '90vw', maxWidth: '860px', height: '92vh', background: '#ffffff', border: '1px solid #e5e7eb' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: '#e5e7eb', background: '#f9fafb' }}>
-          <div className="flex items-center gap-3 min-w-0">
-            <Book size={18} className="text-violet-600 flex-shrink-0" />
-            <div className="min-w-0">
-              <h3 className="text-base font-bold truncate" style={{ color: '#111827' }}>{item.title || 'Untitled'}</h3>
-              <p className="text-xs mt-0.5" style={{ color: '#9ca3af' }}>
-                {wordCount > 0 ? `${wordCount.toLocaleString()} words · ${readMin} min read` : 'No content yet'}
-              </p>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-gray-100 transition-colors"
-            style={{ color: '#6b7280' }}
-            data-testid="close-viewer"
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        {/* Blog-style content body */}
-        <div className="flex-1 overflow-y-auto" style={{ background: '#ffffff' }}>
-          <div className="blog-view-tab">
-            <div className="px-8 py-10 max-w-[740px] mx-auto">
-              {item.description && (
-                <p className="text-base italic mb-8 pb-6 border-b" style={{ color: '#6b7280', borderColor: '#e5e7eb' }}>
-                  {item.description}
-                </p>
-              )}
-              {item.content ? (
-                <div className="learn-article max-w-none">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {item.content}
-                  </ReactMarkdown>
-                </div>
-              ) : (
-                <p className="text-center py-16 italic" style={{ color: '#9ca3af' }}>No content available — generate notes using the ✨ button.</p>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function InlineCreator({ placeholder, onCreate, icon: Icon, color = 'violet' }) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [desc, setDesc] = useState('');
-  const [saving, setSaving] = useState(false);
-  const inputRef = useRef(null);
-
-  useEffect(() => { if (open && inputRef.current) inputRef.current.focus(); }, [open]);
-
-  if (!open) {
-    return (
-      <button onClick={() => setOpen(true)} className={`w-full p-3 rounded-xl border-2 border-dashed border-white/10 hover:border-${color}-500/40 text-white/40 hover:text-${color}-400 flex items-center gap-2 text-sm transition-colors`} data-testid={`add-${placeholder.toLowerCase()}`}>
-        <Plus size={16} /> Add {placeholder}
-      </button>
-    );
-  }
-
-  const submit = async () => {
-    if (!name.trim()) return;
-    setSaving(true);
-    try {
-      await onCreate(name.trim(), desc.trim());
-      setName(''); setDesc(''); setOpen(false);
-    } catch (e) {
-      toast.error(e.response?.data?.detail || `Failed to create ${placeholder}`);
-    } finally { setSaving(false); }
-  };
-
-  return (
-    <div className="p-3 rounded-xl border border-white/10 bg-white/[0.02] space-y-2">
-      <div className="flex items-center gap-2">
-        {Icon && <Icon size={16} className={`text-${color}-400`} />}
-        <input
-          ref={inputRef}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && submit()}
-          placeholder={`${placeholder} name...`}
-          className="flex-1 h-9 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
-        />
-      </div>
-      <input
-        value={desc}
-        onChange={(e) => setDesc(e.target.value)}
-        onKeyDown={(e) => e.key === 'Enter' && submit()}
-        placeholder="Description (optional)"
-        className="w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
-      />
-      <div className="flex gap-2">
-        <button onClick={() => { setOpen(false); setName(''); setDesc(''); }} className="flex-1 h-8 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 text-xs">Cancel</button>
-        <button onClick={submit} disabled={saving || !name.trim()} className={`flex-1 h-8 rounded-lg bg-${color}-600 hover:bg-${color}-500 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1`}>
-          {saving ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
-          {saving ? 'Creating...' : 'Create'}
-        </button>
-      </div>
-    </div>
-  );
-}
+import ContentViewerPopup from './content-editor/ContentViewerPopup';
+import InlineCreator from './content-editor/InlineCreator';
+import ChapterEditForm from './content-editor/ChapterEditForm';
+import HierarchyTree from './content-editor/HierarchyTree';
+import ChapterList from './content-editor/ChapterList';
+import ContentGapsPanel from './content-editor/ContentGapsPanel';
+import ThumbnailStudio from './content-editor/ThumbnailStudio';
+import WorkflowTracker from './content-editor/WorkflowTracker';
 
 export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext }) {
   const [boards, setBoards] = useState([]);
@@ -172,75 +36,60 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [contentForm, setContentForm] = useState({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1 });
   const [editTarget, setEditTarget] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [contentMode, setContentMode] = useState('preview');
   const [chapterStats, setChapterStats] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [aiParsing, setAiParsing] = useState(false);
-  const [thumbnailLoading, setThumbnailLoading] = useState(false);
-  const [aiThumbLoading, setAiThumbLoading]     = useState(false);
-  const [thumbVariants, setThumbVariants]       = useState([]);
-  const [thumbAnalysis, setThumbAnalysis]       = useState(null);
-  const [selectedThumbVariant, setSelectedThumbVariant] = useState(0);
   const [generatingNotes, setGeneratingNotes] = useState(new Set());
   const [bulkGenerating, setBulkGenerating] = useState(false);
   const [showAgenticCreator, setShowAgenticCreator] = useState(false);
   const [autoAgentic, setAutoAgentic] = useState(false);
   const fileInputRef = useRef(null);
-  const thumbnailInputRef = useRef(null);
-  const contentTextareaRef = useRef(null);
   const editorRef = useRef(null);
 
-  const [publishingBlog, setPublishingBlog]     = useState(false);
+  const [publishingBlog, setPublishingBlog] = useState(false);
   const [selectedChapters, setSelectedChapters] = useState(new Set());
-  const [bulkMerging, setBulkMerging]           = useState(false);
-  const [showPreview, setShowPreview]           = useState(false);
+  const [bulkMerging, setBulkMerging] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
   const [mergedSubjectIds, setMergedSubjectIds] = useState(new Set());
   const [seoTopicsGeneratedIds, setSeoTopicsGeneratedIds] = useState(new Set());
-  const [assetsGeneratedIds, setAssetsGeneratedIds]       = useState(new Set());
-  const [chapterAssets, setChapterAssets]                 = useState({});
-  const [generatingSeoTopics, setGeneratingSeoTopics]     = useState(false);
-  const [editorKey, setEditorKey]               = useState(0);
-  const [showPipeline, setShowPipeline]         = useState(false);
+  const [assetsGeneratedIds, setAssetsGeneratedIds] = useState(new Set());
+  const [chapterAssets, setChapterAssets] = useState({});
+  const [generatingSeoTopics, setGeneratingSeoTopics] = useState(false);
+  const [editorKey, setEditorKey] = useState(0);
+  const [showPipeline, setShowPipeline] = useState(false);
 
-  const [showGapPanel, setShowGapPanel]         = useState(false);
-  const [gapSubjects, setGapSubjects]           = useState([]);
-  const [loadingGaps, setLoadingGaps]           = useState(false);
-  const [gapGenStatus, setGapGenStatus]         = useState({});
-  const [gapGenSubject, setGapGenSubject]       = useState(null);
-  const [bulkGapSelected, setBulkGapSelected]   = useState(new Set());
+  const [showGapPanel, setShowGapPanel] = useState(false);
+  const [gapSubjects, setGapSubjects] = useState([]);
+  const [loadingGaps, setLoadingGaps] = useState(false);
+  const [gapGenStatus, setGapGenStatus] = useState({});
+  const [gapGenSubject, setGapGenSubject] = useState(null);
+  const [bulkGapSelected, setBulkGapSelected] = useState(new Set());
   const [bulkGapGenerating, setBulkGapGenerating] = useState(false);
-  const [bulkGapProgress, setBulkGapProgress]  = useState({ done: 0, total: 0 });
+  const [bulkGapProgress, setBulkGapProgress] = useState({ done: 0, total: 0 });
 
   useEffect(() => { setSelectedChapters(new Set()); }, [selSubject]);
 
-  const CONTENT_TYPES = [
-    { value: 'notes', label: 'Notes', color: 'violet' },
-    { value: 'pyq', label: 'PYQ', color: 'amber' },
-    { value: 'formula', label: 'Formula Sheet', color: 'pink' },
-    { value: 'summary', label: 'Summary', color: 'emerald' },
-    { value: 'solution', label: 'Solution', color: 'blue' },
-    { value: 'reference', label: 'Reference', color: 'slate' },
-  ];
-
-  const autoSlug = (title) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  const subjectData = subjects.find(s => s.id === selSubject);
+  const boardData = boards.find(b => b.id === selBoard);
+  const classData = classes.find(c => c.id === selClass);
+  const streamData = streams.find(s => s.id === selStream);
+  const isBoardDegree = isDegreeBoard(boardData?.name);
+  const streamNodeLabel = isBoardDegree ? 'Courses' : 'Streams';
+  const streamPlaceholder = isBoardDegree ? 'Course Type' : 'Stream';
+  const filteredClasses = selBoard ? classes.filter(c => c.board_id === selBoard) : [];
+  const filteredStreams = selClass ? streams.filter(s => s.class_id === selClass) : [];
+  const filteredSubjects = selStream ? subjects.filter(s => s.stream_id === selStream) : subjects;
+  const searchFiltered = searchQuery
+    ? subjects.filter(s => s.name?.toLowerCase().includes(searchQuery.toLowerCase()) || s.description?.toLowerCase().includes(searchQuery.toLowerCase()))
+    : null;
+  const allChaptersHaveNotes = chapters.length > 0 && chapters.every(ch => ch.notes_generated || (ch.content && ch.content.trim().length > 100));
 
   const loadChapterStats = useCallback(async (chapterId) => {
     try {
       const res = await axios.get(`${API}/admin/content/chapters/${chapterId}/stats`, authHeaders(adminToken));
       setChapterStats(res.data);
-      // Update chapterAssets so chapter list badges survive page navigation
       if (chapterId) {
-        setChapterAssets(prev => ({
-          ...prev,
-          [chapterId]: {
-            ...prev[chapterId],
-            notesGenerated: res.data.notes_generated,
-            pyqCount:       res.data.pyq_count       || 0,
-            flashcardCount: res.data.flashcard_count  || 0,
-            blogCount:      res.data.geo_blog_count   || 0,
-            pyqPage:        res.data.pyq_html_count   > 0,
-          },
-        }));
+        setChapterAssets(prev => ({ ...prev, [chapterId]: { ...prev[chapterId], notesGenerated: res.data.notes_generated, pyqCount: res.data.pyq_count || 0, flashcardCount: res.data.flashcard_count || 0, blogCount: res.data.geo_blog_count || 0, pyqPage: res.data.pyq_html_count > 0 } }));
       }
     } catch { setChapterStats(null); }
   }, [adminToken]);
@@ -248,11 +97,9 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const handleFileAttach = useCallback(async (chapterId) => {
     const file = fileInputRef.current?.files?.[0];
     if (!file || !chapterId) return;
-    const MAX_SIZE = 10 * 1024 * 1024;
-    if (file.size > MAX_SIZE) { toast.error('File too large (max 10 MB)'); return; }
-    const allowed = ['pdf', 'txt', 'md'];
+    if (file.size > 10 * 1024 * 1024) { toast.error('File too large (max 10 MB)'); return; }
     const ext = file.name.split('.').pop()?.toLowerCase();
-    if (!allowed.includes(ext)) { toast.error(`Only ${allowed.join(', ')} files allowed`); return; }
+    if (!['pdf', 'txt', 'md'].includes(ext)) { toast.error('Only pdf, txt, md files allowed'); return; }
     setUploading(true);
     try {
       const formData = new FormData();
@@ -264,77 +111,22 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const freshChapter = await axios.get(`${API}/admin/content/chapters/${selSubject}`, authHeaders(adminToken));
       const updated = (freshChapter.data || []).find(c => c.id === chapterId);
       if (updated) setContentForm(f => ({ ...f, content: updated.content || f.content }));
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'File upload failed');
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
+    } catch (e) { toast.error(e.response?.data?.detail || 'File upload failed'); }
+    finally { setUploading(false); if (fileInputRef.current) fileInputRef.current.value = ''; }
   }, [adminToken, selSubject, loadChapterStats]);
 
   const handleAiParse = useCallback(async () => {
     if (!contentForm.content.trim()) return toast.error('Add content first');
     setAiParsing(true);
     try {
-      const res = await axios.post(`${API}/admin/studio/parse`, {
-        raw_text: contentForm.content,
-        subject: subjects.find(s => s.id === selSubject)?.name || '',
-        chapter: contentForm.title || '',
-      }, authHeaders(adminToken));
+      const res = await axios.post(`${API}/admin/studio/parse`, { raw_text: contentForm.content, subject: subjects.find(s => s.id === selSubject)?.name || '', chapter: contentForm.title || '' }, authHeaders(adminToken));
       const blocks = res.data.blocks || [];
       if (blocks.length === 0) return toast.error('AI could not parse content');
-      const formatted = blocks.map(b => `## ${b.title}\n\n${b.content}`).join('\n\n---\n\n');
-      setContentForm(f => ({ ...f, content: formatted }));
+      setContentForm(f => ({ ...f, content: blocks.map(b => `## ${b.title}\n\n${b.content}`).join('\n\n---\n\n') }));
       toast.success(`AI structured ${blocks.length} blocks`);
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'AI parsing failed');
-    } finally { setAiParsing(false); }
+    } catch (e) { toast.error(e.response?.data?.detail || 'AI parsing failed'); }
+    finally { setAiParsing(false); }
   }, [contentForm.content, contentForm.title, selSubject, subjects]);
-
-  const formatText = useCallback((type) => {
-    const ta = contentTextareaRef.current;
-    if (!ta) return;
-    const start = ta.selectionStart;
-    const end   = ta.selectionEnd;
-    const selected = contentForm.content.slice(start, end);
-    const before   = contentForm.content.slice(0, start);
-    const after    = contentForm.content.slice(end);
-
-    const lineStart = before.lastIndexOf('\n') + 1;
-    const linePrefix = before.slice(lineStart);
-
-    let newContent = contentForm.content;
-    let newCursor  = end;
-
-    if (type === 'h1' || type === 'h2' || type === 'h3') {
-      const prefix = type === 'h1' ? '# ' : type === 'h2' ? '## ' : '### ';
-      const cleanLine = linePrefix.replace(/^#+\s/, '');
-      newContent = before.slice(0, lineStart) + prefix + cleanLine + after;
-      newCursor  = lineStart + prefix.length + cleanLine.length;
-    } else if (type === 'bold') {
-      newContent = before + `**${selected || 'bold text'}**` + after;
-      newCursor  = start + 2 + (selected || 'bold text').length + 2;
-    } else if (type === 'italic') {
-      newContent = before + `*${selected || 'italic text'}*` + after;
-      newCursor  = start + 1 + (selected || 'italic text').length + 1;
-    } else if (type === 'ul') {
-      const lines = (selected || 'List item').split('\n').map(l => `- ${l}`).join('\n');
-      newContent = before + '\n' + lines + '\n' + after;
-      newCursor  = start + 1 + lines.length;
-    } else if (type === 'ol') {
-      const lines = (selected || 'List item').split('\n').map((l, i) => `${i + 1}. ${l}`).join('\n');
-      newContent = before + '\n' + lines + '\n' + after;
-      newCursor  = start + 1 + lines.length;
-    } else if (type === 'hr') {
-      newContent = before + '\n\n---\n\n' + after;
-      newCursor  = start + 6;
-    }
-
-    setContentForm(f => ({ ...f, content: newContent }));
-    setTimeout(() => { ta.focus(); ta.setSelectionRange(newCursor, newCursor); }, 0);
-  }, [contentForm.content]);
-
-  const subjectData = subjects.find(s => s.id === selSubject);
 
   const handlePublishAsBlog = useCallback(async (subjectId, subjectName) => {
     if (!subjectId) return;
@@ -342,52 +134,21 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const res = await axios.post(`${API}/admin/cms/merge/${subjectId}`, {}, authHeaders(adminToken));
       const mergedMd = res.data?.merged_md || res.data?.content || '';
-
-      // Build slug dynamically from subject + class context returned by merge endpoint
       const toSlug = str => (str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
       const subjectSlug = res.data?.slug || toSlug(subjectName || subjectId);
-      const classSlug   = res.data?.class_slug || '';
-      // Compose: subject-class (e.g. "mathematics-sem-1", "political-science-sem-3")
-      const slugParts = [subjectSlug, classSlug].filter(Boolean);
-      const autoSeoSlug = slugParts.join('-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-
-      // Rich title: "Mathematics — Semester 1"
-      const className     = res.data?.class_name || '';
+      const classSlug = res.data?.class_slug || '';
+      const autoSeoSlug = [subjectSlug, classSlug].filter(Boolean).join('-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      const className = res.data?.class_name || '';
       const resolvedTitle = res.data?.title || subjectName || subjectId;
       const richTitle = [resolvedTitle, className].filter(Boolean).join(' — ');
-
-      // Blog Publisher prefill — full autoFlow handoff
       const autoKeyword = `${toSlug(resolvedTitle).replace(/-/g, ' ')}${className ? ` ${className.toLowerCase()}` : ' ahsec'} notes`;
-      const blogPrefill = {
-        subjectId,
-        subjectName:    resolvedTitle,
-        workingTitle:   richTitle,
-        primaryKeyword: autoKeyword,
-        draftContent:   mergedMd,
-        docId:          res.data?.doc_id || null,
-        seoSlug:        autoSeoSlug,
-        autoFlow:       true,
-        timestamp:      Date.now(),
-      };
-      localStorage.setItem('syrabit_blog_prefill', JSON.stringify(blogPrefill));
-      // Also keep CMS prefill for anyone still using the CMS tab directly
-      const cmsPrefill = {
-        subjectId,
-        title:            richTitle,
-        content:          mergedMd,
-        seo_slug:         autoSeoSlug || toSlug(subjectName || subjectId),
-        meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`,
-        timestamp:        Date.now(),
-      };
-      localStorage.setItem('syrabit_cms_prefill', JSON.stringify(cmsPrefill));
+      localStorage.setItem('syrabit_blog_prefill', JSON.stringify({ subjectId, subjectName: resolvedTitle, workingTitle: richTitle, primaryKeyword: autoKeyword, draftContent: mergedMd, docId: res.data?.doc_id || null, seoSlug: autoSeoSlug, autoFlow: true, timestamp: Date.now() }));
+      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({ subjectId, title: richTitle, content: mergedMd, seo_slug: autoSeoSlug || toSlug(subjectName || subjectId), meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`, timestamp: Date.now() }));
       setMergedSubjectIds(s => new Set([...s, subjectId]));
       toast.success(`"${subjectName}" merged — opening Blog Publisher`);
       onNavigate?.('blog');
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Merge failed');
-    } finally {
-      setPublishingBlog(false);
-    }
+    } catch (e) { toast.error(e.response?.data?.detail || 'Merge failed'); }
+    finally { setPublishingBlog(false); }
   }, [adminToken, onNavigate]);
 
   const handleBulkMerge = useCallback(async () => {
@@ -397,30 +158,19 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const res = await axios.post(`${API}/admin/cms/merge/${selSubject}`, {}, authHeaders(adminToken));
       const mergedMd = res.data?.merged_md || res.data?.content || '';
       const toSlug = str => (str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      const subjectSlug  = res.data?.slug       || toSlug(subjectData?.name || selSubject);
-      const classSlug    = res.data?.class_slug  || '';
-      const autoSeoSlug  = [subjectSlug, classSlug].filter(Boolean).join('-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      const subjectSlug = res.data?.slug || toSlug(subjectData?.name || selSubject);
+      const classSlug = res.data?.class_slug || '';
+      const autoSeoSlug = [subjectSlug, classSlug].filter(Boolean).join('-').replace(/-+/g, '-').replace(/^-|-$/g, '');
       const resolvedTitle = res.data?.title || subjectData?.name || selSubject;
-      const className    = res.data?.class_name || '';
-      const richTitle    = [resolvedTitle, className].filter(Boolean).join(' — ');
-      const prefill = {
-        subjectId: selSubject,
-        title:     richTitle,
-        content:   mergedMd,
-        seo_slug:  autoSeoSlug || toSlug(subjectData?.name || selSubject),
-        meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`,
-        timestamp: Date.now(),
-      };
-      localStorage.setItem('syrabit_cms_prefill', JSON.stringify(prefill));
+      const className = res.data?.class_name || '';
+      const richTitle = [resolvedTitle, className].filter(Boolean).join(' — ');
+      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({ subjectId: selSubject, title: richTitle, content: mergedMd, seo_slug: autoSeoSlug || toSlug(subjectData?.name || selSubject), meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`, timestamp: Date.now() }));
       setMergedSubjectIds(s => new Set([...s, selSubject]));
       setSelectedChapters(new Set());
       toast.success(`${selectedChapters.size} chapters merged — opening CMS Editor`);
       onNavigate?.('cms');
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Bulk merge failed');
-    } finally {
-      setBulkMerging(false);
-    }
+    } catch (e) { toast.error(e.response?.data?.detail || 'Bulk merge failed'); }
+    finally { setBulkMerging(false); }
   }, [adminToken, selSubject, subjectData, selectedChapters, onNavigate]);
 
   const handleGenerateSeoTopics = useCallback(async () => {
@@ -433,32 +183,17 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const d = res.data || {};
       setSeoTopicsGeneratedIds(prev => new Set([...prev, selSubject]));
       const topicCount = (d.created || 0) + (d.skipped || 0);
-      toast.success(
-        `${topicCount} SEO topics ready for "${subjectName}" — now run Full Pipeline to generate ${topicCount * 5}+ pages`,
-        {
-          id: 'seo-extract',
-          duration: 8000,
-          action: {
-            label: 'Run Full Pipeline →',
-            onClick: () => setShowPipeline(true),
-          },
-        }
-      );
+      toast.success(`${topicCount} SEO topics ready for "${subjectName}" — now run Full Pipeline to generate ${topicCount * 5}+ pages`, { id: 'seo-extract', duration: 8000, action: { label: 'Run Full Pipeline →', onClick: () => setShowPipeline(true) } });
       onNavigate?.('seomanager', { subjectId: selSubject, subjectName });
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || 'SEO topic extraction failed', { id: 'seo-extract' });
-    } finally {
-      setGeneratingSeoTopics(false);
-    }
+    } catch (e) { toast.error(e?.response?.data?.detail || 'SEO topic extraction failed', { id: 'seo-extract' }); }
+    finally { setGeneratingSeoTopics(false); }
   }, [adminToken, selSubject, subjects, onNavigate]);
 
-  // ── Content Gaps helpers ──────────────────────────────────────────────────
   const loadGapSubjects = useCallback(async () => {
     setLoadingGaps(true);
     try {
       const res = await axios.get(`${API}/content/subjects`);
-      const subs = res.data || [];
-      setGapSubjects(subs.filter(s => (s.chapter_count || 0) < 3));
+      setGapSubjects((res.data || []).filter(s => (s.chapter_count || 0) < 3));
     } catch { toast.error('Could not load subjects'); }
     finally { setLoadingGaps(false); }
   }, []);
@@ -468,38 +203,21 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     setGapGenStatus(prev => ({ ...prev, [s.id]: 'generating' }));
     try {
       const prompt = `Generate comprehensive educational notes for AssamBoard students on: ${s.name}.\nInclude: key concepts (with AssamBoard exam frequency), textbook definitions, worked examples, PYQ-style questions with marks, and 2 FAQ blocks.`;
-      const res = await axios.post(`${API}/admin/studio/parse`, {
-        raw_text: prompt, subject: s.name, chapter: 'Overview',
-      }, { withCredentials: true });
+      const res = await axios.post(`${API}/admin/studio/parse`, { raw_text: prompt, subject: s.name, chapter: 'Overview' }, { withCredentials: true });
       const parsed = res.data.blocks || [];
       if (!parsed.length) { setGapGenStatus(prev => ({ ...prev, [s.id]: 'failed' })); return; }
       const markdown = parsed.map(b => `## ${b.title}\n\n${b.content}`).join('\n\n---\n\n');
-      await axios.post(
-        `${API}/admin/content/chapters`,
-        {
-          subject_id:   s.id,
-          title:        `${s.name} — Overview`,
-          slug:         s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-overview',
-          content:      markdown,
-          content_type: 'notes',
-          order:        1,
-        },
-        { headers: adminToken && adminToken.split('.').length === 3 ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true }
-      );
+      await axios.post(`${API}/admin/content/chapters`, { subject_id: s.id, title: `${s.name} — Overview`, slug: s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-overview', content: markdown, content_type: 'notes', order: 1 }, { headers: adminToken && adminToken.split('.').length === 3 ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true });
       setGapGenStatus(prev => ({ ...prev, [s.id]: 'done' }));
       toast.success(`Auto-generated chapter for "${s.name}"`);
       loadGapSubjects();
-    } catch {
-      setGapGenStatus(prev => ({ ...prev, [s.id]: 'failed' }));
-      toast.error(`Auto-generate failed for "${s.name}"`);
-    } finally { setGapGenSubject(null); }
+    } catch { setGapGenStatus(prev => ({ ...prev, [s.id]: 'failed' })); toast.error(`Auto-generate failed for "${s.name}"`); }
+    finally { setGapGenSubject(null); }
   }, [adminToken, loadGapSubjects]);
 
   const handleMergeGapToCms = async (s) => {
     try {
-      await axios.post(`${API}/admin/cms/merge/${s.id}`, {},
-        { headers: adminToken && adminToken.split('.').length === 3 ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true }
-      );
+      await axios.post(`${API}/admin/cms/merge/${s.id}`, {}, { headers: adminToken && adminToken.split('.').length === 3 ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true });
       toast.success(`Merged "${s.name}" → CMS`);
       onNavigate?.('cms');
     } catch (e) { toast.error(e.response?.data?.detail || 'Merge failed'); }
@@ -510,198 +228,43 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     if (!selected.length) return;
     setBulkGapGenerating(true);
     setBulkGapProgress({ done: 0, total: selected.length });
-    const tasks = selected.map(s =>
-      handleAutoGenerateGap(s).then(() => setBulkGapProgress(p => ({ ...p, done: p.done + 1 })))
-    );
-    await Promise.allSettled(tasks);
+    await Promise.allSettled(selected.map(s => handleAutoGenerateGap(s).then(() => setBulkGapProgress(p => ({ ...p, done: p.done + 1 })))));
     setBulkGapGenerating(false);
     setBulkGapSelected(new Set());
     toast.success(`Bulk generation complete (${selected.length} subjects)`);
   };
 
-  // ── Auto-load gap subjects whenever subject view is active ───────────────
-  useEffect(() => {
-    if (!selSubject) return;
-    loadGapSubjects();
-  }, [selSubject, loadGapSubjects]);
-
-  // ── Auto-progress: when SEO topics generated, nudge toward pipeline ──────
-  useEffect(() => {
-    if (!selSubject || !seoTopicsGeneratedIds.has(selSubject)) return;
-    if (assetsGeneratedIds.has(selSubject)) return;
-    toast(`Topics ready — run "Auto-Generate Full Subject" to produce 300+ assets`, {
-      id: `auto-nudge-${selSubject}`,
-      duration: 5000,
-      action: { label: 'Run Now', onClick: () => setShowPipeline(true) },
-    });
-  }, [seoTopicsGeneratedIds, selSubject]);
-
-  // ── Auto-progress: when assets generated, nudge toward publish ───────────
-  useEffect(() => {
-    if (!selSubject || !assetsGeneratedIds.has(selSubject)) return;
-    toast.success(`Assets ready — click "Publish as Blog" to go live`, {
-      id: `publish-nudge-${selSubject}`,
-      duration: 6000,
-    });
-  }, [assetsGeneratedIds, selSubject]);
-
   const load = useCallback(async (bustCache = false) => {
     try {
       const nc = bustCache ? '?nocache=1' : '';
-      const [b, c, s, sub] = await Promise.all([
-        axios.get(`${API}/content/boards${nc}`),
-        axios.get(`${API}/content/classes${nc}`),
-        axios.get(`${API}/content/streams${nc}`),
-        axios.get(`${API}/content/subjects${nc}`),
-      ]);
-      setBoards(b.data || []);
-      setClasses(c.data || []);
-      setStreams(s.data || []);
-      setSubjects(sub.data || []);
+      const [b, c, s, sub] = await Promise.all([axios.get(`${API}/content/boards${nc}`), axios.get(`${API}/content/classes${nc}`), axios.get(`${API}/content/streams${nc}`), axios.get(`${API}/content/subjects${nc}`)]);
+      setBoards(b.data || []); setClasses(c.data || []); setStreams(s.data || []); setSubjects(sub.data || []);
     } catch { toast.error('Failed to load content data'); }
   }, []);
 
   useEffect(() => { load(true); }, [load]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await axios.get(`${API}/admin/content/cms-documents/merged-subject-ids`, authHeaders(adminToken));
-        const ids = new Set((res.data || []).filter(Boolean));
-        if (ids.size > 0) setMergedSubjectIds(prev => new Set([...prev, ...ids]));
-      } catch {}
-    })();
-  }, [adminToken]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await axios.get(`${API}/admin/content/cms-documents/seo-topics-subject-ids`, authHeaders(adminToken));
-        const ids = new Set((res.data || []).filter(Boolean));
-        if (ids.size > 0) setSeoTopicsGeneratedIds(prev => new Set([...prev, ...ids]));
-      } catch {}
-    })();
-  }, [adminToken]);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const res = await axios.get(`${API}/admin/content/cms-documents/assets-generated-subject-ids`, authHeaders(adminToken));
-        const ids = new Set((res.data || []).filter(Boolean));
-        if (ids.size > 0) setAssetsGeneratedIds(prev => new Set([...prev, ...ids]));
-      } catch {}
-    })();
-  }, [adminToken]);
-
-  // Read CMS → Editor handoff prefill on mount
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem('syrabit_editor_prefill');
-      if (!raw) return;
-      const pf = JSON.parse(raw);
-      if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) {
-        localStorage.removeItem('syrabit_editor_prefill');
-        return;
-      }
-      localStorage.removeItem('syrabit_editor_prefill');
-      setContentForm(f => ({
-        ...f,
-        title:   pf.title || f.title || '',
-        content: pf.content || f.content || '',
-      }));
-      setEditView('new-chapter');
-      toast.success(`Pre-filled from CMS Doc "${pf.title || 'Untitled'}" — select a subject and save`);
-    } catch {}
-  }, []);
-
-  // Pre-fill selectors from hub context (only if nothing selected yet and data is loaded)
-  useEffect(() => {
-    if (!hubContext?.subjectId || !subjects.length || selSubject) return;
-    const sub = subjects.find(s => s.id === hubContext.subjectId);
-    if (!sub) return;
-    setSelBoard(hubContext.boardId   || null);
-    setSelClass(hubContext.classId   || null);
-    setSelStream(hubContext.streamId || null);
-    setSelSubject(sub.id);
-  }, [hubContext?.subjectId, subjects]);
-
-  // Broadcast subject context back to hub when user picks a subject
-  useEffect(() => {
-    if (!onHubContext || !selSubject) return;
-    const sub  = subjects.find(s => s.id === selSubject);
-    const str  = streams.find(s => s.id === selStream);
-    const cls  = classes.find(c => c.id === selClass);
-    const brd  = boards.find(b => b.id === selBoard);
-    onHubContext({
-      boardId: selBoard || '', boardName: brd?.name || '',
-      classId: selClass || '', className: cls?.name || '',
-      streamId: selStream || '', streamName: str?.name || '',
-      subjectId: selSubject, subjectName: sub?.name || '',
-    });
-  }, [selSubject]);
+  useEffect(() => { if (!selSubject) return; loadGapSubjects(); }, [selSubject, loadGapSubjects]);
+  useEffect(() => { if (!selSubject || !seoTopicsGeneratedIds.has(selSubject) || assetsGeneratedIds.has(selSubject)) return; toast(`Topics ready — run "Auto-Generate Full Subject" to produce 300+ assets`, { id: `auto-nudge-${selSubject}`, duration: 5000, action: { label: 'Run Now', onClick: () => setShowPipeline(true) } }); }, [seoTopicsGeneratedIds, selSubject]);
+  useEffect(() => { if (!selSubject || !assetsGeneratedIds.has(selSubject)) return; toast.success(`Assets ready — click "Publish as Blog" to go live`, { id: `publish-nudge-${selSubject}`, duration: 6000 }); }, [assetsGeneratedIds, selSubject]);
+  useEffect(() => { (async () => { try { const res = await axios.get(`${API}/admin/content/cms-documents/merged-subject-ids`, authHeaders(adminToken)); const ids = new Set((res.data || []).filter(Boolean)); if (ids.size > 0) setMergedSubjectIds(prev => new Set([...prev, ...ids])); } catch {} })(); }, [adminToken]);
+  useEffect(() => { (async () => { try { const res = await axios.get(`${API}/admin/content/cms-documents/seo-topics-subject-ids`, authHeaders(adminToken)); const ids = new Set((res.data || []).filter(Boolean)); if (ids.size > 0) setSeoTopicsGeneratedIds(prev => new Set([...prev, ...ids])); } catch {} })(); }, [adminToken]);
+  useEffect(() => { (async () => { try { const res = await axios.get(`${API}/admin/content/cms-documents/assets-generated-subject-ids`, authHeaders(adminToken)); const ids = new Set((res.data || []).filter(Boolean)); if (ids.size > 0) setAssetsGeneratedIds(prev => new Set([...prev, ...ids])); } catch {} })(); }, [adminToken]);
+  useEffect(() => { try { const raw = localStorage.getItem('syrabit_editor_prefill'); if (!raw) return; const pf = JSON.parse(raw); if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) { localStorage.removeItem('syrabit_editor_prefill'); return; } localStorage.removeItem('syrabit_editor_prefill'); setContentForm(f => ({ ...f, title: pf.title || f.title || '', content: pf.content || f.content || '' })); setEditView('new-chapter'); toast.success(`Pre-filled from CMS Doc "${pf.title || 'Untitled'}" — select a subject and save`); } catch {} }, []);
+  useEffect(() => { if (!hubContext?.subjectId || !subjects.length || selSubject) return; const sub = subjects.find(s => s.id === hubContext.subjectId); if (!sub) return; setSelBoard(hubContext.boardId || null); setSelClass(hubContext.classId || null); setSelStream(hubContext.streamId || null); setSelSubject(sub.id); }, [hubContext?.subjectId, subjects]);
+  useEffect(() => { if (!onHubContext || !selSubject) return; const sub = subjects.find(s => s.id === selSubject); const str = streams.find(s => s.id === selStream); const cls = classes.find(c => c.id === selClass); const brd = boards.find(b => b.id === selBoard); onHubContext({ boardId: selBoard || '', boardName: brd?.name || '', classId: selClass || '', className: cls?.name || '', streamId: selStream || '', streamName: str?.name || '', subjectId: selSubject, subjectName: sub?.name || '' }); }, [selSubject]);
 
   const refreshChapters = (subjectId) => {
     axios.get(`${API}/admin/content/chapters/${subjectId}`, authHeaders(adminToken))
-      .then(r => {
-        setChapters(r.data || []);
-        axios.get(`${API}/admin/content/chapters/${subjectId}/coverage`, authHeaders(adminToken))
-          .then(covRes => {
-            const covMap = {};
-            (covRes.data?.chapters || []).forEach(c => { covMap[c.chapter_id] = c.coverage_score; });
-            setChapters(prev => prev.map(ch => ({ ...ch, coverage_score: covMap[ch.id] ?? ch.coverage_score ?? null })));
-          })
-          .catch(() => {});
-      })
+      .then(r => { setChapters(r.data || []); axios.get(`${API}/admin/content/chapters/${subjectId}/coverage`, authHeaders(adminToken)).then(covRes => { const covMap = {}; (covRes.data?.chapters || []).forEach(c => { covMap[c.chapter_id] = c.coverage_score; }); setChapters(prev => prev.map(ch => ({ ...ch, coverage_score: covMap[ch.id] ?? ch.coverage_score ?? null }))); }).catch(() => {}); })
       .catch(() => toast.error('Could not reload chapter list'));
   };
 
-  useEffect(() => {
-    if (selSubject) refreshChapters(selSubject);
-  }, [selSubject]);
+  useEffect(() => { if (selSubject) refreshChapters(selSubject); }, [selSubject]);
 
-  const filteredClasses = selBoard ? classes.filter(c => c.board_id === selBoard) : [];
-  const filteredStreams = selClass ? streams.filter(s => s.class_id === selClass) : [];
-  const filteredSubjects = selStream ? subjects.filter(s => s.stream_id === selStream) : subjects;
-
-  const boardData    = boards.find(b => b.id === selBoard);
-  const classData    = classes.find(c => c.id === selClass);
-  const streamData   = streams.find(s => s.id === selStream);
-  const isBoardDegree = isDegreeBoard(boardData?.name);
-  const streamNodeLabel = isBoardDegree ? 'Courses' : 'Streams';
-  const streamPlaceholder = isBoardDegree ? 'Course Type' : 'Stream';
-
-  const searchFiltered = searchQuery
-    ? subjects.filter(s => s.name?.toLowerCase().includes(searchQuery.toLowerCase()) || s.description?.toLowerCase().includes(searchQuery.toLowerCase()))
-    : null;
-
-  const handleCreateBoard = async (name, desc) => {
-    await axios.post(`${API}/admin/content/boards`, { name, description: desc }, authHeaders(adminToken));
-    await load(true);
-    toast.success('Board created');
-  };
-
-  const handleCreateClass = async (name, desc) => {
-    if (!selBoard) return toast.error('Select a board first');
-    await axios.post(`${API}/admin/content/classes`, { board_id: selBoard, name, description: desc }, authHeaders(adminToken));
-    await load(true);
-    toast.success('Class created');
-  };
-
-  const handleCreateStream = async (name, desc) => {
-    if (!selClass) return toast.error('Select a class first');
-    await axios.post(`${API}/admin/content/streams`, { class_id: selClass, name, description: desc }, authHeaders(adminToken));
-    await load(true);
-    toast.success('Stream created');
-  };
-
-  const handleCreateSubject = async (name, desc) => {
-    if (!selStream) return toast.error('Select a stream first');
-    await axios.post(`${API}/admin/content/subjects`, {
-      stream_id: selStream, name, description: desc, tags: '', status: 'published'
-    }, authHeaders(adminToken));
-    await load(true);
-    toast.success('Subject created');
-  };
+  const handleCreateBoard = async (name, desc) => { await axios.post(`${API}/admin/content/boards`, { name, description: desc }, authHeaders(adminToken)); await load(true); toast.success('Board created'); };
+  const handleCreateClass = async (name, desc) => { if (!selBoard) return toast.error('Select a board first'); await axios.post(`${API}/admin/content/classes`, { board_id: selBoard, name, description: desc }, authHeaders(adminToken)); await load(true); toast.success('Class created'); };
+  const handleCreateStream = async (name, desc) => { if (!selClass) return toast.error('Select a class first'); await axios.post(`${API}/admin/content/streams`, { class_id: selClass, name, description: desc }, authHeaders(adminToken)); await load(true); toast.success('Stream created'); };
+  const handleCreateSubject = async (name, desc) => { if (!selStream) return toast.error('Select a stream first'); await axios.post(`${API}/admin/content/subjects`, { stream_id: selStream, name, description: desc, tags: '', status: 'published' }, authHeaders(adminToken)); await load(true); toast.success('Subject created'); };
 
   const handleDelete = async (type, id) => {
     if (!confirm(`Delete this ${type}?`)) return;
@@ -711,86 +274,8 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       if (type === 'classe' && selClass === id) { setSelClass(null); setSelStream(null); setSelSubject(null); }
       if (type === 'stream' && selStream === id) { setSelStream(null); setSelSubject(null); }
       if (type === 'subject' && selSubject === id) setSelSubject(null);
-      await load(true);
-      toast.success(`${type} deleted`);
+      await load(true); toast.success(`${type} deleted`);
     } catch { toast.error(`Failed to delete ${type}`); }
-  };
-
-  const handleUploadThumbnail = async (file) => {
-    if (!file || !selSubject) return;
-    setThumbnailLoading(true);
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      const h = authHeaders(adminToken);
-      const res = await axios.post(
-        `${API}/admin/content/subjects/${selSubject}/thumbnail`,
-        form,
-        { ...h, headers: { ...h.headers, 'Content-Type': 'multipart/form-data' } },
-      );
-      toast.success('Thumbnail uploaded');
-      await load(true);
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to upload thumbnail');
-    } finally {
-      setThumbnailLoading(false);
-      if (thumbnailInputRef.current) thumbnailInputRef.current.value = '';
-    }
-  };
-
-  const handleGenerateAiThumbnails = useCallback(async (sourceFile = null) => {
-    if (!selSubject) return;
-    setAiThumbLoading(true);
-    setThumbVariants([]);
-    try {
-      const form = new FormData();
-      form.append('subject_id', selSubject);
-      if (sourceFile) form.append('file', sourceFile);
-      const h = authHeaders(adminToken);
-      const res = await axios.post(
-        `${API}/admin/thumbnail/generate`,
-        form,
-        { ...h, headers: { ...h.headers, 'Content-Type': 'multipart/form-data' } },
-      );
-      setThumbVariants(res.data.variants || []);
-      setThumbAnalysis(res.data.analysis || null);
-      setSelectedThumbVariant(res.data.auto_selected ?? 0);
-      if (res.data.original_url) await load(true);
-      toast.success('AI variants generated — pick your favourite!');
-    } catch (err) {
-      toast.error(err?.response?.data?.detail || 'AI thumbnail generation failed');
-    } finally {
-      setAiThumbLoading(false);
-    }
-  }, [selSubject, adminToken]);
-
-  const handleApplyVariant = useCallback(async (variantIndex) => {
-    if (!selSubject || variantIndex == null) return;
-    try {
-      await axios.post(
-        `${API}/admin/thumbnail/apply`,
-        { subject_id: selSubject, variant_index: variantIndex },
-        authHeaders(adminToken),
-      );
-      await load(true);
-      toast.success('Variant applied as thumbnail!');
-    } catch (err) {
-      log.error('Apply thumbnail variant failed', { error: err.message, status: err.response?.status, subjectId: selSubject });
-      toast.error('Failed to apply variant');
-    }
-  }, [selSubject, adminToken]);
-
-  const handleClearThumbnail = async () => {
-    if (!selSubject) return;
-    try {
-      await axios.patch(
-        `${API}/admin/content/subjects/${selSubject}`,
-        { thumbnail_url: '' },
-        authHeaders(adminToken),
-      );
-      toast.success('Thumbnail removed');
-      await load(true);
-    } catch { toast.error('Failed to clear thumbnail'); }
   };
 
   const handleCreateChapter = async () => {
@@ -799,11 +284,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const slug = contentForm.slug || autoSlug(contentForm.title);
       await axios.post(`${API}/admin/content/chapters`, { subject_id: selSubject, title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, status: 'published' }, authHeaders(adminToken));
-      toast.success('Chapter created');
-      setEditView(null);
-      setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1 });
-      setChapterStats(null);
-      refreshChapters(selSubject);
+      toast.success('Chapter created'); setEditView(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1 }); setChapterStats(null); refreshChapters(selSubject);
     } catch { toast.error('Failed to create chapter'); }
     finally { setSaving(false); }
   };
@@ -814,72 +295,40 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const slug = contentForm.slug || autoSlug(contentForm.title);
       await axios.patch(`${API}/admin/content/chapters/${editTarget.id}`, { title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order }, authHeaders(adminToken));
-      toast.success('Chapter updated');
-      setEditView(null); setEditTarget(null);
-      setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1 });
-      setChapterStats(null);
-      refreshChapters(selSubject);
+      toast.success('Chapter updated'); setEditView(null); setEditTarget(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1 }); setChapterStats(null); refreshChapters(selSubject);
     } catch { toast.error('Failed to update'); }
     finally { setSaving(false); }
   };
 
-  const handleDeleteChapter = async (id) => {
-    if (!confirm('Delete this chapter?')) return;
-    try {
-      await axios.delete(`${API}/admin/content/chapters/${id}`, authHeaders(adminToken));
-      setChapters(p => p.filter(c => c.id !== id));
-      toast.success('Chapter deleted');
-    } catch { toast.error('Failed to delete'); }
-  };
+  const handleDeleteChapter = async (id) => { if (!confirm('Delete this chapter?')) return; try { await axios.delete(`${API}/admin/content/chapters/${id}`, authHeaders(adminToken)); setChapters(p => p.filter(c => c.id !== id)); toast.success('Chapter deleted'); } catch { toast.error('Failed to delete'); } };
 
   const handleGenerateNotes = async (chapterId, chapterTitle) => {
     setGeneratingNotes(prev => new Set([...prev, chapterId]));
     try {
       const res = await axios.post(`${API}/admin/content/chapters/${chapterId}/generate-notes`, {}, authHeaders(adminToken));
       const generated = res.data?.content;
-      const wordCount = res.data?.word_count;
       if (generated) {
-        setChapters(prev => prev.map(ch => ch.id === chapterId
-          ? { ...ch, content: generated, content_type: 'notes', notes_generated: true, _word_count: wordCount }
-          : ch));
-        toast.success(`Notes generated for "${chapterTitle}"${wordCount ? ` — ${wordCount.toLocaleString()} words` : ''}`, {
-          action: autoAgentic ? undefined : { label: 'Run Agentic ⚡', onClick: () => setShowAgenticCreator(true) },
-        });
+        setChapters(prev => prev.map(ch => ch.id === chapterId ? { ...ch, content: generated, content_type: 'notes', notes_generated: true, _word_count: res.data?.word_count } : ch));
+        toast.success(`Notes generated for "${chapterTitle}"${res.data?.word_count ? ` — ${res.data.word_count.toLocaleString()} words` : ''}`, { action: autoAgentic ? undefined : { label: 'Run Agentic ⚡', onClick: () => setShowAgenticCreator(true) } });
         if (autoAgentic) setShowAgenticCreator(true);
       }
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || `Failed to generate notes for "${chapterTitle}"`);
-    } finally {
-      setGeneratingNotes(prev => { const next = new Set(prev); next.delete(chapterId); return next; });
-    }
+    } catch (e) { toast.error(e?.response?.data?.detail || `Failed to generate notes for "${chapterTitle}"`); }
+    finally { setGeneratingNotes(prev => { const next = new Set(prev); next.delete(chapterId); return next; }); }
   };
 
   const handleGenerateAllNotes = async () => {
     if (!selSubject) return;
     const subjectName = subjects.find(s => s.id === selSubject)?.name || selSubject;
-    const skipMsg = allChaptersHaveNotes ? ' — already-complete chapters will be skipped' : '';
-    if (!confirm(`Generate AI notes for all ${chapters.length} chapters in "${subjectName}"${skipMsg}? This may take a moment.`)) return;
+    if (!confirm(`Generate AI notes for all ${chapters.length} chapters in "${subjectName}"? This may take a moment.`)) return;
     setBulkGenerating(true);
     try {
-      const res = await axios.post(
-        `${API}/admin/subjects/${selSubject}/generate-notes-bulk`,
-        { skip_existing: allChaptersHaveNotes },
-        authHeaders(adminToken)
-      );
-      const data = res.data;
-      const ok = data?.generated || 0;
-      const skipped = data?.skipped || 0;
-      const msg = skipped > 0
-        ? `Generated ${ok} chapters · ${skipped} already had notes (skipped)`
-        : `Generated notes for ${ok} of ${data?.total || chapters.length} chapters`;
-      toast.success(msg);
+      const res = await axios.post(`${API}/admin/subjects/${selSubject}/generate-notes-bulk`, { skip_existing: allChaptersHaveNotes }, authHeaders(adminToken));
+      const ok = res.data?.generated || 0; const skipped = res.data?.skipped || 0;
+      toast.success(skipped > 0 ? `Generated ${ok} chapters · ${skipped} already had notes (skipped)` : `Generated notes for ${ok} of ${res.data?.total || chapters.length} chapters`);
       const freshRes = await axios.get(`${API}/content/chapters?subject_id=${selSubject}`, authHeaders(adminToken));
       if (freshRes.data?.chapters) setChapters(freshRes.data.chapters);
-    } catch (e) {
-      toast.error(e?.response?.data?.detail || 'Bulk note generation failed');
-    } finally {
-      setBulkGenerating(false);
-    }
+    } catch (e) { toast.error(e?.response?.data?.detail || 'Bulk note generation failed'); }
+    finally { setBulkGenerating(false); }
   };
 
   const breadcrumb = [];
@@ -888,966 +337,160 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   if (selStream) breadcrumb.push({ label: streamData?.name || selStream, onClick: () => { setSelSubject(null); setEditView(null); } });
   if (selSubject) breadcrumb.push({ label: subjectData?.name || selSubject, onClick: () => { setEditView(null); } });
 
-  const allChaptersHaveNotes = chapters.length > 0 && chapters.every(
-    ch => ch.notes_generated || (ch.content && ch.content.trim().length > 100)
-  );
-
   return (
     <div className="h-full flex flex-col bg-[#06060e]">
       <>
+        <div className="h-14 border-b border-white/10 flex items-center justify-between px-6" style={{ background: 'rgba(255,255,255,0.02)' }}>
+          <div className="flex items-center gap-2 min-w-0">
+            {breadcrumb.length > 0 && (
+              <div className="flex items-center gap-1 text-sm text-white/40 min-w-0 overflow-hidden">
+                {breadcrumb.map((b, i) => (
+                  <span key={i} className="flex items-center gap-1 min-w-0">
+                    <ChevronRight size={12} className="flex-shrink-0" />
+                    <button onClick={b.onClick} className="hover:text-violet-400 truncate max-w-[120px] transition-colors">{b.label}</button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="relative flex-shrink-0 w-64">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
+            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search all subjects..." className="w-full h-9 pl-8 pr-3 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" data-testid="search-subjects" />
+          </div>
+        </div>
 
-          <div className="h-14 border-b border-white/10 flex items-center justify-between px-6" style={{ background: 'rgba(255,255,255,0.02)' }}>
-            <div className="flex items-center gap-2 min-w-0">
-              {breadcrumb.length > 0 && (
-                <div className="flex items-center gap-1 text-sm text-white/40 min-w-0 overflow-hidden">
-                  {breadcrumb.map((b, i) => (
-                    <span key={i} className="flex items-center gap-1 min-w-0">
-                      <ChevronRight size={12} className="flex-shrink-0" />
-                      <button onClick={b.onClick} className="hover:text-violet-400 truncate max-w-[120px] transition-colors">{b.label}</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="relative flex-shrink-0 w-64">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-              <input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search all subjects..."
-                className="w-full h-9 pl-8 pr-3 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500"
-                data-testid="search-subjects"
-              />
+        {searchQuery && searchFiltered ? (
+          <div className="flex-1 overflow-y-auto p-6">
+            <p className="text-sm text-white/40 mb-4">{searchFiltered.length} subject(s) matching "{searchQuery}"</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {searchFiltered.map(s => (
+                <button key={s.id} onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
+                  className="p-4 rounded-xl border border-white/10 hover:border-violet-500/30 bg-white/[0.02] text-left transition-colors">
+                  <p className="text-sm font-medium text-white">{s.icon} {s.name}</p>
+                  <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
+                </button>
+              ))}
+              {searchFiltered.length === 0 && <p className="text-white/30 text-sm col-span-3">No subjects found</p>}
             </div>
           </div>
-
-          {searchQuery && searchFiltered ? (
-            <div className="flex-1 overflow-y-auto p-6">
-              <p className="text-sm text-white/40 mb-4">{searchFiltered.length} subject(s) matching "{searchQuery}"</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {searchFiltered.map(s => (
-                  <button key={s.id} onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
-                    className="p-4 rounded-xl border border-white/10 hover:border-violet-500/30 bg-white/[0.02] text-left transition-colors"
-                  >
-                    <p className="text-sm font-medium text-white">{s.icon} {s.name}</p>
-                    <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
-                    <p className="text-[10px] text-white/30 mt-2">{s.streamName || s.className || ''}</p>
-                  </button>
-                ))}
-                {searchFiltered.length === 0 && <p className="text-white/30 text-sm col-span-3">No subjects found</p>}
-              </div>
-            </div>
-          ) : editView === 'new-chapter' || editView === 'edit-chapter' ? (
-            <div className="flex-1 flex flex-col overflow-hidden">
-              <div className="px-8 pt-7 pb-4 flex-shrink-0">
-                <button onClick={() => { setEditView(null); setEditTarget(null); setChapterStats(null); }} className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white mb-5"><ArrowLeft size={16} /> Back</button>
-                <h3 className="text-2xl font-bold text-white mb-0.5">{editView === 'edit-chapter' ? 'Edit Chapter' : 'Create Chapter'}</h3>
-                <p className="text-white/50 text-sm">for {subjectData?.name}</p>
-              </div>
-              <div className="flex-1 flex flex-col min-h-0 px-8 pb-8 gap-4">
-                <div className="flex-shrink-0 grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-sm text-white/60 block mb-1.5">Title *</label>
-                    <input value={contentForm.title} onChange={(e) => { const title = e.target.value; setContentForm(f => ({ ...f, title, slug: f.slug === autoSlug(f.title) || !f.slug ? autoSlug(title) : f.slug })); }} placeholder="Chapter title" className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
-                  </div>
-                  <div>
-                    <label className="text-sm text-white/60 block mb-1.5">URL Slug</label>
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center flex-1 h-11 rounded-xl bg-white/5 border border-white/10 overflow-hidden">
-                        <span className="px-3 text-xs text-white/30 flex-shrink-0"><Link2 size={12} /></span>
-                        <input value={contentForm.slug} onChange={(e) => setContentForm({ ...contentForm, slug: e.target.value })} placeholder="auto-generated-slug" className="flex-1 h-full text-sm text-white bg-transparent outline-none font-mono pr-3" />
-                      </div>
-                    </div>
+        ) : editView === 'new-chapter' || editView === 'edit-chapter' ? (
+          <ChapterEditForm
+            editView={editView} editTarget={editTarget} contentForm={contentForm} setContentForm={setContentForm}
+            subjectData={subjectData} saving={saving} chapterStats={chapterStats}
+            onSave={editView === 'edit-chapter' ? handleUpdateChapter : handleCreateChapter}
+            onCancel={() => { setEditView(null); setEditTarget(null); setChapterStats(null); }}
+            onFileAttach={handleFileAttach} uploading={uploading}
+            onAiParse={handleAiParse} aiParsing={aiParsing} onLoadChapterStats={loadChapterStats}
+            editorRef={editorRef} editorKey={editorKey} setEditorKey={setEditorKey}
+            showPreview={showPreview} setShowPreview={setShowPreview}
+            fileInputRef={fileInputRef}
+          />
+        ) : (
+          <div className="flex-1 flex overflow-hidden">
+            <HierarchyTree
+              boards={boards} filteredClasses={filteredClasses} filteredStreams={filteredStreams}
+              selBoard={selBoard} setSelBoard={setSelBoard} selClass={selClass} setSelClass={setSelClass}
+              selStream={selStream} setSelStream={setSelStream} setSelSubject={setSelSubject} setEditView={setEditView}
+              streamNodeLabel={streamNodeLabel} streamPlaceholder={streamPlaceholder}
+              onDelete={handleDelete} onCreateBoard={handleCreateBoard} onCreateClass={handleCreateClass} onCreateStream={handleCreateStream}
+            />
+            <div className="flex-1 overflow-y-auto">
+              {!selStream && !selSubject ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center max-w-md">
+                    <Layers size={56} className="mx-auto text-white/15 mb-4" />
+                    <h3 className="text-xl font-bold text-white mb-2">All-in-One Content Manager</h3>
+                    <p className="text-white/50 text-sm mb-2">Navigate the tree on the left: Board → Class → {streamPlaceholder} → Subject</p>
+                    <p className="text-white/30 text-xs">Or use the search bar to find any subject</p>
                   </div>
                 </div>
-                <div className="flex-shrink-0 grid grid-cols-1 lg:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-sm text-white/60 block mb-1.5">Content Type</label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {CONTENT_TYPES.map(ct => (
-                        <button
-                          key={ct.value}
-                          onClick={() => setContentForm(f => ({ ...f, content_type: ct.value }))}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${contentForm.content_type === ct.value ? 'border-violet-500 bg-violet-500/20 text-violet-300' : 'border-white/10 bg-white/5 text-white/50 hover:text-white hover:border-white/20'}`}
-                        >
-                          {ct.label}
-                        </button>
-                      ))}
-                    </div>
+              ) : selStream && !selSubject ? (
+                <div className="p-6 max-w-4xl mx-auto space-y-4">
+                  <div className="mb-2">
+                    <h3 className="text-xl font-bold text-white">{streamData?.icon} {streamData?.name}</h3>
+                    <p className="text-sm text-white/40">{streamData?.description}</p>
                   </div>
-                  <div>
-                    <label className="text-sm text-white/60 block mb-1.5">Description</label>
-                    <input value={contentForm.description} onChange={(e) => setContentForm({ ...contentForm, description: e.target.value })} placeholder="Brief description..." className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
-                  </div>
-                </div>
-
-                {chapterStats && (
-                  <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs flex-wrap">
-                    <div className="flex items-center gap-1.5 text-white/60">
-                      <BarChart3 size={12} className="text-violet-400" />
-                      <span>{chapterStats.chunk_count} chunks</span>
-                    </div>
-                    <div className="text-white/40">{chapterStats.content_length?.toLocaleString()} chars</div>
-                    <div className={`${chapterStats.has_slug ? 'text-emerald-400' : 'text-amber-400'}`}>{chapterStats.has_slug ? 'Slug ✓' : 'No slug'}</div>
-                    {(chapterStats.pyq_count || 0) > 0 && (
-                      <div className="flex items-center gap-1 text-amber-400">
-                        <FileText size={11} />{chapterStats.pyq_count} Qs
-                        {chapterStats.mark_wise_counts && Object.keys(chapterStats.mark_wise_counts).length > 0 && (
-                          <span className="text-white/25 text-[9px]">
-                            ({Object.entries(chapterStats.mark_wise_counts).map(([m, c]) => `${c}×${m}M`).join(' ')})
-                          </span>
-                        )}
+                  <p className="text-sm font-semibold text-white/60">Subjects ({filteredSubjects.length})</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {filteredSubjects.map(s => (
+                      <div key={s.id} className="p-4 rounded-xl border border-white/10 hover:border-violet-500/30 bg-white/[0.02] text-left transition-colors group cursor-pointer" onClick={() => setSelSubject(s.id)}>
+                        <div className="flex items-center justify-between">
+                          <p className="text-sm font-medium text-white">{s.icon || '📚'} {s.name}</p>
+                          <div className="flex items-center gap-1">
+                            {mergedSubjectIds.has(s.id) && <CheckCircle size={11} className="text-violet-400" />}
+                            <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={12} /></button>
+                          </div>
+                        </div>
+                        <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
+                        <div className="flex items-center justify-between mt-2">
+                          <p className="text-[10px] text-white/25">{s.chapter_count || 0} chapters</p>
+                          <button onClick={(e) => { e.stopPropagation(); handlePublishAsBlog(s.id, s.name); }} disabled={publishingBlog}
+                            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium disabled:opacity-40 transition-all hover:brightness-110"
+                            style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.30),rgba(79,70,229,0.30))', color: '#c4b0f0' }}>
+                            {publishingBlog ? <Loader2 size={10} className="animate-spin" /> : <Globe size={10} />} Publish
+                          </button>
+                        </div>
                       </div>
-                    )}
-                    {(chapterStats.flashcard_count || 0) > 0 && (
-                      <div className="flex items-center gap-1 text-emerald-400"><Layers size={11} />{chapterStats.flashcard_count} cards</div>
-                    )}
-                    {(chapterStats.geo_blog_count || 0) > 0 && (
-                      <div className="flex items-center gap-1 text-blue-400"><Globe size={11} />{chapterStats.geo_blog_count} blogs</div>
-                    )}
-                    {(chapterStats.attached_files || []).length > 0 && (
-                      <div className="flex items-center gap-1 text-blue-400"><Paperclip size={11} />{chapterStats.attached_files.length} files</div>
-                    )}
-                    <button onClick={() => loadChapterStats(editTarget?.id)} className="ml-auto text-white/30 hover:text-white p-1"><RefreshCw size={11} /></button>
-                  </div>
-                )}
-                <div className="flex-1 flex flex-col min-h-0">
-                  {/* Template Library row */}
-                  <div className="flex items-center gap-1.5 mb-2 flex-shrink-0 flex-wrap">
-                    <LayoutTemplate size={11} className="text-white/25 flex-shrink-0" />
-                    <span className="text-[10px] text-white/30 flex-shrink-0 mr-0.5">Insert:</span>
-                    {TEMPLATES.map(t => (
-                      <button
-                        key={t.label}
-                        onClick={() => {
-                          const current = editorRef.current?.getMarkdown?.() ?? contentForm.content;
-                          setContentForm(f => ({ ...f, content: current + t.shortcode }));
-                          setEditorKey(k => k + 1);
-                        }}
-                        className="px-2 py-0.5 rounded text-[10px] border border-white/10 bg-white/5 text-white/40 hover:text-violet-300 hover:border-violet-500/40 transition-colors"
-                      >
-                        {t.label}
-                      </button>
                     ))}
-                    <div className="ml-auto flex items-center gap-2">
-                      <span className="text-[10px] text-white/25">{contentForm.content.length}ch</span>
-                      <button
-                        onClick={() => setShowPreview(p => !p)}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium border transition-colors ${
-                          showPreview
-                            ? 'bg-violet-600/25 text-violet-300 border-violet-500/30'
-                            : 'bg-white/5 text-white/40 border-white/10 hover:text-white'
-                        }`}
-                      >
-                        <Eye size={10} />
-                        {showPreview ? 'Hide Blog Preview' : 'Blog Preview'}
-                      </button>
+                  </div>
+                  <InlineCreator placeholder="Subject" onCreate={handleCreateSubject} icon={Layers} color="violet" />
+                </div>
+              ) : selSubject ? (
+                <div className="p-6 max-w-5xl mx-auto space-y-5">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h3 className="text-xl font-bold text-white">{subjectData?.icon} {subjectData?.name}</h3>
+                      <p className="text-sm text-white/40">{subjectData?.description}</p>
                     </div>
                   </div>
-
-                  {/* MDXEditor + optional split blog preview */}
-                  <div className={`flex-1 min-h-0 flex gap-3 ${showPreview ? '' : 'flex-col'}`}>
-                    <div
-                      className="flex-1 min-h-0 rounded-xl overflow-hidden border border-black/10 cms-light-editor-wrapper flex flex-col"
-                      data-color-mode="light"
-                      style={{ backgroundColor: '#ffffff', color: '#1a1a1a' }}
-                    >
-                      <MDXEditor
-                        ref={editorRef}
-                        key={`${editTarget?.id ?? '__new__'}-${editorKey}`}
-                        markdown={contentForm.content}
-                        onChange={md => setContentForm(f => ({ ...f, content: md }))}
-                        className="mdx-editor-light h-full"
-                        contentEditableClassName="cms-editor-content"
-                        plugins={[
-                          headingsPlugin(),
-                          listsPlugin(),
-                          quotePlugin(),
-                          thematicBreakPlugin(),
-                          markdownShortcutPlugin(),
-                          codeBlockPlugin({ defaultCodeBlockLanguage: 'text' }),
-                          codeMirrorPlugin({
-                            codeBlockLanguages: {
-                              js: 'JavaScript', ts: 'TypeScript', python: 'Python',
-                              text: 'Text', md: 'Markdown', html: 'HTML', css: 'CSS',
-                            },
-                          }),
-                          tablePlugin(),
-                          linkPlugin(),
-                          diffSourcePlugin({ viewMode: 'rich-text', diffMarkdown: '' }),
-                          toolbarPlugin({
-                            toolbarContents: () => (
-                              <DiffSourceToggleWrapper>
-                                <UndoRedo />
-                                <Separator />
-                                <BoldItalicUnderlineToggles />
-                                <CodeToggle />
-                                <Separator />
-                                <ListsToggle />
-                                <Separator />
-                                <BlockTypeSelect />
-                                <Separator />
-                                <CreateLink />
-                                <InsertTable />
-                                <InsertThematicBreak />
-                                <InsertCodeBlock />
-                                <Separator />
-                                <button
-                                  type="button"
-                                  onClick={handleAiParse}
-                                  disabled={aiParsing}
-                                  style={{
-                                    display: 'flex', alignItems: 'center', gap: 4,
-                                    padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
-                                    color: '#a78bfa', background: 'rgba(167,139,250,0.10)',
-                                    border: '1px solid rgba(167,139,250,0.20)',
-                                    cursor: aiParsing ? 'not-allowed' : 'pointer',
-                                    opacity: aiParsing ? 0.5 : 1,
-                                  }}
-                                >
-                                  {aiParsing
-                                    ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
-                                    : <Sparkles size={12} />}
-                                  AI
-                                </button>
-                              </DiffSourceToggleWrapper>
-                            ),
-                          }),
-                        ]}
-                      />
-                    </div>
-                    {showPreview && (
-                      <div className="flex-1 min-h-0 overflow-y-auto rounded-xl" style={{ background: '#f0f0f1' }}>
-                        <div style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '15px', lineHeight: '1.75', padding: '1.5rem 2rem', minHeight: '100%' }}>
-                          {contentForm.content.trim() ? (
-                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                              {contentForm.content}
-                            </ReactMarkdown>
-                          ) : (
-                            <p style={{ color: '#aaa', fontStyle: 'italic' }}>Blog preview appears here as you type…</p>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Attach file — edit mode only */}
-                  {editView === 'edit-chapter' && editTarget?.id && (
-                    <div className="flex items-center gap-3 mt-2 flex-shrink-0">
-                      <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md" className="hidden" onChange={() => handleFileAttach(editTarget.id)} />
-                      <button
-                        onClick={() => fileInputRef.current?.click()}
-                        disabled={uploading}
-                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors text-xs font-medium disabled:opacity-40"
-                      >
-                        {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
-                        Attach File (PDF / TXT / MD)
-                      </button>
-                      {chapterStats && (
-                        <span className="text-[11px] text-white/30">{chapterStats.chunk_count} chunks · {chapterStats.content_length?.toLocaleString()} chars</span>
-                      )}
-                    </div>
-                  )}
+                  <WorkflowTracker
+                    chapters={chapters} selSubject={selSubject} allChaptersHaveNotes={allChaptersHaveNotes}
+                    seoTopicsGeneratedIds={seoTopicsGeneratedIds} assetsGeneratedIds={assetsGeneratedIds} mergedSubjectIds={mergedSubjectIds}
+                    generatingSeoTopics={generatingSeoTopics} publishingBlog={publishingBlog}
+                    onGenerateSeoTopics={handleGenerateSeoTopics} onShowPipeline={() => setShowPipeline(true)} onPublishAsBlog={handlePublishAsBlog}
+                    subjectData={subjectData} onNavigate={onNavigate}
+                  />
+                  <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => load(true)} />
+                  <ChapterList
+                    chapters={chapters} chapterAssets={chapterAssets} selectedChapters={selectedChapters} setSelectedChapters={setSelectedChapters}
+                    generatingNotes={generatingNotes} bulkGenerating={bulkGenerating}
+                    onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
+                    onViewChapter={(ch) => setViewerItem(ch)}
+                    onEditChapter={(ch) => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1 }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
+                    showAgenticCreator={showAgenticCreator} setShowAgenticCreator={setShowAgenticCreator}
+                    autoAgentic={autoAgentic} setAutoAgentic={setAutoAgentic}
+                    onBulkMerge={handleBulkMerge} bulkMerging={bulkMerging}
+                    selSubject={selSubject} subjectData={subjectData}
+                    onCreateNew={() => { setEditView('new-chapter'); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: chapters.length + 1 }); setChapterStats(null); }}
+                  />
+                  <ContentGapsPanel
+                    showGapPanel={showGapPanel} setShowGapPanel={setShowGapPanel}
+                    gapSubjects={gapSubjects} loadGapSubjects={loadGapSubjects} loadingGaps={loadingGaps}
+                    gapGenStatus={gapGenStatus} gapGenSubject={gapGenSubject}
+                    bulkGapSelected={bulkGapSelected} setBulkGapSelected={setBulkGapSelected}
+                    bulkGapGenerating={bulkGapGenerating} bulkGapProgress={bulkGapProgress}
+                    onAutoGenerateGap={handleAutoGenerateGap} onMergeGapToCms={handleMergeGapToCms} onBulkGapAutoGen={handleBulkGapAutoGen}
+                  />
                 </div>
-                <div className="flex gap-3 flex-shrink-0">
-                  <button onClick={() => { setEditView(null); setEditTarget(null); }} className="flex-1 h-12 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium">Cancel</button>
-                  <button
-                    onClick={editView === 'edit-chapter' ? handleUpdateChapter : handleCreateChapter}
-                    disabled={saving || !contentForm.title}
-                    className="flex-1 h-12 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-semibold disabled:opacity-40 flex items-center justify-center gap-2"
-                  >
-                    {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                    {saving ? 'Saving...' : editView === 'edit-chapter' ? 'Update Chapter' : 'Create Chapter'}
-                  </button>
-                </div>
-              </div>
+              ) : null}
             </div>
-          ) : (
-            <div className="flex-1 flex overflow-hidden">
-              {/* Left panel — hierarchy tree */}
-              <div className="w-72 border-r border-white/10 flex flex-col overflow-y-auto" style={{ background: 'rgba(255,255,255,0.015)' }}>
-                <div className="p-3 space-y-1">
-                  <p className="text-[10px] uppercase tracking-wider text-white/30 px-2 mb-2 font-semibold">Boards</p>
-                  {boards.map(b => (
-                    <div key={b.id}>
-                      <div className="flex items-center group">
-                        <button
-                          onClick={() => { setSelBoard(selBoard === b.id ? null : b.id); setSelClass(null); setSelStream(null); setSelSubject(null); }}
-                          className={`flex-1 flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${selBoard === b.id ? 'bg-violet-500/15 text-violet-300' : 'text-white/70 hover:bg-white/5'}`}
-                        >
-                          {selBoard === b.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                          <Building2 size={14} />
-                          <span className="truncate">{b.name}</span>
-                        </button>
-                        <button onClick={() => handleDelete('board', b.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={12} /></button>
-                      </div>
-
-                      {selBoard === b.id && (
-                        <div className="ml-5 mt-1 space-y-1 border-l border-white/5 pl-3">
-                          <p className="text-[10px] uppercase tracking-wider text-white/25 px-1 font-semibold">Classes</p>
-                          {filteredClasses.map(c => (
-                            <div key={c.id}>
-                              <div className="flex items-center group">
-                                <button
-                                  onClick={() => { setSelClass(selClass === c.id ? null : c.id); setSelStream(null); setSelSubject(null); }}
-                                  className={`flex-1 flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${selClass === c.id ? 'bg-blue-500/15 text-blue-300' : 'text-white/60 hover:bg-white/5'}`}
-                                >
-                                  {selClass === c.id ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                                  <GraduationCap size={12} />
-                                  <span className="truncate">{c.name}</span>
-                                </button>
-                                <button onClick={() => handleDelete('classe', c.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={10} /></button>
-                              </div>
-
-                              {selClass === c.id && (
-                                <div className="ml-4 mt-1 space-y-1 border-l border-white/5 pl-3">
-                                  <p className="text-[10px] uppercase tracking-wider text-white/25 px-1 font-semibold">{streamNodeLabel}</p>
-                                  {filteredStreams.map(st => (
-                                    <div key={st.id} className="flex items-center group">
-                                      <button
-                                        onClick={() => { setSelStream(selStream === st.id ? null : st.id); setSelSubject(null); }}
-                                        className={`flex-1 flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs transition-colors ${selStream === st.id ? 'bg-emerald-500/15 text-emerald-300' : 'text-white/50 hover:bg-white/5'}`}
-                                      >
-                                        <GitBranch size={11} />
-                                        <span className="truncate">{st.icon || ''} {st.name}</span>
-                                      </button>
-                                      <button onClick={() => handleDelete('stream', st.id)} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={10} /></button>
-                                    </div>
-                                  ))}
-                                  <InlineCreator placeholder={streamPlaceholder} onCreate={handleCreateStream} icon={GitBranch} color="emerald" />
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                          <InlineCreator placeholder="Class" onCreate={handleCreateClass} icon={GraduationCap} color="blue" />
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  <InlineCreator placeholder="Board" onCreate={handleCreateBoard} icon={Building2} color="violet" />
-                </div>
-              </div>
-
-              {/* Right panel */}
-              <div className="flex-1 overflow-y-auto">
-                {!selStream && !selSubject ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center max-w-md">
-                      <Layers size={56} className="mx-auto text-white/15 mb-4" />
-                      <h3 className="text-xl font-bold text-white mb-2">All-in-One Content Manager</h3>
-                      <p className="text-white/50 text-sm mb-2">Navigate the tree on the left: Board → Class → {streamPlaceholder} → Subject</p>
-                      <p className="text-white/30 text-xs">Or use the search bar to find any subject</p>
-                    </div>
-                  </div>
-                ) : selStream && !selSubject ? (
-                  <div className="p-6 max-w-4xl mx-auto space-y-4">
-                    <div className="mb-2">
-                      <h3 className="text-xl font-bold text-white">{streamData?.icon} {streamData?.name}</h3>
-                      <p className="text-sm text-white/40">{streamData?.description}</p>
-                    </div>
-                    <p className="text-sm font-semibold text-white/60">Subjects ({filteredSubjects.length})</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {filteredSubjects.map(s => (
-                        <div key={s.id} className="p-4 rounded-xl border border-white/10 hover:border-violet-500/30 bg-white/[0.02] text-left transition-colors group cursor-pointer" onClick={() => setSelSubject(s.id)}>
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm font-medium text-white">{s.icon || '📚'} {s.name}</p>
-                            <div className="flex items-center gap-1">
-                              {mergedSubjectIds.has(s.id) && <CheckCircle size={11} className="text-violet-400" />}
-                              <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={12} /></button>
-                            </div>
-                          </div>
-                          <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
-                          <div className="flex items-center justify-between mt-2">
-                            <p className="text-[10px] text-white/25">{s.chapter_count || 0} chapters</p>
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handlePublishAsBlog(s.id, s.name); }}
-                              disabled={publishingBlog}
-                              className="flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium opacity-0 group-hover:opacity-100 disabled:opacity-30 transition-all"
-                              style={{ background: 'rgba(149,117,224,0.20)', color: '#c4b0f0' }}
-                            >
-                              <Globe size={9} /> Publish as Blog
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <InlineCreator placeholder="Subject" onCreate={handleCreateSubject} icon={BookOpen} color="violet" />
-                  </div>
-                ) : selSubject ? (
-                  <div className="p-6 max-w-5xl mx-auto space-y-6">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 className="text-xl font-bold text-white">{subjectData?.icon || '📚'} {subjectData?.name}</h3>
-                        <p className="text-sm text-white/40">{subjectData?.description}</p>
-                      </div>
-                    </div>
-
-                    {/* ── Workflow Tracker ──────────────────────────────── */}
-                    <div className="flex items-center gap-2 px-4 py-3 rounded-xl border" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
-                      {/* Step 1: Chapters */}
-                      <div className={`flex items-center gap-1.5 text-xs font-medium ${chapters.length > 0 ? 'text-emerald-400' : 'text-white/30'}`}>
-                        {chapters.length > 0 ? <CheckCircle size={13} /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
-                        <span>{chapters.length} Chapter{chapters.length !== 1 ? 's' : ''}</span>
-                      </div>
-                      <ChevronRight size={11} className="text-white/20" />
-                      {/* Step 2: SEO Topics */}
-                      <div className={`flex items-center gap-1.5 text-xs font-medium ${seoTopicsGeneratedIds.has(selSubject) ? 'text-cyan-400' : 'text-white/25'}`}>
-                        {seoTopicsGeneratedIds.has(selSubject) ? <CheckCircle size={13} /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
-                        <span>SEO Topics</span>
-                      </div>
-                      <ChevronRight size={11} className="text-white/20" />
-                      {/* Step 3: Assets */}
-                      <div className={`flex items-center gap-1.5 text-xs font-medium ${assetsGeneratedIds.has(selSubject) ? 'text-violet-400' : 'text-white/25'}`}>
-                        {assetsGeneratedIds.has(selSubject) ? <CheckCircle size={13} /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
-                        <span>300+ Assets</span>
-                      </div>
-                      <ChevronRight size={11} className="text-white/20" />
-                      {/* Step 4: Published */}
-                      <div className={`flex items-center gap-1.5 text-xs font-medium ${mergedSubjectIds.has(selSubject) ? 'text-emerald-400' : 'text-white/25'}`}>
-                        {mergedSubjectIds.has(selSubject) ? <CheckCircle size={13} /> : <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20" />}
-                        <span>Published</span>
-                      </div>
-                      <div className="ml-auto flex items-center gap-2">
-                        {onNavigate && (
-                          <>
-                            <button
-                              onClick={handleGenerateSeoTopics}
-                              disabled={!selSubject || generatingSeoTopics || chapters.length === 0}
-                              className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
-                              style={{ background: 'rgba(6,182,212,0.12)', color: '#67e8f9', border: '1px solid rgba(6,182,212,0.28)' }}
-                              title={chapters.length === 0 ? 'Add chapters before generating SEO topics' : 'Extract SEO topics for this subject using AI'}
-                            >
-                              {generatingSeoTopics ? <Loader2 size={11} className="animate-spin" /> : <Globe size={11} />}
-                              {generatingSeoTopics ? 'Extracting…' : seoTopicsGeneratedIds.has(selSubject) ? 'SEO Topics ✓' : 'Generate SEO Topics'}
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={() => setShowPipeline(true)}
-                          disabled={chapters.length === 0 || !seoTopicsGeneratedIds.has(selSubject)}
-                          className="flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-bold disabled:opacity-40 transition-all hover:opacity-90"
-                          style={allChaptersHaveNotes
-                            ? { background: 'linear-gradient(135deg,#0ea5e9,#7c3aed)', color: 'white' }
-                            : { background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: 'white' }}
-                          title={
-                            chapters.length === 0
-                              ? 'Add chapters before running pipeline'
-                              : !seoTopicsGeneratedIds.has(selSubject)
-                              ? 'Generate SEO Topics first before running full pipeline'
-                              : allChaptersHaveNotes
-                              ? 'SEO Polish — skips re-generation of existing notes/PYQs/flashcards, only publishes blogs & PYQ pages'
-                              : 'Auto-Generate Full Subject — generates all content, MCQs, blogs & PYQ pages'
-                          }
-                        >
-                          <Zap size={11} /> {allChaptersHaveNotes ? 'SEO Polish ⚡' : 'Auto-Generate Full Subject'}
-                        </button>
-                        <button
-                          onClick={() => handlePublishAsBlog(selSubject, subjectData?.name || selSubject)}
-                          disabled={publishingBlog || chapters.length === 0 || (!assetsGeneratedIds.has(selSubject) && !mergedSubjectIds.has(selSubject))}
-                          className="flex items-center gap-1.5 h-8 px-4 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all hover:opacity-90"
-                          style={{
-                            background: assetsGeneratedIds.has(selSubject)
-                              ? 'linear-gradient(135deg,#059669,#10b981)'
-                              : 'linear-gradient(135deg,#7c3aed,#9575e0)',
-                            color: 'white', boxShadow: '0 2px 8px rgba(124,58,237,0.28)',
-                          }}
-                          title={
-                            chapters.length === 0
-                              ? 'Add chapters first'
-                              : (!assetsGeneratedIds.has(selSubject) && !mergedSubjectIds.has(selSubject))
-                              ? 'Run "Auto-Generate Full Subject" first to build 300+ assets'
-                              : assetsGeneratedIds.has(selSubject)
-                              ? '✅ 300+ assets ready — merge & open Blog Publisher'
-                              : 'Publish merged content as a blog post'
-                          }
-                        >
-                          {publishingBlog ? <Loader2 size={12} className="animate-spin" /> : <Globe size={12} />}
-                          Publish as Blog
-                          {assetsGeneratedIds.has(selSubject) && <span style={{ fontSize: 9, marginLeft: 2, opacity: 0.8 }}>✅</span>}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* ── AI Thumbnail Studio ───────────────────────────── */}
-                    <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
-                      <div className="flex items-center justify-between px-4 py-3 border-b border-white/8">
-                        <div className="flex items-center gap-2">
-                          <Wand2 size={13} className="text-violet-400" />
-                          <span className="text-sm font-semibold text-white">AI Thumbnail Studio</span>
-                          <span className="text-[10px] text-white/30 bg-white/5 px-2 py-0.5 rounded-full">background on Library card</span>
-                        </div>
-                        {subjectData?.thumbnailUrl && (
-                          <button onClick={handleClearThumbnail}
-                            className="text-[11px] text-red-400/70 hover:text-red-400 transition-colors flex items-center gap-1">
-                            <X size={11} /> Remove
-                          </button>
-                        )}
-                      </div>
-                      <div className="p-4 space-y-4">
-                        {/* Upload row */}
-                        <div className="flex items-start gap-4">
-                          <div className="w-20 h-[72px] rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden"
-                            style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
-                            {subjectData?.thumbnailUrl ? (
-                              <img src={subjectData.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover" />
-                            ) : (
-                              <span className="text-white/20 text-[10px] text-center px-1">No image</span>
-                            )}
-                          </div>
-                          <div className="flex-1 space-y-2">
-                            <p className="text-xs text-white/40">
-                              Upload a book cover (PNG, JPG, WebP — max 2 MB). The AI will extract its color DNA and generate 3 copyright-safe abstract variants.
-                            </p>
-                            <input ref={thumbnailInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
-                              onChange={async (e) => {
-                                const file = e.target.files?.[0];
-                                if (!file) return;
-                                await handleUploadThumbnail(file);
-                                await handleGenerateAiThumbnails(file);
-                              }} />
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <button onClick={() => thumbnailInputRef.current?.click()} disabled={thumbnailLoading || aiThumbLoading}
-                                className="flex items-center gap-2 h-9 px-4 rounded-lg text-xs font-semibold text-white transition-all hover:opacity-90 active:scale-95 disabled:opacity-50"
-                                style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', boxShadow: '0 2px 8px rgba(124,58,237,0.30)' }}>
-                                {thumbnailLoading ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                                {thumbnailLoading ? 'Uploading…' : subjectData?.thumbnailUrl ? 'Replace' : 'Upload Cover'}
-                              </button>
-                              {subjectData?.thumbnailUrl && (
-                                <button onClick={() => handleGenerateAiThumbnails()} disabled={aiThumbLoading}
-                                  className="flex items-center gap-2 h-9 px-4 rounded-lg text-xs font-semibold disabled:opacity-50 transition-all hover:opacity-90"
-                                  style={{ background: 'rgba(139,92,246,0.20)', border: '1px solid rgba(139,92,246,0.35)', color: '#c4b0f0' }}>
-                                  {aiThumbLoading ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
-                                  {aiThumbLoading ? 'Analyzing…' : thumbVariants.length > 0 ? 'Regenerate' : 'Generate AI Variants'}
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* AI loading state */}
-                        {aiThumbLoading && (
-                          <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.20)' }}>
-                            <Loader2 size={16} className="animate-spin flex-shrink-0" style={{ color: '#a78bfa' }} />
-                            <div>
-                              <p className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>Groq Vision analyzing color palette…</p>
-                              <p className="text-[10px] mt-0.5" style={{ color: 'rgba(167,139,250,0.60)' }}>Extracting dominant colors → generating 3 abstract variants</p>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* AI Variant Carousel */}
-                        {thumbVariants.length > 0 && !aiThumbLoading && (
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>Copyright-Safe Variants</span>
-                                {thumbAnalysis?.style && (
-                                  <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa' }}>
-                                    {thumbAnalysis.style} · {thumbAnalysis.mood}
-                                  </span>
-                                )}
-                              </div>
-                              <button onClick={() => handleGenerateAiThumbnails()} disabled={aiThumbLoading}
-                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg"
-                                style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.06)' }}>
-                                <RefreshCw size={9} /> New set
-                              </button>
-                            </div>
-
-                            {/* Color palette */}
-                            {thumbAnalysis?.dominant_colors && (
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.30)' }}>Palette:</span>
-                                {[...(thumbAnalysis.dominant_colors || []), ...(thumbAnalysis.secondary_colors || [])].slice(0, 5).map((hex, i) => (
-                                  <div key={i} title={hex} className="w-4 h-4 rounded-full border border-white/15 flex-shrink-0" style={{ background: hex }} />
-                                ))}
-                              </div>
-                            )}
-
-                            {/* 3 variant cards */}
-                            <div className="grid grid-cols-3 gap-2">
-                              {thumbVariants.map((varUrl, i) => (
-                                <div key={i}
-                                  className="relative group rounded-xl overflow-hidden cursor-pointer transition-all"
-                                  style={{ border: `2px solid ${selectedThumbVariant === i ? '#7c3aed' : 'rgba(255,255,255,0.08)'}` }}
-                                  onClick={() => setSelectedThumbVariant(i)}>
-                                  <img src={varUrl} alt={`Variant ${i + 1}`} className="w-full object-cover" style={{ aspectRatio: '2/3' }} />
-                                  {/* Hover overlay with "Use This" */}
-                                  <div className="absolute inset-0 flex flex-col justify-end p-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 60%)' }}>
-                                    <button onClick={e => { e.stopPropagation(); handleApplyVariant(i); }}
-                                      className="w-full py-1.5 rounded-lg text-[10px] font-bold text-white"
-                                      style={{ background: '#7c3aed' }}>
-                                      Use This
-                                    </button>
-                                  </div>
-                                  {/* Selected badge */}
-                                  {selectedThumbVariant === i && (
-                                    <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full flex items-center justify-center" style={{ background: '#7c3aed' }}>
-                                      <CheckCircle size={11} className="text-white" />
-                                    </div>
-                                  )}
-                                  {/* Variant label */}
-                                  <div className="absolute bottom-0 left-0 right-0 text-center py-1 text-[8px] font-medium"
-                                    style={{ background: 'rgba(0,0,0,0.65)', color: 'rgba(255,255,255,0.55)' }}>
-                                    {['Gradient Wash', 'Geometric', 'Abstract'][i]}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-
-                            {/* Apply selected */}
-                            <button onClick={() => handleApplyVariant(selectedThumbVariant)}
-                              className="w-full py-2.5 rounded-xl text-sm font-semibold text-white"
-                              style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', boxShadow: '0 2px 10px rgba(124,58,237,0.30)' }}>
-                              Apply "{['Gradient Wash', 'Geometric', 'Abstract'][selectedThumbVariant]}" as Thumbnail
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Create Chapter CTA */}
-                    <button
-                      onClick={() => { setEditView('new-chapter'); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: chapters.length + 1 }); setChapterStats(null); }}
-                      className="w-full p-5 rounded-xl border border-dashed border-violet-500/30 hover:border-violet-500/60 bg-violet-500/5 hover:bg-violet-500/10 text-center transition-colors"
-                    >
-                      <BookOpen size={28} className="mx-auto text-violet-400 mb-2" />
-                      <p className="text-sm font-bold text-white">Create New Chapter</p>
-                      <p className="text-[11px] text-white/40 mt-1">Add chapter content with Markdown — slug auto-generated</p>
-                    </button>
-
-                    {/* Chapters list */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <p className="text-sm font-semibold text-white">Chapters ({chapters.length})</p>
-                        <div className="flex items-center gap-2">
-                          {chapters.length > 0 && (
-                            <button
-                              onClick={() => setSelectedChapters(prev => prev.size === chapters.length ? new Set() : new Set(chapters.map(c => c.id)))}
-                              className="text-[10px] text-white/30 hover:text-white transition-colors"
-                            >
-                              {selectedChapters.size === chapters.length ? 'Deselect all' : 'Select all'}
-                            </button>
-                          )}
-                          {chapters.length > 0 && (
-                            <button
-                              onClick={() => setShowAgenticCreator(true)}
-                              className="flex items-center gap-1 h-6 px-2.5 rounded-lg text-[10px] font-semibold transition-all hover:brightness-110"
-                              style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.30),rgba(79,70,229,0.30))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.30)' }}
-                              title="Agentic content creator — notes, MCQs, flashcards"
-                            >
-                              <Zap size={10} />
-                              Agentic Generate
-                            </button>
-                          )}
-                          <button
-                            onClick={() => setAutoAgentic(v => !v)}
-                            className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-medium transition-all"
-                            style={autoAgentic
-                              ? { background: 'rgba(245,158,11,0.20)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.35)' }
-                              : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)' }}
-                            title={autoAgentic ? 'Auto-Agentic ON — notes generation will auto-trigger Agentic Generate' : 'Auto-Agentic OFF — click to enable auto-cascade after notes generation'}
-                          >
-                            <Zap size={9} className={autoAgentic ? 'text-amber-400' : ''} />
-                            Auto-Agentic {autoAgentic ? 'ON' : 'OFF'}
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Bulk action bar */}
-                      {selectedChapters.size > 0 && (
-                        <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(149,117,224,0.10)', border: '1px solid rgba(149,117,224,0.20)' }}>
-                          <span className="text-xs text-violet-300 font-medium">{selectedChapters.size} selected</span>
-                          <button
-                            onClick={handleBulkMerge}
-                            disabled={bulkMerging}
-                            className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-medium disabled:opacity-40 transition-colors"
-                            style={{ background: 'rgba(149,117,224,0.25)', color: '#c4b0f0' }}
-                          >
-                            {bulkMerging ? <Loader2 size={11} className="animate-spin" /> : <Globe size={11} />}
-                            Merge to Blog
-                          </button>
-                          <button
-                            onClick={() => setSelectedChapters(new Set())}
-                            className="ml-auto text-[10px] text-white/30 hover:text-white transition-colors"
-                          >
-                            Clear
-                          </button>
-                        </div>
-                      )}
-
-                      {chapters.length === 0 && <p className="text-xs text-white/30 py-4 text-center">No chapters yet — create the first one above</p>}
-                      {chapters.map(ch => {
-                        const assets   = chapterAssets[ch.id] || {};
-                        const hasNotes = assets.notesGenerated || (ch.content && ch.content.trim().length > 50);
-                        const preview  = ch.content ? ch.content.replace(/#{1,6}\s?/g, '').replace(/\*+/g, '').replace(/\n+/g, ' ').trim().slice(0, 130) : '';
-                        const wordCount = ch.content ? ch.content.split(/\s+/).filter(Boolean).length : 0;
-                        const hasPyqs   = (assets.pyqCount || 0) > 0;
-                        const hasFc     = (assets.flashcardCount || 0) > 0;
-                        const hasBlogs  = (assets.blogCount || 0) > 0;
-                        const isSelected = selectedChapters.has(ch.id);
-                        return (
-                          <div key={ch.id}
-                            className="rounded-xl border transition-all"
-                            style={{
-                              borderColor: isSelected ? 'rgba(149,117,224,0.40)' : hasNotes ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.08)',
-                              background:  isSelected ? 'rgba(149,117,224,0.05)' : 'rgba(255,255,255,0.02)',
-                            }}>
-                            {/* Card header row */}
-                            <div className="flex items-start gap-2 p-3 pb-2">
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={e => setSelectedChapters(prev => {
-                                  const next = new Set(prev);
-                                  if (e.target.checked) next.add(ch.id); else next.delete(ch.id);
-                                  return next;
-                                })}
-                                className="rounded flex-shrink-0 accent-violet-500 cursor-pointer mt-0.5"
-                                onClick={e => e.stopPropagation()}
-                              />
-                              {/* Status dot */}
-                              <div className="flex-shrink-0 mt-1">
-                                {hasNotes
-                                  ? <div className="w-2 h-2 rounded-full bg-emerald-400" title="Notes generated" />
-                                  : <div className="w-2 h-2 rounded-full bg-white/15" title="No notes yet" />}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <p className="text-sm font-semibold text-white truncate">{ch.title}</p>
-                                  {ch.content_type && ch.content_type !== 'notes' && (
-                                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-white/10 text-white/40 uppercase tracking-wide">{ch.content_type}</span>
-                                  )}
-                                  {wordCount > 0 && (
-                                    <span className="text-[9px] text-white/25 font-mono">{wordCount.toLocaleString()} words</span>
-                                  )}
-                                </div>
-                                {ch.description && !preview && (
-                                  <p className="text-xs text-white/35 mt-0.5 truncate">{ch.description}</p>
-                                )}
-                                {/* Notes content preview */}
-                                {preview && (
-                                  <p className="text-[11px] text-white/40 mt-1 leading-relaxed line-clamp-2">{preview}{preview.length >= 130 ? '…' : ''}</p>
-                                )}
-                                {!hasNotes && !preview && (
-                                  <p className="text-[11px] text-white/20 mt-1 italic">No notes yet — generate with AI or edit manually</p>
-                                )}
-                              </div>
-                              {/* Action buttons */}
-                              <div className="flex gap-0.5 flex-shrink-0 ml-1">
-                                <button
-                                  onClick={() => handleGenerateNotes(ch.id, ch.title)}
-                                  disabled={generatingNotes.has(ch.id) || bulkGenerating}
-                                  className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-semibold disabled:opacity-40 transition-all hover:brightness-110"
-                                  style={hasNotes
-                                    ? { background: 'rgba(16,185,129,0.15)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.25)' }
-                                    : { background: 'linear-gradient(135deg,rgba(124,58,237,0.35),rgba(79,70,229,0.35))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.35)' }}
-                                  title={hasNotes ? 'Regenerate AI notes for this chapter' : 'Generate AI notes for this chapter'}
-                                >
-                                  {generatingNotes.has(ch.id)
-                                    ? <><Loader2 size={10} className="animate-spin" /> Generating…</>
-                                    : <><Sparkles size={10} /> {hasNotes ? 'Regen' : 'AI ⚡'}</>}
-                                </button>
-                                <button onClick={() => setViewerItem(ch)} className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-white/30 hover:text-emerald-400" title="Preview lesson" data-testid={`open-chapter-${ch.id}`}><Eye size={13} /></button>
-                                <button onClick={() => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1 }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
-                                  className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400" title="Edit chapter"><Edit2 size={13} /></button>
-                                <button onClick={() => handleDeleteChapter(ch.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400" title="Delete chapter"><Trash2 size={13} /></button>
-                              </div>
-                            </div>
-                            {/* Asset badges footer */}
-                            {(hasNotes || hasPyqs || hasFc || hasBlogs || ch.slug) && (
-                              <div className="flex items-center gap-1.5 px-3 pb-2.5 flex-wrap">
-                                {hasNotes && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                                    style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>
-                                    <CheckCircle size={9} /> Notes
-                                  </span>
-                                )}
-                                {hasPyqs && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                                    style={{ background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.20)' }}>
-                                    <FileText size={9} /> {assets.pyqCount} PYQs
-                                  </span>
-                                )}
-                                {hasFc && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                                    style={{ background: 'rgba(16,185,129,0.10)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.18)' }}>
-                                    <Layers size={9} /> {assets.flashcardCount} Flashcards
-                                  </span>
-                                )}
-                                {hasBlogs && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                                    style={{ background: 'rgba(59,130,246,0.12)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.20)' }}>
-                                    <Globe size={9} /> {assets.blogCount} Blogs
-                                  </span>
-                                )}
-                                {assets.pyqPage && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                                    style={{ background: 'rgba(236,72,153,0.10)', color: '#f9a8d4', border: '1px solid rgba(236,72,153,0.18)' }}>
-                                    <Sparkles size={9} /> PYQ Page
-                                  </span>
-                                )}
-                                {ch.coverage_score != null && (
-                                  <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-semibold"
-                                    style={ch.coverage_score < 60
-                                      ? { background: 'rgba(239,68,68,0.12)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.25)' }
-                                      : ch.coverage_score < 80
-                                      ? { background: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: '1px solid rgba(245,158,11,0.20)' }
-                                      : { background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }
-                                    }
-                                    title={ch.coverage_score < 60 ? 'Low syllabus coverage — consider regenerating' : `${ch.coverage_score}% of syllabus topics covered`}
-                                  >
-                                    {ch.coverage_score < 60 && <AlertTriangle size={9} />}
-                                    {ch.coverage_score >= 60 && <CheckCircle size={9} />}
-                                    {ch.coverage_score}% Coverage
-                                  </span>
-                                )}
-                                {ch.slug && !hasPyqs && !hasFc && !hasBlogs && (
-                                  <span className="text-[9px] text-white/20 font-mono">/{ch.slug}</span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* ── Content Gaps (collapsible) ────────────────────── */}
-                    <div className="rounded-xl border" style={{ borderColor: 'rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.01)' }}>
-                      <button
-                        onClick={() => {
-                          const next = !showGapPanel;
-                          setShowGapPanel(next);
-                          if (next && gapSubjects.length === 0) loadGapSubjects();
-                        }}
-                        className="w-full flex items-center justify-between px-4 py-3 text-xs font-semibold text-white/40 hover:text-white/70 transition-colors"
-                      >
-                        <span className="flex items-center gap-2">
-                          <AlertTriangle size={12} className={gapSubjects.length > 0 ? 'text-amber-400' : ''} />
-                          Content Gaps
-                          {gapSubjects.length > 0 && (
-                            <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold" style={{ background: 'rgba(245,158,11,0.20)', color: '#fbbf24' }}>
-                              {gapSubjects.length} subjects &lt; 3 chapters
-                            </span>
-                          )}
-                        </span>
-                        <ChevronDown size={12} className={`transition-transform ${showGapPanel ? 'rotate-180' : ''}`} />
-                      </button>
-  
-                      {showGapPanel && (
-                        <div className="border-t px-4 pb-4 pt-3 space-y-3" style={{ borderColor: 'rgba(255,255,255,0.06)' }}>
-                          <p className="text-xs text-white/30">Subjects with fewer than 3 chapters — auto-generate an overview or merge to CMS.</p>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            {bulkGapSelected.size > 0 && !bulkGapGenerating && (
-                              <button onClick={handleBulkGapAutoGen}
-                                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg"
-                                style={{ background: 'rgba(139,92,246,0.25)', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.35)' }}>
-                                <Sparkles size={11} /> Generate All ({bulkGapSelected.size})
-                              </button>
-                            )}
-                            {bulkGapGenerating && (
-                              <span className="flex items-center gap-2 text-xs text-amber-400">
-                                <Loader2 size={11} className="animate-spin" />
-                                {bulkGapProgress.done}/{bulkGapProgress.total} generating…
-                              </span>
-                            )}
-                            <button onClick={loadGapSubjects} disabled={loadingGaps}
-                              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg disabled:opacity-50 ml-auto"
-                              style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.40)', border: '1px solid rgba(255,255,255,0.08)' }}>
-                              {loadingGaps ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
-                              Refresh
-                            </button>
-                          </div>
-  
-                          {loadingGaps ? (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                              {[...Array(3)].map((_, i) => <div key={i} className="h-24 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.04)' }} />)}
-                            </div>
-                          ) : gapSubjects.length === 0 ? (
-                            <div className="flex items-center gap-2 py-4 text-sm text-white/40">
-                              <CheckCircle size={15} className="text-emerald-400" /> All subjects have 3+ chapters
-                            </div>
-                          ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                              {gapSubjects.map(s => {
-                                const status = gapGenStatus[s.id];
-                                const isGen  = gapGenSubject === s.id;
-                                const isSel  = bulkGapSelected.has(s.id);
-                                return (
-                                  <div key={s.id} className="p-3 rounded-xl border transition-all"
-                                    style={{
-                                      borderColor: isSel ? 'rgba(139,92,246,0.35)' : status === 'done' ? 'rgba(52,211,153,0.28)' : 'rgba(255,255,255,0.07)',
-                                      background:  isSel ? 'rgba(139,92,246,0.07)' : 'rgba(255,255,255,0.02)',
-                                    }}>
-                                    <div className="flex items-start gap-2 mb-1.5">
-                                      <input type="checkbox" checked={isSel}
-                                        onChange={() => setBulkGapSelected(prev => { const n = new Set(prev); n.has(s.id) ? n.delete(s.id) : n.add(s.id); return n; })}
-                                        className="rounded accent-violet-500 mt-0.5 flex-shrink-0" />
-                                      <p className="text-xs font-medium flex-1 min-w-0 text-white">{s.icon || '📚'} {s.name}</p>
-                                      {status === 'done'   && <CheckCircle size={12} className="text-emerald-400 flex-shrink-0" />}
-                                      {status === 'failed' && <AlertCircle size={12} className="text-red-400 flex-shrink-0" />}
-                                    </div>
-                                    <p className="text-[10px] ml-5 mb-2.5 text-amber-400">{s.chapter_count || 0} / 3 chapters</p>
-                                    <div className="flex gap-1.5 flex-wrap ml-5">
-                                      <button onClick={() => handleAutoGenerateGap(s)} disabled={isGen || status === 'done'}
-                                        className="px-2 py-1 rounded-lg text-[10px] font-medium disabled:opacity-40 flex items-center gap-1 flex-1"
-                                        style={{ background: 'rgba(139,92,246,0.20)', color: '#a78bfa' }}>
-                                        {isGen ? <Loader2 size={9} className="animate-spin" /> : <Sparkles size={9} />}
-                                        {status === 'done' ? 'Done!' : isGen ? 'Generating…' : 'Auto-Generate Overview'}
-                                      </button>
-                                      <button onClick={() => handleMergeGapToCms(s)}
-                                        className="px-2 py-1 rounded-lg text-[10px] font-medium flex items-center gap-1 flex-1"
-                                        style={{ background: 'rgba(99,102,241,0.18)', color: '#818cf8' }}>
-                                        <Globe size={9} /> Merge to CMS
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                ) : null}
-              </div>
-            </div>
-          )}
-        </>
+          </div>
+        )}
+      </>
 
       {viewerItem && <ContentViewerPopup item={viewerItem} onClose={() => setViewerItem(null)} />}
 
       {showPipeline && (
         <PipelineProgressPanel
-          adminToken={adminToken}
-          subjectId={selSubject}
-          subjectName={subjectData?.name || selSubject}
-          skipExisting={allChaptersHaveNotes}
-          onClose={() => setShowPipeline(false)}
+          adminToken={adminToken} subjectId={selSubject} subjectName={subjectData?.name || selSubject}
+          skipExisting={allChaptersHaveNotes} onClose={() => setShowPipeline(false)}
           onComplete={(summary) => {
             const total = (summary.total_blogs || 0) + (summary.total_topic_pyqs || 0) + (summary.total_flashcards || 0) + (summary.total_pyq_pages || 0);
             toast.success(`${total} assets generated for "${subjectData?.name}" — ${summary.total_blogs || 0} blogs live`);
             setAssetsGeneratedIds(prev => new Set([...prev, selSubject]));
             setMergedSubjectIds(prev => new Set([...prev, selSubject]));
             if (summary.chapter_results?.length > 0) {
-              setChapterAssets(prev => {
-                const next = { ...prev };
-                for (const r of summary.chapter_results) {
-                  if (r.chapter_id) {
-                    next[r.chapter_id] = {
-                      notesGenerated: r.notes_generated,
-                      pyqCount:       r.topic_pyq_count  || 0,
-                      flashcardCount: r.flashcards_count  || 0,
-                      blogCount:      r.blogs_count        || 0,
-                      pyqPage:        r.pyq_page           || false,
-                    };
-                  }
-                }
-                return next;
-              });
+              setChapterAssets(prev => { const next = { ...prev }; for (const r of summary.chapter_results) { if (r.chapter_id) { next[r.chapter_id] = { notesGenerated: r.notes_generated, pyqCount: r.topic_pyq_count || 0, flashcardCount: r.flashcards_count || 0, blogCount: r.blogs_count || 0, pyqPage: r.pyq_page || false }; } } return next; });
             }
           }}
         />
@@ -1855,15 +498,9 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
       {showAgenticCreator && selSubject && (
         <AgenticCreatorModal
-          adminToken={adminToken}
-          subjectId={selSubject}
-          subjectName={subjectData?.name || selSubject}
-          chapterCount={chapters.length}
-          onClose={() => setShowAgenticCreator(false)}
-          onComplete={() => {
-            toast.success('Agentic generation complete — refreshing chapters…');
-            refreshChapters(selSubject);
-          }}
+          adminToken={adminToken} subjectId={selSubject} subjectName={subjectData?.name || selSubject}
+          chapterCount={chapters.length} onClose={() => setShowAgenticCreator(false)}
+          onComplete={() => { toast.success('Agentic generation complete — refreshing chapters…'); refreshChapters(selSubject); }}
         />
       )}
     </div>

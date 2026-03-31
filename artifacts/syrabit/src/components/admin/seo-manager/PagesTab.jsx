@@ -1,0 +1,112 @@
+import { Loader2, Search, FileText, Eye, EyeOff, Globe, Play } from 'lucide-react';
+
+const PAGE_TYPES = [
+  { id: 'notes',               label: 'Notes',               color: '#7c3aed' },
+  { id: 'definition',          label: 'Definitions',         color: '#0891b2' },
+  { id: 'important-questions', label: 'Important Questions', color: '#d97706' },
+  { id: 'mcqs',                label: 'MCQs',                color: '#16a34a' },
+  { id: 'examples',            label: 'Examples',            color: '#e11d48' },
+];
+
+const STATUS_COLORS = {
+  published: { text: '#34d399', bg: 'rgba(16,185,129,0.10)', border: 'rgba(52,211,153,0.20)' },
+  draft:     { text: '#fbbf24', bg: 'rgba(245,158,11,0.10)',  border: 'rgba(251,191,36,0.20)' },
+  archived:  { text: '#9ca3af', bg: 'rgba(156,163,175,0.10)', border: 'rgba(156,163,175,0.20)' },
+};
+
+export default function PagesTab({
+  loading, filteredPages, pages, publishedCount, draftCount,
+  pageSearch, setPageSearch, pageFilter, setPageFilter,
+  handleToggleStatus, handleAutoRun,
+}) {
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-48">
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.25)' }} />
+          <input value={pageSearch} onChange={e => setPageSearch(e.target.value)} placeholder="Search pages…"
+            className="w-full h-9 pl-8 pr-3 rounded-xl text-sm outline-none"
+            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
+          />
+        </div>
+        {['all', 'published', 'draft'].map(f => (
+          <button key={f} onClick={() => setPageFilter(f)}
+            className="h-9 px-3 rounded-xl text-xs capitalize font-medium transition-all"
+            style={pageFilter === f
+              ? { background: '#7c3aed', color: '#fff' }
+              : { color: 'rgba(255,255,255,0.40)', border: '1px solid rgba(255,255,255,0.08)' }}>
+            {f === 'all' ? 'All' : f === 'published' ? `Published (${publishedCount})` : `Draft (${draftCount})`}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="space-y-2">{[...Array(5)].map((_, i) => <div key={i} className="h-16 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.02)' }} />)}</div>
+      ) : filteredPages.length === 0 ? (
+        <div className="rounded-xl p-10 text-center border" style={{ background: 'rgba(255,255,255,0.01)', borderColor: 'rgba(255,255,255,0.06)' }}>
+          <FileText size={28} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
+          <p className="text-sm" style={{ color: 'rgba(255,255,255,0.30)' }}>
+            {pages.length === 0
+              ? 'No SEO pages yet. Click Auto-Run All to start the pipeline.'
+              : 'No pages match your filter.'}
+          </p>
+          {pages.length === 0 && (
+            <button onClick={handleAutoRun} className="mt-4 h-9 px-5 rounded-xl text-xs font-semibold flex items-center gap-2 mx-auto"
+              style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+              <Play size={13} /> Auto-Run All
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-1.5">
+          {filteredPages.map(page => {
+            const pid = page._id || page.id;
+            const sc = STATUS_COLORS[page.status] || STATUS_COLORS.draft;
+            const typeInfo = PAGE_TYPES.find(p => p.id === page.page_type);
+            return (
+              <div key={pid} className="flex items-center gap-3 p-3 rounded-xl border transition-colors"
+                style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                {typeInfo && (
+                  <div className="w-1.5 h-8 rounded-full flex-shrink-0" style={{ background: typeInfo.color }} />
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate" style={{ color: '#E8E8E8' }}>{page.title || page.topic_title || '—'}</p>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <p className="text-xs truncate" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                      {[page.board_name, page.class_name, page.subject_name, page.page_type].filter(Boolean).join(' · ')}
+                    </p>
+                    {page.quality_score != null && (
+                      <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold"
+                        style={{
+                          background: page.quality_score.score >= 70 ? 'rgba(34,197,94,0.15)' : page.quality_score.score >= 40 ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)',
+                          color: page.quality_score.score >= 70 ? '#4ade80' : page.quality_score.score >= 40 ? '#fbbf24' : '#f87171',
+                        }}>
+                        Q:{page.quality_score.score} · {page.quality_score.word_count}w
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <span className="flex-shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold border"
+                  style={{ color: sc.text, background: sc.bg, borderColor: sc.border }}>
+                  {page.status || 'draft'}
+                </span>
+                <button onClick={() => handleToggleStatus(page)} title={page.status === 'published' ? 'Unpublish' : 'Publish'}
+                  className="flex-shrink-0 p-1.5 rounded-lg transition-colors"
+                  style={{ color: 'rgba(255,255,255,0.25)' }}>
+                  {page.status === 'published' ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+                {page.url && (
+                  <a href={page.url} target="_blank" rel="noopener"
+                    className="flex-shrink-0 p-1.5 rounded-lg transition-colors"
+                    style={{ color: 'rgba(255,255,255,0.25)' }}>
+                    <Globe size={14} />
+                  </a>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}

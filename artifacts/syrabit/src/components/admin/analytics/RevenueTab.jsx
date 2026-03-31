@@ -1,0 +1,79 @@
+import { DollarSign, TrendingUp, Target, Zap, AlertTriangle } from 'lucide-react';
+import {
+  XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, BarChart, Bar, LineChart, Line, Cell,
+} from 'recharts';
+import { Card, Stat, TT, PLAN_COLORS, fmt, fmtInr } from './shared';
+
+export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth, arpu, ltv, paidUsers, dailyRev, cohortData, predict, revenue }) {
+  return (
+    <div className="space-y-4">
+      {widgetErrors.revenue && (
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+          <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
+          <p className="text-xs text-amber-300 flex-1">Revenue data failed to load.</p>
+          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">Retry</button>
+        </div>
+      )}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <Stat icon={DollarSign} label="MRR (30d)"     value={fmtInr(mrr)}       color="#10b981" trend={growth} />
+        <Stat icon={TrendingUp} label="Predicted MRR" value={fmtInr(predicted)} color="#7c3aed"
+          sub={growth >= 0 ? `${growth}% MoM growth` : `${Math.abs(growth)}% MoM decline`} />
+        <Stat icon={Target}     label="ARPU"          value={fmtInr(arpu)}       color="#f59e0b"
+          sub={paidUsers > 0 ? `${paidUsers} paid users` : 'No paid users yet'} />
+        <Stat icon={Zap}        label="LTV (12-mo)"   value={fmtInr(ltv)}        color="#06b6d4" sub="Avg lifetime value" />
+      </div>
+
+      <Card title="Daily Revenue — Last 30 Days"
+        empty={!dailyRev.length} emptyMsg="No payment data yet">
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={dailyRev} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+            <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={fmt} />
+            <YAxis tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={v => `₹${v}`} />
+            <Tooltip {...TT} formatter={v => [`₹${v}`, 'Revenue']} />
+            <Line type="monotone" dataKey="revenue_inr" name="Revenue ₹" stroke="#10b981" strokeWidth={2.5}
+              dot={{ r: 3, fill: '#10b981' }} activeDot={{ r: 5 }} />
+          </LineChart>
+        </ResponsiveContainer>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card title="Users by Plan" empty={!cohortData.length} emptyMsg="No cohort data yet">
+          {cohortData.length > 0 && (
+            <ResponsiveContainer width="100%" height={160}>
+              <BarChart data={cohortData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="plan" tick={{ fill: '#64748b', fontSize: 11 }} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 11 }} allowDecimals={false} />
+                <Tooltip {...TT} />
+                <Bar dataKey="count" name="Users" radius={[4, 4, 0, 0]}>
+                  {cohortData.map((entry, i) => (
+                    <Cell key={i} fill={PLAN_COLORS[entry.plan] || '#8b5cf6'} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </Card>
+
+        <Card title="Revenue Summary">
+          <div className="space-y-3">
+            {[
+              { label: 'Payments (this month)', value: predict?.payments_this_month || 0, color: '#10b981' },
+              { label: 'Payments (last month)',  value: predict?.payments_last_month  || 0, color: '#64748b' },
+              { label: 'Signups (this month)',   value: predict?.signups_this_month   || 0, color: '#7c3aed' },
+              { label: 'Signups (last month)',   value: predict?.signups_last_month   || 0, color: '#64748b' },
+              { label: 'Total payments (30d)',   value: revenue?.total_payments       || 0, color: '#f59e0b' },
+            ].map((item, i) => (
+              <div key={i} className="flex items-center justify-between">
+                <span className="text-slate-400 text-sm">{item.label}</span>
+                <span className="font-semibold text-sm" style={{ color: item.color }}>{item.value.toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}

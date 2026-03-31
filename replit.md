@@ -301,6 +301,29 @@ Generated React Query hooks and fetch client from the OpenAPI spec (e.g. `useHea
 - Section label changed from "Topic PYQs — Previous Year Questions" → **"Important Questions — mark-wise for exam"**
 - Flashcard section label updated to **"Memory Tricks & Flashcards"**
 
+## Frontend Component Architecture (Task #49 Refactoring)
+
+All large frontend files have been split into sub-components. Sub-component directories:
+
+**Admin components** (`src/components/admin/`):
+- `content-editor/` — 8 sub-components for AdminContentEditor
+- `blog-wizard/` — 10 sub-components for BlogPublishWizard (Step1-5, SerpPreview, PerplexityPreview, TagChips, ThumbnailUploader, DocsDrawer)
+- `seo-manager/` — 14 sub-components for AdminSeoManager (tab panels + StatCard, JobProgress, InsightCard, useSeoManager hook)
+- `syllabus-manager/` — 6 sub-components for AdminSyllabusManager (NepStatsBanner, ManualPdfImport, PreviewEditPanel, SyllabusSelection, EditorForm, ImportsHistory)
+- `cms-editor/` — 7 sub-components for AdminCmsDocEditor (MdxToolbar, DocumentList, EditorToolbar, ContentTab, SeoMetaTab, GeoTagsTab, useCmsEditor hook)
+- `vertex-panel/` — 12 sub-components for AdminVertexPanel (9 service cards + shared, StatusHeader, McqGeneratorCard)
+- `analytics/` — 9 sub-components for AdminAnalytics (8 tab panels + shared)
+
+**Page components** (`src/pages/`):
+- `profile/` — 11 sub-components for ProfilePage (ProfileHeader, AcademicDetails, AiCredits, SubscriptionPlans, DangerZone, dialogs, modals, shared)
+- `chat/` — 7 sub-components for ChatPage (ThinkingIndicator, SourcesCard, MarkdownContent, MessageBubble, EmptyState, InputBar, ModelSelector)
+- `library/` — 7 sub-components for LibraryPage (CmsDocCard, CmsDocsSection, CmsPostCard, CmsPostsGrid, SubjectCard, LibrarySkeleton, FilterChip)
+- `landing/` — 9 sub-components for LandingPage (FloatingParticles, GlowOrb, AnimatedStat, Reveal, HeroSection, FeaturesGrid, PricingSection, TestimonialsFooter, shared)
+
+**Shared utilities** (`src/utils/adminHelpers.js`): `API`, `authHeaders`, `autoSlug`, `wordCount`
+
+**CSS** (`src/styles/`): index.css split into `tokens.css`, `animations.css`, `utilities.css`, `components.css`, `chat.css`, `article.css`
+
 ### `scripts` (`@workspace/scripts`)
 
 Utility scripts package. Each script is a `.ts` file in `src/` with a corresponding npm script in `package.json`. Run scripts via `pnpm --filter @workspace/scripts run <script>`. Scripts can import any workspace package (e.g., `@workspace/db`) by adding it as a dependency in `scripts/package.json`.

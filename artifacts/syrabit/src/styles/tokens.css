@@ -1,0 +1,156 @@
+@layer base {
+  :root {
+    /* ── Surfaces ── */
+    --background: 240 20% 96%;
+    --foreground: 240 65% 7%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 65% 7%;
+    --popover: 0 0% 98%;
+    --popover-foreground: 240 65% 7%;
+
+    /* ── Brand ── */
+    --primary: 263 80% 57%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 257 100% 93%;
+    --secondary-foreground: 263 73% 40%;
+
+    /* ── Neutral ── */
+    --muted: 263 55% 97%;
+    --muted-foreground: 215 20% 47%;
+    --accent: 225 75% 93%;
+    --accent-foreground: 243 73% 34%;
+
+    /* ── Destructive ── */
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    /* ── Borders & Input ── */
+    --border: 263 60% 75%;
+    --input: 263 55% 97%;
+    --ring: 263 80% 57%;
+
+    /* ── Sidebar ── */
+    --sidebar: 0 0% 100%;
+    --sidebar-foreground: 240 65% 7%;
+    --sidebar-primary: 263 80% 57%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 257 100% 93%;
+    --sidebar-accent-foreground: 263 73% 40%;
+    --sidebar-border: 263 60% 75%;
+    --sidebar-ring: 263 80% 57%;
+
+    /* ── Charts ── */
+    --chart-1: 263 80% 57%;
+    --chart-2: 258 89% 66%;
+    --chart-3: 41 74% 55%;
+    --chart-4: 184 70% 45%;
+    --chart-5: 12 76% 55%;
+
+    /* ── Radius ── */
+    --radius: 0.875rem;
+
+    /* ── RGBA glassmorphism values (not convertible to HSL) ── */
+    --card-glass: rgba(255, 255, 255, 0.75);
+    --card-glass-border: rgba(139, 92, 246, 0.12);
+    --popover-glass: rgba(255, 255, 255, 0.92);
+    --input-bg: rgba(139, 92, 246, 0.05);
+    --sidebar-glass: rgba(255, 255, 255, 0.60);
+
+    /* ── Glow — soft in light mode ── */
+    --glow-primary:   rgba(124, 58, 237, 0.35);
+    --glow-secondary: rgba(99, 102, 241, 0.25);
+    --glow-accent:    rgba(168, 85, 247, 0.30);
+    --glow-tertiary:  rgba(59, 130, 246, 0.20);
+  }
+
+  .dark {
+    /* ── Surfaces — #121212 / #E8E8E8 neutral dark palette ── */
+    --background: 0 0% 7%;
+    --foreground: 0 0% 91%;
+    --card: 0 0% 10%;
+    --card-foreground: 0 0% 91%;
+    --popover: 0 0% 9%;
+    --popover-foreground: 0 0% 91%;
+
+    /* ── Brand — violet accent stays vibrant on neutral bg ── */
+    --primary: 258 60% 68%;
+    --primary-foreground: 258 80% 12%;
+    --secondary: 255 20% 16%;
+    --secondary-foreground: 258 55% 82%;
+
+    /* ── Neutral ── */
+    --muted: 0 0% 13%;
+    --muted-foreground: 0 0% 55%;
+    --accent: 255 20% 16%;
+    --accent-foreground: 258 55% 82%;
+
+    /* ── Destructive ── */
+    --destructive: 0 72% 65%;
+    --destructive-foreground: 0 72% 17%;
+
+    /* ── Borders & Input ── */
+    --border: 0 0% 20%;
+    --input: 0 0% 12%;
+    --ring: 258 60% 68%;
+
+    /* ── Sidebar ── */
+    --sidebar: 0 0% 6%;
+    --sidebar-foreground: 0 0% 91%;
+    --sidebar-primary: 258 60% 68%;
+    --sidebar-primary-foreground: 258 80% 12%;
+    --sidebar-accent: 255 20% 14%;
+    --sidebar-accent-foreground: 258 55% 82%;
+    --sidebar-border: 0 0% 16%;
+    --sidebar-ring: 258 60% 68%;
+
+    /* ── Charts ── */
+    --chart-1: 258 60% 68%;
+    --chart-2: 258 55% 62%;
+    --chart-3: 41 70% 60%;
+    --chart-4: 160 55% 50%;
+    --chart-5: 350 65% 58%;
+
+    /* ── RGBA glassmorphism — neutral dark glass ── */
+    --card-glass: rgba(26, 26, 26, 0.90);
+    --card-glass-border: rgba(149, 117, 224, 0.12);
+    --popover-glass: rgba(23, 23, 23, 0.97);
+    --input-bg: rgba(149, 117, 224, 0.05);
+    --sidebar-glass: rgba(15, 15, 15, 0.95);
+
+    /* ── Glow ── */
+    --glow-primary:   rgba(149, 117, 224, 0.28);
+    --glow-secondary: rgba(120, 130, 210, 0.20);
+    --glow-accent:    rgba(180, 120, 240, 0.22);
+    --glow-tertiary:  rgba(80, 120, 220, 0.16);
+  }
+
+  /* ── Base resets ── */
+  * {
+    @apply border-border;
+    box-sizing: border-box;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Space Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+    letter-spacing: 0.012em;
+  }
+
+  /* ── Comfortable global transitions ── */
+  a, button, [role="button"], input, select, textarea {
+    transition-duration: 120ms;
+    transition-timing-function: ease-out;
+  }
+
+  /* ── Brand selection color ── */
+  ::selection {
+    background: rgba(124, 58, 237, 0.30);
+  }
+}
