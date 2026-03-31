@@ -1124,19 +1124,22 @@ def build_rag_system_prompt(
     _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard"
     _curriculum_label = f"{_board_label} Curriculum"
 
-    _intro_subject = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
-    _intro_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
+    _src_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
+    _src_subject = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
+    _src_course  = (context.get("stream_name", "") or "").strip()
+    _src_board   = _board_label or "AssamBoard"
     _source_parts = []
-    if _intro_chapter:
-        _source_parts.append(f"{_intro_chapter} (unit name)")
-    if _intro_subject:
-        _source_parts.append(f"{_intro_subject} (subject name)")
-    _board_course = _board_label or "AssamBoard"
-    _source_parts.append(f"{_board_course} (course name)")
+    if _src_chapter:
+        _source_parts.append(f"{_src_chapter} (unit name)")
+    if _src_subject:
+        _source_parts.append(f"{_src_subject} (subject name)")
+    if _src_course:
+        _source_parts.append(f"{_src_course} (course name)")
+    _source_parts.append(f"{_src_board} (board name)")
     _source_line = " · ".join(_source_parts)
     base_prompt += (
         f"\n\nSOURCE CITATION RULE: Do NOT mention source, subject name, unit name, "
-        f"or course name anywhere in your answer body. Answer the question directly first. "
+        f"course name, or board name anywhere in your answer body. Answer the question directly first. "
         f"Then, at the very end of your response, on its own line, add:\n"
         f"SOURCE : {_source_line}\n"
         f"Casual greetings and small-talk skip this source line."
