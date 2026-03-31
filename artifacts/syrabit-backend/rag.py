@@ -548,7 +548,7 @@ async def rag_search(
 
             chunks, subjects_found, chapters_kw, chapters_all = await asyncio.gather(
                 db.chunks.find(chunk_filter, {"_id": 0}).sort("priority", 1).limit(12).to_list(12),
-                db.subjects.find(subj_kw_filter, {"_id": 0}).limit(1).to_list(1),
+                db.subjects.find(subj_kw_filter, {"_id": 0, "id": 1, "name": 1, "icon": 1, "gradient": 1}).limit(1).to_list(1),
                 db.chapters.find(ch_kw_filter, {"_id": 0, "title": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(8).to_list(8),
                 db.chapters.find(ch_all_filter, {"_id": 0, "title": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(25).to_list(25),
             )
@@ -570,7 +570,7 @@ async def rag_search(
             #   (1) subjects by name/desc/tags
             #   (2) ALL chapters whose title matches keywords → backtrack to subject
             #   (3) chunks whose content matches keywords → backtrack to subject via chapter_id
-            _subj_proj = {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1}
+            _subj_proj = {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1, "icon": 1, "gradient": 1}
             _ch_proj   = {"_id": 0, "id": 1, "subject_id": 1, "title": 1, "description": 1, "order_index": 1}
             chunks, subjects_by_name, chapters_by_title = await asyncio.gather(
                 db.chunks.find({"$or": regex_parts}, {"_id": 0}).sort("priority", 1).limit(15).to_list(15),
@@ -596,7 +596,8 @@ async def rag_search(
             extra_subjects: list = []
             if extra_ids:
                 extra_subjects = await db.subjects.find(
-                    {"id": {"$in": extra_ids}, "status": "published"}, _subj_proj
+                    {"id": {"$in": extra_ids}, "status": "published"},
+                    {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1, "icon": 1, "gradient": 1}
                 ).to_list(20)
 
             # ── Score & re-rank ALL candidate subjects ────────────────────────────
