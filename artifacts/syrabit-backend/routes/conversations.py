@@ -47,6 +47,47 @@ async def get_conversation(conv_id: str, user: dict = Depends(get_current_user))
     conv = await supa_get_conversation(conv_id, user["id"])
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = conv.get("messages", [])
+    if isinstance(messages, str):
+        import json as _json
+        try: messages = _json.loads(messages)
+        except: messages = []
+    _cache = {}
+    for m in messages:
+        if m.get("role") != "assistant":
+            continue
+        if m.get("rag_stream_name"):
+            continue
+        sid = m.get("rag_subject_id") or conv.get("subject_id")
+        if not sid:
+            continue
+        if sid not in _cache:
+            try:
+                subj = await db.subjects.find_one({"id": sid}, {"_id": 0, "stream_id": 1})
+                if subj and subj.get("stream_id"):
+                    stream = await db.streams.find_one({"id": subj["stream_id"]}, {"_id": 0, "name": 1, "class_id": 1})
+                    if stream:
+                        cls = await db.classes.find_one({"id": stream["class_id"]}, {"_id": 0, "name": 1, "board_id": 1})
+                        board = await db.boards.find_one({"id": cls["board_id"]}, {"_id": 0, "name": 1}) if cls else None
+                        _cache[sid] = {
+                            "stream_name": stream.get("name", ""),
+                            "class_name": cls.get("name", "") if cls else "",
+                            "board_name": board.get("name", "") if board else "",
+                        }
+                    else:
+                        _cache[sid] = {}
+                else:
+                    _cache[sid] = {}
+            except:
+                _cache[sid] = {}
+        ctx = _cache.get(sid, {})
+        if ctx.get("stream_name"):
+            m["rag_stream_name"] = ctx["stream_name"]
+        if not m.get("rag_board_name") and ctx.get("board_name"):
+            m["rag_board_name"] = ctx["board_name"]
+        if not m.get("rag_class_name") and ctx.get("class_name"):
+            m["rag_class_name"] = ctx["class_name"]
+    conv["messages"] = messages
     return conv
 
 @router.delete("/conversations/{conv_id}")
