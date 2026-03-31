@@ -110,7 +110,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const boardLabel = msg.rag_board_name || null;
               const classLabel = msg.rag_class_name || null;
               const subjectUrl = msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null;
-              const subjectIcon = msg.ctx_subject_icon || '📚';
               const handleCardNav = () => {
                 if (!subjectUrl) return;
                 navigate(subjectUrl);
@@ -118,17 +117,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const isDocument = msg.rag_source === 'document';
               const isWeb = msg.rag_source === 'web';
               const hasContext = boardLabel || subjectLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
-
-              const GRAD_MAP = {
-                math:      ['#4f46e5', '#7c3aed'],
-                physics:   ['#2563eb', '#0891b2'],
-                chemistry: ['#059669', '#0d9488'],
-                biology:   ['#16a34a', '#15803d'],
-                arts:      ['#d97706', '#b45309'],
-                science:   ['#7c3aed', '#4f46e5'],
-              };
-              const gradKey = msg.ctx_subject_gradient || 'arts';
-              const thumbColors = GRAD_MAP[gradKey] || GRAD_MAP.arts;
 
               return (
                 <>
@@ -140,48 +128,36 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                         background: 'var(--card, rgba(20,20,30,0.9))',
                         border: '1px solid rgba(139,92,246,0.10)',
                         maxWidth: 'fit-content',
-                        minWidth: '220px',
                       }}
                       role={subjectUrl ? 'link' : undefined}
                       aria-label={subjectUrl ? `View ${subjectLabel}` : undefined}
                     >
-                      <div className="flex items-start gap-3 px-3 py-2.5">
-                        <div
-                          className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
-                          style={{
-                            background: `linear-gradient(135deg, ${thumbColors[0]}30, ${thumbColors[1]}20)`,
-                            border: `1px solid ${thumbColors[0]}30`,
-                          }}
+                      <div className="px-3 py-2.5">
+                        <h4
+                          className="text-foreground font-bold leading-tight truncate"
+                          style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}
                         >
-                          {subjectIcon}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <h4
-                            className="text-foreground font-bold leading-tight truncate"
-                            style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}
-                          >
-                            {subjectLabel}
-                          </h4>
-                          <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1">
-                            {boardLabel && (
-                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))' }}>
-                                {boardLabel}
+                          {subjectLabel}
+                        </h4>
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1">
+                          {boardLabel && (
+                            <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))' }}>
+                              {boardLabel}
+                            </span>
+                          )}
+                          {classLabel && (
+                            <span className="text-[11px] text-muted-foreground">
+                              {classLabel}
+                            </span>
+                          )}
+                          {courseLabel && (
+                            <>
+                              <span className="text-[11px] text-muted-foreground/60">·</span>
+                              <span className="text-[11px] text-muted-foreground/60">
+                                {courseLabel}
                               </span>
-                            )}
-                            {classLabel && (
-                              <span className="text-[11px] text-muted-foreground">
-                                {classLabel}
-                              </span>
-                            )}
-                            {courseLabel && (
-                              <>
-                                <span className="text-[11px] text-muted-foreground/60">·</span>
-                                <span className="text-[11px] text-muted-foreground/60">
-                                  {courseLabel}
-                                </span>
-                              </>
-                            )}
-                          </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
