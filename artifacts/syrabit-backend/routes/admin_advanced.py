@@ -667,9 +667,11 @@ async def delete_notification_trigger(trigger_id: str, admin: dict = Depends(get
 # ── T005: PDF-to-Syllabus Importer ───────────────────────────────────────────
 
 _VALID_PAPER_TYPES = {"major", "minor", "mdc", "vac", "aec", "sec", "ge", "cc"}
+_VALID_BOARDS = {"ahsec", "seba", "degree"}
+_AHSEC_SEBA_STREAMS = {"science", "arts", "commerce"}
 
-_SYLLABUS_EXTRACT_PROMPT = """
-You are parsing an official university/board syllabus PDF for students in Assam, India.
+_SYLLABUS_EXTRACT_PROMPT_DEGREE = """
+You are parsing an official university/board syllabus PDF for degree-level students in Assam, India (NEP / FYUGP curriculum).
 
 The PDF may contain ONE or MULTIPLE subjects (one subject per page/section). Extract EVERY subject found.
 
@@ -677,8 +679,8 @@ Paper type for ALL subjects in this PDF: {paper_type}
 
 For EACH subject, return one JSON object in this exact schema:
 {{
-  "board": "<College / University / Board name exactly as stated, e.g. 'Darrang College (Autonomous)', 'Gauhati University', 'AHSEC'>",
-  "class_year": "<Year of study — e.g. '1st Year', '2nd Year', 'HS 1st Year', 'Class 10'>",
+  "board": "<College / University / Board name exactly as stated, e.g. 'Darrang College (Autonomous)', 'Gauhati University'>",
+  "class_year": "<Year of study — e.g. '1st Year', '2nd Year'>",
   "semester": "<Semester label — e.g. 'Semester 1', 'Semester 2', '' if annual/not stated>",
   "semester_number": <integer 1-8 if stated, else 0>,
   "subject_name": "<Exact subject/course name as printed>",
@@ -708,7 +710,87 @@ Rules:
 - Return ONLY a valid JSON array. No markdown fences, no explanations.
 """.strip()
 
-_CHAPTER_CONTENT_PROMPT = """You are an expert academic content writer for degree-level students in Assam, India.
+_SYLLABUS_EXTRACT_PROMPT_AHSEC = """
+You are parsing an official AHSEC (Assam Higher Secondary Education Council) syllabus PDF for HS 1st Year or HS 2nd Year students in Assam, India.
+
+The PDF may contain ONE or MULTIPLE subjects. Extract EVERY subject found.
+Stream: {stream}
+
+For EACH subject, return one JSON object in this exact schema:
+{{
+  "board": "AHSEC",
+  "class_year": "<HS 1st Year or HS 2nd Year — infer from context>",
+  "semester": "",
+  "semester_number": 0,
+  "subject_name": "<Exact subject name as printed, e.g. 'Physics', 'English', 'Accountancy'>",
+  "course_code": "",
+  "credits": 0,
+  "paper_type": "",
+  "stream_target": "{stream}",
+  "chapters": [
+    {{
+      "title": "<Chapter/Unit exact title as printed>",
+      "description": "<Concise summary of all topics/subtopics under this chapter>",
+      "topics": ["<subtopic 1>", "<subtopic 2>", "<subtopic 3>"]
+    }}
+  ],
+  "topics": ["<Key topic 1>", "<Key topic 2>", ...],
+  "guidelines": "<Course objectives or learning goals, or ''>"
+}}
+
+Rules:
+- Extract EVERY subject in the PDF — do NOT skip any.
+- chapters = numbered chapters or units from the syllabus.
+- For EACH chapter, "title" MUST NOT be empty.
+- topics (top-level) = key terms across all chapters (max 20 per subject).
+- Return ONLY a valid JSON array. No markdown fences, no explanations.
+""".strip()
+
+_SYLLABUS_EXTRACT_PROMPT_SEBA = """
+You are parsing an official SEBA (Board of Secondary Education, Assam) syllabus PDF for Class 9 or Class 10 students in Assam, India.
+
+The PDF may contain ONE or MULTIPLE subjects. Extract EVERY subject found.
+
+For EACH subject, return one JSON object in this exact schema:
+{{
+  "board": "SEBA",
+  "class_year": "<Class 9 or Class 10 — infer from context>",
+  "semester": "",
+  "semester_number": 0,
+  "subject_name": "<Exact subject name as printed>",
+  "course_code": "",
+  "credits": 0,
+  "paper_type": "",
+  "stream_target": "All",
+  "chapters": [
+    {{
+      "title": "<Chapter/Unit exact title as printed>",
+      "description": "<Concise summary of all topics/subtopics under this chapter>",
+      "topics": ["<subtopic 1>", "<subtopic 2>", "<subtopic 3>"]
+    }}
+  ],
+  "topics": ["<Key topic 1>", "<Key topic 2>", ...],
+  "guidelines": "<Course objectives or learning goals, or ''>"
+}}
+
+Rules:
+- Extract EVERY subject in the PDF.
+- chapters = numbered chapters or units from the syllabus.
+- For EACH chapter, "title" MUST NOT be empty.
+- topics (top-level) = key terms across all chapters (max 20 per subject).
+- Return ONLY a valid JSON array. No markdown fences, no explanations.
+""".strip()
+
+def _get_extract_prompt(board: str, paper_type: str = "", stream: str = "") -> str:
+    board = board.lower().strip()
+    if board == "ahsec":
+        return _SYLLABUS_EXTRACT_PROMPT_AHSEC.format(stream=stream.capitalize() or "Science")
+    elif board == "seba":
+        return _SYLLABUS_EXTRACT_PROMPT_SEBA
+    else:
+        return _SYLLABUS_EXTRACT_PROMPT_DEGREE.format(paper_type=paper_type or "major")
+
+_CHAPTER_CONTENT_PROMPT_DEGREE = """You are an expert academic content writer for degree-level students in Assam, India (NEP / FYUGP curriculum).
 
 Generate comprehensive educational notes (Markdown format, 600–1000 words) for:
 Subject: {subject_name}
@@ -739,23 +821,79 @@ Rules:
 - Return ONLY the markdown content, no preamble
 """.strip()
 
+_CHAPTER_CONTENT_PROMPT_SCHOOL = """You are an expert educational content writer creating study notes for {board_label} students in Assam, India.
+
+Generate comprehensive study notes (Markdown format, 600–1000 words) for:
+Subject: {subject_name}
+Chapter: {chapter_title}
+Topics covered: {topics}
+Class/Board: {board_semester}
+
+Structure the content as:
+## {chapter_title}
+### Introduction
+(2-3 paragraphs introducing the chapter in simple language)
+
+### Key Concepts & Definitions
+(Define and explain each major concept clearly)
+
+### {topic_sections}
+(One ### section per major topic — explain with examples, diagrams descriptions)
+
+### Important Questions (Previous Year Pattern)
+(5-8 likely exam questions based on Assamboard pattern)
+
+### Summary
+(Bullet-point summary of key takeaways)
+
+Rules:
+- Write for {level_desc}
+- Use clear, simple language appropriate for the level
+- Include real examples from Assam/Northeast India where applicable
+- Cover NCERT + Assamboard syllabus points
+- Include exam-oriented tips and important definitions
+- Do NOT use placeholder text — write actual educational content
+- Return ONLY the markdown content, no preamble
+""".strip()
+
+def _get_content_prompt(board: str) -> str:
+    board = board.lower().strip()
+    if board == "ahsec":
+        return _CHAPTER_CONTENT_PROMPT_SCHOOL
+    elif board == "seba":
+        return _CHAPTER_CONTENT_PROMPT_SCHOOL
+    else:
+        return _CHAPTER_CONTENT_PROMPT_DEGREE
+
+def _board_prompt_vars(board: str) -> dict:
+    board = board.lower().strip()
+    if board == "ahsec":
+        return {"board_label": "AHSEC Higher Secondary (HS)", "level_desc": "HS 1st/2nd Year students (Class 11-12 level)"}
+    elif board == "seba":
+        return {"board_label": "SEBA", "level_desc": "Class 9-10 secondary school students"}
+    else:
+        return {"board_label": "Degree (NEP FYUGP)", "level_desc": "undergraduate degree students"}
+
 # ── Helper: generate chapter-level educational content via AI ─────────────────
 async def _agentic_generate_chapter_content(
     subject_name: str,
     chapter_title: str,
     topics: list,
     board_semester: str,
+    board: str = "degree",
 ) -> str:
     """Use LLM pool to generate educational markdown for a chapter."""
     topics_str = ", ".join(topics[:12]) if topics else "as listed in the chapter title"
-    # Build topic section headers
     topic_sections = "\n".join([f"### {t}" for t in topics[:6]]) if topics else "### Core Content"
-    prompt = _CHAPTER_CONTENT_PROMPT.format(
+    template = _get_content_prompt(board)
+    extra_vars = _board_prompt_vars(board)
+    prompt = template.format(
         subject_name=subject_name,
         chapter_title=chapter_title,
         topics=topics_str,
         board_semester=board_semester,
         topic_sections=topic_sections,
+        **extra_vars,
     )
     try:
         result = await slm_pool.complete(
@@ -778,17 +916,22 @@ async def _agentic_generate_chapter_content(
 async def agentic_syllabus_run(
     file: UploadFile = File(...),
     paper_type: str  = Form("major"),
+    board: str       = Form("degree"),
+    stream: str      = Form(""),
     admin: dict      = Depends(get_admin_user),
 ):
     """
     Agentic Syllabus Uploader — full autonomous pipeline, streamed as SSE.
+    Supports AHSEC, SEBA, and DEGREE boards with board-specific prompts.
 
     Pipeline per subject:
       PDF scan → identify subjects → for each subject:
-        hierarchy link (board→semester→stream→subject) →
+        hierarchy link (board→class→stream→subject) →
         chapter content generation (AI) →
         auto-chunk →
         embed (RAG) →
+        flag notes_generated →
+        create chapter-wise blog drafts →
         SEO/GEO topic tagging →
         next subject
 
@@ -796,9 +939,18 @@ async def agentic_syllabus_run(
     """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files supported")
+    board = board.lower().strip() or "degree"
+    if board not in _VALID_BOARDS:
+        board = "degree"
     paper_type = paper_type.lower().strip()
-    if paper_type not in _VALID_PAPER_TYPES:
-        raise HTTPException(status_code=400, detail=f"paper_type must be one of: {', '.join(sorted(_VALID_PAPER_TYPES))}")
+    stream = stream.lower().strip()
+    if board == "degree":
+        if paper_type not in _VALID_PAPER_TYPES:
+            raise HTTPException(status_code=400, detail=f"paper_type must be one of: {', '.join(sorted(_VALID_PAPER_TYPES))}")
+    elif board in ("ahsec", "seba"):
+        if stream and stream not in _AHSEC_SEBA_STREAMS:
+            stream = "science"
+        paper_type = ""
 
     pdf_bytes  = await file.read()
     filename   = file.filename
@@ -838,12 +990,12 @@ async def agentic_syllabus_run(
 
     async def _pipeline():
         # ── 1. SCAN: Extract subjects from PDF ───────────────────────────────
-        yield _sse("scan_start", {"filename": filename, "paper_type": paper_type})
+        yield _sse("scan_start", {"filename": filename, "paper_type": paper_type, "board": board, "stream": stream})
 
         extracted: list = []
         try:
             b64_pdf = _b64.b64encode(pdf_bytes).decode()
-            prompt  = _SYLLABUS_EXTRACT_PROMPT.format(paper_type=paper_type)
+            prompt  = _get_extract_prompt(board, paper_type, stream)
             headers = await vertex_services._auth_headers()
             body    = {
                 "contents": [{"parts": [
@@ -875,7 +1027,7 @@ async def agentic_syllabus_run(
                 resp = await slm_pool.complete(
                     messages=[
                         {"role": "system", "content": "Extract syllabus from text. Return JSON array."},
-                        {"role": "user",   "content": _SYLLABUS_EXTRACT_PROMPT.format(paper_type=paper_type) + f"\n\nPDF TEXT:\n{full_text[:12000]}"},
+                        {"role": "user",   "content": _get_extract_prompt(board, paper_type, stream) + f"\n\nPDF TEXT:\n{full_text[:12000]}"},
                     ],
                     max_tokens=4096, temperature=0.1, task_hint="classification",
                 )
@@ -910,7 +1062,8 @@ async def agentic_syllabus_run(
             sem_num  = entry_raw.get("semester_number", 0) or 0
             if sem_num and not sem_raw:
                 sem_raw = f"Semester {sem_num}"
-            board_semester = f"{entry_raw.get('board','DEGREE')} / {sem_raw or 'Semester 1'}"
+            effective_board = board.upper() if board in ("ahsec", "seba") else (entry_raw.get("board", "DEGREE") or "DEGREE")
+            board_semester = f"{effective_board} / {sem_raw or entry_raw.get('class_year', '') or 'Semester 1'}"
 
             # Normalise chapter list
             raw_chaps = entry_raw.get("chapters", [])
@@ -938,13 +1091,16 @@ async def agentic_syllabus_run(
             })
 
             # ── 2a. Link hierarchy ────────────────────────────────────────────
+            linker_board = effective_board if board in ("ahsec", "seba") else (entry_raw.get("board") or "").strip()
+            linker_paper = paper_type if board == "degree" else ""
+            linker_stream = stream.capitalize() if board in ("ahsec", "seba") and stream else (entry_raw.get("stream_target") or "All").strip()
             entry = SyllabusEntry(
-                board_name      = (entry_raw.get("board") or "").strip(),
+                board_name      = linker_board,
                 class_year      = (entry_raw.get("class_year") or "").strip(),
                 semester        = sem_raw.strip(),
                 subject_name    = subject_name,
-                paper_type      = paper_type,
-                stream_hint     = (entry_raw.get("stream_target") or "All").strip(),
+                paper_type      = linker_paper,
+                stream_hint     = linker_stream,
                 chapters        = [ch["title"] for ch in chapter_details],
                 chapter_details = chapter_details,
                 topics          = [t for t in entry_raw.get("topics", []) if isinstance(t, str)][:20],
@@ -985,6 +1141,7 @@ async def agentic_syllabus_run(
                 ).to_list(200)
 
             ch_map = {doc["title"].lower().strip(): doc for doc in ch_docs}
+            generated_contents = {}
 
             for ch_idx, ch_detail in enumerate(chapter_details):
                 ch_title  = ch_detail["title"]
@@ -1010,6 +1167,7 @@ async def agentic_syllabus_run(
                             chapter_title=ch_title,
                             topics=ch_topics or entry.topics[:8],
                             board_semester=board_semester,
+                            board=board,
                         )
                     except Exception:
                         content = f"## {ch_title}\n\n" + "\n\n".join(f"### {t}\n\n*Content for {t}.*" for t in (ch_topics or [ch_title]))
@@ -1024,6 +1182,8 @@ async def agentic_syllabus_run(
                 else:
                     content = existing_content
                     yield _sse("chapter_content", {"chapter": ch_title, "length": len(content), "existing": True})
+
+                generated_contents[ch_title.lower().strip()] = {"content": content, "chapter_id": chapter_id}
 
                 # Auto-chunk
                 geo_tags = [board_disp, class_disp, subject_name, ch_title]
@@ -1050,10 +1210,68 @@ async def agentic_syllabus_run(
                 except Exception as ee:
                     yield _sse("chapter_embedded", {"chapter": ch_title, "ok": False})
 
+                # Flag notes_generated on the chapter doc
+                if ch_doc:
+                    try:
+                        await db.chapters.update_one(
+                            {"id": chapter_id},
+                            {"$set": {"notes_generated": True, "notes_generated_at": datetime.now(timezone.utc).isoformat()}}
+                        )
+                    except Exception:
+                        pass
+
             total_chapters_all += n_chapters
             total_chunks_all   += chap_chunks_total
 
-            # ── 2c. SEO/GEO topic tagging ─────────────────────────────────────
+            # ── 2c. Create chapter-wise blog drafts ────────────────────────────
+            blog_drafts_created = 0
+            if subject_ids:
+                from routes.admin_monetization import _md_to_html as _blog_md_to_html_fn
+                _now_iso = datetime.now(timezone.utc).isoformat()
+                for ch_detail in chapter_details:
+                    ch_t = ch_detail["title"]
+                    gen_entry = generated_contents.get(ch_t.lower().strip())
+                    if not gen_entry:
+                        continue
+                    ch_content = gen_entry["content"]
+                    ch_chapter_id = gen_entry["chapter_id"]
+                    if len(ch_content.strip()) < 100:
+                        continue
+                    ch_slug_val = re.sub(r'[^a-z0-9]+', '-', f"{ch_t} {subject_name}".lower()).strip('-')
+                    ch_html = _blog_md_to_html_fn(ch_content)
+                    ch_wc = len(re.sub(r'<[^>]+>', '', ch_html).split())
+                    blog_doc = {
+                        "subject_id": subject_ids[0],
+                        "chapter_id": ch_chapter_id,
+                        "title": f"{ch_t} — {subject_name}",
+                        "seo_slug": ch_slug_val,
+                        "board_slug": board_disp.lower().replace(' ', '-'),
+                        "class_slug": class_disp.lower().replace(' ', '-'),
+                        "content": ch_html,
+                        "merged_md": ch_content,
+                        "word_count": ch_wc,
+                        "status": "draft",
+                        "schema_type": "Article",
+                        "primary_keyword": f"{ch_t} {subject_name} Assamboard notes",
+                        "updated_at": _now_iso,
+                    }
+                    existing_blog = await db.cms_documents.find_one(
+                        {"subject_id": subject_ids[0], "chapter_id": ch_chapter_id}, {"_id": 0, "id": 1}
+                    )
+                    if existing_blog:
+                        await db.cms_documents.update_one(
+                            {"subject_id": subject_ids[0], "chapter_id": ch_chapter_id},
+                            {"$set": blog_doc}
+                        )
+                    else:
+                        blog_doc["id"] = str(uuid.uuid4())
+                        blog_doc["created_at"] = _now_iso
+                        await db.cms_documents.insert_one(blog_doc)
+                    blog_drafts_created += 1
+                if blog_drafts_created:
+                    yield _sse("blog_drafts_created", {"subject": subject_name, "count": blog_drafts_created})
+
+            # ── 2d. SEO/GEO topic tagging ─────────────────────────────────────
             geo_phrase = f"{board_disp}, {class_disp}, {subject_name}, Assam"
             if subject_ids:
                 await db.subjects.update_one(
@@ -1093,6 +1311,7 @@ async def agentic_syllabus_run(
                 "name":           subject_name,
                 "chapters_done":  n_chapters,
                 "chunks_created": chap_chunks_total,
+                "blog_drafts":    blog_drafts_created,
                 "subject_ids":    subject_ids,
             })
 
@@ -1148,7 +1367,7 @@ async def syllabus_import_pdf(
     import vertex_services
 
     b64_pdf = _b64.b64encode(pdf_bytes).decode()
-    prompt = _SYLLABUS_EXTRACT_PROMPT.format(paper_type=paper_type)
+    prompt = _SYLLABUS_EXTRACT_PROMPT_DEGREE.format(paper_type=paper_type)
 
     logger.info(f"[pdf_import] START paper_type={paper_type} size={len(pdf_bytes)}B gemini_ok={vertex_services._ok()}")
 

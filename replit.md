@@ -33,21 +33,29 @@ The backend (`artifacts/syrabit-backend/`) is split into modular files:
 
 **Dependency hierarchy:** config → deps → cache → auth_deps → db_ops → llm/rag/utils → routes → server.py
 
-## Agentic Syllabus Uploader (added 2026-03-30)
+## Agentic Syllabus Uploader (updated 2026-03-31)
 
 - **Backend**: `POST /api/admin/agentic-syllabus/run` — SSE streaming endpoint.  
+  Supports 3 boards: **AHSEC**, **SEBA**, **Degree** with board-specific extraction prompts and content generation.  
+  Accepts form params: `file`, `board` (ahsec/seba/degree), `paper_type` (degree only), `stream` (ahsec/seba: science/arts/commerce).  
   Full autonomous pipeline: PDF upload → Gemini Vision scans all subjects → for each subject sequentially:  
-  1. `SyllabusLinker.link()` → auto-creates board/semester/stream/subject hierarchy in MongoDB  
-  2. `_agentic_generate_chapter_content()` → LLM generates 600–1000 word markdown notes per chapter  
+  1. `SyllabusLinker.link()` → auto-creates board/class/stream/subject hierarchy in MongoDB  
+  2. `_agentic_generate_chapter_content()` → board-aware LLM notes (degree=academic, AHSEC/SEBA=exam-oriented with PYQ patterns)  
   3. `auto_chunk_content()` → splits content into RAG-ready chunks with geo_tags  
-  4. `_embed_and_store_chapter()` → embedds chapters into `syllabus_embeddings` for AI chat RAG  
-  5. SEO/GEO topic tagging per subject  
-  6. Saves import record to `syllabus_pdf_imports`  
-  7. Invalidates content caches + reseeds syllabus embedder  
-  Streams SSE events: `scan_start → scan_complete → subject_start → hierarchy → chapter_start → chapter_content → chapter_chunked → chapter_embedded → seo_tagged → subject_done → complete`
+  4. `_embed_and_store_chapter()` → embeds chapters into `syllabus_embeddings` for AI chat RAG  
+  5. Flags `notes_generated` on each chapter doc  
+  6. Creates chapter-wise CMS blog drafts in `cms_documents`  
+  7. SEO/GEO topic tagging per subject  
+  8. Saves import record to `syllabus_pdf_imports`  
+  9. Invalidates content caches + reseeds syllabus embedder  
+  Streams SSE events: `scan_start → scan_complete → subject_start → hierarchy → chapter_start → chapter_content → chapter_chunked → chapter_embedded → blog_drafts_created → seo_tagged → subject_done → complete`
 - **Frontend**: `AgenticSyllabusUploader.jsx` — 3-phase wizard (Upload PDF → Running/Live log → Done summary).  
-  - PDF drag-and-drop zone + paper type picker (major/minor/mdc/vac/aec/sec/ge/cc)  
+  - Board selector (Degree/AHSEC/SEBA) with adaptive sub-selectors:  
+    - Degree → paper type picker (major/minor/mdc/vac/aec/sec/ge/cc)  
+    - AHSEC/SEBA → stream picker (Science/Arts/Commerce)  
+  - Dynamic pipeline steps diagram updates based on board  
   - Real-time per-subject subject cards with chapter-level progress (content/chunk/embed step dots)  
+  - Blog draft count shown per subject  
   - Side-by-side layout: subjects list (left) + live log with colour-coded events (right)  
   - Import Another / Cancel button for reset  
 - **Integration**: Added to `AdminSyllabusManager.jsx` above existing Manual PDF Importer. Calls `loadImports()` + `onHubContext` on completion.  

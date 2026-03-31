@@ -3,7 +3,7 @@ import { log } from '@/utils/logger';
 import {
   Upload, Loader2, CheckCircle2, XCircle, ChevronDown, ChevronRight,
   Sparkles, BookOpen, Brain, Layers, Database, Zap, FileText,
-  Globe, ArrowRight, RefreshCw, AlertTriangle,
+  Globe, ArrowRight, RefreshCw, AlertTriangle, PenTool, GraduationCap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { adminSeoRunSubject } from '@/utils/api';
@@ -14,6 +14,12 @@ function authHeaders(token) {
   const isJwt = token && token.split('.').length === 3;
   return isJwt ? { Authorization: `Bearer ${token}` } : {};
 }
+
+const BOARDS = [
+  { value: 'degree', label: 'Degree',  icon: GraduationCap, desc: 'NEP / FYUGP undergraduate' },
+  { value: 'ahsec',  label: 'AHSEC',   icon: BookOpen,      desc: 'HS 1st/2nd Year (Class 11-12)' },
+  { value: 'seba',   label: 'SEBA',    icon: BookOpen,      desc: 'Class 9-10 Secondary' },
+];
 
 const PAPER_TYPES = [
   { value: 'major', label: 'Major',  icon: '🎯', desc: 'Core discipline course' },
@@ -26,7 +32,12 @@ const PAPER_TYPES = [
   { value: 'cc',    label: 'CC',     icon: '⭐', desc: 'Core Course' },
 ];
 
-// pipeline step definitions per chapter
+const STREAMS = [
+  { value: 'science',  label: 'Science',  icon: '🔬' },
+  { value: 'arts',     label: 'Arts',     icon: '📜' },
+  { value: 'commerce', label: 'Commerce', icon: '📊' },
+];
+
 const CHAPTER_STEPS = [
   { key: 'chapter_content',  icon: Brain,    label: 'AI content generated'  },
   { key: 'chapter_chunked',  icon: Layers,   label: 'Content chunked (RAG)' },
@@ -61,10 +72,10 @@ function SubjectCard({ subj, isActive }) {
             {subj.semester && <span>{subj.semester} · </span>}
             {subj.chapters?.length > 0 && <span>{subj.chapters.length} chapters</span>}
             {subj.chunks_created > 0 && <span> · {subj.chunks_created} chunks</span>}
+            {subj.blog_drafts > 0 && <span> · {subj.blog_drafts} blog drafts</span>}
           </div>
         </div>
 
-        {/* Chapter progress bar */}
         {status === 'active' && subj.chapters?.length > 0 && (
           <div style={{ width: 80 }}>
             <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
@@ -112,14 +123,34 @@ function SubjectCard({ subj, isActive }) {
   );
 }
 
+function updateChapterStep(setSubjects, chapterTitle, stepKey, chunks) {
+  setSubjects(prev => {
+    const copy = [...prev];
+    for (let si = 0; si < copy.length; si++) {
+      const chs = copy[si].chapters || [];
+      const ci = chs.findIndex(c => c.title === chapterTitle);
+      if (ci >= 0) {
+        const newChs = [...chs];
+        newChs[ci] = { ...newChs[ci], steps: { ...newChs[ci].steps, [stepKey]: true } };
+        if (chunks !== undefined) newChs[ci].chunks = chunks;
+        copy[si] = { ...copy[si], chapters: newChs };
+        break;
+      }
+    }
+    return copy;
+  });
+}
+
 export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
-  const [phase, setPhase]             = useState('upload');   // upload | running | done
+  const [phase, setPhase]             = useState('upload');
   const [file, setFile]               = useState(null);
+  const [board, setBoard]             = useState('degree');
   const [paperType, setPaperType]     = useState('major');
+  const [stream, setStream]           = useState('science');
   const [dragging, setDragging]       = useState(false);
   const [running, setRunning]         = useState(false);
   const [subjects, setSubjects]       = useState([]);
-  const [log, setLog]                 = useState([]);
+  const [logEntries, setLogEntries]   = useState([]);
   const [summary, setSummary]         = useState(null);
   const [scanTotal, setScanTotal]     = useState(0);
   const [activeSubjIdx, setActiveSubjIdx] = useState(-1);
@@ -128,7 +159,7 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
   const abortRef  = useRef(null);
 
   const addLog = useCallback((msg, color = 'rgba(232,232,232,0.45)') => {
-    setLog(prev => [...prev.slice(-120), { msg, color, ts: Date.now() }]);
+    setLogEntries(prev => [...prev.slice(-120), { msg, color, ts: Date.now() }]);
     setTimeout(() => logEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
   }, []);
 
@@ -152,19 +183,25 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
     setRunning(true);
     setPhase('running');
     setSubjects([]);
-    setLog([]);
+    setLogEntries([]);
     setSummary(null);
     setActiveSubjIdx(-1);
 
     const form = new FormData();
     form.append('file', file);
-    form.append('paper_type', paperType);
+    form.append('board', board);
+    if (board === 'degree') {
+      form.append('paper_type', paperType);
+    } else {
+      form.append('stream', stream);
+    }
 
     const controller = new AbortController();
     abortRef.current = controller;
 
+    const boardLabel = BOARDS.find(b => b.value === board)?.label || board.toUpperCase();
     addLog(`Starting agentic import: ${file.name}`, '#c4b5fd');
-    addLog(`Paper type: ${paperType.toUpperCase()}`, 'rgba(232,232,232,0.3)');
+    addLog(`Board: ${boardLabel}${board === 'degree' ? ` · Paper: ${paperType.toUpperCase()}` : ` · Stream: ${stream}`}`, 'rgba(232,232,232,0.3)');
 
     try {
       const resp = await fetch(`${API}/admin/agentic-syllabus/run`, {
@@ -184,26 +221,25 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
       const decoder = new TextDecoder();
       let buf = '';
 
-      // State held in ref to avoid stale closure issues
-      const subjMapRef = { current: {} };  // name → subject obj
+      const subjMapRef = { current: {} };
 
       const processEvent = (eventName, data) => {
         switch (eventName) {
           case 'scan_start':
             addLog(`📄 Scanning PDF: ${data.filename}`, '#60a5fa');
-            addLog(`   Extracting subjects with Gemini Vision…`, 'rgba(232,232,232,0.3)');
+            addLog(`   Board: ${data.board?.toUpperCase() || 'DEGREE'}${data.stream ? ` · Stream: ${data.stream}` : ''}`, 'rgba(232,232,232,0.3)');
             break;
 
           case 'scan_complete': {
             setScanTotal(data.total);
             addLog(`✅ Found ${data.total} subject(s): ${data.subjects.join(', ')}`, '#34d399');
-            // Pre-populate subjects list
             const newSubjs = (data.subjects || []).map(name => ({
               name,
               status: 'pending',
               chapters: [],
               doneCh: 0,
               chunks_created: 0,
+              blog_drafts: 0,
             }));
             newSubjs.forEach(s => { subjMapRef.current[s.name] = s; });
             setSubjects([...newSubjs]);
@@ -212,7 +248,7 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
 
           case 'subject_start': {
             addLog(`\n📚 [${data.index + 1}/${data.total}] ${data.name}`, '#a78bfa');
-            addLog(`   ${data.board || 'DEGREE'} · ${data.semester || 'Semester ?'} · ${data.chapters} chapters`, 'rgba(232,232,232,0.3)');
+            addLog(`   ${data.board || 'DEGREE'} · ${data.semester || data.class || 'Semester ?'} · ${data.chapters} chapters`, 'rgba(232,232,232,0.3)');
             setActiveSubjIdx(data.index);
             setSubjects(prev => {
               const copy = [...prev];
@@ -261,7 +297,6 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
           case 'chapter_embedded':
             addLog(`      🔗 Embedded: ${data.ok ? 'ok' : 'skipped'}`, data.ok ? '#86efac' : 'rgba(232,232,232,0.3)');
             updateChapterStep(setSubjects, data.chapter, 'chapter_embedded');
-            // Mark chapter done
             setSubjects(prev => {
               const copy = [...prev];
               for (let si = 0; si < copy.length; si++) {
@@ -279,6 +314,16 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
             });
             break;
 
+          case 'blog_drafts_created':
+            addLog(`   📝 Blog drafts created: ${data.count} for ${data.subject}`, '#67e8f9');
+            setSubjects(prev => {
+              const copy = [...prev];
+              const idx  = copy.findIndex(s => s.name === data.subject);
+              if (idx >= 0) copy[idx] = { ...copy[idx], blog_drafts: data.count };
+              return copy;
+            });
+            break;
+
           case 'seo_tagged':
             addLog(`   🌐 SEO tagged: ${data.geo_phrase}`, '#67e8f9');
             setSubjects(prev => {
@@ -290,11 +335,11 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
             break;
 
           case 'subject_done':
-            addLog(`   ✅ ${data.name} done — ${data.chapters_done} chapters, ${data.chunks_created} chunks`, '#34d399');
+            addLog(`   ✅ ${data.name} done — ${data.chapters_done} chapters, ${data.chunks_created} chunks${data.blog_drafts ? `, ${data.blog_drafts} blog drafts` : ''}`, '#34d399');
             setSubjects(prev => {
               const copy = [...prev];
               const idx  = copy.findIndex(s => s.name === data.name);
-              if (idx >= 0) copy[idx] = { ...copy[idx], status: 'done', chunks_created: data.chunks_created };
+              if (idx >= 0) copy[idx] = { ...copy[idx], status: 'done', chunks_created: data.chunks_created, blog_drafts: data.blog_drafts || 0 };
               return copy;
             });
             break;
@@ -306,7 +351,6 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
             setPhase('done');
             setRunning(false);
             if (onComplete) onComplete(data);
-            // Auto-trigger SEO pipeline for every newly imported subject
             if (data.subject_ids?.length) {
               addLog(`\n🚀 Auto-triggering SEO pipeline for ${data.subject_ids.length} subject(s)…`, '#a78bfa');
               Promise.allSettled(
@@ -362,22 +406,40 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
       setRunning(false);
       setPhase('upload');
     }
-  }, [file, paperType, adminToken, addLog, onComplete]);
+  }, [file, board, paperType, stream, adminToken, addLog, onComplete]);
 
   const reset = () => {
     abortRef.current?.abort();
     setPhase('upload');
     setFile(null);
     setSubjects([]);
-    setLog([]);
+    setLogEntries([]);
     setSummary(null);
     setRunning(false);
   };
 
-  // ── Upload Phase ──────────────────────────────────────────────────────────
+  const pipelineSteps = board === 'degree'
+    ? [
+        { icon: FileText,  label: 'Upload PDF'      },
+        { icon: Brain,     label: 'AI Scans'        },
+        { icon: BookOpen,  label: 'Builds Hierarchy' },
+        { icon: Layers,    label: 'Chunks Content'  },
+        { icon: Database,  label: 'Embeds RAG'      },
+        { icon: PenTool,   label: 'Blog Drafts'     },
+        { icon: Globe,     label: 'SEO Tags'        },
+      ]
+    : [
+        { icon: FileText,  label: 'Upload PDF'      },
+        { icon: Brain,     label: 'AI Scans'        },
+        { icon: BookOpen,  label: 'Builds Hierarchy' },
+        { icon: Layers,    label: 'Generates Notes' },
+        { icon: Database,  label: 'Embeds RAG'      },
+        { icon: PenTool,   label: 'Blog Drafts'     },
+        { icon: Globe,     label: 'SEO Tags'        },
+      ];
+
   if (phase === 'upload') return (
     <div style={{ background: 'rgba(139,92,246,0.04)', border: '1px solid rgba(139,92,246,0.18)', borderRadius: 14, padding: 20 }}>
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
         <div style={{ width: 32, height: 32, borderRadius: 8, background: 'linear-gradient(135deg,#7c3aed,#a855f7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Sparkles size={16} style={{ color: '#fff' }} />
@@ -385,21 +447,13 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
         <div>
           <div style={{ fontSize: 14, fontWeight: 700, color: '#e8e8e8' }}>Agentic Syllabus Uploader</div>
           <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.4)' }}>
-            PDF → AI scan → auto-import all subjects → chapters → RAG embeddings → SEO tags
+            PDF → AI scan → auto-import subjects → chapters → notes → RAG → blog drafts → SEO
           </div>
         </div>
       </div>
 
-      {/* Pipeline steps diagram */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
-        {[
-          { icon: FileText,  label: 'Upload PDF'      },
-          { icon: Brain,     label: 'AI Scans'        },
-          { icon: BookOpen,  label: 'Builds Hierarchy' },
-          { icon: Layers,    label: 'Chunks Content'  },
-          { icon: Database,  label: 'Embeds RAG'      },
-          { icon: Globe,     label: 'SEO Tags'        },
-        ].map((s, i, arr) => {
+        {pipelineSteps.map((s, i, arr) => {
           const Icon = s.icon;
           return (
             <span key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -412,7 +466,6 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
         })}
       </div>
 
-      {/* Drop zone */}
       <div
         onDragOver={e => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
@@ -443,28 +496,81 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
         )}
       </div>
 
-      {/* Paper type selector */}
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(232,232,232,0.5)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Course / Paper Type
+          Board
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {PAPER_TYPES.map(pt => (
-            <button
-              key={pt.value}
-              onClick={() => setPaperType(pt.value)}
-              style={{
-                padding: '5px 11px', borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${paperType === pt.value ? '#8b5cf6' : 'rgba(255,255,255,0.1)'}`,
-                background: paperType === pt.value ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.03)',
-                color: paperType === pt.value ? '#c4b5fd' : 'rgba(232,232,232,0.45)',
-              }}
-              title={pt.desc}
-            >
-              {pt.icon} {pt.label}
-            </button>
-          ))}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+          {BOARDS.map(b => {
+            const Icon = b.icon;
+            return (
+              <button
+                key={b.value}
+                onClick={() => setBoard(b.value)}
+                style={{
+                  padding: '7px 14px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                  border: `1.5px solid ${board === b.value ? '#8b5cf6' : 'rgba(255,255,255,0.1)'}`,
+                  background: board === b.value ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.03)',
+                  color: board === b.value ? '#c4b5fd' : 'rgba(232,232,232,0.45)',
+                  display: 'flex', alignItems: 'center', gap: 6, flex: 1, justifyContent: 'center',
+                }}
+                title={b.desc}
+              >
+                <Icon size={13} /> {b.label}
+              </button>
+            );
+          })}
         </div>
+
+        {board === 'degree' && (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(232,232,232,0.5)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Course / Paper Type
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {PAPER_TYPES.map(pt => (
+                <button
+                  key={pt.value}
+                  onClick={() => setPaperType(pt.value)}
+                  style={{
+                    padding: '5px 11px', borderRadius: 7, fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                    border: `1px solid ${paperType === pt.value ? '#8b5cf6' : 'rgba(255,255,255,0.1)'}`,
+                    background: paperType === pt.value ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.03)',
+                    color: paperType === pt.value ? '#c4b5fd' : 'rgba(232,232,232,0.45)',
+                  }}
+                  title={pt.desc}
+                >
+                  {pt.icon} {pt.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {(board === 'ahsec' || board === 'seba') && (
+          <>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'rgba(232,232,232,0.5)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Stream
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {STREAMS.map(s => (
+                <button
+                  key={s.value}
+                  onClick={() => setStream(s.value)}
+                  style={{
+                    padding: '6px 14px', borderRadius: 7, fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                    border: `1.5px solid ${stream === s.value ? '#8b5cf6' : 'rgba(255,255,255,0.1)'}`,
+                    background: stream === s.value ? 'rgba(139,92,246,0.2)' : 'rgba(255,255,255,0.03)',
+                    color: stream === s.value ? '#c4b5fd' : 'rgba(232,232,232,0.45)',
+                    flex: 1, textAlign: 'center',
+                  }}
+                >
+                  {s.icon} {s.label}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       <button
@@ -482,10 +588,8 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
     </div>
   );
 
-  // ── Running / Done Phase ──────────────────────────────────────────────────
   return (
     <div style={{ background: 'rgba(6,6,14,0.9)', border: '1px solid rgba(139,92,246,0.2)', borderRadius: 14 }}>
-      {/* Header bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
         {phase === 'done'
           ? <CheckCircle2 size={16} style={{ color: '#10b981' }} />
@@ -501,50 +605,36 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 0, minHeight: 360 }}>
-        {/* Left: Subjects list */}
         <div style={{ borderRight: '1px solid rgba(255,255,255,0.06)', padding: 14, overflowY: 'auto', maxHeight: 480 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(232,232,232,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
             Subjects ({subjects.length}{scanTotal ? ` of ${scanTotal}` : ''})
           </div>
           {subjects.length === 0 && phase === 'running' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: 'rgba(232,232,232,0.35)', fontSize: 12 }}>
-              <Loader2 size={14} className="animate-spin" /> Scanning PDF…
+            <div style={{ textAlign: 'center', padding: 30 }}>
+              <Loader2 size={20} className="animate-spin" style={{ color: '#8b5cf6', margin: '0 auto 8px' }} />
+              <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.3)' }}>Scanning PDF…</div>
             </div>
           )}
-          {subjects.map((s, i) => (
-            <SubjectCard key={i} subj={s} isActive={i === activeSubjIdx && phase === 'running'} />
-          ))}
+          {subjects.map((s, i) => <SubjectCard key={s.name + i} subj={s} isActive={i === activeSubjIdx} />)}
 
-          {/* Summary card when done */}
           {summary && (
-            <div style={{ marginTop: 10, padding: '12px 14px', borderRadius: 10, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: '#34d399', marginBottom: 8 }}>🎉 Import Summary</div>
-              {[
-                { label: 'Subjects',   value: summary.total_subjects  },
-                { label: 'Chapters',   value: summary.total_chapters  },
-                { label: 'RAG Chunks', value: summary.total_chunks    },
-                { label: 'Embeddings', value: summary.total_embedded  },
-              ].map(r => (
-                <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontSize: 11, color: 'rgba(232,232,232,0.5)' }}>{r.label}</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: '#e8e8e8' }}>{r.value}</span>
-                </div>
-              ))}
-              <div style={{ marginTop: 8, fontSize: 10, color: 'rgba(232,232,232,0.3)' }}>
-                AI chat RAG and SEO tags active immediately
+            <div style={{ marginTop: 12, padding: 12, background: 'rgba(16,185,129,0.08)', borderRadius: 8, border: '1px solid rgba(16,185,129,0.15)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#34d399', marginBottom: 6 }}>Summary</div>
+              <div style={{ fontSize: 11, color: '#e8e8e8', lineHeight: 1.6 }}>
+                {summary.total_subjects} subjects · {summary.total_chapters} chapters<br />
+                {summary.total_chunks} RAG chunks · {summary.total_embedded} embeddings
               </div>
             </div>
           )}
         </div>
 
-        {/* Right: Live log */}
-        <div style={{ padding: 14, display: 'flex', flexDirection: 'column', maxHeight: 480 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(232,232,232,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-            Live Log
+        <div style={{ padding: 14, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'rgba(232,232,232,0.3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 10 }}>
+            Activity Log
           </div>
-          <div style={{ flex: 1, overflowY: 'auto', fontFamily: 'monospace', fontSize: 10.5, lineHeight: 1.6 }}>
-            {log.map((l, i) => (
-              <div key={i} style={{ color: l.color, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{l.msg}</div>
+          <div style={{ flex: 1, overflowY: 'auto', maxHeight: 440, fontFamily: 'ui-monospace, monospace', fontSize: 10, lineHeight: 1.7 }}>
+            {logEntries.map((l, i) => (
+              <div key={i} style={{ color: l.color, whiteSpace: 'pre-wrap' }}>{l.msg}</div>
             ))}
             <div ref={logEndRef} />
           </div>
@@ -552,26 +642,4 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
       </div>
     </div>
   );
-}
-
-// Helper: update step status for a chapter by title
-function updateChapterStep(setSubjects, chapterTitle, stepKey, chunks) {
-  setSubjects(prev => {
-    const copy = [...prev];
-    for (let si = 0; si < copy.length; si++) {
-      const chs = copy[si].chapters || [];
-      const ci  = chs.findIndex(c => c.title === chapterTitle);
-      if (ci >= 0) {
-        const newChs = [...chs];
-        newChs[ci] = {
-          ...newChs[ci],
-          steps: { ...(newChs[ci].steps || {}), [stepKey]: true },
-          ...(chunks != null ? { chunks } : {}),
-        };
-        copy[si] = { ...copy[si], chapters: newChs };
-        break;
-      }
-    }
-    return copy;
-  });
 }
