@@ -26,6 +26,7 @@ from config import *
 from deps import *
 import deps
 from cache import *
+from routes.admin_monetization import merge_subject_content, _md_to_html as _blog_md_to_html, _extract_headings_json
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
@@ -592,7 +593,7 @@ async def get_cms_post_by_subject(subject_id: str):
         merged_md = await merge_subject_content(subject_id)
         if not merged_md:
             raise HTTPException(status_code=404, detail="Subject not found or empty")
-        content_html = _md_to_html(merged_md)
+        content_html = _blog_md_to_html(merged_md)
         headings     = _extract_headings_json(merged_md)
         word_count   = len(re.sub(r'<[^>]+>', '', content_html).split())
         subject      = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
@@ -763,7 +764,7 @@ async def admin_merge_subject(subject_id: str, admin: dict = Depends(get_admin_u
     merged_md = await merge_subject_content(subject_id)
     if not merged_md:
         raise HTTPException(status_code=404, detail="Subject not found or has no chapters")
-    content_html  = _md_to_html(merged_md)
+    content_html  = _blog_md_to_html(merged_md)
     headings_json = _extract_headings_json(merged_md)
     word_count    = len(re.sub(r'<[^>]+>', '', content_html).split())
     subject       = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
