@@ -4,7 +4,8 @@ import { Loader2, RefreshCw } from 'lucide-react';
 import axios from 'axios';
 import { adminGetAnalytics, adminGetRevenue, adminGetPredictor,
   adminGetGA4Status, adminGetGA4AuthUrl, adminTestGA4, API_BASE,
-  pageConversions, adminGetDailyAnalytics, adminGetLiveVisitors } from '@/utils/api';
+  pageConversions, adminGetDailyAnalytics, adminGetLiveVisitors,
+  adminGetShareAnalytics } from '@/utils/api';
 import { toast } from 'sonner';
 import OverviewTab from './analytics/OverviewTab';
 import DailyStatsTab from './analytics/DailyStatsTab';
@@ -35,18 +36,20 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
   const [dailyDays, setDailyDays] = useState(30);
   const [widgetErrors, setWidgetErrors] = useState({});
   const [liveVisitors, setLiveVisitors] = useState(null);
+  const [shareStats, setShareStats] = useState(null);
 
   const h = { withCredentials: true };
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
-    const [r1, r2, r3, r4, r5, r6] = await Promise.allSettled([
+    const [r1, r2, r3, r4, r5, r6, r7] = await Promise.allSettled([
       adminGetAnalytics(adminToken),
       axios.get(`${API_BASE}/admin/analytics/funnel`, h),
       axios.get(`${API_BASE}/admin/analytics/content-heatmap`, h),
       adminGetRevenue(adminToken, 30),
       adminGetPredictor(adminToken),
       adminGetGA4Status(adminToken),
+      adminGetShareAnalytics(adminToken, 30),
     ]);
     const errs = {};
     if (r1.status === 'fulfilled') setData(r1.value.data); else { errs.overview = true; setData(null); }
@@ -55,6 +58,7 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
     if (r4.status === 'fulfilled') setRevenue(r4.value.data); else { errs.revenue = true; setRevenue(null); }
     if (r5.status === 'fulfilled') setPredict(r5.value.data); else { errs.predictions = true; setPredict(null); }
     if (r6.status === 'fulfilled') setGa4Status(r6.value.data); else errs.ga4 = true;
+    if (r7.status === 'fulfilled') setShareStats(r7.value.data); else { errs.shares = true; setShareStats(null); }
     setWidgetErrors(errs);
     setLastRefresh(new Date());
     setLoading(false);
@@ -214,7 +218,7 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
       )}
 
       {tab === 'heatmap' && (
-        <HeatmapTab heatmap={heatmap} aiInsight={aiInsight} widgetErrors={widgetErrors} load={load} />
+        <HeatmapTab heatmap={heatmap} aiInsight={aiInsight} widgetErrors={widgetErrors} load={load} shareStats={shareStats} />
       )}
 
       {tab === 'seo' && (

@@ -145,9 +145,9 @@ export const Analytics = {
     trackGA4('view_item', { item_id: subjectId, item_name: subjectName, item_category: 'subject' });
   },
 
-  subjectShared: (subjectName, url) => {
-    track('subject_shared', { subject: subjectName, url });
-    trackGA4('share', { method: 'copy_link', content_type: 'subject', item_id: subjectName });
+  subjectShared: (subjectName, url, referralCode) => {
+    track('subject_shared', { subject: subjectName, url, referral_code: referralCode });
+    trackGA4('share', { method: 'whatsapp', content_type: 'subject', item_id: subjectName, referral_code: referralCode });
   },
 
   // ── SEO Content pages ──────────────────────────────────────────────────────

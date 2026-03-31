@@ -390,3 +390,9 @@ export const adminPipelineAutoGenerate = (token, subjectId, skipExisting = false
 
 export const adminPipelineStatus = (token, jobId) =>
   axios.get(`${API_BASE}/admin/pipeline/status/${jobId}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const createShare = (subjectId, subjectName, subjectPath) =>
+  axios.post(`${API_BASE}/shares`, { subject_id: subjectId, subject_name: subjectName, subject_path: subjectPath }, { withCredentials: true });
+
+export const adminGetShareAnalytics = (token, days = 30) =>
+  axios.get(`${API_BASE}/admin/analytics/shares?days=${days}`, { headers: adminHeaders(token), withCredentials: true });

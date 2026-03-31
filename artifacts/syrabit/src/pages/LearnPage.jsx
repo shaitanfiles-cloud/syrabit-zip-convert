@@ -10,7 +10,8 @@ import {
   FlipHorizontal, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { apiClient } from '@/utils/api';
+import { apiClient, createShare } from '@/utils/api';
+import { Analytics } from '@/utils/analytics';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -207,12 +208,29 @@ export default function LearnPage() {
     return injectHeadingIds(doc.content_html);
   }, [doc]);
 
-  const handleShare = () => {
-    if (navigator.share) {
-      navigator.share({ title: doc?.title, url: window.location.href });
-    } else {
-      navigator.clipboard?.writeText(window.location.href);
-      // simple feedback
+  const [sharing, setSharing] = useState(false);
+
+  const handleShare = async () => {
+    if (sharing) return;
+    setSharing(true);
+    try {
+      const subjectId = doc?.linked_subject_id || doc?.subject_id || slug;
+      const subjectName = doc?.subject_name || doc?.title || slug;
+      const subjectPath = `/learn/${slug}`;
+      const res = await createShare(subjectId, subjectName, subjectPath);
+      const referralUrl = res.data.referral_url;
+      const code = res.data.code;
+      Analytics.subjectShared(subjectName, referralUrl, code);
+      const text = `📚 ${doc?.title || 'Study'} on Syrabit.ai — AI-powered notes & practice!\n${referralUrl}`;
+      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
+    } catch {
+      if (navigator.share) {
+        navigator.share({ title: doc?.title, url: window.location.href });
+      } else {
+        navigator.clipboard?.writeText(window.location.href);
+      }
+    } finally {
+      setSharing(false);
     }
   };
 
@@ -338,9 +356,10 @@ export default function LearnPage() {
               </div>
               <button
                 onClick={handleShare}
-                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white/40 hover:text-white/70 border border-white/10 hover:border-white/20 transition-colors"
+                disabled={sharing}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white/40 hover:text-white/70 border border-white/10 hover:border-white/20 transition-colors disabled:opacity-50"
               >
-                <Share2 size={11} /> Share
+                {sharing ? <Loader2 size={11} className="animate-spin" /> : <Share2 size={11} />} Share
               </button>
             </div>
           </div>

@@ -1,7 +1,7 @@
-import { Search, Zap } from 'lucide-react';
-import { Card, InsightBar } from './shared';
+import { Search, Zap, Share2, MousePointerClick } from 'lucide-react';
+import { Card, InsightBar, Stat } from './shared';
 
-export default function HeatmapTab({ heatmap, aiInsight, widgetErrors, load }) {
+export default function HeatmapTab({ heatmap, aiInsight, widgetErrors, load, shareStats }) {
   if (!heatmap) {
     return (
       <Card title="Content Heatmap" error={!!widgetErrors.heatmap} onRetry={() => load(true)}
@@ -21,6 +21,16 @@ export default function HeatmapTab({ heatmap, aiInsight, widgetErrors, load }) {
           </div>
         </div>
       )}
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <Stat icon={Share2} label="Total Shares" value={shareStats?.total_shares ?? '—'} color="#25D366" />
+        <Stat icon={MousePointerClick} label="Total Clicks" value={shareStats?.total_clicks ?? '—'} color="#f97316" />
+        <Stat icon={Share2} label="Click Rate"
+          value={shareStats?.total_shares > 0 ? `${Math.round((shareStats.total_clicks / shareStats.total_shares) * 100)}%` : '—'}
+          color="#8b5cf6" />
+        <Stat icon={MousePointerClick} label="Subjects Shared" value={shareStats?.subjects?.length ?? '—'} color="#06b6d4" />
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card title="Top Subjects by Activity"
           empty={!heatmap.top_subjects?.length} emptyMsg="No subject activity yet">
@@ -48,6 +58,30 @@ export default function HeatmapTab({ heatmap, aiInsight, widgetErrors, load }) {
           )}
         </Card>
       </div>
+
+      {shareStats?.subjects?.length > 0 && (
+        <Card title="Referral Shares by Subject">
+          <div className="space-y-1.5">
+            <div className="flex items-center gap-2 px-2 pb-1.5 border-b border-slate-800 text-[10px] text-slate-500 uppercase tracking-wider">
+              <span className="flex-1">Subject</span>
+              <span className="w-16 text-right">Shares</span>
+              <span className="w-16 text-right">Clicks</span>
+              <span className="w-16 text-right">CTR</span>
+            </div>
+            {shareStats.subjects.map((s, i) => (
+              <div key={i} className="flex items-center gap-2 px-2 py-1.5 hover:bg-slate-800/50 rounded-lg">
+                <Share2 size={11} className="text-emerald-400 flex-shrink-0" />
+                <span className="text-slate-300 text-sm flex-1 truncate">{s.name}</span>
+                <span className="text-slate-400 text-xs w-16 text-right">{s.shares}</span>
+                <span className="text-orange-400 text-xs w-16 text-right">{s.clicks}</span>
+                <span className="text-violet-400 text-xs w-16 text-right">
+                  {s.shares > 0 ? `${Math.round((s.clicks / s.shares) * 100)}%` : '0%'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
     </div>
   );
 }
