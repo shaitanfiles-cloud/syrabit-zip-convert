@@ -35,6 +35,14 @@ from analytics_helpers import *
 
 logger = logging.getLogger(__name__)
 
+def _get_syllabus_embedder():
+    import server as _s
+    return _s._syllabus_embedder
+
+def _trigger_reseed():
+    import server as _s
+    return _s._reseed_syllabus_embeddings()
+
 router = APIRouter()
 
 @router.get("/admin/monetization/overview")
@@ -1058,7 +1066,7 @@ async def agentic_syllabus_run(
         for cache_key in ("boards", "classes", "streams", "subjects", "chapters"):
             _invalidate_content_cache(cache_key)
         try:
-            asyncio.create_task(_reseed_syllabus_embeddings())
+            asyncio.create_task(_trigger_reseed())
         except Exception:
             pass
 
@@ -1472,8 +1480,8 @@ async def syllabus_import_pdf(
     _invalidate_content_cache("chapters")
 
     # Re-embed new chapters in background (force re-seed even if already seeded once)
-    if _syllabus_embedder is not None:
-        asyncio.create_task(_reseed_syllabus_embeddings())
+    if _get_syllabus_embedder() is not None:
+        asyncio.create_task(_trigger_reseed())
 
     return {
         "success": True,
@@ -1733,7 +1741,7 @@ async def confirm_syllabus_import(
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
     try:
-        asyncio.create_task(_reseed_syllabus_embeddings())
+        asyncio.create_task(_trigger_reseed())
     except Exception:
         pass
 

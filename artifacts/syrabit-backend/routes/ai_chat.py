@@ -1,5 +1,5 @@
 """Syrabit.ai — AI chat & search routes"""
-import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+import re, json, asyncio, time, time as _time_mod, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -33,8 +33,19 @@ from llm import call_llm_api, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
+from prompts import _classify_question
+from subject_router import build_search_scope
+from qa_engine import log_chat_message as _log_chat_message
 
 logger = logging.getLogger(__name__)
+
+def _get_syllabus_embedder():
+    import server as _s
+    return _s._syllabus_embedder
+
+def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini", user_id=""):
+    from routes.admin_advanced import record_llm_cost
+    record_llm_cost(model, prompt_tokens, completion_tokens, provider, user_id)
 
 router = APIRouter()
 
@@ -137,7 +148,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             board_name=ctx_board_name,
             class_name=ctx_class_name,
             subject_name=msg.subject_name or "",
-            embedder=_syllabus_embedder,
+            embedder=_get_syllabus_embedder(),
         )
         rag_ctx = await resolve_rag_context(
             msg.message,
@@ -304,7 +315,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     try:
         _prompt_chars = sum(len(m.get("content", "")) for m in messages)
         _compl_chars  = len(answer) if answer else 0
-        record_llm_cost(
+        _record_llm_cost(
             model=msg.model or LLM_MODEL,
             prompt_tokens=max(1, _prompt_chars // 4),
             completion_tokens=max(1, _compl_chars // 4),
@@ -462,7 +473,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             board_name=ctx_board_name,
             class_name=ctx_class_name,
             subject_name=msg.subject_name or "",
-            embedder=_syllabus_embedder,
+            embedder=_get_syllabus_embedder(),
         )
         # Step 1: Internal RAG first (content cards, vector hits, DB chunks) + history
         rag_ctx, raw_conv = await asyncio.gather(
@@ -664,7 +675,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
             try:
                 _pc = sum(len(m.get("content", "")) for m in messages_payload)
-                record_llm_cost(
+                _record_llm_cost(
                     model=msg.model or LLM_MODEL,
                     prompt_tokens=max(1, _pc // 4),
                     completion_tokens=max(1, len(answer) // 4) if answer else 1,

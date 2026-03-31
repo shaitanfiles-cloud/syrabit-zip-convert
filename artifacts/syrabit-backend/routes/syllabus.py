@@ -36,6 +36,10 @@ from analytics_helpers import *
 
 logger = logging.getLogger(__name__)
 
+def _get_syllabus_embedder():
+    import server as _s
+    return _s._syllabus_embedder
+
 router = APIRouter()
 
 @router.get("/syllabi/{board_id}/{class_id}")
@@ -427,20 +431,20 @@ async def admin_seed_syllabus_embeddings(admin: dict = Depends(get_admin_user)):
     On first run after deployment this happens automatically in the background;
     call this endpoint to trigger it manually or force a refresh.
     """
-    global _syllabus_embedder
-    if _syllabus_embedder is None:
+    emb = _get_syllabus_embedder()
+    if emb is None:
         raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
-    result = await _syllabus_embedder.reseed()
+    result = await emb.reseed()
     return result
 
 
 @router.get("/admin/syllabus/embedding-stats")
 async def admin_syllabus_embedding_stats(admin: dict = Depends(get_admin_user)):
     """Return counts for the syllabus_embeddings collection and in-memory cache."""
-    global _syllabus_embedder
-    if _syllabus_embedder is None:
+    emb = _get_syllabus_embedder()
+    if emb is None:
         raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
-    return await _syllabus_embedder.stats()
+    return await emb.stats()
 
 
 # ─────────────────────────────────────────────
