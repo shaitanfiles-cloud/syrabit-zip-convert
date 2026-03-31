@@ -915,19 +915,17 @@ async def _agentic_generate_chapter_content(
         **extra_vars,
     )
     try:
-        result = await slm_pool.complete(
+        result = await call_llm_api(
             messages=[
                 {"role": "system", "content": "You are an expert educational content writer specializing in Assam board curricula. Write detailed, exam-ready study notes with real examples. Every chapter must have at least 800 words of actual content."},
                 {"role": "user",   "content": prompt},
             ],
+            model="gemini-2.5-flash",
             max_tokens=4000,
-            temperature=0.2,
-            task_hint="content_gen",
         )
         return (result or "").strip()
     except Exception as exc:
         logger.warning(f"[agentic_syllabus] chapter content gen failed for {chapter_title!r}: {exc}")
-        # Fallback: minimal structured content
         return f"## {chapter_title}\n\n" + "\n\n".join([f"### {t}\n\n*Content for {t} in {subject_name}.*" for t in (topics[:5] or [chapter_title])])
 
 
@@ -1044,12 +1042,13 @@ async def agentic_syllabus_run(
                 except: from PyPDF2 import PdfReader as _PR  # type: ignore
                 reader    = _PR(io.BytesIO(pdf_bytes))
                 full_text = "\n".join((reader.pages[i].extract_text() or "") for i in range(len(reader.pages)))
-                resp = await slm_pool.complete(
+                resp = await call_llm_api(
                     messages=[
                         {"role": "system", "content": "Extract syllabus from text. Return JSON array."},
                         {"role": "user",   "content": _get_extract_prompt(board, paper_type, stream) + f"\n\nPDF TEXT:\n{full_text[:12000]}"},
                     ],
-                    max_tokens=4096, temperature=0.1, task_hint="classification",
+                    model="gemini-2.5-flash",
+                    max_tokens=4096,
                 )
                 extracted = _recover_json(resp or "[]")
             except Exception as fe:

@@ -123,7 +123,10 @@ export default function LibraryPage() {
 
   const filteredSubjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
+    const seen = new Set();
     return enrichedSubjects.filter((sub) => {
+      if (seen.has(sub.id)) return false;
+      seen.add(sub.id);
       if (sub.status && sub.status !== 'published') return false;
       if (selectedBoardSlug !== 'all' && sub.boardSlug !== selectedBoardSlug) return false;
       if (selectedClassSlug !== 'all' && sub.classSlug !== selectedClassSlug) return false;
