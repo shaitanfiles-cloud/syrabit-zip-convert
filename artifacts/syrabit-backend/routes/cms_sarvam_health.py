@@ -700,7 +700,7 @@ async def generate_personalized_plan(body: PersonalizePlanRequest, user: dict = 
     )
 
     try:
-        plan_md = await call_slm(prompt, max_tokens=2000, temperature=0.7)
+        plan_md = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2000)
     except Exception as e:
         logger.error(f"Personalize plan generation failed: {e}")
         raise HTTPException(500, "Plan generation failed. Please try again.")
@@ -3188,7 +3188,7 @@ async def admin_cms_scraper_status(admin: dict = Depends(get_admin_user)):
         # Check LLM connectivity — quick probe (new plan generation fails if LLM is down)
         llm_ok = True
         try:
-            test_resp = await call_slm("Say OK", max_tokens=5, temperature=0)
+            test_resp = await call_llm_api([{"role": "user", "content": "Say OK"}], max_tokens=5)
             if not test_resp or len(test_resp.strip()) == 0:
                 llm_ok = False
         except Exception:
@@ -3197,7 +3197,7 @@ async def admin_cms_scraper_status(admin: dict = Depends(get_admin_user)):
         if not llm_ok:
             blockers.append({
                 "type": "llm_unavailable",
-                "message": "LLM provider (call_slm) is unreachable — new personalized plans will fail at generation step. "
+                "message": "LLM provider is unreachable — new personalized plans will fail at generation step. "
                            "Existing published plans are still served from MongoDB.",
                 "severity": "critical",
             })

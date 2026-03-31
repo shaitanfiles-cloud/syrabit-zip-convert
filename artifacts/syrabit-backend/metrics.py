@@ -1,10 +1,14 @@
 """Syrabit.ai — Metrics collection, health check infrastructure."""
-import time as _time_mod, threading as _threading, logging, asyncio
+import time as _time_mod, threading as _threading, logging, asyncio, os
 from typing import Dict
 from collections import defaultdict as _defaultdict
 from datetime import datetime, timezone
+import httpx
 import deps as _deps_mod
 from deps import db, redis_client, supa, logger as _dep_logger
+from config import SUPABASE_URL, SUPABASE_SERVICE_KEY, SUPABASE_ANON_KEY, EMAIL_FROM, LLM_MODEL
+import cache as _cache_mod
+from cache import _redis_get_search
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +94,7 @@ _metrics_history_lock = _threading.Lock()
 def _snapshot_metrics():
     """Take a point-in-time snapshot of key metrics for graphing."""
     import datetime
+    from llm import _llm_batcher
     now = datetime.datetime.utcnow()
     batch_s = _llm_batcher.stats
     snap = {
@@ -131,25 +136,25 @@ _start_metrics_collector()
 async def _check_health_deps():
     result = {}
     try:
-        t0 = time.time()
+        t0 = _time_mod.time()
         await db.command("ping")
-        result["mongodb"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
+        result["mongodb"] = {"status": "ok", "latencyMs": round((_time_mod.time() - t0) * 1000, 1)}
     except Exception:
         result["mongodb"] = {"status": "error", "latencyMs": 0}
     try:
         if _deps_mod.pg_pool:
-            t0 = time.time()
+            t0 = _time_mod.time()
             async with _deps_mod.pg_pool.acquire() as conn:
                 await conn.execute("SELECT 1")
-            result["postgresql"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
+            result["postgresql"] = {"status": "ok", "latencyMs": round((_time_mod.time() - t0) * 1000, 1)}
         else:
             result["postgresql"] = {"status": "not_configured", "latencyMs": 0}
     except Exception:
         result["postgresql"] = {"status": "error", "latencyMs": 0}
     try:
-        t0 = time.time()
+        t0 = _time_mod.time()
         _redis_get_search("__healthcheck__")
-        result["redis"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
+        result["redis"] = {"status": "ok", "latencyMs": round((_time_mod.time() - t0) * 1000, 1)}
     except Exception:
         result["redis"] = {"status": "error", "latencyMs": 0}
     try:
@@ -159,7 +164,7 @@ async def _check_health_deps():
             _supa_key        = SUPABASE_SERVICE_KEY or SUPABASE_ANON_KEY
             _supa_health_url = SUPABASE_URL.rstrip("/") + "/rest/v1/"
             _supa_headers    = {"apikey": _supa_key, "Authorization": f"Bearer {_supa_key}"}
-            t0 = time.time()
+            t0 = _time_mod.time()
             async with httpx.AsyncClient(
                 http2=True,
                 timeout=httpx.Timeout(connect=2.0, read=4.0, write=2.0, pool=1.0),
@@ -167,7 +172,7 @@ async def _check_health_deps():
             ) as _hc:
                 _r = await _hc.get(_supa_health_url, headers=_supa_headers)
                 _r.raise_for_status()
-            result["supabase"] = {"status": "ok", "latencyMs": round((time.time() - t0) * 1000, 1)}
+            result["supabase"] = {"status": "ok", "latencyMs": round((_time_mod.time() - t0) * 1000, 1)}
         else:
             result["supabase"] = {"status": "not_configured", "latencyMs": 0}
     except Exception as _se:
@@ -187,18 +192,18 @@ async def _bg_health_loop():
         try:
             fresh = await asyncio.wait_for(_check_health_deps(), timeout=10)
             _health_deps_cache    = fresh
-            _health_deps_cache_at = time.time()
+            _health_deps_cache_at = _time_mod.time()
         except Exception as _e:
             logger.debug(f"Health bg loop: {_e}")
 
         # Emit cache hit-rate log every 5 minutes
         _cache_stats_log_counter += 1
         if _cache_stats_log_counter % 12 == 0:
-            total = _redis_hit_count + _redis_miss_count
-            hit_rate = round(_redis_hit_count / max(1, total), 3)
+            total = _cache_mod._redis_hit_count + _cache_mod._redis_miss_count
+            hit_rate = round(_cache_mod._redis_hit_count / max(1, total), 3)
             logger.info(
                 f"cache_stats hit_rate={hit_rate} "
-                f"hits={_redis_hit_count} misses={_redis_miss_count} total={total}"
+                f"hits={_cache_mod._redis_hit_count} misses={_cache_mod._redis_miss_count} total={total}"
             )
 
         await asyncio.sleep(25)
@@ -293,6 +298,7 @@ async def _alerting_loop():
 
             # ── 2. LLM latency (p95 from _chat_latencies ring buffer) ──
             try:
+                from rag import _chat_latencies
                 recent_lats = [e["latency_ms"] for e in _chat_latencies[-100:]]
                 if len(recent_lats) >= 5:
                     lats_sorted = sorted(recent_lats)
@@ -307,6 +313,7 @@ async def _alerting_loop():
                 pass
 
             # ── 3. Fallback rate (from cost log provider != primary) ──
+            from routes.admin_advanced import _llm_cost_log
             recent_cost = _llm_cost_log[-100:]
             if len(recent_cost) >= 10:
                 primary_model = LLM_MODEL

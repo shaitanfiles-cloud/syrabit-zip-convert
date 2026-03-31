@@ -8,6 +8,7 @@ from deps import supa, db, logger as _dep_logger
 from cache import (
     _invalidate_user_cache, _user_cache, _conv_cache, _conv_cache_key,
     _invalidate_conv_cache, _redis_cache_session, _redis_get_conversation,
+    _redis_invalidate_conversation, _redis_cache_conversation,
 )
 
 logger = logging.getLogger(__name__)
