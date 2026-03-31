@@ -310,6 +310,19 @@ All large frontend files have been split into sub-components. Sub-component dire
 
 **CSS** (`src/styles/`): index.css split into `tokens.css`, `animations.css`, `utilities.css`, `components.css`, `chat.css`, `article.css`
 
+## RAG Pipeline Data Flow (updated 2026-03-31)
+
+Content Hub pipeline now feeds ALL three RAG search paths:
+- **Keyword search**: `chunks` collection (via `auto_chunk_content`) — keyword/regex matching
+- **Content card search**: `seo_pages` + `chapters` + `cms_documents` (via `_fetch_content_card`) — `$text` index + `$regex` fallback
+- **Vector search**: `seo_pages` + `chapters` + `cms_documents` (via `vector_rag_search`) — Gemini `text-embedding-004` cosine similarity
+
+Pipeline writes to 6 collections: `chapters`, `chunks`, `cms_documents` (geo-blogs + PYQ replicas), `topic_pyq_collections`, `ai_pyq_collections`, `flashcard_collections`.
+
+After content generation, pipeline calls: `auto_chunk_content` → `_embed_and_store_chapter` → `_embed_cms_document` (for each geo-blog and PYQ page).
+
+CMS document indexes: `linked_subject_id`, `(status, linked_subject_id)`, `(status, embedding)`, plus text index on `(title×10, content×1, meta_description×5)`.
+
 ## Chat Response Quality Settings (updated 2026-03-31)
 
 - **Free plan tokens**: 1,536 (was 1,024) — prevents mid-sentence truncation on essay answers

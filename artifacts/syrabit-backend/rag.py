@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "_HISTORY_MAX_TURNS", "_HISTORY_TOKEN_BUDGET", "_LATENCY_MAX", "_RAG_TELEM_MAX",
     "_chat_latencies", "_ddg_news_search", "_ddg_text_search",
-    "_embed_and_store_chapter", "_embed_and_store_page", "_extract_relevant_sections",
+    "_embed_and_store_chapter", "_embed_and_store_page", "_embed_cms_document", "_extract_relevant_sections",
     "_fetch_content_card", "_rag_telemetry", "_record_chat_latency",
     "_record_rag_event", "_sources_from_rag_ctx", "_trim_history",
     "auto_chunk_content", "build_rag_system_prompt", "rag_search", "rechunk_chapter",
@@ -231,8 +231,6 @@ async def _fetch_content_card(
         if not subject_id and subject_name:
             match_filter["subject_name"] = {"$regex": re.escape(subject_name), "$options": "i"}
 
-        # $text search — uses full-text index (weighted: topic_title×10, title×8, content×1)
-        # Falls back to $regex if text index not yet available on this collection
         search_str = " ".join(keywords)
         match_filter["$text"] = {"$search": search_str}
         _text_proj = {
@@ -256,15 +254,44 @@ async def _fetch_content_card(
             ch_filter, _ch_proj,
         ).sort([("score", {"$meta": "textScore"})]).limit(4).to_list(4)
 
+        cms_filter: dict = {"status": "published", "content": {"$exists": True, "$ne": ""}}
+        cms_escaped_kw = "|".join(re.escape(k) for k in keywords)
+        cms_kw_or = [
+            {"content": {"$regex": cms_escaped_kw, "$options": "i"}},
+            {"title":   {"$regex": cms_escaped_kw, "$options": "i"}},
+            {"meta_description": {"$regex": cms_escaped_kw, "$options": "i"}},
+        ]
+        if subject_id:
+            cms_filter["$and"] = [
+                {"$or": [{"linked_subject_id": subject_id}, {"subject_id": subject_id}]},
+                {"$or": cms_kw_or},
+            ]
+        elif subject_name:
+            cms_filter["$and"] = [
+                {"$or": [
+                    {"linked_subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
+                    {"subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
+                ]},
+                {"$or": cms_kw_or},
+            ]
+        else:
+            cms_filter["$or"] = cms_kw_or
+        _cms_proj = {
+            "_id": 0, "title": 1, "content": 1, "seo_slug": 1,
+            "category": 1, "linked_subject_name": 1, "linked_chapter_title": 1,
+            "meta_description": 1,
+        }
+        cms_task = db.cms_documents.find(cms_filter, _cms_proj).limit(4).to_list(4)
+
         try:
-            pages, chapter_pages = await asyncio.gather(seo_task, ch_task)
+            pages, chapter_pages, cms_pages = await asyncio.gather(seo_task, ch_task, cms_task)
         except Exception:
-            # Text index not ready yet — fall back to $regex for this request
             del match_filter["$text"]
+            escaped_kw_re = "|".join(re.escape(k) for k in keywords)
             match_filter["$or"] = [
-                {"content":     {"$regex": "|".join(keywords), "$options": "i"}},
-                {"topic_title": {"$regex": "|".join(keywords), "$options": "i"}},
-                {"title":       {"$regex": "|".join(keywords), "$options": "i"}},
+                {"content":     {"$regex": escaped_kw_re, "$options": "i"}},
+                {"topic_title": {"$regex": escaped_kw_re, "$options": "i"}},
+                {"title":       {"$regex": escaped_kw_re, "$options": "i"}},
             ]
             regex_proj = {"_id": 0, "content": 1, "topic_title": 1, "subject_name": 1,
                           "chapter_title": 1, "page_type": 1, "slug": 1}
@@ -272,27 +299,26 @@ async def _fetch_content_card(
             if subject_id:
                 ch_filter_fb["subject_id"] = subject_id
             ch_filter_fb["$or"] = [
-                {"content": {"$regex": "|".join(keywords), "$options": "i"}},
-                {"title":   {"$regex": "|".join(keywords), "$options": "i"}},
+                {"content": {"$regex": escaped_kw_re, "$options": "i"}},
+                {"title":   {"$regex": escaped_kw_re, "$options": "i"}},
             ]
-            pages, chapter_pages = await asyncio.gather(
+            pages, chapter_pages, cms_pages = await asyncio.gather(
                 db.seo_pages.find(match_filter, regex_proj).limit(6).to_list(6),
                 db.chapters.find(ch_filter_fb, {"_id": 0, "title": 1, "content": 1, "subject_id": 1}).limit(4).to_list(4),
+                db.cms_documents.find(cms_filter, _cms_proj).limit(4).to_list(4),
             )
 
-        if not pages and not chapter_pages:
+        if not pages and not chapter_pages and not cms_pages:
             return None
 
         cards = []
 
-        # Priority: notes → pyq → mcq → everything else (textScore already pre-sorts)
         def _page_priority(p: dict) -> int:
             pt = p.get("page_type", "")
             return 0 if pt == "notes" else (1 if pt == "pyq" else (2 if pt == "mcq" else 3))
 
         ordered_pages = sorted(pages, key=_page_priority)
         card_slugs: set = set()
-        # Track top card name + lesson name for attribution
         _top_card_name: str = ""
         _top_lesson_name: str = ""
         _top_subject_name: str = ""
@@ -311,7 +337,22 @@ async def _fetch_content_card(
             relevant = _extract_relevant_sections(content, keywords, max_chars=2000)
             cards.append(f"{header}\n{relevant}")
 
-        # Append chapter content (trimmed for Flash Lite token budget)
+        for cms in cms_pages[:2]:
+            content = cms.get("content", "")
+            if not content:
+                continue
+            slug = cms.get("seo_slug", "")
+            card_slugs.add(slug)
+            cms_title = cms.get("title") or cms.get("linked_chapter_title") or ""
+            if not _top_card_name and cms_title:
+                _top_card_name = cms_title
+                _top_lesson_name = cms.get("linked_chapter_title") or ""
+                _top_subject_name = cms.get("linked_subject_name") or subject_name or ""
+            cat = cms.get("category", "article")
+            header = f"[CMS {cat}: {cms_title}]" if cms_title else f"[CMS {cat}]"
+            relevant = _extract_relevant_sections(content, keywords, max_chars=1500)
+            cards.append(f"{header}\n{relevant}")
+
         for ch in chapter_pages[:2]:
             content = ch.get("content", "")
             if not content:
@@ -407,6 +448,23 @@ async def _embed_and_store_chapter(chapter_id: str, content: str, title: str = "
     return False
 
 
+async def _embed_cms_document(seo_slug: str, content: str, title: str = "") -> bool:
+    """Embed a cms_document and persist the vector for RAG vector search."""
+    try:
+        text = f"{title}\n\n{content}" if title else content
+        vec = await vertex_services.embed_text(text[:8000], task_type="RETRIEVAL_DOCUMENT")
+        if vec:
+            await db.cms_documents.update_one(
+                {"seo_slug": seo_slug},
+                {"$set": {"embedding": vec, "embedding_model": "text-embedding-004"}},
+            )
+            logger.info(f"CMS doc embedded: {seo_slug} (dim={len(vec)})")
+            return True
+    except Exception as e:
+        logger.warning(f"Embed cms_document {seo_slug} failed: {e}")
+    return False
+
+
 async def vector_rag_search(
     query: str,
     subject_id: Optional[str] = None,
@@ -444,7 +502,6 @@ async def vector_rag_search(
              "chapter_title": 1, "page_type": 1, "embedding": 1},
         ).limit(200).to_list(200)
 
-        # Fetch chapter candidates
         ch_filter: dict = {"embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
         if subject_id:
             ch_filter["subject_id"] = subject_id
@@ -453,7 +510,14 @@ async def vector_rag_search(
             {"_id": 0, "id": 1, "title": 1, "content": 1, "subject_id": 1, "embedding": 1},
         ).limit(100).to_list(100)
 
-        # Score all candidates by cosine similarity
+        cms_filter: dict = {"status": "published", "embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
+        if subject_id:
+            cms_filter["$or"] = [{"linked_subject_id": subject_id}, {"subject_id": subject_id}]
+        cms_docs = await db.cms_documents.find(
+            cms_filter,
+            {"_id": 0, "seo_slug": 1, "title": 1, "content": 1, "category": 1, "embedding": 1},
+        ).limit(100).to_list(100)
+
         scored = []
         for p in pages:
             vec = p.get("embedding")
@@ -480,6 +544,18 @@ async def vector_rag_search(
                     "content": content_snippet,
                     "score":   sim,
                     "source":  "chapter",
+                })
+        for cms in cms_docs:
+            vec = cms.get("embedding")
+            if vec:
+                sim = vertex_services.cosine_similarity(query_vec, vec)
+                content_snippet = _extract_relevant_sections(cms.get("content", ""), [], max_chars=1500)
+                scored.append({
+                    "slug":    cms.get("seo_slug", ""),
+                    "title":   cms.get("title", ""),
+                    "content": content_snippet,
+                    "score":   sim,
+                    "source":  "cms",
                 })
 
         scored.sort(key=lambda x: -x["score"])

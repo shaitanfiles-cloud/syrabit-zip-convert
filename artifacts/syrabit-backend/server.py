@@ -246,6 +246,17 @@ async def lifespan(app):
         await db.cms_documents.create_index("subject_id")
         await db.cms_documents.create_index([("board_id", 1), ("class_id", 1), ("subject_id", 1), ("status", 1)])
         await db.cms_documents.create_index([("updated_at", -1)])
+        await db.cms_documents.create_index("linked_subject_id")
+        await db.cms_documents.create_index([("status", 1), ("linked_subject_id", 1)])
+        await db.cms_documents.create_index([("status", 1), ("embedding", 1)])
+        try:
+            await db.cms_documents.create_index(
+                [("title", "text"), ("content", "text"), ("meta_description", "text")],
+                weights={"title": 10, "content": 1, "meta_description": 5},
+                name="cms_docs_text_search",
+            )
+        except Exception:
+            pass
 
         await db.topic_pyq_collections.create_index("chapter_id")
         await db.topic_pyq_collections.create_index("subject_id")

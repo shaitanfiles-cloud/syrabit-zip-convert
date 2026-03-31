@@ -3300,6 +3300,10 @@ async def _pipeline_process_one_chapter(
                     )
                     geo_blog_urls.append(f"/learn/{blog_slug}")
                     chapter_result["blogs_count"] += 1
+                    try:
+                        await _embed_cms_document(blog_slug, blog_data["article_body"], blog_data["title"])
+                    except Exception:
+                        pass
                 except Exception as e:
                     chapter_result["errors"].append(f"geo-blog-{city}-save: {str(e)[:60]}")
 
@@ -3335,6 +3339,10 @@ async def _pipeline_process_one_chapter(
         if generated_notes:
             try:
                 await auto_chunk_content(chapter_id=chapter_id, content=generated_notes, subject_id=subject_id)
+            except Exception:
+                pass
+            try:
+                await _embed_and_store_chapter(chapter_id, generated_notes, chapter_title)
             except Exception:
                 pass
 
@@ -3417,6 +3425,10 @@ async def _pipeline_process_one_chapter(
                 upsert=True,
             )
             chapter_result["pyq_page"] = True
+            try:
+                await _embed_cms_document(pyq_slug, pyq_html, f"PYQ: {chapter_title} — {subject_name}")
+            except Exception:
+                pass
         except Exception as e:
             chapter_result["errors"].append(f"pyq-page: {str(e)[:80]}")
 
