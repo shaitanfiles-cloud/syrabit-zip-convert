@@ -6,7 +6,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
     _GROQ_KEY, _GEMINI_KEY, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
-    _SARVAM_LLM_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    _SARVAM_LLM_KEY, _EMERGENT_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
 )
 from deps import sarvam_llm_client, logger as _dep_logger
 from cache import _cache_key
@@ -125,11 +125,13 @@ class _LlmBatcher:
 _llm_batcher = _LlmBatcher()
 
 _LLM_PROVIDERS = []
-# Gemini first — most reliable right now (Fireworks suspended, Groq rate-limited)
+# Fallback chain: Gemini (primary) → Groq → Emergent → Fireworks → Sarvam → xAI → OpenAI
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
+if _EMERGENT_KEY:
+    _LLM_PROVIDERS.append({"provider": "emergent",    "key": _EMERGENT_KEY,   "default_model": "gemini-2.5-flash"})
 if _FIREWORKS_KEY:
     _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _SARVAM_LLM_KEY:
@@ -180,6 +182,8 @@ _SLM_SLOT_CANDIDATES = [
     # Groq as secondary (rate-limited but fast when available)
     ("groq",        "llama-3.3-70b-versatile",                           8),
     ("groq",        "llama-3.1-8b-instant",                              4),
+    # Emergent universal gateway fallback
+    ("emergent",    "gemini-2.5-flash",                                  4),
     # Fireworks last (currently suspended)
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
     ("bedrock",     "amazon.nova-micro-v1:0",                            2),
@@ -302,9 +306,39 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     result = re.sub(r'<think>.*$', '', result, flags=re.DOTALL).strip()
     return result
 
+async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
+    import openai as _oai
+    client = _oai.AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+async def _call_emergent(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    """Non-streaming call via the Emergent universal key (OpenAI-compatible gateway)."""
+    import openai as _oai
+    client = _oai.AsyncOpenAI(
+        api_key=api_key,
+        base_url=os.environ.get("EMERGENT_BASE_URL", "https://api.emergentmind.com/v1"),
+    )
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
 async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
     if provider == "sarvam":
         return await _call_sarvam_llm(messages, api_key, model, max_tokens)
+    if provider == "gemini":
+        return await _call_gemini(messages, api_key, model, max_tokens)
+    if provider == "emergent":
+        return await _call_emergent(messages, api_key, model, max_tokens)
 
     system_msg = ""
     user_msg = ""
@@ -446,6 +480,21 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
     client = _oai.AsyncOpenAI(
         api_key=api_key,
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    )
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
+async def _stream_emergent(messages: list, api_key: str, model: str, max_tokens: int):
+    """Token-by-token streaming via the Emergent universal key (OpenAI-compatible gateway)."""
+    import openai as _oai
+    client = _oai.AsyncOpenAI(
+        api_key=api_key,
+        base_url=os.environ.get("EMERGENT_BASE_URL", "https://api.emergentmind.com/v1"),
     )
     stream = await client.chat.completions.create(
         model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
@@ -647,6 +696,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         elif p_name == "gemini":
             logger.info(f"LLM stream: provider=gemini, model={p_model}")
             async for token in _stream_gemini(messages, p_key, p_model, max_tokens):
+                yield token
+        elif p_name == "emergent":
+            logger.info(f"LLM stream: provider=emergent, model={p_model}")
+            async for token in _stream_emergent(messages, p_key, p_model, max_tokens):
                 yield token
         elif p_name == "xai":
             logger.info(f"LLM stream: provider=xai, model={p_model}")
