@@ -14,15 +14,16 @@ axios.interceptors.response.use(
   (response) => response,
   async (error) => {
     const config = error.config;
+    const retryCount = config?._retryCount || 0;
     if (
       config &&
-      !config._retryCount &&
+      retryCount < MAX_RETRIES &&
       error.response &&
       RETRY_CODES.has(error.response.status) &&
       (!config.method || config.method.toLowerCase() === 'get')
     ) {
-      config._retryCount = (config._retryCount || 0) + 1;
-      if (config._retryCount <= MAX_RETRIES) {
+      config._retryCount = retryCount + 1;
+      {
         const delay = RETRY_DELAY_MS * config._retryCount;
         await new Promise(r => setTimeout(r, delay));
         return axios(config);

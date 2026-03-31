@@ -1006,6 +1006,14 @@ async def agentic_syllabus_run(
         return objects
 
     async def _pipeline():
+        import time as _t
+        from rag import record_pipeline_run as _record_run
+        _pipeline_t0 = _t.perf_counter()
+        _pipeline_ok = False
+        _pipeline_chapters = 0
+        _pipeline_chunks = 0
+        _pipeline_embeds = 0
+
         # ── 1. SCAN: Extract subjects from PDF ───────────────────────────────
         yield _sse("scan_start", {"filename": filename, "paper_type": paper_type, "board": board, "stream": stream})
 
@@ -1396,6 +1404,20 @@ async def agentic_syllabus_run(
             asyncio.create_task(_trigger_reseed())
         except Exception:
             pass
+
+        _pipeline_ok = True
+        _pipeline_chapters = total_chapters_all
+        _pipeline_chunks = total_chunks_all
+        _pipeline_embeds = total_embedded
+        _dur = int((_t.perf_counter() - _pipeline_t0) * 1000)
+        _record_run(
+            "agentic_syllabus", filename or "pdf",
+            success=True,
+            chapters=_pipeline_chapters,
+            chunks=_pipeline_chunks,
+            embeddings=_pipeline_embeds,
+            duration_ms=_dur,
+        )
 
         yield _sse("complete", {
             "import_id":        import_id,
@@ -3748,7 +3770,7 @@ async def admin_content_auto_heal(admin: dict = Depends(get_admin_user)):
                 model="gemini-2.5-flash", max_tokens=4096
             )
             new_wc = len(new_content.split())
-            if new_wc >= 500:
+            if new_wc >= 600:
                 old_content = ch.get("content", "")
                 await db.chapters.update_one(
                     {"id": ch["id"]},
