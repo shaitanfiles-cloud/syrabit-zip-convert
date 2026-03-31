@@ -23,7 +23,7 @@ export function EmptyState({ subject, scopedChapters, documentId, defaultPrompts
           className="text-foreground mb-1.5 shimmer-text"
           style={{ fontSize: '1.2rem', fontWeight: 700 }}
         >
-          {subject ? `Ask me about ${subject.name}` : "Educational Browser for AssamBoard Students"}
+          {subject ? `Ask me about ${subject.name}` : "Hi! I'm Syra — Educational Browser for AssamBoard Students"}
         </h2>
         <p className="text-muted-foreground text-sm max-w-sm mx-auto">
           {documentId
