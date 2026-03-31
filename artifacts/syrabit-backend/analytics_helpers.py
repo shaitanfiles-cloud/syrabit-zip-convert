@@ -19,6 +19,7 @@ __all__ = [
 ]
 
 from deps import is_mongo_available
+from db_ops import supa_list_users, supa_get_all_conversations
 
 async def track_library_event(
     event_type: str,
