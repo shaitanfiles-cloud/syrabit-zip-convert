@@ -170,42 +170,67 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     if (!subjectId) return;
     setPublishingBlog(true);
     try {
-      const res = await axios.post(`${API}/admin/cms/merge/${subjectId}`, {}, authHeaders(adminToken));
-      const mergedMd = res.data?.merged_md || res.data?.content || '';
-      const toSlug = str => (str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      const subjectSlug = res.data?.slug || toSlug(subjectName || subjectId);
-      const classSlug = res.data?.class_slug || '';
-      const autoSeoSlug = [subjectSlug, classSlug].filter(Boolean).join('-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      const res = await axios.post(`${API}/admin/cms/merge-by-chapter/${subjectId}`, {}, authHeaders(adminToken));
+      const chapterDocs = res.data?.chapters || [];
       const className = res.data?.class_name || '';
-      const resolvedTitle = res.data?.title || subjectName || subjectId;
-      const richTitle = [resolvedTitle, className].filter(Boolean).join(' — ');
-      const autoKeyword = `${toSlug(resolvedTitle).replace(/-/g, ' ')}${className ? ` ${className.toLowerCase()}` : ' ahsec'} notes`;
-      localStorage.setItem('syrabit_blog_prefill', JSON.stringify({ subjectId, subjectName: resolvedTitle, workingTitle: richTitle, primaryKeyword: autoKeyword, draftContent: mergedMd, docId: res.data?.doc_id || null, seoSlug: autoSeoSlug, autoFlow: true, timestamp: Date.now() }));
-      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({ subjectId, title: richTitle, content: mergedMd, seo_slug: autoSeoSlug || toSlug(subjectName || subjectId), meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`, timestamp: Date.now() }));
+      if (!chapterDocs.length) {
+        toast.error('No chapters found to publish');
+        return;
+      }
+      const firstChapter = chapterDocs[0];
+      const toSlug = str => (str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      const autoKeyword = `${toSlug(firstChapter.title).replace(/-/g, ' ')}${className ? ` ${className.toLowerCase()}` : ''} assamboard notes`;
+      localStorage.setItem('syrabit_blog_prefill', JSON.stringify({
+        subjectId,
+        subjectName: res.data?.subject_name || subjectName,
+        workingTitle: firstChapter.title,
+        primaryKeyword: autoKeyword,
+        draftContent: firstChapter.merged_md,
+        docId: firstChapter.doc_id,
+        seoSlug: firstChapter.seo_slug,
+        autoFlow: false,
+        chapterWise: true,
+        allChapters: chapterDocs.map(c => ({ doc_id: c.doc_id, title: c.title, seo_slug: c.seo_slug, word_count: c.word_count, merged_md: c.merged_md || '' })),
+        timestamp: Date.now(),
+      }));
+      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({
+        subjectId,
+        title: firstChapter.title,
+        content: firstChapter.merged_md,
+        seo_slug: firstChapter.seo_slug,
+        meta_description: `Complete ${firstChapter.title}${className ? ` (${className})` : ''} — definitions, PYQ, MCQs per Assamboard syllabus. Free on Syrabit.`,
+        timestamp: Date.now(),
+      }));
       setMergedSubjectIds(s => new Set([...s, subjectId]));
-      toast.success(`"${subjectName}" merged — opening Blog Publisher`);
+      toast.success(`${chapterDocs.length} chapter drafts created — opening Blog Publisher`);
       onNavigate?.('blog');
     } catch (e) { toast.error(e.response?.data?.detail || 'Merge failed'); }
     finally { setPublishingBlog(false); }
   }, [adminToken, onNavigate]);
 
   const handleBulkMerge = useCallback(async () => {
-    if (!selSubject || selectedChapters.size === 0) return;
+    if (!selSubject) return;
     setBulkMerging(true);
     try {
-      const res = await axios.post(`${API}/admin/cms/merge/${selSubject}`, {}, authHeaders(adminToken));
-      const mergedMd = res.data?.merged_md || res.data?.content || '';
-      const toSlug = str => (str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      const subjectSlug = res.data?.slug || toSlug(subjectData?.name || selSubject);
-      const classSlug = res.data?.class_slug || '';
-      const autoSeoSlug = [subjectSlug, classSlug].filter(Boolean).join('-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-      const resolvedTitle = res.data?.title || subjectData?.name || selSubject;
+      const res = await axios.post(`${API}/admin/cms/merge-by-chapter/${selSubject}`, {}, authHeaders(adminToken));
+      const chapterDocs = res.data?.chapters || [];
+      if (!chapterDocs.length) {
+        toast.error('No chapters found to merge');
+        return;
+      }
+      const firstChapter = chapterDocs[0];
       const className = res.data?.class_name || '';
-      const richTitle = [resolvedTitle, className].filter(Boolean).join(' — ');
-      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({ subjectId: selSubject, title: richTitle, content: mergedMd, seo_slug: autoSeoSlug || toSlug(subjectData?.name || selSubject), meta_description: `Complete ${resolvedTitle}${className ? ` (${className})` : ''} notes, chapters, and PYQ for Assam students on Syrabit.`, timestamp: Date.now() }));
+      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({
+        subjectId: selSubject,
+        title: firstChapter.title,
+        content: firstChapter.merged_md,
+        seo_slug: firstChapter.seo_slug,
+        meta_description: `Complete ${firstChapter.title}${className ? ` (${className})` : ''} — notes, PYQ per Assamboard syllabus. Free on Syrabit.`,
+        timestamp: Date.now(),
+      }));
       setMergedSubjectIds(s => new Set([...s, selSubject]));
       setSelectedChapters(new Set());
-      toast.success(`${selectedChapters.size} chapters merged — opening CMS Editor`);
+      toast.success(`${chapterDocs.length} chapter drafts created — opening CMS Editor`);
       onNavigate?.('cms');
     } catch (e) { toast.error(e.response?.data?.detail || 'Bulk merge failed'); }
     finally { setBulkMerging(false); }

@@ -1,7 +1,7 @@
 import { useReducer, useEffect, useRef, useCallback, useState } from 'react';
 import {
   ChevronRight, Check, Sparkles, Globe, RefreshCw, FileText, X,
-  Target, Edit3, Zap, BarChart3,
+  Target, Edit3, Zap, BarChart3, BookOpen, CheckCircle2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -52,6 +52,9 @@ const INITIAL_STATE = {
   thumbnailUrl: '',
   altText: '',
   publishedStatus: 'draft',
+  chapterWise: false,
+  allChapters: [],
+  activeChapterIdx: 0,
 };
 
 function reducer(state, action) {
@@ -138,8 +141,15 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
         seoTitle: '', metaDescription: '',
         seoTags: '', geoTags: '',
         publishedStatus: 'draft',
+        chapterWise:     !!pf.chapterWise,
+        allChapters:     pf.allChapters || [],
+        activeChapterIdx: 0,
       }});
-      toast.success('Content Editor handoff — scope & draft pre-filled!');
+      if (pf.chapterWise && pf.allChapters?.length) {
+        toast.success(`${pf.allChapters.length} chapter drafts ready — publish each lesson individually`);
+      } else {
+        toast.success('Content Editor handoff — scope & draft pre-filled!');
+      }
     } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -276,6 +286,29 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
     if (state.step > 1) dispatch({ type: 'GO_STEP', step: state.step - 1 });
   };
 
+  const switchChapter = (idx) => {
+    if (!state.chapterWise || !state.allChapters?.[idx]) return;
+    const ch = state.allChapters[idx];
+    dispatch({ type: 'SET', payload: {
+      activeChapterIdx: idx,
+      docId: ch.doc_id,
+      workingTitle: ch.title,
+      seoSlug: ch.seo_slug,
+      draftContent: ch.merged_md || '',
+      step: 2,
+      unlocked: [1, 2],
+      enrichedBlocks: null,
+      enrichedContent: '',
+      enrichmentAccepted: false,
+      seoTitle: '',
+      metaDescription: '',
+      seoTags: '',
+      geoTags: '',
+      publishedStatus: 'draft',
+    }});
+    toast.success(`Switched to "${ch.title}"`);
+  };
+
   return (
     <div className="h-full flex flex-col" style={{ background: '#06060e' }}>
 
@@ -364,6 +397,45 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
             className="ml-auto text-white/30 hover:text-white/60 transition flex-shrink-0">
             <X size={11} />
           </button>
+        </div>
+      )}
+
+      {state.chapterWise && state.allChapters?.length > 0 && (
+        <div className="flex-shrink-0 border-b px-4 py-2.5"
+          style={{ borderColor: 'rgba(255,255,255,0.07)', background: 'rgba(139,92,246,0.04)' }}>
+          <div className="flex items-center gap-2 mb-2">
+            <BookOpen size={12} className="text-violet-400" />
+            <span className="text-[10px] font-bold text-white/50 uppercase tracking-wider">
+              Chapters ({state.allChapters.length})
+            </span>
+            <span className="text-[10px] text-white/30">— click to switch lesson</span>
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {state.allChapters.map((ch, i) => {
+              const isActive = i === state.activeChapterIdx;
+              return (
+                <button
+                  key={ch.doc_id}
+                  onClick={() => switchChapter(i)}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition truncate max-w-[200px]"
+                  style={{
+                    background: isActive ? 'rgba(139,92,246,0.25)' : 'rgba(255,255,255,0.05)',
+                    color: isActive ? '#c4b5fd' : 'rgba(255,255,255,0.45)',
+                    border: isActive ? '1px solid rgba(139,92,246,0.40)' : '1px solid rgba(255,255,255,0.08)',
+                  }}
+                >
+                  <span className="w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0 text-[9px]"
+                    style={{ background: isActive ? '#7c3aed' : 'rgba(255,255,255,0.08)' }}>
+                    {i + 1}
+                  </span>
+                  <span className="truncate">{ch.title.split(' — ')[0]}</span>
+                  {ch.word_count > 0 && (
+                    <span className="text-[9px] text-white/20 flex-shrink-0">{ch.word_count}w</span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 

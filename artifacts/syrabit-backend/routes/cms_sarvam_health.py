@@ -826,6 +826,119 @@ async def admin_merge_subject(subject_id: str, admin: dict = Depends(get_admin_u
     }
 
 
+@router.post("/admin/cms/merge-by-chapter/{subject_id}")
+async def admin_merge_by_chapter(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """Create one CMS document per chapter — thick, syllabus-focused pages."""
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="Content service unavailable")
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).sort("chapter_number", 1).to_list(100)
+    if not chapters:
+        raise HTTPException(status_code=404, detail="Subject has no chapters")
+
+    subject_name = subject.get("name", "")
+    board_slug = subject.get("board_slug", "")
+    class_slug = subject.get("class_slug", "")
+    class_name = subject.get("class_name", "")
+    stream_name = subject.get("stream_name", "")
+    stream_slug = subject.get("stream_slug", "")
+    now = datetime.now(timezone.utc).isoformat()
+    created_docs = []
+
+    for chapter in chapters:
+        ch_id = chapter.get("id", "")
+        ch_num = chapter.get("chapter_number", "")
+        ch_title = chapter.get("title", "")
+        ch_heading = f"Chapter {ch_num}: {ch_title}" if ch_num else ch_title
+
+        parts = [f"# {ch_heading}\n\n"]
+        if chapter.get("description"):
+            parts.append(f"{chapter['description']}\n\n")
+
+        cks = await db.chunks.find(
+            {"chapter_id": ch_id}, {"_id": 0}
+        ).sort("order", 1).to_list(500)
+        for ck in cks:
+            content = (ck.get("content") or "").strip()
+            if not content:
+                continue
+            ctype = (ck.get("type") or "").lower()
+            if ctype == "pyq":
+                parts.append(f"> **Past Year Question**\n>\n> {content}\n\n")
+            elif ctype == "summary":
+                parts.append(f"### Summary\n\n{content}\n\n")
+            elif ctype == "formula":
+                parts.append(f"### Formula\n\n{content}\n\n")
+            else:
+                parts.append(f"{content}\n\n")
+
+        chapter_md = "".join(parts)
+        if len(chapter_md.strip()) < 50:
+            continue
+
+        content_html = _blog_md_to_html(chapter_md)
+        headings_json = _extract_headings_json(chapter_md)
+        word_count = len(re.sub(r'<[^>]+>', '', content_html).split())
+        ch_slug = _slugify(f"{ch_title} {subject_name} chapter {ch_num}" if ch_num else f"{ch_title} {subject_name}")
+
+        cms_doc_data = {
+            "subject_id":      subject_id,
+            "chapter_id":      ch_id,
+            "title":           f"{ch_title} — {subject_name}",
+            "seo_slug":        ch_slug,
+            "board_slug":      board_slug,
+            "class_slug":      class_slug,
+            "content":         content_html,
+            "merged_md":       chapter_md,
+            "headings":        headings_json,
+            "word_count":      word_count,
+            "status":          "draft",
+            "schema_type":     "Article",
+            "primary_keyword": f"{ch_title} {subject_name} Assamboard notes",
+            "updated_at":      now,
+        }
+        existing = await db.cms_documents.find_one(
+            {"subject_id": subject_id, "chapter_id": ch_id}, {"_id": 0, "id": 1}
+        )
+        if existing:
+            await db.cms_documents.update_one(
+                {"subject_id": subject_id, "chapter_id": ch_id},
+                {"$set": cms_doc_data},
+            )
+            doc_id = existing.get("id", "")
+        else:
+            doc_id = str(uuid.uuid4())
+            cms_doc_data["id"] = doc_id
+            cms_doc_data["created_at"] = now
+            await db.cms_documents.insert_one(cms_doc_data)
+
+        created_docs.append({
+            "doc_id":     doc_id,
+            "chapter_id": ch_id,
+            "title":      cms_doc_data["title"],
+            "seo_slug":   ch_slug,
+            "word_count": word_count,
+            "merged_md":  chapter_md,
+        })
+
+    logger.info(f"Chapter-wise merge: {len(created_docs)} docs for subject {subject_id}")
+    return {
+        "subject_id":   subject_id,
+        "subject_name": subject_name,
+        "board_slug":   board_slug,
+        "class_slug":   class_slug,
+        "class_name":   class_name,
+        "stream_name":  stream_name,
+        "stream_slug":  stream_slug,
+        "chapters":     created_docs,
+        "total":        len(created_docs),
+    }
+
+
 @router.post("/admin/content/regenerate-sitemap")
 async def regenerate_sitemap(admin: dict = Depends(get_admin_user)):
     """Regenerate sitemap.xml — reads from cms_documents only."""
