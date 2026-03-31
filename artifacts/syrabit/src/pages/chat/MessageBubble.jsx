@@ -1,16 +1,9 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { BookOpen, RefreshCw, Copy, Check, ExternalLink } from 'lucide-react';
+import { RefreshCw, Copy, Check, ExternalLink } from 'lucide-react';
 import { log } from '@/utils/logger';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
-
-const bubbleVariants = {
-  hidden:  { opacity: 0, y: 14, scale: 0.97 },
-  visible: { opacity: 1, y: 0,  scale: 1,
-    transition: { duration: 0.22, ease: [0.25, 0.1, 0.25, 1] } },
-};
 
 export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast }) {
   const [copied, setCopied] = useState(false);
@@ -56,10 +49,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
   }, [msg.content]);
 
   return (
-    <motion.div
-      variants={bubbleVariants}
-      initial="hidden"
-      animate="visible"
+    <div
       className={`group ${isUser ? 'flex flex-col items-end mb-2' : 'mb-3'}`}
       data-testid="chat-message-bubble"
     >
@@ -196,6 +186,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
           </div>
         </div>
       )}
-    </motion.div>
+    </div>
   );
 });
