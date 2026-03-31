@@ -419,6 +419,8 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
         "CONTENT EXTRACTION RULES:\n"
         "- Look for the CURRICULUM CONSTRAINTS (Tier -1) block — it contains the chapter list and topics.\n"
         "- Also scan any `[Content: ... | type=notes]` blocks for unit/marks breakdowns.\n"
+        "- If a Table of Contents (TOC) is present in any content block, reproduce ALL sections listed in it — do NOT skip any numbered section.\n"
+        "- Ensure section numbering matches the TOC exactly (e.g. if TOC lists 3.1 through 3.8, include ALL of them).\n"
         "- Ignore question-type blocks.\n"
         "RESPONSE FORMAT: Numbered list of units → chapters → topics with marks distribution."
     ),
@@ -441,6 +443,7 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
         "- Prioritize blocks labeled `type=notes` and `type=definition`.\n"
         "- From `[Chapter: ... | type=lesson]` blocks, extract the full structured content.\n"
         "- Combine multiple content blocks in order (BLOCK 1 first).\n"
+        "- If a Table of Contents (TOC) exists in the content, cover ALL listed sections — never skip numbered sections.\n"
         "- IGNORE blocks with `type=important-questions`, `type=mcqs`, and `type=examples` — those are for other query types.\n"
         "RESPONSE FORMAT: Structured study notes with headings, bolded definitions, bullet points, formula blocks, and chapter summary."
     ),
