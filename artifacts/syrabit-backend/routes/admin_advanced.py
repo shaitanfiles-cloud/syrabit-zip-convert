@@ -1179,29 +1179,52 @@ async def agentic_syllabus_run(
                 chapter_id  = ch_doc["id"]   if ch_doc else str(uuid.uuid4())
                 existing_content = (ch_doc.get("content") or "") if ch_doc else ""
 
-                # Generate content if chapter has no content yet
-                if len(existing_content.strip()) < 200:
-                    try:
-                        content = await _agentic_generate_chapter_content(
-                            subject_name=subject_name,
-                            chapter_title=ch_title,
-                            topics=ch_topics or entry.topics[:8],
-                            board_semester=board_semester,
-                            board=board,
-                        )
-                    except Exception:
-                        content = f"## {ch_title}\n\n" + "\n\n".join(f"### {t}\n\n*Content for {t}.*" for t in (ch_topics or [ch_title]))
+                existing_word_count = len(existing_content.split()) if existing_content.strip() else 0
+                if existing_word_count < 500:
+                    best_content = None
+                    best_wc = 0
+                    for attempt in range(2):
+                        try:
+                            attempt_content = await _agentic_generate_chapter_content(
+                                subject_name=subject_name,
+                                chapter_title=ch_title,
+                                topics=ch_topics or entry.topics[:8],
+                                board_semester=board_semester,
+                                board=board,
+                            )
+                        except Exception:
+                            attempt_content = None
 
-                    # Save content to chapter doc
+                        if attempt_content:
+                            wc = len(attempt_content.split())
+                            if wc > best_wc:
+                                best_content = attempt_content
+                                best_wc = wc
+                            if wc >= 500:
+                                break
+                        if attempt == 0 and best_content:
+                            logger.warning(f"[agentic_syllabus] thin content ({best_wc} words) for {ch_title!r}, retrying")
+
+                    needs_review = False
+                    if best_content and best_wc >= 500:
+                        content = best_content
+                    elif best_content:
+                        content = best_content
+                        needs_review = True
+                        yield _sse("chapter_quality_warning", {"chapter": ch_title, "words": best_wc})
+                    else:
+                        content = f"## {ch_title}\n\n" + "\n\n".join(f"### {t}\n\n*Content for {t} in {subject_name}.*" for t in (ch_topics or [ch_title]))
+                        needs_review = True
+
+                    update_fields = {"content": content, "updated_at": datetime.now(timezone.utc).isoformat()}
+                    if needs_review:
+                        update_fields["needs_review"] = True
                     if ch_doc:
-                        await db.chapters.update_one(
-                            {"id": chapter_id},
-                            {"$set": {"content": content, "updated_at": datetime.now(timezone.utc).isoformat()}}
-                        )
-                    yield _sse("chapter_content", {"chapter": ch_title, "length": len(content)})
+                        await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
+                    yield _sse("chapter_content", {"chapter": ch_title, "length": len(content), "words": len(content.split())})
                 else:
                     content = existing_content
-                    yield _sse("chapter_content", {"chapter": ch_title, "length": len(content), "existing": True})
+                    yield _sse("chapter_content", {"chapter": ch_title, "length": len(content), "words": existing_word_count, "existing": True})
 
                 generated_contents[ch_title.lower().strip()] = {"content": content, "chapter_id": chapter_id}
 
@@ -1262,10 +1285,23 @@ async def agentic_syllabus_run(
                     ch_slug_val = re.sub(r'[^a-z0-9]+', '-', f"{ch_t} {subject_name}".lower()).strip('-')
                     ch_html = _blog_md_to_html_fn(ch_content)
                     ch_wc = len(re.sub(r'<[^>]+>', '', ch_html).split())
+                    blog_title = f"{ch_t} — {subject_name}"
+                    meta_desc = f"Study notes for {ch_t} in {subject_name} ({board_disp} {class_disp}). Covers key concepts, definitions, examples from Assam/NE India, and important exam questions."
+                    if len(meta_desc) > 160:
+                        meta_desc = meta_desc[:157] + "..."
+
+                    faq_items = []
+                    ch_topics_list = ch_detail.get("topics", [])
+                    for t in ch_topics_list[:5]:
+                        faq_items.append({
+                            "question": f"What is {t} in {subject_name}?",
+                            "answer": f"{t} is a key topic covered in {ch_t} of {subject_name} under {board_disp} {class_disp}."
+                        })
+
                     blog_doc = {
                         "subject_id": subject_ids[0],
                         "chapter_id": ch_chapter_id,
-                        "title": f"{ch_t} — {subject_name}",
+                        "title": blog_title,
                         "seo_slug": ch_slug_val,
                         "board_slug": board_disp.lower().replace(' ', '-'),
                         "class_slug": class_disp.lower().replace(' ', '-'),
@@ -1276,6 +1312,10 @@ async def agentic_syllabus_run(
                         "content_html": ch_html,
                         "schema_type": "Article",
                         "primary_keyword": f"{ch_t} {subject_name} Assamboard notes",
+                        "meta_description": meta_desc,
+                        "og_title": blog_title,
+                        "og_description": meta_desc,
+                        "faq_schema": faq_items if faq_items else None,
                         "updated_at": _now_iso,
                     }
                     existing_blog = await db.cms_documents.find_one(

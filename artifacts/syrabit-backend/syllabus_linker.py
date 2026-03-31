@@ -388,11 +388,21 @@ class SyllabusLinker:
 
 def _detect_board_key(board_name: str) -> str:
     n = (board_name or "").lower()
-    if any(k in n for k in ("ahsec", "higher secondary", "hs board")):
+    if any(k in n for k in ("ahsec", "higher secondary", "hs board", "hs 1st", "hs 2nd", "class 11", "class 12", "class xi", "class xii")):
         return "ahsec"
-    if any(k in n for k in ("seba", "secondary education", "hslc")):
+    _seba_exact = ("seba", "secondary education", "hslc", "class 9", "class 10")
+    _seba_boundary = re.compile(r'\bclass\s+(?:ix|x)\b(?!\s*i)', re.IGNORECASE)
+    if any(k in n for k in _seba_exact) or _seba_boundary.search(n):
         return "seba"
-    # Everything else (colleges, universities) → DEGREE in NEP_DEGREE_ONLY mode
+    _degree_signals = (
+        "college", "university", "autonomous", "degree", "fyugp", "nep",
+        "ug", "undergraduate", "b.a", "b.sc", "b.com", "bca", "bba",
+        "semester", "tdc", "honours", "honors", "major", "minor",
+        "gauhati", "dibrugarh", "cotton", "darrang", "tezpur",
+        "assam university", "b.barooah", "handique",
+    )
+    if any(k in n for k in _degree_signals):
+        return "degree"
     return "degree"
 
 

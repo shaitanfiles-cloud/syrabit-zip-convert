@@ -25,17 +25,82 @@ __all__ = [
     "web_search_with_fallback",
 ]
 
+_HEADING_RE = re.compile(r'^#{1,4}\s+', re.MULTILINE)
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
+_CHUNK_TARGET = 600
+_CHUNK_MAX = 1200
+_CHUNK_MIN = 80
+_OVERLAP_SENTENCES = 2
+
+def _split_into_sections(content: str) -> list[dict]:
+    parts = _HEADING_RE.split(content)
+    headings = _HEADING_RE.findall(content)
+    sections = []
+    for i, part in enumerate(parts):
+        text = part.strip()
+        if not text:
+            continue
+        heading = headings[i - 1].strip().strip('#').strip() if i > 0 and i - 1 < len(headings) else ""
+        sections.append({"heading": heading, "text": text})
+    if not sections and content.strip():
+        sections.append({"heading": "", "text": content.strip()})
+    return sections
+
+def _merge_short_sections(sections: list[dict], target: int = _CHUNK_TARGET) -> list[dict]:
+    merged = []
+    buf = None
+    for sec in sections:
+        if buf is None:
+            buf = dict(sec)
+            continue
+        combined_len = len(buf["text"]) + len(sec["text"])
+        if combined_len <= target:
+            buf["text"] = buf["text"] + "\n\n" + (f"**{sec['heading']}**\n" if sec["heading"] else "") + sec["text"]
+        else:
+            merged.append(buf)
+            buf = dict(sec)
+    if buf:
+        merged.append(buf)
+    return merged
+
+def _sentence_split_with_overlap(text: str, target: int = _CHUNK_TARGET, max_len: int = _CHUNK_MAX, overlap: int = _OVERLAP_SENTENCES) -> list[str]:
+    sentences = _SENTENCE_SPLIT_RE.split(text)
+    if not sentences:
+        return [text] if text.strip() else []
+    chunks = []
+    i = 0
+    while i < len(sentences):
+        current = []
+        current_len = 0
+        while i < len(sentences) and current_len + len(sentences[i]) <= max_len:
+            current.append(sentences[i])
+            current_len += len(sentences[i]) + 1
+            i += 1
+            if current_len >= target:
+                break
+        if not current and i < len(sentences):
+            current.append(sentences[i])
+            i += 1
+        chunk_text = " ".join(current).strip()
+        if chunk_text:
+            chunks.append(chunk_text)
+        if overlap and i < len(sentences):
+            i = max(i - overlap, i - len(current) + 1) if len(current) > overlap else i
+            if i <= len(chunks) - 1:
+                i = max(i, len(chunks))
+    return chunks
+
 async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None, chapter_title: str = None) -> list:
     """
-    Automatically split chapter content into searchable chunks.
-    
+    Semantically split chapter content into RAG-optimised chunks.
+
     Strategy:
-    - Split by double newlines (paragraphs)
-    - Each chunk: 100-800 chars (optimal for RAG)
-    - Extract keywords for each chunk
-    - Store in 'chunks' collection for fast retrieval
-    - Attach syllabus_id and geo_tags metadata for GEO grounding
-    
+    - Split by markdown headings (###) to keep concepts together
+    - Merge short sections; split long ones by sentences
+    - Target 300-600 chars per chunk for optimal retrieval
+    - 2-sentence overlap between consecutive chunks
+    - Store chapter_title, geo_tags, keywords per chunk
+
     Returns: List of created chunk IDs
     """
     if not content or len(content.strip()) < 100:
@@ -45,123 +110,46 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
     old_chunk_ids = [doc["_id"] async for doc in db.chunks.find({"chapter_id": chapter_id}, {"_id": 1})]
 
     content = content.strip()
-    
-    # Split by double newlines (paragraphs) or single newlines if no double
-    paragraphs = []
-    if '\n\n' in content:
-        paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
-    else:
-        # Fallback: split by single newline and group into chunks
-        lines = [l.strip() for l in content.split('\n') if l.strip()]
-        current_chunk = []
-        for line in lines:
-            current_chunk.append(line)
-            if len(' '.join(current_chunk)) > 400:
-                paragraphs.append(' '.join(current_chunk))
-                current_chunk = []
-        if current_chunk:
-            paragraphs.append(' '.join(current_chunk))
-    
-    if not paragraphs:
-        # No clear structure, split by sentences
-        import re
-        sentences = re.split(r'(?<=[.!?])\s+', content)
-        paragraphs = []
-        current = []
-        for sent in sentences:
-            current.append(sent)
-            if len(' '.join(current)) > 300:
-                paragraphs.append(' '.join(current))
-                current = []
-        if current:
-            paragraphs.append(' '.join(current))
-    
-    # Create chunks
-    chunks_created = []
-    for i, para in enumerate(paragraphs):
-        para_clean = para.strip()
-        
-        # Skip very short paragraphs (less than 50 chars)
-        if len(para_clean) < 50:
-            continue
-        
-        # If paragraph is too long, split it further
-        if len(para_clean) > 1200:
-            import re
-            sentences = re.split(r'(?<=[.!?])\s+', para_clean)
-            sub_chunk = []
-            for sent in sentences:
-                sub_chunk.append(sent)
-                if len(' '.join(sub_chunk)) > 600:
-                    chunk_text = ' '.join(sub_chunk).strip()
-                    if len(chunk_text) >= 50:
-                        # Extract keywords for this chunk
-                        chunk_keywords = _extract_keywords(chunk_text)
-                        
-                        chunk = {
-                            "id": str(uuid.uuid4()),
-                            "chapter_id": chapter_id,
-                            "subject_id": subject_id,
-                            "chapter_title": chapter_title or "",
-                            "content": chunk_text,
-                            "content_type": "notes",
-                            "chunk_index": len(chunks_created),
-                            "tags": chunk_keywords[:5],
-                            "char_count": len(chunk_text),
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                        }
-                        if syllabus_id:
-                            chunk["syllabus_id"] = syllabus_id
-                        if geo_tags:
-                            chunk["geo_tags"] = geo_tags[:5]
-                        await db.chunks.insert_one(chunk)
-                        chunks_created.append(chunk["id"])
-                    sub_chunk = []
-            
-            if sub_chunk:
-                chunk_text = ' '.join(sub_chunk).strip()
-                if len(chunk_text) >= 50:
-                    chunk_keywords = _extract_keywords(chunk_text)
-                    chunk = {
-                        "id": str(uuid.uuid4()),
-                        "chapter_id": chapter_id,
-                        "subject_id": subject_id,
-                        "chapter_title": chapter_title or "",
-                        "content": chunk_text,
-                        "content_type": "notes",
-                        "chunk_index": len(chunks_created),
-                        "tags": chunk_keywords[:5],
-                        "char_count": len(chunk_text),
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                    if syllabus_id:
-                        chunk["syllabus_id"] = syllabus_id
-                    if geo_tags:
-                        chunk["geo_tags"] = geo_tags[:5]
-                    await db.chunks.insert_one(chunk)
-                    chunks_created.append(chunk["id"])
+    sections = _split_into_sections(content)
+    sections = _merge_short_sections(sections)
+
+    raw_chunks: list[str] = []
+    for sec in sections:
+        text = sec["text"]
+        prefix = f"**{sec['heading']}**\n" if sec.get("heading") else ""
+        full = (prefix + text).strip()
+        if len(full) <= _CHUNK_MAX:
+            raw_chunks.append(full)
         else:
-            chunk_keywords = _extract_keywords(para_clean)
-            
-            chunk = {
-                "id": str(uuid.uuid4()),
-                "chapter_id": chapter_id,
-                "subject_id": subject_id,
-                "chapter_title": chapter_title or "",
-                "content": para_clean,
-                "content_type": "notes",
-                "chunk_index": i,
-                "tags": chunk_keywords[:5],
-                "char_count": len(para_clean),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if syllabus_id:
-                chunk["syllabus_id"] = syllabus_id
-            if geo_tags:
-                chunk["geo_tags"] = geo_tags[:5]
-            await db.chunks.insert_one(chunk)
-            chunks_created.append(chunk["id"])
-    
+            sub_chunks = _sentence_split_with_overlap(full)
+            raw_chunks.extend(sub_chunks)
+
+    chunks_created = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for idx, chunk_text in enumerate(raw_chunks):
+        chunk_text = chunk_text.strip()
+        if len(chunk_text) < _CHUNK_MIN:
+            continue
+        chunk_keywords = _extract_keywords(chunk_text)
+        chunk = {
+            "id": str(uuid.uuid4()),
+            "chapter_id": chapter_id,
+            "subject_id": subject_id,
+            "chapter_title": chapter_title or "",
+            "content": chunk_text,
+            "content_type": "notes",
+            "chunk_index": idx,
+            "tags": chunk_keywords[:5],
+            "char_count": len(chunk_text),
+            "created_at": now_iso,
+        }
+        if syllabus_id:
+            chunk["syllabus_id"] = syllabus_id
+        if geo_tags:
+            chunk["geo_tags"] = geo_tags[:5]
+        await db.chunks.insert_one(chunk)
+        chunks_created.append(chunk["id"])
+
     if chunks_created and old_chunk_ids:
         deleted = await db.chunks.delete_many({"_id": {"$in": old_chunk_ids}})
         logger.info(f"Dedup: removed {deleted.deleted_count} old chunks for chapter {chapter_id}")
