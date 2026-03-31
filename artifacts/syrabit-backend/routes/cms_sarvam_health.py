@@ -551,6 +551,31 @@ async def get_public_cms_document(doc_id: str):
 # POST /cms/personalize        — generate a new personalized plan via Gemini
 # ──────────────────────────────────────────────────────────────────────────────
 
+def _sanitize_mongo_doc(doc):
+    """Convert non-JSON-serializable MongoDB field values to strings."""
+    if not isinstance(doc, dict):
+        return doc
+    cleaned = {}
+    for k, v in doc.items():
+        if isinstance(v, datetime):
+            cleaned[k] = v.isoformat()
+        elif hasattr(v, '__str__') and type(v).__name__ == 'ObjectId':
+            cleaned[k] = str(v)
+        elif isinstance(v, dict):
+            cleaned[k] = _sanitize_mongo_doc(v)
+        elif isinstance(v, list):
+            cleaned[k] = [
+                _sanitize_mongo_doc(i) if isinstance(i, dict)
+                else i.isoformat() if isinstance(i, datetime)
+                else str(i) if hasattr(i, '__str__') and type(i).__name__ == 'ObjectId'
+                else i
+                for i in v
+            ]
+        else:
+            cleaned[k] = v
+    return cleaned
+
+
 @router.get("/cms/posts")
 async def list_cms_posts(
     board:      Optional[str] = None,
@@ -562,20 +587,32 @@ async def list_cms_posts(
     """Paginated published cms content for Library infinite scroll — reads from cms_documents."""
     try:
         if not await is_mongo_available():
-            return {"items": [], "total": 0}
+            return JSONResponse(content={"items": [], "total": 0})
         query: dict = {"status": "published", "subject_id": {"$exists": True, "$ne": None}}
         if board:      query["board_slug"]  = board
         if class_slug: query["class_slug"]  = class_slug
         if subject_id: query["subject_id"]  = subject_id
         limit = min(max(limit, 1), 50)
-        items = await db.cms_documents.find(
-            query, {"_id": 0, "merged_md": 0, "content": 0}
-        ).sort("updated_at", -1).skip(skip).limit(limit).to_list(limit)
-        total = await db.cms_documents.count_documents(query)
-        return {"items": items, "total": total}
-    except Exception:
+        try:
+            items = await asyncio.wait_for(
+                db.cms_documents.find(
+                    query, {"_id": 0, "merged_md": 0, "content": 0}
+                ).sort("updated_at", -1).skip(skip).limit(limit).to_list(limit),
+                timeout=10.0,
+            )
+            total = await asyncio.wait_for(
+                db.cms_documents.count_documents(query),
+                timeout=10.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("CMS posts query timed out after 10s")
+            return JSONResponse(content={"items": [], "total": 0})
+        items = [_sanitize_mongo_doc(item) for item in items]
+        return JSONResponse(content={"items": items, "total": total})
+    except Exception as exc:
+        logger.warning(f"CMS posts endpoint error: {exc}")
         mark_mongo_down()
-        return {"items": [], "total": 0}
+        return JSONResponse(content={"items": [], "total": 0})
 
 
 @router.get("/cms/post/{subject_id}")
