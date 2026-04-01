@@ -5,8 +5,7 @@ import {
   BookOpen, Layers, ChevronRight, Sparkles,
   Share2, ExternalLink, Lock, Loader2,
 } from 'lucide-react';
-import { Analytics } from '@/utils/analytics';
-import { createShare } from '@/utils/api';
+import { useShare } from '@/hooks/useShare';
 
 const THUMB_GRADIENTS = {
   math:      ['#4f46e5', '#7c3aed'],
@@ -43,30 +42,12 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
     return `syrabit.ai/subject/${sub.id?.slice(0, 8)}`;
   }, [seoPath, sub.id]);
 
-  const [sharing, setSharing] = useState(false);
+  const { sharing, share } = useShare();
 
-  const handleShare = useCallback(async (e) => {
+  const handleShare = useCallback((e) => {
     e.preventDefault();
-    if (sharing) return;
-    setSharing(true);
-    const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
-    try {
-      const res = await createShare(sub.id, sub.name, subjectLandingPath);
-      const referralUrl = res.data.referral_url;
-      const code = res.data.code;
-      Analytics.subjectShared(sub.name, referralUrl, code);
-      const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
-      const text = `📚 Study ${sub.name} on Syrabit.ai — AI-powered notes & practice for AssamBoard students!\n${shareUrl}`;
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-    } catch (err) {
-      try { Analytics.subjectShared(sub.name, subjectLandingPath, 'error'); } catch {}
-      const fullUrl = `${window.location.origin}${subjectLandingPath}?${utmParams}`;
-      const text = `📚 Study ${sub.name} on Syrabit.ai — AI-powered notes & practice for AssamBoard students!\n${fullUrl}`;
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-    } finally {
-      setSharing(false);
-    }
-  }, [sub.id, sub.name, subjectLandingPath, sharing]);
+    share(sub.name, subjectLandingPath);
+  }, [sub.name, subjectLandingPath, share]);
 
   const visibleChapters = useMemo(() => chapters.slice(0, 3), [chapters]);
   const moreChapters = chapters.length - 3;
@@ -336,10 +317,10 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         <button
           onClick={handleShare}
           disabled={sharing}
-          aria-label={`Share ${sub.name} on WhatsApp`}
+          aria-label={`Share ${sub.name}`}
           className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5 disabled:opacity-50"
-          style={{ color: '#25D366', border: '1px solid rgba(37,211,102,0.22)' }}
-          data-testid="subject-whatsapp-share"
+          style={{ color: '#94a3b8', border: '1px solid rgba(148,163,184,0.22)' }}
+          data-testid="subject-share"
         >
           {sharing ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
           Share

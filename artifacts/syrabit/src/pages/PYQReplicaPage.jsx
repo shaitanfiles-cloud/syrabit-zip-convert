@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { API_BASE, createShare } from '../utils/api';
-import { Analytics } from '../utils/analytics';
+import { API_BASE } from '../utils/api';
+import { useShare } from '../hooks/useShare';
 
 export default function PYQReplicaPage() {
   const { slug } = useParams();
@@ -9,29 +9,12 @@ export default function PYQReplicaPage() {
   const [title, setTitle]       = useState('');
   const [loading, setLoading]   = useState(true);
   const [notFound, setNotFound] = useState(false);
-  const [sharing, setSharing]   = useState(false);
+  const { sharing, share } = useShare();
 
-  const handleShare = useCallback(async () => {
-    if (sharing) return;
-    setSharing(true);
-    const pyqPath = `/pyq/${slug}`;
+  const handleShare = useCallback(() => {
     const pyqTitle = title || `PYQ — ${slug}`;
-    const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
-    try {
-      const res = await createShare(`pyq-${slug}`, pyqTitle, pyqPath);
-      const referralUrl = res.data.referral_url;
-      try { Analytics.subjectShared(pyqTitle, referralUrl, res.data.code); } catch {}
-      const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
-      const text = `📝 ${pyqTitle} — Previous Year Question Paper on Syrabit.ai!\n${shareUrl}`;
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-    } catch {
-      const fallback = `${window.location.origin}${pyqPath}?${utmParams}`;
-      const text = `📝 ${pyqTitle} — Previous Year Question Paper on Syrabit.ai!\n${fallback}`;
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-    } finally {
-      setSharing(false);
-    }
-  }, [sharing, slug, title]);
+    share(pyqTitle, `/pyq/${slug}`);
+  }, [slug, title, share]);
 
   useEffect(() => {
     if (!slug) return;
@@ -98,14 +81,14 @@ export default function PYQReplicaPage() {
         disabled={sharing}
         style={{
           position: 'fixed', bottom: '20px', right: '20px', zIndex: 1000,
-          background: '#25D366', color: '#fff', border: 'none', borderRadius: '50px',
+          background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '50px',
           padding: '10px 18px', fontSize: '14px', fontWeight: 600,
           cursor: sharing ? 'wait' : 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
           display: 'flex', alignItems: 'center', gap: '6px',
           opacity: sharing ? 0.7 : 1,
         }}
       >
-        📤 {sharing ? 'Sharing…' : 'Share via WhatsApp'}
+        📤 {sharing ? 'Sharing…' : 'Share'}
       </button>
       <div dangerouslySetInnerHTML={{ __html: html }} />
     </div>

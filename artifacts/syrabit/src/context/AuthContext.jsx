@@ -70,21 +70,18 @@ export const AuthProvider = ({ children }) => {
   };
 
   const signup = async (name, email, password) => {
-    const referralCode = localStorage.getItem('syrabit_ref') || undefined;
     const res = await axios.post(`${API_BASE}/auth/signup`, {
       name, email, password,
-      referral_code: referralCode,
     }, { withCredentials: true });
-    const { user: userData, access_token, referral_bonus } = res.data;
+    const { user: userData, access_token } = res.data;
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
     setUser(userData);
-    localStorage.removeItem('syrabit_ref');
     try {
       const { Analytics } = await import('@/utils/analytics');
       Analytics.signup(userData.email, userData.plan);
     } catch {}
-    return { ...userData, referral_bonus: referral_bonus || 0 };
+    return userData;
   };
 
   const logout = async () => {

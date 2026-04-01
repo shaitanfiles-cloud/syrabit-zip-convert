@@ -12,8 +12,8 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { getChunks, apiClient, createShare } from '@/utils/api';
-import { Analytics } from '@/utils/analytics';
+import { getChunks, apiClient } from '@/utils/api';
+import { useShare } from '@/hooks/useShare';
 import { useSubject, useChapters } from '@/hooks/useContent';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { toast } from 'sonner';
@@ -155,7 +155,7 @@ function BlogView({ subject, subjectId }) {
   const articleRef = useRef(null);
   const [activeId,  setActiveId]  = useState('');
   const [merging,   setMerging]   = useState(false);
-  const [sharing,   setSharing]   = useState(false);
+  const { sharing, share: handleShare } = useShare();
 
   const headings = useMemo(() => {
     if (!post?.headings) return [];
@@ -245,25 +245,7 @@ function BlogView({ subject, subjectId }) {
             <button
               className="ml-auto flex items-center gap-1 transition-colors text-emerald-600 hover:text-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={sharing}
-              onClick={async () => {
-                if (sharing) return;
-                setSharing(true);
-                const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
-                try {
-                  const res = await createShare(post.slug || post.id, post.title, `/subject/${subjectId}`);
-                  const referralUrl = res.data.referral_url;
-                  try { Analytics.subjectShared(post.title, referralUrl, res.data.code); } catch {}
-                  const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
-                  const text = `📚 ${post.title} on Syrabit.ai!\n${shareUrl}`;
-                  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-                } catch {
-                  const fallback = `${window.location.origin}/subject/${subjectId}?${utmParams}`;
-                  const text = `📚 ${post.title} on Syrabit.ai!\n${fallback}`;
-                  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-                } finally {
-                  setSharing(false);
-                }
-              }}
+              onClick={() => handleShare(post.title, `/subject/${subjectId}`)}
             >
               {sharing ? <Loader2 size={11} className="animate-spin" /> : <Share2 size={11} />} Share
             </button>

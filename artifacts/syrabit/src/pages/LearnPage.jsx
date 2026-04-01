@@ -10,8 +10,8 @@ import {
   FlipHorizontal, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { apiClient, createShare } from '@/utils/api';
-import { Analytics } from '@/utils/analytics';
+import { apiClient } from '@/utils/api';
+import { useShare } from '@/hooks/useShare';
 
 const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -208,33 +208,7 @@ export default function LearnPage() {
     return injectHeadingIds(doc.content_html);
   }, [doc]);
 
-  const [sharing, setSharing] = useState(false);
-
-  const handleShare = async () => {
-    if (sharing) return;
-    setSharing(true);
-    const subjectId = doc?.linked_subject_id || doc?.subject_id || slug;
-    const subjectName = doc?.subject_name || doc?.title || slug;
-    const subjectPath = `/learn/${slug}`;
-    const fallbackUrl = `${window.location.origin}${subjectPath}`;
-    const utmParams = 'utm_source=whatsapp&utm_medium=referral&utm_campaign=share';
-    try {
-      const res = await createShare(subjectId, subjectName, subjectPath);
-      const referralUrl = `${res.data.referral_url}`;
-      const code = res.data.code;
-      Analytics.subjectShared(subjectName, referralUrl, code);
-      const shareUrl = `${referralUrl}${referralUrl.includes('?') ? '&' : '?'}${utmParams}`;
-      const text = `📚 ${doc?.title || 'Study'} on Syrabit.ai — AI-powered notes & practice!\n${shareUrl}`;
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-    } catch (err) {
-      try { Analytics.subjectShared(subjectName, fallbackUrl, 'error'); } catch {}
-      const shareUrl = `${fallbackUrl}?${utmParams}`;
-      const text = `📚 ${doc?.title || 'Study'} on Syrabit.ai — AI-powered notes & practice!\n${shareUrl}`;
-      window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank', 'noopener,noreferrer');
-    } finally {
-      setSharing(false);
-    }
-  };
+  const { sharing, share: handleShare } = useShare();
 
   if (loading) {
     return (
@@ -357,7 +331,7 @@ export default function LearnPage() {
                 <span>Published · Syrabit.ai</span>
               </div>
               <button
-                onClick={handleShare}
+                onClick={() => handleShare(doc?.title || 'Study on Syrabit.ai', `/learn/${slug}`)}
                 disabled={sharing}
                 className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white/40 hover:text-white/70 border border-white/10 hover:border-white/20 transition-colors disabled:opacity-50"
               >

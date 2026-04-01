@@ -315,18 +315,6 @@ async def lifespan(app):
         await _ensure_qa_indexes()
     except Exception as e:
         logger.warning(f"QA index creation skipped: {e}")
-    try:
-        if db is not None:
-            await db.shares.create_index("code", unique=True)
-            await db.shares.create_index("subject_id")
-            await db.shares.create_index("created_at")
-            await db.referral_rewards.create_index(
-                [("new_user_id", 1), ("referral_code", 1)], unique=True
-            )
-            await db.referral_rewards.create_index("created_at")
-            logger.info("Shares/referral indexes created/verified")
-    except Exception as e:
-        logger.warning(f"Shares index creation skipped: {e}")
     _deps_mod._rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
     asyncio.create_task(_migrate_supabase_users_to_pg())
     asyncio.create_task(_heal_credits_limit())
@@ -428,8 +416,6 @@ api.include_router(user_router)
 api.include_router(admin_auth_users_router)
 api.include_router(analytics_router)
 
-from routes.shares import router as shares_router
-api.include_router(shares_router)
 api.include_router(admin_content_router)
 api.include_router(admin_pipeline_router)
 api.include_router(admin_settings_router)
@@ -454,9 +440,6 @@ app.include_router(api)
 
 from routes.pyq import router as pyq_router
 app.include_router(pyq_router)
-
-from routes.shares import share_redirect_router
-app.include_router(share_redirect_router)
 
 from middleware import SecurityHeadersMiddleware, GlobalRateLimitMiddleware
 from routes.cms_sarvam_health import CmsNoIndexMiddleware, BotRenderMiddleware

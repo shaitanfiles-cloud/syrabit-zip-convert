@@ -52,20 +52,6 @@ async def signup(data: UserCreate, response: Response):
     user_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
 
-    raw_ref = (data.referral_code or "").strip()[:20]
-    referred_by_code = None
-    referred_by_user_id = None
-    referrer_share = None
-    if raw_ref and re.fullmatch(r"[a-z0-9]{7}", raw_ref) and await is_mongo_available():
-        referrer_share = await db.shares.find_one({"code": raw_ref})
-        if referrer_share and referrer_share.get("user_id"):
-            if referrer_share["user_id"] != user_id:
-                referred_by_code = raw_ref
-                referred_by_user_id = referrer_share["user_id"]
-            else:
-                logger.warning(f"Self-referral blocked: user_id={user_id} code={raw_ref}")
-
-    # Free users get 30 daily credits (resets at midnight UTC)
     user = {
         "id": user_id,
         "name": data.name,
@@ -83,45 +69,8 @@ async def signup(data: UserCreate, response: Response):
         "saved_subjects": [],
         "has_free_credits_issued": True,
         "created_at": now,
-        "referred_by_code": referred_by_code,
-        "referred_by_user_id": referred_by_user_id,
     }
     await supa_insert_user(user)
-
-    referral_bonus = 0
-    if referred_by_code and referrer_share and await is_mongo_available():
-        try:
-            cfg_doc = await db.api_config.find_one({}, {"_id": 0})
-            ref_cfg = (cfg_doc or {}).get("referral", {})
-            if ref_cfg.get("enabled"):
-                reward_credits = ref_cfg.get("reward_credits", 10)
-                referrer_credits = ref_cfg.get("referrer_credits", 10)
-
-                try:
-                    await db.referral_rewards.insert_one({
-                        "id": str(uuid.uuid4()),
-                        "referral_code": referred_by_code,
-                        "new_user_id": user_id,
-                        "referrer_user_id": referred_by_user_id,
-                        "reward_credits": reward_credits,
-                        "referrer_credits": referrer_credits,
-                        "created_at": now,
-                    })
-                except DuplicateKeyError:
-                    logger.info(f"Referral reward already exists for user={user_id} code={referred_by_code}")
-                else:
-                    if reward_credits > 0:
-                        referral_bonus = reward_credits
-                        user["credits_limit"] = 30 + reward_credits
-                        await supa_update_user(user_id, {"credits_limit": user["credits_limit"]})
-
-                    if referrer_credits > 0 and referred_by_user_id:
-                        referrer = await supa_get_user_by_id(referred_by_user_id)
-                        if referrer:
-                            new_limit = (referrer.get("credits_limit") or 0) + referrer_credits
-                            await supa_update_user(referred_by_user_id, {"credits_limit": new_limit})
-        except Exception as e:
-            logger.warning(f"Referral reward error: {e}")
 
     token = create_access_token(user_id, role="student", plan="free")
     refresh = create_refresh_token(user_id)
@@ -147,10 +96,7 @@ async def signup(data: UserCreate, response: Response):
         path="/api/auth/refresh",
         max_age=JWT_REFRESH_EXPIRE_MINUTES * 60,
     )
-    result = {"access_token": token, "token_type": "bearer", "user": user_out.dict()}
-    if referral_bonus > 0:
-        result["referral_bonus"] = referral_bonus
-    return result
+    return {"access_token": token, "token_type": "bearer", "user": user_out.dict()}
 
 @router.post("/auth/login", response_model=TokenOut)
 async def login(data: UserLogin, response: Response):
