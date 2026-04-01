@@ -1041,32 +1041,90 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
 
     prompt = prompt + syllabus_context
 
+    _QUALITY_SYSTEM = (
+        f"You are an expert {board_display} teacher specialising in {subject_name} "
+        f"for {prompt_class_label} students in Assam, India. "
+        f"Chapter: \"{chapter_title}\" | Topic position: {syllabus_position or 'N/A'}. "
+        f"Create educational content that is comprehensive, exam-focused, syllabus-aligned, "
+        f"and easy to understand. Reference the chapter context and connect to neighboring topics "
+        f"in the syllabus where relevant. Use {board_display} exam marking patterns.\n\n"
+        f"MANDATORY QUALITY RULES — your content MUST include ALL of these:\n"
+        f"1. At least 500 words of detailed, original content\n"
+        f"2. At least 5 Markdown headings (## or ###) for clear structure\n"
+        f"3. A '## FAQ' section with 3-5 commonly asked questions and answers\n"
+        f"4. A '## Exam-Style Questions' section with board exam pattern questions\n"
+        f"5. At least 2 concrete examples (labeled 'Example 1:', 'Example 2:' etc.)\n"
+        f"6. Mention the board name ({board_display}), subject ({subject_name}), "
+        f"and chapter ({chapter_title}) naturally in the text\n"
+        f"7. Use diverse vocabulary — avoid repeating the same phrases\n"
+        f"8. Include relevant key points, revision tips, and exam tips\n"
+    )
+
     messages = [
-        {"role": "system", "content": (
-            f"You are an expert {board_display} teacher specialising in {subject_name} "
-            f"for {prompt_class_label} students in Assam, India. "
-            f"Chapter: \"{chapter_title}\" | Topic position: {syllabus_position or 'N/A'}. "
-            f"Create educational content that is comprehensive, exam-focused, syllabus-aligned, "
-            f"and easy to understand. Reference the chapter context and connect to neighboring topics "
-            f"in the syllabus where relevant. Use {board_display} exam marking patterns."
-        )},
+        {"role": "system", "content": _QUALITY_SYSTEM},
         {"role": "user", "content": prompt},
     ]
 
-    try:
-        content = await asyncio.wait_for(_call_llm(messages, max_tokens=2048), timeout=120)
-    except asyncio.TimeoutError:
-        logger.error(f"LLM timeout generating {page_type} for {topic['title']}")
-        return None
-    except Exception as e:
-        logger.error(f"LLM error generating {page_type} for {topic['title']}: {type(e).__name__}")
+    min_words = {"notes": 500, "definition": 400, "important-questions": 450, "mcqs": 500, "examples": 450}
+    required_min = min_words.get(page_type, 450)
+
+    async def _generate_and_score(msgs, attempt=1):
+        try:
+            raw = await asyncio.wait_for(_call_llm(msgs, max_tokens=3072), timeout=120)
+        except asyncio.TimeoutError:
+            logger.error(f"LLM timeout generating {page_type} for {topic['title']} (attempt {attempt})")
+            return None, 0
+        except Exception as e:
+            logger.error(f"LLM error generating {page_type} for {topic['title']}: {type(e).__name__} (attempt {attempt})")
+            return None, 0
+        wc = len(raw.split())
+        if wc < required_min:
+            logger.warning(f"Content too short ({wc} words, min {required_min}) for {topic['title']}/{page_type} (attempt {attempt})")
+            return None, 0
+        qctx = {"board_name": board_display, "subject_name": subject_name, "chapter_title": chapter_title}
+        qs = _compute_quality_score(raw, page_type, context=qctx)
+        return raw, qs.get("score", 0)
+
+    content, first_score = await _generate_and_score(messages, attempt=1)
+
+    if content is not None and first_score < 70:
+        boost_prompt = (
+            f"The previous attempt scored {first_score}/100. Improve it to score above 70.\n"
+            f"MISSING ELEMENTS — add ALL of these:\n"
+        )
+        if first_score < 70:
+            qctx = {"board_name": board_display, "subject_name": subject_name, "chapter_title": chapter_title}
+            diag = _compute_quality_score(content, page_type, context=qctx)
+            if not diag.get("has_faq"):
+                boost_prompt += "- Add a '## FAQ' section with 3-5 questions and answers\n"
+            if not diag.get("has_exam_q"):
+                boost_prompt += "- Add a '## Exam-Style Questions' section with board-pattern questions\n"
+            if not diag.get("has_examples"):
+                boost_prompt += "- Add labeled examples (Example 1, Example 2, etc.)\n"
+            if diag.get("heading_count", 0) < 5:
+                boost_prompt += "- Add more ## and ### headings (need at least 5)\n"
+            if diag.get("word_count", 0) < 500:
+                boost_prompt += "- Expand content to at least 500 words\n"
+            if not diag.get("anchored"):
+                boost_prompt += f"- Mention {board_display}, {subject_name}, and {chapter_title} in the text\n"
+
+        retry_msgs = [
+            {"role": "system", "content": _QUALITY_SYSTEM},
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": content},
+            {"role": "user", "content": boost_prompt + "\nRewrite the COMPLETE content with ALL improvements. Return ONLY the improved content."},
+        ]
+        content2, retry_score = await _generate_and_score(retry_msgs, attempt=2)
+        if content2 is not None and retry_score > first_score:
+            content, first_score = content2, retry_score
+            logger.info(f"Retry improved {topic['title']}/{page_type}: {first_score} (was {first_score})")
+
+    if content is None:
         return None
 
     word_count = len(content.split())
-    min_words = {"notes": 400, "definition": 300, "important-questions": 350, "mcqs": 400, "examples": 350}
-    required_min = min_words.get(page_type, 350)
     if word_count < required_min:
-        logger.warning(f"Generated content too short ({word_count} words, min {required_min}) for {topic['title']} / {page_type} — rejecting thin page")
+        logger.warning(f"Generated content too short ({word_count} words, min {required_min}) for {topic['title']} / {page_type} — rejecting")
         return None
 
     title_templates = TITLE_TEMPLATES.get(page_type, ["{topic} — {board} {grade} {subject}"])
@@ -1104,12 +1162,9 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
 
     if q_score >= 70:
         page_status = "published"
-    elif q_score >= 50:
-        page_status = "draft"
-        logger.info(f"Page for {topic['title']}/{page_type} scored {q_score} — saved as draft for review")
     else:
         page_status = "rejected"
-        logger.warning(f"Page for {topic['title']}/{page_type} scored {q_score} — rejected (below 50)")
+        logger.warning(f"Page for {topic['title']}/{page_type} scored {q_score} — rejected (below 70 quality threshold)")
 
     page = {
         "id": f"seo-{uuid.uuid4().hex[:8]}",
@@ -2596,10 +2651,17 @@ async def generate_pilot_content(
 async def bulk_publish_pages(
     page_type: Optional[str] = None,
     subject_id: Optional[str] = None,
+    min_score: int = 70,
     _admin: dict = Depends(_require_admin),
 ):
-    """Publish all draft SEO pages (optionally filtered by page_type or subject)."""
-    query: dict = {"status": {"$ne": "published"}}
+    """Publish draft SEO pages that meet the quality threshold (default ≥70)."""
+    query: dict = {
+        "status": {"$ne": "published"},
+        "$or": [
+            {"quality.score": {"$gte": min_score}},
+            {"quality_score.score": {"$gte": min_score}},
+        ],
+    }
     if page_type:
         query["page_type"] = page_type
     if subject_id:
@@ -2607,11 +2669,11 @@ async def bulk_publish_pages(
 
     result = await _db.seo_pages.update_many(
         query,
-        {"$set": {"status": "published", "updated_at": datetime.now(timezone.utc).isoformat()}},
+        {"$set": {"status": "published", "in_sitemap": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
     return {
         "published": result.modified_count,
-        "message": f"Published {result.modified_count} pages",
+        "message": f"Published {result.modified_count} pages (score ≥ {min_score})",
     }
 
 
