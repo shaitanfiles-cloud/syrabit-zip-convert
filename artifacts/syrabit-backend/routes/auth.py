@@ -59,8 +59,11 @@ async def signup(data: UserCreate, response: Response):
     if raw_ref and re.fullmatch(r"[a-z0-9]{7}", raw_ref) and await is_mongo_available():
         referrer_share = await db.shares.find_one({"code": raw_ref})
         if referrer_share and referrer_share.get("user_id"):
-            referred_by_code = raw_ref
-            referred_by_user_id = referrer_share["user_id"]
+            if referrer_share["user_id"] != user_id:
+                referred_by_code = raw_ref
+                referred_by_user_id = referrer_share["user_id"]
+            else:
+                logger.warning(f"Self-referral blocked: user_id={user_id} code={raw_ref}")
 
     # Free users get 30 lifetime credits (ONE-TIME, no reset)
     user = {

@@ -81,8 +81,8 @@ function buildBotHtml(page, url, board, classSlug, subjectSlug, topicSlug, curre
     itemListElement: [
       { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
       { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
-      { '@type': 'ListItem', position: 3, name: page.subject_name, item: `https://syrabit.ai/library` },
-      { '@type': 'ListItem', position: 4, name: page.chapter_title },
+      { '@type': 'ListItem', position: 3, name: page.subject_name, item: `https://syrabit.ai/${page.board_slug || 'library'}/${page.class_slug || ''}/${page.stream_slug || ''}/${page.subject_slug || ''}`.replace(/\/+$/, '') },
+      { '@type': 'ListItem', position: 4, name: page.chapter_title, item: `https://syrabit.ai/${page.board_slug || 'library'}/${page.class_slug || ''}/${page.stream_slug || ''}/${page.subject_slug || ''}/${page.chapter_slug || ''}`.replace(/\/+$/, '') },
       { '@type': 'ListItem', position: 5, name: page.topic_title, item: canonical },
     ],
   };

@@ -47,6 +47,10 @@ export default function ChatPage() {
   const scrollTimeoutRef  = useRef(null);
 
   useEffect(() => {
+    return () => { if (abortControllerRef.current) abortControllerRef.current.abort(); };
+  }, []);
+
+  useEffect(() => {
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     scrollTimeoutRef.current = setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });

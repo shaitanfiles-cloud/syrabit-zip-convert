@@ -71,11 +71,14 @@ async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
     try:
         if not await is_mongo_available():
             raise HTTPException(status_code=503, detail="MongoDB unavailable - cannot create content")
+        name = (data.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Board name is required")
         board_id = str(uuid.uuid4())[:8]
         board = {
             "id": board_id,
-            "name": data["name"],
-            "slug": data["name"].lower().replace(" ", "-"),
+            "name": name,
+            "slug": name.lower().replace(" ", "-"),
             "description": data.get("description", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }

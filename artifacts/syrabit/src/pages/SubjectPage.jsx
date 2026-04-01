@@ -400,9 +400,26 @@ export default function SubjectPage() {
   const { subjectId }          = useParams();
   const [activeTab, setActiveTab] = useState('blog');
 
-  const { data: subject, isLoading: subjectLoading } = useSubject(subjectId);
+  const { data: subject, isLoading: subjectLoading, isError: subjectError, refetch: refetchSubject } = useSubject(subjectId);
   const { data: chapters = [], isLoading: chaptersLoading } = useChapters(subjectId);
   const loading = subjectLoading || chaptersLoading;
+
+  if (subjectError && !subjectLoading) return (
+    <AppLayout>
+      <div className="p-6 text-center space-y-4">
+        <div className="mx-auto w-12 h-12 rounded-full bg-red-500/10 flex items-center justify-center">
+          <BookOpen className="w-6 h-6 text-red-500" />
+        </div>
+        <p className="text-muted-foreground">Failed to load subject. Please check your connection and try again.</p>
+        <Button onClick={() => refetchSubject()} variant="outline">
+          <RefreshCw className="w-4 h-4 mr-2" /> Retry
+        </Button>
+        <div>
+          <Link to="/library"><Button variant="ghost" className="mt-2">Back to Browser</Button></Link>
+        </div>
+      </div>
+    </AppLayout>
+  );
 
   if (loading) return (
     <AppLayout>

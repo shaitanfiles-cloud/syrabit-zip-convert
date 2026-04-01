@@ -417,6 +417,23 @@ async def stripe_webhook(request: StarletteRequest2):
                 credits = PLAN_CREDITS[plan]
                 doc_acc = PLAN_DOC_ACCESS[plan]
                 now_iso = datetime.now(timezone.utc).isoformat()
+                wh_user = await db.users.find_one({"id": user_id}, {"plan": 1})
+                wh_current_plan = (wh_user or {}).get("plan", "free")
+                if PLAN_RANK_MAP.get(plan, 0) < PLAN_RANK_MAP.get(wh_current_plan, 0):
+                    logger.warning(
+                        f"Stripe webhook: skipping downgrade {wh_current_plan}→{plan} "
+                        f"for user={user_id} session={stripe_session_id} — payment logged only"
+                    )
+                    await db.payments.insert_one({
+                        "user_id": user_id, "plan": plan, "provider": "stripe",
+                        "status": "skipped",
+                        "stripe_session_id": stripe_session_id,
+                        "amount_cents": session.get("amount_total", 0),
+                        "currency": session.get("currency", "usd"),
+                        "verified_at": now_iso, "activation_skipped": True,
+                        "skip_reason": f"user already on higher plan ({wh_current_plan})",
+                    })
+                    return {"received": True}
                 await db.payments.insert_one({
                     "user_id": user_id,
                     "plan": plan,
