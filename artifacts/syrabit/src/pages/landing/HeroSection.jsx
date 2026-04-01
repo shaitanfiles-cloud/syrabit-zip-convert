@@ -1,9 +1,10 @@
+import { useState, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sparkles, Play, GraduationCap, BookOpen, Users, TrendingUp } from 'lucide-react';
-import { LogoMark } from '@/components/Logo';
+import { Sparkles, Play, BookOpen, Users, TrendingUp } from 'lucide-react';
 import { fadeUp, staggerContainer } from './shared';
 import AnimatedStat from './AnimatedStat';
+import AnimatedChatDemo from './AnimatedChatDemo';
 
 const STATS = [
   { value: '3',    label: 'AssamBoard Divisions', icon: BookOpen   },
@@ -12,6 +13,9 @@ const STATS = [
 ];
 
 export default function HeroSection() {
+  const [browserPath, setBrowserPath] = useState('chat');
+  const handleUrlChange = useCallback((path) => setBrowserPath(path), []);
+
   return (
     <>
       <section className="relative min-h-screen flex items-center justify-center pt-16 overflow-hidden">
@@ -163,62 +167,20 @@ export default function HeroSection() {
                   className="flex-1 mx-4 h-6 rounded-lg flex items-center px-3"
                   style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                 >
-                  <span className="text-xs" style={{ color: 'rgba(255,255,255,0.30)' }}>{window.location.hostname}/chat</span>
+                  <motion.span
+                    key={browserPath}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.3 }}
+                    className="text-xs"
+                    style={{ color: 'rgba(255,255,255,0.30)' }}
+                  >
+                    {window.location.hostname}/{browserPath}
+                  </motion.span>
                 </div>
               </div>
 
-              <div className="p-6 space-y-4 text-left">
-                <div className="flex items-start gap-3">
-                  <div
-                    className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
-                    style={{ background: 'rgba(124,58,237,0.20)', border: '1px solid rgba(139,92,246,0.30)' }}
-                  >
-                    <GraduationCap size={14} className="text-violet-400" />
-                  </div>
-                  <div
-                    className="px-4 py-3 text-sm max-w-xs"
-                    style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '0 1rem 1rem 1rem', color: 'rgba(255,255,255,0.80)' }}
-                  >
-                    Explain the photoelectric effect with the Einstein equation for my AHSEC Class 12 Physics exam.
-                  </div>
-                </div>
-                <div className="flex items-start gap-3 flex-row-reverse">
-                  <div
-                    className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
-                    style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' }}
-                  >
-                    <LogoMark size="xs" style={{ filter: 'none' }} />
-                  </div>
-                  <div
-                    className="px-4 py-3 text-sm max-w-sm"
-                    style={{
-                      background: 'linear-gradient(135deg,rgba(124,58,237,0.22),rgba(109,40,217,0.16))',
-                      border: '1px solid rgba(139,92,246,0.22)',
-                      borderRadius: '1rem 0 1rem 1rem',
-                    }}
-                  >
-                    <p className="font-semibold mb-1 text-white">Photoelectric Effect — AHSEC Class 12</p>
-                    <p className="text-xs leading-relaxed mb-2" style={{ color: 'rgba(255,255,255,0.68)' }}>
-                      The photoelectric effect occurs when light strikes a metal surface and ejects electrons. Einstein's equation:
-                    </p>
-                    <code
-                      className="text-xs px-1.5 py-0.5 rounded"
-                      style={{ color: '#a78bfa', background: 'rgba(139,92,246,0.14)' }}
-                    >
-                      E = hν = φ + ½mv²
-                    </code>
-                    <div className="flex items-center gap-2 mt-3">
-                      <span
-                        className="px-2 py-0.5 rounded-full"
-                        style={{ fontSize: 10, background: 'rgba(139,92,246,0.20)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.22)' }}
-                      >
-                        2 credits
-                      </span>
-                      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.30)' }}>Chapter 11 · Wave Optics</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <AnimatedChatDemo onUrlChange={handleUrlChange} />
             </motion.div>
           </motion.div>
         </div>
