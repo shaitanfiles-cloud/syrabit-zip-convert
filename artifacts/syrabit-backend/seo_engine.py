@@ -986,7 +986,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
 
     sibling_topics = []
     syllabus_position = ""
-    if chapter_id and _db:
+    if chapter_id and _db is not None:
         siblings = await _db.topics.find(
             {"chapter_id": chapter_id, "status": "published"},
             {"_id": 0, "title": 1, "order": 1, "id": 1}
