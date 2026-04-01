@@ -38,6 +38,73 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+async def _pipeline_generate_mcqs(
+    content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 20,
+) -> list:
+    if not content or len(content.strip()) < 100:
+        return []
+    prompt = (
+        f"You are an expert examiner for AHSEC/SEBA/Degree students in Assam.\n"
+        f"Generate exactly {count} MCQ questions for:\n"
+        f"Subject: {subject_name} ({class_name})\nChapter: {chapter_title}\n\n"
+        f"Each MCQ must have exactly 4 options (A, B, C, D), one correct answer, and a brief explanation.\n"
+        f"Mix difficulties: 30% easy, 40% medium, 30% hard.\n"
+        f"Return ONLY valid JSON (no markdown fences):\n"
+        f'[{{"id": 1, "question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, '
+        f'"correct_answer": "A", "explanation": "...", "difficulty": "medium", "topic": "...", "marks": 1}}]\n\n'
+        f"Chapter content:\n{content[:4500]}"
+    )
+    try:
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        cleaned = result.strip()
+        if cleaned.startswith("```"):
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        data = json.loads(cleaned)
+        if isinstance(data, list):
+            return data
+        return data.get("mcqs", data.get("questions", []))
+    except Exception:
+        return []
+
+
+async def _pipeline_generate_flashcards(
+    content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 15,
+    topics: list = None,
+) -> list:
+    if not content or len(content.strip()) < 100:
+        return []
+    topic_instruction = ""
+    if topics:
+        topic_list = ", ".join(str(t) for t in topics[:15])
+        topic_instruction = f"\nFlashcards MUST collectively cover ALL of these syllabus topics: {topic_list}\nEnsure at least one flashcard per topic.\n"
+    prompt = (
+        f"You are an expert memory coach for AHSEC/SEBA/Degree students in Assam.\n"
+        f"Generate exactly {count} HIGH-IMPACT memory-trick flashcards for:\n"
+        f"Subject: {subject_name} ({class_name})\nChapter: {chapter_title}\n"
+        f"{topic_instruction}\n"
+        f"Card types (distribute evenly): mnemonic, mindmap, shortcut, memory_hack, key_fact\n\n"
+        f"Return ONLY valid JSON (no markdown fences):\n"
+        f'{{"flashcards": [{{"id": 1, "front": "...", "back": "...", "type": "mnemonic", '
+        f'"difficulty": "easy", "exam_tip": "...", "tags": ["..."]}}]}}\n\n'
+        f"Chapter content:\n{content[:4500]}"
+    )
+    try:
+        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        cleaned = result.strip()
+        if cleaned.startswith("```"):
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        data = json.loads(cleaned)
+        return data.get("flashcards", [])
+    except Exception:
+        return []
+
 @router.post("/admin/content/chapters/{chapter_id}/generate-notes")
 async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(get_admin_user)):
     """

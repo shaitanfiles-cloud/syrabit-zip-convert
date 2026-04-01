@@ -344,16 +344,16 @@ async def seo_inject_schema_bulk(admin: dict = Depends(get_admin_user)):
 async def seo_pipeline_status(admin: dict = Depends(get_admin_user)):
     """Get real-time content pipeline statistics with thin-page and sitemap tracking."""
     try:
-        total         = await db.seo_topics.count_documents({})
-        published     = await db.seo_topics.count_documents({"status": "published"})
-        draft         = await db.seo_topics.count_documents({"status": "draft"})
-        archived      = await db.seo_topics.count_documents({"status": "archived"})
-        has_content   = await db.seo_topics.count_documents({"has_content": True})
-        no_schema     = await db.seo_topics.count_documents({"status": "published", "schema_org": {"$exists": False}})
-        no_links      = await db.seo_topics.count_documents({"status": "published", "internal_links_injected": {"$ne": True}})
+        total         = await db.topics.count_documents({})
+        published     = await db.topics.count_documents({"status": "published"})
+        draft         = await db.topics.count_documents({"status": "draft"})
+        archived      = await db.topics.count_documents({"status": "archived"})
+        has_content   = await db.topics.count_documents({"has_content": True})
+        no_schema     = await db.topics.count_documents({"status": "published", "schema_org": {"$exists": False}})
+        no_links      = await db.topics.count_documents({"status": "published", "internal_links_injected": {"$ne": True}})
 
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        published_today = await db.seo_topics.count_documents({
+        published_today = await db.topics.count_documents({
             "status": "published",
             "published_at": {"$gte": today.isoformat()}
         })
