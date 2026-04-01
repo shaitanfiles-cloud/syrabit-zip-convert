@@ -29,6 +29,7 @@ from auth_deps import (
 )
 from db_ops import *
 from llm import call_llm_api, call_llm_api_stream, _call_llm_raw
+from seo_engine import _normalize_headings
 from rag import *
 from utils import *
 from analytics_helpers import *
@@ -165,7 +166,7 @@ async def seo_internal_links_analyze(admin: dict = Depends(get_admin_user)):
 
 @router.post("/admin/seo/internal-links/inject/{slug}")
 async def seo_internal_links_inject(slug: str, admin: dict = Depends(get_admin_user)):
-    """Inject internal links into a topic's generated content."""
+    """Inject internal links into a topic's generated content and track them."""
     topic = await db.seo_topics.find_one({"slug": slug})
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
@@ -180,26 +181,99 @@ async def seo_internal_links_inject(slug: str, admin: dict = Depends(get_admin_u
     ).to_list(200)
 
     injected_count = 0
+    injected_links = []
+    now_iso = datetime.now(timezone.utc).isoformat()
     for page in pages[:5]:
         content = page.get("content", "")
         if not content:
             continue
+        page_id = str(page.get("_id", ""))
         for related in all_topics[:10]:
             r_title = related.get("title", "")
             r_slug = related.get("slug", "")
             if r_title.lower() in content.lower() and f"[{r_title}]" not in content:
-                content = content.replace(
-                    r_title,
-                    f"[{r_title}](/learn/{r_slug})",
-                    1
+                target_url = f"/learn/{r_slug}"
+                old_content = content
+                content = re.sub(
+                    re.escape(r_title),
+                    f"[{r_title}]({target_url})",
+                    content,
+                    count=1,
+                    flags=re.IGNORECASE,
                 )
-                injected_count += 1
+                if content != old_content:
+                    injected_count += 1
+                    injected_links.append({
+                        "source_page_id": page_id,
+                        "source_slug": slug,
+                        "target_slug": r_slug,
+                        "target_url": target_url,
+                        "target_title": r_title,
+                        "injection_date": now_iso,
+                        "status": "active",
+                    })
         await db.seo_pages.update_one(
             {"_id": page["_id"]},
-            {"$set": {"content": content, "internal_links_injected": True, "links_updated_at": datetime.now(timezone.utc).isoformat()}}
+            {"$set": {"content": content, "internal_links_injected": True, "links_updated_at": now_iso}}
+        )
+
+    for link in injected_links:
+        await db.seo_internal_links.update_one(
+            {"source_page_id": link["source_page_id"], "source_slug": link["source_slug"], "target_slug": link["target_slug"]},
+            {"$set": link},
+            upsert=True,
         )
 
     return {"slug": slug, "pages_updated": len(pages), "links_injected": injected_count}
+
+
+@router.get("/admin/seo/internal-links/validate")
+async def seo_internal_links_validate(admin: dict = Depends(get_admin_user)):
+    """Validate all tracked internal links. Flag broken links where target is unpublished."""
+    all_links = await db.seo_internal_links.find({}).to_list(50000)
+    if not all_links:
+        return {"total_links": 0, "valid": 0, "broken": 0, "broken_links": []}
+
+    published_slugs = set()
+    published_topics = await db.seo_topics.find(
+        {"status": "published"}, {"_id": 0, "slug": 1}
+    ).to_list(50000)
+    for t in published_topics:
+        published_slugs.add(t.get("slug", ""))
+
+    valid_count = 0
+    broken_count = 0
+    broken_links = []
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for link in all_links:
+        target_slug = link.get("target_slug", "")
+        if target_slug in published_slugs:
+            if link.get("status") != "active":
+                await db.seo_internal_links.update_one(
+                    {"_id": link["_id"]},
+                    {"$set": {"status": "active", "validated_at": now_iso}}
+                )
+            valid_count += 1
+        else:
+            await db.seo_internal_links.update_one(
+                {"_id": link["_id"]},
+                {"$set": {"status": "broken", "validated_at": now_iso}}
+            )
+            broken_count += 1
+            broken_links.append({
+                "source_slug": link.get("source_slug", ""),
+                "target_slug": target_slug,
+                "target_url": link.get("target_url", ""),
+                "injection_date": link.get("injection_date", ""),
+            })
+
+    return {
+        "total_links": len(all_links),
+        "valid": valid_count,
+        "broken": broken_count,
+        "broken_links": broken_links[:100],
+    }
 
 
 # ── T003: FAQ Auto-Extractor ──────────────────────────────────────────────────
@@ -383,6 +457,9 @@ async def seo_pipeline_status(admin: dict = Depends(get_admin_user)):
 
         sitemap_indexed = await db.seo_pages.count_documents({"in_sitemap": True})
 
+        broken_links = await db.seo_internal_links.count_documents({"status": "broken"})
+        total_tracked_links = await db.seo_internal_links.count_documents({})
+
         return {
             "total_topics": total,
             "published": published,
@@ -402,6 +479,8 @@ async def seo_pipeline_status(admin: dict = Depends(get_admin_user)):
             "cms_published": cms_published,
             "cms_with_jsonld": cms_with_jsonld,
             "sitemap_indexed": sitemap_indexed,
+            "broken_links": broken_links,
+            "total_tracked_links": total_tracked_links,
             "publish_rate_pct": round(published / max(total, 1) * 100, 1),
             "content_rate_pct": round(has_content / max(total, 1) * 100, 1),
             "quality_rate_pct": round(high_quality / max(pages_published, 1) * 100, 1),
@@ -923,7 +1002,7 @@ async def _agentic_generate_chapter_content(
             model="gemini-2.5-flash",
             max_tokens=4000,
         )
-        return (result or "").strip()
+        return _normalize_headings((result or "").strip())
     except Exception as exc:
         logger.warning(f"[agentic_syllabus] chapter content gen failed for {chapter_title!r}: {exc}")
         return f"## {chapter_title}\n\n" + "\n\n".join([f"### {t}\n\n*Content for {t} in {subject_name}.*" for t in (topics[:5] or [chapter_title])])
@@ -2780,7 +2859,7 @@ Write **exam-focused, topic-wise summary notes** for the chapter below. These ar
 **QUALITY GUIDELINES:**
 1. Open with a crisp **introduction** (2-3 sentences) — state the chapter's exam relevance.
 2. For EACH syllabus topic above:
-   - **## Topic Heading** (match topic name exactly)
+   - ## Topic Heading (match topic name exactly)
    - 3-5 sentence explanation using simple, precise academic language
    - **Key Points** as 4-6 bullets: definitions in **bold**, significance, and facts examiners look for
    - Where applicable, include a brief real-world example or Assam-specific context
@@ -2793,6 +2872,7 @@ Write **exam-focused, topic-wise summary notes** for the chapter below. These ar
         result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
         text = result.strip() if result and len(result.strip()) > 50 else ""
         if text:
+            text = _normalize_headings(text)
             _redis_set("pipeline_notes", cache_key, text, 3600)
         return text
     except Exception:

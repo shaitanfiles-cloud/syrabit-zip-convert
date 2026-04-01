@@ -250,8 +250,8 @@ export default function SeoTopicPage() {
     return () => observer.disconnect();
   }, [tocItems, page]);
 
-  useEffect(() => {
-    if (!page) return;
+  const jsonLdSchema = useMemo(() => {
+    if (!page) return null;
     const pageUrl = `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}/${topicSlug}${currentType !== 'notes' ? `/${currentType}` : ''}`;
 
     const graphNodes = [
@@ -321,14 +321,7 @@ export default function SeoTopicPage() {
     }
     if (faqMainEntity.length >= 2) graphNodes.push({ '@type': 'FAQPage', mainEntity: faqMainEntity });
 
-    const existing = document.getElementById('seo-topic-graph');
-    if (existing) existing.remove();
-    const s = document.createElement('script');
-    s.type = 'application/ld+json';
-    s.id = 'seo-topic-graph';
-    s.text = JSON.stringify({ '@context': 'https://schema.org', '@graph': graphNodes });
-    document.head.appendChild(s);
-    return () => { const el = document.getElementById('seo-topic-graph'); if (el) el.remove(); };
+    return { '@context': 'https://schema.org', '@graph': graphNodes };
   }, [page, board, classSlug, subjectSlug, topicSlug, currentType]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
@@ -400,6 +393,7 @@ export default function SeoTopicPage() {
         tags={[page.topic_title, page.subject_name, page.board_name].filter(Boolean)}
         publishedTime={page.generated_at}
         modifiedTime={page.updated_at || page.generated_at}
+        jsonLd={jsonLdSchema}
       />
 
       {/* Header */}

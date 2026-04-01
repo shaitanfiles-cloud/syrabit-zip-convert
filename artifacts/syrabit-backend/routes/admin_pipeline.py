@@ -33,6 +33,7 @@ from rag import *
 from utils import *
 from analytics_helpers import *
 from seed import ensure_seeded
+from seo_engine import _normalize_headings
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +298,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 **INSTRUCTIONS:**
 - Write a brief **introduction** (2-3 sentences) about the chapter.
 - You MUST cover EVERY topic listed above. For EACH topic listed, write:
-  - A **## Heading** matching the topic name
+  - A ## Heading matching the topic name
   - 3-5 sentence explanation in simple academic language
   - **Key Points** in 4-6 bullets with definitions/significance/**bold key terms**
 - Do NOT skip any topic from the list. If the syllabus lists N topics, your notes must have N corresponding sections.
@@ -308,7 +309,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
         try:
             generated = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
             if generated and len(generated.strip()) > 50:
-                gen_text = generated.strip()
+                gen_text = _normalize_headings(generated.strip())
                 if topics:
                     cov = _compute_topic_coverage(topics, gen_text)
                     if cov["missing"]:
@@ -424,6 +425,7 @@ Generate detailed study notes for:
         try:
             generated = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4000)
             if generated and len(generated.split()) >= 200:
+                generated = _normalize_headings(generated)
                 wc = len(generated.split())
                 update_fields = {
                     "content": generated.strip(),

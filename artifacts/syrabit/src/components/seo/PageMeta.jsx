@@ -11,6 +11,7 @@ export default function PageMeta({
   tags,
   publishedTime,
   modifiedTime,
+  jsonLd,
 }) {
   const siteName = "Syrabit.ai";
   const absImage = image.startsWith("http") ? image : `https://syrabit.ai${image}`;
@@ -56,6 +57,12 @@ export default function PageMeta({
       <meta name="geo.position" content="26.2006;92.9376" />
       <meta name="ICBM" content="26.2006, 92.9376" />
       <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
+
+      {jsonLd && (
+        <script type="application/ld+json">
+          {JSON.stringify(jsonLd)}
+        </script>
+      )}
     </Helmet>
   );
 }

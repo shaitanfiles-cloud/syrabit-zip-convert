@@ -485,9 +485,42 @@ TITLE_TEMPLATES = {
 }
 
 
+def _strip_markdown_symbols(text: str) -> str:
+    """Remove all markdown symbols from text for clean meta descriptions."""
+    text = re.sub(r'^#{1,6}\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\*{1,3}', '', text)
+    text = re.sub(r'_{1,3}', '', text)
+    text = re.sub(r'`{1,3}', '', text)
+    text = re.sub(r'^>\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    text = re.sub(r'\[.*?\]', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def _normalize_headings(content: str) -> str:
+    """Normalize malformed markdown headings from LLM output.
+    Converts patterns like **## Heading**, **##Heading**, ## **Heading** to clean ## Heading."""
+    content = re.sub(r'\*{1,3}(#{1,6})\s*(.+?)\*{1,3}', r'\1 \2', content, flags=re.MULTILINE)
+    content = re.sub(r'^(#{1,6})\s*\*{1,3}(.+?)\*{1,3}\s*$', r'\1 \2', content, flags=re.MULTILINE)
+    content = re.sub(r'^(#{1,6})([^\s#])', r'\1 \2', content, flags=re.MULTILINE)
+    return content
+
+
+def _clamp_meta_description(text: str, min_len: int = 140, max_len: int = 160) -> str:
+    """Clamp text to 140-160 characters, trimming at word boundary or returning as-is if short."""
+    if len(text) > max_len:
+        text = text[:155].rsplit(' ', 1)[0] + '...'
+    return text
+
+
 def _extract_summary_from_content(content: str) -> str | None:
     """Extract the Summary section from generated markdown content.
-    Tries known heading patterns first, then falls back to first paragraph."""
+    Tries known heading patterns first, then falls back to first paragraph.
+    Returns a clean sentence of 140-160 characters with no markdown symbols."""
+    candidates = []
+
     match = re.search(
         r'##\s*(?:Summary|At a Glance|In One Line|Why .+ Matters|What to Expect|'
         r'About These Questions|What Examiners Ask[^\n]*)\s*\n+(.*?)(?:\n##|\Z)',
@@ -495,23 +528,48 @@ def _extract_summary_from_content(content: str) -> str | None:
         re.DOTALL | re.IGNORECASE,
     )
     if match:
-        text = match.group(1).strip()
-        text = re.sub(r'\[.*?\]', '', text)
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = _strip_markdown_symbols(match.group(1).strip())
         if len(text) >= 30:
-            return text[:155].rsplit(' ', 1)[0] + '...' if len(text) > 155 else text
+            candidates.append(text)
 
-    paragraphs = re.split(r'\n{2,}', content)
-    for para in paragraphs:
-        clean = para.strip()
-        if clean.startswith('#') or clean.startswith('[') or len(clean) < 40:
-            continue
-        clean = re.sub(r'\*\*|__|`', '', clean)
-        clean = re.sub(r'\s+', ' ', clean).strip()
-        if len(clean) >= 40:
-            return clean[:155].rsplit(' ', 1)[0] + '...' if len(clean) > 155 else clean
+    lines = content.split('\n')
+    current_para = []
+    for line in lines + ['']:
+        stripped = line.strip()
+        if not stripped:
+            if current_para:
+                para_text = ' '.join(current_para)
+                clean = _strip_markdown_symbols(para_text)
+                if len(clean) >= 40:
+                    candidates.append(clean)
+                current_para = []
+        elif stripped.startswith('#') or stripped.startswith('['):
+            if current_para:
+                para_text = ' '.join(current_para)
+                clean = _strip_markdown_symbols(para_text)
+                if len(clean) >= 40:
+                    candidates.append(clean)
+                current_para = []
+        else:
+            current_para.append(stripped)
 
-    return None
+    if not candidates:
+        return None
+
+    best = None
+    for c in candidates:
+        clamped = _clamp_meta_description(c)
+        if 140 <= len(clamped) <= 160:
+            return clamped
+        if best is None or abs(len(clamped) - 150) < abs(len(best) - 150):
+            best = clamped
+
+    if best and len(best) < 140 and len(candidates) > 1:
+        combined = ' '.join(candidates)
+        combined = re.sub(r'\s+', ' ', combined).strip()
+        return _clamp_meta_description(combined)
+
+    return best
 
 
 REQUIRED_SECTIONS = {
@@ -1085,6 +1143,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         except Exception as e:
             logger.error(f"LLM error generating {page_type} for {topic['title']}: {type(e).__name__} (attempt {attempt})")
             return None, 0
+        raw = _normalize_headings(raw)
         wc = len(raw.split())
         if wc < required_min:
             logger.warning(f"Content too short ({wc} words, min {required_min}) for {topic['title']}/{page_type} (attempt {attempt})")
@@ -1094,44 +1153,88 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         return raw, qs.get("score", 0)
 
     content, first_score = await _generate_and_score(messages, attempt=1)
+    attempt_scores = [{"attempt": 1, "score": first_score}]
 
-    if content is not None and first_score < _QUALITY_PUBLISH_THRESHOLD:
-        boost_prompt = (
-            f"The previous attempt scored {first_score}/100. Improve it to score above {_QUALITY_PUBLISH_THRESHOLD}.\n"
-            f"MISSING ELEMENTS — add ALL of these:\n"
-        )
-        if first_score < _QUALITY_PUBLISH_THRESHOLD:
-            qctx = {"board_name": board_display, "subject_name": subject_name, "chapter_title": chapter_title}
-            diag = _compute_quality_score(content, page_type, context=qctx)
+    def _build_retry_prompt(current_content, current_score, retry_number):
+        qctx = {"board_name": board_display, "subject_name": subject_name, "chapter_title": chapter_title}
+        diag = _compute_quality_score(current_content, page_type, context=qctx)
+
+        if retry_number == 1:
+            boost = (
+                f"The previous attempt scored {current_score}/100. Improve it to score above {_QUALITY_PUBLISH_THRESHOLD}.\n"
+                f"MISSING ELEMENTS — add ALL of these:\n"
+            )
             if not diag.get("has_faq"):
-                boost_prompt += "- Add a '## FAQ' section with 3-5 questions and answers\n"
+                boost += "- Add a '## FAQ' section with 3-5 questions and answers\n"
             if not diag.get("has_exam_q"):
-                boost_prompt += "- Add a '## Exam-Style Questions' section with board-pattern questions\n"
+                boost += "- Add a '## Exam-Style Questions' section with board-pattern questions\n"
             if not diag.get("has_examples"):
-                boost_prompt += "- Add labeled examples (Example 1, Example 2, etc.)\n"
+                boost += "- Add labeled examples (Example 1, Example 2, etc.)\n"
             if diag.get("heading_count", 0) < 5:
-                boost_prompt += "- Add more ## and ### headings (need at least 5)\n"
+                boost += "- Add more ## and ### headings (need at least 5)\n"
             if diag.get("word_count", 0) < 500:
-                boost_prompt += "- Expand content to at least 500 words\n"
+                boost += "- Expand content to at least 500 words\n"
             if not diag.get("anchored"):
-                boost_prompt += f"- Mention {board_display}, {subject_name}, and {chapter_title} in the text\n"
+                boost += f"- Mention {board_display}, {subject_name}, and {chapter_title} in the text\n"
             if not diag.get("has_key_points"):
-                boost_prompt += "- Add a '## Key Points' or '## Revision Notes' section\n"
+                boost += "- Add a '## Key Points' or '## Revision Notes' section\n"
             if not diag.get("has_tips"):
-                boost_prompt += "- Add exam tips, revision tips, or important notes throughout\n"
+                boost += "- Add exam tips, revision tips, or important notes throughout\n"
             if diag.get("word_count", 0) < 700:
-                boost_prompt += "- Expand content to at least 700 words with deeper explanations\n"
+                boost += "- Expand content to at least 700 words with deeper explanations\n"
+            boost += "\nRewrite the COMPLETE content with ALL improvements. Return ONLY the improved content."
+        elif retry_number == 2:
+            boost = (
+                f"The previous attempt scored {current_score}/100 (target: {_QUALITY_PUBLISH_THRESHOLD}+).\n"
+                f"Focus on DEPTH and WORD COUNT:\n"
+                f"- Expand every section with deeper explanations, more detail, and real-world examples\n"
+                f"- Target at least 800 words of dense, high-value content\n"
+                f"- Add more sub-headings (###) for better structure\n"
+                f"- Ensure every section has at least 3-4 sentences of explanation\n"
+                f"- Add Assam-specific context or {board_display} exam patterns where relevant\n"
+                f"\nRewrite the COMPLETE content with deeper, more detailed explanations. Return ONLY the improved content."
+            )
+        else:
+            boost = (
+                f"Previous attempts scored below {_QUALITY_PUBLISH_THRESHOLD}. Simplify and ensure these minimum requirements:\n"
+                f"- At least 500 words\n"
+                f"- At least 5 headings (## or ###)\n"
+                f"- A FAQ section with 3 Q&As\n"
+                f"- A Key Points section\n"
+                f"- Mention {board_display}, {subject_name}, and {chapter_title}\n"
+                f"\nWrite clean, simple content covering the topic thoroughly. Return ONLY the content."
+            )
+        return boost
 
-        retry_msgs = [
-            {"role": "system", "content": _QUALITY_SYSTEM},
-            {"role": "user", "content": prompt},
-            {"role": "assistant", "content": content},
-            {"role": "user", "content": boost_prompt + "\nRewrite the COMPLETE content with ALL improvements. Return ONLY the improved content."},
-        ]
-        content2, retry_score = await _generate_and_score(retry_msgs, attempt=2)
-        if content2 is not None and retry_score > first_score:
-            content, first_score = content2, retry_score
-            logger.info(f"Retry improved {topic['title']}/{page_type}: {first_score} (was {first_score})")
+    best_content, best_score = content, first_score
+
+    for retry_num in range(1, 4):
+        if best_content is not None and best_score >= _QUALITY_PUBLISH_THRESHOLD:
+            break
+
+        if best_content is not None:
+            boost_prompt = _build_retry_prompt(best_content, best_score, retry_num)
+            retry_msgs = [
+                {"role": "system", "content": _QUALITY_SYSTEM},
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": best_content},
+                {"role": "user", "content": boost_prompt},
+            ]
+        else:
+            retry_msgs = [
+                {"role": "system", "content": _QUALITY_SYSTEM},
+                {"role": "user", "content": prompt + "\n\nIMPORTANT: Ensure comprehensive coverage with at least 500 words. Include FAQ, Key Points, and examples."},
+            ]
+
+        new_content, new_score = await _generate_and_score(retry_msgs, attempt=retry_num + 1)
+        attempt_scores.append({"attempt": retry_num + 1, "score": new_score})
+        logger.info(f"Retry {retry_num} for {topic['title']}/{page_type}: score={new_score} (best so far: {best_score})")
+
+        if new_content is not None and (best_content is None or new_score > best_score):
+            best_content, best_score = new_content, new_score
+
+    content, first_score = best_content, best_score
+    logger.info(f"Generation complete for {topic['title']}/{page_type}: final_score={first_score}, attempts={attempt_scores}")
 
     if content is None:
         return None
@@ -2363,7 +2466,8 @@ async def _fetch_published_pages() -> list[dict]:
         return await _db.seo_pages.find(
             {"status": "published"},
             {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1,
-             "chapter_slug": 1, "topic_slug": 1, "page_type": 1, "updated_at": 1},
+             "chapter_slug": 1, "topic_slug": 1, "page_type": 1, "updated_at": 1,
+             "generated_at": 1, "created_at": 1},
         ).to_list(50000)
     except Exception:
         return []
@@ -2377,6 +2481,8 @@ def _page_to_entry(p: dict, today: str) -> dict | None:
     path = base_path if pt == "notes" else f"{base_path}/{pt}"
     try:
         raw = p.get("updated_at", "")
+        if not raw:
+            raw = p.get("generated_at", "") or p.get("created_at", "")
         lastmod = raw[:10] if raw else today
     except Exception:
         lastmod = today
