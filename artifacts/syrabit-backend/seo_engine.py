@@ -523,6 +523,8 @@ REQUIRED_SECTIONS = {
 }
 
 
+_QUALITY_PUBLISH_THRESHOLD = 80
+
 def _compute_quality_score(content: str, page_type: str, context: dict | None = None) -> dict:
     """Compute content quality indicators for a generated page.
 
@@ -538,6 +540,8 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
     has_faq = bool(re.search(r'##\s*(FAQ|Frequently Asked)', content, re.IGNORECASE))
     has_exam_q = bool(re.search(r'##\s*(Exam.Style|Commonly Tested|Board Pattern|Previous Year|PYQ|Frequently Repeated)', content, re.IGNORECASE))
     has_examples = bool(re.search(r'Example\s*\d', content, re.IGNORECASE))
+    has_key_points = bool(re.search(r'##\s*(Key Point|Key Takeaway|Important Point|Revision|Summary)', content, re.IGNORECASE))
+    has_tips = bool(re.search(r'(exam tip|revision tip|remember|important note)', content_lower))
 
     unique_words = set(w.lower() for w in words if len(w) > 3)
     unique_ratio = round(len(unique_words) / max(word_count, 1), 3)
@@ -557,21 +561,22 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
         anchored = True
 
     score = 0
-    if word_count >= 500: score += 25
-    elif word_count >= 300: score += 20
-    elif word_count >= 150: score += 10
-    if heading_count >= 5: score += 15
-    elif heading_count >= 3: score += 10
+    if word_count >= 700: score += 20
+    elif word_count >= 500: score += 15
+    elif word_count >= 350: score += 8
+    if heading_count >= 6: score += 15
+    elif heading_count >= 4: score += 10
     elif heading_count >= 2: score += 5
-    if unique_ratio >= 0.35: score += 15
-    elif unique_ratio >= 0.30: score += 10
-    elif unique_ratio >= 0.20: score += 5
-    if sections_ratio >= 0.8: score += 15
-    elif sections_ratio >= 0.5: score += 8
-    if has_faq: score += 5
+    if unique_ratio >= 0.35: score += 10
+    elif unique_ratio >= 0.28: score += 6
+    if sections_ratio >= 0.8: score += 10
+    elif sections_ratio >= 0.5: score += 5
+    if has_faq: score += 10
     if has_exam_q: score += 10
-    if has_examples: score += 5
-    if anchored: score += 10
+    if has_examples: score += 10
+    if has_key_points: score += 5
+    if has_tips: score += 5
+    if anchored: score += 5
 
     return {
         "word_count": word_count,
@@ -581,6 +586,8 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
         "has_faq": has_faq,
         "has_exam_q": has_exam_q,
         "has_examples": has_examples,
+        "has_key_points": has_key_points,
+        "has_tips": has_tips,
         "anchored": anchored,
         "score": min(score, 100),
     }
@@ -1049,15 +1056,16 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         f"and easy to understand. Reference the chapter context and connect to neighboring topics "
         f"in the syllabus where relevant. Use {board_display} exam marking patterns.\n\n"
         f"MANDATORY QUALITY RULES — your content MUST include ALL of these:\n"
-        f"1. At least 500 words of detailed, original content\n"
-        f"2. At least 5 Markdown headings (## or ###) for clear structure\n"
-        f"3. A '## FAQ' section with 3-5 commonly asked questions and answers\n"
+        f"1. At least 700 words of detailed, original content with deep explanations\n"
+        f"2. At least 6 Markdown headings (## or ###) for clear structure\n"
+        f"3. A '## FAQ' or '## Frequently Asked Questions' section with 3-5 Q&As\n"
         f"4. A '## Exam-Style Questions' section with board exam pattern questions\n"
         f"5. At least 2 concrete examples (labeled 'Example 1:', 'Example 2:' etc.)\n"
-        f"6. Mention the board name ({board_display}), subject ({subject_name}), "
+        f"6. A '## Key Points' or '## Revision Notes' section summarizing essentials\n"
+        f"7. Include 'Exam tip:', 'Revision tip:', or 'Important note:' callouts\n"
+        f"8. Mention the board name ({board_display}), subject ({subject_name}), "
         f"and chapter ({chapter_title}) naturally in the text\n"
-        f"7. Use diverse vocabulary — avoid repeating the same phrases\n"
-        f"8. Include relevant key points, revision tips, and exam tips\n"
+        f"9. Use diverse vocabulary — avoid repeating the same phrases\n"
     )
 
     messages = [
@@ -1087,12 +1095,12 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
 
     content, first_score = await _generate_and_score(messages, attempt=1)
 
-    if content is not None and first_score < 70:
+    if content is not None and first_score < _QUALITY_PUBLISH_THRESHOLD:
         boost_prompt = (
-            f"The previous attempt scored {first_score}/100. Improve it to score above 70.\n"
+            f"The previous attempt scored {first_score}/100. Improve it to score above {_QUALITY_PUBLISH_THRESHOLD}.\n"
             f"MISSING ELEMENTS — add ALL of these:\n"
         )
-        if first_score < 70:
+        if first_score < _QUALITY_PUBLISH_THRESHOLD:
             qctx = {"board_name": board_display, "subject_name": subject_name, "chapter_title": chapter_title}
             diag = _compute_quality_score(content, page_type, context=qctx)
             if not diag.get("has_faq"):
@@ -1107,6 +1115,12 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
                 boost_prompt += "- Expand content to at least 500 words\n"
             if not diag.get("anchored"):
                 boost_prompt += f"- Mention {board_display}, {subject_name}, and {chapter_title} in the text\n"
+            if not diag.get("has_key_points"):
+                boost_prompt += "- Add a '## Key Points' or '## Revision Notes' section\n"
+            if not diag.get("has_tips"):
+                boost_prompt += "- Add exam tips, revision tips, or important notes throughout\n"
+            if diag.get("word_count", 0) < 700:
+                boost_prompt += "- Expand content to at least 700 words with deeper explanations\n"
 
         retry_msgs = [
             {"role": "system", "content": _QUALITY_SYSTEM},
@@ -1160,11 +1174,11 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
     quality_score = _compute_quality_score(content, page_type, context=quality_context)
     q_score = quality_score.get("score", 0)
 
-    if q_score >= 70:
+    if q_score >= _QUALITY_PUBLISH_THRESHOLD:
         page_status = "published"
     else:
         page_status = "rejected"
-        logger.warning(f"Page for {topic['title']}/{page_type} scored {q_score} — rejected (below 70 quality threshold)")
+        logger.warning(f"Page for {topic['title']}/{page_type} scored {q_score} — rejected (below {_QUALITY_PUBLISH_THRESHOLD} quality threshold)")
 
     page = {
         "id": f"seo-{uuid.uuid4().hex[:8]}",
@@ -2651,10 +2665,10 @@ async def generate_pilot_content(
 async def bulk_publish_pages(
     page_type: Optional[str] = None,
     subject_id: Optional[str] = None,
-    min_score: int = 70,
+    min_score: int = _QUALITY_PUBLISH_THRESHOLD,
     _admin: dict = Depends(_require_admin),
 ):
-    """Publish draft SEO pages that meet the quality threshold (default ≥70)."""
+    """Publish draft SEO pages that meet the quality threshold."""
     query: dict = {
         "status": {"$ne": "published"},
         "$or": [
