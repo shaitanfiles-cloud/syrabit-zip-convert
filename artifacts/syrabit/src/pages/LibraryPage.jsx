@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Search, Bookmark,
@@ -38,8 +38,6 @@ export default function LibraryPage() {
 
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
-  const [selectedBoardSlug, setSelectedBoardSlug] = useState('all');
-  const [selectedClassSlug, setSelectedClassSlug] = useState('all');
 
   const { data: bundle, isLoading: bundleLoading, isFetching, refetch: refetchBundle } = useLibraryBundle();
   const subjects    = bundle?.subjects  || [];
@@ -49,21 +47,6 @@ export default function LibraryPage() {
   const allChapters = bundle?.chapters  || [];
   const { data: savedSubjects = [] } = useSavedSubjects(user);
   const toggleSaved = useToggleSavedSubject();
-
-  const profileApplied = useRef(false);
-  useEffect(() => {
-    if (profileApplied.current || !boards.length || !classes.length) return;
-    const boardId = user?.board_id || getOnboardingProfile()?.board_id;
-    const classId = user?.class_id || getOnboardingProfile()?.class_id;
-    if (!boardId) return;
-    profileApplied.current = true;
-    const board = boards.find((b) => b.id === boardId);
-    if (board?.slug) setSelectedBoardSlug(board.slug);
-    if (classId) {
-      const cls = classes.find((c) => c.id === classId);
-      if (cls?.slug) setSelectedClassSlug(cls.slug);
-    }
-  }, [boards, classes, user]);
 
   useEffect(() => {
     const handleContentUploaded = () => { refetchBundle(); };
@@ -106,42 +89,16 @@ export default function LibraryPage() {
   const dynamicStreamChips = useMemo(() => {
     const streamSlugs = new Set();
     const chips = [];
-    const filtered = enrichedSubjects.filter((sub) => {
-      if (selectedBoardSlug !== 'all' && sub.boardSlug !== selectedBoardSlug) return false;
-      if (selectedClassSlug !== 'all' && sub.classSlug !== selectedClassSlug) return false;
-      return true;
-    });
-    for (const sub of filtered) {
+    for (const sub of enrichedSubjects) {
       if (sub.streamSlug && !streamSlugs.has(sub.streamSlug)) {
         streamSlugs.add(sub.streamSlug);
         chips.push({ id: sub.streamSlug, label: sub.streamName || sub.streamSlug });
       }
     }
     return chips;
-  }, [enrichedSubjects, selectedBoardSlug, selectedClassSlug]);
+  }, [enrichedSubjects]);
 
   const allStreamChips = useMemo(() => [...STREAM_CHIPS, ...dynamicStreamChips], [dynamicStreamChips]);
-
-  const boardChips = useMemo(() => {
-    const chips = [{ id: 'all', label: 'All Boards' }];
-    for (const b of boards) {
-      if (b.slug) chips.push({ id: b.slug, label: b.name || b.slug });
-    }
-    return chips;
-  }, [boards]);
-
-  const classChips = useMemo(() => {
-    if (selectedBoardSlug === 'all') return [];
-    const board = boards.find((b) => b.slug === selectedBoardSlug);
-    if (!board) return [];
-    const boardClasses = classes.filter((c) => c.board_id === board.id);
-    if (boardClasses.length <= 1) return [];
-    const chips = [{ id: 'all', label: 'All' }];
-    for (const c of boardClasses) {
-      if (c.slug) chips.push({ id: c.slug, label: c.name || c.slug });
-    }
-    return chips;
-  }, [selectedBoardSlug, boards, classes]);
 
   const filteredSubjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -150,8 +107,6 @@ export default function LibraryPage() {
       if (seen.has(sub.id)) return false;
       seen.add(sub.id);
       if (sub.status && sub.status !== 'published') return false;
-      if (selectedBoardSlug !== 'all' && sub.boardSlug !== selectedBoardSlug) return false;
-      if (selectedClassSlug !== 'all' && sub.classSlug !== selectedClassSlug) return false;
       if (activeFilter === 'saved') {
         if (!savedSubjectsSet.has(sub.id)) return false;
       } else if (activeFilter !== 'all') {
@@ -170,7 +125,7 @@ export default function LibraryPage() {
       }
       return true;
     });
-  }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, selectedBoardSlug, selectedClassSlug, chaptersBySubject]);
+  }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, chaptersBySubject]);
 
   useEffect(() => {
     if (!filteredSubjects.length) return;
@@ -203,15 +158,13 @@ export default function LibraryPage() {
     navigate(`/chat?${params.toString()}`);
   }, [navigate]);
 
-  const handleResetFilters = useCallback(() => { setSearchQuery(''); setActiveFilter('all'); setSelectedBoardSlug('all'); setSelectedClassSlug('all'); }, []);
+  const handleResetFilters = useCallback(() => { setSearchQuery(''); setActiveFilter('all'); }, []);
 
   const handleRefetchSubjects = useCallback(async () => { await refetchBundle(); toast.success('Browser refreshed'); }, [refetchBundle]);
 
   const handleSearchChange = useCallback((e) => setSearchQuery(e.target.value), []);
   const handleFilterChange = useCallback((filterId) => setActiveFilter(filterId), []);
   const handleSearchClear = useCallback(() => setSearchQuery(''), []);
-  const handleBoardChange = useCallback((slug) => { setSelectedBoardSlug(slug); setSelectedClassSlug('all'); setActiveFilter('all'); }, []);
-  const handleClassChange = useCallback((slug) => { setSelectedClassSlug(slug); setActiveFilter('all'); }, []);
 
   if (bundleLoading) {
     return (
@@ -315,40 +268,6 @@ export default function LibraryPage() {
         <div className="flex-1 overflow-y-auto">
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
 
-            {boardChips.length > 2 && (
-              <ScrollableFilterRow
-                role="group"
-                aria-label="Board filters"
-                className="pb-2"
-                data-testid="library-board-chips"
-              >
-                {boardChips.map((chip) => (
-                  <FilterChip
-                    key={`board-${chip.id}`}
-                    chip={chip}
-                    isActive={chip.id === selectedBoardSlug}
-                    onClick={() => handleBoardChange(chip.id)}
-                  />
-                ))}
-              </ScrollableFilterRow>
-            )}
-            {classChips.length > 0 && (
-              <ScrollableFilterRow
-                role="group"
-                aria-label="Class filters"
-                className="pb-2"
-                data-testid="library-class-chips"
-              >
-                {classChips.map((chip) => (
-                  <FilterChip
-                    key={`class-${chip.id}`}
-                    chip={chip}
-                    isActive={chip.id === selectedClassSlug}
-                    onClick={() => handleClassChange(chip.id)}
-                  />
-                ))}
-              </ScrollableFilterRow>
-            )}
             <ScrollableFilterRow
               role="group"
               aria-label="Stream filters"
@@ -415,7 +334,7 @@ export default function LibraryPage() {
                         ? `No results for "${searchQuery}" — try a different term or clear the search`
                         : 'Try adjusting your filters to discover more subjects'}
                     </p>
-                    {(searchQuery || activeFilter !== 'all' || selectedBoardSlug !== 'all' || selectedClassSlug !== 'all') && (
+                    {(searchQuery || activeFilter !== 'all') && (
                       <button
                         onClick={handleResetFilters}
                         className="mt-5 px-4 py-2 rounded-xl text-sm text-primary hover:text-white transition-all duration-200 active:scale-95"
@@ -447,14 +366,8 @@ export default function LibraryPage() {
               </div>
             )}
           </div>
-          <CmsDocsSection
-            board={selectedBoardSlug !== 'all' ? selectedBoardSlug : undefined}
-            classSlug={selectedClassSlug !== 'all' ? selectedClassSlug : undefined}
-          />
-          <CmsPostsGrid
-            board={selectedBoardSlug !== 'all' ? selectedBoardSlug : undefined}
-            classSlug={selectedClassSlug !== 'all' ? selectedClassSlug : undefined}
-          />
+          <CmsDocsSection />
+          <CmsPostsGrid />
         </div>
 
       </div>
