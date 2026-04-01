@@ -31,7 +31,7 @@ const STREAM_COLORS = {
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
-  const { user, loading: authLoading, refreshUser } = useAuth();
+  const { user, loading: authLoading, refreshUser, updateUser, justAuthenticated } = useAuth();
   const [step, setStep] = useState(0);
 
   const [boards, setBoards] = useState([]);
@@ -50,9 +50,12 @@ export default function OnboardingPage() {
 
   useEffect(() => {
     if (authLoading) return;
-    if (!user) navigate('/login', { replace: true });
+    if (!user && !justAuthenticated.current) {
+      navigate('/login', { replace: true });
+      return;
+    }
     if (user?.onboarding_done) navigate('/library', { replace: true });
-  }, [user, authLoading, navigate]);
+  }, [user, authLoading, navigate, justAuthenticated]);
 
   useEffect(() => {
     getBoards().then((res) => setBoards(res.data));
@@ -96,7 +99,10 @@ export default function OnboardingPage() {
       }
       await saveOnboarding(onboardingData);
       localStorage.setItem('syrabit:onboarding', JSON.stringify(onboardingData));
-      await refreshUser();
+      updateUser({ onboarding_done: true });
+      try {
+        await refreshUser();
+      } catch {}
       toast.success('Setup complete! Welcome to Syrabit.ai');
       navigate('/library', { replace: true });
     } catch (err) {

@@ -1,33 +1,66 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
-import { API_BASE } from '@/utils/api';
+import { API_BASE, setAuthToken } from '@/utils/api';
 
 const AuthContext = createContext(null);
+
+let _inMemoryToken = null;
+
+export const getInMemoryToken = () => _inMemoryToken;
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const justAuthenticated = useRef(false);
 
   const fetchMe = useCallback(async () => {
     try {
-      const res = await axios.get(`${API_BASE}/auth/me`, { withCredentials: true });
+      const headers = _inMemoryToken
+        ? { Authorization: `Bearer ${_inMemoryToken}` }
+        : {};
+      const res = await axios.get(`${API_BASE}/auth/me`, {
+        withCredentials: true,
+        headers,
+      });
       setUser(res.data);
+      justAuthenticated.current = false;
+      return true;
     } catch {
-      setUser(null);
+      if (!justAuthenticated.current) {
+        setUser(null);
+      }
+      return false;
     }
   }, []);
 
   useEffect(() => {
     const init = async () => {
+      const savedToken = sessionStorage.getItem('syrabit_token');
+      if (savedToken) {
+        _inMemoryToken = savedToken;
+        setAuthToken(savedToken);
+      }
       await fetchMe();
       setLoading(false);
     };
     init();
   }, [fetchMe]);
 
+  const _storeToken = (token) => {
+    _inMemoryToken = token;
+    setAuthToken(token);
+    if (token) {
+      sessionStorage.setItem('syrabit_token', token);
+    } else {
+      sessionStorage.removeItem('syrabit_token');
+    }
+  };
+
   const login = async (email, password) => {
     const res = await axios.post(`${API_BASE}/auth/login`, { email, password }, { withCredentials: true });
-    const { user: userData } = res.data;
+    const { user: userData, access_token } = res.data;
+    if (access_token) _storeToken(access_token);
+    justAuthenticated.current = true;
     setUser(userData);
     try {
       const { Analytics } = await import('@/utils/analytics');
@@ -42,7 +75,9 @@ export const AuthProvider = ({ children }) => {
       name, email, password,
       referral_code: referralCode,
     }, { withCredentials: true });
-    const { user: userData, referral_bonus } = res.data;
+    const { user: userData, access_token, referral_bonus } = res.data;
+    if (access_token) _storeToken(access_token);
+    justAuthenticated.current = true;
     setUser(userData);
     localStorage.removeItem('syrabit_ref');
     try {
@@ -56,6 +91,8 @@ export const AuthProvider = ({ children }) => {
     try {
       await axios.post(`${API_BASE}/auth/logout`, {}, { withCredentials: true });
     } catch {}
+    _storeToken(null);
+    justAuthenticated.current = false;
     localStorage.removeItem('syrabit:onboarding');
     setUser(null);
     try {
@@ -64,19 +101,25 @@ export const AuthProvider = ({ children }) => {
   };
 
   const refreshUser = async () => {
-    await fetchMe();
+    return await fetchMe();
   };
+
+  const updateUser = useCallback((updates) => {
+    setUser((prev) => (prev ? { ...prev, ...updates } : prev));
+  }, []);
 
   return (
     <AuthContext.Provider value={{
       user,
-      token: null,
+      token: _inMemoryToken,
       loading,
       login,
       signup,
       logout,
       refreshUser,
-      authHeader: {},
+      updateUser,
+      justAuthenticated,
+      authHeader: _inMemoryToken ? { Authorization: `Bearer ${_inMemoryToken}` } : {},
       API: API_BASE,
     }}>
       {children}

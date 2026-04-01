@@ -4,7 +4,19 @@ import { toast } from 'sonner';
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 export const API_BASE = `${BACKEND_URL}/api`;
 
-const authConfig = () => ({ withCredentials: true });
+let _authToken = null;
+
+export const setAuthToken = (token) => {
+  _authToken = token;
+};
+
+const authConfig = () => {
+  const config = { withCredentials: true };
+  if (_authToken) {
+    config.headers = { Authorization: `Bearer ${_authToken}` };
+  }
+  return config;
+};
 
 const RETRY_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_RETRIES = 2;

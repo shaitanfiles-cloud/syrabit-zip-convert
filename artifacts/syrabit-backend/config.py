@@ -8,12 +8,28 @@ load_dotenv(ROOT_DIR / '.env')
 
 MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 'mongodb://localhost:27017').strip().strip('"').strip("'")
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
-JWT_SECRET   = os.environ.get('JWT_SECRET') or os.urandom(48).hex()
+_jwt_secret_env = os.environ.get('JWT_SECRET', '').strip()
+if not _jwt_secret_env:
+    import warnings as _w
+    _w.warn(
+        "JWT_SECRET is not set — generating a random secret. "
+        "Sessions will NOT survive restarts and will break in multi-worker mode. "
+        "Set JWT_SECRET in your environment.",
+        stacklevel=1,
+    )
+    JWT_SECRET = os.urandom(48).hex()
+else:
+    JWT_SECRET = _jwt_secret_env
 JWT_ALGORITHM    = 'HS256'
 JWT_ACCESS_EXPIRE_MINUTES = int(os.environ.get('JWT_ACCESS_EXPIRE_MINUTES', '60'))
 JWT_REFRESH_EXPIRE_MINUTES = int(os.environ.get('JWT_REFRESH_EXPIRE_MINUTES', str(60 * 24 * 30)))
 JWT_EXPIRE_MINUTES = JWT_ACCESS_EXPIRE_MINUTES
-ADMIN_JWT_SECRET = os.environ.get('ADMIN_JWT_SECRET') or os.urandom(48).hex()
+
+_admin_jwt_env = os.environ.get('ADMIN_JWT_SECRET', '').strip()
+if not _admin_jwt_env:
+    ADMIN_JWT_SECRET = os.urandom(48).hex()
+else:
+    ADMIN_JWT_SECRET = _admin_jwt_env
 
 # ── Email Configuration ───────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
