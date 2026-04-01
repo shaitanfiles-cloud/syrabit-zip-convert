@@ -20,6 +20,7 @@ import CmsDocsSection from './library/CmsDocsSection';
 import CmsPostsGrid from './library/CmsPostsGrid';
 import LibrarySkeleton from './library/LibrarySkeleton';
 import FilterChip from './library/FilterChip';
+import ScrollableFilterRow from './library/ScrollableFilterRow';
 
 const STREAM_CHIPS = [
   { id: 'all', label: 'All' },
@@ -315,10 +316,10 @@ export default function LibraryPage() {
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
 
             {boardChips.length > 2 && (
-              <div
+              <ScrollableFilterRow
                 role="group"
                 aria-label="Board filters"
-                className="flex gap-2 overflow-x-auto pb-2 no-scrollbar"
+                className="pb-2"
                 data-testid="library-board-chips"
               >
                 {boardChips.map((chip) => (
@@ -329,13 +330,13 @@ export default function LibraryPage() {
                     onClick={() => handleBoardChange(chip.id)}
                   />
                 ))}
-              </div>
+              </ScrollableFilterRow>
             )}
             {classChips.length > 0 && (
-              <div
+              <ScrollableFilterRow
                 role="group"
                 aria-label="Class filters"
-                className="flex gap-2 overflow-x-auto pb-2 no-scrollbar"
+                className="pb-2"
                 data-testid="library-class-chips"
               >
                 {classChips.map((chip) => (
@@ -346,12 +347,12 @@ export default function LibraryPage() {
                     onClick={() => handleClassChange(chip.id)}
                   />
                 ))}
-              </div>
+              </ScrollableFilterRow>
             )}
-            <div
+            <ScrollableFilterRow
               role="group"
               aria-label="Stream filters"
-              className="flex gap-2 overflow-x-auto pb-4 no-scrollbar"
+              className="pb-4"
               data-testid="library-filter-chips"
             >
               {allStreamChips.map((chip) => (
@@ -362,7 +363,7 @@ export default function LibraryPage() {
                   onClick={() => handleFilterChange(chip.id)}
                 />
               ))}
-            </div>
+            </ScrollableFilterRow>
             {filteredSubjects.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <div
