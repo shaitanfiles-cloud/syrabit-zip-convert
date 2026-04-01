@@ -18,3 +18,9 @@ id = "h3KGt1aqTURO4u9B50-Ir"
 uri = "file://audit-report.md"
 type = "text"
 title = "Syrabit.ai Platform Audit Report — 100/100"
+
+[[outputs]]
+id = "xrOj2F6mcL-xejxzHzMQu"
+uri = "file://.local/quality_audit_report.md"
+type = "text"
+title = "Syrabit.ai Quality Improvement Audit Report"
