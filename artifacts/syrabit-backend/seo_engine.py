@@ -602,6 +602,8 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
     has_examples = bool(re.search(r'(Example\s*\d|#{2,4}\s*(Example|Solved Example|Illustration|Worked Example))', content, re.IGNORECASE))
     has_key_points = bool(re.search(r'#{2,4}\s*(Key Point|Key Takeaway|Important Point|Revision|Summary|Points to Remember|Quick Recap|At a Glance)', content, re.IGNORECASE))
     has_tips = bool(re.search(r'(exam tip|revision tip|remember|important note|pro tip|study tip|scoring tip)', content_lower))
+    has_citations = bool(re.search(r'(syllabus|NCERT|SCERT|textbook|curriculum|prescribed|as per the)', content, re.IGNORECASE))
+    has_marks_ref = bool(re.search(r'(\d\s*-?\s*marks?\b|short answer|long answer|objective type|very short)', content, re.IGNORECASE))
 
     unique_words = set(w.lower() for w in words if len(w) > 3)
     unique_ratio = round(len(unique_words) / max(word_count, 1), 3)
@@ -621,22 +623,24 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
         anchored = True
 
     score = 0
-    if word_count >= 700: score += 20
-    elif word_count >= 500: score += 15
-    elif word_count >= 350: score += 8
-    if heading_count >= 6: score += 15
-    elif heading_count >= 4: score += 10
-    elif heading_count >= 2: score += 5
-    if unique_ratio >= 0.35: score += 10
-    elif unique_ratio >= 0.28: score += 6
-    if sections_ratio >= 0.8: score += 10
-    elif sections_ratio >= 0.5: score += 5
+    if word_count >= 800: score += 18
+    elif word_count >= 600: score += 12
+    elif word_count >= 400: score += 6
+    if heading_count >= 8: score += 12
+    elif heading_count >= 6: score += 9
+    elif heading_count >= 4: score += 5
+    if unique_ratio >= 0.35: score += 8
+    elif unique_ratio >= 0.28: score += 4
+    if sections_ratio >= 0.8: score += 8
+    elif sections_ratio >= 0.5: score += 4
     if has_faq: score += 10
     if has_exam_q: score += 10
-    if has_examples: score += 10
+    if has_examples: score += 8
     if has_key_points: score += 5
     if has_tips: score += 5
-    if anchored: score += 5
+    if anchored: score += 4
+    if has_citations: score += 6
+    if has_marks_ref: score += 6
 
     return {
         "word_count": word_count,
@@ -649,6 +653,8 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
         "has_key_points": has_key_points,
         "has_tips": has_tips,
         "anchored": anchored,
+        "has_citations": has_citations,
+        "has_marks_ref": has_marks_ref,
         "score": min(score, 100),
     }
 
@@ -1113,19 +1119,28 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         f"for {prompt_class_label} students in Assam, India. "
         f"Chapter: \"{chapter_title}\" | Topic position: {syllabus_position or 'N/A'}. "
         f"Create educational content that is comprehensive, exam-focused, syllabus-aligned, "
-        f"and easy to understand. Reference the chapter context and connect to neighboring topics "
+        f"and easy to understand. This is a LESSON-LEVEL page covering the ENTIRE chapter/unit — "
+        f"not a subtopic. Cover ALL key concepts from this chapter comprehensively. "
+        f"Reference the chapter context and connect to neighboring topics "
         f"in the syllabus where relevant. Use {board_display} exam marking patterns.\n\n"
         f"MANDATORY QUALITY RULES — your content MUST include ALL of these:\n"
-        f"1. At least 700 words of detailed, original content with deep explanations\n"
-        f"2. At least 6 Markdown headings (## or ###) for clear structure\n"
+        f"1. At least 800 words of detailed, original content with deep explanations\n"
+        f"2. At least 8 Markdown headings (## or ###) for clear structure\n"
         f"3. A '## FAQ' or '## Frequently Asked Questions' section with 3-5 Q&As\n"
-        f"4. A '## Exam-Style Questions' section with board exam pattern questions\n"
+        f"4. A '## Exam-Style Questions' section with 2-mark, 5-mark, and long-answer board exam pattern questions\n"
         f"5. At least 2 concrete examples (labeled 'Example 1:', 'Example 2:' etc.)\n"
         f"6. A '## Key Points' or '## Revision Notes' section summarizing essentials\n"
         f"7. Include 'Exam tip:', 'Revision tip:', or 'Important note:' callouts\n"
         f"8. Mention the board name ({board_display}), subject ({subject_name}), "
         f"and chapter ({chapter_title}) naturally in the text\n"
         f"9. Use diverse vocabulary — avoid repeating the same phrases\n"
+        f"10. MANDATORY: Reference curriculum/syllabus sources — use phrases like "
+        f"'As per the {board_display} syllabus', 'prescribed in the SCERT/NCERT curriculum', "
+        f"'as outlined in the {subject_name} textbook', 'per the university syllabus'\n"
+        f"11. MANDATORY: Include exam marking references — '2-mark question', '5-mark answer', "
+        f"'long answer (10 marks)', 'short answer type' to match board exam patterns\n"
+        f"12. Include Assam-specific context where relevant — local examples, regional institutions, "
+        f"Assamese context that connects the academic content to students' lived experience\n"
     )
 
     messages = [
@@ -1133,8 +1148,8 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         {"role": "user", "content": prompt},
     ]
 
-    min_words = {"notes": 500, "definition": 400, "important-questions": 450, "mcqs": 500, "examples": 450}
-    required_min = min_words.get(page_type, 450)
+    min_words = {"notes": 700, "definition": 500, "important-questions": 550, "mcqs": 500, "examples": 500}
+    required_min = min_words.get(page_type, 500)
 
     async def _generate_and_score(msgs, attempt=1):
         try:
@@ -1169,21 +1184,23 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
             if not diag.get("has_faq"):
                 boost += "- Add a '## FAQ' section with 3-5 questions and answers\n"
             if not diag.get("has_exam_q"):
-                boost += "- Add a '## Exam-Style Questions' section with board-pattern questions\n"
+                boost += "- Add a '## Exam-Style Questions' section with 2-mark, 5-mark, and long-answer board-pattern questions\n"
             if not diag.get("has_examples"):
                 boost += "- Add labeled examples (Example 1, Example 2, etc.)\n"
-            if diag.get("heading_count", 0) < 5:
-                boost += "- Add more ## and ### headings (need at least 5)\n"
-            if diag.get("word_count", 0) < 500:
-                boost += "- Expand content to at least 500 words\n"
+            if diag.get("heading_count", 0) < 8:
+                boost += "- Add more ## and ### headings (need at least 8 for comprehensive lesson coverage)\n"
+            if diag.get("word_count", 0) < 800:
+                boost += "- Expand content to at least 800 words with deeper explanations\n"
             if not diag.get("anchored"):
                 boost += f"- Mention {board_display}, {subject_name}, and {chapter_title} in the text\n"
             if not diag.get("has_key_points"):
                 boost += "- Add a '## Key Points' or '## Revision Notes' section\n"
             if not diag.get("has_tips"):
                 boost += "- Add exam tips, revision tips, or important notes throughout\n"
-            if diag.get("word_count", 0) < 700:
-                boost += "- Expand content to at least 700 words with deeper explanations\n"
+            if not diag.get("has_citations"):
+                boost += f"- Add curriculum citations: 'As per the {board_display} syllabus', 'prescribed in SCERT/NCERT curriculum'\n"
+            if not diag.get("has_marks_ref"):
+                boost += "- Add exam marks references: '2-mark question', '5-mark answer', 'long answer (10 marks)'\n"
             boost += "\nRewrite the COMPLETE content with ALL improvements. Return ONLY the improved content."
         elif retry_number == 2:
             boost = (
@@ -1398,7 +1415,7 @@ async def generate_seo_content(data: GenerateRequest, background_tasks: Backgrou
     if data.batch:
         topics = await _db.topics.find({"status": "published"}, {"_id": 0}).to_list(5000)
         if not topics:
-            raise HTTPException(status_code=404, detail="No topics found. Run extract-topics first.")
+            raise HTTPException(status_code=404, detail="No topics found. Run extract-topics or generate-lessons first.")
 
         background_tasks.add_task(_batch_generate, topics, page_types)
         return {
@@ -1428,6 +1445,88 @@ async def generate_seo_content(data: GenerateRequest, background_tasks: Backgrou
         details = f"Generated {len(results)} SEO pages for topic '{topic.get('title', topic['id'])}': {', '.join(p['page_type'] for p in results)}",
     ))
     return {"message": f"Generated {len(results)} pages", "pages": results}
+
+
+@router.post("/generate-lessons")
+async def generate_lesson_pages(background_tasks: BackgroundTasks, _admin: dict = Depends(_require_admin)):
+    """Lesson-wise SEO generation: 1 topic + 1 notes page per chapter.
+    Directly links to content card lessons. Enforces max 1 page per chapter."""
+    chapters = await _db.chapters.find({}, {"_id": 0}).to_list(5000)
+    if not chapters:
+        raise HTTPException(status_code=404, detail="No chapters found in database")
+
+    existing_topics = {}
+    async for t in _db.topics.find({}, {"_id": 0}):
+        existing_topics[t.get("chapter_id", "")] = t
+
+    created_topics = 0
+    skipped = 0
+    to_generate = []
+
+    for ch in chapters:
+        ch_id = ch["id"]
+        if ch_id in existing_topics:
+            existing_page = await _db.seo_pages.find_one(
+                {"topic_id": existing_topics[ch_id]["id"], "status": "published"},
+                {"_id": 0, "id": 1}
+            )
+            if existing_page:
+                skipped += 1
+                continue
+            to_generate.append(existing_topics[ch_id])
+            continue
+
+        subj = await _db.subjects.find_one({"id": ch.get("subject_id", "")}, {"_id": 0})
+        board = None
+        if subj:
+            board = await _db.boards.find_one({"id": subj.get("board_id", "")}, {"_id": 0})
+
+        subject_name = subj["name"] if subj else ""
+        board_name = board["name"] if board else "DEGREE"
+        title = ch.get("title", "")
+
+        topic_id = f"topic-{uuid.uuid4().hex[:8]}"
+        topic_slug = _slug(title)
+        primary_kw = f"{title.lower()} {subject_name.lower()} {board_name}".strip()[:120]
+
+        topic = {
+            "id": topic_id,
+            "chapter_id": ch_id,
+            "subject_id": ch.get("subject_id", ""),
+            "chapter_title": title,
+            "subject_name": subject_name,
+            "board_name": board_name,
+            "title": title,
+            "slug": topic_slug,
+            "primary_keyword": primary_kw,
+            "search_intent": "informational",
+            "definition": "",
+            "examples": "",
+            "order": ch.get("order_index", 0),
+            "status": "published",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await _db.topics.insert_one(topic)
+        await _db.chapters.update_one(
+            {"id": ch_id},
+            {"$set": {"linked_topic_ids": [topic_id]}}
+        )
+        created_topics += 1
+        to_generate.append(topic)
+
+    if to_generate:
+        background_tasks.add_task(_batch_generate, to_generate, ["notes"])
+
+    return {
+        "message": (
+            f"Lesson-wise generation: {created_topics} topics created, "
+            f"{len(to_generate)} pages queued, {skipped} already complete"
+        ),
+        "total_chapters": len(chapters),
+        "topics_created": created_topics,
+        "pages_queued": len(to_generate),
+        "already_complete": skipped,
+    }
 
 
 async def _batch_generate(topics: list, page_types: list):
