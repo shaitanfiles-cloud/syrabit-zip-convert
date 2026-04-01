@@ -160,6 +160,7 @@ class SyllabusLinker:
             "class_id": class_id, "class_name": class_name, "class_slug": class_slug,
         }
         for s in linked_streams:
+            ctx["stream_name"] = s.get("stream_name", "")
             subj_id = await self._find_or_create_subject(
                 s["stream_id"], s["stream_slug"], entry, ctx, created
             )
@@ -273,6 +274,12 @@ class SyllabusLinker:
                 missing["class_slug"] = ctx["class_slug"]
             if not doc.get("stream_slug") and stream_slug:
                 missing["stream_slug"] = stream_slug
+            if ctx.get("board_name") and doc.get("boardName") != ctx["board_name"]:
+                missing["boardName"] = ctx["board_name"]
+            if ctx.get("class_name") and doc.get("className") != ctx["class_name"]:
+                missing["className"] = ctx["class_name"]
+            if ctx.get("stream_name") and doc.get("streamName") != ctx["stream_name"]:
+                missing["streamName"] = ctx["stream_name"]
             if missing:
                 await self._db.subjects.update_one({"id": doc["id"]}, {"$set": missing})
             return doc["id"]
@@ -316,7 +323,7 @@ class SyllabusLinker:
             "boardId": ctx.get("board_id", ""),
             "boardName": ctx.get("board_name", ""),
             "className": ctx.get("class_name", ""),
-            "streamName": entry.stream_hint or ctx.get("class_name", ""),
+            "streamName": ctx.get("stream_name", "") or entry.stream_hint or ctx.get("class_name", ""),
             "created_at": _NOW(),
         })
         created.append(f"Subject: {entry.subject_name}")
