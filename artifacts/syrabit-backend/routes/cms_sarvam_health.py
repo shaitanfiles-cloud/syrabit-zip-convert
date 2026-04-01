@@ -1727,18 +1727,26 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
     - /{board}/{class}/{subject}/{topic}/{type} → topic page (typed)
     """
 
+    async def _safe_call_next(self, request, call_next):
+        try:
+            return await call_next(request)
+        except Exception as exc:
+            logger.warning(f"BotRenderMiddleware downstream error: {exc}")
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
     async def dispatch(self, request: StarletteRequest, call_next):
         ua = request.headers.get("user-agent", "")
         if not _BOT_UA_RE.search(ua):
-            return await call_next(request)
+            return await self._safe_call_next(request, call_next)
 
         path = request.url.path.rstrip("/") or "/"
         for prefix in _BOT_SKIP_PREFIXES:
             if path.startswith(prefix):
-                return await call_next(request)
+                return await self._safe_call_next(request, call_next)
 
         if "." in path.split("/")[-1]:
-            return await call_next(request)
+            return await self._safe_call_next(request, call_next)
 
         parts = [p for p in path.split("/") if p]
         n = len(parts)
@@ -1752,11 +1760,11 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
         elif n in (4, 5):
             page_type_part = parts[4] if n == 5 else None
             if page_type_part and page_type_part not in _VALID_PAGE_TYPES:
-                return await call_next(request)
+                return await self._safe_call_next(request, call_next)
             current_type = page_type_part or "notes"
             cache_key = f"{parts[0]}/{parts[1]}/{parts[2]}/{parts[3]}/{current_type}"
         else:
-            return await call_next(request)
+            return await self._safe_call_next(request, call_next)
 
         cached_html = _bot_html_cache.get(cache_key)
         if cached_html:
@@ -1780,16 +1788,16 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             async with httpx.AsyncClient(timeout=10.0) as client:
                 html_resp = await client.get(api_url)
             if html_resp.status_code != 200:
-                return await call_next(request)
+                return await self._safe_call_next(request, call_next)
             ct = html_resp.headers.get("content-type", "")
             if "text/html" not in ct and "text/xml" not in ct:
-                return await call_next(request)
+                return await self._safe_call_next(request, call_next)
             html_content = html_resp.text
             _bot_html_cache[cache_key] = html_content
             return _bot_html_response(html_content)
         except Exception as _bot_err:
             logger.debug(f"BotRenderMiddleware fallthrough: {_bot_err}")
-            return await call_next(request)
+            return await self._safe_call_next(request, call_next)
 
 
 class CmsNoIndexMiddleware(BaseHTTPMiddleware):

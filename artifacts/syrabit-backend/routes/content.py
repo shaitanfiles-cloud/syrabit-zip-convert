@@ -49,18 +49,25 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         if not await is_mongo_available():
             return {"boards": [], "classes": [], "streams": [], "subjects": []}
         async with _slow_query("library_bundle"):
-            boards_data, classes_data, streams_data, subjects_data, chapters_data, pyq_data, fc_data = await asyncio.gather(
-                db.boards.find({}, {"_id": 0}).to_list(100),
-                db.classes.find({}, {"_id": 0}).to_list(100),
-                db.streams.find({}, {"_id": 0}).to_list(100),
-                db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
-                db.chapters.find(
-                    {},
-                    {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "description": 1, "notes_generated": 1},
-                ).sort("order_index", 1).to_list(5000),
-                db.topic_pyq_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
-                db.flashcard_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
-            )
+            try:
+                boards_data, classes_data, streams_data, subjects_data, chapters_data, pyq_data, fc_data = await asyncio.wait_for(
+                    asyncio.gather(
+                        db.boards.find({}, {"_id": 0}).to_list(100),
+                        db.classes.find({}, {"_id": 0}).to_list(100),
+                        db.streams.find({}, {"_id": 0}).to_list(100),
+                        db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
+                        db.chapters.find(
+                            {},
+                            {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "notes_generated": 1},
+                        ).sort("order_index", 1).to_list(2000),
+                        db.topic_pyq_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
+                        db.flashcard_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
+                    ),
+                    timeout=15.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("library-bundle MongoDB query timed out after 15s")
+                return {"boards": [], "classes": [], "streams": [], "subjects": []}
 
         # ── Compute per-subject content coverage ─────────────────────────────
         chapters_by_subject: dict = {}

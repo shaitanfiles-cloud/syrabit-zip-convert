@@ -38,9 +38,24 @@ class SecurityHeadersMiddleware:
 class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
     """Plan-aware IP rate limiting for all /api routes + request tracking.
     Plan is read from JWT claim (refreshed on login, plan change invalidates session)."""
+    _RATE_LIMIT_EXEMPT_PREFIXES = (
+        "/api/auth/me",
+        "/api/analytics/",
+        "/api/health",
+    )
+
     async def dispatch(self, request: StarletteRequest, call_next):
         path = request.url.path
         if path.startswith("/api/"):
+            exempt = any(path.startswith(p) for p in self._RATE_LIMIT_EXEMPT_PREFIXES)
+            if exempt:
+                _metrics.inc_active()
+                try:
+                    response = await call_next(request)
+                    _metrics.record_request(path, response.status_code)
+                    return response
+                finally:
+                    _metrics.dec_active()
             client_ip = request.client.host if request.client else "unknown"
             ip_limit = PLAN_LIMITS["free"]["req_per_min_ip"]
             try:
