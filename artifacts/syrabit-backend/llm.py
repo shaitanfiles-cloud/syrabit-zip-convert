@@ -430,6 +430,17 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     Uses all providers including Emergent (admin content generation)."""
     return await _llm_batcher.call(messages, model, max_tokens)
 
+_LLM_PROVIDERS_CONTENT: list[dict] = []
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+for p in _LLM_PROVIDERS:
+    if p["provider"] != "gemini" and p["provider"] != "emergent":
+        _LLM_PROVIDERS_CONTENT.append(p)
+
+async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
+    """LLM call for SEO content generation — Gemini-primary with higher token limit."""
+    return await _llm_batcher.call(messages, model or "gemini-2.5-flash", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT)
+
 async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
     """LLM call for student chat — excludes Emergent provider (admin-only)."""
     return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CHAT)
