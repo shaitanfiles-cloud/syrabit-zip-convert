@@ -155,7 +155,7 @@ function App() {
           <AuthProvider>
             <BrowserRouter>
               <PageTracker />
-              <Toaster richColors position="top-right" closeButton />
+              <Toaster richColors position="top-center" closeButton />
               <Suspense fallback={<PageFallback />}>
                 <Routes>
                   {/* ── Public routes ── */}

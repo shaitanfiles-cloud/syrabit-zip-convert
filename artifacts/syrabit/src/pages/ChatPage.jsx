@@ -11,7 +11,7 @@ import { useAuth } from '@/context/AuthContext';
 import { getConversation, getSubject, getChapters, API_BASE, apiClient } from '@/utils/api';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { toast } from 'sonner';
-import { Toaster } from '@/components/ui/sonner';
+
 import '@/styles/perplexity-chat.css';
 
 import { MessageBubble } from './chat/MessageBubble';
@@ -325,7 +325,6 @@ export default function ChatPage() {
         modelMenuRef={modelMenuRef} handleNewChat={handleNewChat}
       />
     }>
-      <Toaster richColors position="top-right" />
       <div className="flex flex-col chat-viewport-height">
         {isOutOfCredits && (
           <div

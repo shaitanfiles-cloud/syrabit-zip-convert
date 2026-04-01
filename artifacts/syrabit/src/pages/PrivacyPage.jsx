@@ -3,7 +3,7 @@ import { PublicLayout } from '@/components/layout/PublicLayout';
 export default function PrivacyPage() {
   return (
     <PublicLayout>
-      <div className="min-h-screen bg-[#06060e] py-24 px-4">
+      <div className="min-h-screen bg-[#06060e] pt-8 pb-24 px-4">
         <div className="max-w-3xl mx-auto">
           <h1 className="text-3xl font-semibold text-white mb-2">Privacy Policy</h1>
           <p className="text-white/50 text-sm mb-10">Last updated: January 2025</p>

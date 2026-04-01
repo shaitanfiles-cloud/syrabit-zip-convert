@@ -152,16 +152,15 @@ export default function SignupPage() {
       </div>
 
       {/* ── Right panel — auth form ── */}
-      <div className="w-full lg:w-[48%] flex items-center justify-center p-4 sm:p-6 relative overflow-y-auto">
+      <div className="w-full lg:w-[48%] flex items-start lg:items-center justify-center p-4 sm:p-6 pt-4 lg:pt-6 relative overflow-y-auto">
         {/* Subtle background glow */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
             style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.08) 0%, transparent 70%)', filter: 'blur(40px)' }} />
         </div>
 
-        <div className="w-full max-w-sm relative z-10 anim-slide-right py-8">
-          {/* Mobile logo */}
-          <Link to="/" className="flex items-center gap-2 mb-8 lg:hidden">
+        <div className="w-full max-w-sm relative z-10 anim-slide-right py-4 lg:py-8">
+          <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden">
             <LogoFull size="sm" textClassName="text-white" />
           </Link>
 
@@ -248,7 +247,7 @@ export default function SignupPage() {
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 transition-colors"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                     style={{ color: 'rgba(255,255,255,0.28)' }}
                     onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.60)'; }}
                     onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.28)'; }}
@@ -292,7 +291,7 @@ export default function SignupPage() {
                   <button
                     type="button"
                     onClick={() => setShowConfirm(!showConfirm)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 transition-colors"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                     style={{ color: 'rgba(255,255,255,0.28)' }}
                     onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.60)'; }}
                     onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.28)'; }}
@@ -305,15 +304,19 @@ export default function SignupPage() {
                 )}
               </div>
 
-              <div className="flex items-start gap-3 py-1">
+              <div className="flex items-start gap-1 py-1">
                 <button
                   type="button"
                   onClick={() => setAgreed(!agreed)}
-                  className={`mt-0.5 w-4 h-4 rounded flex-shrink-0 border flex items-center justify-center transition-all cursor-pointer ${agreed ? 'border-violet-500' : 'border-white/25 bg-white/5'}`}
-                  style={agreed ? { background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' } : {}}
+                  className="-ml-3 p-3 min-w-[44px] min-h-[44px] rounded flex-shrink-0 flex items-center justify-center transition-all cursor-pointer"
                   aria-label="Agree to terms"
                 >
-                  {agreed && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  <span
+                    className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${agreed ? 'border-violet-500' : 'border-white/25 bg-white/5'}`}
+                    style={agreed ? { background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' } : {}}
+                  >
+                    {agreed && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </span>
                 </button>
                 <span className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
                   I agree to the{' '}

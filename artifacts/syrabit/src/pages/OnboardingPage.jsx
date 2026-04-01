@@ -6,7 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { getBoards, getClasses, getStreams, saveOnboarding } from '@/utils/api';
 import { isDegreeBoard, streamStepHint } from '@/utils/courseTypes';
 import { toast } from 'sonner';
-import { Toaster } from '@/components/ui/sonner';
+
 import { LogoMark } from '@/components/Logo';
 
 const STREAM_ICONS = {
@@ -123,7 +123,6 @@ export default function OnboardingPage() {
 
   return (
     <div className="min-h-screen bg-[#06060e] flex items-center justify-center p-4">
-      <Toaster richColors position="top-right" />
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">

@@ -154,7 +154,7 @@ export default function LoginPage() {
       </div>
 
       {/* ── Right panel — auth form ── */}
-      <div className="w-full lg:w-[48%] flex items-center justify-center p-6 relative">
+      <div className="w-full lg:w-[48%] flex items-start lg:items-center justify-center p-6 pt-4 lg:pt-6 relative">
         {/* Subtle background glow */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
@@ -163,7 +163,7 @@ export default function LoginPage() {
 
         <div className="w-full max-w-sm relative z-10 anim-slide-right">
           {/* Mobile logo */}
-          <Link to="/" className="flex items-center gap-2 mb-8 lg:hidden">
+          <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden">
             <LogoFull size="sm" textClassName="text-white" />
           </Link>
 
@@ -232,7 +232,7 @@ export default function LoginPage() {
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 transition-colors"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                     style={{ color: 'rgba(255,255,255,0.28)' }}
                     onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.60)'; }}
                     onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.28)'; }}

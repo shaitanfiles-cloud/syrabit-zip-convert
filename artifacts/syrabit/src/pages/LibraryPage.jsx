@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
-import { Toaster } from '@/components/ui/sonner';
+
 import PageMeta from '@/components/seo/PageMeta';
 import { Analytics } from '@/utils/analytics';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -181,7 +181,6 @@ export default function LibraryPage() {
 
   return (
     <AppLayout pageTitle="Library" hideNavbar>
-      <Toaster richColors position="top-right" />
       <PageMeta
         title="Assamboard Subject Library"
         description="Explore Assamboard Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
@@ -216,14 +215,14 @@ export default function LibraryPage() {
                   onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
                   title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
                   aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-                  className="h-9 w-9 rounded-xl flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all duration-200"
+                  className="min-w-[44px] min-h-[44px] rounded-xl flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all duration-200"
                 >
                   {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
                 </button>
                 <button
                   onClick={handleRefetchSubjects}
                   disabled={isFetching}
-                  className="h-9 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-60 transition-all flex items-center gap-1.5 active:scale-95"
+                  className="h-11 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-60 transition-all flex items-center gap-1.5 active:scale-95"
                 >
                   <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
                   {isFetching ? 'Updating…' : 'Refresh'}

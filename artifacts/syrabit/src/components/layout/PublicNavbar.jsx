@@ -105,7 +105,7 @@ export const PublicNavbar = () => {
 
           {/* ─── Mobile Hamburger ─── */}
           <button
-            className="lg:hidden w-9 h-9 rounded-xl text-white/70 hover:text-white hover:bg-white/[0.08] flex items-center justify-center transition-all"
+            className="lg:hidden min-w-[44px] min-h-[44px] rounded-xl text-white/70 hover:text-white hover:bg-white/[0.08] flex items-center justify-center transition-all"
             onClick={() => setMenuOpen(!menuOpen)}
             aria-label="Toggle menu"
             data-testid="mobile-menu-button"
@@ -131,7 +131,7 @@ export const PublicNavbar = () => {
               <Link
                 key={link.label}
                 to={link.href}
-                className="block px-3 py-2.5 rounded-xl text-sm text-white/60 hover:text-white hover:bg-white/[0.06] transition-all"
+                className="block px-3 py-3 rounded-xl text-sm text-white/60 hover:text-white hover:bg-white/[0.06] transition-all min-h-[44px] flex items-center"
                 onClick={() => setMenuOpen(false)}
               >
                 {link.label}
@@ -140,7 +140,7 @@ export const PublicNavbar = () => {
               <a
                 key={link.label}
                 href={link.href}
-                className="block px-3 py-2.5 rounded-xl text-sm text-white/60 hover:text-white hover:bg-white/[0.06] transition-all"
+                className="block px-3 py-3 rounded-xl text-sm text-white/60 hover:text-white hover:bg-white/[0.06] transition-all min-h-[44px] flex items-center"
                 onClick={() => setMenuOpen(false)}
               >
                 {link.label}
@@ -150,7 +150,7 @@ export const PublicNavbar = () => {
           <div className="pt-3 space-y-2 mt-2" style={{ borderTop: '1px solid rgba(139,92,246,0.10)' }}>
             <Link
               to="/admin/login"
-              className="flex items-center gap-2 w-full px-3 py-2.5 rounded-xl text-sm text-violet-400 border border-violet-500/25 hover:bg-violet-500/10 transition-all"
+              className="flex items-center gap-2 w-full px-3 min-h-[44px] rounded-xl text-sm text-violet-400 border border-violet-500/25 hover:bg-violet-500/10 transition-all"
               onClick={() => setMenuOpen(false)}
             >
               <Shield size={14} /> Admin Panel
@@ -158,7 +158,7 @@ export const PublicNavbar = () => {
             {user ? (
               <Link
                 to="/library"
-                className="flex items-center justify-center gap-2 w-full h-10 rounded-xl text-sm text-white font-semibold btn-gradient"
+                className="flex items-center justify-center gap-2 w-full min-h-[44px] rounded-xl text-sm text-white font-semibold btn-gradient"
                 onClick={() => setMenuOpen(false)}
               >
                 Go to App <ArrowRight size={14} />
@@ -167,14 +167,14 @@ export const PublicNavbar = () => {
               <>
                 <Link
                   to="/login"
-                  className="flex items-center justify-center w-full h-10 rounded-xl text-sm text-white/70 border border-white/10 hover:bg-white/[0.06] transition-all"
+                  className="flex items-center justify-center w-full min-h-[44px] rounded-xl text-sm text-white/70 border border-white/10 hover:bg-white/[0.06] transition-all"
                   onClick={() => setMenuOpen(false)}
                 >
                   Sign In
                 </Link>
                 <Link
                   to="/signup"
-                  className="flex items-center justify-center gap-2 w-full h-10 rounded-xl text-sm text-white font-semibold btn-gradient"
+                  className="flex items-center justify-center gap-2 w-full min-h-[44px] rounded-xl text-sm text-white font-semibold btn-gradient"
                   onClick={() => setMenuOpen(false)}
                 >
                   Get Started Free <ArrowRight size={14} />

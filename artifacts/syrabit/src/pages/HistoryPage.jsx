@@ -17,7 +17,7 @@ import { PageTitle } from '@/components/PageTitle';
 import { useAuth } from '@/context/AuthContext';
 import { getConversations, deleteConversation, updateConversation } from '@/utils/api';
 import { toast } from 'sonner';
-import { Toaster } from '@/components/ui/sonner';
+
 import { formatDistanceToNow, isToday, isYesterday } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -432,7 +432,6 @@ export default function HistoryPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <AppLayout pageTitle="History">
-      <Toaster richColors position="top-right" />
       <PageTitle title="Chat History | Syrabit.ai" />
 
       <div className="flex flex-col h-full overflow-y-auto" data-testid="history-conversation-list">

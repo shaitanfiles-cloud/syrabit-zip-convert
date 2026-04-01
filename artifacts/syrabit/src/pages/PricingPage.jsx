@@ -101,7 +101,7 @@ export default function PricingPage() {
 
   return (
     <PublicLayout>
-      <div className="min-h-screen bg-[#06060e] py-24 px-4">
+      <div className="min-h-screen bg-[#06060e] pt-8 pb-24 px-4">
         {/* Header */}
         <div className="text-center max-w-2xl mx-auto mb-16">
           <Badge className="bg-violet-500/15 text-violet-400 border-violet-500/25 mb-4">

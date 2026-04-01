@@ -5,6 +5,7 @@ import axios from 'axios';
 import { ChevronRight, BookOpen, GraduationCap, Layers, FileText, ExternalLink } from 'lucide-react';
 import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
+import { BottomNav } from '@/components/layout/BottomNav';
 
 const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
@@ -223,6 +224,8 @@ export default function CurriculumMap() {
           </TreeNode>
         ))}
       </div>
+      <div className="pb-20 md:pb-0" />
+      <BottomNav />
     </div>
   );
 }

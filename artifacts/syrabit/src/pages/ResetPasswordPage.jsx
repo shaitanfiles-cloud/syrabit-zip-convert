@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
-import { Toaster } from '@/components/ui/sonner';
+
 import axios from 'axios';
 import { LogoFull } from '@/components/Logo';
 
@@ -49,7 +49,6 @@ export default function ResetPasswordPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#06060e] p-4">
-      <Toaster richColors position="top-right" />
       <div className="w-full max-w-sm">
         <Link to="/login" className="flex items-center gap-2 mb-8">
           <LogoFull size="sm" textClassName="text-white" />
