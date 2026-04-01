@@ -33,7 +33,7 @@ from llm import call_llm_api, call_llm_api_chat, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
-from prompts import _classify_intent, _is_out_of_scope_response
+from prompts import _classify_intent, _is_out_of_scope_response, extract_semester_number
 from subject_router import build_search_scope
 from qa_engine import log_chat_message as _log_chat_message
 
@@ -81,6 +81,24 @@ async def _resolve_subject_context(subject_id: str) -> dict:
     except Exception as e:
         logger.warning(f"_resolve_subject_context({subject_id}) failed: {e}")
         return {}
+
+async def _resolve_semester_class_id(query: str, ctx_board_id: str) -> str | None:
+    sem_num = extract_semester_number(query)
+    if not sem_num:
+        return None
+    sem_slugs = [f"semester-{sem_num}", f"{sem_num}th-sem", f"{sem_num}nd-sem", f"{sem_num}st-sem", f"{sem_num}rd-sem"]
+    try:
+        cls = await db.classes.find_one(
+            {"board_id": ctx_board_id, "slug": {"$in": sem_slugs}},
+            {"_id": 0, "id": 1},
+        )
+        if cls:
+            logger.info(f"Semester {sem_num} resolved to class_id={cls['id']} for board {ctx_board_id}")
+            return cls["id"]
+    except Exception as e:
+        logger.warning(f"_resolve_semester_class_id failed: {e}")
+    return None
+
 @router.post("/ai/chat")
 async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     _chat_t0 = _time_mod.time()
@@ -115,22 +133,26 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     # ── Fetch syllabus (subject → stream → board+class fallback) ────────────
     syllabus = None
-    if ctx_board_id and ctx_class_id:
+    _sem_class_id = await _resolve_semester_class_id(msg.message, ctx_board_id) if ctx_board_id else None
+    _syl_class_id = _sem_class_id or ctx_class_id
+    if _sem_class_id:
+        logger.info(f"Chat [NON-STREAM]: Semester override class_id={_sem_class_id} (from query)")
+    if ctx_board_id and _syl_class_id:
         try:
             if ctx_stream_id and msg.subject_id:
-                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0})
+                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0})
                 if syllabus:
-                    logger.info(f"Chat [NON-STREAM]: Subject syllabus loaded for {ctx_board_id}/{ctx_class_id}/{ctx_stream_id}/{msg.subject_id}")
+                    logger.info(f"Chat [NON-STREAM]: Subject syllabus loaded for {ctx_board_id}/{_syl_class_id}/{ctx_stream_id}/{msg.subject_id}")
             if not syllabus and ctx_stream_id:
-                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id}, {"_id": 0})
+                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id}, {"_id": 0})
                 if syllabus:
-                    logger.info(f"Chat [NON-STREAM]: Stream syllabus loaded for {ctx_board_id}/{ctx_class_id}/{ctx_stream_id}")
+                    logger.info(f"Chat [NON-STREAM]: Stream syllabus loaded for {ctx_board_id}/{_syl_class_id}/{ctx_stream_id}")
             if not syllabus:
-                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": {"$exists": False}}, {"_id": 0})
+                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": {"$exists": False}}, {"_id": 0})
                 if not syllabus:
-                    syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id}, {"_id": 0})
+                    syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id}, {"_id": 0})
                 if syllabus:
-                    logger.info(f"Chat [NON-STREAM]: Board+class syllabus loaded for {ctx_board_id}/{ctx_class_id}")
+                    logger.info(f"Chat [NON-STREAM]: Board+class syllabus loaded for {ctx_board_id}/{_syl_class_id}")
         except Exception as e:
             logger.error(f"Failed to fetch syllabus: {e}")
 
@@ -463,22 +485,27 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         subj = await db.subjects.find_one({"id": msg.document_id}, {"_id": 0, "document_text": 1})
         return (subj or {}).get("document_text")
 
+    _sem_class_id_s = await _resolve_semester_class_id(msg.message, ctx_board_id) if ctx_board_id else None
+    _syl_class_id_s = _sem_class_id_s or ctx_class_id
+    if _sem_class_id_s:
+        logger.info(f"Chat [STREAM]: Semester override class_id={_sem_class_id_s} (from query)")
+
     async def _fetch_syllabus():
-        if not (ctx_board_id and ctx_class_id):
+        if not (ctx_board_id and _syl_class_id_s):
             return None
-        _sck = _syllabus_cache_key(ctx_board_id, ctx_class_id, ctx_stream_id, msg.subject_id)
+        _sck = _syllabus_cache_key(ctx_board_id, _syl_class_id_s, ctx_stream_id, msg.subject_id)
         if _sck in _syllabus_cache:
             return _syllabus_cache[_sck]
         try:
             s = None
             if ctx_stream_id and msg.subject_id:
-                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0})
+                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0})
             if not s and ctx_stream_id:
-                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": ctx_stream_id}, {"_id": 0})
+                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id}, {"_id": 0})
             if not s:
-                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id, "stream_id": {"$exists": False}}, {"_id": 0})
+                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": {"$exists": False}}, {"_id": 0})
             if not s:
-                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": ctx_class_id}, {"_id": 0})
+                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s}, {"_id": 0})
             if s:
                 _syllabus_cache[_sck] = s
             return s

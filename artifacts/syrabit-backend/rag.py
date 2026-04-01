@@ -275,6 +275,7 @@ async def _fetch_content_card(
     query: str,
     subject_id: Optional[str] = None,
     subject_name: Optional[str] = None,
+    intent: Optional[str] = None,
 ) -> Optional[tuple]:
     """
     Search seo_pages + chapters for the most relevant content card.
@@ -282,7 +283,7 @@ async def _fetch_content_card(
     Card slugs are used by the grounding builder to deduplicate vector hits.
     source_meta contains card_name, lesson_name, subject_name for chat attribution.
     """
-    _ck = _content_card_cache_key(query, subject_id, subject_name)
+    _ck = _content_card_cache_key(query, subject_id, subject_name, intent)
     if _ck in _content_card_cache:
         logger.info(f"Content card cache hit: query='{query[:40]}'")
         return _content_card_cache[_ck]
@@ -392,6 +393,11 @@ async def _fetch_content_card(
             pt = p.get("page_type", "")
             return 0 if pt == "notes" else (1 if pt == "pyq" else (2 if pt == "mcq" else 3))
 
+        _is_syllabus = (intent or "").lower() == "syllabus"
+        _page_max = 3500 if _is_syllabus else 2000
+        _cms_max = 2500 if _is_syllabus else 1500
+        _ch_max = 2000 if _is_syllabus else 1200
+
         ordered_pages = sorted(pages, key=_page_priority)
         card_slugs: set = set()
         _top_card_name: str = ""
@@ -413,7 +419,7 @@ async def _fetch_content_card(
                 header = f"[Content: {topic_title} | type={page_type}]" if page_type else f"[Content: {topic_title}]"
             else:
                 header = f"[Content Page | type={page_type}]" if page_type else "[Content Page]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=2000)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_page_max)
             cards.append(f"{header}\n{relevant}")
 
         for cms in cms_pages[:2]:
@@ -429,7 +435,7 @@ async def _fetch_content_card(
                 _top_subject_name = cms.get("linked_subject_name") or subject_name or ""
             cat = cms.get("category", "article")
             header = f"[CMS {cat}: {cms_title}]" if cms_title else f"[CMS {cat}]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=1500)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_cms_max)
             cards.append(f"{header}\n{relevant}")
 
         for ch in chapter_pages[:2]:
@@ -439,7 +445,7 @@ async def _fetch_content_card(
             if not _top_lesson_name:
                 _top_lesson_name = ch.get("title") or ""
             header = f"[Chapter: {ch.get('title', '')} | type=lesson]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=1200)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_ch_max)
             cards.append(f"{header}\n{relevant}")
 
         if not cards:
@@ -1137,7 +1143,9 @@ async def resolve_rag_context(
             score = sum(1 for kw in keywords if kw in line.lower())
             scored.append((score, i, line))
 
-        # Keep top-scoring lines + surrounding context, up to 3000 chars
+        _is_syllabus_intent = (intent or "").lower() == "syllabus"
+        _doc_char_limit = 5000 if _is_syllabus_intent else 3000
+
         scored.sort(key=lambda x: -x[0])
         selected_indices = set()
         for score, idx, _ in scored[:8]:
@@ -1147,9 +1155,9 @@ async def resolve_rag_context(
 
         if selected_indices:
             relevant = "\n".join(lines[i] for i in sorted(selected_indices))
-            relevant = relevant[:3000]
+            relevant = relevant[:_doc_char_limit]
         else:
-            relevant = document_text[:3000]
+            relevant = document_text[:_doc_char_limit]
 
         _resolved_intent_t0 = intent or "general"
         return {
@@ -1157,14 +1165,14 @@ async def resolve_rag_context(
             "chapters": [],
             "subjects": [],
             "document_text": relevant,
-            "document_full": document_text[:3000],
+            "document_full": document_text[:_doc_char_limit],
             "source":  "document",
             "quality": "tier0",
             "intent":  _resolved_intent_t0,
         }
     cached_rag, _card_result, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
-        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name),  # returns (text, slug_set) or None
+        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
         vector_rag_search(query, subject_id=subject_id, top_k=10),
     )
 
@@ -1565,9 +1573,10 @@ def build_rag_system_prompt(
 
             if content_card:
                 grounding += f"**[CONTENT CARD — Full page content]:**\n{content_card}\n\n"
+            _chunk_limit = 2500 if _intent == "syllabus" else 1500
             for i, c in enumerate(chunks, 1):
                 title = c.get("content_type", "content").capitalize()
-                grounding += f"**[BLOCK {i} — {title}]:**\n{c.get('content', '')[:1500]}\n\n"
+                grounding += f"**[BLOCK {i} — {title}]:**\n{c.get('content', '')[:_chunk_limit]}\n\n"
 
             _enrichment = rag_context.get("enrichment_blocks", "")
             if _enrichment:

@@ -52,8 +52,8 @@ _vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=30
 # Content card cache — 180-second TTL (avoids duplicate seo_pages + chapters queries)
 _content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=180)
 
-def _content_card_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str]) -> str:
-    raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}"
+def _content_card_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str], intent: Optional[str] = None) -> str:
+    raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}|{intent or ''}"
     return hashlib.md5(raw.encode()).hexdigest()
 
 # Syllabus cache — 30-minute TTL; syllabi almost never change between requests

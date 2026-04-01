@@ -95,7 +95,8 @@ _INTENT_PATTERNS: list[tuple[str, list[str], "re.Pattern | None"]] = [
         "syllabus of", "what topics are covered", "course structure",
         "syllabus for", "topics in syllabus", "syllabus list",
         "course outline", "subject syllabus",
-    ], re.compile(r'\bsyllabus\b', re.I)),
+        "semester syllabus", "semester subjects", "semester course",
+    ], re.compile(r'\bsyllabus\b|\b\d+(?:st|nd|rd|th)\s+semester\b', re.I)),
 
     ("solved_pyq", [
         "solve question", "solved pyq", "answer of pyq",
@@ -192,6 +193,17 @@ ENRICHMENT_INTENTS = frozenset({
     "pyq", "solved_pyq", "important_questions", "lesson_questions",
     "marks_wise", "flashcards",
 })
+
+_SEMESTER_RE = re.compile(
+    r'(?:(\d+)(?:st|nd|rd|th)\s+sem(?:ester)?)|(?:sem(?:ester)?\s*(\d+))',
+    re.I,
+)
+
+def extract_semester_number(query: str) -> int | None:
+    m = _SEMESTER_RE.search(query)
+    if m:
+        return int(m.group(1) or m.group(2))
+    return None
 
 
 def _classify_intent(query: str) -> str:
@@ -422,6 +434,11 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
         "- If a Table of Contents (TOC) is present in any content block, reproduce ALL sections listed in it — do NOT skip any numbered section.\n"
         "- Ensure section numbering matches the TOC exactly (e.g. if TOC lists 3.1 through 3.8, include ALL of them).\n"
         "- Ignore question-type blocks.\n"
+        "SEMESTER HANDLING:\n"
+        "- If the student asks for a specific semester (e.g. '4th semester syllabus'), filter and present ONLY the units/chapters/topics for that semester.\n"
+        "- If the syllabus data has explicit semester markers, use them to filter.\n"
+        "- If the syllabus data does NOT have explicit semester markers, organize the full syllabus clearly by unit and note that semester-specific breakdowns are not available in the data.\n"
+        "- Always present the COMPLETE list of topics for the requested scope — never truncate or abbreviate.\n"
         "RESPONSE FORMAT: Numbered list of units → chapters → topics with marks distribution."
     ),
     "pyq": (
