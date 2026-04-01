@@ -9,7 +9,7 @@ export default function AiCredits({
   return (
     <div className="glass-card rounded-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-border">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Lifetime Usage</p>
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Daily Usage</p>
       </div>
       <div className="p-4">
         <div className="grid grid-cols-2 gap-3">

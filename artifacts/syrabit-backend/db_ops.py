@@ -52,7 +52,8 @@ def _pg_user_cols():
     return """id, name, email, password_hash, plan, credits_used, credits_limit,
               document_access, onboarding_done, is_admin, status, bio, phone,
               avatar_url, saved_subjects::text, has_free_credits_issued,
-              board_id, board_name, class_id, class_name, stream_id, stream_name, created_at"""
+              board_id, board_name, class_id, class_name, stream_id, stream_name,
+              credits_used_today, credits_reset_date, created_at"""
 
 # ── Supabase mirror helper ────────────────────────────────────────────────────
 def _supa_mirror(fn):
@@ -180,6 +181,7 @@ async def supa_insert_user(user: dict):
 _ALLOWED_USER_COLUMNS = frozenset({
     "name", "bio", "phone", "avatar_url", "plan", "status",
     "credits_used", "credits_limit", "document_access",
+    "credits_used_today", "credits_reset_date",
     "saved_subjects", "deletion_requested_at", "deletion_hard_at",
     "last_seen", "onboarding_done",
     "board_id", "board_name", "class_id", "class_name",
@@ -234,22 +236,34 @@ async def supa_update_user(uid: str, updates: dict):
         logger.warning(f"All stores failed for update_user: {e}")
 
 async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) -> bool:
-    """Atomically deduct 1 credit only if credits_used < credits_limit.
+    """Atomically deduct 1 daily credit only if credits_used_today < daily limit.
     Returns True on success, False if limit already reached (race condition guard).
+    Resets credits_used_today to 0 when credits_reset_date is before today (UTC).
     Uses PG UPDATE...WHERE for atomic check+increment; falls back to Redis INCR/DECR
     CAS pattern; last resort falls back to Supabase with explicit limit guard.
     """
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     _invalidate_user_cache(uid)
     # ── Primary: PostgreSQL atomic UPDATE (multi-worker safe) ──────────────
     if _deps_mod.pg_pool:
         try:
             async with _deps_mod.pg_pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE users
+                          SET credits_used_today = 0,
+                              credits_reset_date = $2
+                        WHERE id = $1
+                          AND (credits_reset_date IS NULL OR credits_reset_date::text < $2)""",
+                    uid, today_str,
+                )
                 result = await conn.execute(
                     """UPDATE users
-                          SET credits_used = credits_used + 1
+                          SET credits_used_today = credits_used_today + 1,
+                              credits_used = credits_used + 1
                         WHERE id = $1
-                          AND credits_used < credits_limit""",
-                    uid,
+                          AND credits_used_today < $2""",
+                    uid, current_limit,
                 )
             if result and result.split()[-1] != '0':
                 return True
@@ -259,16 +273,15 @@ async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) 
     # ── Fallback: Redis INCR + rollback CAS (atomic per Redis INCR semantics) ──
     if redis_client:
         try:
-            redis_key = f"credits:{uid}"
-            # Seed the counter from the authoritative used value if missing
+            redis_key = f"daily_credits:{uid}:{today_str}"
             redis_client.set(redis_key, current_used, ex=86400, nx=True)
             new_count = redis_client.incr(redis_key)
             if new_count > current_limit:
-                # Over limit — roll back the increment
                 redis_client.decr(redis_key)
                 return False
-            # Propagate the new count to Supabase asynchronously (best-effort)
-            await supa_update_user(uid, {"credits_used": int(new_count)})
+            user_data = await supa_get_user_by_id(uid)
+            lifetime_used = (user_data.get("credits_used", 0) if user_data else 0) + 1
+            await supa_update_user(uid, {"credits_used_today": int(new_count), "credits_reset_date": today_str, "credits_used": lifetime_used})
             return True
         except Exception as e:
             logger.warning(f"atomic_deduct_credit redis failed, falling back: {e}")
@@ -276,7 +289,9 @@ async def atomic_deduct_credit(uid: str, current_used: int, current_limit: int) 
     if current_used >= current_limit:
         return False
     new_used = current_used + 1
-    await supa_update_user(uid, {"credits_used": new_used})
+    user_data = await supa_get_user_by_id(uid)
+    lifetime_used = (user_data.get("credits_used", 0) if user_data else 0) + 1
+    await supa_update_user(uid, {"credits_used_today": new_used, "credits_reset_date": today_str, "credits_used": lifetime_used})
     return True
 
 async def supa_list_users():

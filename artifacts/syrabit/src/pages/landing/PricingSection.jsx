@@ -7,24 +7,24 @@ import GlowOrb from './GlowOrb';
 
 const PLANS = [
   {
-    id: 'free', name: 'Free', price: '₹0', period: '/ month', credits: '0 credits',
-    renewal: 'No credits included', icon: Zap, highlighted: false, badge: null,
+    id: 'free', name: 'Free', price: '₹0', period: '/ month', credits: '30/day',
+    renewal: '30 credits/day · resets daily', icon: Zap, highlighted: false, badge: null,
     docAccess: '🔒 Zero document access',
-    features: ['30 AI credits/month', 'All subjects access', 'Chat history (limited)', 'Zero document access'],
+    features: ['30 AI credits/day', '5 messages/min', 'All subjects access', 'Chat history (limited)', 'Zero document access'],
     ctaText: 'Get Started Free',
   },
   {
-    id: 'starter', name: 'Starter', price: '₹99', period: 'one-time', credits: '300 credits',
-    renewal: 'Valid for 1 month', icon: Trophy, highlighted: true, badge: 'MOST POPULAR',
+    id: 'starter', name: 'Starter', price: '₹99', period: 'one-time', credits: '500/day',
+    renewal: '500 credits/day · resets daily', icon: Trophy, highlighted: true, badge: 'MOST POPULAR',
     docAccess: '📄 Limited document access',
-    features: ['300 AI credits', 'All subjects access', 'Full chat history', 'Limited document access', 'Priority responses'],
+    features: ['500 AI credits/day', '10 messages/min', 'All subjects access', 'Full chat history', 'Limited document access', 'Priority responses'],
     ctaText: 'Buy Starter',
   },
   {
-    id: 'pro', name: 'Pro', price: '₹999', period: 'one-time', credits: '4,000 credits',
-    renewal: 'Valid for 1 year', icon: Sparkles, highlighted: false, badge: 'BEST VALUE',
+    id: 'pro', name: 'Pro', price: '₹999', period: 'one-time', credits: '4,000/day',
+    renewal: '4,000 credits/day · resets daily', icon: Sparkles, highlighted: false, badge: 'BEST VALUE',
     docAccess: '📚 Full document access',
-    features: ['4,000 AI credits', 'Unlimited subjects access', 'Unlimited history', 'Full document access', 'All AI models (fastest)', 'Early access to features'],
+    features: ['4,000 AI credits/day', '15 messages/min', 'Unlimited subjects access', 'Unlimited history', 'Full document access', 'All AI models (fastest)', 'Early access to features'],
     ctaText: 'Go Pro',
   },
 ];
@@ -48,7 +48,7 @@ export default function PricingSection() {
             Start free. Scale as you need.
           </h2>
           <p className="max-w-lg mx-auto" style={{ color: 'rgba(255,255,255,0.40)' }}>
-            No subscriptions. No hidden fees. Buy credits when you need them — they never expire within validity.
+            No subscriptions. No hidden fees. All plans include daily credits that reset at midnight UTC.
           </p>
         </Reveal>
 
@@ -142,7 +142,7 @@ export default function PricingSection() {
         </motion.div>
 
         <p className="text-center text-sm mt-8" style={{ color: 'rgba(255,255,255,0.25)' }}>
-          Credits don't expire before their validity period · use them at your own pace
+          All credits reset daily at midnight UTC · fresh allowance every day
         </p>
       </div>
     </section>

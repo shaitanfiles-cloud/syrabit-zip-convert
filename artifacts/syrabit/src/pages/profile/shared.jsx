@@ -29,17 +29,17 @@ export function UsageDots({ value = 3, max = 4, color = 'bg-primary' }) {
 }
 
 export const PLANS = {
-  free:    { label: 'Free',    credits: 30,   price: '₹0',   period: '/month',    badge: 'FREE TIER',   badgeColor: 'text-slate-400 bg-slate-400/10 border-slate-400/20',  docAccess: 'zero'    },
-  starter: { label: 'Starter', credits: 300,  price: '₹99',  period: ' one-time', badge: 'POPULAR',     badgeColor: 'text-violet-400 bg-violet-400/10 border-violet-400/20', docAccess: 'limited' },
-  pro:     { label: 'Pro',     credits: 4000, price: '₹999', period: ' one-time', badge: 'BEST VALUE',  badgeColor: 'text-amber-400 bg-amber-400/10 border-amber-400/20',    docAccess: 'full'    },
+  free:    { label: 'Free',    credits: 30,   creditsLabel: '30/day',    price: '₹0',   period: '/month',    badge: 'FREE TIER',   badgeColor: 'text-slate-400 bg-slate-400/10 border-slate-400/20',  docAccess: 'zero'    },
+  starter: { label: 'Starter', credits: 500,  creditsLabel: '500/day',   price: '₹99',  period: ' one-time', badge: 'POPULAR',     badgeColor: 'text-violet-400 bg-violet-400/10 border-violet-400/20', docAccess: 'limited' },
+  pro:     { label: 'Pro',     credits: 4000, creditsLabel: '4,000/day', price: '₹999', period: ' one-time', badge: 'BEST VALUE',  badgeColor: 'text-amber-400 bg-amber-400/10 border-amber-400/20',    docAccess: 'full'    },
 };
 
 export const PLAN_RANK = { free: 0, starter: 1, pro: 2 };
 
 export const PLAN_FEATURES = {
-  free:    ['30 AI credits/month', 'All subjects access', 'Chat history (limited)', 'Zero document access'],
-  starter: ['300 AI credits', 'All subjects access', 'Full chat history', 'Limited document access', 'Priority responses'],
-  pro:     ['4,000 AI credits', 'Unlimited subjects access', 'Unlimited history', 'Full document access', 'All AI models'],
+  free:    ['30 AI credits/day', '5 messages/min', 'All subjects access', 'Chat history (limited)', 'Zero document access'],
+  starter: ['500 AI credits/day', '10 messages/min', 'All subjects access', 'Full chat history', 'Limited document access', 'Priority responses'],
+  pro:     ['4,000 AI credits/day', '15 messages/min', 'Unlimited subjects access', 'Unlimited history', 'Full document access', 'All AI models'],
 };
 
 export const TOPUP_OPTIONS = [

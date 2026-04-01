@@ -19,9 +19,9 @@ const TIERS = [
 ];
 
 const DEFAULT_POLICIES = {
-  free:       { req_per_min: 5,  credits_per_day: 30,   max_tokens: 5000,   req_per_min_ip: 20 },
-  starter:    { req_per_min: 15, credits_per_day: 500,  max_tokens: 8000,   req_per_min_ip: 50 },
-  pro:        { req_per_min: 30, credits_per_day: 4000, max_tokens: 100000, req_per_min_ip: 100},
+  free:       { req_per_min: 5,  credits_per_day: 30,   max_tokens: 10000,  req_per_min_ip: 20 },
+  starter:    { req_per_min: 10, credits_per_day: 500,  max_tokens: 15000,  req_per_min_ip: 30 },
+  pro:        { req_per_min: 15, credits_per_day: 4000, max_tokens: 20000,  req_per_min_ip: 40 },
   enterprise: { req_per_min: 60, credits_per_day: 99999,max_tokens: 200000, req_per_min_ip: 200},
 };
 

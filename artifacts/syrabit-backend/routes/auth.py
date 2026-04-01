@@ -65,7 +65,7 @@ async def signup(data: UserCreate, response: Response):
             else:
                 logger.warning(f"Self-referral blocked: user_id={user_id} code={raw_ref}")
 
-    # Free users get 30 lifetime credits (ONE-TIME, no reset)
+    # Free users get 30 daily credits (resets at midnight UTC)
     user = {
         "id": user_id,
         "name": data.name,
@@ -73,7 +73,7 @@ async def signup(data: UserCreate, response: Response):
         "password_hash": pwd_ctx.hash(data.password),
         "plan": "free",
         "credits_used": 0,
-        "credits_limit": 30,     # Free = 30 lifetime credits
+        "credits_limit": 30,     # Legacy field preserved for backwards compatibility
         "document_access": "zero",
         "onboarding_done": False,
         "is_admin": False,
@@ -123,7 +123,7 @@ async def signup(data: UserCreate, response: Response):
         except Exception as e:
             logger.warning(f"Referral reward error: {e}")
 
-    token = create_access_token(user_id, role="student")
+    token = create_access_token(user_id, role="student", plan="free")
     refresh = create_refresh_token(user_id)
     user_out = UserOut(
         id=user_id, name=data.name, email=data.email.lower(),
@@ -162,7 +162,7 @@ async def login(data: UserLogin, response: Response):
 
     credits_info = await get_user_credits(user)
     role = "admin" if user.get("is_admin") else "student"
-    token = create_access_token(user["id"], role=role)
+    token = create_access_token(user["id"], role=role, plan=user.get("plan", "free"))
     refresh = create_refresh_token(user["id"])
     user_out = UserOut(
         id=user["id"], name=user["name"], email=user["email"],

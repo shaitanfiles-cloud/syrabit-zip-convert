@@ -401,10 +401,10 @@ async def seo_generation_progress_detail(job_id: str, admin: dict = Depends(get_
 # RATE LIMIT POLICIES
 # ─────────────────────────────────────────────
 DEFAULT_RATE_POLICIES = {
-    "free":       {"req_per_min": 5,  "credits_per_day": 0,    "max_tokens": 1024, "req_per_min_ip": 20},
-    "starter":    {"req_per_min": 15, "credits_per_day": 300,  "max_tokens": 2048, "req_per_min_ip": 50},
-    "pro":        {"req_per_min": 30, "credits_per_day": 4000, "max_tokens": 4096, "req_per_min_ip": 100},
-    "enterprise": {"req_per_min": 60, "credits_per_day": 99999,"max_tokens": 8192, "req_per_min_ip": 200},
+    "free":       {"req_per_min": 5,  "credits_per_day": 30,   "max_tokens": 10000,  "req_per_min_ip": 20},
+    "starter":    {"req_per_min": 10, "credits_per_day": 500,  "max_tokens": 15000,  "req_per_min_ip": 30},
+    "pro":        {"req_per_min": 15, "credits_per_day": 4000, "max_tokens": 20000,  "req_per_min_ip": 40},
+    "enterprise": {"req_per_min": 60, "credits_per_day": 99999,"max_tokens": 200000, "req_per_min_ip": 200},
 }
 
 @router.get("/admin/rate-policies")

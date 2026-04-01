@@ -71,8 +71,8 @@ export default function SubscriptionPlans({
 
                   <p className="font-bold text-2xl mt-1"
                     style={{ color: isPro ? '#f59e0b' : isLower ? 'hsl(var(--muted-foreground))' : 'hsl(var(--primary))' }}>
-                    {info.credits.toLocaleString()}
-                    <span className="text-xs font-normal text-muted-foreground ml-1">credits</span>
+                    {info.creditsLabel || info.credits.toLocaleString()}
+                    <span className="text-xs font-normal text-muted-foreground ml-1">{info.creditsLabel ? '' : 'credits'}</span>
                   </p>
 
                   <p className="text-base font-semibold text-foreground mt-0.5">

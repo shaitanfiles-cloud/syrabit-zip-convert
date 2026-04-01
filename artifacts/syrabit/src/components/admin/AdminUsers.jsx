@@ -65,7 +65,7 @@ function CreditsModal({ user, adminToken, onClose, onUpdated }) {
           <div>
             <h3 className="text-white font-semibold text-sm">Credits Management</h3>
             <p className="text-slate-500 text-xs mt-0.5">{user.name || user.email}</p>
-            <p className="text-slate-400 text-xs">Current: {user.credits_used || 0} used / {user.credits_limit || 0} limit</p>
+            <p className="text-slate-400 text-xs">Today: {user.credits_used || 0} used (daily reset)</p>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800">
             <X size={16} />
@@ -87,9 +87,9 @@ function CreditsModal({ user, adminToken, onClose, onUpdated }) {
           ))}
         </div>
 
-        {mode === 'add' && <p className="text-xs text-slate-500 mb-3">Increases credit limit — user gets more available credits.</p>}
-        {mode === 'deduct' && <p className="text-xs text-slate-500 mb-3">Marks credits as consumed — reduces remaining balance.</p>}
-        {mode === 'reset' && <p className="text-xs text-slate-500 mb-3">Resets credits used to 0 — restores full credit limit.</p>}
+        {mode === 'add' && <p className="text-xs text-slate-500 mb-3">Restores daily credits — reduces today's usage count.</p>}
+        {mode === 'deduct' && <p className="text-xs text-slate-500 mb-3">Marks credits as consumed — increases today's usage count.</p>}
+        {mode === 'reset' && <p className="text-xs text-slate-500 mb-3">Resets today's usage to 0 — restores full daily allowance.</p>}
 
         {mode !== 'reset' && (
           <div className="mb-3">

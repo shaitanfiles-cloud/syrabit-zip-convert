@@ -136,8 +136,12 @@ CREATE TABLE IF NOT EXISTS users (
     stream_name TEXT,
     referred_by_code TEXT,
     referred_by_user_id TEXT,
+    credits_used_today INTEGER NOT NULL DEFAULT 0,
+    credits_reset_date TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT ''
 );
+ALTER TABLE users ADD COLUMN IF NOT EXISTS credits_used_today INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS credits_reset_date TEXT NOT NULL DEFAULT '';
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,

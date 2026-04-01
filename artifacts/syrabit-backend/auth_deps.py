@@ -19,24 +19,42 @@ logger = logging.getLogger(__name__)
 
 async def get_user_credits(user: dict) -> dict:
     """
-    Lifetime credits — NO daily/monthly reset.
-    Uses the actual credits_limit from DB (includes top-ups and admin adjustments).
-    Always guarantees at least the plan's entitled minimum so stale DB rows never
-    under-report credits (e.g. a Pro user whose DB column wasn't updated yet).
+    Daily-resetting credits with backwards-compatible legacy balance bridge.
+    Each plan gets a fixed credits_per_day allowance that resets at midnight UTC.
+    If the stored credits_reset_date is before today (UTC), usage is treated as 0
+    and the counter will be reset on next deduction.
+
+    Legacy bridge: if a user has a credits_limit (from top-ups / admin adjustments /
+    referral bonuses) that exceeds the plan's base daily allowance, the effective
+    daily limit is raised to honour those purchased credits until they are consumed.
     """
     plan      = user.get("plan", "free")
     plan_cfg  = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-    plan_min  = plan_cfg["lifetime_credits"]
-    db_limit  = user.get("credits_limit")
-    raw_limit = db_limit if db_limit is not None else plan_min
-    # Ensure Pro users always see at least 4000 even if DB column is stale
-    limit = max(raw_limit, plan_min)
-    used  = user.get("credits_used", 0) or 0
+    daily_limit = plan_cfg["credits_per_day"]
+
+    legacy_limit = user.get("credits_limit")
+    legacy_used  = user.get("credits_used", 0) or 0
+    if legacy_limit is not None:
+        legacy_remaining = max(0, legacy_limit - legacy_used)
+        if legacy_remaining > daily_limit:
+            daily_limit = legacy_remaining
+
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    reset_date = user.get("credits_reset_date") or ""
+    if isinstance(reset_date, datetime):
+        reset_date = reset_date.strftime("%Y-%m-%d")
+    elif hasattr(reset_date, "isoformat"):
+        reset_date = str(reset_date)[:10]
+    if reset_date == today_str:
+        used = user.get("credits_used_today", 0) or 0
+    else:
+        used = 0
     return {
         "used": used,
-        "limit": limit,
-        "remaining": max(0, limit - used),
+        "limit": daily_limit,
+        "remaining": max(0, daily_limit - used),
         "document_access": plan_cfg["document_access"],
+        "resets_at": "midnight UTC",
     }
 
 
@@ -45,8 +63,8 @@ def create_token(data: dict, secret: str = JWT_SECRET, expires_delta: int = JWT_
     to_encode["exp"] = datetime.now(timezone.utc) + timedelta(minutes=expires_delta)
     return jwt.encode(to_encode, secret, algorithm=JWT_ALGORITHM)
 
-def create_access_token(user_id: str, role: str = "student") -> str:
-    return create_token({"sub": user_id, "role": role, "type": "access"}, expires_delta=JWT_ACCESS_EXPIRE_MINUTES)
+def create_access_token(user_id: str, role: str = "student", plan: str = "free") -> str:
+    return create_token({"sub": user_id, "role": role, "type": "access", "plan": plan}, expires_delta=JWT_ACCESS_EXPIRE_MINUTES)
 
 def create_refresh_token(user_id: str) -> str:
     return create_token({"sub": user_id, "type": "refresh"}, expires_delta=JWT_REFRESH_EXPIRE_MINUTES)
@@ -173,12 +191,15 @@ def check_rate_limit(key: str, max_requests: int = 100, window_seconds: int = 60
     return _check_rate_limit_memory(key, max_requests, window_seconds)
 
 async def rate_limit_chat(user: dict = Depends(get_current_user)):
-    """Dependency: 30 chat req/min per user (stricter for AI)."""
+    """Dependency: plan-aware chat rate limiting (Free 5, Starter 10, Pro 15 req/min)."""
     user_id = user.get("id", "anonymous")
-    if not check_rate_limit(f"chat:{user_id}", max_requests=60, window_seconds=60):
+    plan = user.get("plan", "free")
+    plan_cfg = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+    limit = plan_cfg["req_per_min"]
+    if not check_rate_limit(f"chat:{user_id}", max_requests=limit, window_seconds=60):
         raise HTTPException(
             status_code=429,
-            detail="Chat rate limit exceeded — 30 messages/minute. Upgrade for higher limits.",
-            headers={"Retry-After": "60", "X-RateLimit-Limit": "30"},
+            detail=f"Chat rate limit exceeded — {limit} messages/minute ({plan} plan). Upgrade for higher limits.",
+            headers={"Retry-After": "60", "X-RateLimit-Limit": str(limit)},
         )
     return user

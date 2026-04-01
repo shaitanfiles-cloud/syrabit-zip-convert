@@ -13,11 +13,12 @@ const PLANS = [
     name: 'Free',
     price: '0',
     period: '/month',
-    credits: '30 credits/month',
+    credits: '30 credits/day',
     docAccess: 'zero',
     description: 'Start exploring, no card needed',
     features: [
-      { label: '30 AI credits/month',         included: true  },
+      { label: '30 AI credits/day',           included: true  },
+      { label: '5 messages/min',              included: true  },
       { label: 'All subjects access',         included: true  },
       { label: 'Chat history (limited)',      included: true  },
       { label: 'Zero document access',        included: true  },
@@ -35,12 +36,13 @@ const PLANS = [
     name: 'Starter',
     price: '99',
     period: ' one-time',
-    credits: '300 credits',
+    credits: '500 credits/day',
     docAccess: 'limited',
     description: 'Best for regular students',
     badge: 'MOST POPULAR',
     features: [
-      { label: '300 AI credits',             included: true  },
+      { label: '500 AI credits/day',         included: true  },
+      { label: '10 messages/min',            included: true  },
       { label: 'All subjects access',        included: true  },
       { label: 'Full chat history',          included: true  },
       { label: 'Limited document access',    included: true  },
@@ -58,12 +60,13 @@ const PLANS = [
     name: 'Pro',
     price: '999',
     period: ' one-time',
-    credits: '4,000 credits',
+    credits: '4,000 credits/day',
     docAccess: 'full',
     description: 'For serious exam prep',
     badge: 'BEST VALUE',
     features: [
-      { label: '4,000 AI credits',           included: true  },
+      { label: '4,000 AI credits/day',       included: true  },
+      { label: '15 messages/min',            included: true  },
       { label: 'Unlimited subjects access',  included: true  },
       { label: 'Unlimited history',          included: true  },
       { label: 'Full document access',       included: true  },
@@ -207,8 +210,8 @@ export default function PricingPage() {
           <h2 className="text-2xl font-semibold text-white text-center mb-8">FAQs</h2>
           <div className="space-y-4">
             {[
-              { q: 'What are credits?', a: 'Each AI response costs 1 credit. Free users get 30 per day. Starter and Pro plans have credits that never expire.' },
-              { q: 'Do credits expire?', a: 'Free credits reset daily. Starter and Pro credits are one-time purchases that never expire.' },
+              { q: 'What are credits?', a: 'Each AI response costs 1 credit. Free users get 30/day, Starter 500/day, Pro 4,000/day. All credits reset at midnight UTC.' },
+              { q: 'Do credits expire?', a: 'All plan credits reset daily at midnight UTC. You get a fresh allowance every day based on your plan.' },
               { q: 'Can I upgrade later?', a: 'Yes! You can upgrade anytime. Your existing credits will be preserved.' },
               { q: 'Which AHSEC classes are supported?', a: 'We support both Class 11 and Class 12 for Science (PCM, PCB) and Arts streams.' },
             ].map(({ q, a }) => (

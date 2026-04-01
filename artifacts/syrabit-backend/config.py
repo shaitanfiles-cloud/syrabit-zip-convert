@@ -162,17 +162,16 @@ CONTENT_CACHE_SECONDS = 600
 REDIS_CONTENT_PREFIX = "content:"
 
 # ── Plan configuration ────────────────────────────────────────────────────────
-# FREE: 30 credits ONCE (lifetime, no reset)
-# STARTER / PRO: one-time purchase, no reset
+# Credits reset daily at midnight UTC.
 PLAN_LIMITS = {
-    "free":    {"lifetime_credits": 30,   "max_tokens": 5000,   "document_access": "zero"},
-    "starter": {"lifetime_credits": 300,  "max_tokens": 8000,   "document_access": "limited"},
-    "pro":     {"lifetime_credits": 4000, "max_tokens": 100000, "document_access": "full"},
+    "free":    {"credits_per_day": 30,   "max_tokens": 10000,  "document_access": "zero",    "req_per_min": 5,  "req_per_min_ip": 20},
+    "starter": {"credits_per_day": 500,  "max_tokens": 15000,  "document_access": "limited", "req_per_min": 10, "req_per_min_ip": 30},
+    "pro":     {"credits_per_day": 4000, "max_tokens": 20000,  "document_access": "full",    "req_per_min": 15, "req_per_min_ip": 40},
 }
 PLAN_PRICES = {
-    "free":    {"price": 0,   "label": "Free",    "description": "30 one-time credits · zero document access"},
-    "starter": {"price": 99,  "label": "Starter", "description": "300 credits · limited document access (one-time)"},
-    "pro":     {"price": 999, "label": "Pro",      "description": "4000 credits · full document access (one-time)"},
+    "free":    {"price": 0,   "label": "Free",    "description": "30 credits/day · zero document access"},
+    "starter": {"price": 99,  "label": "Starter", "description": "500 credits/day · limited document access"},
+    "pro":     {"price": 999, "label": "Pro",      "description": "4,000 credits/day · full document access"},
 }
 
 SEED_DATA = {

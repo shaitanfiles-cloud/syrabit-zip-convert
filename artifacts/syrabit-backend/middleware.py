@@ -4,8 +4,9 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request as StarletteRequest
-from config import SECURE_COOKIES
+from config import SECURE_COOKIES, PLAN_LIMITS
 from auth_deps import check_rate_limit, decode_token
+from cache import _redis_get_session
 from metrics import _metrics
 
 logger = logging.getLogger(__name__)
@@ -35,18 +36,39 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_security_headers)
 
 class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
-    """200 req/min per IP for all /api routes + request tracking."""
+    """Plan-aware IP rate limiting for all /api routes + request tracking.
+    Plan is read from JWT claim (refreshed on login, plan change invalidates session)."""
     async def dispatch(self, request: StarletteRequest, call_next):
         path = request.url.path
         if path.startswith("/api/"):
             client_ip = request.client.host if request.client else "unknown"
-            if not check_rate_limit(f"ip:{client_ip}", max_requests=600, window_seconds=60):
+            ip_limit = PLAN_LIMITS["free"]["req_per_min_ip"]
+            try:
+                token = None
+                auth = request.headers.get("authorization", "")
+                if auth.startswith("Bearer "):
+                    token = auth[7:]
+                else:
+                    token = request.cookies.get("syrabit_session")
+                if token:
+                    payload = decode_token(token)
+                    user_id = payload.get("sub")
+                    user_plan = payload.get("plan", "free")
+                    if user_id:
+                        cached_user = _redis_get_session(user_id)
+                        if cached_user:
+                            user_plan = cached_user.get("plan", user_plan)
+                    plan_cfg = PLAN_LIMITS.get(user_plan, PLAN_LIMITS["free"])
+                    ip_limit = plan_cfg["req_per_min_ip"]
+            except Exception:
+                pass
+            if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
                 from fastapi.responses import JSONResponse
                 _metrics.record_request(path, 429)
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Too many requests — please slow down."},
-                    headers={"Retry-After": "60", "X-RateLimit-Limit": "200"}
+                    headers={"Retry-After": "60", "X-RateLimit-Limit": str(ip_limit)}
                 )
         _metrics.inc_active()
         try:

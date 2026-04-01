@@ -42,7 +42,7 @@ const FEATURES = [
   {
     icon: BarChart3,
     title: 'Credit System',
-    desc: 'Transparent usage tracking. Buy Starter (300 credits, ₹99) or Pro (4000 credits, ₹999) — credits never expire.',
+    desc: 'Transparent usage tracking. Starter (500/day, ₹99) or Pro (4,000/day, ₹999) — credits reset daily at midnight UTC.',
     gradient: 'linear-gradient(135deg,#db2777,#f43f5e)',
     glow: 'rgba(244,63,94,0.28)',
     border: 'rgba(244,63,94,0.20)',

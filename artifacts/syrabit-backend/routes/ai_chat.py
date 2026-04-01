@@ -104,7 +104,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     _chat_t0 = _time_mod.time()
     credits_info = await get_user_credits(user)
     if credits_info["remaining"] <= 0:
-        raise HTTPException(status_code=402, detail=f"Credit limit reached ({credits_info['limit']} lifetime credits). Upgrade your plan for more.")
+        raise HTTPException(status_code=402, detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.")
 
     plan = user.get("plan", "free")
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
@@ -373,24 +373,29 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     }
 
 async def _refund_credit(uid: str, credits_used: int) -> None:
-    """Refund 1 credit (decrement credits_used) when streaming fails/empty answer."""
+    """Refund 1 daily credit (decrement credits_used_today and credits_used) when streaming fails/empty answer."""
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     try:
         if deps.pg_pool:
             async with deps.pg_pool.acquire() as conn:
                 await conn.execute(
-                    "UPDATE users SET credits_used = GREATEST(0, credits_used - 1) WHERE id = $1",
+                    "UPDATE users SET credits_used_today = GREATEST(0, credits_used_today - 1), credits_used = GREATEST(0, credits_used - 1) WHERE id = $1",
                     uid,
                 )
             return
         if redis_client:
-            redis_key = f"credits:{uid}"
+            redis_key = f"daily_credits:{uid}:{today_str}"
             refunded_count = redis_client.decr(redis_key)
-            # Persist refunded count back to authoritative Supabase store (best-effort)
             if refunded_count is not None and refunded_count >= 0:
-                await supa_update_user(uid, {"credits_used": int(refunded_count)})
+                user_data = await supa_get_user_by_id(uid)
+                lifetime_used = max(0, (user_data.get("credits_used", 0) if user_data else 0) - 1)
+                await supa_update_user(uid, {"credits_used_today": int(refunded_count), "credits_used": lifetime_used})
             return
         if credits_used > 0:
-            await supa_update_user(uid, {"credits_used": credits_used - 1})
+            user_data = await supa_get_user_by_id(uid)
+            lifetime_used = max(0, (user_data.get("credits_used", 0) if user_data else 0) - 1)
+            await supa_update_user(uid, {"credits_used_today": credits_used - 1, "credits_used": lifetime_used})
     except Exception as e:
         logger.warning(f"_refund_credit failed: {e}")
 
@@ -453,7 +458,7 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     _stream_t0 = _time_mod.time()
     credits_info = await get_user_credits(user)
     if credits_info["remaining"] <= 0:
-        raise HTTPException(status_code=402, detail=f"Credit limit reached ({credits_info['limit']} lifetime credits). Upgrade your plan for more.")
+        raise HTTPException(status_code=402, detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.")
 
     # Atomically reserve 1 credit before streaming begins to prevent parallel bypass
     deducted = await atomic_deduct_credit(user["id"], credits_info["used"], credits_info["limit"])

@@ -79,9 +79,9 @@ function PlanCard({ planKey, ui, config, dist, onSave, saving }) {
 export default function AdminPlans({ adminToken, onNavigate }) {
   const [dist, setDist] = useState({ free: 0, starter: 0, pro: 0 });
   const [planConfig, setPlanConfig] = useState({
-    free:    { price: 0,   credits: 30,   validity: 'monthly' },
-    starter: { price: 99,  credits: 300,  validity: '30 days' },
-    pro:     { price: 999, credits: 4000, validity: '365 days' },
+    free:    { price: 0,   credits: 30,   validity: 'daily reset' },
+    starter: { price: 99,  credits: 500,  validity: 'daily reset' },
+    pro:     { price: 999, credits: 4000, validity: 'daily reset' },
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

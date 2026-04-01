@@ -101,7 +101,7 @@ async def refresh_token(
     if user.get("status") in ("banned", "suspended"):
         raise HTTPException(status_code=403, detail=f"Account {user.get('status')}")
     role = "admin" if user.get("is_admin") else "student"
-    new_access = create_access_token(user_id, role=role)
+    new_access = create_access_token(user_id, role=role, plan=user.get("plan", "free"))
     _redis_invalidate_session(user_id)
     response.set_cookie(
         key="syrabit_session",
@@ -290,6 +290,7 @@ async def admin_update_user_plan(user_id: str, data: UserPlanUpdate, admin: dict
     if data.credits_used is not None:
         update["credits_used"] = data.credits_used
     await supa_update_user(user_id, update)
+    _redis_invalidate_session(user_id)
     return {"message": "Updated"}
 
 @router.patch("/admin/users/{user_id}/credits")
@@ -301,17 +302,23 @@ async def admin_update_user_credits(user_id: str, data: UserCreditsUpdate, admin
         raise HTTPException(status_code=400, detail="action must be one of: add, deduct, reset")
     if data.action != "reset" and (data.amount is None or data.amount < 0):
         raise HTTPException(status_code=400, detail="amount must be a non-negative integer for add/deduct actions")
-    credits_used = user.get("credits_used", 0)
-    credits_limit = user.get("credits_limit", 0)
+    from datetime import datetime, timezone
+    today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    reset_date = user.get("credits_reset_date") or ""
+    if isinstance(reset_date, datetime):
+        reset_date = reset_date.strftime("%Y-%m-%d")
+    elif hasattr(reset_date, "isoformat"):
+        reset_date = str(reset_date)[:10]
+    credits_used_today = user.get("credits_used_today", 0) if reset_date == today_str else 0
     action = data.action
     amount = data.amount if data.amount is not None else 0
-    update = {}
+    update = {"credits_reset_date": today_str}
     if action == "reset":
-        update["credits_used"] = 0
+        update["credits_used_today"] = 0
     elif action == "deduct":
-        update["credits_used"] = min(credits_limit, credits_used + amount)
+        update["credits_used_today"] = credits_used_today + amount
     else:
-        update["credits_limit"] = credits_limit + amount
+        update["credits_used_today"] = max(0, credits_used_today - amount)
     await supa_update_user(user_id, update)
     return {"message": "Credits updated", **update}
 
