@@ -21,7 +21,7 @@ import CmsPostsGrid from './library/CmsPostsGrid';
 import LibrarySkeleton from './library/LibrarySkeleton';
 import FilterChip from './library/FilterChip';
 
-const FILTER_CHIPS = [
+const STREAM_CHIPS = [
   { id: 'all', label: 'All' },
   { id: 'saved', label: '★ Saved' },
 ];
@@ -49,22 +49,20 @@ export default function LibraryPage() {
   const { data: savedSubjects = [] } = useSavedSubjects(user);
   const toggleSaved = useToggleSavedSubject();
 
-  const [showOtherSubjects, setShowOtherSubjects] = useState(false);
-
-  const onboardingApplied = useRef(false);
+  const profileApplied = useRef(false);
   useEffect(() => {
-    if (onboardingApplied.current || !streams.length) return;
-    onboardingApplied.current = true;
-    if (user?.stream_id) {
-      const stream = streams.find((s) => s.id === user.stream_id);
-      if (stream?.slug) { setActiveFilter(stream.slug); return; }
+    if (profileApplied.current || !boards.length || !classes.length) return;
+    const boardId = user?.board_id || getOnboardingProfile()?.board_id;
+    const classId = user?.class_id || getOnboardingProfile()?.class_id;
+    if (!boardId) return;
+    profileApplied.current = true;
+    const board = boards.find((b) => b.id === boardId);
+    if (board?.slug) setSelectedBoardSlug(board.slug);
+    if (classId) {
+      const cls = classes.find((c) => c.id === classId);
+      if (cls?.slug) setSelectedClassSlug(cls.slug);
     }
-    const profile = getOnboardingProfile();
-    if (profile?.stream_id) {
-      const stream = streams.find((s) => s.id === profile.stream_id);
-      if (stream?.slug) setActiveFilter(stream.slug);
-    }
-  }, [streams, user]);
+  }, [boards, classes, user]);
 
   useEffect(() => {
     const handleContentUploaded = () => { refetchBundle(); };
@@ -121,9 +119,28 @@ export default function LibraryPage() {
     return chips;
   }, [enrichedSubjects, selectedBoardSlug, selectedClassSlug]);
 
-  const allFilterChips = useMemo(() => [...FILTER_CHIPS, ...dynamicStreamChips], [dynamicStreamChips]);
+  const allStreamChips = useMemo(() => [...STREAM_CHIPS, ...dynamicStreamChips], [dynamicStreamChips]);
 
-  const userBoardId = user?.board_id || getOnboardingProfile()?.board_id;
+  const boardChips = useMemo(() => {
+    const chips = [{ id: 'all', label: 'All Boards' }];
+    for (const b of boards) {
+      if (b.slug) chips.push({ id: b.slug, label: b.name || b.slug });
+    }
+    return chips;
+  }, [boards]);
+
+  const classChips = useMemo(() => {
+    if (selectedBoardSlug === 'all') return [];
+    const board = boards.find((b) => b.slug === selectedBoardSlug);
+    if (!board) return [];
+    const boardClasses = classes.filter((c) => c.board_id === board.id);
+    if (boardClasses.length <= 1) return [];
+    const chips = [{ id: 'all', label: 'All' }];
+    for (const c of boardClasses) {
+      if (c.slug) chips.push({ id: c.slug, label: c.name || c.slug });
+    }
+    return chips;
+  }, [selectedBoardSlug, boards, classes]);
 
   const filteredSubjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -153,22 +170,6 @@ export default function LibraryPage() {
       return true;
     });
   }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, selectedBoardSlug, selectedClassSlug, chaptersBySubject]);
-
-  const { mySubjects, otherSubjects } = useMemo(() => {
-    if (!userBoardId) return { mySubjects: filteredSubjects, otherSubjects: [] };
-    const mine = [];
-    const other = [];
-    for (const sub of filteredSubjects) {
-      const stream = streamMap.get(sub.stream_id);
-      const cls = classMap.get(stream?.class_id);
-      if (cls?.board_id === userBoardId) {
-        mine.push(sub);
-      } else {
-        other.push(sub);
-      }
-    }
-    return { mySubjects: mine, otherSubjects: other };
-  }, [filteredSubjects, userBoardId, streamMap, classMap]);
 
   useEffect(() => {
     if (!filteredSubjects.length) return;
@@ -208,6 +209,8 @@ export default function LibraryPage() {
   const handleSearchChange = useCallback((e) => setSearchQuery(e.target.value), []);
   const handleFilterChange = useCallback((filterId) => setActiveFilter(filterId), []);
   const handleSearchClear = useCallback(() => setSearchQuery(''), []);
+  const handleBoardChange = useCallback((slug) => { setSelectedBoardSlug(slug); setSelectedClassSlug('all'); setActiveFilter('all'); }, []);
+  const handleClassChange = useCallback((slug) => { setSelectedClassSlug(slug); setActiveFilter('all'); }, []);
 
   if (bundleLoading) {
     return (
@@ -311,13 +314,47 @@ export default function LibraryPage() {
         <div className="flex-1 overflow-y-auto">
           <div className="w-full max-w-6xl mx-auto px-4 md:px-6 py-5">
 
+            {boardChips.length > 2 && (
+              <div
+                role="group"
+                aria-label="Board filters"
+                className="flex gap-2 overflow-x-auto pb-2 no-scrollbar"
+                data-testid="library-board-chips"
+              >
+                {boardChips.map((chip) => (
+                  <FilterChip
+                    key={`board-${chip.id}`}
+                    chip={chip}
+                    isActive={chip.id === selectedBoardSlug}
+                    onClick={() => handleBoardChange(chip.id)}
+                  />
+                ))}
+              </div>
+            )}
+            {classChips.length > 0 && (
+              <div
+                role="group"
+                aria-label="Class filters"
+                className="flex gap-2 overflow-x-auto pb-2 no-scrollbar"
+                data-testid="library-class-chips"
+              >
+                {classChips.map((chip) => (
+                  <FilterChip
+                    key={`class-${chip.id}`}
+                    chip={chip}
+                    isActive={chip.id === selectedClassSlug}
+                    onClick={() => handleClassChange(chip.id)}
+                  />
+                ))}
+              </div>
+            )}
             <div
               role="group"
-              aria-label="Subject filters"
+              aria-label="Stream filters"
               className="flex gap-2 overflow-x-auto pb-4 no-scrollbar"
               data-testid="library-filter-chips"
             >
-              {allFilterChips.map((chip) => (
+              {allStreamChips.map((chip) => (
                 <FilterChip
                   key={chip.id}
                   chip={chip}
@@ -391,83 +428,22 @@ export default function LibraryPage() {
                 )}
               </div>
             ) : (
-              <>
-                {mySubjects.length > 0 && (
-                  <>
-                    {otherSubjects.length > 0 && (
-                      <div className="flex items-center gap-2 mb-4">
-                        <h2 className="text-sm font-semibold text-foreground">Your Syllabus</h2>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-400 font-medium">{mySubjects.length}</span>
-                      </div>
-                    )}
-                    <div
-                      className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
-                      data-testid="library-subject-grid"
-                    >
-                      {mySubjects.map((sub, index) => (
-                        <SubjectCard
-                          key={sub.id}
-                          sub={sub}
-                          chapters={chaptersBySubject.get(sub.id) || []}
-                          isSaved={savedSubjects.includes(sub.id)}
-                          onToggleSave={(id) => toggleSaved.mutate(id)}
-                          onAskAI={handleAskAI}
-                          index={index}
-                        />
-                      ))}
-                    </div>
-                  </>
-                )}
-
-                {otherSubjects.length > 0 && (
-                  <div className="mt-8">
-                    <button
-                      onClick={() => setShowOtherSubjects(!showOtherSubjects)}
-                      className="flex items-center gap-2 mb-4 group"
-                    >
-                      <h2 className="text-sm font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
-                        Explore Other Subjects
-                      </h2>
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">{otherSubjects.length}</span>
-                      <svg className={`w-3.5 h-3.5 text-muted-foreground transition-transform ${showOtherSubjects ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg>
-                    </button>
-                    {showOtherSubjects && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                        {otherSubjects.map((sub, index) => (
-                          <SubjectCard
-                            key={sub.id}
-                            sub={sub}
-                            chapters={chaptersBySubject.get(sub.id) || []}
-                            isSaved={savedSubjects.includes(sub.id)}
-                            onToggleSave={(id) => toggleSaved.mutate(id)}
-                            onAskAI={handleAskAI}
-                            index={mySubjects.length + index}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {mySubjects.length === 0 && otherSubjects.length === 0 && (
-                  <div
-                    className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
-                    data-testid="library-subject-grid"
-                  >
-                    {filteredSubjects.map((sub, index) => (
-                      <SubjectCard
-                        key={sub.id}
-                        sub={sub}
-                        chapters={chaptersBySubject.get(sub.id) || []}
-                        isSaved={savedSubjects.includes(sub.id)}
-                        onToggleSave={(id) => toggleSaved.mutate(id)}
-                        onAskAI={handleAskAI}
-                        index={index}
-                      />
-                    ))}
-                  </div>
-                )}
-              </>
+              <div
+                className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5"
+                data-testid="library-subject-grid"
+              >
+                {filteredSubjects.map((sub, index) => (
+                  <SubjectCard
+                    key={sub.id}
+                    sub={sub}
+                    chapters={chaptersBySubject.get(sub.id) || []}
+                    isSaved={savedSubjects.includes(sub.id)}
+                    onToggleSave={(id) => toggleSaved.mutate(id)}
+                    onAskAI={handleAskAI}
+                    index={index}
+                  />
+                ))}
+              </div>
             )}
           </div>
           <CmsDocsSection />

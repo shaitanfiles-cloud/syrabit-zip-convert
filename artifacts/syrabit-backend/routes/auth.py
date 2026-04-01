@@ -171,6 +171,9 @@ async def login(data: UserLogin, response: Response):
         credits_limit=credits_info["limit"],
         onboarding_done=user.get("onboarding_done", False),
         is_admin=user.get("is_admin", False),
+        board_id=user.get("board_id"),
+        class_id=user.get("class_id"),
+        stream_id=user.get("stream_id"),
         created_at=user.get("created_at", ""),
         avatar_url=user.get("avatar_url", ""),
     )
@@ -230,6 +233,9 @@ async def get_me(user: dict = Depends(get_current_user)):
         credits_limit=credits_info["limit"],
         onboarding_done=user.get("onboarding_done", False),
         is_admin=user.get("is_admin", False),
+        board_id=user.get("board_id"),
+        class_id=user.get("class_id"),
+        stream_id=user.get("stream_id"),
         created_at=user.get("created_at", ""),
         avatar_url=user.get("avatar_url", ""),
     )

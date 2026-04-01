@@ -27,6 +27,9 @@ class UserOut(BaseModel):
     credits_limit: int = 0
     onboarding_done: bool = False
     is_admin: bool = False
+    board_id: Optional[str] = None
+    class_id: Optional[str] = None
+    stream_id: Optional[str] = None
     created_at: str
     avatar_url: Optional[str] = ""
 
