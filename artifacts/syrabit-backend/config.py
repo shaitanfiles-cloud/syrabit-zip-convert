@@ -27,7 +27,8 @@ JWT_EXPIRE_MINUTES = JWT_ACCESS_EXPIRE_MINUTES
 
 _admin_jwt_env = os.environ.get('ADMIN_JWT_SECRET', '').strip()
 if not _admin_jwt_env:
-    ADMIN_JWT_SECRET = os.urandom(48).hex()
+    import hashlib as _hl
+    ADMIN_JWT_SECRET = _hl.sha256(f"admin-{JWT_SECRET}".encode()).hexdigest()
 else:
     ADMIN_JWT_SECRET = _admin_jwt_env
 
