@@ -147,7 +147,7 @@ async def admin_verify(response: Response, admin: dict = Depends(get_admin_user)
         samesite=COOKIE_SAMESITE,
         max_age=60 * 24 * 60,
     )
-    return {"valid": True, "email": admin.get("email"), "name": admin.get("name", "Admin")}
+    return {"valid": True, "email": admin.get("email"), "name": admin.get("name", "Admin"), "access_token": refreshed}
 
 # ─────────────────────────────────────────────
 # ADMIN ROUTES

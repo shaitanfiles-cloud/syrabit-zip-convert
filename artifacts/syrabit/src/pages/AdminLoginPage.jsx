@@ -20,8 +20,7 @@ export default function AdminLoginPage() {
     setLoading(true);
     try {
       const res = await adminLogin(email, password);
-      // Token is automatically set in httpOnly cookie by backend
-      // No need to store in sessionStorage (security best practice)
+      localStorage.setItem('admin_token', res.data.access_token);
       toast.success(`Welcome back, ${res.data.name || 'Admin'}!`, {
         description: 'Admin session started',
       });

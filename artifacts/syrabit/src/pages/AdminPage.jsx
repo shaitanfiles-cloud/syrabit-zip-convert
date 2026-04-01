@@ -105,17 +105,18 @@ export default function AdminPage() {
   const [adminName,  setAdminName]  = useState('Admin');
   const [adminToken, setAdminToken] = useState(null);
 
-  // ── Verify admin session (uses httpOnly cookie via withCredentials) ───────
   useEffect(() => {
-    adminVerify(null)
+    const storedToken = localStorage.getItem('admin_token');
+    adminVerify(storedToken)
       .then((res) => {
         if (res.data?.name) setAdminName(res.data.name);
         if (res.data?.email) setAdminEmail(res.data.email);
-        setAdminToken('verified'); // Flag that session is valid
+        if (res.data?.access_token) localStorage.setItem('admin_token', res.data.access_token);
+        setAdminToken(res.data?.access_token || storedToken || 'verified');
         setVerifying(false);
       })
       .catch(() => {
-        // Session invalid - redirect to login
+        localStorage.removeItem('admin_token');
         navigate('/admin/login');
       });
   }, [navigate]);
@@ -124,11 +125,16 @@ export default function AdminPage() {
   useEffect(() => {
     if (verifying) return;
     const id = setInterval(() => {
-      adminVerify(null).catch(() => {
-        // Session truly expired while admin was idle — redirect
-        toast.error('Session expired. Please log in again.');
-        navigate('/admin/login');
-      });
+      const t = localStorage.getItem('admin_token');
+      adminVerify(t)
+        .then((res) => {
+          if (res.data?.access_token) localStorage.setItem('admin_token', res.data.access_token);
+        })
+        .catch(() => {
+          localStorage.removeItem('admin_token');
+          toast.error('Session expired. Please log in again.');
+          navigate('/admin/login');
+        });
     }, 20 * 60 * 1000); // 20 minutes
     return () => clearInterval(id);
   }, [verifying, navigate]);
@@ -167,6 +173,7 @@ export default function AdminPage() {
   const handleLogout = async () => {
     // Call logout endpoint - this clears the httpOnly cookie server-side
     await adminLogout().catch(() => {});
+    localStorage.removeItem('admin_token');
     setAdminToken(null);
     toast.success('Logged out');
     navigate('/admin/login');
