@@ -501,10 +501,12 @@ def _strip_markdown_symbols(text: str) -> str:
 
 def _normalize_headings(content: str) -> str:
     """Normalize malformed markdown headings from LLM output.
-    Converts patterns like **## Heading**, **##Heading**, ## **Heading** to clean ## Heading."""
+    Fixes: **## H**, ## **H**, ### ## H, ---\\n## H, and missing spaces."""
     content = re.sub(r'\*{1,3}(#{1,6})\s*(.+?)\*{1,3}', r'\1 \2', content, flags=re.MULTILINE)
     content = re.sub(r'^(#{1,6})\s*\*{1,3}(.+?)\*{1,3}\s*$', r'\1 \2', content, flags=re.MULTILINE)
+    content = re.sub(r'^#{1,6}\s+#{1,6}\s+', '## ', content, flags=re.MULTILINE)
     content = re.sub(r'^(#{1,6})([^\s#])', r'\1 \2', content, flags=re.MULTILINE)
+    content = re.sub(r'^---+\s*\n(#{1,6}\s)', r'\1', content, flags=re.MULTILINE)
     return content
 
 
@@ -581,7 +583,7 @@ REQUIRED_SECTIONS = {
 }
 
 
-_QUALITY_PUBLISH_THRESHOLD = 80
+_QUALITY_PUBLISH_THRESHOLD = 90
 
 def _compute_quality_score(content: str, page_type: str, context: dict | None = None) -> dict:
     """Compute content quality indicators for a generated page.
@@ -595,11 +597,11 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
     heading_count = len(headings)
     content_lower = content.lower()
 
-    has_faq = bool(re.search(r'##\s*(FAQ|Frequently Asked)', content, re.IGNORECASE))
-    has_exam_q = bool(re.search(r'##\s*(Exam.Style|Commonly Tested|Board Pattern|Previous Year|PYQ|Frequently Repeated)', content, re.IGNORECASE))
-    has_examples = bool(re.search(r'Example\s*\d', content, re.IGNORECASE))
-    has_key_points = bool(re.search(r'##\s*(Key Point|Key Takeaway|Important Point|Revision|Summary)', content, re.IGNORECASE))
-    has_tips = bool(re.search(r'(exam tip|revision tip|remember|important note)', content_lower))
+    has_faq = bool(re.search(r'#{2,4}\s*(FAQ|Frequently Asked|Common Question)', content, re.IGNORECASE))
+    has_exam_q = bool(re.search(r'#{2,4}\s*(Exam.Style|Commonly Tested|Board Pattern|Previous Year|PYQ|Frequently Repeated|Board Question|Exam Question|Exam.Ready|Practice Question)', content, re.IGNORECASE))
+    has_examples = bool(re.search(r'(Example\s*\d|#{2,4}\s*(Example|Solved Example|Illustration|Worked Example))', content, re.IGNORECASE))
+    has_key_points = bool(re.search(r'#{2,4}\s*(Key Point|Key Takeaway|Important Point|Revision|Summary|Points to Remember|Quick Recap|At a Glance)', content, re.IGNORECASE))
+    has_tips = bool(re.search(r'(exam tip|revision tip|remember|important note|pro tip|study tip|scoring tip)', content_lower))
 
     unique_words = set(w.lower() for w in words if len(w) > 3)
     unique_ratio = round(len(unique_words) / max(word_count, 1), 3)
@@ -1466,6 +1468,65 @@ async def _batch_generate(topics: list, page_types: list):
         details = f"Batch SEO generation complete — {total} pages created across {len(topics)} topics" +
                   (f" · {errors} errors" if errors else ""),
         level   = "info" if errors == 0 else "warn",
+    )
+
+
+class QualityEditRequest(BaseModel):
+    min_score: Optional[int] = 90
+    page_ids: Optional[List[str]] = None
+    limit: Optional[int] = 50
+
+
+@router.post("/quality-edit")
+async def quality_edit_pages(data: QualityEditRequest, background_tasks: BackgroundTasks, _admin: dict = Depends(_require_admin)):
+    """Delete low-scoring published pages and regenerate them with the quality retry loop."""
+    query: dict = {"status": "published"}
+    if data.page_ids:
+        query["id"] = {"$in": data.page_ids}
+    else:
+        query["quality_score.score"] = {"$lt": data.min_score}
+
+    low_pages = await _db.seo_pages.find(query, {"_id": 0, "id": 1, "topic_id": 1, "page_type": 1, "quality_score.score": 1}).to_list(data.limit)
+    if not low_pages:
+        return {"message": "No low-scoring pages found", "count": 0}
+
+    page_ids_to_delete = [p["id"] for p in low_pages]
+    regen_specs = [(p["topic_id"], p["page_type"]) for p in low_pages]
+
+    await _db.seo_pages.delete_many({"id": {"$in": page_ids_to_delete}})
+
+    background_tasks.add_task(_quality_regen_batch, regen_specs)
+    return {
+        "message": f"Deleted {len(page_ids_to_delete)} low-scoring pages, regeneration started",
+        "count": len(page_ids_to_delete),
+        "deleted_ids": page_ids_to_delete,
+    }
+
+
+async def _quality_regen_batch(specs: list):
+    """Regenerate pages from (topic_id, page_type) specs."""
+    total = 0
+    errors = 0
+    for topic_id, page_type in specs:
+        try:
+            topic = await _db.topics.find_one({"id": topic_id}, {"_id": 0})
+            if not topic:
+                continue
+            hierarchy = await _resolve_hierarchy(topic)
+            if not hierarchy:
+                continue
+            page = await _generate_single_page(topic, page_type, hierarchy)
+            if page:
+                total += 1
+        except Exception as e:
+            logger.error(f"Quality regen error for {topic_id}/{page_type}: {e}")
+            errors += 1
+        await asyncio.sleep(1)
+
+    await _seo_log(
+        action="seo:quality_edit_complete",
+        details=f"Quality edit regenerated {total}/{len(specs)} pages" + (f" · {errors} errors" if errors else ""),
+        level="info" if errors == 0 else "warn",
     )
 
 

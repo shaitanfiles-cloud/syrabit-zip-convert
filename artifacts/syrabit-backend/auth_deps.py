@@ -141,8 +141,8 @@ async def get_admin_user(
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        payload = decode_token(token, secret=ADMIN_JWT_SECRET)
-        if not payload.get("is_admin"):
+        payload = decode_token(token)
+        if not (payload.get("is_admin") or payload.get("role") == "admin"):
             raise HTTPException(status_code=403, detail="Not authorized")
         return payload
     except JWTError:
