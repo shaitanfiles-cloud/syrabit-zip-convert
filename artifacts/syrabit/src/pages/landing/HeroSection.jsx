@@ -90,18 +90,19 @@ export default function HeroSection() {
             <motion.div whileHover={{ scale: 1.04, y: -3 }} whileTap={{ scale: 0.97 }}>
               <Link
                 to="/signup"
-                className="flex items-center gap-2.5 text-white font-bold btn-gradient"
+                className="flex flex-wrap items-center justify-center gap-2.5 text-white font-bold btn-gradient"
                 style={{
-                  height: 54,
-                  padding: '0 2.25rem',
+                  minHeight: 54,
+                  padding: '0.75rem 1.5rem',
                   borderRadius: '1rem',
-                  fontSize: '1rem',
+                  fontSize: 'clamp(0.875rem, 2.5vw, 1rem)',
                   boxShadow: '0 8px 36px rgba(139,92,246,0.50), 0 0 0 1px rgba(255,255,255,0.08) inset',
+                  textAlign: 'center',
                 }}
                 data-testid="landing-hero-primary-cta-button"
               >
-                <Sparkles size={18} />
-                Start for Free — No Card Needed
+                <Sparkles size={18} className="flex-shrink-0" />
+                <span>Start for Free — No Card Needed</span>
               </Link>
             </motion.div>
             <motion.div whileHover={{ scale: 1.03, y: -2 }} whileTap={{ scale: 0.97 }}>
@@ -109,10 +110,10 @@ export default function HeroSection() {
                 href="#features"
                 className="flex items-center gap-2.5 font-semibold transition-all duration-200 hover:border-white/22 hover:bg-white/[0.07]"
                 style={{
-                  height: 54,
-                  padding: '0 2.25rem',
+                  minHeight: 54,
+                  padding: '0.75rem 1.5rem',
                   borderRadius: '1rem',
-                  fontSize: '1rem',
+                  fontSize: 'clamp(0.875rem, 2.5vw, 1rem)',
                   color: 'rgba(255,255,255,0.68)',
                   border: '1px solid rgba(255,255,255,0.14)',
                   background: 'rgba(255,255,255,0.05)',

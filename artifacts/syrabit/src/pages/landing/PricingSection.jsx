@@ -57,7 +57,7 @@ export default function PricingSection() {
           whileInView="visible"
           viewport={{ once: true, margin: '-60px' }}
           variants={staggerContainer}
-          className="grid grid-cols-1 lg:grid-cols-3 gap-5"
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
         >
           {PLANS.map((plan) => {
             const isPro = plan.id === 'pro';

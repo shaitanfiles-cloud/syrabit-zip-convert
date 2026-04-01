@@ -177,7 +177,7 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
           <button
             onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
             className={cn(
-              'w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-150',
+              'w-11 h-11 rounded-lg flex items-center justify-center transition-all duration-150',
               'text-muted-foreground hover:text-foreground hover:bg-primary/10',
               'opacity-100 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100',
               menuOpen && 'bg-primary/10 text-foreground'
@@ -192,7 +192,7 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
           {/* Dropdown menu */}
           {menuOpen && (
               <div
-                className="absolute right-0 top-8 z-50 rounded-xl overflow-hidden shadow-xl min-w-[160px]"
+                className="absolute right-0 sm:right-0 left-auto top-8 z-50 rounded-xl overflow-hidden shadow-xl min-w-[160px] max-w-[calc(100vw-2rem)]"
                 style={{
                   background: 'var(--popover-glass, hsl(var(--popover)))',
                   backdropFilter: 'blur(20px)',

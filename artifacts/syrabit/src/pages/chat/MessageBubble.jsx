@@ -64,7 +64,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               fontSize: '15px',
               lineHeight: '1.6',
               color: '#fff',
-              maxWidth: '70%',
+              maxWidth: 'min(70%, calc(100vw - 5rem))',
               wordWrap: 'break-word',
             }}
           >

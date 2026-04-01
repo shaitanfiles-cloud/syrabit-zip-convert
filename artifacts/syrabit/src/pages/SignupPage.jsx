@@ -155,7 +155,7 @@ export default function SignupPage() {
       </div>
 
       {/* ── Right panel — auth form ── */}
-      <div className="w-full lg:w-[48%] flex items-center justify-center p-6 relative overflow-y-auto">
+      <div className="w-full lg:w-[48%] flex items-center justify-center p-4 sm:p-6 relative overflow-y-auto">
         {/* Subtle background glow */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
@@ -170,7 +170,7 @@ export default function SignupPage() {
 
           {/* Form card */}
           <div
-            className="rounded-2xl p-7"
+            className="rounded-2xl p-5 sm:p-7"
             style={{
               background: 'rgba(255,255,255,0.04)',
               backdropFilter: 'blur(24px)',

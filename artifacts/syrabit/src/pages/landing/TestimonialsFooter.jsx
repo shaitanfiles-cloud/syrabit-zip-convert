@@ -143,7 +143,7 @@ export default function TestimonialsFooter({ year }) {
         style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.30)' }}
       >
         <div className="max-w-6xl mx-auto px-5">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-8 mb-12">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 md:gap-8 mb-12">
             <div className="col-span-2 md:col-span-1 space-y-4">
               <LogoFull size="sm" textClassName="text-white" />
               <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.30)' }}>
@@ -156,7 +156,7 @@ export default function TestimonialsFooter({ year }) {
                     aria-label={label}
                     whileHover={{ scale: 1.1, background: 'rgba(255,255,255,0.10)' }}
                     whileTap={{ scale: 0.95 }}
-                    className="w-8 h-8 rounded-lg flex items-center justify-center"
+                    className="w-11 h-11 rounded-lg flex items-center justify-center"
                     style={{ color: 'rgba(255,255,255,0.40)', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
                   >
                     <Icon size={16} />

@@ -20,7 +20,7 @@ function TreeNode({ label, icon: Icon, count, children, defaultOpen = false, dep
       <button
         onClick={() => setOpen((o) => !o)}
         className={`w-full flex items-center gap-3 text-left px-4 py-3 transition-colors
-          ${depth === 0 ? 'bg-white/5 hover:bg-white/8' : depth === 1 ? 'bg-white/3 hover:bg-white/6 pl-8' : 'hover:bg-white/4 pl-12'}`}
+          ${depth === 0 ? 'bg-white/5 hover:bg-white/8' : depth === 1 ? 'bg-white/3 hover:bg-white/6 pl-4 sm:pl-6 md:pl-8' : 'hover:bg-white/4 pl-6 sm:pl-8 md:pl-12'}`}
       >
         <ChevronRight
           className={`shrink-0 text-white/40 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
@@ -49,7 +49,7 @@ function SubjectNode({ subject, boardSlug, classSlug }) {
       count={`${chapters.length} ch`}
       depth={2}
     >
-      <div className="pl-16 pr-4 py-2 space-y-1">
+      <div className="pl-8 sm:pl-12 md:pl-16 pr-4 py-2 space-y-1">
         {chapters.length === 0 && (
           <p className="text-xs text-white/30 py-2">No chapters yet</p>
         )}

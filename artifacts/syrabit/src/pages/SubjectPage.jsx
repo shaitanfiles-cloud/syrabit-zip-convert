@@ -488,13 +488,13 @@ export default function SubjectPage() {
 
         {/* Header */}
         <div className="glass-card rounded-2xl p-6">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center text-3xl">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+            <div className="flex items-center gap-4 min-w-0">
+              <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center text-3xl flex-shrink-0">
                 {subject.icon || '📚'}
               </div>
-              <div>
-                <h1 className="text-xl font-semibold text-foreground">{subject.name}</h1>
+              <div className="min-w-0">
+                <h1 className="text-xl font-semibold text-foreground truncate">{subject.name}</h1>
                 <p className="text-sm text-muted-foreground mt-0.5">{subject.description}</p>
                 <div className="flex items-center gap-3 mt-2">
                   <span className="text-xs text-muted-foreground">
@@ -503,8 +503,8 @@ export default function SubjectPage() {
                 </div>
               </div>
             </div>
-            <Link to={`/chat?subject=${subjectId}`}>
-              <Button className="bg-primary hover:bg-primary/90 text-primary-foreground flex-shrink-0">Ask AI</Button>
+            <Link to={`/chat?subject=${subjectId}`} className="flex-shrink-0">
+              <Button className="bg-primary hover:bg-primary/90 text-primary-foreground w-full sm:w-auto min-h-[44px]">Ask AI</Button>
             </Link>
           </div>
           {subject.tags?.length > 0 && (

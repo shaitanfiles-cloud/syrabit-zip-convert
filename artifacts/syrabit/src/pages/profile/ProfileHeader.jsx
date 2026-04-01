@@ -109,11 +109,11 @@ export default function ProfileHeader({
         ].map(({ icon: Icon, label, value }) => (
           <div
             key={label}
-            className="flex-1 flex flex-col items-center p-2 rounded-xl"
+            className="flex-1 flex flex-col items-center p-2 rounded-xl min-w-0"
             style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' }}
           >
             <Icon size={14} className="text-white/50 mb-1" />
-            <span className="text-white text-sm font-semibold">{value}</span>
+            <span className="text-white text-sm font-semibold truncate max-w-full min-w-0">{value}</span>
             <span className="text-white/40 text-[10px]">{label}</span>
           </div>
         ))}

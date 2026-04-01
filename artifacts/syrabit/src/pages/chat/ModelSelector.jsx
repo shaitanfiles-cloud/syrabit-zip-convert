@@ -28,7 +28,7 @@ export function ModelSelector({ model, setModel, showModelMenu, setShowModelMenu
       </button>
       {showModelMenu && (
         <div
-          className="absolute top-full left-0 mt-2 z-50 rounded-xl border border-border/60 shadow-2xl min-w-[260px] overflow-hidden backdrop-blur-xl"
+          className="absolute top-full left-0 mt-2 z-50 rounded-xl border border-border/60 shadow-2xl min-w-[260px] max-w-[calc(100vw-2rem)] overflow-hidden backdrop-blur-xl"
           style={{ background: 'var(--popover-glass, var(--popover))' }}
         >
           {MODELS.map((m) => (

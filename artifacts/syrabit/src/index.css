@@ -1207,4 +1207,5 @@
 /* Ensure touch targets are large enough on mobile */
 @media (max-width: 767px) {
   .bottom-nav-item { min-width: 44px; min-height: 44px; }
+  html, body { overflow-x: hidden; }
 }

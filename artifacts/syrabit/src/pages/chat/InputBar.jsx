@@ -13,7 +13,7 @@ export function InputBar({
 
   return (
     <div
-      className="sticky bottom-0 z-20 flex-shrink-0 border-t border-border/50 px-4 md:px-6 py-3"
+      className="sticky bottom-0 z-20 flex-shrink-0 border-t border-border/50 px-4 md:px-6 py-3 pb-[calc(0.75rem+64px+env(safe-area-inset-bottom,0px))] md:pb-3"
       style={{ background: 'var(--card)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       data-testid="chat-input"
     >
@@ -61,7 +61,7 @@ export function InputBar({
             {isLoading ? (
               <button
                 onClick={handleStop}
-                className="w-9 h-9 rounded-xl flex items-center justify-center transition-all"
+                className="w-11 h-11 rounded-xl flex items-center justify-center transition-all"
                 style={{
                   background: 'rgba(239,68,68,0.15)',
                   border: '1px solid rgba(239,68,68,0.30)',
@@ -77,7 +77,7 @@ export function InputBar({
               <button
                 onClick={() => sendMsg(input)}
                 disabled={!input.trim() || isOutOfCredits}
-                className="w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
+                className="w-11 h-11 rounded-xl flex items-center justify-center transition-all disabled:cursor-not-allowed"
                 style={
                   input.trim() && !isOutOfCredits
                     ? {
