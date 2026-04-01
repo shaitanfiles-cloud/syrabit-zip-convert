@@ -59,8 +59,8 @@ export default function CmsPostsGrid({ board, classSlug }) {
           fetchPage(items.length);
         }}
       >
-        {items.map(post => (
-          <CmsPostCard key={post.subject_id} post={post} />
+        {items.map((post, index) => (
+          <CmsPostCard key={post.id || post._id || `${post.subject_id}-${index}`} post={post} />
         ))}
       </MasonryInfiniteGrid>
       {loading && (

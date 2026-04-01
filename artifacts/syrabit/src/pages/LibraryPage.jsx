@@ -447,8 +447,14 @@ export default function LibraryPage() {
               </div>
             )}
           </div>
-          <CmsDocsSection />
-          <CmsPostsGrid />
+          <CmsDocsSection
+            board={selectedBoardSlug !== 'all' ? selectedBoardSlug : undefined}
+            classSlug={selectedClassSlug !== 'all' ? selectedClassSlug : undefined}
+          />
+          <CmsPostsGrid
+            board={selectedBoardSlug !== 'all' ? selectedBoardSlug : undefined}
+            classSlug={selectedClassSlug !== 'all' ? selectedClassSlug : undefined}
+          />
         </div>
 
       </div>
