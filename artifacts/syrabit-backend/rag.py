@@ -650,16 +650,19 @@ async def vector_rag_search(
             try:
                 _rerank_start = time.time()
                 documents = [r.get("content", "") or r.get("title", "") for r in top]
-                _rerank_top_k = min(3, len(top))
+                _rerank_top_k = min(top_k, len(top))
                 loop = asyncio.get_running_loop()
-                rerank_result = await loop.run_in_executor(
-                    None,
-                    lambda: voyage_client.rerank(
-                        query=query,
-                        documents=documents,
-                        model="rerank-2",
-                        top_k=_rerank_top_k,
+                rerank_result = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: voyage_client.rerank(
+                            query=query,
+                            documents=documents,
+                            model="rerank-2",
+                            top_k=_rerank_top_k,
+                        ),
                     ),
+                    timeout=3.0,
                 )
                 _rerank_ms = (time.time() - _rerank_start) * 1000
                 reranked_top = []
@@ -675,6 +678,8 @@ async def vector_rag_search(
                 )
                 top = reranked_top
                 reranked = True
+            except asyncio.TimeoutError:
+                logger.warning(f"Voyage rerank timed out after 3s (falling back to cosine): query='{query[:40]}'")
             except Exception as _rerank_err:
                 logger.warning(f"Voyage rerank failed (falling back to cosine): {_rerank_err}")
 

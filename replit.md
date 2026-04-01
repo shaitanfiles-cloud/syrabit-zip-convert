@@ -54,6 +54,7 @@ The project is a pnpm workspace monorepo comprising a React + Vite frontend (`ar
     - Emergent universal gateway (fallback, `EMERGENT_API_KEY`).
     - Fireworks (deepseek-v3p2, currently suspended).
     - Sarvam (sarvam-m, last-resort fallback).
+- **Voyage AI Rerank:** `rerank-2` model re-scores vector search results for higher relevance. 3s timeout with cosine fallback. `VOYAGE_API_KEY`.
 - **Payment Gateways:** Razorpay (INR) and Stripe (USD).
 - **Email Service:** Resend API (for password resets).
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.
