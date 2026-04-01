@@ -30,6 +30,7 @@ _user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=120)
 
 def _invalidate_user_cache(uid: str):
     _user_cache.pop(uid, None)
+    _redis_del("session", uid)
 
 # ── Conversation Object Cache ──────────────────────────────────────────────────
 # Keyed by "conv_id:uid", 60-second TTL — avoids PG on every chat turn
