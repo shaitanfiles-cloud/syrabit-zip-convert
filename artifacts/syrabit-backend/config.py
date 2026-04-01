@@ -138,6 +138,8 @@ ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
 
 _PG_DSN = os.environ.get("DATABASE_URL", "")
 
+VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY', '').strip()
+
 SARVAM_THINK_BUFFER = 80
 
 CONTENT_CACHE_SECONDS = 600

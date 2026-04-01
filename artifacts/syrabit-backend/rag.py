@@ -3,7 +3,7 @@ import re, asyncio, time, uuid, hashlib, logging
 from typing import Optional, Dict
 from datetime import datetime, timezone
 from fastapi import HTTPException
-from deps import db, logger as _dep_logger, _assert_not_cms_context, is_mongo_available
+from deps import db, logger as _dep_logger, _assert_not_cms_context, is_mongo_available, voyage_client
 from cache import (
     _rag_cache, _rag_cache_key, _vector_rag_cache, _vector_rag_cache_key,
     _content_card_cache, _content_card_cache_key,
@@ -38,7 +38,7 @@ _VECTOR_SIM_THRESHOLD = 0.30
 _VECTOR_SIM_METRICS: list = []
 _VECTOR_SIM_MAX = 10_000
 
-def _record_vector_search(query: str, num_results: int, scores: list, below_threshold: int, total_candidates: int):
+def _record_vector_search(query: str, num_results: int, scores: list, below_threshold: int, total_candidates: int, reranked: bool = False):
     _VECTOR_SIM_METRICS.append({
         "ts": time.time(),
         "query": query[:120],
@@ -48,6 +48,7 @@ def _record_vector_search(query: str, num_results: int, scores: list, below_thre
         "worst_score": round(min(scores), 4) if scores else 0.0,
         "below_threshold": below_threshold,
         "total_candidates": total_candidates,
+        "reranked": reranked,
     })
     if len(_VECTOR_SIM_METRICS) > _VECTOR_SIM_MAX:
         del _VECTOR_SIM_METRICS[:500]
@@ -642,10 +643,45 @@ async def vector_rag_search(
         top = [r for r in scored if r["score"] >= _VECTOR_SIM_THRESHOLD][:top_k]
         all_scores = [r["score"] for r in scored]
         below = sum(1 for s in all_scores if s < _VECTOR_SIM_THRESHOLD)
-        _record_vector_search(query, len(top), [r["score"] for r in top] if top else [], below, len(scored))
+
+        reranked = False
+        if voyage_client and top:
+            pre_rerank_slugs = [r["slug"] for r in top[:3]]
+            try:
+                _rerank_start = time.time()
+                documents = [r.get("content", "") or r.get("title", "") for r in top]
+                _rerank_top_k = min(3, len(top))
+                loop = asyncio.get_running_loop()
+                rerank_result = await loop.run_in_executor(
+                    None,
+                    lambda: voyage_client.rerank(
+                        query=query,
+                        documents=documents,
+                        model="rerank-2",
+                        top_k=_rerank_top_k,
+                    ),
+                )
+                _rerank_ms = (time.time() - _rerank_start) * 1000
+                reranked_top = []
+                for rr in rerank_result.results:
+                    item = dict(top[rr.index])
+                    item["rerank_score"] = rr.relevance_score
+                    reranked_top.append(item)
+                post_rerank_slugs = [r["slug"] for r in reranked_top[:3]]
+                logger.info(
+                    f"Voyage rerank: latency={_rerank_ms:.0f}ms | "
+                    f"before={pre_rerank_slugs} → after={post_rerank_slugs} | "
+                    f"query='{query[:40]}'"
+                )
+                top = reranked_top
+                reranked = True
+            except Exception as _rerank_err:
+                logger.warning(f"Voyage rerank failed (falling back to cosine): {_rerank_err}")
+
+        _record_vector_search(query, len(top), [r["score"] for r in top] if top else [], below, len(scored), reranked=reranked)
         logger.info(
             f"Vector RAG: query='{query[:40]}' → {len(top)} results "
-            f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}], threshold={_VECTOR_SIM_THRESHOLD})" if top else
+            f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}], threshold={_VECTOR_SIM_THRESHOLD}, reranked={reranked})" if top else
             f"Vector RAG: query='{query[:40]}' → no results above threshold ({_VECTOR_SIM_THRESHOLD})"
         )
         _vector_rag_cache[_vk] = top
@@ -1124,7 +1160,7 @@ async def resolve_rag_context(
     cached_rag, _card_result, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
         _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name),  # returns (text, slug_set) or None
-        vector_rag_search(query, subject_id=subject_id, top_k=8),
+        vector_rag_search(query, subject_id=subject_id, top_k=10),
     )
 
     rag_ctx = dict(cached_rag)

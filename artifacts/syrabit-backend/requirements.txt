@@ -26,6 +26,7 @@ supabase==2.28.0
 # AI
 openai>=1.0.0
 cachetools>=5.3.3
+voyageai>=0.3.0
 
 # Markdown processing
 mistune>=3.0.0

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 __all__ = [
     "db", "redis_client", "supa", "pg_pool", "pwd_ctx", "security",
-    "sarvam_client", "sarvam_llm_client", "logger",
+    "sarvam_client", "sarvam_llm_client", "voyage_client", "logger",
     "is_mongo_available", "mark_mongo_down",
     "_cms_request_ctx", "_assert_not_cms_context", "_init_pg_pool",
     "_sarvam_headers", "_sarvam_timeout", "_sarvam_llm_timeout", "_sarvam_pool_limits",
@@ -29,7 +29,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from config import (
     MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_BASE_URL,
     REDIS_URL, REDIS_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_KEY,
-    _PG_DSN,
+    _PG_DSN, VOYAGE_API_KEY,
 )
 
 logger = logging.getLogger(__name__)
@@ -248,6 +248,25 @@ if SARVAM_API_KEY:
     logging.getLogger(__name__).info("Sarvam AI client ready (HTTP/2 pooled, dual-client)")
 else:
     logging.getLogger(__name__).warning("SARVAM_API_KEY not set — Sarvam features disabled")
+
+try:
+    import voyageai as _voyageai
+except ImportError:
+    _voyageai = None
+
+voyage_client: Optional[Any] = None
+if _voyageai and VOYAGE_API_KEY:
+    try:
+        voyage_client = _voyageai.Client(api_key=VOYAGE_API_KEY)
+        logging.getLogger(__name__).info("Voyage AI rerank client ready")
+    except Exception as _voyage_err:
+        voyage_client = None
+        logging.getLogger(__name__).warning(f"Voyage AI client init failed: {_voyage_err}")
+else:
+    if VOYAGE_API_KEY and not _voyageai:
+        logging.getLogger(__name__).warning("VOYAGE_API_KEY is set but voyageai package not installed — reranking disabled")
+    elif not VOYAGE_API_KEY:
+        logging.getLogger(__name__).info("VOYAGE_API_KEY not set — reranking disabled (cosine-similarity fallback)")
 
 pwd_ctx  = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
