@@ -5,7 +5,7 @@ from fastapi import HTTPException
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
-    _GROQ_KEY, _GEMINI_KEY, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
+    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
     _SARVAM_LLM_KEY, _EMERGENT_KEY, _EMERGENT_BASE_URL, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
 )
 from deps import sarvam_llm_client, logger as _dep_logger
@@ -134,6 +134,8 @@ if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
+if _GROQ_KEY_2 and _GROQ_KEY_2 != 'x':
+    _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY_2,     "default_model": "llama-3.3-70b-versatile"})
 if _FIREWORKS_KEY:
     _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _SARVAM_LLM_KEY:
@@ -183,9 +185,12 @@ _MODEL_ALIAS_MAP = {
 _SLM_SLOT_CANDIDATES = [
     # Gemini 2.5 Flash — primary: best accuracy + reasoning
     ("gemini",      "gemini-2.5-flash",                                  6),
-    # Groq as secondary (rate-limited but fast when available)
+    # Groq key 1 (rate-limited but fast when available)
     ("groq",        "llama-3.3-70b-versatile",                           8),
     ("groq",        "llama-3.1-8b-instant",                              4),
+    # Groq key 2 (doubles rate limit capacity)
+    ("groq:2",      "llama-3.3-70b-versatile",                           8),
+    ("groq:2",      "llama-3.1-8b-instant",                              4),
     # Emergent universal gateway fallback
     ("emergent",    "gemini-2.5-flash",                                  4),
     # Fireworks last (currently suspended)
@@ -209,19 +214,24 @@ class _SmartKeyPool:
     _ERR_COOLDOWN = 15.0   # any other error → skip for 15 s
 
     def __init__(self, candidates: list):
-        pmap = {p["provider"]: p["key"] for p in _LLM_PROVIDERS}
+        pmap: dict = {}
+        for p in _LLM_PROVIDERS:
+            pname = p["provider"]
+            if pname not in pmap:
+                pmap[pname] = []
+            pmap[pname].append(p["key"])
         self._slots = []
         for pname, model_id, max_con in candidates:
-            key = pmap.get(pname, "")
-            # bedrock uses AWS env-var credentials, not a provider API key
-            # sarvam also has no key in pmap
-            if key or pname in ("sarvam", "bedrock"):
-                # for bedrock: only add slot if AWS credentials are present
-                if pname == "bedrock" and not (_AWS_ACCESS_KEY and _AWS_SECRET_KEY):
+            real_provider = pname.split(":")[0]
+            key_idx = int(pname.split(":")[1]) - 1 if ":" in pname else 0
+            keys = pmap.get(real_provider, [])
+            key = keys[key_idx] if key_idx < len(keys) else ""
+            if key or real_provider in ("sarvam", "bedrock"):
+                if real_provider == "bedrock" and not (_AWS_ACCESS_KEY and _AWS_SECRET_KEY):
                     logger.info("SLM pool: skipping bedrock slot (AWS credentials not set)")
                     continue
                 self._slots.append({
-                    "provider": pname, "key": key, "model": model_id,
+                    "provider": real_provider, "key": key, "model": model_id,
                     "sem": asyncio.Semaphore(max_con), "max_con": max_con,
                     "last_used": 0.0, "cooldown_until": 0.0, "errors": 0,
                 })
@@ -378,7 +388,7 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     provider, key = primary_provider, primary_key
     try_model = use_model
     try:
-        tried.add((provider, try_model))
+        tried.add((provider, try_model, id(key) if key else 0))
         _t0 = _t.perf_counter()
         result = await _call_single_provider(messages, provider, key, try_model, max_tokens)
         _dur = int((_t.perf_counter() - _t0) * 1000)
@@ -394,9 +404,10 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
 
     for fallback in providers:
         fb_model = fallback["default_model"]
-        if (fallback["provider"], fb_model) in tried:
+        fb_key_id = id(fallback["key"]) if fallback.get("key") else 0
+        if (fallback["provider"], fb_model, fb_key_id) in tried:
             continue
-        tried.add((fallback["provider"], fb_model))
+        tried.add((fallback["provider"], fb_model, fb_key_id))
         try:
             _t0 = _t.perf_counter()
             result = await _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens)

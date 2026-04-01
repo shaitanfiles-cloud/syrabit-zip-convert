@@ -22,6 +22,7 @@ FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rs
 
 # ── LLM Configuration ─────────────────────────────────────────────────────────
 _GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
+_GROQ_KEY_2 = os.environ.get('GROQ_API_KEY_2', '').strip()
 _GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 _XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
 _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
@@ -47,9 +48,9 @@ elif _EXPLICIT_PROVIDER == 'openai' and _OPENAI_KEY and _OPENAI_KEY != 'x':
     LLM_PROVIDER = 'openai'
     LLM_API_KEY = _OPENAI_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'gpt-4o-mini')
-elif _EXPLICIT_PROVIDER == 'groq' and _GROQ_KEY and _GROQ_KEY != 'x':
+elif _EXPLICIT_PROVIDER == 'groq' and ((_GROQ_KEY and _GROQ_KEY != 'x') or (_GROQ_KEY_2 and _GROQ_KEY_2 != 'x')):
     LLM_PROVIDER = 'groq'
-    LLM_API_KEY = _GROQ_KEY
+    LLM_API_KEY = (_GROQ_KEY if _GROQ_KEY and _GROQ_KEY != 'x' else _GROQ_KEY_2)
     LLM_MODEL = os.environ.get('LLM_MODEL', 'llama-3.1-8b-instant')
 elif _SARVAM_LLM_KEY:
     LLM_PROVIDER = 'sarvam'
@@ -59,9 +60,9 @@ elif _FIREWORKS_KEY:
     LLM_PROVIDER = 'fireworksai'
     LLM_API_KEY = _FIREWORKS_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/qwen2p5-72b-instruct')
-elif _GROQ_KEY and _GROQ_KEY != 'x':
+elif (_GROQ_KEY and _GROQ_KEY != 'x') or (_GROQ_KEY_2 and _GROQ_KEY_2 != 'x'):
     LLM_PROVIDER = 'groq'
-    LLM_API_KEY = _GROQ_KEY
+    LLM_API_KEY = (_GROQ_KEY if _GROQ_KEY and _GROQ_KEY != 'x' else _GROQ_KEY_2)
     LLM_MODEL = os.environ.get('LLM_MODEL', 'llama-3.1-8b-instant')
 elif _OPENAI_KEY and _OPENAI_KEY != 'x':
     LLM_PROVIDER = 'openai'

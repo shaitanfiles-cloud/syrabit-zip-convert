@@ -48,11 +48,12 @@ The project is a pnpm workspace monorepo comprising a React + Vite frontend (`ar
 - **Database:** PostgreSQL (for users/auth) and MongoDB (for content/RAG).
 - **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers.
 - **Caching:** Redis (distributed cache) and in-memory caching.
-- **LLM Providers:**
+- **LLM Providers (fallback chain: Gemini → Groq → Emergent → Sarvam):**
     - Google Gemini (gemini-2.5-flash, Gemini Vision, gemini-embedding-001) - primary.
-    - Groq (llama-3.3-70b, llama-3.1-8b).
-    - Fireworks (deepseek-v3p2).
-    - Sarvam clients.
+    - Groq x2 keys (llama-3.3-70b, llama-3.1-8b) — doubled rate limit via `GROQ_API_KEY` + `GROQ_API_KEY_2`.
+    - Emergent universal gateway (fallback, `EMERGENT_API_KEY`).
+    - Fireworks (deepseek-v3p2, currently suspended).
+    - Sarvam (sarvam-m, last-resort fallback).
 - **Payment Gateways:** Razorpay (INR) and Stripe (USD).
 - **Email Service:** Resend API (for password resets).
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.
