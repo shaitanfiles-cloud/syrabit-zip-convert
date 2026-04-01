@@ -47,7 +47,7 @@ The project is a pnpm workspace monorepo comprising a React + Vite frontend (`ar
 
 - **Database:** PostgreSQL (for users/auth) and MongoDB (for content/RAG).
 - **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers.
-- **Caching:** Redis (distributed cache) and in-memory caching.
+- **Caching:** Redis (distributed cache) and in-memory caching. User cache invalidation clears both in-memory TTL cache AND Redis session cache to prevent stale reads after profile/onboarding updates.
 - **LLM Providers (fallback chain: Gemini → Groq → Emergent → Sarvam):**
     - Google Gemini (gemini-2.5-flash, Gemini Vision, gemini-embedding-001) - primary.
     - Groq x2 keys (llama-3.3-70b, llama-3.1-8b) — doubled rate limit via `GROQ_API_KEY` + `GROQ_API_KEY_2`.
