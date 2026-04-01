@@ -13,7 +13,7 @@ export function InputBar({
 
   return (
     <div
-      className="sticky bottom-0 z-20 flex-shrink-0 border-t border-border/50 px-4 md:px-6 py-3 pb-[calc(0.75rem+64px+env(safe-area-inset-bottom,0px))] md:pb-3"
+      className="fixed bottom-0 left-0 right-0 z-20 border-t border-border/50 px-4 md:px-6 py-3 pb-[calc(0.75rem+64px+env(safe-area-inset-bottom,0px))] md:pb-3"
       style={{ background: 'var(--card)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       data-testid="chat-input"
     >
