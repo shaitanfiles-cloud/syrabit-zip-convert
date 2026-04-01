@@ -165,9 +165,9 @@ REDIS_CONTENT_PREFIX = "content:"
 # FREE: 30 credits ONCE (lifetime, no reset)
 # STARTER / PRO: one-time purchase, no reset
 PLAN_LIMITS = {
-    "free":    {"lifetime_credits": 30,   "max_tokens": 1536, "document_access": "zero"},
-    "starter": {"lifetime_credits": 300,  "max_tokens": 2048, "document_access": "limited"},
-    "pro":     {"lifetime_credits": 4000, "max_tokens": 4096, "document_access": "full"},
+    "free":    {"lifetime_credits": 30,   "max_tokens": 5000,   "document_access": "zero"},
+    "starter": {"lifetime_credits": 300,  "max_tokens": 8000,   "document_access": "limited"},
+    "pro":     {"lifetime_credits": 4000, "max_tokens": 100000, "document_access": "full"},
 }
 PLAN_PRICES = {
     "free":    {"price": 0,   "label": "Free",    "description": "30 one-time credits · zero document access"},
