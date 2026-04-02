@@ -40,7 +40,8 @@ class SecurityHeadersMiddleware:
 
 class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
     """Plan-aware IP rate limiting for all /api routes + request tracking.
-    Plan is read from JWT claim (refreshed on login, plan change invalidates session)."""
+    Plan is read from JWT claim (refreshed on login, plan change invalidates session).
+    JWT is decoded once and reused for both rate-limiting and metrics."""
     _RATE_LIMIT_EXEMPT_PREFIXES = (
         "/api/auth/me",
         "/api/analytics/",
@@ -49,63 +50,55 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: StarletteRequest, call_next):
         path = request.url.path
-        if path.startswith("/api/"):
-            exempt = any(path.startswith(p) for p in self._RATE_LIMIT_EXEMPT_PREFIXES)
-            if exempt:
-                _metrics.inc_active()
-                try:
-                    response = await call_next(request)
-                    _metrics.record_request(path, response.status_code)
-                    return response
-                finally:
-                    _metrics.dec_active()
-            client_ip = request.client.host if request.client else "unknown"
-            ip_limit = PLAN_LIMITS["free"]["req_per_min_ip"]
+        if not path.startswith("/api/"):
+            return await call_next(request)
+
+        exempt = any(path.startswith(p) for p in self._RATE_LIMIT_EXEMPT_PREFIXES)
+        if exempt:
+            _metrics.inc_active()
             try:
-                token = None
-                auth = request.headers.get("authorization", "")
-                if auth.startswith("Bearer "):
-                    token = auth[7:]
-                else:
-                    token = request.cookies.get("syrabit_session")
-                if token:
-                    payload = decode_token(token)
-                    user_id = payload.get("sub")
-                    user_plan = payload.get("plan", "free")
-                    if user_id:
-                        cached_user = _redis_get_session(user_id)
-                        if cached_user:
-                            user_plan = cached_user.get("plan", user_plan)
-                    plan_cfg = PLAN_LIMITS.get(user_plan, PLAN_LIMITS["free"])
-                    ip_limit = plan_cfg["req_per_min_ip"]
-            except Exception:
-                pass
-            if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
-                from fastapi.responses import JSONResponse
-                _metrics.record_request(path, 429)
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": "Too many requests — please slow down."},
-                    headers={"Retry-After": "60", "X-RateLimit-Limit": str(ip_limit)}
-                )
+                response = await call_next(request)
+                _metrics.record_request(path, response.status_code)
+                return response
+            finally:
+                _metrics.dec_active()
+
+        user_id = None
+        ip_limit = PLAN_LIMITS["free"]["req_per_min_ip"]
+        try:
+            token = None
+            auth = request.headers.get("authorization", "")
+            if auth.startswith("Bearer "):
+                token = auth[7:]
+            else:
+                token = request.cookies.get("syrabit_session")
+            if token:
+                payload = decode_token(token)
+                user_id = payload.get("sub") or payload.get("user_id")
+                user_plan = payload.get("plan", "free")
+                if user_id:
+                    cached_user = _redis_get_session(user_id)
+                    if cached_user:
+                        user_plan = cached_user.get("plan", user_plan)
+                plan_cfg = PLAN_LIMITS.get(user_plan, PLAN_LIMITS["free"])
+                ip_limit = plan_cfg["req_per_min_ip"]
+        except Exception:
+            pass
+
+        client_ip = request.client.host if request.client else "unknown"
+        if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
+            from fastapi.responses import JSONResponse
+            _metrics.record_request(path, 429)
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many requests — please slow down."},
+                headers={"Retry-After": "60", "X-RateLimit-Limit": str(ip_limit)}
+            )
+
         _metrics.inc_active()
         try:
             response = await call_next(request)
-            user_id = None
-            if path.startswith("/api/"):
-                try:
-                    token = None
-                    auth = request.headers.get("authorization", "")
-                    if auth.startswith("Bearer "):
-                        token = auth[7:]
-                    else:
-                        token = request.cookies.get("syrabit_session")
-                    if token:
-                        _pl = decode_token(token)
-                        user_id = _pl.get("sub") or _pl.get("user_id")
-                except Exception:
-                    pass
-                _metrics.record_request(path, response.status_code, user_id)
+            _metrics.record_request(path, response.status_code, user_id)
             return response
         finally:
             _metrics.dec_active()

@@ -143,61 +143,38 @@ function App() {
     return () => { clearTimeout(fallback); detach(); };
   }, []);
 
-  // Nuke Emergent badge completely — fast interval + all hiding properties
   useEffect(() => {
-    const HIDE = [
-      'display:none!important',
-      'visibility:hidden!important',
-      'opacity:0!important',
-      'width:0!important',
-      'height:0!important',
-      'max-width:0!important',
-      'max-height:0!important',
-      'min-width:0!important',
-      'min-height:0!important',
-      'overflow:hidden!important',
-      'clip:rect(0 0 0 0)!important',
-      'clip-path:inset(50%)!important',
-      'transform:scale(0)!important',
-      'border:0!important',
-      'padding:0!important',
-      'margin:0!important',
-      'background:transparent!important',
-      'box-shadow:none!important',
-      'position:fixed!important',
-      'bottom:0!important',
-      'right:0!important',
-      'z-index:-9999!important',
-      'pointer-events:none!important',
-    ].join(';');
+    const HIDE = 'display:none!important;visibility:hidden!important;opacity:0!important;width:0!important;height:0!important;pointer-events:none!important;position:fixed!important;z-index:-9999!important';
 
     const nuke = () => {
       ['#emergent-badge', 'a[href*="emergent.sh"]', '[id*="emergent-badge"]'].forEach((sel) => {
         document.querySelectorAll(sel).forEach((el) => {
           el.style.cssText = HIDE;
-          el.querySelectorAll('*').forEach((c) => {
-            c.style.cssText = 'display:none!important;width:0!important;height:0!important;font-size:0!important;color:transparent!important;';
-          });
+          el.remove();
         });
       });
     };
 
     nuke();
-    // Fast interval for first 5s, then maintenance interval
-    const fastIv = setInterval(nuke, 100);
-    const slowIv = setTimeout(() => {
-      clearInterval(fastIv);
-      setInterval(nuke, 2000);
-    }, 5000);
+    const style = document.createElement('style');
+    style.textContent = '#emergent-badge, a[href*="emergent.sh"], [id*="emergent-badge"] { display:none!important; }';
+    document.head.appendChild(style);
 
-    const mo = new MutationObserver(nuke);
+    const mo = new MutationObserver((mutations) => {
+      for (const m of mutations) {
+        for (const node of m.addedNodes) {
+          if (node.nodeType !== 1) continue;
+          if (node.id?.includes('emergent') || node.href?.includes('emergent.sh') ||
+              node.querySelector?.('#emergent-badge, a[href*="emergent.sh"], [id*="emergent"]')) {
+            nuke();
+            return;
+          }
+        }
+      }
+    });
     mo.observe(document.documentElement, { childList: true, subtree: true });
 
-    return () => {
-      clearInterval(fastIv);
-      clearTimeout(slowIv);
-      mo.disconnect();
-    };
+    return () => { mo.disconnect(); style.remove(); };
   }, []);
   return (
     <HelmetProvider>

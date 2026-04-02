@@ -393,22 +393,12 @@ async def extract_pdf_text(file: UploadFile = File(...), admin: dict = Depends(g
     raw = await file.read()
     if len(raw) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 20 MB)")
-    try:
-        import io
-        import pypdf
-        reader = pypdf.PdfReader(io.BytesIO(raw))
-        pages = []
-        for page in reader.pages:
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append(text.strip())
-        extracted = "\n\n".join(pages)
-        return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
-    except ImportError:
-        # Fallback to PyPDF2 if pypdf not available
+
+    def _extract_sync(data: bytes):
         try:
-            import PyPDF2, io
-            reader = PyPDF2.PdfReader(io.BytesIO(raw))
+            import io as _io
+            import pypdf
+            reader = pypdf.PdfReader(_io.BytesIO(data))
             pages = []
             for page in reader.pages:
                 text = page.extract_text() or ""
@@ -416,8 +406,20 @@ async def extract_pdf_text(file: UploadFile = File(...), admin: dict = Depends(g
                     pages.append(text.strip())
             extracted = "\n\n".join(pages)
             return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
-        except Exception as e:
-            raise HTTPException(status_code=422, detail=f"PDF extraction failed: {e}")
+        except ImportError:
+            import PyPDF2, io as _io
+            reader = PyPDF2.PdfReader(_io.BytesIO(data))
+            pages = []
+            for page in reader.pages:
+                text = page.extract_text() or ""
+                if text.strip():
+                    pages.append(text.strip())
+            extracted = "\n\n".join(pages)
+            return {"text": extracted, "pages": len(reader.pages), "chars": len(extracted)}
+
+    try:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _extract_sync, raw)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"PDF extraction failed: {e}")
 

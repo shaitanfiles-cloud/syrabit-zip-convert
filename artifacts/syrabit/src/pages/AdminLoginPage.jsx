@@ -37,7 +37,7 @@ export default function AdminLoginPage() {
       <div className="w-full max-w-sm space-y-4">
         {/* Header mark */}
         <div className="text-center mb-6">
-          <img src="/logo.png" alt="Syrabit.ai" className="w-14 h-14 rounded-2xl mx-auto mb-3 object-cover" style={{ boxShadow: '0 0 24px rgba(99,102,241,0.15)' }} />
+          <img src="/logo.png" alt="Syrabit.ai" width="56" height="56" className="w-14 h-14 rounded-2xl mx-auto mb-3 object-cover" style={{ boxShadow: '0 0 24px rgba(99,102,241,0.15)' }} />
           <h1 className="text-lg font-semibold text-white">Administrator Access</h1>
           <p className="text-slate-500 text-sm mt-0.5">Syrabit.ai Control Panel</p>
         </div>

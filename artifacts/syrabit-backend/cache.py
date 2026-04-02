@@ -10,7 +10,7 @@ __all__ = [
     "CONTENT_CACHE_SECONDS", "REDIS_AI_CACHE_TTL", "REDIS_CASUAL_CACHE_TTL",
     "REDIS_CHAT_CACHE_TTL", "REDIS_CONTENT_PREFIX", "REDIS_RATE_WINDOW",
     "REDIS_SEARCH_CACHE_TTL", "REDIS_SESSION_CACHE_TTL",
-    "_ai_response_cache", "_cache_key", "_content_cache", "_content_cache_ttl",
+    "_ai_response_cache", "_cache_key", "_content_cache",
     "_content_card_cache", "_content_card_cache_key", "_conv_cache", "_conv_cache_key",
     "_get_content_cache", "_invalidate_content_cache", "_invalidate_conv_cache",
     "_invalidate_user_cache", "_rag_cache", "_rag_cache_key",
@@ -164,33 +164,29 @@ def _redis_invalidate_session(user_id: str):
     _redis_del("session", user_id)
     _invalidate_user_cache(str(user_id))
 
-_content_cache: Dict[str, Any] = {}
-_content_cache_ttl: Dict[str, float] = {}
+_content_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
 CONTENT_CACHE_SECONDS = 600
 REDIS_CONTENT_PREFIX = "content:"
 
 def _get_content_cache(key: str):
-    import time as _time
-    if key in _content_cache and _time.time() - _content_cache_ttl.get(key, 0) < CONTENT_CACHE_SECONDS:
-        return _content_cache[key]
+    cached = _content_cache.get(key)
+    if cached is not None:
+        return cached
     if redis_client:
         try:
             val = redis_client.get(f"{REDIS_CONTENT_PREFIX}{key}")
             if val:
                 parsed = json.loads(val) if isinstance(val, str) else val
                 _content_cache[key] = parsed
-                _content_cache_ttl[key] = _time.time()
                 return parsed
         except Exception:
             pass
     return None
 
 def _invalidate_content_cache(prefix: str):
-    # Always also clear the composite library-bundle cache
-    keys_to_del = [k for k in _content_cache if k == prefix or k.startswith(f"{prefix}:") or k == "library-bundle"]
+    keys_to_del = [k for k in list(_content_cache.keys()) if k == prefix or k.startswith(f"{prefix}:") or k == "library-bundle"]
     for k in keys_to_del:
         _content_cache.pop(k, None)
-        _content_cache_ttl.pop(k, None)
         if redis_client:
             try:
                 redis_client.delete(f"{REDIS_CONTENT_PREFIX}{k}")
@@ -203,9 +199,7 @@ def _invalidate_content_cache(prefix: str):
             pass
 
 def _set_content_cache(key: str, value):
-    import time as _time
     _content_cache[key] = value
-    _content_cache_ttl[key] = _time.time()
     if redis_client:
         try:
             redis_client.set(f"{REDIS_CONTENT_PREFIX}{key}", json.dumps(value, default=str), ex=CONTENT_CACHE_SECONDS)

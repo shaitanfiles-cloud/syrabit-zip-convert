@@ -431,7 +431,7 @@ export default defineConfig({
   },
 
   server: {
-    port: 5000,
+    port: Number.isFinite(parseInt(process.env.PORT, 10)) ? parseInt(process.env.PORT, 10) : 5000,
     host: '0.0.0.0',
     allowedHosts: true,
     proxy: {

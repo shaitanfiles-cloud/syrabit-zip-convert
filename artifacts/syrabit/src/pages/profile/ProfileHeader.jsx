@@ -46,6 +46,8 @@ export default function ProfileHeader({
               <img
                 src={profile.avatar_url}
                 alt={profile?.name || 'Avatar'}
+                width="72"
+                height="72"
                 className="w-full h-full rounded-2xl object-cover shadow-xl"
                 style={{ boxShadow: '0 0 24px rgba(139,92,246,0.4)' }}
               />
