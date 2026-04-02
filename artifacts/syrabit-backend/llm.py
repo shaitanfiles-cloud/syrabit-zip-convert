@@ -772,7 +772,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # async with slot["sem"] lets up to max_concurrent requests run in parallel.
     # asyncio.wait_for enforces a per-slot timeout so a slow provider never
     # blocks the pool — the next slot is tried immediately on timeout.
-    _SLM_SLOT_TIMEOUT = 25.0   # max seconds to wait for first token from any slot
+    _SLM_SLOT_TIMEOUT = 10.0   # max seconds to wait for first token from any slot
 
     async def _collect_stream(p_name, p_key, p_model):
         """Buffer entire token stream into a list and return it (for timeout wrapper)."""

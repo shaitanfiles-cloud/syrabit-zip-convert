@@ -1173,7 +1173,7 @@ async def resolve_rag_context(
     cached_rag, _card_result, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
         _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
-        vector_rag_search(query, subject_id=subject_id, top_k=10),
+        vector_rag_search(query, subject_id=subject_id, top_k=5),
     )
 
     rag_ctx = dict(cached_rag)
@@ -1554,15 +1554,14 @@ def build_rag_system_prompt(
         if quality == "high":
             grounding += (
                 "\n\n---\n"
-                "**GROUNDING CONTEXT (Syrabit Library — 97% Accuracy Mode):**\n"
-                "The following is the COMPLETE content from the student's actual curriculum database. "
-                "Answer the question directly from this content. "
-                "Quote verbatim where possible.\n\n"
+                "**GROUNDING CONTEXT (Syrabit Library — Reference Base):**\n"
+                "The following content is from the student's curriculum database. "
+                "Use it as the factual base (50%) for your answer.\n\n"
             )
             if vector_hits:
                 grounding += "**[VECTOR SEARCH RESULTS — Semantically matched pages]:**\n\n"
-                _VH_CONTENT_LIMIT = 2000
-                _VH_MAX_HITS = 5
+                _VH_CONTENT_LIMIT = 1200
+                _VH_MAX_HITS = 3
                 for hit in vector_hits[:_VH_MAX_HITS]:
                     slug = hit.get("slug", "")
                     title = hit.get("title", slug)
@@ -1592,12 +1591,12 @@ def build_rag_system_prompt(
             grounding += (
                 "---\n"
                 "**ANSWER WEIGHTAGE (50/50 BALANCE):**\n"
-                "1. 50% GROUNDING: Use the curriculum content above as your factual anchor — definitions, formulas, syllabus-specific facts.\n"
-                "2. 50% YOUR KNOWLEDGE: Enrich with your own training knowledge — explanations, real-world examples, analogies, exam tips.\n"
-                "3. Structure: Explanation → Key Points → Examples. Blend both sources naturally.\n"
-                "4. Do NOT add source citations inline — the system appends the SOURCE line automatically.\n"
-                "5. NEVER hallucinate. NEVER invent facts. Be precise — prioritize accuracy over creativity.\n"
-                "6. If the grounding is thin, lean more on your knowledge but stay within the curriculum scope.*"
+                "1. 50% RAG BASE: Use the grounding above as your factual base — definitions, formulas, key facts from the database.\n"
+                "2. 50% YOUR KNOWLEDGE + LOGIC: Draft the answer using your training knowledge — explanations, real-world examples, analogies, deeper context. Answer what the student actually needs.\n"
+                "3. Do NOT rigidly stick to curriculum — answer the student's actual question naturally and completely.\n"
+                "4. Structure: Direct answer → Explanation → Examples. Keep it concise and useful.\n"
+                "5. Do NOT add source citations inline — the system appends the SOURCE line automatically.\n"
+                "6. NEVER hallucinate or invent facts.*"
             )
 
         else:
@@ -1646,10 +1645,9 @@ def build_rag_system_prompt(
             grounding += (
                 "\n---\n"
                 "**ANSWER WEIGHTAGE (50/50 BALANCE):**\n"
-                f"1. 50% GROUNDING: Use the {_curriculum_label} metadata above as your factual anchor.\n"
-                "2. 50% YOUR KNOWLEDGE: Enrich with your training knowledge — explanations, examples, exam context.\n"
-                f"When referencing the curriculum by name, always call it '{_curriculum_label}'. "
-                "Blend both sources naturally. If unsure about a specific fact, state it clearly rather than guessing.*"
+                f"1. 50% RAG BASE: Use the {_curriculum_label} context above as reference.\n"
+                "2. 50% YOUR KNOWLEDGE + LOGIC: Answer the student's question using your training knowledge. Do NOT rigidly stick to curriculum — be helpful and complete.\n"
+                "Blend both sources naturally. Keep it concise and directly useful.*"
             )
 
     # ── Live Web Search Results (dual-layer: base + polish) ─────────────────
