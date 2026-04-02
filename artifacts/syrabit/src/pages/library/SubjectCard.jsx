@@ -54,7 +54,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
   return (
     <div
-      className="w-full rounded-2xl overflow-hidden transition-all duration-300 group/card hover:-translate-y-0.5"
+      className="w-full rounded-2xl overflow-hidden transition-all duration-300 group/card hover:-translate-y-0.5 relative cursor-pointer"
       style={{
         background: 'var(--card)',
         border: isSaved
@@ -100,7 +100,8 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       </div>
 
       <div className="px-3 sm:px-4 pt-3 pb-2">
-        <Link to={subjectLandingPath} className="block group/title">
+        <Link to={subjectLandingPath} className="block group/title static" aria-label={`View ${sub.name}`}>
+          <span className="absolute inset-0 z-0" aria-hidden="true" />
           <div className="flex items-start gap-3 mb-2">
             <div
               className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
@@ -170,7 +171,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
       {visibleChapters.length > 0 && (
         <div
-          className="mx-3 mb-2 sm:mb-3 rounded-xl overflow-hidden relative"
+          className="mx-3 mb-2 sm:mb-3 rounded-xl overflow-hidden relative z-10"
           style={{
             background: 'rgba(139,92,246,0.03)',
             border: '1px solid rgba(139,92,246,0.08)',
@@ -274,7 +275,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       )}
 
       <div
-        className="grid grid-cols-2 gap-1.5 px-3 py-2.5"
+        className="grid grid-cols-2 gap-1.5 px-3 py-2.5 relative z-10"
         style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
       >
         <button
