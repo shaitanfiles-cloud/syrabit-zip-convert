@@ -57,7 +57,8 @@ The project is a pnpm workspace monorepo comprising a React + Vite frontend (`ar
     - Cerebras (llama-3.3-70b, 6 slots) — also primary for admin content generation.
     - Google Gemini (gemini-2.5-flash 6 slots, Gemini Vision, gemini-embedding-001).
     - Sarvam (sarvam-m, 4 slots, reliable fallback).
-    - Model aliases: `openai/gpt-oss-20b` → SLM pool, `openai/gpt-oss-120b` → Cerebras llama-3.3-70b (coming soon).
+    - OpenRouter (deepseek-chat-v3-0324 default) — access to 200+ models via single API key.
+    - Model aliases: `openai/gpt-oss-20b` → SLM pool, `openai/gpt-oss-120b` → Cerebras qwen-3-235b (coming soon).
 - **Cloudflare AI Gateway (free tier):** Routes OpenAI, Groq, Gemini, xAI, Fireworks, and Sarvam through `CF_AI_GATEWAY_ACCOUNT_ID`/`CF_AI_GATEWAY_ID`. Provides response caching (`cf-aig-cache-ttl`, default 3600s for non-streaming), unified analytics, and request logging. Gateway health auto-tracked: marks down on connection errors, auto-recovers after 5 min. In-request graceful degradation: on gateway connection failure, retries same request with direct provider URL. Bedrock stays direct (boto3, not OpenAI-compatible). Fireworks and Sarvam require custom provider setup in CF dashboard. Emergent gateway removed (replaced by CF AI Gateway).
 - **Voyage AI Rerank:** `rerank-2` model re-scores vector search results for higher relevance. 3s timeout with cosine fallback. `VOYAGE_API_KEY`.
 - **Payment Gateways:** Razorpay (INR) and Stripe (USD).

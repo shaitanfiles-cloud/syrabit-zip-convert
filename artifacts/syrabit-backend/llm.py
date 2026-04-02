@@ -17,7 +17,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
     _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
-    _SARVAM_LLM_KEY, _CEREBRAS_KEY, _EMERGENT_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    _SARVAM_LLM_KEY, _CEREBRAS_KEY, _EMERGENT_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
     CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
 )
 from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
@@ -152,6 +152,8 @@ if _GROQ_KEY_2 and _GROQ_KEY_2 != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY_2,     "default_model": "llama-3.3-70b-versatile"})
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _OPENROUTER_KEY:
+    _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 if _XAI_KEY:
     _LLM_PROVIDERS.append({"provider": "xai",         "key": _XAI_KEY,        "default_model": "grok-3-fast"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
@@ -172,8 +174,10 @@ if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _OPENROUTER_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 for _p in _LLM_PROVIDERS:
-    if _p["provider"] not in ("fireworksai", "groq", "cerebras", "gemini", "sarvam"):
+    if _p["provider"] not in ("fireworksai", "groq", "cerebras", "gemini", "sarvam", "openrouter"):
         _LLM_PROVIDERS_CHAT.append(_p)
 
 _MODEL_PROVIDER_MAP = {
@@ -190,6 +194,11 @@ _MODEL_PROVIDER_MAP = {
     "llama-3.1-8b-instant": "groq",
     "llama3.1-8b": "cerebras",
     "qwen-3-235b-a22b-instruct-2507": "cerebras",
+    "deepseek/deepseek-chat-v3-0324": "openrouter",
+    "deepseek/deepseek-r1": "openrouter",
+    "qwen/qwen3-235b-a22b": "openrouter",
+    "google/gemini-2.5-flash-preview": "openrouter",
+    "meta-llama/llama-4-maverick": "openrouter",
 }
 
 _MODEL_ALIAS_MAP = {
@@ -428,6 +437,8 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
         return await _call_cerebras(messages, api_key, model, max_tokens)
     if provider == "xai":
         return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
+    if provider == "openrouter":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "openrouter", "https://openrouter.ai/api/v1")
 
     system_msg = ""
     user_msg = ""
@@ -661,6 +672,29 @@ async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int)
         if delta and delta.content:
             yield delta.content
 
+async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
+    """Token-by-token streaming from any OpenAI-compatible provider."""
+    import openai as _oai
+    base = get_provider_base_url(provider) or fallback_base
+    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _oai.AsyncOpenAI(api_key=api_key, base_url=fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
 async def _stream_bedrock(messages: list, model: str, max_tokens: int):
     """Token-by-token streaming from Amazon Bedrock via Converse streaming API.
     boto3 is synchronous — runs in a thread pool; tokens passed back via asyncio.Queue.
@@ -845,6 +879,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         elif p_name == "xai":
             logger.info(f"LLM stream: provider=xai, model={p_model}")
             async for token in _stream_xai(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "openrouter":
+            logger.info(f"LLM stream: provider=openrouter, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "openrouter", "https://openrouter.ai/api/v1"):
                 yield token
         elif p_name == "bedrock":
             logger.info(f"LLM stream: provider=bedrock, model={p_model}")
