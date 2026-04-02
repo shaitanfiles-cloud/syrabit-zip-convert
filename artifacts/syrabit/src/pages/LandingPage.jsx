@@ -13,7 +13,14 @@ export default function LandingPage() {
   const { user } = useAuth();
 
   useEffect(() => {
-    if (user) navigate('/library', { replace: true });
+    if (user) {
+      navigate('/library', { replace: true });
+      return;
+    }
+    const timer = setTimeout(() => {
+      navigate('/chat', { replace: true });
+    }, 3000);
+    return () => clearTimeout(timer);
   }, [user, navigate]);
 
   const year = new Date().getFullYear();
