@@ -30,6 +30,14 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
+_embed_http_client: Optional[httpx.AsyncClient] = None
+
+def _get_embed_client() -> httpx.AsyncClient:
+    global _embed_http_client
+    if _embed_http_client is None or _embed_http_client.is_closed:
+        _embed_http_client = httpx.AsyncClient(timeout=12, http2=True, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
+    return _embed_http_client
+
 # ── Model names ───────────────────────────────────────────────────────────────
 _EMBED_MODEL  = "gemini-embedding-001"
 _GEN_MODEL    = "gemini-2.5-flash"
@@ -163,19 +171,19 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
         except Exception:
             pass
 
+    c = _get_embed_client()
     if _SA_CREDS is not None:
         url  = _embed_url()
         body = {"instances": [{"content": text[:8000], "task_type": task_type}]}
         try:
-            async with httpx.AsyncClient(timeout=15) as c:
-                r = await c.post(url, json=body, headers=headers)
-                if r.status_code == 403:
-                    _mark_forbidden()
-                    return None
-                r.raise_for_status()
-                vec = r.json()["predictions"][0]["embeddings"]["values"]
-                _store_embed_cache(vec)
-                return vec
+            r = await c.post(url, json=body, headers=headers)
+            if r.status_code == 403:
+                _mark_forbidden()
+                return None
+            r.raise_for_status()
+            vec = r.json()["predictions"][0]["embeddings"]["values"]
+            _store_embed_cache(vec)
+            return vec
         except Exception as e:
             logger.warning(f"embed_text (Vertex) failed: {e}")
             return None
@@ -188,18 +196,17 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
             "taskType": task_type,
         }
         try:
-            async with httpx.AsyncClient(timeout=15) as c:
-                r = await c.post(url, json=body, headers=headers)
-                if r.status_code == 403:
-                    _mark_forbidden()
-                    return None
-                if r.status_code == 404:
-                    logger.warning(f"embed_text: model {model} not found (404), trying next…")
-                    continue
-                r.raise_for_status()
-                vec = r.json()["embedding"]["values"]
-                _store_embed_cache(vec)
-                return vec
+            r = await c.post(url, json=body, headers=headers)
+            if r.status_code == 403:
+                _mark_forbidden()
+                return None
+            if r.status_code == 404:
+                logger.warning(f"embed_text: model {model} not found (404), trying next…")
+                continue
+            r.raise_for_status()
+            vec = r.json()["embedding"]["values"]
+            _store_embed_cache(vec)
+            return vec
         except Exception as e:
             logger.warning(f"embed_text ({model}) failed: {e}")
             continue

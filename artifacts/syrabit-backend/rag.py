@@ -14,6 +14,8 @@ import vertex_services
 
 logger = logging.getLogger(__name__)
 
+_voyage_backoff_until: float = 0.0
+
 __all__ = [
     "_HISTORY_MAX_TURNS", "_HISTORY_TOKEN_BUDGET", "_LATENCY_MAX", "_RAG_TELEM_MAX",
     "_chat_latencies", "_ddg_news_search", "_ddg_text_search",
@@ -687,7 +689,9 @@ async def vector_rag_search(
         below = sum(1 for s in all_scores if s < _VECTOR_SIM_THRESHOLD)
 
         reranked = False
-        if voyage_client and top:
+        global _voyage_backoff_until
+        _voyage_available = voyage_client and top and time.time() >= _voyage_backoff_until
+        if _voyage_available:
             pre_rerank_slugs = [r["slug"] for r in top[:3]]
             try:
                 _rerank_start = time.time()
@@ -723,7 +727,12 @@ async def vector_rag_search(
             except asyncio.TimeoutError:
                 logger.warning(f"Voyage rerank timed out after 1.5s (falling back to cosine): query='{query[:40]}'")
             except Exception as _rerank_err:
-                logger.warning(f"Voyage rerank failed (falling back to cosine): {_rerank_err}")
+                _err_str = str(_rerank_err)
+                if "429" in _err_str or "rate" in _err_str.lower() or "Ratelimit" in _err_str or "payment" in _err_str.lower():
+                    _voyage_backoff_until = time.time() + 120
+                    logger.warning(f"Voyage rerank rate-limited → backing off 120s: {_err_str[:100]}")
+                else:
+                    logger.warning(f"Voyage rerank failed (falling back to cosine): {_rerank_err}")
 
         _record_vector_search(query, len(top), [r["score"] for r in top] if top else [], below, len(scored), reranked=reranked)
         logger.info(
@@ -1224,17 +1233,30 @@ async def resolve_rag_context(
     except ValueError:
         _RELEVANCE_GATE = 0.50
 
-    cached_rag, _card_result, vector_hits = await asyncio.gather(
+    from prompts import ENRICHMENT_INTENTS
+    _resolved_intent = intent or "general"
+    _want_enrichment = _resolved_intent in ENRICHMENT_INTENTS
+
+    _gather_tasks = [
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
         _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
         vector_rag_search(query, subject_id=subject_id, top_k=5),
-    )
+    ]
+    if _want_enrichment:
+        _gather_tasks.append(
+            _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
+        )
+
+    _results = await asyncio.gather(*_gather_tasks)
+    cached_rag = _results[0]
+    _card_result = _results[1]
+    vector_hits = _results[2]
+    _enrichment_result = _results[3] if _want_enrichment else ""
 
     _best_vec_sim = max((h.get("score", 0) for h in vector_hits), default=0.0) if vector_hits else 0.0
     _embeddings_relevant = _best_vec_sim >= _RELEVANCE_GATE
 
     if not _embeddings_relevant:
-        _resolved_intent = intent or "general"
         logger.info(
             f"RAG resolve: EMBEDDINGS MISS — best_sim={_best_vec_sim:.3f} < gate={_RELEVANCE_GATE} "
             f"→ outside syllabus, skipping RAG | intent: {_resolved_intent} | query: {query[:50]}"
@@ -1270,23 +1292,11 @@ async def resolve_rag_context(
             rag_ctx["source"] = "rag"
         logger.info(f"RAG resolve: vector hits={len(deduped)} (deduped from {len(vector_hits)}, best_sim={deduped[0]['score']:.3f}) | query: {query[:50]}" if deduped else f"RAG resolve: vector hits=0 (all deduped by content card)")
 
-    from prompts import ENRICHMENT_INTENTS
-    _resolved_intent = intent or "general"
-    if _resolved_intent in ENRICHMENT_INTENTS and rag_ctx.get("quality") in ("high", "medium", None, "none"):
-        _chapter_hint = ""
-        _chs = rag_ctx.get("chapters", [])
-        if _chs:
-            _chapter_hint = _chs[0].get("title", "")
-        enrichment = await _fetch_enrichment_blocks(
-            _resolved_intent,
-            subject_id=subject_id,
-            chapter_title=_chapter_hint,
-        )
-        if enrichment:
-            rag_ctx["enrichment_blocks"] = enrichment
-            if rag_ctx["quality"] == "none":
-                rag_ctx["quality"] = "high"
-                rag_ctx["source"] = "rag"
+    if _enrichment_result:
+        rag_ctx["enrichment_blocks"] = _enrichment_result
+        if rag_ctx["quality"] == "none":
+            rag_ctx["quality"] = "high"
+            rag_ctx["source"] = "rag"
 
     _final_quality = rag_ctx["quality"]
     rag_ctx["intent"] = _resolved_intent

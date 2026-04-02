@@ -47,10 +47,10 @@ def _invalidate_conv_cache(conv_id: str, uid: str):
 _rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=600)
 
 # Vector RAG cache — 300-second TTL (Gemini embed API calls are expensive to re-run)
-_vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=300)
+_vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
 
 # Content card cache — 180-second TTL (avoids duplicate seo_pages + chapters queries)
-_content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=180)
+_content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
 
 def _content_card_cache_key(query: str, subject_id: Optional[str], subject_name: Optional[str], intent: Optional[str] = None) -> str:
     raw = f"{query.strip().lower()}|{subject_id or ''}|{subject_name or ''}|{intent or ''}"
