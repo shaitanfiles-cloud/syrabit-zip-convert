@@ -133,37 +133,58 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     if subj_ctx:
         logger.info(f"Chat [NON-STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
 
-    # ── Fetch syllabus (subject → stream → board+class fallback) ────────────
     syllabus = None
     _sem_class_id = await _resolve_semester_class_id(msg.message, ctx_board_id) if ctx_board_id else None
     _syl_class_id = _sem_class_id or ctx_class_id
     if _sem_class_id:
         logger.info(f"Chat [NON-STREAM]: Semester override class_id={_sem_class_id} (from query)")
-    if ctx_board_id and _syl_class_id:
-        try:
-            if ctx_stream_id and msg.subject_id:
-                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0})
-                if syllabus:
-                    logger.info(f"Chat [NON-STREAM]: Subject syllabus loaded for {ctx_board_id}/{_syl_class_id}/{ctx_stream_id}/{msg.subject_id}")
-            if not syllabus and ctx_stream_id:
-                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id}, {"_id": 0})
-                if syllabus:
-                    logger.info(f"Chat [NON-STREAM]: Stream syllabus loaded for {ctx_board_id}/{_syl_class_id}/{ctx_stream_id}")
-            if not syllabus:
-                syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": {"$exists": False}}, {"_id": 0})
-                if not syllabus:
-                    syllabus = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id}, {"_id": 0})
-                if syllabus:
-                    logger.info(f"Chat [NON-STREAM]: Board+class syllabus loaded for {ctx_board_id}/{_syl_class_id}")
-        except Exception as e:
-            logger.error(f"Failed to fetch syllabus: {e}")
 
-    # ── Internal-content-first: MongoDB RAG → web fallback ──────────────
+    async def _ns_fetch_syllabus():
+        if not (ctx_board_id and _syl_class_id):
+            return None
+        _sck = _syllabus_cache_key(ctx_board_id, _syl_class_id, ctx_stream_id, msg.subject_id)
+        if _sck in _syllabus_cache:
+            return _syllabus_cache[_sck]
+        try:
+            queries = []
+            if ctx_stream_id and msg.subject_id:
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0}))
+            if ctx_stream_id:
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id}, {"_id": 0}))
+            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": {"$exists": False}}, {"_id": 0}))
+            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id}, {"_id": 0}))
+            results = await asyncio.gather(*queries, return_exceptions=True)
+            s = None
+            for r in results:
+                if r and not isinstance(r, Exception):
+                    s = r
+                    break
+            if s:
+                _syllabus_cache[_sck] = s
+            return s
+        except Exception:
+            return None
+
     _detected_intent = _classify_intent(msg.message)
     _is_casual_sync = _detected_intent == "casual"
 
     conv_id = msg.conversation_id
     user_id = user["id"] if user else None
+
+    async def _ns_fetch_search_scope():
+        if _is_casual_sync:
+            return "", None
+        return await build_search_scope(
+            msg.message,
+            board_name=ctx_board_name,
+            class_name=ctx_class_name,
+            subject_name=msg.subject_name or "",
+            embedder=_get_syllabus_embedder(),
+        )
+
+    syllabus, (_ns_scoped_query, _ns_route) = await asyncio.gather(
+        _ns_fetch_syllabus(), _ns_fetch_search_scope(),
+    )
 
     async def _safe_web_search(**kw):
         try:
@@ -186,18 +207,10 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
 
     if _is_casual_sync:
         web_results = []
-        _ns_route = None
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
         history_messages = await _ns_fetch_history()
     else:
-        _ns_scoped_query, _ns_route = await build_search_scope(
-            msg.message,
-            board_name=ctx_board_name,
-            class_name=ctx_class_name,
-            subject_name=msg.subject_name or "",
-            embedder=_get_syllabus_embedder(),
-        )
         rag_ctx, web_results, history_messages = await asyncio.gather(
             resolve_rag_context(
                 msg.message,
@@ -307,7 +320,10 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     _rag_subject_ids = list({s["id"] for s in rag_ctx.get("subjects", []) if s.get("id")})
     _rag_subject_names = list({s.get("name","") for s in rag_ctx.get("subjects", []) if s.get("name")})
     _src_sid = _rag_subject_ids[0] if _rag_subject_ids else msg.subject_id
-    _src_ctx = await _resolve_subject_context(_src_sid) if _src_sid else {}
+    if _src_sid and _src_sid == msg.subject_id and subj_ctx:
+        _src_ctx = subj_ctx
+    else:
+        _src_ctx = await _resolve_subject_context(_src_sid) if _src_sid else {}
     _src_board = _src_ctx.get("board_name") or ctx_board_name or ""
     _src_class = _src_ctx.get("class_name") or ctx_class_name or ""
     _src_stream = _src_ctx.get("stream_name") or ctx_stream_name or ""
@@ -515,22 +531,42 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
         if _sck in _syllabus_cache:
             return _syllabus_cache[_sck]
         try:
-            s = None
+            queries = []
             if ctx_stream_id and msg.subject_id:
-                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0})
-            if not s and ctx_stream_id:
-                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id}, {"_id": 0})
-            if not s:
-                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": {"$exists": False}}, {"_id": 0})
-            if not s:
-                s = await db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s}, {"_id": 0})
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0}))
+            if ctx_stream_id:
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id}, {"_id": 0}))
+            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": {"$exists": False}}, {"_id": 0}))
+            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s}, {"_id": 0}))
+            results = await asyncio.gather(*queries, return_exceptions=True)
+            s = None
+            for r in results:
+                if r and not isinstance(r, Exception):
+                    s = r
+                    break
             if s:
                 _syllabus_cache[_sck] = s
             return s
         except Exception:
             return None
 
-    document_text, syllabus = await asyncio.gather(_fetch_doc(), _fetch_syllabus())
+    _stream_intent = _classify_intent(msg.message)
+    _is_casual = _stream_intent == "casual"
+
+    async def _fetch_search_scope():
+        if _is_casual:
+            return "", None
+        return await build_search_scope(
+            msg.message,
+            board_name=ctx_board_name,
+            class_name=ctx_class_name,
+            subject_name=msg.subject_name or "",
+            embedder=_get_syllabus_embedder(),
+        )
+
+    document_text, syllabus, (_sr_scoped_query, _sr_route) = await asyncio.gather(
+        _fetch_doc(), _fetch_syllabus(), _fetch_search_scope(),
+    )
 
     # ── Phase 2: RAG + conversation history in parallel ───────────────────────
     async def _fetch_history():
@@ -538,23 +574,12 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
             return None
         return await supa_get_conversation(msg.conversation_id, user_id)
 
-    _stream_intent = _classify_intent(msg.message)
-    _is_casual = _stream_intent == "casual"
-
     if _is_casual:
         web_results = []
-        _sr_route = None
         raw_conv = await _fetch_history()
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
-        _sr_scoped_query, _sr_route = await build_search_scope(
-            msg.message,
-            board_name=ctx_board_name,
-            class_name=ctx_class_name,
-            subject_name=msg.subject_name or "",
-            embedder=_get_syllabus_embedder(),
-        )
         async def _safe_web_search_stream():
             try:
                 return await web_search_with_fallback(
@@ -688,7 +713,10 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
     rag_sources = _sources_from_rag_ctx(rag_ctx)
 
     _src_sid_s = rag_subject_id or msg.subject_id
-    _src_ctx_s = await _resolve_subject_context(_src_sid_s) if _src_sid_s else {}
+    if _src_sid_s and _src_sid_s == msg.subject_id and subj_ctx:
+        _src_ctx_s = subj_ctx
+    else:
+        _src_ctx_s = await _resolve_subject_context(_src_sid_s) if _src_sid_s else {}
     _src_board_s = _src_ctx_s.get("board_name") or ctx_board_name or ""
     _src_class_s = _src_ctx_s.get("class_name") or ctx_class_name or ""
     _src_stream_s = _src_ctx_s.get("stream_name") or ctx_stream_name or ""

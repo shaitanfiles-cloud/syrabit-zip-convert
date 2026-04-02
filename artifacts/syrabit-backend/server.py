@@ -210,7 +210,6 @@ async def lifespan(app):
             await db.chunks.create_index([("content", "text")], name="chunks_content_text")
         except Exception:
             pass
-
         await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
         await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
         await db.analytics.create_index("user_id")

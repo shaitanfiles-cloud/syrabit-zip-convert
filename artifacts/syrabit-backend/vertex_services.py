@@ -146,7 +146,22 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
     Uses gemini-embedding-001 (3072-dim) as primary model."""
     if not _ok() or not text:
         return None
+    try:
+        from cache import _embedding_cache, _embedding_cache_key
+        _ek = _embedding_cache_key(text, task_type)
+        if _ek in _embedding_cache:
+            return _embedding_cache[_ek]
+    except Exception:
+        _ek = None
     headers = await _auth_headers()
+
+    def _store_embed_cache(vec):
+        try:
+            if _ek and vec:
+                from cache import _embedding_cache
+                _embedding_cache[_ek] = vec
+        except Exception:
+            pass
 
     if _SA_CREDS is not None:
         url  = _embed_url()
@@ -158,7 +173,9 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
                     _mark_forbidden()
                     return None
                 r.raise_for_status()
-                return r.json()["predictions"][0]["embeddings"]["values"]
+                vec = r.json()["predictions"][0]["embeddings"]["values"]
+                _store_embed_cache(vec)
+                return vec
         except Exception as e:
             logger.warning(f"embed_text (Vertex) failed: {e}")
             return None
@@ -180,7 +197,9 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
                     logger.warning(f"embed_text: model {model} not found (404), trying next…")
                     continue
                 r.raise_for_status()
-                return r.json()["embedding"]["values"]
+                vec = r.json()["embedding"]["values"]
+                _store_embed_cache(vec)
+                return vec
         except Exception as e:
             logger.warning(f"embed_text ({model}) failed: {e}")
             continue

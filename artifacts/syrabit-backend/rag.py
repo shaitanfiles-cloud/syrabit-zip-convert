@@ -331,33 +331,48 @@ async def _fetch_content_card(
         ).sort([("score", {"$meta": "textScore"})]).limit(4).to_list(4)
 
         cms_filter: dict = {"status": "published", "content": {"$exists": True, "$ne": ""}}
-        cms_escaped_kw = "|".join(re.escape(k) for k in keywords)
-        cms_kw_or = [
-            {"content": {"$regex": cms_escaped_kw, "$options": "i"}},
-            {"title":   {"$regex": cms_escaped_kw, "$options": "i"}},
-            {"meta_description": {"$regex": cms_escaped_kw, "$options": "i"}},
-        ]
-        if subject_id:
-            cms_filter["$and"] = [
-                {"$or": [{"linked_subject_id": subject_id}, {"subject_id": subject_id}]},
-                {"$or": cms_kw_or},
-            ]
-        elif subject_name:
-            cms_filter["$and"] = [
-                {"$or": [
-                    {"linked_subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
-                    {"subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
-                ]},
-                {"$or": cms_kw_or},
-            ]
-        else:
-            cms_filter["$or"] = cms_kw_or
         _cms_proj = {
             "_id": 0, "title": 1, "content": 1, "seo_slug": 1,
             "category": 1, "linked_subject_name": 1, "linked_chapter_title": 1,
             "meta_description": 1,
         }
-        cms_task = db.cms_documents.find(cms_filter, _cms_proj).limit(4).to_list(4)
+
+        def _build_cms_regex_task():
+            _cms_regex_filter = dict(cms_filter)
+            cms_escaped_kw = "|".join(re.escape(k) for k in keywords)
+            cms_kw_or = [
+                {"content": {"$regex": cms_escaped_kw, "$options": "i"}},
+                {"title":   {"$regex": cms_escaped_kw, "$options": "i"}},
+                {"meta_description": {"$regex": cms_escaped_kw, "$options": "i"}},
+            ]
+            if subject_id:
+                _cms_regex_filter["$and"] = [
+                    {"$or": [{"linked_subject_id": subject_id}, {"subject_id": subject_id}]},
+                    {"$or": cms_kw_or},
+                ]
+            elif subject_name:
+                _cms_regex_filter["$and"] = [
+                    {"$or": [
+                        {"linked_subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
+                        {"subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
+                    ]},
+                    {"$or": cms_kw_or},
+                ]
+            else:
+                _cms_regex_filter["$or"] = cms_kw_or
+            return db.cms_documents.find(_cms_regex_filter, _cms_proj).limit(4).to_list(4)
+
+        cms_text_filter = dict(cms_filter)
+        cms_text_filter["$text"] = {"$search": search_str}
+        if subject_id:
+            cms_text_filter["$or"] = [{"linked_subject_id": subject_id}, {"subject_id": subject_id}]
+        elif subject_name:
+            cms_text_filter["$or"] = [
+                {"linked_subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
+                {"subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
+            ]
+        _cms_text_proj = {**_cms_proj, "score": {"$meta": "textScore"}}
+        cms_task = db.cms_documents.find(cms_text_filter, _cms_text_proj).sort([("score", {"$meta": "textScore"})]).limit(4).to_list(4)
 
         try:
             pages, chapter_pages, cms_pages = await asyncio.gather(seo_task, ch_task, cms_task)
@@ -381,7 +396,7 @@ async def _fetch_content_card(
             pages, chapter_pages, cms_pages = await asyncio.gather(
                 db.seo_pages.find(match_filter, regex_proj).limit(6).to_list(6),
                 db.chapters.find(ch_filter_fb, {"_id": 0, "title": 1, "content": 1, "subject_id": 1}).limit(4).to_list(4),
-                db.cms_documents.find(cms_filter, _cms_proj).limit(4).to_list(4),
+                _build_cms_regex_task(),
             )
 
         if not pages and not chapter_pages and not cms_pages:
@@ -573,35 +588,30 @@ async def vector_rag_search(
         if not query_vec:
             return []
 
-        # Build page filter
-        page_filter: dict = {"status": "published", "embedding": {"$exists": True}}
+        page_filter: dict = {"status": "published", "embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
         if subject_id:
             subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "slug": 1})
             if subj and subj.get("slug"):
                 page_filter["subject_slug"] = subj["slug"]
 
-        # Fetch candidates (limit high to allow good ranking)
-        pages = await db.seo_pages.find(
-            page_filter,
-            {"_id": 0, "topic_slug": 1, "content": 1, "topic_title": 1,
-             "chapter_title": 1, "page_type": 1, "embedding": 1},
-        ).limit(200).to_list(200)
+        _page_proj = {"_id": 0, "topic_slug": 1, "topic_title": 1,
+             "chapter_title": 1, "page_type": 1, "embedding": 1}
+        _ch_proj = {"_id": 0, "id": 1, "title": 1, "subject_id": 1, "embedding": 1}
+        _cms_proj = {"_id": 0, "seo_slug": 1, "title": 1, "category": 1, "embedding": 1}
 
         ch_filter: dict = {"embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
         if subject_id:
             ch_filter["subject_id"] = subject_id
-        chapters = await db.chapters.find(
-            ch_filter,
-            {"_id": 0, "id": 1, "title": 1, "content": 1, "subject_id": 1, "embedding": 1},
-        ).limit(100).to_list(100)
 
         cms_filter: dict = {"status": "published", "embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
         if subject_id:
             cms_filter["$or"] = [{"linked_subject_id": subject_id}, {"subject_id": subject_id}]
-        cms_docs = await db.cms_documents.find(
-            cms_filter,
-            {"_id": 0, "seo_slug": 1, "title": 1, "content": 1, "category": 1, "embedding": 1},
-        ).limit(100).to_list(100)
+
+        pages, chapters, cms_docs = await asyncio.gather(
+            db.seo_pages.find(page_filter, _page_proj).limit(50).to_list(50),
+            db.chapters.find(ch_filter, _ch_proj).limit(30).to_list(30),
+            db.cms_documents.find(cms_filter, _cms_proj).limit(20).to_list(20),
+        )
 
         scored = []
         q_dim = len(query_vec)
@@ -611,11 +621,10 @@ async def vector_rag_search(
                 sim = vertex_services.cosine_similarity(query_vec, vec)
                 slug = p.get("topic_slug", "")
                 title = p.get("topic_title") or p.get("chapter_title") or slug
-                content_snippet = _extract_relevant_sections(p.get("content", ""), [], max_chars=1500)
                 scored.append({
                     "slug":    slug,
                     "title":   title,
-                    "content": content_snippet,
+                    "content": title,
                     "score":   sim,
                     "source":  "page",
                     "page_type": p.get("page_type", ""),
@@ -624,11 +633,10 @@ async def vector_rag_search(
             vec = ch.get("embedding")
             if vec and len(vec) == q_dim:
                 sim = vertex_services.cosine_similarity(query_vec, vec)
-                content_snippet = _extract_relevant_sections(ch.get("content", ""), [], max_chars=1500)
                 scored.append({
                     "slug":    f"chapter/{ch.get('id', '')}",
                     "title":   ch.get("title", ""),
-                    "content": content_snippet,
+                    "content": ch.get("title", ""),
                     "score":   sim,
                     "source":  "chapter",
                 })
@@ -636,17 +644,45 @@ async def vector_rag_search(
             vec = cms.get("embedding")
             if vec and len(vec) == q_dim:
                 sim = vertex_services.cosine_similarity(query_vec, vec)
-                content_snippet = _extract_relevant_sections(cms.get("content", ""), [], max_chars=1500)
                 scored.append({
                     "slug":    cms.get("seo_slug", ""),
                     "title":   cms.get("title", ""),
-                    "content": content_snippet,
+                    "content": cms.get("title", ""),
                     "score":   sim,
                     "source":  "cms",
                 })
 
         scored.sort(key=lambda x: -x["score"])
         top = [r for r in scored if r["score"] >= _VECTOR_SIM_THRESHOLD][:top_k]
+
+        if top:
+            _content_fetch_tasks = []
+            _content_fetch_indices = []
+            for i, hit in enumerate(top):
+                if hit["source"] == "page":
+                    _page_q = {"topic_slug": hit["slug"], "status": "published"}
+                    if hit.get("page_type"):
+                        _page_q["page_type"] = hit["page_type"]
+                    _content_fetch_tasks.append(
+                        db.seo_pages.find_one(_page_q, {"_id": 0, "content": 1})
+                    )
+                    _content_fetch_indices.append(i)
+                elif hit["source"] == "chapter":
+                    _ch_id = hit["slug"].replace("chapter/", "")
+                    _content_fetch_tasks.append(
+                        db.chapters.find_one({"id": _ch_id}, {"_id": 0, "content": 1})
+                    )
+                    _content_fetch_indices.append(i)
+                elif hit["source"] == "cms":
+                    _content_fetch_tasks.append(
+                        db.cms_documents.find_one({"seo_slug": hit["slug"], "status": "published"}, {"_id": 0, "content": 1})
+                    )
+                    _content_fetch_indices.append(i)
+            if _content_fetch_tasks:
+                _fetched = await asyncio.gather(*_content_fetch_tasks, return_exceptions=True)
+                for idx, doc in zip(_content_fetch_indices, _fetched):
+                    if doc and not isinstance(doc, Exception) and doc.get("content"):
+                        top[idx]["content"] = _extract_relevant_sections(doc["content"], [], max_chars=1500)
         all_scores = [r["score"] for r in scored]
         below = sum(1 for s in all_scores if s < _VECTOR_SIM_THRESHOLD)
 
@@ -668,7 +704,7 @@ async def vector_rag_search(
                             top_k=_rerank_top_k,
                         ),
                     ),
-                    timeout=3.0,
+                    timeout=1.5,
                 )
                 _rerank_ms = (time.time() - _rerank_start) * 1000
                 reranked_top = []
@@ -685,7 +721,7 @@ async def vector_rag_search(
                 top = reranked_top
                 reranked = True
             except asyncio.TimeoutError:
-                logger.warning(f"Voyage rerank timed out after 3s (falling back to cosine): query='{query[:40]}'")
+                logger.warning(f"Voyage rerank timed out after 1.5s (falling back to cosine): query='{query[:40]}'")
             except Exception as _rerank_err:
                 logger.warning(f"Voyage rerank failed (falling back to cosine): {_rerank_err}")
 
@@ -726,39 +762,46 @@ async def rag_search(
             return {"chunks": [], "chapters": [], "subjects": [], "source": "none", "quality": "none"}
 
         kw_join = "|".join(keywords)
+        _text_search_str = " ".join(keywords)
         regex_parts = [{"content": {"$regex": kw, "$options": "i"}} for kw in keywords]
         ch_title_filter = {"$or": [{"title": {"$regex": kw, "$options": "i"}} for kw in keywords]}
 
         if subject_id:
-            # ── Fast path: subject is known — pre-fetch chapter IDs then run all 3 queries in parallel ──
             sub_chapters = await db.chapters.find(
                 {"subject_id": subject_id}, {"_id": 0, "id": 1}
             ).to_list(200)
             chapter_ids = [c["id"] for c in sub_chapters]
-            # Include PYQ chunks linked by subject_id directly (they use synthetic chapter IDs)
             pyq_branch: dict = {"$and": [{"subject_id": subject_id}, {"content_type": "pyq"}, {"$or": regex_parts}]}
-            if chapter_ids:
-                chunk_filter: dict = {"$or": [
-                    {"$and": [{"chapter_id": {"$in": chapter_ids}}, {"$or": regex_parts}]},
-                    pyq_branch,
-                ]}
-            else:
-                chunk_filter = {"$or": [{"$or": regex_parts}, pyq_branch]}
+
+            try:
+                _chunk_text_filter: dict = {"$text": {"$search": _text_search_str}}
+                if chapter_ids:
+                    _chunk_text_filter["$or"] = [{"chapter_id": {"$in": chapter_ids}}, {"subject_id": subject_id, "content_type": "pyq"}]
+                else:
+                    _chunk_text_filter["subject_id"] = subject_id
+                _chunk_proj_text = {"_id": 0, "score": {"$meta": "textScore"}, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1}
+                chunks = await db.chunks.find(_chunk_text_filter, _chunk_proj_text).sort([("score", {"$meta": "textScore"})]).limit(12).to_list(12)
+            except Exception:
+                if chapter_ids:
+                    chunk_filter: dict = {"$or": [
+                        {"$and": [{"chapter_id": {"$in": chapter_ids}}, {"$or": regex_parts}]},
+                        pyq_branch,
+                    ]}
+                else:
+                    chunk_filter = {"$or": [{"$or": regex_parts}, pyq_branch]}
+                chunks = await db.chunks.find(chunk_filter, {"_id": 0}).sort("priority", 1).limit(12).to_list(12)
+
             subj_kw_filter = {"id": subject_id}
-            # Fetch keyword-matching chapters AND all chapters for this subject
             ch_kw_filter = {"$and": [{"subject_id": subject_id}, ch_title_filter]}
             ch_all_filter = {"subject_id": subject_id}
 
-            chunks, subjects_found, chapters_kw, chapters_all = await asyncio.gather(
-                db.chunks.find(chunk_filter, {"_id": 0}).sort("priority", 1).limit(12).to_list(12),
+            subjects_found, chapters_kw, chapters_all = await asyncio.gather(
                 db.subjects.find(subj_kw_filter, {"_id": 0, "id": 1, "name": 1, "icon": 1, "gradient": 1}).limit(1).to_list(1),
                 db.chapters.find(ch_kw_filter, {"_id": 0, "title": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(8).to_list(8),
                 db.chapters.find(ch_all_filter, {"_id": 0, "title": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(25).to_list(25),
             )
-            # Use keyword-matching chapters when available; otherwise use the full chapter list
             chapters_found = chapters_kw if chapters_kw else chapters_all
         else:
-            # ── No subject: 3-way parallel search across name, chapters, and chunks ──
             subj_kw_filter = {"$or": [
                 {"name":        {"$regex": kw_join, "$options": "i"}},
                 {"description": {"$regex": kw_join, "$options": "i"}},
@@ -769,17 +812,23 @@ async def rag_search(
                     {"name": {"$regex": subject_name, "$options": "i"}, "status": "published"},
                 ]}
 
-            # Run 3 searches in parallel:
-            #   (1) subjects by name/desc/tags
-            #   (2) ALL chapters whose title matches keywords → backtrack to subject
-            #   (3) chunks whose content matches keywords → backtrack to subject via chapter_id
             _subj_proj = {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1, "icon": 1, "gradient": 1}
             _ch_proj   = {"_id": 0, "id": 1, "subject_id": 1, "title": 1, "description": 1, "order_index": 1}
-            chunks, subjects_by_name, chapters_by_title = await asyncio.gather(
-                db.chunks.find({"$or": regex_parts}, {"_id": 0}).sort("priority", 1).limit(15).to_list(15),
-                db.subjects.find(subj_kw_filter, _subj_proj).limit(55).to_list(55),
-                db.chapters.find(ch_title_filter, _ch_proj).sort("order_index", 1).limit(25).to_list(25),
-            )
+
+            try:
+                _chunk_text_filter_ns: dict = {"$text": {"$search": _text_search_str}}
+                _chunk_proj_ns = {"_id": 0, "score": {"$meta": "textScore"}, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1}
+                chunks, subjects_by_name, chapters_by_title = await asyncio.gather(
+                    db.chunks.find(_chunk_text_filter_ns, _chunk_proj_ns).sort([("score", {"$meta": "textScore"})]).limit(15).to_list(15),
+                    db.subjects.find(subj_kw_filter, _subj_proj).limit(55).to_list(55),
+                    db.chapters.find(ch_title_filter, _ch_proj).sort("order_index", 1).limit(25).to_list(25),
+                )
+            except Exception:
+                chunks, subjects_by_name, chapters_by_title = await asyncio.gather(
+                    db.chunks.find({"$or": regex_parts}, {"_id": 0}).sort("priority", 1).limit(15).to_list(15),
+                    db.subjects.find(subj_kw_filter, _subj_proj).limit(55).to_list(55),
+                    db.chapters.find(ch_title_filter, _ch_proj).sort("order_index", 1).limit(25).to_list(25),
+                )
 
             # ── Resolve chunks → parent subjects (via chapter_id) ─────────────────
             chunk_chapter_ids = list({c["chapter_id"] for c in chunks if c.get("chapter_id")})
@@ -1272,7 +1321,7 @@ async def _ddg_text_search(query: str, num_results: int) -> list:
         return results
     try:
         loop = asyncio.get_running_loop()
-        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=5.0)
+        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=2.0)
         logger.info(f"DDG text search: {len(results)} results | query: {query[:60]}")
         return results
     except Exception as exc:
@@ -1295,7 +1344,7 @@ async def _ddg_news_search(query: str, num_results: int) -> list:
         return results
     try:
         loop = asyncio.get_running_loop()
-        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=5.0)
+        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=2.0)
         logger.info(f"DDG news search: {len(results)} results | query: {query[:60]}")
         return results
     except Exception as exc:

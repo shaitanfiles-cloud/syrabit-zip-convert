@@ -70,6 +70,12 @@ def _vector_rag_cache_key(query: str, subject_id: Optional[str], top_k: int) -> 
     raw = f"{query.strip().lower()}|{subject_id or ''}|{top_k}"
     return hashlib.md5(raw.encode()).hexdigest()
 
+_embedding_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
+
+def _embedding_cache_key(text: str, task_type: str) -> str:
+    raw = f"{text[:200].strip().lower()}|{task_type}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
 REDIS_AI_CACHE_TTL = 3600
 REDIS_CASUAL_CACHE_TTL = 300
 REDIS_CHAT_CACHE_TTL = 600

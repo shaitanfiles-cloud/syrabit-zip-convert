@@ -450,26 +450,42 @@ async def supa_get_conversations(uid: str):
         return []
 
 async def supa_get_conversation(conv_id: str, uid: str):
-    # L1: in-memory cache (microseconds)
     _ck = _conv_cache_key(conv_id, uid)
     if _ck in _conv_cache:
         return _conv_cache[_ck]
-    # L2: Redis (if configured)
     cached = _redis_get_conversation(conv_id, uid)
     if cached:
         _conv_cache[_ck] = cached
         return cached
-    result = None
-    if _deps_mod.pg_pool:
+
+    async def _pg_fetch():
+        if not _deps_mod.pg_pool:
+            return None
         try:
             async with _deps_mod.pg_pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "SELECT * FROM conversations WHERE id = $1 AND user_id = $2 LIMIT 1",
                     conv_id, uid
                 )
-                result = _pg_row(row)
+                return _pg_row(row)
         except Exception as e:
             logger.warning(f"pg supa_get_conversation failed: {e}")
+            return None
+
+    async def _mongo_fetch():
+        try:
+            return await db.conversations.find_one({"id": conv_id, "user_id": uid}, {"_id": 0})
+        except Exception:
+            return None
+
+    import asyncio
+    pg_result, mongo_result = await asyncio.gather(_pg_fetch(), _mongo_fetch(), return_exceptions=True)
+    result = None
+    if pg_result and not isinstance(pg_result, Exception):
+        result = pg_result
+    elif mongo_result and not isinstance(mongo_result, Exception):
+        result = mongo_result
+
     if result is None and supa:
         try:
             r = await _supa(lambda: supa.table("conversations").select("*").eq("id", conv_id).eq("user_id", uid).limit(1).execute())
@@ -478,10 +494,6 @@ async def supa_get_conversation(conv_id: str, uid: str):
                 if isinstance(result.get("messages"), str):
                     try: result["messages"] = json.loads(result["messages"])
                     except: result["messages"] = []
-        except Exception: pass
-    if result is None:
-        try:
-            result = await db.conversations.find_one({"id": conv_id, "user_id": uid}, {"_id": 0})
         except Exception: pass
     if result:
         _conv_cache[_conv_cache_key(conv_id, uid)] = result
