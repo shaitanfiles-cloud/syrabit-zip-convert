@@ -179,7 +179,7 @@ _MODEL_PROVIDER_MAP = {
 
 # Map display-alias model names to the actual API model ID to send to the provider
 _MODEL_ALIAS_MAP = {
-    "openai/gpt-oss-20b":  "llama-3.3-70b-versatile",              # Groq (primary)
+    "openai/gpt-oss-20b":  "llama-3.1-8b-instant",                   # Groq highest TPS (~750 tok/s)
     "openai/gpt-oss-120b": "accounts/fireworks/models/gpt-oss-120b", # Fireworks
 }
 
@@ -196,16 +196,15 @@ _MODEL_ALIAS_MAP = {
 #  Bedrock     amazon.nova-micro-v1:0  — free tier: 30 RPM cap, lowest latency on Bedrock
 #                                        paid tier: 66.7 RPS / 33K TPS (no cap)
 _SLM_SLOT_CANDIDATES = [
-    # Gemini 2.5 Flash — primary: best accuracy + reasoning
+    # Groq 8b-instant — HIGHEST TPS (~750 tok/s), lowest latency
+    ("groq",        "llama-3.1-8b-instant",                              8),
+    ("groq:2",      "llama-3.1-8b-instant",                              8),
+    # Gemini 2.5 Flash — quality fallback
     ("gemini",      "gemini-2.5-flash",                                  6),
-    # Gemini key 2 (doubles rate limit capacity)
     ("gemini:2",    "gemini-2.5-flash",                                  6),
-    # Groq key 1 (rate-limited but fast when available)
-    ("groq",        "llama-3.3-70b-versatile",                           8),
-    ("groq",        "llama-3.1-8b-instant",                              4),
-    # Groq key 2 (doubles rate limit capacity)
-    ("groq:2",      "llama-3.3-70b-versatile",                           8),
-    ("groq:2",      "llama-3.1-8b-instant",                              4),
+    # Groq 70b — quality fallback when 8b slots busy
+    ("groq",        "llama-3.3-70b-versatile",                           4),
+    ("groq:2",      "llama-3.3-70b-versatile",                           4),
     # Sarvam — reliable fallback when Gemini/Groq are rate-limited
     ("sarvam",      "sarvam-m",                                          4),
     # Fireworks (currently suspended)

@@ -97,7 +97,7 @@ class LlmChat:
 
     async def _call_groq(self, messages: list) -> str:
         from groq import AsyncGroq
-        client = AsyncGroq(api_key=self.api_key)
+        client = AsyncGroq(api_key=self.api_key, max_retries=0, timeout=8.0)
         response = await client.chat.completions.create(
             model=self._model,
             messages=messages,
@@ -107,7 +107,7 @@ class LlmChat:
 
     async def _stream_groq(self, messages: list, max_tokens: int = 2048):
         from groq import AsyncGroq
-        client = AsyncGroq(api_key=self.api_key)
+        client = AsyncGroq(api_key=self.api_key, max_retries=0, timeout=8.0)
         stream = await client.chat.completions.create(
             model=self._model,
             messages=messages,
