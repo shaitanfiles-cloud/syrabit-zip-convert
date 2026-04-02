@@ -202,9 +202,9 @@ _SLM_SLOT_CANDIDATES = [
     # Groq key 2 (doubles rate limit capacity)
     ("groq:2",      "llama-3.3-70b-versatile",                           8),
     ("groq:2",      "llama-3.1-8b-instant",                              4),
-    # Emergent universal gateway fallback
-    ("emergent",    "gemini-2.5-flash",                                  4),
-    # Fireworks last (currently suspended)
+    # Sarvam — reliable fallback when Gemini/Groq are rate-limited
+    ("sarvam",      "sarvam-m",                                          4),
+    # Fireworks (currently suspended)
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
     ("bedrock",     "amazon.nova-micro-v1:0",                            2),
 ]
@@ -802,7 +802,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 continue
             except Exception as e:
                 err_str = str(e)
-                is_429 = "429" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower() or "throttl" in err_str.lower()
+                is_429 = "429" in err_str or "413" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower() or "throttl" in err_str.lower() or "too large" in err_str.lower()
                 is_403 = "403" in err_str or "forbidden" in err_str.lower() or "permission" in err_str.lower() or "unauthorized" in err_str.lower()
                 if is_429:
                     _slm_pool.mark_429(slot)
