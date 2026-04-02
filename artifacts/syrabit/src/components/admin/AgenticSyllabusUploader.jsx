@@ -117,6 +117,38 @@ function SubjectCard({ subj, isActive }) {
               <Globe size={9} style={{ display: 'inline', marginRight: 4 }} />{subj.geo_phrase}
             </div>
           )}
+          {subj.verification && (
+            <div style={{
+              marginTop: 8, padding: '8px 10px', borderRadius: 6,
+              background: subj.verification.fully_verified ? 'rgba(16,185,129,0.08)' : 'rgba(251,191,36,0.08)',
+              border: `1px solid ${subj.verification.fully_verified ? 'rgba(16,185,129,0.2)' : 'rgba(251,191,36,0.2)'}`,
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                {subj.verification.fully_verified
+                  ? <CheckCircle2 size={12} style={{ color: '#10b981' }} />
+                  : <AlertTriangle size={12} style={{ color: '#fbbf24' }} />
+                }
+                <span style={{ fontSize: 11, fontWeight: 600, color: subj.verification.fully_verified ? '#34d399' : '#fbbf24' }}>
+                  {subj.verification.passed}/{subj.verification.total} chapters verified
+                </span>
+              </div>
+              {!subj.verification.fully_verified && subj.verification.chapters && (
+                <div style={{ marginTop: 4 }}>
+                  {subj.verification.chapters.filter(c => !c.passed).map((fc, fi) => (
+                    <div key={fi} style={{ fontSize: 10, color: '#fbbf24', padding: '2px 0', display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <XCircle size={9} style={{ flexShrink: 0 }} />
+                      <span>{fc.title}</span>
+                      <span style={{ color: 'rgba(251,191,36,0.6)', marginLeft: 'auto', fontSize: 9 }}>
+                        {fc.is_placeholder ? 'placeholder' : fc.word_count < 500 ? `${fc.word_count}w` : ''}
+                        {!fc.has_chunks ? ' no-chunks' : ''}
+                        {!fc.has_embedding ? ' no-embed' : ''}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -333,6 +365,41 @@ export default function AgenticSyllabusUploader({ adminToken, onComplete }) {
               return copy;
             });
             break;
+
+          case 'subject_verification': {
+            const vColor = data.fully_verified ? '#34d399' : '#fbbf24';
+            const vIcon = data.fully_verified ? '✅' : '⚠️';
+            addLog(`   ${vIcon} Verification: ${data.passed}/${data.total} chapters passed${data.fully_verified ? '' : ' — some need review'}`, vColor);
+            if (!data.fully_verified && data.chapters) {
+              const failedChs = data.chapters.filter(c => !c.passed);
+              for (const fc of failedChs) {
+                const reasons = [];
+                if (fc.is_placeholder) reasons.push('placeholder content');
+                else if (fc.word_count < 500) reasons.push(`thin content (${fc.word_count} words)`);
+                if (!fc.has_chunks) reasons.push('missing chunks');
+                if (!fc.has_embedding) reasons.push('missing embedding');
+                if (fc.needs_review) reasons.push('needs review');
+                addLog(`      ⚠️  ${fc.title}: ${reasons.join(', ')}`, '#fbbf24');
+              }
+            }
+            setSubjects(prev => {
+              const copy = [...prev];
+              const idx = copy.findIndex(s => s.name === data.subject);
+              if (idx >= 0) {
+                copy[idx] = {
+                  ...copy[idx],
+                  verification: {
+                    passed: data.passed,
+                    total: data.total,
+                    fully_verified: data.fully_verified,
+                    chapters: data.chapters || [],
+                  },
+                };
+              }
+              return copy;
+            });
+            break;
+          }
 
           case 'subject_done':
             addLog(`   ✅ ${data.name} done — ${data.chapters_done} chapters, ${data.chunks_created} chunks${data.blog_drafts ? `, ${data.blog_drafts} blog drafts` : ''}`, '#34d399');

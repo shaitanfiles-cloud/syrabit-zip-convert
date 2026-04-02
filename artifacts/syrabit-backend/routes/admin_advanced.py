@@ -1351,6 +1351,135 @@ async def agentic_syllabus_run(
                     except Exception:
                         pass
 
+            chapter_tracking = {}
+            for ch_detail in chapter_details:
+                ch_t_lower = ch_detail["title"].lower().strip()
+                gen_entry = generated_contents.get(ch_t_lower, {})
+                ch_id = gen_entry.get("chapter_id", "")
+                ch_content = gen_entry.get("content", "")
+                chapter_tracking[ch_t_lower] = {
+                    "title": ch_detail["title"],
+                    "chapter_id": ch_id,
+                    "content": ch_content,
+                    "topics": ch_detail.get("topics", []),
+                }
+
+            # ── 2b-verify. Verification + retry pass ─────────────────────────
+            verification_results = []
+            for ch_key, ch_info in chapter_tracking.items():
+                ch_id = ch_info["chapter_id"]
+                ch_title = ch_info["title"]
+                ch_content = ch_info["content"]
+
+                ch_doc = await db.chapters.find_one({"id": ch_id}, {"_id": 0, "content": 1, "needs_review": 1}) if ch_id else None
+                actual_content = (ch_doc.get("content") or ch_content) if ch_doc else ch_content
+                word_count = len(actual_content.split()) if actual_content.strip() else 0
+                _has_placeholder_marker = bool(re.search(r'\*Content for .+ in .+\.\*', actual_content))
+                is_placeholder = word_count < 500 or _has_placeholder_marker
+
+                chunk_count = await db.chunks.count_documents({"chapter_id": ch_id}) if ch_id else 0
+                has_chunks = chunk_count > 0
+
+                embed_doc = await db.syllabus_embeddings.find_one({"chapter_id": ch_id}, {"_id": 1}) if ch_id else None
+                has_embedding = embed_doc is not None
+
+                needs_review = (ch_doc.get("needs_review", False)) if ch_doc else False
+                passed = (not is_placeholder) and has_chunks and has_embedding and (not needs_review)
+
+                verification_results.append({
+                    "title": ch_title,
+                    "chapter_id": ch_id,
+                    "word_count": word_count,
+                    "is_placeholder": is_placeholder,
+                    "has_chunks": has_chunks,
+                    "has_embedding": has_embedding,
+                    "needs_review": needs_review,
+                    "passed": passed,
+                })
+
+            failed_chapters = [v for v in verification_results if not v["passed"]]
+
+            for retry_round in range(2):
+                if not failed_chapters:
+                    break
+                for fc in list(failed_chapters):
+                    ch_title = fc["title"]
+                    ch_id = fc["chapter_id"]
+                    ch_info = chapter_tracking.get(ch_title.lower().strip(), {})
+                    ch_topics = ch_info.get("topics", [])
+
+                    _needs_content_regen = fc["word_count"] < 500 or fc.get("needs_review", False) or fc.get("is_placeholder", False)
+                    if _needs_content_regen:
+                        try:
+                            retry_content = await _agentic_generate_chapter_content(
+                                subject_name=subject_name,
+                                chapter_title=ch_title,
+                                topics=ch_topics or entry.topics[:8],
+                                board_semester=board_semester,
+                                board=board,
+                            )
+                            if retry_content and len(retry_content.split()) >= 500 and not re.search(r'\*Content for .+ in .+\.\*', retry_content):
+                                await db.chapters.update_one(
+                                    {"id": ch_id},
+                                    {"$set": {"content": retry_content, "needs_review": False, "updated_at": datetime.now(timezone.utc).isoformat()}}
+                                )
+                                fc["word_count"] = len(retry_content.split())
+                                fc["needs_review"] = False
+                                fc["is_placeholder"] = False
+                                generated_contents[ch_title.lower().strip()] = {"content": retry_content, "chapter_id": ch_id}
+                        except Exception:
+                            pass
+
+                    retry_content_src = generated_contents.get(ch_title.lower().strip(), {}).get("content", "")
+                    if not retry_content_src and ch_id:
+                        r_doc = await db.chapters.find_one({"id": ch_id}, {"_id": 0, "content": 1})
+                        retry_content_src = (r_doc.get("content") or "") if r_doc else ""
+
+                    if not fc["has_chunks"] and retry_content_src and ch_id:
+                        try:
+                            geo_tags = [board_disp, class_disp, subject_name, ch_title]
+                            chunk_ids = await auto_chunk_content(
+                                chapter_id=ch_id, content=retry_content_src,
+                                subject_id=subject_ids[0] if subject_ids else None,
+                                geo_tags=geo_tags, chapter_title=ch_title,
+                            )
+                            fc["has_chunks"] = len(chunk_ids) > 0
+                            chap_chunks_total += len(chunk_ids)
+                        except Exception:
+                            pass
+
+                    if not fc["has_embedding"] and retry_content_src and ch_id:
+                        try:
+                            embed_ok = await _embed_and_store_chapter(ch_id, retry_content_src, ch_title)
+                            if embed_ok:
+                                fc["has_embedding"] = True
+                                total_embedded += 1
+                                subject_embedded += 1
+                        except Exception:
+                            pass
+
+                    fc["passed"] = (fc["word_count"] >= 500) and (not fc.get("is_placeholder", False)) and fc["has_chunks"] and fc["has_embedding"] and (not fc.get("needs_review", False))
+
+                failed_chapters = [v for v in verification_results if not v["passed"]]
+
+            passed_count = sum(1 for v in verification_results if v["passed"])
+            total_v = len(verification_results)
+            fully_verified = passed_count == total_v
+
+            yield _sse("subject_verification", {
+                "subject": subject_name,
+                "passed": passed_count,
+                "total": total_v,
+                "fully_verified": fully_verified,
+                "chapters": [
+                    {"title": v["title"], "passed": v["passed"], "word_count": v["word_count"],
+                     "is_placeholder": v.get("is_placeholder", False),
+                     "has_chunks": v["has_chunks"], "has_embedding": v["has_embedding"],
+                     "needs_review": v.get("needs_review", False)}
+                    for v in verification_results
+                ],
+            })
+
             total_chapters_all += n_chapters
             total_chunks_all   += chap_chunks_total
 
@@ -1464,6 +1593,13 @@ async def agentic_syllabus_run(
                 "created_nodes":      created_nodes,
                 "source":             "agentic_import",
                 "status":             "agentic_complete",
+                "fully_verified":     fully_verified,
+                "verification_result": [
+                    {"title": v["title"], "chapter_id": v["chapter_id"], "passed": v["passed"],
+                     "word_count": v["word_count"], "has_chunks": v["has_chunks"],
+                     "has_embedding": v["has_embedding"], "needs_review": v.get("needs_review", False)}
+                    for v in verification_results
+                ],
                 "created_at":         now_iso,
             })
 
@@ -3514,12 +3650,12 @@ async def _pipeline_process_one_chapter(
         if generated_notes:
             try:
                 await auto_chunk_content(chapter_id=chapter_id, content=generated_notes, subject_id=subject_id)
-            except Exception:
-                pass
+            except Exception as chunk_err:
+                chapter_result["errors"].append(f"chunking: {str(chunk_err)[:60]}")
             try:
                 await _embed_and_store_chapter(chapter_id, generated_notes, chapter_title)
-            except Exception:
-                pass
+            except Exception as embed_err:
+                chapter_result["errors"].append(f"embedding: {str(embed_err)[:60]}")
 
         if topic_pyqs:
             try:
@@ -3718,6 +3854,136 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
             summary["total_pyq_pages"] += 1
         summary["blog_urls"].extend(outcome.get("blog_urls", []))
         summary["chapter_results"].append(r)
+
+    # ── Verification + retry pass ──────────────────────────────────────────
+    failed_ch_results = []
+    for ch_idx, outcome in enumerate(chapter_outcomes):
+        src_chapter = chapters[ch_idx] if ch_idx < len(chapters) else {}
+        src_ch_id = src_chapter.get("id", "")
+        src_ch_title = (src_chapter.get("title") or "").strip()
+
+        if isinstance(outcome, Exception):
+            failed_ch_results.append({
+                "chapter_id": src_ch_id, "chapter_title": src_ch_title,
+                "word_count": 0, "has_chunks": False, "has_embedding": False,
+                "errors": [f"exception: {str(outcome)[:120]}"],
+                "reason": "exception",
+            })
+            continue
+
+        r = outcome.get("result", {})
+        ch_id = r.get("chapter_id", "") or src_ch_id
+        ch_title = r.get("chapter_title", "") or src_ch_title
+
+        if not ch_id:
+            continue
+
+        ch_doc = await db.chapters.find_one({"id": ch_id}, {"_id": 0, "content": 1})
+        actual_content = (ch_doc.get("content") or "") if ch_doc else ""
+        word_count = len(actual_content.split()) if actual_content.strip() else 0
+        chunk_count = await db.chunks.count_documents({"chapter_id": ch_id})
+        embed_doc = await db.syllabus_embeddings.find_one({"chapter_id": ch_id}, {"_id": 1})
+
+        content_ok = word_count >= 500
+        chunks_ok = chunk_count > 0
+        embed_ok = embed_doc is not None
+
+        if not content_ok or not chunks_ok or not embed_ok:
+            failed_ch_results.append({
+                "chapter_id": ch_id, "chapter_title": ch_title,
+                "word_count": word_count, "has_chunks": chunks_ok, "has_embedding": embed_ok,
+                "errors": r.get("errors", []),
+                "reason": "incomplete",
+            })
+
+    if job_id and job_id in _pipeline_jobs:
+        _pipeline_jobs[job_id].update({"progress": 94, "message": f"Verification: {len(failed_ch_results)} chapter(s) need retry…"})
+
+    retry_successes = 0
+    for retry_round in range(2):
+        if not failed_ch_results:
+            break
+        still_failed = []
+        for fc in failed_ch_results:
+            ch_id = fc.get("chapter_id", "")
+            ch_title = fc.get("chapter_title", "")
+            if not ch_id:
+                still_failed.append(fc)
+                continue
+
+            chapter_doc = None
+            for ch in chapters:
+                if ch.get("id") == ch_id:
+                    chapter_doc = ch
+                    break
+            if not chapter_doc:
+                still_failed.append(fc)
+                continue
+
+            try:
+                retry_outcome = await _pipeline_process_one_chapter(
+                    chapter_doc,
+                    subject_id=subject_id, subject_name=subject_name,
+                    class_name=class_name, paper_type=paper_type,
+                    board_slug=board_slug, board_display=board_display,
+                    class_slug=class_slug,
+                    now_iso=now_iso, pyq_docs=pyq_docs,
+                    semaphore=asyncio.Semaphore(1), done_counter={"done": 0},
+                    total_chapters=1, job_id="",
+                    skip_existing=False,
+                )
+                if isinstance(retry_outcome, Exception) or retry_outcome.get("skipped"):
+                    still_failed.append(fc)
+                    continue
+
+                rr = retry_outcome.get("result", {})
+                r_ch_doc = await db.chapters.find_one({"id": ch_id}, {"_id": 0, "content": 1})
+                r_content = (r_ch_doc.get("content") or "") if r_ch_doc else ""
+                r_wc = len(r_content.split()) if r_content.strip() else 0
+                r_chunks = await db.chunks.count_documents({"chapter_id": ch_id})
+                r_embed = await db.syllabus_embeddings.find_one({"chapter_id": ch_id}, {"_id": 1})
+
+                if r_wc >= 500 and r_chunks > 0 and r_embed:
+                    retry_successes += 1
+                    rr_idx = next((i for i, cr in enumerate(summary["chapter_results"]) if cr.get("chapter_id") == ch_id), None)
+                    if rr_idx is not None:
+                        summary["chapter_results"][rr_idx] = rr
+                    else:
+                        summary["chapter_results"].append(rr)
+                else:
+                    fc["word_count"] = r_wc
+                    fc["has_chunks"] = r_chunks > 0
+                    fc["has_embedding"] = r_embed is not None
+                    retry_reasons = []
+                    if r_wc < 500:
+                        retry_reasons.append(f"content still thin ({r_wc} words)")
+                    if r_chunks == 0:
+                        retry_reasons.append("chunking still failed")
+                    if not r_embed:
+                        retry_reasons.append("embedding still missing")
+                    if retry_reasons:
+                        fc.setdefault("errors", []).append(f"retry-round-{retry_round+1}: {'; '.join(retry_reasons)}")
+                    still_failed.append(fc)
+            except Exception as retry_err:
+                fc.setdefault("errors", []).append(f"retry: {str(retry_err)[:80]}")
+                still_failed.append(fc)
+        failed_ch_results = still_failed
+
+    summary["failed_chapters"] = [
+        {"chapter_id": fc.get("chapter_id", ""), "chapter_title": fc.get("chapter_title", ""),
+         "word_count": fc.get("word_count", 0), "has_chunks": fc.get("has_chunks", False),
+         "has_embedding": fc.get("has_embedding", False), "errors": fc.get("errors", []),
+         "reason": fc.get("reason", "unknown")}
+        for fc in failed_ch_results
+    ]
+    summary["verification_status"] = "all_passed" if not failed_ch_results else "some_failed"
+    summary["retry_successes"] = retry_successes
+
+    if job_id and job_id in _pipeline_jobs:
+        _pipeline_jobs[job_id].update({
+            "verification_status": summary["verification_status"],
+            "failed_chapters": summary["failed_chapters"],
+        })
 
     _invalidate_content_cache("chapters")
 
