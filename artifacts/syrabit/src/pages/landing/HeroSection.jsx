@@ -58,7 +58,7 @@ export default function HeroSection() {
             className="mb-6"
             style={{ fontSize: 'clamp(2.5rem,6.5vw,5rem)', fontWeight: 900, lineHeight: 1.06, letterSpacing: '-0.03em' }}
           >
-            <span className="text-white">Educational Browser For </span>
+            <span className="text-white">AI Exam Prep That </span>
             <span style={{
               background: 'linear-gradient(135deg,#c4b5fd 0%,#a78bfa 40%,#7c3aed 80%)',
               WebkitBackgroundClip: 'text',
@@ -66,7 +66,7 @@ export default function HeroSection() {
               backgroundClip: 'text',
               filter: 'drop-shadow(0 0 30px rgba(139,92,246,0.30))',
             }}>
-              AssamBoard Students
+              Actually Works
             </span>
           </motion.h1>
 
