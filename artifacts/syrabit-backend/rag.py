@@ -1624,14 +1624,15 @@ def build_rag_system_prompt(
         if quality == "high":
             grounding += (
                 "\n\n---\n"
-                "**GROUNDING CONTEXT (Syrabit Library — Reference Base):**\n"
-                "The following content is from the student's curriculum database. "
-                "Use it as the factual base (50%) for your answer.\n\n"
+                "**GROUNDING CONTEXT (Syrabit Library — PRIMARY AUTHORITY):**\n"
+                "The following content is from the student's verified curriculum database. "
+                "This is your PRIMARY source of truth — use it as the foundation (80-90%) of your answer. "
+                "Only supplement with your own knowledge to explain, add examples, or fill minor gaps.\n\n"
             )
             if vector_hits:
                 grounding += "**[VECTOR SEARCH RESULTS — Semantically matched pages]:**\n\n"
-                _VH_CONTENT_LIMIT = 1200
-                _VH_MAX_HITS = 3
+                _VH_CONTENT_LIMIT = 2000
+                _VH_MAX_HITS = 4
                 for hit in vector_hits[:_VH_MAX_HITS]:
                     slug = hit.get("slug", "")
                     title = hit.get("title", slug)
@@ -1645,7 +1646,7 @@ def build_rag_system_prompt(
 
             if content_card:
                 grounding += f"**[CONTENT CARD — Full page content]:**\n{content_card}\n\n"
-            _chunk_limit = 2500 if _intent == "syllabus" else 1500
+            _chunk_limit = 3000 if _intent == "syllabus" else 2000
             for i, c in enumerate(chunks, 1):
                 title = c.get("content_type", "content").capitalize()
                 grounding += f"**[BLOCK {i} — {title}]:**\n{c.get('content', '')[:_chunk_limit]}\n\n"
@@ -1660,13 +1661,14 @@ def build_rag_system_prompt(
 
             grounding += (
                 "---\n"
-                "**ANSWER WEIGHTAGE (50/50 BALANCE):**\n"
-                "1. 50% RAG BASE: Use the grounding above as your factual base — definitions, formulas, key facts from the database.\n"
-                "2. 50% YOUR KNOWLEDGE + LOGIC: Draft the answer using your training knowledge — explanations, real-world examples, analogies, deeper context. Answer what the student actually needs.\n"
-                "3. Do NOT rigidly stick to curriculum — answer the student's actual question naturally and completely.\n"
-                "4. Structure: Direct answer → Explanation → Examples. Keep it concise and useful.\n"
-                "5. Do NOT add source citations inline — the system appends the SOURCE line automatically.\n"
-                "6. NEVER hallucinate or invent facts.*"
+                "**ANSWER RULES (RAG-FIRST):**\n"
+                "1. RAG IS PRIMARY (80-90%): Build your answer from the grounding context above — definitions, formulas, explanations, facts from the curriculum database. This is verified content.\n"
+                "2. YOUR KNOWLEDGE IS SUPPLEMENTARY (10-20%): Only use your own knowledge to explain concepts more clearly, add simple real-world examples, or bridge minor gaps in the grounding.\n"
+                "3. NEVER contradict the RAG content. If grounding says X, your answer must say X.\n"
+                "4. ADAPT to the student: Simplify language for board-exam students. Use analogies to make concepts click. Focus on what helps them understand and score well.\n"
+                "5. Structure: Direct answer → Explanation with examples → Key points to remember.\n"
+                "6. Do NOT add source citations inline — the system appends the SOURCE line automatically.\n"
+                "7. NEVER hallucinate or invent facts. When unsure, stick to what the grounding provides.*"
             )
 
         else:
@@ -1714,10 +1716,11 @@ def build_rag_system_prompt(
 
             grounding += (
                 "\n---\n"
-                "**ANSWER WEIGHTAGE (50/50 BALANCE):**\n"
-                f"1. 50% RAG BASE: Use the {_curriculum_label} context above as reference.\n"
-                "2. 50% YOUR KNOWLEDGE + LOGIC: Answer the student's question using your training knowledge. Do NOT rigidly stick to curriculum — be helpful and complete.\n"
-                "Blend both sources naturally. Keep it concise and directly useful.*"
+                "**ANSWER RULES (RAG-FIRST):**\n"
+                f"1. RAG IS PRIMARY: Use the {_curriculum_label} metadata above as your factual anchor — subject structure, chapter topics, definitions.\n"
+                "2. SUPPLEMENT WITH YOUR KNOWLEDGE: Add explanations, examples, and clarity. But always stay consistent with the curriculum context above.\n"
+                "3. ADAPT to the student: Use simple language, relatable examples, and focus on what helps them understand and score well.\n"
+                "4. Do NOT add source citations inline. NEVER hallucinate or invent facts.*"
             )
 
     # ── Live Web Search Results — EQUAL WEIGHTAGE with RAG ──────────────────
@@ -1730,10 +1733,10 @@ def build_rag_system_prompt(
 
         if _has_internal:
             web_block += (
-                "**WEB SEARCH — POLISH LAYER (equal weight with RAG above):**\n"
-                "RAG content above is the BASE (50%). These web results are the POLISH (50%). "
-                "Use web results to add depth, real-world examples, recent context, and completeness. "
-                "Blend both naturally into one cohesive answer.\n\n"
+                "**WEB SEARCH — SUPPLEMENTARY CONTEXT (secondary to RAG):**\n"
+                "RAG content above is your PRIMARY source (80-90%). These web results are SUPPLEMENTARY. "
+                "Only use web results to add real-world examples, recent updates, or fill gaps NOT covered by RAG. "
+                "NEVER let web results override or contradict the RAG grounding.\n\n"
             )
         else:
             web_block += (
@@ -1761,10 +1764,11 @@ def build_rag_system_prompt(
         if _has_internal:
             web_block += (
                 "---\n"
-                "**BLENDING INSTRUCTION (RAG + WEB = EQUAL):**\n"
-                "*RAG content = factual base (definitions, formulas, curriculum facts). "
-                "Web results = polish (depth, examples, modern context, completeness). "
-                "Merge both into one natural answer. Do not add source citations inline — the system appends SOURCE automatically. "
+                "**BLENDING INSTRUCTION (RAG DOMINANT):**\n"
+                "*RAG content = PRIMARY authority (80-90%) — definitions, formulas, curriculum facts. "
+                "Web results = supplementary only (10-20%) — examples, recent context. "
+                "If web contradicts RAG, trust RAG. Build the answer from RAG first, then sprinkle web insights. "
+                "Do not add source citations inline — the system appends SOURCE automatically. "
                 "NEVER hallucinate or invent facts.*\n"
             )
         else:
