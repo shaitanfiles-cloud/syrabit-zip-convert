@@ -17,6 +17,10 @@ class UserLogin(BaseModel):
     password: str
 
 
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+
 class UserOut(BaseModel):
     id: str
     name: str

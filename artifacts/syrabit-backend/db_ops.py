@@ -53,7 +53,8 @@ def _pg_user_cols():
               document_access, onboarding_done, is_admin, status, bio, phone,
               avatar_url, saved_subjects::text, has_free_credits_issued,
               board_id, board_name, class_id, class_name, stream_id, stream_name,
-              credits_used_today, credits_reset_date, created_at"""
+              credits_used_today, credits_reset_date, created_at,
+              google_id, auth_provider"""
 
 # ── Supabase mirror helper ────────────────────────────────────────────────────
 def _supa_mirror(fn):
@@ -149,9 +150,10 @@ async def supa_insert_user(user: dict):
                        credits_limit, document_access, onboarding_done, is_admin, status,
                        bio, phone, avatar_url, saved_subjects, has_free_credits_issued,
                        board_id, board_name, class_id, class_name, stream_id, stream_name,
-                       referred_by_code, referred_by_user_id, created_at)
+                       referred_by_code, referred_by_user_id, created_at,
+                       google_id, auth_provider)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,
-                               $17,$18,$19,$20,$21,$22,$23,$24,$25)
+                               $17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
                        ON CONFLICT (id) DO NOTHING""",
                     user.get("id",""), user.get("name",""), user.get("email",""),
                     user.get("password_hash",""), user.get("plan","free"),
@@ -164,7 +166,8 @@ async def supa_insert_user(user: dict):
                     user.get("class_id"), user.get("class_name"),
                     user.get("stream_id"), user.get("stream_name"),
                     user.get("referred_by_code"), user.get("referred_by_user_id"),
-                    user.get("created_at","")
+                    user.get("created_at",""),
+                    user.get("google_id"), user.get("auth_provider"),
                 )
             _supa_mirror(lambda: supa.table("users").upsert(user).execute())
             return
@@ -187,6 +190,7 @@ _ALLOWED_USER_COLUMNS = frozenset({
     "board_id", "board_name", "class_id", "class_name",
     "stream_id", "stream_name",
     "referred_by_code", "referred_by_user_id",
+    "google_id", "auth_provider",
 })
 
 _ALLOWED_CONV_COLUMNS = frozenset({

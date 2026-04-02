@@ -47,7 +47,7 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 ## External Dependencies
 
 - **Databases:** PostgreSQL (for users/auth) and MongoDB (for content/RAG).
-- **Authentication:** Supabase (mirror for PostgreSQL).
+- **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers, Google OAuth (Sign In with Google via GIS library, server-side ID token verification via `google-auth`).
 - **Caching:** Redis (distributed cache) and in-memory caching.
 - **LLM Providers (SLM pool):** Fireworks (deepseek-v3p2), Groq (llama-3.1-8b-instant, llama-3.3-70b-versatile), Cerebras (llama3.1-8b), Google Gemini (gemini-2.5-flash, Gemini Vision, gemini-embedding-001), Sarvam (sarvam-m), OpenRouter (deepseek-chat-v3-0324).
 - **Cloudflare AI Gateway:** Routes LLM traffic, provides caching, analytics, and graceful degradation.
@@ -61,3 +61,19 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm.
 - **Containerization:** Docker.
+
+## Cloudflare Deployment Configuration
+
+When deploying the frontend on Cloudflare Pages with the backend on Replit, set these environment variables on the backend:
+
+- `COOKIE_DOMAIN` — e.g., `.syrabit.ai` (leading dot for subdomain sharing). Leave unset in dev.
+- `PRODUCTION_ORIGINS` — e.g., `https://syrabit.ai,https://www.syrabit.ai`. Appended to CORS origins automatically.
+- `VITE_BACKEND_URL` — Set on the frontend build to point to the Replit backend URL.
+- `GOOGLE_CLIENT_ID` — Google OAuth Client ID (backend, required for Google sign-in).
+- `GOOGLE_CLIENT_SECRET` — Google OAuth Client Secret (backend, optional — only needed if using authorization code flow).
+
+All frontend files use a single centralized `API_BASE` from `utils/api.jsx`. No local API base definitions.
+
+## Google OAuth
+
+Google Sign-In is integrated on both Login and Signup pages. The frontend dynamically fetches the Google Client ID from `GET /api/auth/google/client-id`. If `GOOGLE_CLIENT_ID` is not set, the Google button is hidden. The backend endpoint `POST /api/auth/google` verifies the ID token server-side using `google.oauth2.id_token.verify_oauth2_token`, then finds or creates the user. Users who sign up via Google get `auth_provider: "google"` and `google_id` fields set on their user record. Existing email/password users who sign in with Google get their Google ID linked automatically. Google-only users (empty `password_hash`) can set a password via the "Forgot password" flow.

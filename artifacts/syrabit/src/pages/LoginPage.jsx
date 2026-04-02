@@ -6,6 +6,7 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
+import GoogleSignInButton from '@/components/GoogleSignInButton';
 
 const BENEFITS = [
   {
@@ -196,6 +197,8 @@ export default function LoginPage() {
                 {error}
               </div>
             )}
+
+            <GoogleSignInButton mode="login" />
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">

@@ -214,6 +214,14 @@ async def _init_pg_pool():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_user_id TEXT")
             except Exception:
                 pass
+            try:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS google_id TEXT")
+            except Exception:
+                pass
+            try:
+                await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT")
+            except Exception:
+                pass
         logging.getLogger(__name__).info("Replit PostgreSQL pool ready — tables created/verified")
     except Exception as _pg_err:
         pg_pool = None

@@ -89,6 +89,19 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
+  const googleLogin = async (credential) => {
+    const res = await axios.post(`${API_BASE}/auth/google`, { credential }, { withCredentials: true });
+    const { user: userData, access_token } = res.data;
+    if (access_token) _storeToken(access_token);
+    justAuthenticated.current = true;
+    setUser(userData);
+    try {
+      const { Analytics } = await import('@/utils/analytics');
+      Analytics.login(userData.id, userData.email);
+    } catch {}
+    return userData;
+  };
+
   const logout = async () => {
     try {
       await axios.post(`${API_BASE}/auth/logout`, {}, { withCredentials: true });
@@ -117,6 +130,7 @@ export const AuthProvider = ({ children }) => {
       loading,
       login,
       signup,
+      googleLogin,
       logout,
       refreshUser,
       updateUser,
