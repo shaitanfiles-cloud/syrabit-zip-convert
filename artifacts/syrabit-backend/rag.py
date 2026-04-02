@@ -361,7 +361,9 @@ async def _fetch_content_card(
                     {"$or": cms_kw_or},
                 ]
             else:
-                _cms_regex_filter["$or"] = cms_kw_or
+                async def _empty():
+                    return []
+                return _empty()
             return db.cms_documents.find(_cms_regex_filter, _cms_proj).limit(4).to_list(4)
 
         cms_text_filter = dict(cms_filter)
@@ -373,8 +375,14 @@ async def _fetch_content_card(
                 {"linked_subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
                 {"subject_name": {"$regex": re.escape(subject_name), "$options": "i"}},
             ]
+
         _cms_text_proj = {**_cms_proj, "score": {"$meta": "textScore"}}
-        cms_task = db.cms_documents.find(cms_text_filter, _cms_text_proj).sort([("score", {"$meta": "textScore"})]).limit(4).to_list(4)
+        if subject_id or subject_name:
+            cms_task = db.cms_documents.find(cms_text_filter, _cms_text_proj).sort([("score", {"$meta": "textScore"})]).limit(4).to_list(4)
+        else:
+            async def _empty_cms():
+                return []
+            cms_task = _empty_cms()
 
         try:
             pages, chapter_pages, cms_pages = await asyncio.gather(seo_task, ch_task, cms_task)
@@ -591,15 +599,16 @@ async def vector_rag_search(
             return []
 
         page_filter: dict = {"status": "published", "embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
+        subj = None
         if subject_id:
             subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "slug": 1})
             if subj and subj.get("slug"):
                 page_filter["subject_slug"] = subj["slug"]
 
         _page_proj = {"_id": 0, "topic_slug": 1, "topic_title": 1,
-             "chapter_title": 1, "page_type": 1, "embedding": 1}
+             "chapter_title": 1, "page_type": 1, "embedding": 1, "subject_slug": 1}
         _ch_proj = {"_id": 0, "id": 1, "title": 1, "subject_id": 1, "embedding": 1}
-        _cms_proj = {"_id": 0, "seo_slug": 1, "title": 1, "category": 1, "embedding": 1}
+        _cms_proj = {"_id": 0, "seo_slug": 1, "title": 1, "category": 1, "embedding": 1, "linked_subject_id": 1, "subject_id": 1}
 
         ch_filter: dict = {"embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
         if subject_id:
@@ -617,12 +626,17 @@ async def vector_rag_search(
 
         scored = []
         q_dim = len(query_vec)
+        _subj_slug_to_id = {}
+        if subj and subj.get("slug"):
+            _subj_slug_to_id[subj["slug"]] = subject_id
+
         for p in pages:
             vec = p.get("embedding")
             if vec and len(vec) == q_dim:
                 sim = vertex_services.cosine_similarity(query_vec, vec)
                 slug = p.get("topic_slug", "")
                 title = p.get("topic_title") or p.get("chapter_title") or slug
+                _p_subj_slug = p.get("subject_slug", "")
                 scored.append({
                     "slug":    slug,
                     "title":   title,
@@ -630,6 +644,7 @@ async def vector_rag_search(
                     "score":   sim,
                     "source":  "page",
                     "page_type": p.get("page_type", ""),
+                    "subject_id": _subj_slug_to_id.get(_p_subj_slug, ""),
                 })
         for ch in chapters:
             vec = ch.get("embedding")
@@ -641,6 +656,7 @@ async def vector_rag_search(
                     "content": ch.get("title", ""),
                     "score":   sim,
                     "source":  "chapter",
+                    "subject_id": ch.get("subject_id", ""),
                 })
         for cms in cms_docs:
             vec = cms.get("embedding")
@@ -652,6 +668,7 @@ async def vector_rag_search(
                     "content": cms.get("title", ""),
                     "score":   sim,
                     "source":  "cms",
+                    "subject_id": cms.get("linked_subject_id") or cms.get("subject_id", ""),
                 })
 
         scored.sort(key=lambda x: -x["score"])
@@ -1547,6 +1564,10 @@ def build_rag_system_prompt(
     subjects    = rag_context.get("subjects", [])
     document_text = rag_context.get("document_text", "")
     vector_hits = rag_context.get("vector_hits", [])
+
+    _ctx_subject_id = (context.get("subject_id") or "").strip()
+    if _ctx_subject_id and vector_hits:
+        vector_hits = [h for h in vector_hits if not h.get("subject_id") or h["subject_id"] == _ctx_subject_id]
     _board_raw = (context.get("board_name", "") or "").strip().upper()
     _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard"
     _curriculum_label = f"{_board_label} Curriculum"

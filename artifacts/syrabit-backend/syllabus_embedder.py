@@ -50,7 +50,9 @@ def _safe_float_env(name: str, default: float) -> float:
         return default
 
 
-SIMILARITY_THRESHOLD = _safe_float_env("SYLLABUS_CLASSIFY_THRESHOLD", 0.65)
+SIMILARITY_THRESHOLD = _safe_float_env("SYLLABUS_CLASSIFY_THRESHOLD", 0.75)
+SUBJECT_MATCH_BONUS = _safe_float_env("SYLLABUS_SUBJECT_MATCH_BONUS", 0.05)
+SUBJECT_MISMATCH_PENALTY = _safe_float_env("SYLLABUS_SUBJECT_MISMATCH_PENALTY", 0.08)
 
 
 @dataclass
@@ -164,7 +166,7 @@ class SyllabusEmbedder:
             self._seeded = True
         return inserted
 
-    async def classify(self, query: str) -> Optional[SyllabusMatch]:
+    async def classify(self, query: str, subject_id: Optional[str] = None) -> Optional[SyllabusMatch]:
         try:
             from vertex_services import embed_text, cosine_similarity
         except ImportError:
@@ -192,6 +194,12 @@ class SyllabusEmbedder:
             if not vec:
                 continue
             score = cosine_similarity(q_vec, vec)
+            if subject_id:
+                entry_sid = entry.get("subject_id", "")
+                if entry_sid == subject_id:
+                    score += SUBJECT_MATCH_BONUS
+                elif entry_sid:
+                    score -= SUBJECT_MISMATCH_PENALTY
             scored.append((score, entry))
 
         scored.sort(key=lambda x: -x[0])
