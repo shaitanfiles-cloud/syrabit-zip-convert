@@ -260,6 +260,14 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         }
         await supa_upsert_conversation(conv_doc)
 
+    _MAX_PROMPT_CHARS_NS = 100_000
+    _total_chars_ns = len(system_prompt) + sum(len(m.get("content", "")) for m in history_messages) + len(msg.message)
+    if _total_chars_ns > _MAX_PROMPT_CHARS_NS:
+        _overhead_ns = len(system_prompt) - (_total_chars_ns - _MAX_PROMPT_CHARS_NS)
+        if _overhead_ns > 2000:
+            system_prompt = system_prompt[:_overhead_ns]
+            logger.warning(f"[CHAT] System prompt truncated from {_total_chars_ns} to ~{_MAX_PROMPT_CHARS_NS} chars to fit provider limits")
+
     messages = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 
     # ── Cache check (Non-streaming) — Redis first, in-memory fallback ───────
@@ -629,6 +637,14 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         asyncio.create_task(supa_upsert_conversation(conv_doc))
+
+    _MAX_PROMPT_CHARS = 100_000
+    _total_chars = len(system_prompt) + sum(len(m.get("content", "")) for m in history_messages) + len(msg.message)
+    if _total_chars > _MAX_PROMPT_CHARS:
+        _overhead = len(system_prompt) - (_total_chars - _MAX_PROMPT_CHARS)
+        if _overhead > 2000:
+            system_prompt = system_prompt[:_overhead]
+            logger.warning(f"[STREAM] System prompt truncated from {_total_chars} to ~{_MAX_PROMPT_CHARS} chars to fit provider limits")
 
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 

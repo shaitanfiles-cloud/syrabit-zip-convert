@@ -1559,13 +1559,16 @@ def build_rag_system_prompt(
                 "Answer the question directly from this content. "
                 "Quote verbatim where possible.\n\n"
             )
-            # Vector hits — highest confidence (semantic similarity ranked)
             if vector_hits:
                 grounding += "**[VECTOR SEARCH RESULTS — Semantically matched pages]:**\n\n"
-                for hit in vector_hits:
+                _VH_CONTENT_LIMIT = 2000
+                _VH_MAX_HITS = 5
+                for hit in vector_hits[:_VH_MAX_HITS]:
                     slug = hit.get("slug", "")
                     title = hit.get("title", slug)
                     content = hit.get("content", "")
+                    if len(content) > _VH_CONTENT_LIMIT:
+                        content = content[:_VH_CONTENT_LIMIT] + "…"
                     score = hit.get("score", 0)
                     _pt = hit.get("page_type", "")
                     _pt_label = f" | type={_pt}" if _pt else ""
