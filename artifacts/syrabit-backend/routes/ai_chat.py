@@ -638,13 +638,22 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         }
         asyncio.create_task(supa_upsert_conversation(conv_doc))
 
-    _MAX_PROMPT_CHARS = 100_000
-    _total_chars = len(system_prompt) + sum(len(m.get("content", "")) for m in history_messages) + len(msg.message)
+    _MAX_PROMPT_CHARS = 24_000
+    _sys_len = len(system_prompt)
+    _hist_len = sum(len(m.get("content", "")) for m in history_messages)
+    _user_len = len(msg.message)
+    _total_chars = _sys_len + _hist_len + _user_len
+    logger.info(f"[STREAM] Payload chars: system={_sys_len}, history={_hist_len} ({len(history_messages)} msgs), user={_user_len}, total={_total_chars}")
     if _total_chars > _MAX_PROMPT_CHARS:
-        _overhead = len(system_prompt) - (_total_chars - _MAX_PROMPT_CHARS)
-        if _overhead > 2000:
-            system_prompt = system_prompt[:_overhead]
-            logger.warning(f"[STREAM] System prompt truncated from {_total_chars} to ~{_MAX_PROMPT_CHARS} chars to fit provider limits")
+        _target_sys = max(2000, _MAX_PROMPT_CHARS - _hist_len - _user_len)
+        if _sys_len > _target_sys:
+            system_prompt = system_prompt[:_target_sys]
+            logger.warning(f"[STREAM] System prompt truncated: {_sys_len} → {_target_sys} chars (total was {_total_chars})")
+        _total_chars = len(system_prompt) + _hist_len + _user_len
+        if _total_chars > _MAX_PROMPT_CHARS and history_messages:
+            history_messages = history_messages[-4:]
+            _hist_len = sum(len(m.get("content", "")) for m in history_messages)
+            logger.warning(f"[STREAM] History trimmed to last 4 messages ({_hist_len} chars)")
 
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 

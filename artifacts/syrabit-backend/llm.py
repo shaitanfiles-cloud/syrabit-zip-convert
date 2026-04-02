@@ -1,5 +1,16 @@
 """Syrabit.ai — LLM infrastructure: batching, smart key pool, streaming."""
 import os, re, json, asyncio, uuid, time, logging
+
+_MODEL_MAX_OUTPUT_TOKENS = {
+    "llama-3.1-8b-instant": 8192,
+    "llama-3.3-70b-versatile": 32768,
+    "gemini-2.5-flash": 65536,
+    "gemini-2.0-flash": 8192,
+}
+
+def _clamp_max_tokens(model: str, max_tokens: int) -> int:
+    cap = _MODEL_MAX_OUTPUT_TOKENS.get(model)
+    return min(max_tokens, cap) if cap else max_tokens
 from typing import Dict, Optional
 from fastapi import HTTPException
 from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -348,6 +359,7 @@ async def _call_emergent(messages: list, api_key: str, model: str, max_tokens: i
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
 async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
+    max_tokens = _clamp_max_tokens(model, max_tokens)
     if provider == "sarvam":
         return await _call_sarvam_llm(messages, api_key, model, max_tokens)
     if provider == "gemini":
@@ -723,29 +735,30 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
     async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
         """Yield raw tokens from a provider. Raises on failure."""
+        _mt = _clamp_max_tokens(p_model, max_tokens)
         if p_name == "sarvam":
-            async for token in _stream_sarvam(messages, p_key, p_model, max_tokens):
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt):
                 yield token
         elif p_name == "gemini":
             logger.info(f"LLM stream: provider=gemini, model={p_model}")
-            async for token in _stream_gemini(messages, p_key, p_model, max_tokens):
+            async for token in _stream_gemini(messages, p_key, p_model, _mt):
                 yield token
         elif p_name == "emergent":
             logger.info(f"LLM stream: provider=emergent, model={p_model}")
-            async for token in _stream_emergent(messages, p_key, p_model, max_tokens):
+            async for token in _stream_emergent(messages, p_key, p_model, _mt):
                 yield token
         elif p_name == "xai":
             logger.info(f"LLM stream: provider=xai, model={p_model}")
-            async for token in _stream_xai(messages, p_key, p_model, max_tokens):
+            async for token in _stream_xai(messages, p_key, p_model, _mt):
                 yield token
         elif p_name == "bedrock":
             logger.info(f"LLM stream: provider=bedrock, model={p_model}")
-            async for token in _stream_bedrock(messages, p_model, max_tokens):
+            async for token in _stream_bedrock(messages, p_model, _mt):
                 yield token
         else:
             logger.info(f"LLM stream: provider={p_name}, model={p_model}")
             chat = LlmChat(api_key=p_key or OPENAI_API_KEY, session_id=str(uuid.uuid4())).with_model(p_name, p_model)
-            async for token in chat.stream_messages(messages, max_tokens=max_tokens):
+            async for token in chat.stream_messages(messages, max_tokens=_mt):
                 yield token
 
     # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
