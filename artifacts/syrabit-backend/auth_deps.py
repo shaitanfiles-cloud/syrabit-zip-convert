@@ -2,7 +2,7 @@
 import time, asyncio, logging
 from typing import Optional, List, Dict
 from datetime import datetime, timezone, timedelta
-from fastapi import Depends, HTTPException, Cookie
+from fastapi import Depends, HTTPException, Cookie, Request
 from fastapi.security import HTTPAuthorizationCredentials
 import jwt
 from jwt.exceptions import PyJWTError as JWTError
@@ -126,7 +126,13 @@ async def get_current_user_optional(
         if not user_id:
             return None
         cached = _redis_get_session(user_id)
-        user = cached if cached else await supa_get_user_by_id(user_id)
+        if cached:
+            user = cached
+        else:
+            from db_ops import supa_get_user_by_id
+            user = await supa_get_user_by_id(user_id)
+            if user:
+                _redis_cache_session(user_id, user)
         if user and "role" not in user:
             user["role"] = "admin" if user.get("is_admin") else "student"
         return user if user and user.get("status") not in ["banned", "suspended"] else None
@@ -203,3 +209,30 @@ async def rate_limit_chat(user: dict = Depends(get_current_user)):
             headers={"Retry-After": "60", "X-RateLimit-Limit": str(limit)},
         )
     return user
+
+async def rate_limit_chat_optional(
+    request: Request,
+    user: Optional[dict] = Depends(get_current_user_optional),
+):
+    """Like rate_limit_chat but allows anonymous users with IP-based rate limiting."""
+    if user:
+        user_id = user.get("id", "anonymous")
+        plan = user.get("plan", "free")
+        plan_cfg = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+        limit = plan_cfg["req_per_min"]
+        if not check_rate_limit(f"chat:{user_id}", max_requests=limit, window_seconds=60):
+            raise HTTPException(
+                status_code=429,
+                detail=f"Chat rate limit exceeded — {limit} messages/minute ({plan} plan). Upgrade for higher limits.",
+                headers={"Retry-After": "60", "X-RateLimit-Limit": str(limit)},
+            )
+        return user
+    ip = (request.client.host if request.client else None) or request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "unknown"
+    free_cfg = PLAN_LIMITS["free"]
+    if not check_rate_limit(f"chat:ip:{ip}", max_requests=free_cfg["req_per_min"], window_seconds=60):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded. Sign in for higher limits.",
+            headers={"Retry-After": "60"},
+        )
+    return None

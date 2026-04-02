@@ -250,9 +250,9 @@ function App() {
                   <Route path="/:board/:classSlug/:subjectSlug" element={<SubjectLandingPage />} />
 
                   {/* ── Protected routes (require login) ── */}
-                  <Route path="/chat"              element={<AuthGuard><ChatPage /></AuthGuard>} />
-                  <Route path="/history"           element={<AuthGuard><HistoryPage /></AuthGuard>} />
-                  <Route path="/profile"           element={<AuthGuard><ProfilePage /></AuthGuard>} />
+                  <Route path="/chat"              element={<ChatPage />} />
+                  <Route path="/history"           element={<HistoryPage />} />
+                  <Route path="/profile"           element={<ProfilePage />} />
 
                   {/* ── Admin routes ── */}
                   <Route path="/admin/login" element={<AdminLoginPage />} />

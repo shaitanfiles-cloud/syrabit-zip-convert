@@ -59,7 +59,9 @@ async def save_onboarding(data: OnboardingData, user: dict = Depends(get_current
     return {"message": "Onboarding complete"}
 
 @router.get("/user/profile")
-async def get_profile(user: dict = Depends(get_current_user)):
+async def get_profile(user: Optional[dict] = Depends(get_current_user_optional)):
+    if not user:
+        return {"user": None}
     credits_info = await get_user_credits(user)
     return {
         "id": user["id"],
@@ -146,13 +148,17 @@ async def toggle_saved_subject(subject_id: str, user: dict = Depends(get_current
     return {"message": action, "saved_subjects": saved}
 
 @router.get("/user/credits")
-async def get_credits(user: dict = Depends(get_current_user)):
+async def get_credits(user: Optional[dict] = Depends(get_current_user_optional)):
+    if not user:
+        return {"used": 0, "limit": 30, "remaining": 30, "document_access": False}
     credits_info = await get_user_credits(user)
     return credits_info
 
 @router.get("/user/stats")
-async def get_user_stats(user: dict = Depends(get_current_user)):
+async def get_user_stats(user: Optional[dict] = Depends(get_current_user_optional)):
     """Returns aggregated usage stats for the profile page."""
+    if not user:
+        return {"conversations": 0, "saved_subjects": 0, "total_tokens": 0, "credits_used": 0}
     conv_count = 0
     # Fast path: single COUNT query — much faster than fetching all conversations
     if deps.pg_pool:

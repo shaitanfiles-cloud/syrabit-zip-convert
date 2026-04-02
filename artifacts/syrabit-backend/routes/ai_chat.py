@@ -26,7 +26,7 @@ from cache import *
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
-    get_current_user_optional,
+    get_current_user_optional, rate_limit_chat_optional,
 )
 from db_ops import *
 from llm import call_llm_api, call_llm_api_chat, call_llm_api_stream
@@ -100,13 +100,15 @@ async def _resolve_semester_class_id(query: str, ctx_board_id: str) -> str | Non
     return None
 
 @router.post("/ai/chat")
-async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
+async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_optional)):
     _chat_t0 = _time_mod.time()
-    credits_info = await get_user_credits(user)
-    if credits_info["remaining"] <= 0:
-        raise HTTPException(status_code=402, detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.")
+    is_anon = user is None
+    if not is_anon:
+        credits_info = await get_user_credits(user)
+        if credits_info["remaining"] <= 0:
+            raise HTTPException(status_code=402, detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.")
 
-    plan = user.get("plan", "free")
+    plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
     # ── Tier 0: card_context (library scrape) → document_id (PDF upload) ──────
@@ -125,9 +127,9 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
     ctx_class_id   = subj_ctx.get("class_id")   or msg.class_id
     ctx_stream_id  = subj_ctx.get("stream_id")  or getattr(msg, 'stream_id', None)
-    ctx_board_name = subj_ctx.get("board_name") or msg.board_name or user.get("board_name", "")
-    ctx_class_name = subj_ctx.get("class_name") or msg.class_name or user.get("class_name", "")
-    ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or user.get("stream_name", "")
+    ctx_board_name = subj_ctx.get("board_name") or msg.board_name or (user.get("board_name", "") if user else "")
+    ctx_class_name = subj_ctx.get("class_name") or msg.class_name or (user.get("class_name", "") if user else "")
+    ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or (user.get("stream_name", "") if user else "")
     if subj_ctx:
         logger.info(f"Chat [NON-STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
 
@@ -222,11 +224,11 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         },
         rag_ctx,
         user_info={
-            "name":        user.get("name", ""),
-            "board_name":  ctx_board_name or user.get("board_name", ""),
-            "class_name":  ctx_class_name or user.get("class_name", ""),
-            "stream_name": ctx_stream_name or user.get("stream_name", ""),
-            "plan":        user.get("plan", "free"),
+            "name":        (user.get("name", "") if user else ""),
+            "board_name":  ctx_board_name or (user.get("board_name", "") if user else ""),
+            "class_name":  ctx_class_name or (user.get("class_name", "") if user else ""),
+            "stream_name": ctx_stream_name or (user.get("stream_name", "") if user else ""),
+            "plan":        (user.get("plan", "free") if user else "free"),
         },
         query=msg.message,
         syllabus=syllabus,
@@ -235,9 +237,10 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     conv_id = msg.conversation_id
     history_messages = []
+    user_id = user["id"] if user else None
 
-    if conv_id:
-        conv = await supa_get_conversation(conv_id, user["id"])
+    if conv_id and user_id:
+        conv = await supa_get_conversation(conv_id, user_id)
         if conv:
             raw_history = [
                 {"role": m.get("role", ""), "content": m.get("content") or ""}
@@ -245,12 +248,12 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                 if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
             ]
             history_messages = _trim_history(raw_history)
-    else:
+    elif not conv_id and user_id:
         conv_id = str(uuid.uuid4())
         title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
         conv_doc = {
             "id": conv_id,
-            "user_id": user["id"],
+            "user_id": user_id,
             "title": title,
             "subject_id": msg.subject_id,
             "subject_name": msg.subject_name,
@@ -259,6 +262,8 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         await supa_upsert_conversation(conv_doc)
+    else:
+        conv_id = None
 
     _MAX_PROMPT_CHARS_NS = 100_000
     _total_chars_ns = len(system_prompt) + sum(len(m.get("content", "")) for m in history_messages) + len(msg.message)
@@ -319,38 +324,37 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
          "rag_class_name": _src_class,
          "rag_stream_name": _src_stream},
     ]
-    # Update conversation in Supabase
-    conv = await supa_get_conversation(conv_id, user["id"])
-    if conv:
-        existing_msgs = conv.get("messages", [])
-        if isinstance(existing_msgs, str):
-            try: existing_msgs = json.loads(existing_msgs)
-            except: existing_msgs = []
-        updated_msgs = existing_msgs + new_messages
-        await supa_update_conversation(conv_id, user["id"], {
-            "messages": json.dumps(updated_msgs) if supa else updated_msgs,
-            "updated_at": now,
-            "preview": answer[:100],
-            "tokens": len(answer.split()),
-        })
+    new_used = 0
+    if user_id:
+        conv = await supa_get_conversation(conv_id, user_id)
+        if conv:
+            existing_msgs = conv.get("messages", [])
+            if isinstance(existing_msgs, str):
+                try: existing_msgs = json.loads(existing_msgs)
+                except: existing_msgs = []
+            updated_msgs = existing_msgs + new_messages
+            await supa_update_conversation(conv_id, user_id, {
+                "messages": json.dumps(updated_msgs) if supa else updated_msgs,
+                "updated_at": now,
+                "preview": answer[:100],
+                "tokens": len(answer.split()),
+            })
 
-    # Deduct 1 credit atomically (guards against parallel request exploitation)
-    deducted = await atomic_deduct_credit(user["id"], credits_info["used"], credits_info["limit"])
-    if not deducted:
-        raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
-    new_used = credits_info["used"] + 1
+        deducted = await atomic_deduct_credit(user_id, credits_info["used"], credits_info["limit"])
+        if not deducted:
+            raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
+        new_used = credits_info["used"] + 1
 
-    # Fire-and-forget: log chat turn for QA curation
-    asyncio.create_task(_log_chat_message(
-        user_id=user["id"],
-        question=msg.message,
-        raw_ai_answer=answer,
-        subject_id=msg.subject_id,
-        subject_name=msg.subject_name,
-        board_name=ctx_board_name,
-        class_name=ctx_class_name,
-        conversation_id=conv_id,
-    ))
+        asyncio.create_task(_log_chat_message(
+            user_id=user_id,
+            question=msg.message,
+            raw_ai_answer=answer,
+            subject_id=msg.subject_id,
+            subject_name=msg.subject_name,
+            board_name=ctx_board_name,
+            class_name=ctx_class_name,
+            conversation_id=conv_id,
+        ))
 
     try:
         _record_chat_latency((_time_mod.time() - _chat_t0) * 1000)
@@ -365,7 +369,7 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             prompt_tokens=max(1, _prompt_chars // 4),
             completion_tokens=max(1, _compl_chars // 4),
             provider="gemini",
-            user_id=str(user["id"]),
+            user_id=str(user_id) if user_id else "anonymous",
         )
     except Exception:
         pass
@@ -373,8 +377,8 @@ async def chat(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     return {
         "answer": answer,
         "conversation_id": conv_id,
-        "credits_remaining": max(0, credits_info["remaining"] - 1),
-        "credits_used": new_used,
+        "credits_remaining": max(0, credits_info["remaining"] - 1) if not is_anon else None,
+        "credits_used": new_used if not is_anon else None,
         "rag_source": rag_ctx.get("source", "none"),
         "rag_chunks_used": len(rag_ctx.get("chunks", [])),
         "sources": lib_sources,
@@ -462,18 +466,20 @@ async def _persist_chat_turn(
         logger.warning(f"_persist_chat_turn failed: {e}")
 
 @router.post("/ai/chat/stream")
-async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
+async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_optional)):
     _stream_t0 = _time_mod.time()
-    credits_info = await get_user_credits(user)
-    if credits_info["remaining"] <= 0:
-        raise HTTPException(status_code=402, detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.")
+    is_anon = user is None
+    user_id = user["id"] if user else None
+    credits_info = None
+    if not is_anon:
+        credits_info = await get_user_credits(user)
+        if credits_info["remaining"] <= 0:
+            raise HTTPException(status_code=402, detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.")
+        deducted = await atomic_deduct_credit(user_id, credits_info["used"], credits_info["limit"])
+        if not deducted:
+            raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
 
-    # Atomically reserve 1 credit before streaming begins to prevent parallel bypass
-    deducted = await atomic_deduct_credit(user["id"], credits_info["used"], credits_info["limit"])
-    if not deducted:
-        raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
-
-    plan = user.get("plan", "free")
+    plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
     # ── Resolve subject's own board/class/stream (overrides user profile) ────
@@ -481,9 +487,9 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
     ctx_class_id   = subj_ctx.get("class_id")   or msg.class_id
     ctx_stream_id  = subj_ctx.get("stream_id")  or getattr(msg, 'stream_id', None)
-    ctx_board_name = subj_ctx.get("board_name") or msg.board_name or user.get("board_name", "")
-    ctx_class_name = subj_ctx.get("class_name") or msg.class_name or user.get("class_name", "")
-    ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or user.get("stream_name", "")
+    ctx_board_name = subj_ctx.get("board_name") or msg.board_name or (user.get("board_name", "") if user else "")
+    ctx_class_name = subj_ctx.get("class_name") or msg.class_name or (user.get("class_name", "") if user else "")
+    ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or (user.get("stream_name", "") if user else "")
     if subj_ctx:
         logger.info(f"Chat [STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
 
@@ -529,9 +535,9 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
     # ── Phase 2: RAG + conversation history in parallel ───────────────────────
     async def _fetch_history():
-        if not msg.conversation_id:
+        if not msg.conversation_id or not user_id:
             return None
-        return await supa_get_conversation(msg.conversation_id, user["id"])
+        return await supa_get_conversation(msg.conversation_id, user_id)
 
     _stream_intent = _classify_intent(msg.message)
     _is_casual = _stream_intent == "casual"
@@ -602,11 +608,11 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
         },
         rag_ctx,
         user_info={
-            "name":        user.get("name", ""),
-            "board_name":  ctx_board_name or user.get("board_name", ""),
-            "class_name":  ctx_class_name or user.get("class_name", ""),
-            "stream_name": ctx_stream_name or user.get("stream_name", ""),
-            "plan":        user.get("plan", "free"),
+            "name":        (user.get("name", "") if user else ""),
+            "board_name":  ctx_board_name or (user.get("board_name", "") if user else ""),
+            "class_name":  ctx_class_name or (user.get("class_name", "") if user else ""),
+            "stream_name": ctx_stream_name or (user.get("stream_name", "") if user else ""),
+            "plan":        (user.get("plan", "free") if user else "free"),
         },
         query=msg.message,
         syllabus=syllabus,
@@ -623,12 +629,12 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
         ]
         history_messages = _trim_history(raw_history)
-    elif not conv_id:
+    elif not conv_id and user_id:
         conv_id = str(uuid.uuid4())
         title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
         conv_doc = {
             "id": conv_id,
-            "user_id": user["id"],
+            "user_id": user_id,
             "title": title,
             "subject_id": msg.subject_id,
             "subject_name": msg.subject_name,
@@ -637,6 +643,8 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         asyncio.create_task(supa_upsert_conversation(conv_doc))
+    elif not conv_id:
+        conv_id = None
 
     _MAX_PROMPT_CHARS = 24_000
     _sys_len = len(system_prompt)
@@ -750,15 +758,15 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
 
             # Yield DONE immediately — DB writes happen in background
             answer = "".join(full_response)
-            new_used_optimistic = credits_info["used"] + 1 if answer else credits_info["used"]
+            new_used_optimistic = (credits_info["used"] + 1 if answer else credits_info["used"]) if credits_info else 0
 
             # ── syrabit_done event with credits metadata + RAG-derived sources ────
             done_payload = {
                 "event": "syrabit_done",
                 "conversation_id": conv_id,
-                "credits_used": 1,
-                "credits_used_total": new_used_optimistic,
-                "remaining_credits": max(0, credits_info["remaining"] - 1),
+                "credits_used": 1 if not is_anon else None,
+                "credits_used_total": new_used_optimistic if not is_anon else None,
+                "remaining_credits": max(0, credits_info["remaining"] - 1) if credits_info else None,
                 "rag_source": rag_source_saved,
                 "rag_chunks": rag_chunks_count,
                 "words": len(answer.split()) if answer else 0,
@@ -783,43 +791,43 @@ async def chat_stream(msg: ChatMessage, user: dict = Depends(rate_limit_chat)):
                     prompt_tokens=max(1, _pc // 4),
                     completion_tokens=max(1, len(answer) // 4) if answer else 1,
                     provider="gemini",
-                    user_id=str(user["id"]),
+                    user_id=str(user_id) if user_id else "anonymous",
                 )
             except Exception:
                 pass
 
             if answer and _is_out_of_scope_response(answer) and rag_source_saved == "none":
-                logger.info(f"[GUARD] Out-of-scope response detected — refunding credit for user {user['id']}")
+                logger.info(f"[GUARD] Out-of-scope response detected — refunding credit for user {user_id or 'anon'}")
                 _credit_saved = False
 
             if answer and (not _is_out_of_scope_response(answer) or rag_source_saved != "none"):
                 _credit_saved = True
-                asyncio.create_task(_persist_chat_turn(
-                    conv_id, user["id"],
-                    user_msg_saved, answer,
-                    rag_source_saved, rag_chunks_count,
-                    credits_info["used"],
-                    sources=rag_sources,
-                    rag_subject_id=rag_subject_id,
-                    rag_subject_name=rag_subject_name,
-                    rag_board_name=_src_board_s,
-                    rag_class_name=_src_class_s,
-                    rag_stream_name=_src_stream_s,
-                ))
-                asyncio.create_task(_log_chat_message(
-                    user_id=user["id"],
-                    question=user_msg_saved,
-                    raw_ai_answer=answer,
-                    subject_id=msg.subject_id,
-                    subject_name=msg.subject_name,
-                    board_name=ctx_board_name,
-                    class_name=ctx_class_name,
-                    conversation_id=conv_id,
-                ))
+                if user_id:
+                    asyncio.create_task(_persist_chat_turn(
+                        conv_id, user_id,
+                        user_msg_saved, answer,
+                        rag_source_saved, rag_chunks_count,
+                        credits_info["used"],
+                        sources=rag_sources,
+                        rag_subject_id=rag_subject_id,
+                        rag_subject_name=rag_subject_name,
+                        rag_board_name=_src_board_s,
+                        rag_class_name=_src_class_s,
+                        rag_stream_name=_src_stream_s,
+                    ))
+                    asyncio.create_task(_log_chat_message(
+                        user_id=user_id,
+                        question=user_msg_saved,
+                        raw_ai_answer=answer,
+                        subject_id=msg.subject_id,
+                        subject_name=msg.subject_name,
+                        board_name=ctx_board_name,
+                        class_name=ctx_class_name,
+                        conversation_id=conv_id,
+                    ))
         finally:
-            # Guaranteed refund if credit was pre-deducted but no answer was committed
-            if not _credit_saved:
-                asyncio.create_task(_refund_credit(user["id"], credits_info["used"] + 1))
+            if not _credit_saved and user_id and credits_info:
+                asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
 
     return StreamingResponse(event_stream(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

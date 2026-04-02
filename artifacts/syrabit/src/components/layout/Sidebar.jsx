@@ -146,7 +146,7 @@ export const Sidebar = () => {
           className="px-2 py-3 space-y-0.5"
           style={{ borderTop: '1px solid rgba(139,92,246,0.10)' }}
         >
-          <Tooltip>
+          {user ? <Tooltip>
             <TooltipTrigger asChild>
               <button
                 onClick={handleLogout}
@@ -161,7 +161,16 @@ export const Sidebar = () => {
               </button>
             </TooltipTrigger>
             {collapsed && <TooltipContent side="right">Logout</TooltipContent>}
-          </Tooltip>
+          </Tooltip> : <button
+            onClick={() => navigate('/login')}
+            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:text-primary transition-all duration-200"
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(139,92,246,0.08)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = ''; }}
+            aria-label="Sign in to Syrabit.ai"
+          >
+            <LogOut size={18} className="flex-shrink-0 rotate-180" />
+            {!collapsed && <span>Sign In</span>}
+          </button>}
 
           <button
             onClick={() => setCollapsed(!collapsed)}

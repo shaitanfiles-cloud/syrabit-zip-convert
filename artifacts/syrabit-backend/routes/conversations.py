@@ -38,12 +38,16 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/conversations")
-async def get_conversations(user: dict = Depends(get_current_user)):
+async def get_conversations(user: Optional[dict] = Depends(get_current_user_optional)):
+    if not user:
+        return []
     convs = await supa_get_conversations(user["id"])
     return convs
 
 @router.get("/conversations/{conv_id}")
-async def get_conversation(conv_id: str, user: dict = Depends(get_current_user)):
+async def get_conversation(conv_id: str, user: Optional[dict] = Depends(get_current_user_optional)):
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in to access conversation history")
     conv = await supa_get_conversation(conv_id, user["id"])
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")

@@ -149,8 +149,10 @@ async def reset_confirm(data: PasswordResetConfirm):
     await supa_delete_password_reset(data.token)
     return {"message": "Password updated successfully"}
 
-@router.get("/auth/me", response_model=UserOut)
-async def get_me(user: dict = Depends(get_current_user)):
+@router.get("/auth/me")
+async def get_me(user: Optional[dict] = Depends(get_current_user_optional)):
+    if not user:
+        return {"user": None}
     credits_info = await get_user_credits(user)
     return UserOut(
         id=user["id"], name=user["name"], email=user["email"],

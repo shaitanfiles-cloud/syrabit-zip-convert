@@ -22,9 +22,14 @@ export const AuthProvider = ({ children }) => {
         withCredentials: true,
         headers,
       });
-      setUser(res.data);
+      const userData = res.data;
+      if (userData && userData.id) {
+        setUser(userData);
+      } else {
+        setUser(null);
+      }
       justAuthenticated.current = false;
-      return true;
+      return !!(userData && userData.id);
     } catch {
       if (!justAuthenticated.current) {
         setUser(null);

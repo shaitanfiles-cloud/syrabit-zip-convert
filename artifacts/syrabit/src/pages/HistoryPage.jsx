@@ -430,6 +430,32 @@ export default function HistoryPage() {
   };
 
   // ── Render ─────────────────────────────────────────────────────────────────
+
+  if (!user) {
+    return (
+      <AppLayout pageTitle="History">
+        <PageTitle title="Chat History | Syrabit.ai" />
+        <div className="flex flex-col items-center justify-center h-full px-4 py-20 text-center">
+          <MessageSquare size={48} className="text-muted-foreground mb-4 opacity-40" />
+          <h2 className="text-lg font-semibold text-foreground mb-2">Sign in to see your history</h2>
+          <p className="text-muted-foreground text-sm mb-6 max-w-xs">
+            Your conversations will be saved when you create an account.
+          </p>
+          <button
+            onClick={() => navigate('/login')}
+            className="h-10 px-6 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+            style={{
+              background: 'linear-gradient(135deg, hsl(var(--primary)), #8b5cf6)',
+              boxShadow: '0 4px 15px var(--glow-primary, rgba(139,92,246,0.35))',
+            }}
+          >
+            Sign In
+          </button>
+        </div>
+      </AppLayout>
+    );
+  }
+
   return (
     <AppLayout pageTitle="History">
       <PageTitle title="Chat History | Syrabit.ai" />

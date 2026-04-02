@@ -227,6 +227,33 @@ export default function ProfilePage() {
     setEditValue(profile?.[key] || '');
   };
 
+  if (!user) {
+    return (
+      <AppLayout pageTitle="Profile">
+        <PageTitle title="Profile | Syrabit.ai" />
+        <div className="flex flex-col items-center justify-center h-full px-4 py-20 text-center">
+          <div className="w-16 h-16 rounded-full mb-4 flex items-center justify-center" style={{ background: 'rgba(139,92,246,0.15)' }}>
+            <span className="text-2xl">👤</span>
+          </div>
+          <h2 className="text-lg font-semibold text-foreground mb-2">Sign in to view your profile</h2>
+          <p className="text-muted-foreground text-sm mb-6 max-w-xs">
+            Create an account to track your credits, save conversations, and unlock premium features.
+          </p>
+          <button
+            onClick={() => navigate('/login')}
+            className="h-10 px-6 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+            style={{
+              background: 'linear-gradient(135deg, hsl(var(--primary)), #8b5cf6)',
+              boxShadow: '0 4px 15px var(--glow-primary, rgba(139,92,246,0.35))',
+            }}
+          >
+            Sign In
+          </button>
+        </div>
+      </AppLayout>
+    );
+  }
+
   if (loading) {
     return (
       <AppLayout pageTitle="Profile">

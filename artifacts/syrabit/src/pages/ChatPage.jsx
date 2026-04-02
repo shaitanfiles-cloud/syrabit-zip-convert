@@ -59,11 +59,10 @@ export default function ChatPage() {
   }, [messages]);
 
   useEffect(() => {
-    if (!user) return;
-    apiClient().get('/user/profile')
+    apiClient().get('/user/credits')
       .then((res) => {
-        const p = res.data;
-        setCredits({ used: p.credits_used ?? 0, limit: p.credits_limit ?? null });
+        const c = res.data;
+        setCredits({ used: c.used ?? 0, limit: c.limit ?? null });
       })
       .catch(() => {});
   }, [user]);
@@ -78,7 +77,7 @@ export default function ChatPage() {
   }, [subjectId]);
 
   useEffect(() => {
-    if (!convId || !user) return;
+    if (!convId) return;
     setSyncState('syncing');
     getConversation(convId)
       .then((r) => { const conv = r.data; setConversationId(conv.id); setMessages(conv.messages || []); setSyncState('idle'); })
@@ -267,7 +266,9 @@ export default function ChatPage() {
             }
             if (parsed.event === 'syrabit_done') {
               if (parsed.sources) libSources = parsed.sources;
-              setCredits((c) => ({ ...c, used: parsed.credits_used_total || c.used + 1 }));
+              if (parsed.credits_used_total != null) {
+                setCredits((c) => ({ ...c, used: parsed.credits_used_total }));
+              }
               const remaining = parsed.remaining_credits ?? 0;
               try {
                 const { Analytics } = await import('@/utils/analytics');
