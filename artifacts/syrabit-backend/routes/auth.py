@@ -56,7 +56,7 @@ async def signup(data: UserCreate, response: Response):
         "id": user_id,
         "name": data.name,
         "email": data.email.lower(),
-        "password_hash": pwd_ctx.hash(data.password),
+        "password_hash": await asyncio.to_thread(pwd_ctx.hash, data.password),
         "plan": "free",
         "credits_used": 0,
         "credits_limit": 30,     # Legacy field preserved for backwards compatibility
@@ -91,7 +91,7 @@ async def signup(data: UserCreate, response: Response):
 @router.post("/auth/login", response_model=TokenOut)
 async def login(data: UserLogin, response: Response):
     user = await supa_get_user(data.email.lower())
-    if not user or not pwd_ctx.verify(data.password, user.get("password_hash", "")):
+    if not user or not await asyncio.to_thread(pwd_ctx.verify, data.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     if user.get("status") == "banned":
         raise HTTPException(status_code=403, detail="Account banned")
@@ -145,7 +145,7 @@ async def reset_confirm(data: PasswordResetConfirm):
     expires = datetime.fromisoformat(record["expires"])
     if datetime.now(timezone.utc) > expires:
         raise HTTPException(status_code=400, detail="Reset token expired")
-    await supa_update_user_password(record["email"], pwd_ctx.hash(data.new_password))
+    await supa_update_user_password(record["email"], await asyncio.to_thread(pwd_ctx.hash, data.new_password))
     await supa_delete_password_reset(data.token)
     return {"message": "Password updated successfully"}
 

@@ -54,7 +54,7 @@ The project is a pnpm workspace monorepo comprising a React + Vite frontend (`ar
 - **LLM Providers (SLM pool `openai/gpt-oss-20b`: Fireworks → Groq → Cerebras → Gemini → Sarvam):**
     - Fireworks (deepseek-v3p2) — primary SLM pool provider, 8 concurrent slots.
     - Groq x2 keys (llama-3.1-8b-instant 8 slots, llama-3.3-70b-versatile 4 slots) via `GROQ_API_KEY` + `GROQ_API_KEY_2`.
-    - Cerebras (llama-3.3-70b, 6 slots) — also primary for admin content generation.
+    - Cerebras (llama3.1-8b, 6 slots) — also primary for admin content generation.
     - Google Gemini (gemini-2.5-flash 6 slots, Gemini Vision, gemini-embedding-001).
     - Sarvam (sarvam-m, 4 slots, reliable fallback).
     - OpenRouter (deepseek-chat-v3-0324 default) — access to 200+ models via single API key.

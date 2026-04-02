@@ -4,7 +4,7 @@ AHSEC AI-Powered Educational Platform
 
 Thin entry point: creates the app, mounts middleware, and includes all route modules.
 """
-import os, sys, json, uuid, logging, asyncio
+import os, sys, json, uuid, logging, asyncio, fcntl
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -221,129 +221,144 @@ async def _reseed_syllabus_embeddings():
 async def lifespan(app):
     import deps as _deps_mod
     await _init_pg_pool()
+
+    _is_leader = False
+    _lock_fd = None
     try:
-        await ensure_seeded()
-        await db.chapters.create_index("subject_id")
-        await db.subjects.create_index("stream_id")
-        await db.streams.create_index("class_id")
-        await db.classes.create_index("board_id")
-        await db.chunks.create_index("chapter_id")
-        try:
-            await db.chunks.create_index([("content", "text")], name="chunks_content_text")
-        except Exception:
-            pass
-        await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
-        await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
-        await db.analytics.create_index("user_id")
-        await db.page_views.create_index([("date", 1), ("visitor_id", 1)])
-        await db.page_views.create_index([("timestamp", -1)])
-        await db.page_views.create_index("visitor_id")
-        await db.page_views.create_index("session_id")
-        await db.page_views.create_index([("is_bot", 1)])
+        _lock_fd = open("/tmp/.syrabit_startup.lock", "w")
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _is_leader = True
+        logger.info("Worker acquired startup lock — running migrations/indexes")
+    except (IOError, OSError):
+        logger.info("Worker skipping migrations/indexes (another worker owns lock)")
 
-        await db.sessions.create_index("session_id", unique=True, sparse=True)
-        await db.sessions.create_index("visitor_id")
-        await db.sessions.create_index([("last_ping", -1)])
-        await db.sessions.create_index([("start_time", -1)])
+    try:
+        if _is_leader:
+            await ensure_seeded()
+            await db.chapters.create_index("subject_id")
+            await db.subjects.create_index("stream_id")
+            await db.streams.create_index("class_id")
+            await db.classes.create_index("board_id")
+            await db.chunks.create_index("chapter_id")
+            try:
+                await db.chunks.create_index([("content", "text")], name="chunks_content_text")
+            except Exception:
+                pass
+            await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
+            await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
+            await db.analytics.create_index("user_id")
+            await db.page_views.create_index([("date", 1), ("visitor_id", 1)])
+            await db.page_views.create_index([("timestamp", -1)])
+            await db.page_views.create_index("visitor_id")
+            await db.page_views.create_index("session_id")
+            await db.page_views.create_index([("is_bot", 1)])
 
-        await db.users.create_index("email", unique=True, sparse=True)
-        await db.users.create_index("id", unique=True)
-        await db.conversations.create_index([("user_id", 1), ("updated_at", -1)])
-        await db.conversations.create_index([("id", 1), ("user_id", 1)], unique=True)
-        await db.password_resets.create_index("token", unique=True)
-        await db.password_resets.create_index("expires_at", expireAfterSeconds=0)
-        await db.activity_log.create_index([("created_at", -1)])
-        await db.notifications.create_index([("created_at", -1)])
-        await db.settings.create_index("id", unique=True, sparse=True)
-        await db.payments.create_index("razorpay_payment_id", unique=True, sparse=True)
-        await db.payments.create_index("stripe_session_id", unique=True, sparse=True)
-        await db.payments.create_index([("user_id", 1), ("verified_at", -1)])
-        await db.push_subscriptions.create_index("user_id")
-        await db.push_subscriptions.create_index("endpoint", unique=True, sparse=True)
+            await db.sessions.create_index("session_id", unique=True, sparse=True)
+            await db.sessions.create_index("visitor_id")
+            await db.sessions.create_index([("last_ping", -1)])
+            await db.sessions.create_index([("start_time", -1)])
 
-        await db.cms_documents.create_index("id", unique=True, sparse=True)
-        await db.cms_documents.create_index("seo_slug", unique=True, sparse=True)
-        await db.cms_documents.create_index("status")
-        await db.cms_documents.create_index("subject_id")
-        await db.cms_documents.create_index([("board_id", 1), ("class_id", 1), ("subject_id", 1), ("status", 1)])
-        await db.cms_documents.create_index([("updated_at", -1)])
-        await db.cms_documents.create_index("linked_subject_id")
-        await db.cms_documents.create_index([("status", 1), ("linked_subject_id", 1)])
-        await db.cms_documents.create_index([("status", 1), ("embedding", 1)])
-        try:
-            await db.cms_documents.create_index(
-                [("title", "text"), ("content", "text"), ("meta_description", "text")],
-                weights={"title": 10, "content": 1, "meta_description": 5},
-                name="cms_docs_text_search",
-            )
-        except Exception:
-            pass
+            await db.users.create_index("email", unique=True, sparse=True)
+            await db.users.create_index("id", unique=True)
+            await db.conversations.create_index([("user_id", 1), ("updated_at", -1)])
+            await db.conversations.create_index([("id", 1), ("user_id", 1)], unique=True)
+            await db.password_resets.create_index("token", unique=True)
+            await db.password_resets.create_index("expires_at", expireAfterSeconds=0)
+            await db.activity_log.create_index([("created_at", -1)])
+            await db.notifications.create_index([("created_at", -1)])
+            await db.settings.create_index("id", unique=True, sparse=True)
+            await db.payments.create_index("razorpay_payment_id", unique=True, sparse=True)
+            await db.payments.create_index("stripe_session_id", unique=True, sparse=True)
+            await db.payments.create_index([("user_id", 1), ("verified_at", -1)])
+            await db.push_subscriptions.create_index("user_id")
+            await db.push_subscriptions.create_index("endpoint", unique=True, sparse=True)
 
-        await db.topic_pyq_collections.create_index("chapter_id")
-        await db.topic_pyq_collections.create_index("subject_id")
+            await db.cms_documents.create_index("id", unique=True, sparse=True)
+            await db.cms_documents.create_index("seo_slug", unique=True, sparse=True)
+            await db.cms_documents.create_index("status")
+            await db.cms_documents.create_index("subject_id")
+            await db.cms_documents.create_index([("board_id", 1), ("class_id", 1), ("subject_id", 1), ("status", 1)])
+            await db.cms_documents.create_index([("updated_at", -1)])
+            await db.cms_documents.create_index("linked_subject_id")
+            await db.cms_documents.create_index([("status", 1), ("linked_subject_id", 1)])
+            await db.cms_documents.create_index([("status", 1), ("embedding", 1)])
+            try:
+                await db.cms_documents.create_index(
+                    [("title", "text"), ("content", "text"), ("meta_description", "text")],
+                    weights={"title": 10, "content": 1, "meta_description": 5},
+                    name="cms_docs_text_search",
+                )
+            except Exception:
+                pass
 
-        await db.ai_pyq_collections.create_index("chapter_id")
-        await db.ai_pyq_collections.create_index("subject_id")
+            await db.topic_pyq_collections.create_index("chapter_id")
+            await db.topic_pyq_collections.create_index("subject_id")
 
-        await db.exam_schedule.create_index([("exam_date", 1), ("active", 1)])
+            await db.ai_pyq_collections.create_index("chapter_id")
+            await db.ai_pyq_collections.create_index("subject_id")
 
-        try:
-            await db.topics.create_index("chapter_id")
-            await db.topics.create_index("status")
-            await db.topics.create_index([("board_slug", 1), ("class_slug", 1), ("subject_slug", 1), ("slug", 1)])
-            await db.seo_pages.create_index([("topic_id", 1), ("page_type", 1)])
-            await db.seo_pages.create_index("status")
-            await db.seo_pages.create_index([("board_slug", 1), ("class_slug", 1), ("subject_slug", 1), ("topic_slug", 1), ("page_type", 1)])
-            await db.seo_pages.create_index([("generated_at", -1)])
-            await db.seo_pages.create_index(
-                [("content", "text"), ("topic_title", "text"), ("title", "text")],
-                name="seo_pages_content_text",
-                weights={"topic_title": 10, "title": 8, "content": 1},
-            )
-            await db.chapters.create_index(
-                [("title", "text"), ("content", "text")],
-                name="chapters_content_text",
-                weights={"title": 10, "content": 1},
-            )
-        except Exception:
-            pass
+            await db.exam_schedule.create_index([("exam_date", 1), ("active", 1)])
 
-        logger.info("MongoDB indexes ensured")
+            try:
+                await db.topics.create_index("chapter_id")
+                await db.topics.create_index("status")
+                await db.topics.create_index([("board_slug", 1), ("class_slug", 1), ("subject_slug", 1), ("slug", 1)])
+                await db.seo_pages.create_index([("topic_id", 1), ("page_type", 1)])
+                await db.seo_pages.create_index("status")
+                await db.seo_pages.create_index([("board_slug", 1), ("class_slug", 1), ("subject_slug", 1), ("topic_slug", 1), ("page_type", 1)])
+                await db.seo_pages.create_index([("generated_at", -1)])
+                await db.seo_pages.create_index(
+                    [("content", "text"), ("topic_title", "text"), ("title", "text")],
+                    name="seo_pages_content_text",
+                    weights={"topic_title": 10, "title": 8, "content": 1},
+                )
+                await db.chapters.create_index(
+                    [("title", "text"), ("content", "text")],
+                    name="chapters_content_text",
+                    weights={"title": 10, "content": 1},
+                )
+            except Exception:
+                pass
 
-        try:
-            existing = await db.roadmap.find_one({"title": "Day-to-Day Analytics"})
-            if not existing:
-                await db.roadmap.insert_one({
-                    "id": str(uuid.uuid4()),
-                    "title": "Day-to-Day Analytics",
-                    "description": "Per-day admin analytics panel with date-range picker, metric summary cards (visitors, page views, signups, messages, AI interactions, bounce rate, avg session duration), and multi-series line/bar charts.",
-                    "phase": "Analytics & Growth",
-                    "status": "in-progress",
-                    "effort": "medium",
-                    "impact": "high",
-                    "priority": "high",
-                    "category": "analytics",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                })
-                logger.info("Roadmap: seeded 'Day-to-Day Analytics' item")
-        except Exception as _re:
-            logger.warning(f"Roadmap seed skipped: {_re}")
+            logger.info("MongoDB indexes ensured")
+
+            try:
+                existing = await db.roadmap.find_one({"title": "Day-to-Day Analytics"})
+                if not existing:
+                    await db.roadmap.insert_one({
+                        "id": str(uuid.uuid4()),
+                        "title": "Day-to-Day Analytics",
+                        "description": "Per-day admin analytics panel with date-range picker, metric summary cards (visitors, page views, signups, messages, AI interactions, bounce rate, avg session duration), and multi-series line/bar charts.",
+                        "phase": "Analytics & Growth",
+                        "status": "in-progress",
+                        "effort": "medium",
+                        "impact": "high",
+                        "priority": "high",
+                        "category": "analytics",
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    })
+                    logger.info("Roadmap: seeded 'Day-to-Day Analytics' item")
+            except Exception as _re:
+                logger.warning(f"Roadmap seed skipped: {_re}")
 
     except Exception as e:
         logger.warning(f"Seeding/indexing skipped (MongoDB may not be ready): {e}")
-    try:
-        from qa_engine import ensure_qa_indexes as _ensure_qa_indexes
-        await _ensure_qa_indexes()
-    except Exception as e:
-        logger.warning(f"QA index creation skipped: {e}")
+    if _is_leader:
+        try:
+            from qa_engine import ensure_qa_indexes as _ensure_qa_indexes
+            await _ensure_qa_indexes()
+        except Exception as e:
+            logger.warning(f"QA index creation skipped: {e}")
     _deps_mod._rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
-    asyncio.create_task(_migrate_supabase_users_to_pg())
-    asyncio.create_task(_heal_credits_limit())
+    if _is_leader:
+        asyncio.create_task(_migrate_supabase_users_to_pg())
+        asyncio.create_task(_heal_credits_limit())
     asyncio.create_task(_bg_health_loop())
     global _syllabus_embedder
     if db is not None:
         _syllabus_embedder = SyllabusEmbedder(db)
-        asyncio.create_task(_seed_syllabus_embeddings())
+        if _is_leader:
+            asyncio.create_task(_seed_syllabus_embeddings())
     asyncio.create_task(_load_ga4_from_db())
     from routes.admin_notifications import _exam_reminder_loop
     asyncio.create_task(_exam_reminder_loop())
@@ -363,6 +378,12 @@ async def lifespan(app):
     if sarvam_llm_client_direct:
         await sarvam_llm_client_direct.aclose()
     mongo_client.close()
+    if _lock_fd:
+        try:
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+            _lock_fd.close()
+        except Exception:
+            pass
 
 
 app = FastAPI(title="Syrabit.ai API", version="2.0.0", lifespan=lifespan)

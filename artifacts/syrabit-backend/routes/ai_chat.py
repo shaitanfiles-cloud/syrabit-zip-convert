@@ -10,6 +10,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, EmailStr
+import cachetools
 import mistune as _mistune
 
 from models import (
@@ -49,35 +50,34 @@ def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini",
 
 router = APIRouter()
 
+_subject_ctx_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=3600)
+
 async def _resolve_subject_context(subject_id: str) -> dict:
-    """
-    Given a subject_id, walk subject → stream → class → board and return
-    the resolved board/class/stream IDs and names.  Returns an empty dict
-    if subject_id is absent or any lookup fails.
-    """
     if not subject_id:
         return {}
+    cached = _subject_ctx_cache.get(subject_id)
+    if cached is not None:
+        return cached
     try:
-        subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "stream_id": 1})
-        if not subj or not subj.get("stream_id"):
-            return {}
-        stream = await db.streams.find_one({"id": subj["stream_id"]}, {"_id": 0, "id": 1, "name": 1, "class_id": 1})
-        if not stream:
-            return {}
-        cls = await db.classes.find_one({"id": stream["class_id"]}, {"_id": 0, "id": 1, "name": 1, "board_id": 1})
-        if not cls:
-            return {}
-        board = await db.boards.find_one({"id": cls["board_id"]}, {"_id": 0, "id": 1, "name": 1})
-        if not board:
-            return {}
-        return {
-            "board_id":   board["id"],
-            "board_name": board["name"],
-            "class_id":   cls["id"],
-            "class_name": cls["name"],
-            "stream_id":  stream["id"],
-            "stream_name": stream["name"],
-        }
+        pipeline = [
+            {"$match": {"id": subject_id}},
+            {"$lookup": {"from": "streams", "localField": "stream_id", "foreignField": "id", "as": "_stream"}},
+            {"$unwind": {"path": "$_stream", "preserveNullAndEmptyArrays": False}},
+            {"$lookup": {"from": "classes", "localField": "_stream.class_id", "foreignField": "id", "as": "_class"}},
+            {"$unwind": {"path": "$_class", "preserveNullAndEmptyArrays": False}},
+            {"$lookup": {"from": "boards", "localField": "_class.board_id", "foreignField": "id", "as": "_board"}},
+            {"$unwind": {"path": "$_board", "preserveNullAndEmptyArrays": False}},
+            {"$project": {
+                "_id": 0,
+                "board_id": "$_board.id", "board_name": "$_board.name",
+                "class_id": "$_class.id", "class_name": "$_class.name",
+                "stream_id": "$_stream.id", "stream_name": "$_stream.name",
+            }},
+        ]
+        result = await db.subjects.aggregate(pipeline).to_list(1)
+        ctx = result[0] if result else {}
+        _subject_ctx_cache[subject_id] = ctx
+        return ctx
     except Exception as e:
         logger.warning(f"_resolve_subject_context({subject_id}) failed: {e}")
         return {}

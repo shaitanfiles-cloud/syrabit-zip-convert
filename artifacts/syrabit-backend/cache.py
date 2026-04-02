@@ -26,7 +26,7 @@ _ai_response_cache = cachetools.TTLCache(maxsize=512, ttl=3600)
 
 # ── User Object Cache ─────────────────────────────────────────────────────────
 # Keyed by user_id, 120-second TTL — eliminates DB round-trip on every auth'd request
-_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=120)
+_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=300)
 
 def _invalidate_user_cache(uid: str):
     _user_cache.pop(uid, None)
@@ -34,7 +34,7 @@ def _invalidate_user_cache(uid: str):
 
 # ── Conversation Object Cache ──────────────────────────────────────────────────
 # Keyed by "conv_id:uid", 60-second TTL — avoids PG on every chat turn
-_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4000, ttl=60)
+_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4000, ttl=300)
 
 def _conv_cache_key(conv_id: str, uid: str) -> str:
     return f"{conv_id}:{uid}"
@@ -57,7 +57,7 @@ def _content_card_cache_key(query: str, subject_id: Optional[str], subject_name:
     return hashlib.md5(raw.encode()).hexdigest()
 
 # Syllabus cache — 30-minute TTL; syllabi almost never change between requests
-_syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=1800)
+_syllabus_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=3600)
 
 def _syllabus_cache_key(board_id: str, class_id: str, stream_id: Optional[str], subject_id: Optional[str] = None) -> str:
     return f"{board_id}|{class_id}|{stream_id or ''}|{subject_id or ''}"
