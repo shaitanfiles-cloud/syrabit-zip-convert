@@ -198,7 +198,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             subject_name=msg.subject_name or "",
             embedder=_get_syllabus_embedder(),
         )
-        rag_ctx, web_results, history_messages = await asyncio.gather(
+        rag_ctx, history_messages = await asyncio.gather(
             resolve_rag_context(
                 msg.message,
                 subject_id=msg.subject_id,
@@ -206,20 +206,25 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
                 document_text=document_text,
                 intent=_detected_intent,
             ),
-            _safe_web_search(
-                query=msg.message, num_results=5,
+            _ns_fetch_history(),
+        )
+        _ns_rag_quality = rag_ctx.get("quality", "none")
+        if _ns_rag_quality in ("high", "medium", "tier0"):
+            web_results = []
+            logger.info(f"[NON-STREAM][RAG-FIRST] RAG quality={_ns_rag_quality} | web search skipped")
+        else:
+            logger.info(f"[NON-STREAM][RAG-FIRST] RAG quality={_ns_rag_quality} | falling back to web search")
+            web_results = await _safe_web_search(
+                query=msg.message, num_results=8,
                 board_name=ctx_board_name,
                 class_name=ctx_class_name,
                 subject_name=msg.subject_name or "",
                 scoped_query=_ns_scoped_query,
-            ),
-            _ns_fetch_history(),
-        )
-        _ns_rag_quality = rag_ctx.get("quality", "none")
-        if _ns_rag_quality == "none" and web_results:
-            rag_ctx["source"] = "web"
-            rag_ctx["quality"] = "web"
-        logger.info(f"[NON-STREAM][PARALLEL] RAG quality={_ns_rag_quality} | web results={len(web_results)}")
+            )
+            if web_results:
+                rag_ctx["source"] = "web"
+                rag_ctx["quality"] = "web"
+                logger.info(f"[NON-STREAM][WEB-FALLBACK] {len(web_results)} web results found")
 
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -550,10 +555,23 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
             subject_name=msg.subject_name or "",
             embedder=_get_syllabus_embedder(),
         )
-        async def _safe_web_search_stream():
+        rag_ctx, raw_conv = await asyncio.gather(
+            resolve_rag_context(
+                msg.message, subject_id=msg.subject_id,
+                subject_name=msg.subject_name, document_text=document_text,
+                intent=_stream_intent,
+            ),
+            _fetch_history(),
+        )
+        _rag_quality = rag_ctx.get("quality", "none")
+        if _rag_quality in ("high", "medium", "tier0"):
+            web_results = []
+            logger.info(f"[STREAM][RAG-FIRST] RAG quality={_rag_quality} | web search skipped")
+        else:
+            logger.info(f"[STREAM][RAG-FIRST] RAG quality={_rag_quality} | falling back to web search")
             try:
-                return await web_search_with_fallback(
-                    msg.message, num_results=5,
+                web_results = await web_search_with_fallback(
+                    msg.message, num_results=8,
                     board_name=ctx_board_name,
                     class_name=ctx_class_name,
                     subject_name=msg.subject_name or "",
@@ -561,22 +579,11 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                 )
             except Exception as e:
                 logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
-                return []
-
-        rag_ctx, web_results, raw_conv = await asyncio.gather(
-            resolve_rag_context(
-                msg.message, subject_id=msg.subject_id,
-                subject_name=msg.subject_name, document_text=document_text,
-                intent=_stream_intent,
-            ),
-            _safe_web_search_stream(),
-            _fetch_history(),
-        )
-        _rag_quality = rag_ctx.get("quality", "none")
-        if _rag_quality == "none" and web_results:
-            rag_ctx["source"] = "web"
-            rag_ctx["quality"] = "web"
-        logger.info(f"[STREAM][PARALLEL] RAG quality={_rag_quality} | web results={len(web_results)}")
+                web_results = []
+            if web_results:
+                rag_ctx["source"] = "web"
+                rag_ctx["quality"] = "web"
+                logger.info(f"[STREAM][WEB-FALLBACK] {len(web_results)} web results found")
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(

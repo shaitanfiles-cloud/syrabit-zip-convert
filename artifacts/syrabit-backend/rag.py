@@ -1591,13 +1591,13 @@ def build_rag_system_prompt(
 
             grounding += (
                 "---\n"
-                "**ACCURACY LOCK:**\n"
-                "1. Answer ONLY from the grounding above. Structure: Explanation → Key Points → Examples.\n"
-                "2. Do NOT add source citations inline — the system appends the SOURCE line automatically.\n"
-                "3. If the answer is NOT in the grounding: check for Tier 3 web search results below — "
-                "use those. If those are absent, answer from general curriculum knowledge. Never stop without an answer.\n"
-                "4. NEVER hallucinate. NEVER invent facts not present in the grounding or web results.\n"
-                "5. Be deterministic and precise — prioritize accuracy over creativity.*"
+                "**ANSWER WEIGHTAGE (50/50 BALANCE):**\n"
+                "1. 50% GROUNDING: Use the curriculum content above as your factual anchor — definitions, formulas, syllabus-specific facts.\n"
+                "2. 50% YOUR KNOWLEDGE: Enrich with your own training knowledge — explanations, real-world examples, analogies, exam tips.\n"
+                "3. Structure: Explanation → Key Points → Examples. Blend both sources naturally.\n"
+                "4. Do NOT add source citations inline — the system appends the SOURCE line automatically.\n"
+                "5. NEVER hallucinate. NEVER invent facts. Be precise — prioritize accuracy over creativity.\n"
+                "6. If the grounding is thin, lean more on your knowledge but stay within the curriculum scope.*"
             )
 
         else:
@@ -1645,11 +1645,11 @@ def build_rag_system_prompt(
 
             grounding += (
                 "\n---\n"
-                f"*ACCURACY INSTRUCTION: Answer using the {_curriculum_label} context above as the primary source. "
-                f"Cross-reference with your training knowledge for the {_curriculum_label} in Assam. "
+                "**ANSWER WEIGHTAGE (50/50 BALANCE):**\n"
+                f"1. 50% GROUNDING: Use the {_curriculum_label} metadata above as your factual anchor.\n"
+                "2. 50% YOUR KNOWLEDGE: Enrich with your training knowledge — explanations, examples, exam context.\n"
                 f"When referencing the curriculum by name, always call it '{_curriculum_label}'. "
-                "If you are unsure about any specific fact, state it clearly rather than guessing. "
-                "Do not add examples or exam tips unless the student explicitly asks.*"
+                "Blend both sources naturally. If unsure about a specific fact, state it clearly rather than guessing.*"
             )
 
     # ── Live Web Search Results (dual-layer: base + polish) ─────────────────
@@ -1718,10 +1718,11 @@ def build_rag_system_prompt(
             )
             web_block += (
                 "---\n"
-                f"*INSTRUCTION: {_enriched_note}"
-                "Build the answer from the Base layer first. "
-                "Then enrich it with relevant details from the Polish layer. "
-                "Do not fabricate facts beyond what the results contain.*\n"
+                "**ANSWER WEIGHTAGE (50/50 BALANCE):**\n"
+                f"*{_enriched_note}"
+                "1. 50% WEB RESULTS: Use the search results above as your factual anchor.\n"
+                "2. 50% YOUR KNOWLEDGE: Enrich with your training knowledge — explanations, examples, deeper context.\n"
+                "Blend both sources naturally. Do not fabricate facts beyond what the results contain.*\n"
             )
         grounding += web_block
 
