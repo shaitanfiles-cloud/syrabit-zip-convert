@@ -139,7 +139,7 @@ _llm_batcher = _LlmBatcher()
 
 _LLM_PROVIDERS = []
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b"})
+    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -165,7 +165,7 @@ if _GROQ_KEY and _GROQ_KEY != 'x':
 if _GROQ_KEY_2 and _GROQ_KEY_2 != 'x':
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY_2, "default_model": "llama-3.3-70b-versatile"})
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -188,13 +188,13 @@ _MODEL_PROVIDER_MAP = {
     "accounts/fireworks/models/gpt-oss-120b": "fireworksai",
     "llama-3.3-70b-versatile": "groq",
     "llama-3.1-8b-instant": "groq",
-    "llama-3.3-70b": "cerebras",
     "llama3.1-8b": "cerebras",
+    "qwen-3-235b-a22b-instruct-2507": "cerebras",
 }
 
 _MODEL_ALIAS_MAP = {
     "openai/gpt-oss-20b": "accounts/fireworks/models/deepseek-v3p2",
-    "openai/gpt-oss-120b": "llama-3.3-70b",
+    "openai/gpt-oss-120b": "qwen-3-235b-a22b-instruct-2507",
 }
 
 # ── SLM slot table ────────────────────────────────────────────────────────────
@@ -206,7 +206,7 @@ _SLM_SLOT_CANDIDATES = [
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
     ("groq",        "llama-3.1-8b-instant",                              8),
     ("groq:2",      "llama-3.1-8b-instant",                              8),
-    ("cerebras",    "llama-3.3-70b",                                     6),
+    ("cerebras",    "llama3.1-8b",                                       6),
     ("gemini",      "gemini-2.5-flash",                                  6),
     ("gemini:2",    "gemini-2.5-flash",                                  6),
     ("groq",        "llama-3.3-70b-versatile",                           4),
@@ -506,7 +506,7 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
 
 _LLM_PROVIDERS_CONTENT: list[dict] = []
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b"})
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -517,7 +517,7 @@ for p in _LLM_PROVIDERS:
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
     """LLM call for admin content generation — Cerebras-primary, Gemini fallback."""
-    return await _llm_batcher.call(messages, model or "llama-3.3-70b", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT)
+    return await _llm_batcher.call(messages, model or "llama3.1-8b", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT)
 
 async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
     """LLM call for student chat — excludes Emergent provider (admin-only)."""
