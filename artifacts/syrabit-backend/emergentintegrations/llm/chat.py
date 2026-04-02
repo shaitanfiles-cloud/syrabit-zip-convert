@@ -68,6 +68,8 @@ class LlmChat:
             return await self._call_openai(messages)
         elif self._provider == "fireworksai":
             return await self._call_fireworks(messages)
+        elif self._provider == "cerebras":
+            return await self._call_cerebras(messages)
         else:
             return await self._call_groq(messages)
 
@@ -78,6 +80,8 @@ class LlmChat:
             return await self._call_openai(messages)
         elif self._provider == "fireworksai":
             return await self._call_fireworks(messages)
+        elif self._provider == "cerebras":
+            return await self._call_cerebras(messages)
         else:
             return await self._call_groq(messages)
 
@@ -90,6 +94,9 @@ class LlmChat:
                 yield token
         elif self._provider == "fireworksai":
             async for token in self._stream_fireworks(messages, max_tokens):
+                yield token
+        elif self._provider == "cerebras":
+            async for token in self._stream_cerebras(messages, max_tokens):
                 yield token
         else:
             async for token in self._stream_groq(messages, max_tokens):
@@ -163,6 +170,37 @@ class LlmChat:
         client = openai.AsyncOpenAI(
             api_key=self.api_key,
             base_url="https://api.fireworks.ai/inference/v1"
+        )
+        stream = await client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+            max_tokens=max_tokens,
+            stream=True,
+            temperature=0.1,
+            top_p=0.95,
+        )
+        async for chunk in stream:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
+    async def _call_cerebras(self, messages: list) -> str:
+        import openai
+        client = openai.AsyncOpenAI(
+            api_key=self.api_key,
+            base_url="https://api.cerebras.ai/v1"
+        )
+        response = await client.chat.completions.create(
+            model=self._model,
+            messages=messages,
+        )
+        return response.choices[0].message.content or ""
+
+    async def _stream_cerebras(self, messages: list, max_tokens: int = 2048):
+        import openai
+        client = openai.AsyncOpenAI(
+            api_key=self.api_key,
+            base_url="https://api.cerebras.ai/v1"
         )
         stream = await client.chat.completions.create(
             model=self._model,

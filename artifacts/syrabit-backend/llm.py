@@ -17,7 +17,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
     _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
-    _SARVAM_LLM_KEY, _EMERGENT_KEY, _EMERGENT_BASE_URL, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    _SARVAM_LLM_KEY, _CEREBRAS_KEY, _EMERGENT_KEY, _EMERGENT_BASE_URL, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
 )
 from deps import sarvam_llm_client, logger as _dep_logger
 from cache import _cache_key
@@ -137,20 +137,20 @@ class _LlmBatcher:
 _llm_batcher = _LlmBatcher()
 
 _LLM_PROVIDERS = []
-# Emergent first — universal key with highest priority (admin content generation only)
 if _EMERGENT_KEY:
     _LLM_PROVIDERS.append({"provider": "emergent",    "key": _EMERGENT_KEY,   "default_model": "openai/gpt-4o-mini"})
-# Fallback chain: Gemini → Groq → Fireworks → Sarvam → xAI → OpenAI
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
+if _FIREWORKS_KEY:
+    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
 if _GROQ_KEY_2 and _GROQ_KEY_2 != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY_2,     "default_model": "llama-3.3-70b-versatile"})
-if _FIREWORKS_KEY:
-    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _XAI_KEY:
@@ -158,7 +158,24 @@ if _XAI_KEY:
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
-_LLM_PROVIDERS_CHAT = [p for p in _LLM_PROVIDERS if p["provider"] != "emergent"]
+_LLM_PROVIDERS_CHAT: list[dict] = []
+if _FIREWORKS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
+if _GROQ_KEY and _GROQ_KEY != 'x':
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.1-8b-instant"})
+if _GROQ_KEY_2 and _GROQ_KEY_2 != 'x':
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY_2, "default_model": "llama-3.3-70b-versatile"})
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b"})
+if _GEMINI_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+for _p in _LLM_PROVIDERS:
+    if _p["provider"] not in ("emergent", "fireworksai", "groq", "cerebras", "gemini", "sarvam"):
+        _LLM_PROVIDERS_CHAT.append(_p)
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -172,9 +189,10 @@ _MODEL_PROVIDER_MAP = {
     "accounts/fireworks/models/gpt-oss-120b": "fireworksai",
     "llama-3.3-70b-versatile": "groq",
     "llama-3.1-8b-instant": "groq",
-    # UI display aliases
-    "openai/gpt-oss-20b": "groq",        # SLM: fast Groq model
-    "openai/gpt-oss-120b": "fireworksai", # MLM: full Fireworks gpt-oss-120b
+    "llama-3.3-70b": "cerebras",
+    "llama3.1-8b": "cerebras",
+    "openai/gpt-oss-20b": "groq",
+    "openai/gpt-oss-120b": "fireworksai",
 }
 
 # Map display-alias model names to the actual API model ID to send to the provider
@@ -188,27 +206,16 @@ _MODEL_ALIAS_MAP = {
 # Models chosen for HIGHEST RPS on their respective providers.
 # Multiple slots per provider = parallel streams up to max_concurrent each.
 #
-#  Groq        llama-3.3-70b-versatile — PRIMARY: quality + fast, 30 RPM
-#              llama-3.1-8b-instant    — fallback: sub-second TTFT, highest TPD
-#  Gemini      gemini-2.0-flash-lite   — 30 RPM free, lowest latency Gemini
-#              gemini-2.0-flash        — 15 RPM free, higher quality
-#  Fireworks   deepseek-v3p2           — high-quality, pay-per-token (no hard RPM cap)
-#  Bedrock     amazon.nova-micro-v1:0  — free tier: 30 RPM cap, lowest latency on Bedrock
-#                                        paid tier: 66.7 RPS / 33K TPS (no cap)
 _SLM_SLOT_CANDIDATES = [
-    # Groq 8b-instant — HIGHEST TPS (~750 tok/s), lowest latency
+    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
     ("groq",        "llama-3.1-8b-instant",                              8),
     ("groq:2",      "llama-3.1-8b-instant",                              8),
-    # Gemini 2.5 Flash — quality fallback
+    ("cerebras",    "llama-3.3-70b",                                     6),
     ("gemini",      "gemini-2.5-flash",                                  6),
     ("gemini:2",    "gemini-2.5-flash",                                  6),
-    # Groq 70b — quality fallback when 8b slots busy
     ("groq",        "llama-3.3-70b-versatile",                           4),
     ("groq:2",      "llama-3.3-70b-versatile",                           4),
-    # Sarvam — reliable fallback when Gemini/Groq are rate-limited
     ("sarvam",      "sarvam-m",                                          4),
-    # Fireworks (currently suspended)
-    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
     ("bedrock",     "amazon.nova-micro-v1:0",                            2),
 ]
 
@@ -361,6 +368,18 @@ async def _call_emergent(messages: list, api_key: str, model: str, max_tokens: i
     content = resp.choices[0].message.content or ""
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
+async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
+    import openai as _oai
+    client = _oai.AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://api.cerebras.ai/v1",
+    )
+    resp = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+    )
+    content = resp.choices[0].message.content or ""
+    return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
 async def _call_single_provider(messages: list, provider: str, api_key: str, model: str, max_tokens: int) -> str:
     max_tokens = _clamp_max_tokens(model, max_tokens)
     if provider == "sarvam":
@@ -369,6 +388,8 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
         return await _call_gemini(messages, api_key, model, max_tokens)
     if provider == "emergent":
         return await _call_emergent(messages, api_key, model, max_tokens)
+    if provider == "cerebras":
+        return await _call_cerebras(messages, api_key, model, max_tokens)
 
     system_msg = ""
     user_msg = ""
@@ -446,17 +467,19 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     return await _llm_batcher.call(messages, model, max_tokens)
 
 _LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
 for p in _LLM_PROVIDERS:
-    if p["provider"] != "gemini" and p["provider"] != "emergent":
+    if p["provider"] not in ("gemini", "emergent", "cerebras"):
         _LLM_PROVIDERS_CONTENT.append(p)
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
-    """LLM call for SEO content generation — Gemini-primary with higher token limit."""
-    return await _llm_batcher.call(messages, model or "gemini-2.5-flash", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT)
+    """LLM call for admin content generation — Cerebras-primary, Gemini fallback."""
+    return await _llm_batcher.call(messages, model or "llama-3.3-70b", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT)
 
 async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
     """LLM call for student chat — excludes Emergent provider (admin-only)."""
@@ -554,6 +577,20 @@ async def _stream_emergent(messages: list, api_key: str, model: str, max_tokens:
         if delta and delta.content:
             yield delta.content
 
+async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
+    import openai as _oai
+    client = _oai.AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://api.cerebras.ai/v1",
+    )
+    stream = await client.chat.completions.create(
+        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+    )
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta and delta.content:
+            yield delta.content
+
 async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
     """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
     import openai as _oai
@@ -632,7 +669,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     """
     Real token-by-token streaming from the LLM provider.
     Uses native streaming APIs for instant first-token delivery.
-    Supports: Sarvam, Groq, Fireworks, Gemini, xAI, Bedrock.
+    Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
     If the requested model name is not in _MODEL_PROVIDER_MAP (e.g. a display-only alias
     like 'openai/gpt-oss-20b'), the resolved provider's default model is used instead.
     """
@@ -751,6 +788,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         elif p_name == "emergent":
             logger.info(f"LLM stream: provider=emergent, model={p_model}")
             async for token in _stream_emergent(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "cerebras":
+            logger.info(f"LLM stream: provider=cerebras, model={p_model}")
+            async for token in _stream_cerebras(messages, p_key, p_model, _mt):
                 yield token
         elif p_name == "xai":
             logger.info(f"LLM stream: provider=xai, model={p_model}")
