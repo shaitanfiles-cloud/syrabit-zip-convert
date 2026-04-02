@@ -193,8 +193,8 @@ _MODEL_PROVIDER_MAP = {
 }
 
 _MODEL_ALIAS_MAP = {
-    "syrabit-slm": "accounts/fireworks/models/deepseek-v3p2",
-    "syrabit-mlm": "accounts/fireworks/models/deepseek-v3p2",
+    "openai/gpt-oss-20b": "accounts/fireworks/models/deepseek-v3p2",
+    "openai/gpt-oss-120b": "llama-3.3-70b",
 }
 
 # ── SLM slot table ────────────────────────────────────────────────────────────
@@ -450,7 +450,7 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
 async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
     import time as _t
     providers = _LLM_PROVIDERS if provider_list is None else provider_list
-    use_model = model or LLM_MODEL
+    use_model = _MODEL_ALIAS_MAP.get(model or LLM_MODEL, model or LLM_MODEL)
     primary_provider, primary_key = _resolve_provider_for_model(use_model, providers)
 
     if not primary_key and not providers:
@@ -725,7 +725,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     Real token-by-token streaming from the LLM provider.
     Uses native streaming APIs for instant first-token delivery.
     Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
-    'syrabit-slm' triggers the smart SLM pool (round-robin across all providers).
+    'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
     """
     use_model_raw = model or LLM_MODEL
     use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
@@ -870,7 +870,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             tokens.append(chunk)
         return tokens
 
-    if use_model_raw == "syrabit-slm":
+    if use_model_raw == "openai/gpt-oss-20b":
         _tried = 0
         while _tried < len(_slm_pool.all_slots):
             slot = _slm_pool.pick()

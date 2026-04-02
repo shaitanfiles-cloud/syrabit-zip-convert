@@ -1,8 +1,8 @@
 import { ChevronDown, Plus } from 'lucide-react';
 
 const MODELS = [
-  { value: 'syrabit-slm',  label: 'Syrabit SLM', badge: '⚡ Fast'         },
-  { value: 'syrabit-mlm', label: 'Syrabit MLM', badge: '🔜 Coming Soon', disabled: true },
+  { value: 'openai/gpt-oss-20b',  label: 'Syrabit SLM', badge: '⚡ Fast'         },
+  { value: 'openai/gpt-oss-120b', label: 'Syrabit MLM', badge: '🔜 Coming Soon', disabled: true },
 ];
 
 export { MODELS };

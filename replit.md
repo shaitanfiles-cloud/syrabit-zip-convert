@@ -51,11 +51,13 @@ The project is a pnpm workspace monorepo comprising a React + Vite frontend (`ar
 - **Database:** PostgreSQL (for users/auth) and MongoDB (for content/RAG).
 - **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers.
 - **Caching:** Redis (distributed cache) and in-memory caching. User cache invalidation clears both in-memory TTL cache AND Redis session cache to prevent stale reads after profile/onboarding updates.
-- **LLM Providers (SLM streaming pool: Gemini → Groq ×2 → Sarvam):**
-    - Google Gemini (gemini-2.5-flash, Gemini Vision, gemini-embedding-001) - primary.
-    - Groq x2 keys (llama-3.3-70b, llama-3.1-8b) — doubled rate limit via `GROQ_API_KEY` + `GROQ_API_KEY_2`.
-    - Sarvam (sarvam-m, reliable fallback when Gemini/Groq are rate-limited).
-    - Fireworks (deepseek-v3p2, currently suspended).
+- **LLM Providers (SLM pool `openai/gpt-oss-20b`: Fireworks → Groq → Cerebras → Gemini → Sarvam):**
+    - Fireworks (deepseek-v3p2) — primary SLM pool provider, 8 concurrent slots.
+    - Groq x2 keys (llama-3.1-8b-instant 8 slots, llama-3.3-70b-versatile 4 slots) via `GROQ_API_KEY` + `GROQ_API_KEY_2`.
+    - Cerebras (llama-3.3-70b, 6 slots) — also primary for admin content generation.
+    - Google Gemini (gemini-2.5-flash 6 slots, Gemini Vision, gemini-embedding-001).
+    - Sarvam (sarvam-m, 4 slots, reliable fallback).
+    - Model aliases: `openai/gpt-oss-20b` → SLM pool, `openai/gpt-oss-120b` → Cerebras llama-3.3-70b (coming soon).
 - **Cloudflare AI Gateway (free tier):** Routes OpenAI, Groq, Gemini, xAI, Fireworks, and Sarvam through `CF_AI_GATEWAY_ACCOUNT_ID`/`CF_AI_GATEWAY_ID`. Provides response caching (`cf-aig-cache-ttl`, default 3600s for non-streaming), unified analytics, and request logging. Gateway health auto-tracked: marks down on connection errors, auto-recovers after 5 min. In-request graceful degradation: on gateway connection failure, retries same request with direct provider URL. Bedrock stays direct (boto3, not OpenAI-compatible). Fireworks and Sarvam require custom provider setup in CF dashboard. Emergent gateway removed (replaced by CF AI Gateway).
 - **Voyage AI Rerank:** `rerank-2` model re-scores vector search results for higher relevance. 3s timeout with cosine fallback. `VOYAGE_API_KEY`.
 - **Payment Gateways:** Razorpay (INR) and Stripe (USD).
