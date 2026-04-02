@@ -285,41 +285,18 @@ export default function SeoTopicPage() {
         ],
       },
       {
-        '@type': 'Course',
+        '@type': 'LearningResource',
         name: `${page.topic_title || topicSlug} — ${page.class_name || ''} ${page.board_name || ''}`.trim(),
         description: page.meta_description || page.summary || '',
         provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
         educationalLevel: `${page.class_name || ''} ${page.board_name || ''}`.trim(),
         url: pageUrl,
         inLanguage: 'en-IN',
-        hasCourseInstance: {
-          '@type': 'CourseInstance',
-          courseMode: 'online',
-          courseWorkload: page.word_count ? `PT${Math.max(1, Math.ceil(page.word_count / 200))}M` : undefined,
-        },
+        learningResourceType: PAGE_TYPE_META[currentType]?.label || 'Study Material',
+        timeRequired: page.word_count ? `PT${Math.max(1, Math.ceil(page.word_count / 200))}M` : undefined,
+        isAccessibleForFree: true,
       },
     ];
-
-    let faqMainEntity = [];
-    if (Array.isArray(page.qa_pairs) && page.qa_pairs.length > 0) {
-      faqMainEntity = page.qa_pairs.map((q) => ({
-        '@type': 'Question', name: q.question,
-        acceptedAnswer: { '@type': 'Answer', text: q.answer },
-      }));
-    } else if (['important-questions', 'mcqs'].includes(currentType) && page.content) {
-      const lines = page.content.split('\n').filter(Boolean);
-      let currentQ = null;
-      for (const line of lines) {
-        const stripped = line.replace(/^#+\s*/, '').replace(/^\*\*/, '').replace(/\*\*$/, '').trim();
-        if (line.match(/^[#*]/) && stripped.endsWith('?')) { currentQ = stripped; }
-        else if (currentQ && stripped.length > 10) {
-          faqMainEntity.push({ '@type': 'Question', name: currentQ, acceptedAnswer: { '@type': 'Answer', text: stripped } });
-          currentQ = null;
-          if (faqMainEntity.length >= 10) break;
-        }
-      }
-    }
-    if (faqMainEntity.length >= 2) graphNodes.push({ '@type': 'FAQPage', mainEntity: faqMainEntity });
 
     return { '@context': 'https://schema.org', '@graph': graphNodes };
   }, [page, board, classSlug, subjectSlug, topicSlug, currentType]);

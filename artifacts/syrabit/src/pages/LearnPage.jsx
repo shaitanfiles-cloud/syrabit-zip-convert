@@ -61,26 +61,17 @@ function SchemaOrg({ doc }) {
       ],
     },
     {
-      '@type': 'Course',
+      '@type': 'LearningResource',
       name: `${doc.title} — ${eduLevel}`,
       description: description || `Study material for ${doc.title}`,
       provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
       educationalLevel: eduLevel,
       url: pageUrl,
       inLanguage: 'en-IN',
+      learningResourceType: doc.type || 'Study Material',
+      isAccessibleForFree: true,
     },
   ];
-
-  if (Array.isArray(doc.qa_pairs) && doc.qa_pairs.length >= 2) {
-    graphNodes.push({
-      '@type': 'FAQPage',
-      mainEntity: doc.qa_pairs.map(q => ({
-        '@type': 'Question',
-        name: q.question,
-        acceptedAnswer: { '@type': 'Answer', text: q.answer },
-      })),
-    });
-  }
 
   return (
     <script

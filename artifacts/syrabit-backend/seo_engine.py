@@ -1943,14 +1943,15 @@ def _render_seo_html(
             },
         },
         {
-            "@type": "Course",
+            "@type": "LearningResource",
             "name": f"{topic} — {edu_level}".strip(),
             "description": page.get("meta_description", ""),
             "provider": _ORG_NODE,
             "educationalLevel": edu_level,
             "url": page_url,
             "inLanguage": "en-IN",
-            "availableLanguage": ["en", "as", "hi", "bn"],
+            "learningResourceType": {"notes": "Study Notes", "definition": "Definitions", "important-questions": "Practice Questions", "mcqs": "Multiple Choice Questions", "examples": "Examples"}.get(page_type, "Study Material"),
+            "isAccessibleForFree": True,
         },
         {
             "@type": "BreadcrumbList",
@@ -2031,8 +2032,6 @@ def _render_seo_html(
                 if len(faq_items) >= 10:
                     break
 
-    if len(faq_items) >= 2:
-        graph_nodes.append({"@type": "FAQPage", "mainEntity": faq_items})
 
     ld_json = json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False)
 
@@ -2118,6 +2117,8 @@ def _render_seo_html(
 <meta name="geo.region" content="IN-AS">
 <meta name="geo.placename" content="Assam, India">
 <meta name="geo.position" content="26.2006;92.9376">
+<meta http-equiv="content-language" content="en-IN">
+<link rel="alternate" hreflang="en-IN" href="{html_mod.escape(page_url)}">
 <meta name="ICBM" content="26.2006, 92.9376">
 <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
 {_prev_link}{_next_link}<script type="application/ld+json">{ld_json}</script>
@@ -2266,6 +2267,8 @@ async def get_homepage_html():
 <meta name="ICBM" content="26.2006, 92.9376">
 <meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
 <meta property="og:locale" content="en_IN">
+<meta http-equiv="content-language" content="en-IN">
+<link rel="alternate" hreflang="en-IN" href="https://syrabit.ai">
 <script type="application/ld+json">{schema}</script>
 <style>
 body{{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:0 auto;padding:1rem;color:#1a1a1a;line-height:1.6}}
@@ -2305,7 +2308,7 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <footer>
 <p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
 <p class="geo-footer">Serving students in Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, and across Assam, India</p>
-<p><a href="https://syrabit.ai/library">Full Library</a> &middot; <a href="https://syrabit.ai/chat">AI Chat</a></p>
+<p><a href="https://syrabit.ai/library">Full Library</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></p>
 </footer>
 </body>
 </html>"""
@@ -2394,6 +2397,8 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
 <meta name="ICBM" content="26.2006, 92.9376">
 <meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
 <meta property="og:locale" content="en_IN">
+<meta http-equiv="content-language" content="en-IN">
+<link rel="alternate" hreflang="en-IN" href="{html_mod.escape(page_url)}">
 <script type="application/ld+json">{schema}</script>
 <style>
 body{{font-family:system-ui,-apple-system,sans-serif;max-width:800px;margin:0 auto;padding:1rem;color:#1a1a1a;line-height:1.6}}

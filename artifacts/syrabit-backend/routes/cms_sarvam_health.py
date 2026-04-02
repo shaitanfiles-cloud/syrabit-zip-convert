@@ -1711,6 +1711,8 @@ def _bot_html_response(html: str):
             "Cache-Control": "public, max-age=3600, s-maxage=86400",
             "X-Bot-Rendered": "1",
             "Vary": "User-Agent",
+            "X-Robots-Tag": "index, follow",
+            "Content-Language": "en-IN",
         },
     )
 
@@ -1721,6 +1723,10 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
     Handles:
     - /                                  → homepage
     - /library                           → homepage (same listing)
+    - /pricing                           → pricing page
+    - /terms                             → terms page
+    - /privacy                           → privacy page
+    - /learn/{slug}                      → CMS document page
     - /pyq/{slug}                        → PYQ HTML replica (html only)
     - /{board}/{class}/{subject}         → subject landing page
     - /{board}/{class}/{subject}/{topic}      → topic page (notes)
@@ -1753,6 +1759,14 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 
         if n == 0 or (n == 1 and parts[0] == "library"):
             cache_key = "_homepage_"
+        elif n == 1 and parts[0] == "pricing":
+            cache_key = "_pricing_"
+        elif n == 1 and parts[0] == "terms":
+            cache_key = "_terms_"
+        elif n == 1 and parts[0] == "privacy":
+            cache_key = "_privacy_"
+        elif n == 2 and parts[0] == "learn":
+            cache_key = f"_learn_/{parts[1]}"
         elif n == 2 and parts[0] == "pyq":
             cache_key = f"_pyq_/{parts[1]}"
         elif n == 3:
@@ -1773,6 +1787,93 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
         try:
             _seo_port = int(os.environ.get("PORT", "8000"))
             api_base = f"http://localhost:{_seo_port}/api/seo"
+
+            if cache_key in ("_pricing_", "_terms_", "_privacy_"):
+                page_name = cache_key.strip("_")
+                page_titles = {"pricing": "Pricing & Plans", "terms": "Terms of Service", "privacy": "Privacy Policy"}
+                page_title = page_titles.get(page_name, page_name.title())
+                html_content = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{page_title} | Syrabit.ai</title>
+<link rel="canonical" href="https://syrabit.ai/{page_name}">
+<meta property="og:title" content="{page_title} | Syrabit.ai">
+<meta property="og:url" content="https://syrabit.ai/{page_name}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta name="robots" content="index, follow">
+<meta http-equiv="content-language" content="en-IN">
+<link rel="alternate" hreflang="en-IN" href="https://syrabit.ai/{page_name}">
+<script type="application/ld+json">{{"@context":"https://schema.org","@type":"WebPage","name":"{page_title}","url":"https://syrabit.ai/{page_name}","isPartOf":{{"@type":"WebSite","@id":"https://syrabit.ai","name":"Syrabit.ai"}},"provider":{{"@type":"EducationalOrganization","name":"Syrabit.ai","url":"https://syrabit.ai"}}}}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <span>{page_title}</span></nav>
+<h1>{page_title}</h1>
+<p>Visit <a href="https://syrabit.ai/{page_name}">this page</a> for full details.</p>
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                _bot_html_cache[cache_key] = html_content
+                return _bot_html_response(html_content)
+
+            if cache_key.startswith("_learn_/"):
+                learn_slug = parts[1]
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    doc_resp = await client.get(f"http://localhost:{_seo_port}/api/content/cms-documents/{learn_slug}")
+                if doc_resp.status_code != 200:
+                    return await self._safe_call_next(request, call_next)
+                doc = doc_resp.json()
+                doc_title = _html_mod.escape(doc.get("title", learn_slug))
+                doc_desc = _html_mod.escape(doc.get("meta_description", doc.get("description", ""))[:300])
+                doc_body = doc.get("content_html", "") or _html_mod.escape(doc.get("content", "")[:2000])
+                page_url = f"https://syrabit.ai/learn/{learn_slug}"
+                schema = json.dumps({"@context": "https://schema.org", "@graph": [
+                    {"@type": "Article", "headline": doc.get("title", ""), "description": doc.get("meta_description", ""),
+                     "url": page_url, "inLanguage": "en-IN",
+                     "author": {"@type": "Organization", "name": "Syrabit.ai"},
+                     "publisher": {"@type": "Organization", "name": "Syrabit.ai",
+                                   "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"}},
+                     "datePublished": doc.get("created_at", doc.get("generated_at", "")),
+                     "dateModified": doc.get("updated_at", doc.get("created_at", ""))},
+                    {"@type": "LearningResource", "name": doc.get("title", ""), "url": page_url,
+                     "provider": {"@type": "Organization", "name": "Syrabit.ai"},
+                     "inLanguage": "en-IN", "isAccessibleForFree": True},
+                    {"@type": "BreadcrumbList", "itemListElement": [
+                        {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
+                        {"@type": "ListItem", "position": 2, "name": "Library", "item": "https://syrabit.ai/library"},
+                        {"@type": "ListItem", "position": 3, "name": doc.get("title", ""), "item": page_url},
+                    ]},
+                ]}, ensure_ascii=False)
+                html_content = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{doc_title} | Syrabit.ai</title>
+<meta name="description" content="{doc_desc}">
+<link rel="canonical" href="{page_url}">
+<meta property="og:title" content="{doc_title} | Syrabit.ai">
+<meta property="og:description" content="{doc_desc}">
+<meta property="og:url" content="{page_url}">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
+<meta http-equiv="content-language" content="en-IN">
+<meta name="geo.region" content="IN-AS">
+<meta name="geo.placename" content="Assam, India">
+<link rel="alternate" hreflang="en-IN" href="{page_url}">
+<script type="application/ld+json">{schema}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <a href="https://syrabit.ai/library">Library</a> &rsaquo; <span>{doc_title}</span></nav>
+<article><h1>{doc_title}</h1>{doc_body}</article>
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                _bot_html_cache[cache_key] = html_content
+                return _bot_html_response(html_content)
 
             if cache_key == "_homepage_":
                 api_url = f"{api_base}/html/homepage"

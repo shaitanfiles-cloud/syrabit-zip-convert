@@ -1,24 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <sitemap>
+    <loc>https://syrabit.ai/sitemap-static.xml</loc>
+    <lastmod>2026-03-30</lastmod>
+  </sitemap>
+  <sitemap>
     <loc>https://syrabit.ai/api/seo/sitemap-pages.xml</loc>
+    <lastmod>2026-03-30</lastmod>
   </sitemap>
   <sitemap>
     <loc>https://syrabit.ai/api/seo/sitemap-subjects.xml</loc>
+    <lastmod>2026-03-30</lastmod>
   </sitemap>
   <sitemap>
     <loc>https://syrabit.ai/api/seo/sitemap-notes.xml</loc>
+    <lastmod>2026-03-30</lastmod>
   </sitemap>
   <sitemap>
     <loc>https://syrabit.ai/api/seo/sitemap-mcqs.xml</loc>
+    <lastmod>2026-03-30</lastmod>
   </sitemap>
   <sitemap>
     <loc>https://syrabit.ai/api/seo/sitemap-pyqs.xml</loc>
+    <lastmod>2026-03-30</lastmod>
   </sitemap>
   <sitemap>
     <loc>https://syrabit.ai/api/seo/sitemap-examples.xml</loc>
+    <lastmod>2026-03-30</lastmod>
   </sitemap>
   <sitemap>
     <loc>https://syrabit.ai/api/seo/sitemap-definitions.xml</loc>
+    <lastmod>2026-03-30</lastmod>
   </sitemap>
 </sitemapindex>

@@ -31,6 +31,9 @@ class SecurityHeadersMiddleware:
                 if SECURE_COOKIES:
                     headers.append("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
                 headers.append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'self'")
+                ct = headers.get("content-type", "")
+                if "text/html" in ct:
+                    headers.append("Content-Language", "en-IN")
             await send(message)
 
         await self.app(scope, receive, send_with_security_headers)

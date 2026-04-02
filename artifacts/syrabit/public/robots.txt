@@ -8,14 +8,6 @@ Disallow: /profile
 Disallow: /cms/
 
 Sitemap: https://syrabit.ai/sitemap.xml
-Sitemap: https://syrabit.ai/api/seo/sitemap-index.xml
-Sitemap: https://syrabit.ai/api/seo/sitemap-pages.xml
-Sitemap: https://syrabit.ai/api/seo/sitemap-subjects.xml
-Sitemap: https://syrabit.ai/api/seo/sitemap-notes.xml
-Sitemap: https://syrabit.ai/api/seo/sitemap-mcqs.xml
-Sitemap: https://syrabit.ai/api/seo/sitemap-pyqs.xml
-Sitemap: https://syrabit.ai/api/seo/sitemap-examples.xml
-Sitemap: https://syrabit.ai/api/seo/sitemap-definitions.xml
 
 Crawl-delay: 1
 
