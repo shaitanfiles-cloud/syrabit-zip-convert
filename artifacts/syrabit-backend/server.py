@@ -77,6 +77,27 @@ def _validate_env():
             _log.warning(f"Recommended env var not set: {key} — {desc}")
     _log.info("Environment validation passed")
 
+    _llm_keys = {
+        "GROQ_API_KEY": os.environ.get("GROQ_API_KEY", "").strip(),
+        "GROQ_API_KEY_2": os.environ.get("GROQ_API_KEY_2", "").strip(),
+        "GEMINI_API_KEY": os.environ.get("GEMINI_API_KEY", "").strip(),
+        "GEMINI_API_KEY_2": os.environ.get("GEMINI_API_KEY_2", "").strip(),
+        "XAI_API_KEY": os.environ.get("XAI_API_KEY", "").strip(),
+        "OPENAI_API_KEY": os.environ.get("OPENAI_API_KEY", "").strip(),
+        "FIREWORKS_API_KEY": os.environ.get("FIREWORKS_API_KEY", "").strip(),
+        "SARVAM_API_KEY": os.environ.get("SARVAM_API_KEY", "").strip(),
+        "CEREBRAS_API_KEY": os.environ.get("CEREBRAS_API_KEY", "").strip(),
+        "EMERGENT_API_KEY": os.environ.get("EMERGENT_API_KEY", "").strip(),
+        "OPENROUTER_API_KEY": os.environ.get("OPENROUTER_API_KEY", "").strip(),
+        "AWS_ACCESS_KEY_ID": os.environ.get("AWS_ACCESS_KEY_ID", "").strip(),
+        "AWS_SECRET_ACCESS_KEY": os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip(),
+    }
+    _log.info("─── LLM Provider Key Diagnostic ───")
+    for name, val in _llm_keys.items():
+        status = "SET" if val else "NOT SET"
+        _log.info(f"  {name}: {status}")
+    _log.info("───────────────────────────────────")
+
 
 _validate_env()
 

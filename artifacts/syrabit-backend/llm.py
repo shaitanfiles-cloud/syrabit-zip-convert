@@ -221,6 +221,9 @@ _SLM_SLOT_CANDIDATES = [
     ("groq",        "llama-3.3-70b-versatile",                           4),
     ("groq:2",      "llama-3.3-70b-versatile",                           4),
     ("sarvam",      "sarvam-m",                                          4),
+    ("openai",      "gpt-4o-mini",                                       4),
+    ("xai",         "grok-3-fast",                                       4),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4),
     ("bedrock",     "amazon.nova-micro-v1:0",                            2),
 ]
 

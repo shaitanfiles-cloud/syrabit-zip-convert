@@ -103,13 +103,13 @@ else:
     _cfg_log.info("Cloudflare AI Gateway DISABLED — using direct provider URLs")
 
 # ── LLM Configuration ─────────────────────────────────────────────────────────
-_GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
+_GROQ_KEY = os.environ.get('GROQ_API_KEY', '').strip()
 _GROQ_KEY_2 = os.environ.get('GROQ_API_KEY_2', '').strip()
 _GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 _GEMINI_KEY_2 = os.environ.get('GEMINI_API_KEY_2', '').strip()
 _XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
-_OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
-_FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '')
+_OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '').strip()
+_FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '').strip()
 _SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
 _CEREBRAS_KEY = os.environ.get('CEREBRAS_API_KEY', '').strip()
 _EMERGENT_KEY = os.environ.get('EMERGENT_API_KEY', '').strip()
