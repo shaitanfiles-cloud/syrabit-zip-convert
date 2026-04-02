@@ -7,7 +7,8 @@ export function useShare() {
   const share = useCallback(async (title, url) => {
     if (sharing) return;
     setSharing(true);
-    const shareUrl = url.startsWith('http') ? url : `${window.location.origin}${url}`;
+    const siteOrigin = import.meta.env.VITE_SITE_URL || window.location.origin;
+    const shareUrl = url.startsWith('http') ? url : `${siteOrigin}${url}`;
     try {
       if (navigator.share) {
         await navigator.share({ title, url: shareUrl });
