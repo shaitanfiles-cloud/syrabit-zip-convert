@@ -216,14 +216,15 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             _ns_fetch_history(),
         )
         _ns_rag_quality = rag_ctx.get("quality", "none")
-        if _ns_rag_quality in ("high", "medium", "tier0"):
-            web_results = []
-            logger.info(f"[NON-STREAM][RAG-FIRST] RAG quality={_ns_rag_quality} | web discarded (RAG is base)")
-        else:
+        if _ns_rag_quality == "none":
+            rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+                       "vector_hits": [], "source": "none", "quality": "none"}
             if web_results:
                 rag_ctx["source"] = "web"
                 rag_ctx["quality"] = "web"
-            logger.info(f"[NON-STREAM][RAG-FIRST] RAG quality={_ns_rag_quality} | web fallback={len(web_results)} results")
+            logger.info(f"[NON-STREAM] No embeddings match (outside syllabus) → RAG skipped | web={len(web_results)} (web+LLM mode)")
+        else:
+            logger.info(f"[NON-STREAM] RAG quality={_ns_rag_quality} | web={len(web_results)} (RAG=base, web=polish)")
 
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -577,14 +578,15 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
             _fetch_history(),
         )
         _rag_quality = rag_ctx.get("quality", "none")
-        if _rag_quality in ("high", "medium", "tier0"):
-            web_results = []
-            logger.info(f"[STREAM][RAG-FIRST] RAG quality={_rag_quality} | web discarded (RAG is base)")
-        else:
+        if _rag_quality == "none":
+            rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+                       "vector_hits": [], "source": "none", "quality": "none"}
             if web_results:
                 rag_ctx["source"] = "web"
                 rag_ctx["quality"] = "web"
-            logger.info(f"[STREAM][RAG-FIRST] RAG quality={_rag_quality} | web fallback={len(web_results)} results")
+            logger.info(f"[STREAM] No embeddings match (outside syllabus) → RAG skipped | web={len(web_results)} (web+LLM mode)")
+        else:
+            logger.info(f"[STREAM] RAG quality={_rag_quality} | web={len(web_results)} (RAG=base, web=polish)")
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(

@@ -1170,15 +1170,34 @@ async def resolve_rag_context(
             "quality": "tier0",
             "intent":  _resolved_intent_t0,
         }
+    _RELEVANCE_GATE = 0.60
+
     cached_rag, _card_result, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
         _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
         vector_rag_search(query, subject_id=subject_id, top_k=5),
     )
 
+    _best_vec_sim = max((h.get("score", 0) for h in vector_hits), default=0.0) if vector_hits else 0.0
+    _embeddings_relevant = _best_vec_sim >= _RELEVANCE_GATE
+
+    if not _embeddings_relevant:
+        _resolved_intent = intent or "general"
+        logger.info(
+            f"RAG resolve: EMBEDDINGS MISS — best_sim={_best_vec_sim:.3f} < gate={_RELEVANCE_GATE} "
+            f"→ outside syllabus, skipping RAG | intent: {_resolved_intent} | query: {query[:50]}"
+        )
+        try:
+            _record_rag_event("none", 0, query, intent=_resolved_intent)
+        except Exception:
+            pass
+        return {
+            "chunks": [], "chapters": [], "subjects": [], "vector_hits": [],
+            "source": "none", "quality": "none", "intent": _resolved_intent,
+        }
+
     rag_ctx = dict(cached_rag)
 
-    # Unpack content card tuple → (text, slug_set used for dedup, source_meta)
     content_card_text: Optional[str] = None
     content_card_slugs: set = set()
     if _card_result:
@@ -1191,7 +1210,6 @@ async def resolve_rag_context(
             rag_ctx["source"] = "rag"
         logger.info(f"RAG resolve: content card found ({len(content_card_text)} chars, {len(content_card_slugs)} slugs) | query: {query[:50]}")
 
-    # Vector hits: deduplicate against content card slugs before injecting
     if vector_hits:
         deduped = [h for h in vector_hits if h.get("slug") not in content_card_slugs]
         rag_ctx["vector_hits"] = deduped
@@ -1222,7 +1240,7 @@ async def resolve_rag_context(
     rag_ctx["intent"] = _resolved_intent
 
     if _final_quality == "high":
-        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(rag_ctx.get('vector_hits', []))}, card: {'yes' if content_card_text else 'no'}, intent: {_resolved_intent}) | query: {query[:50]}")
+        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(rag_ctx.get('vector_hits', []))}, card: {'yes' if content_card_text else 'no'}, best_sim={_best_vec_sim:.3f}, intent: {_resolved_intent}) | query: {query[:50]}")
     elif _final_quality == "medium":
         logger.info(f"RAG resolve: MEDIUM metadata only | intent: {_resolved_intent} | query: {query[:50]}")
     else:
@@ -1650,7 +1668,7 @@ def build_rag_system_prompt(
                 "Blend both sources naturally. Keep it concise and directly useful.*"
             )
 
-    # ── Live Web Search Results (dual-layer: base + polish) ─────────────────
+    # ── Live Web Search Results — EQUAL WEIGHTAGE with RAG ──────────────────
     if web_results:
         _has_internal = bool(chunks or subjects or chapters or content_card or vector_hits)
         base_results   = [r for r in web_results if r.get("_layer") != "polish"]
@@ -1660,67 +1678,56 @@ def build_rag_system_prompt(
 
         if _has_internal:
             web_block += (
-                "**WEB SEARCH — SUPPLEMENTARY (external sources):**\n"
-                "Internal Syrabit content above is the PRIMARY source. "
-                "Use these web results ONLY to supplement or enrich your answer. "
-                "Always prefer citing internal [PAGE: slug] sources over external web links.\n\n"
+                "**WEB SEARCH — POLISH LAYER (equal weight with RAG above):**\n"
+                "RAG content above is the BASE (50%). These web results are the POLISH (50%). "
+                "Use web results to add depth, real-world examples, recent context, and completeness. "
+                "Blend both naturally into one cohesive answer.\n\n"
+            )
+        else:
+            web_block += (
+                "**WEB SEARCH — PRIMARY SOURCE (outside syllabus topic):**\n"
+                "No syllabus content matched this topic. Use these web results as your primary factual base. "
+                "Answer the student's question thoroughly using web content + your own knowledge.\n\n"
             )
 
         _any_enriched = any(r.get("_enriched") for r in web_results)
 
-        if base_results:
-            if not _has_internal:
-                _quality_note = (
-                    "Full page content has been extracted from these sources — use the detailed text to build a thorough, accurate answer. "
-                    if _any_enriched else ""
-                )
-                web_block += (
-                    "**WEB SEARCH — BASE LAYER (browser results, primary facts):**\n"
-                    f"{_quality_note}"
-                    "Build the core of your answer from these results. "
-                    "Use them as the factual foundation — definitions, explanations, data points.\n\n"
-                )
-            for i, r in enumerate(base_results, 1):
-                title   = r.get("title", "")
-                url     = r.get("url", "")
-                content = r.get("full_content") or r.get("snippet", "")
-                _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
-                web_block += f"[Base {i}] {_tag} {title}\n{content}\nSource: {url}\n\n"
+        for i, r in enumerate(base_results, 1):
+            title   = r.get("title", "")
+            url     = r.get("url", "")
+            content = r.get("full_content") or r.get("snippet", "")
+            _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
+            web_block += f"[Web {i}] {_tag} {title}\n{content}\nSource: {url}\n\n"
 
-        if polish_results:
-            if not _has_internal:
-                web_block += (
-                    "**WEB SEARCH — POLISH LAYER (news/open web, enrichment):**\n"
-                    "Use these to add current context, recent examples, or relevance to the student's "
-                    "specific situation. Blend naturally into the answer — do not list them separately.\n\n"
-                )
-            for i, r in enumerate(polish_results, 1):
-                title   = r.get("title", "")
-                url     = r.get("url", "")
-                content = r.get("full_content") or r.get("snippet", "")
-                _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
-                web_block += f"[Polish {i}] {_tag} {title}\n{content}\nSource: {url}\n\n"
+        for i, r in enumerate(polish_results, 1):
+            title   = r.get("title", "")
+            url     = r.get("url", "")
+            content = r.get("full_content") or r.get("snippet", "")
+            _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
+            web_block += f"[Web {len(base_results)+i}] {_tag} {title}\n{content}\nSource: {url}\n\n"
 
         if _has_internal:
             web_block += (
                 "---\n"
-                "*INSTRUCTION: Your answer MUST prioritize internal Syrabit content above. "
-                "Web results are supplementary — use them only to fill gaps or add context. "
-                "Do not add source citations inline — the system appends the SOURCE line automatically. "
-                "Do not fabricate facts beyond what the sources contain.*\n"
+                "**BLENDING INSTRUCTION (RAG + WEB = EQUAL):**\n"
+                "*RAG content = factual base (definitions, formulas, curriculum facts). "
+                "Web results = polish (depth, examples, modern context, completeness). "
+                "Merge both into one natural answer. Do not add source citations inline — the system appends SOURCE automatically. "
+                "NEVER hallucinate or invent facts.*\n"
             )
         else:
             _enriched_note = (
-                "Results marked [Full Content] contain detailed page text — rely on these heavily for accuracy. "
+                "Results marked [Full Content] contain detailed page text — rely on these heavily. "
                 if _any_enriched else ""
             )
             web_block += (
                 "---\n"
-                "**ANSWER WEIGHTAGE (50/50 BALANCE):**\n"
+                "**ANSWER WEIGHTAGE (WEB + YOUR KNOWLEDGE):**\n"
                 f"*{_enriched_note}"
-                "1. 50% WEB RESULTS: Use the search results above as your factual anchor.\n"
-                "2. 50% YOUR KNOWLEDGE: Enrich with your training knowledge — explanations, examples, deeper context.\n"
-                "Blend both sources naturally. Do not fabricate facts beyond what the results contain.*\n"
+                "1. Use web results as your factual anchor — extract key facts, definitions, explanations.\n"
+                "2. Enrich with your own knowledge — deeper context, examples, analogies.\n"
+                "3. Answer the student's actual question completely, even if it's outside the syllabus.\n"
+                "Blend naturally. Do not fabricate facts.*\n"
             )
         grounding += web_block
 
