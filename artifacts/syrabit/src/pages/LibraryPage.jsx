@@ -204,7 +204,7 @@ export default function LibraryPage() {
                   className="text-foreground shimmer-text"
                   style={{ fontSize: 'clamp(1.15rem, 4vw, 1.5rem)', fontWeight: 700, lineHeight: 1.3 }}
                 >
-                  Your Educational Browser
+                  Educational Browser For Assamboard Students
                 </h1>
                 <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                   Browse {subjects.length} subjects · {allChapters.length} lessons
