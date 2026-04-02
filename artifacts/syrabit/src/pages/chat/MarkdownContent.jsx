@@ -1,22 +1,29 @@
-import { useMemo } from 'react';
+import { useMemo, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-const MD_LINK_COMPONENTS = {
-  a: ({ href, children }) => {
-    if (!href) return <span>{children}</span>;
-    if (href.startsWith('http')) {
-      return <a href={href} target="_blank" rel="noopener noreferrer" className="inline-source-link">{children}</a>;
-    }
-    return (
-      <button onClick={() => { window.location.href = href; }} className="inline-source-link">
-        {children}
-      </button>
-    );
-  },
-};
-
 export function MarkdownContent({ content, streaming, sources }) {
+  const navigate = useNavigate();
+
+  const handleInternalClick = useCallback((href) => {
+    navigate(href);
+  }, [navigate]);
+
+  const components = useMemo(() => ({
+    a: ({ href, children }) => {
+      if (!href) return <span>{children}</span>;
+      if (/^(https?:)?\/\/|^mailto:|^tel:/i.test(href)) {
+        return <a href={href} target="_blank" rel="noopener noreferrer" className="inline-source-link">{children}</a>;
+      }
+      return (
+        <button onClick={() => handleInternalClick(href)} className="inline-source-link">
+          {children}
+        </button>
+      );
+    },
+  }), [handleInternalClick]);
+
   const processed = useMemo(() => {
     if (!content) return content;
     const normalize = (s) => (s || '').trim().toLowerCase().replace(/[\s\-_]+/g, ' ').replace(/[^a-z0-9 ]/g, '');
@@ -54,7 +61,7 @@ export function MarkdownContent({ content, streaming, sources }) {
 
   return (
     <div className="md-content-light" style={{ fontSize: '0.9375rem' }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_LINK_COMPONENTS}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {processed}
       </ReactMarkdown>
       {streaming && (

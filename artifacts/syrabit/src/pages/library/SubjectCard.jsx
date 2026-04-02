@@ -1,5 +1,6 @@
 import { useMemo, useState, useCallback, memo } from 'react';
 import { Link } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Bookmark, BookmarkCheck,
   BookOpen, Layers, ChevronRight, Sparkles,
@@ -7,6 +8,7 @@ import {
   FileText, HelpCircle, List, Lightbulb, CheckSquare, ChevronDown,
 } from 'lucide-react';
 import { useShare } from '@/hooks/useShare';
+import { prefetchSubjectData } from '@/hooks/useContent';
 
 const THUMB_GRADIENTS = {
   math:      ['#4f46e5', '#7c3aed'],
@@ -51,6 +53,7 @@ function TopicPageTypePills({ topic, basePath }) {
 }
 
 const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onToggleSave, onAskAI, index }) {
+  const queryClient = useQueryClient();
   const [showTopics, setShowTopics] = useState(null);
   const thumbColors = useMemo(() => THUMB_GRADIENTS[sub.gradient] || THUMB_GRADIENTS.math, [sub.gradient]);
   const tags = useMemo(() => Array.isArray(sub.tags) ? sub.tags : [], [sub.tags]);
@@ -93,6 +96,12 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
     e.preventDefault();
     share(sub.name, subjectLandingPath);
   }, [sub.name, subjectLandingPath, share]);
+
+  const handlePrefetch = useCallback(() => {
+    if (sub.boardSlug && sub.classSlug && sub.slug) {
+      prefetchSubjectData(queryClient, sub.boardSlug, sub.classSlug, sub.slug);
+    }
+  }, [queryClient, sub.boardSlug, sub.classSlug, sub.slug]);
 
   const visibleChapters = useMemo(() => chapters.slice(0, 3), [chapters]);
   const moreChapters = chapters.length - 3;
@@ -396,6 +405,8 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
         <Link
           to={subjectLandingPath}
+          onMouseEnter={handlePrefetch}
+          onTouchStart={handlePrefetch}
           className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
           style={{ color: 'hsl(var(--muted-foreground))', border: '1px solid rgba(139,92,246,0.12)' }}
         >

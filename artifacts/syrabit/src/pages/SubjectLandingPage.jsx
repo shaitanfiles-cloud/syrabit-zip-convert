@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import {
@@ -7,54 +7,23 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { getSeoPageTypes, API_BASE } from '@/utils/api';
-import axios from 'axios';
+import { getSeoPageTypes } from '@/utils/api';
+import { useResolveSubject, useChapters, useSeoTopics } from '@/hooks/useContent';
 
 export default function SubjectLandingPage() {
   const { board, classSlug, subjectSlug } = useParams();
-
-  const [subject, setSubject] = useState(null);
-  const [chapters, setChapters] = useState([]);
-  const [topics, setTopics] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
+  const { data: subject = null, isLoading: subjectLoading, error: subjectError } = useResolveSubject(board, classSlug, subjectSlug);
+  const subjectId = subject?.id || subject?._id;
+  const { data: chapters = [], isLoading: chaptersLoading } = useChapters(subjectId);
+  const { data: topicsRaw = [] } = useSeoTopics(board, classSlug, subjectSlug);
+  const topics = Array.isArray(topicsRaw) ? topicsRaw : [];
 
-    (async () => {
-      try {
-        const resolveRes = await axios.get(`${API_BASE}/content/resolve-subject/${board}/${classSlug}/${subjectSlug}`);
-        const subjectData = resolveRes.data;
-        if (cancelled) return;
-        setSubject(subjectData);
-
-        const subjectId = subjectData.id || subjectData._id;
-        if (subjectId) {
-          const chapRes = await axios.get(`${API_BASE}/content/chapters/${subjectId}`);
-          if (!cancelled) setChapters(chapRes.data || []);
-        }
-
-        try {
-          const topicsRes = await axios.get(`${API_BASE}/seo/topics/${board}/${classSlug}/${subjectSlug}`);
-          if (!cancelled) setTopics(topicsRes.data || []);
-        } catch {
-          if (!cancelled) setTopics([]);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err.response?.status === 404 ? 'Subject not found' : 'Failed to load subject');
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [board, classSlug, subjectSlug]);
+  const loading = subjectLoading || (!!subjectId && chaptersLoading);
+  const error = subjectError
+    ? (subjectError.response?.status === 404 ? 'Subject not found' : 'Failed to load subject')
+    : null;
 
   const topicsByChapter = useMemo(() => {
     const map = new Map();

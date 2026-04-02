@@ -111,6 +111,51 @@ export const useLibraryBundle = () =>
     gcTime: 60 * 60 * 1000,
   });
 
+const fetchResolveSubject = (board, classSlug, subjectSlug) =>
+  apiClient().get(`/content/resolve-subject/${board}/${classSlug}/${subjectSlug}`).then((r) => r.data);
+
+const fetchSeoTopics = (board, classSlug, subjectSlug) =>
+  apiClient().get(`/seo/topics/${board}/${classSlug}/${subjectSlug}`).then((r) => r.data);
+
+export const useResolveSubject = (board, classSlug, subjectSlug) =>
+  useQuery({
+    queryKey: ['resolve-subject', board, classSlug, subjectSlug],
+    queryFn: () => fetchResolveSubject(board, classSlug, subjectSlug),
+    staleTime: 10 * 60 * 1000,
+    enabled: !!board && !!classSlug && !!subjectSlug,
+  });
+
+export const useSeoTopics = (board, classSlug, subjectSlug) =>
+  useQuery({
+    queryKey: ['seo-topics', board, classSlug, subjectSlug],
+    queryFn: () => fetchSeoTopics(board, classSlug, subjectSlug),
+    staleTime: 10 * 60 * 1000,
+    enabled: !!board && !!classSlug && !!subjectSlug,
+  });
+
+export function prefetchSubjectData(queryClient, board, classSlug, subjectSlug) {
+  const staleTime = 10 * 60 * 1000;
+  queryClient.prefetchQuery({
+    queryKey: ['seo-topics', board, classSlug, subjectSlug],
+    queryFn: () => fetchSeoTopics(board, classSlug, subjectSlug),
+    staleTime,
+  });
+  queryClient.fetchQuery({
+    queryKey: ['resolve-subject', board, classSlug, subjectSlug],
+    queryFn: () => fetchResolveSubject(board, classSlug, subjectSlug),
+    staleTime,
+  }).then((subjectData) => {
+    const subjectId = subjectData?.id || subjectData?._id;
+    if (subjectId) {
+      queryClient.prefetchQuery({
+        queryKey: ['chapters', subjectId],
+        queryFn: () => fetchChapters(subjectId),
+        staleTime,
+      });
+    }
+  }).catch(() => {});
+}
+
 const fetchCmsLibrary = () =>
   apiClient().get('/content/cms-library').then((r) => {
     const d = r.data;

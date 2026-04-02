@@ -13,6 +13,10 @@ const routeImports = {
   '/signup': () => import('@/pages/SignupPage'),
 };
 
+routeImports['/library']()
+  .then(() => prefetched.add('/library'))
+  .catch(() => {});
+
 export function prefetchRoute(path) {
   if (prefetched.has(path) || pending.has(path)) return;
   const loader = routeImports[path];
