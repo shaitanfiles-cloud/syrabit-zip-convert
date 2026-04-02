@@ -323,7 +323,7 @@ export default function AnimatedChatDemo({ onUrlChange }) {
   useEffect(() => {
     if (phase !== PHASES.CLICKING) return;
     timeoutRef.current = setTimeout(() => {
-      onUrlChange?.('content/photoelectric-effect');
+      onUrlChange?.('chat');
       setPhase(PHASES.PAGE_VIEW);
     }, CLICKING_DURATION);
     return () => clearTimeout(timeoutRef.current);

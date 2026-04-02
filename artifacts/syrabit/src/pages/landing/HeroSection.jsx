@@ -176,7 +176,7 @@ export default function HeroSection() {
                     className="text-xs"
                     style={{ color: 'rgba(255,255,255,0.30)' }}
                   >
-                    {window.location.hostname}/{browserPath}
+                    syrabit.ai/{browserPath}
                   </motion.span>
                 </div>
               </div>

@@ -58,7 +58,7 @@ export default function PageMeta({
       <meta name="ICBM" content="26.2006, 92.9376" />
       <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large" />
       <meta httpEquiv="content-language" content="en-IN" />
-      <link rel="alternate" hreflang="en-IN" href={url} />
+      <link rel="alternate" hrefLang="en-IN" href={url} />
 
       {jsonLd && (
         <script type="application/ld+json">
