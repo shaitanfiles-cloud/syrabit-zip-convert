@@ -7,8 +7,6 @@ export default function CmsPostCard({ post }) {
   return (
     <Link
       to={to}
-      data-grid-groupkey={post.groupKey}
-      data-grid-key={post.subject_id}
       className="block rounded-2xl overflow-hidden border transition-all duration-200 hover:-translate-y-0.5"
       style={{ background: '#1a1a1a', border: '1px solid rgba(149,117,224,0.10)', boxShadow: '0 4px 20px rgba(0,0,0,0.30)' }}
     >

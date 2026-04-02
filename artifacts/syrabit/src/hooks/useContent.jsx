@@ -110,3 +110,18 @@ export const useLibraryBundle = () =>
     staleTime: 30 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
   });
+
+const fetchCmsLibrary = () =>
+  apiClient().get('/content/cms-library').then((r) => {
+    const d = r.data;
+    return Array.isArray(d) ? d : [];
+  });
+
+export const useCmsLibrary = () =>
+  useQuery({
+    queryKey: ['cms-library'],
+    queryFn: fetchCmsLibrary,
+    staleTime: 30 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+  });
+

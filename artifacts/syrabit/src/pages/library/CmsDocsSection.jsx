@@ -1,24 +1,10 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useMemo } from 'react';
 import { FileText } from 'lucide-react';
 import CmsDocCard from './CmsDocCard';
-
-const CMS_API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
-
-function useCmsLibrary() {
-  const [docs, setDocs] = useState([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    fetch(`${CMS_API}/content/cms-library`)
-      .then(r => r.json())
-      .then(d => setDocs(Array.isArray(d) ? d : []))
-      .catch(() => setDocs([]))
-      .finally(() => setLoading(false));
-  }, []);
-  return { docs, loading };
-}
+import { useCmsLibrary } from '@/hooks/useContent';
 
 export default function CmsDocsSection({ board, classSlug }) {
-  const { docs, loading } = useCmsLibrary();
+  const { data: docs = [], isLoading } = useCmsLibrary();
 
   const filtered = useMemo(() => {
     let result = docs;
@@ -27,7 +13,7 @@ export default function CmsDocsSection({ board, classSlug }) {
     return result;
   }, [docs, board, classSlug]);
 
-  if (loading || filtered.length === 0) return null;
+  if (isLoading || filtered.length === 0) return null;
   return (
     <div className="w-full max-w-6xl mx-auto px-4 md:px-6 pb-8">
       <div className="flex items-center gap-2 mb-4 mt-2">

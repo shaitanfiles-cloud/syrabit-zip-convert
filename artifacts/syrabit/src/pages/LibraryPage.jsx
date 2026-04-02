@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Search, Bookmark,
@@ -16,11 +16,39 @@ import {
 } from '@/hooks/useContent';
 import { useToggleSavedSubject } from '@/hooks/useUser';
 import SubjectCard from './library/SubjectCard';
-import CmsDocsSection from './library/CmsDocsSection';
-import CmsPostsGrid from './library/CmsPostsGrid';
 import LibrarySkeleton from './library/LibrarySkeleton';
 import FilterChip from './library/FilterChip';
 import ScrollableFilterRow from './library/ScrollableFilterRow';
+
+const LazyCmsDocsSection = lazy(() => import('./library/CmsDocsSection'));
+const LazyCmsPostsGrid = lazy(() => import('./library/CmsPostsGrid'));
+
+function LazyOnVisible({ children }) {
+  const [visible, setVisible] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={ref}>
+      {visible ? children : null}
+    </div>
+  );
+}
 
 const STREAM_CHIPS = [
   { id: 'all', label: 'All' },
@@ -365,8 +393,16 @@ export default function LibraryPage() {
               </div>
             )}
           </div>
-          <CmsDocsSection />
-          <CmsPostsGrid />
+          <LazyOnVisible>
+            <Suspense fallback={null}>
+              <LazyCmsDocsSection />
+            </Suspense>
+          </LazyOnVisible>
+          <LazyOnVisible>
+            <Suspense fallback={null}>
+              <LazyCmsPostsGrid />
+            </Suspense>
+          </LazyOnVisible>
         </div>
 
       </div>

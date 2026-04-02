@@ -177,15 +177,18 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           }}
         >
           {sub.thumbnailUrl && (
-            <div
-              className="absolute inset-0 pointer-events-none"
-              style={{
-                backgroundImage: `linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.70) 100%), url(${sub.thumbnailUrl})`,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-                zIndex: 0,
-              }}
-            />
+            <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }}>
+              <img
+                src={sub.thumbnailUrl}
+                alt=""
+                loading="lazy"
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+              <div
+                className="absolute inset-0"
+                style={{ background: 'linear-gradient(180deg, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0.70) 100%)' }}
+              />
+            </div>
           )}
           <div className="relative z-10">
             <div className="flex items-center justify-between gap-1.5 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(139,92,246,0.06)' }}>

@@ -1,43 +1,57 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { log } from '@/utils/logger';
+import { useState, useCallback } from 'react';
 import { BookText, Loader2 } from 'lucide-react';
-import { MasonryInfiniteGrid } from '@egjs/react-infinitegrid';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiClient } from '@/utils/api';
 import CmsPostCard from './CmsPostCard';
 
-const CMS_API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 const POSTS_PER_PAGE = 12;
 
+const fetchCmsPosts = ({ limit, skip, board, classSlug }) => {
+  const params = new URLSearchParams({ limit: String(limit), skip: String(skip) });
+  if (board) params.append('board', board);
+  if (classSlug) params.append('class_slug', classSlug);
+  return apiClient().get(`/cms/posts?${params}`).then((r) => r.data);
+};
+
 export default function CmsPostsGrid({ board, classSlug }) {
-  const [items,    setItems]    = useState([]);
-  const [total,    setTotal]    = useState(0);
-  const [loading,  setLoading]  = useState(false);
-  const [done,     setDone]     = useState(false);
-  const groupKey = useRef(0);
+  const [pages, setPages] = useState([0]);
+  const queryClient = useQueryClient();
 
-  const fetchPage = useCallback(async (skip) => {
-    setLoading(true);
+  const { data: firstPageData, isLoading } = useQuery({
+    queryKey: ['cms-posts', board || '', classSlug || '', 0],
+    queryFn: () => fetchCmsPosts({ limit: POSTS_PER_PAGE, skip: 0, board, classSlug }),
+    staleTime: 30 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+  });
+
+  const total = firstPageData?.total || 0;
+
+  const allItems = pages.flatMap((skip) => {
+    const cached = queryClient.getQueryData(['cms-posts', board || '', classSlug || '', skip]);
+    return cached?.items || [];
+  });
+
+  const [loadingMore, setLoadingMore] = useState(false);
+  const hasMore = allItems.length < total;
+
+  const handleLoadMore = useCallback(async () => {
+    const nextSkip = allItems.length;
+    setLoadingMore(true);
     try {
-      const params = new URLSearchParams({ limit: POSTS_PER_PAGE, skip });
-      if (board)      params.append('board',      board);
-      if (classSlug)  params.append('class_slug', classSlug);
-      const res  = await fetch(`${CMS_API}/cms/posts?${params}`);
-      if (!res.ok) {
-        log.error('CMS posts fetch non-ok', { status: res.status, route: '/api/cms/posts', skip });
-        return;
+      const data = await queryClient.fetchQuery({
+        queryKey: ['cms-posts', board || '', classSlug || '', nextSkip],
+        queryFn: () => fetchCmsPosts({ limit: POSTS_PER_PAGE, skip: nextSkip, board, classSlug }),
+        staleTime: 30 * 60 * 1000,
+      });
+      if (data) {
+        setPages(prev => [...prev, nextSkip]);
       }
-      const data = await res.json();
-      const newItems = (data.items || []).map(p => ({ ...p, groupKey: groupKey.current }));
-      setItems(prev => skip === 0 ? newItems : [...prev, ...newItems]);
-      setTotal(data.total || 0);
-      if (skip + POSTS_PER_PAGE >= (data.total || 0)) setDone(true);
-      groupKey.current += 1;
-    } catch (err) { log.error('CMS posts fetch failed', { error: err.message, route: '/api/cms/posts', skip }); }
-    finally { setLoading(false); }
-  }, [board, classSlug]);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [allItems.length, board, classSlug, queryClient]);
 
-  useEffect(() => { setItems([]); setDone(false); groupKey.current = 0; fetchPage(0); }, [fetchPage]);
-
-  if (!loading && items.length === 0) return null;
+  if (!isLoading && allItems.length === 0) return null;
 
   return (
     <div className="w-full max-w-6xl mx-auto px-4 md:px-6 pb-10">
@@ -48,27 +62,32 @@ export default function CmsPostsGrid({ board, classSlug }) {
           <span className="ml-1 px-2 py-0.5 rounded-full text-[10px] font-medium" style={{ background: 'rgba(149,117,224,0.12)', color: '#a78bfa' }}>{total}</span>
         )}
       </div>
-      <MasonryInfiniteGrid
-        className="cms-posts-masonry"
-        gap={16}
-        align="stretch"
-        useResizeObserver
-        observeChildren
-        onRequestAppend={({ groupKey: gk }) => {
-          if (loading || done) return;
-          fetchPage(items.length);
-        }}
-      >
-        {items.map((post, index) => (
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+        {allItems.map((post, index) => (
           <CmsPostCard key={post.id || post._id || `${post.subject_id}-${index}`} post={post} />
         ))}
-      </MasonryInfiniteGrid>
-      {loading && (
+      </div>
+      {(isLoading || loadingMore) && (
         <div className="flex justify-center py-6">
           <Loader2 size={20} className="animate-spin text-violet-400" />
         </div>
       )}
-      {done && items.length > 0 && (
+      {hasMore && !isLoading && !loadingMore && (
+        <div className="flex justify-center pt-6">
+          <button
+            onClick={handleLoadMore}
+            className="px-5 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 active:scale-95"
+            style={{
+              color: '#a78bfa',
+              background: 'rgba(139,92,246,0.08)',
+              border: '1px solid rgba(139,92,246,0.20)',
+            }}
+          >
+            Load more posts
+          </button>
+        </div>
+      )}
+      {!hasMore && allItems.length > 0 && !isLoading && (
         <p className="text-center text-xs py-4" style={{ color: 'rgba(232,232,232,0.25)' }}>All {total} posts loaded</p>
       )}
     </div>

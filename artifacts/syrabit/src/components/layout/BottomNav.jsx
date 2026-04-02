@@ -1,13 +1,14 @@
+import { useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { BookOpen, MessageSquare, Clock, User, ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-
+import { pageImports } from '@/utils/pageImports';
 
 const NAV_ITEMS = [
-  { to: '/library', icon: BookOpen,      label: 'Browser'  },
-  { to: '/chat',    icon: MessageSquare, label: 'Chat'     },
-  { to: '/history', icon: Clock,         label: 'History'  },
-  { to: '/profile', icon: User,          label: 'Profile'  },
+  { to: '/library', icon: BookOpen,      label: 'Browser',  preloadKey: 'library' },
+  { to: '/chat',    icon: MessageSquare, label: 'Chat',     preloadKey: 'chat' },
+  { to: '/history', icon: Clock,         label: 'History',  preloadKey: 'history' },
+  { to: '/profile', icon: User,          label: 'Profile',  preloadKey: 'profile' },
 ];
 
 export function BottomNav() {
@@ -20,6 +21,12 @@ export function BottomNav() {
   const items = user?.is_admin
     ? [...NAV_ITEMS, { to: '/admin', icon: ShieldCheck, label: 'Admin' }]
     : NAV_ITEMS;
+
+  const handlePreload = useCallback((preloadKey) => {
+    if (preloadKey && pageImports[preloadKey]) {
+      pageImports[preloadKey]();
+    }
+  }, []);
 
   return (
     <nav
@@ -37,12 +44,15 @@ export function BottomNav() {
       data-testid="app-bottom-nav"
     >
       <div className="flex items-center justify-around h-16 px-2">
-        {items.map(({ to, icon: Icon, label }) => {
+        {items.map(({ to, icon: Icon, label, preloadKey }) => {
           const active = isActive(to);
           return (
             <Link
               key={to}
               to={to}
+              onTouchStart={() => handlePreload(preloadKey)}
+              onMouseEnter={() => handlePreload(preloadKey)}
+              onFocus={() => handlePreload(preloadKey)}
               className="flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 min-w-[44px] min-h-[44px] relative"
               style={active ? {
                 color: '#a78bfa',

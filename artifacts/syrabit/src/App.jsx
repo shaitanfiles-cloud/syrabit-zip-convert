@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
 import { initGA4 } from "@/utils/analytics";
 import { Toaster } from "sonner";
@@ -11,6 +11,7 @@ import { ThemeProvider } from "next-themes";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
 import { Loader2 } from "lucide-react";
+import { apiClient } from "@/utils/api";
 
 // ── React Query client ────────────────────────────────────────────────────────
 const queryClient = new QueryClient({
@@ -25,17 +26,19 @@ const queryClient = new QueryClient({
 });
 
 
+import { pageImports } from "@/utils/pageImports";
+
 // ── React.lazy() code splitting — all pages ────────────────────────────────
 const LandingPage        = lazy(() => import("@/pages/LandingPage"));
 const LoginPage          = lazy(() => import("@/pages/LoginPage"));
 const SignupPage         = lazy(() => import("@/pages/SignupPage"));
 const ResetPasswordPage  = lazy(() => import("@/pages/ResetPasswordPage"));
 const OnboardingPage     = lazy(() => import("@/pages/OnboardingPage"));
-const LibraryPage        = lazy(() => import("@/pages/LibraryPage"));
+const LibraryPage        = lazy(pageImports.library);
 const SubjectPage        = lazy(() => import("@/pages/SubjectPage"));
-const ChatPage           = lazy(() => import("@/pages/ChatPage"));
-const HistoryPage        = lazy(() => import("@/pages/HistoryPage"));
-const ProfilePage        = lazy(() => import("@/pages/ProfilePage"));
+const ChatPage           = lazy(pageImports.chat);
+const HistoryPage        = lazy(pageImports.history);
+const ProfilePage        = lazy(pageImports.profile);
 const PricingPage        = lazy(() => import("@/pages/PricingPage"));
 const TermsPage          = lazy(() => import("@/pages/TermsPage"));
 const PrivacyPage        = lazy(() => import("@/pages/PrivacyPage"));
@@ -53,7 +56,7 @@ const PYQReplicaPage         = lazy(() => import("@/pages/PYQReplicaPage"));
 const PersonalizedCmsPage    = lazy(() => import("@/pages/PersonalizedCmsPage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
-const PageFallback = () => (
+const PageFallbackContent = () => (
   <div
     className="min-h-screen flex items-center justify-center bg-background"
     role="status"
@@ -86,10 +89,29 @@ const PageFallback = () => (
   </div>
 );
 
+function DeferredFallback({ delay = 300 }) {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => setShow(true), delay);
+    return () => clearTimeout(timer);
+  }, [delay]);
+  return show ? <PageFallbackContent /> : null;
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
   useEffect(() => { initGA4(); }, []);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      queryClient.prefetchQuery({
+        queryKey: ['library-bundle'],
+        queryFn: () => apiClient().get('/content/library-bundle').then((r) => r.data),
+        staleTime: 30 * 60 * 1000,
+      });
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, []);
 
   // Nuke Emergent badge completely — fast interval + all hiding properties
   useEffect(() => {
@@ -156,7 +178,7 @@ function App() {
             <BrowserRouter>
               <PageTracker />
               <Toaster richColors position="top-center" closeButton />
-              <Suspense fallback={<PageFallback />}>
+              <Suspense fallback={<DeferredFallback />}>
                 <Routes>
                   {/* ── Public routes ── */}
                   <Route path="/"         element={<LandingPage />} />

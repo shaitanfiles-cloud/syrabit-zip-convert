@@ -1,17 +1,18 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { BookOpen, MessageSquare, Clock, User, ShieldCheck, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Separator } from '@/components/ui/separator';
 import { LogoFull, LogoMark } from '@/components/Logo';
+import { pageImports } from '@/utils/pageImports';
 
 const NAV_ITEMS = [
-  { to: '/library', icon: BookOpen,      label: 'Browser'  },
-  { to: '/chat',    icon: MessageSquare, label: 'Chat'     },
-  { to: '/history', icon: Clock,         label: 'History'  },
-  { to: '/profile', icon: User,          label: 'Profile'  },
+  { to: '/library', icon: BookOpen,      label: 'Browser',  preloadKey: 'library' },
+  { to: '/chat',    icon: MessageSquare, label: 'Chat',     preloadKey: 'chat' },
+  { to: '/history', icon: Clock,         label: 'History',  preloadKey: 'history' },
+  { to: '/profile', icon: User,          label: 'Profile',  preloadKey: 'profile' },
 ];
 
 export const Sidebar = () => {
@@ -29,6 +30,12 @@ export const Sidebar = () => {
   const handleLogout = () => { logout(); navigate('/login'); };
   const isActive = (path) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
+
+  const handlePreload = useCallback((preloadKey) => {
+    if (preloadKey && pageImports[preloadKey]) {
+      pageImports[preloadKey]();
+    }
+  }, []);
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -62,7 +69,7 @@ export const Sidebar = () => {
 
         {/* Nav items */}
         <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto">
-          {NAV_ITEMS.map(({ to, icon: Icon, label }) => {
+          {NAV_ITEMS.map(({ to, icon: Icon, label, preloadKey }) => {
             const active = isActive(to);
             return (
               <Tooltip key={to}>
@@ -79,7 +86,9 @@ export const Sidebar = () => {
                       background: 'linear-gradient(135deg, rgba(124,58,237,0.18), rgba(109,40,217,0.08))',
                       boxShadow: '0 2px 12px rgba(124,58,237,0.12)',
                     } : {}}
+                    onFocus={() => handlePreload(preloadKey)}
                     onMouseEnter={e => {
+                      handlePreload(preloadKey);
                       if (!active) e.currentTarget.style.background = 'rgba(139,92,246,0.08)';
                     }}
                     onMouseLeave={e => {

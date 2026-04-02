@@ -1198,11 +1198,6 @@
   }
 }
 
-/* Masonry grid: always 1 column on mobile, 2 on sm, 3 on lg */
-.cms-posts-masonry .igItemWrapper { min-width: 280px; }
-@media (max-width: 639px) {
-  .cms-posts-masonry .igItemWrapper { min-width: unset; width: 100% !important; }
-}
 
 /* Ensure touch targets are large enough on mobile */
 @media (max-width: 767px) {
