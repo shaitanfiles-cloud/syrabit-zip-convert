@@ -74,7 +74,6 @@ async def admin_patch_plan_tier(plan: str, data: dict, admin: dict = Depends(get
 # ─────────────────────────────────────────────
 DEFAULT_API_CONFIG = {
     "groq":        {"key": ""},
-    "emergent":    {"key": "", "base_url": ""},
     "payment":     {"razorpay_key_id": "", "razorpay_key_secret": "", "razorpay_webhook_secret": ""},
     "email":       {"resend_key": ""},
     "push":        {"onesignal_key": ""},

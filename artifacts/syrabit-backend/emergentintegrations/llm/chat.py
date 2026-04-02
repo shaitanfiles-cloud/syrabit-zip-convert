@@ -1,9 +1,14 @@
 """
 Universal LLM adapter — supports Groq and OpenAI providers.
 Automatically selects the right client based on provider setting.
+Routes through Cloudflare AI Gateway when configured.
 """
 import asyncio
 import logging
+
+from config import (
+    CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -62,9 +67,7 @@ class LlmChat:
             messages.append({"role": "system", "content": self.system_message})
         messages.append({"role": "user", "content": message.text})
 
-        if self._provider == "emergent":
-            return await self._call_emergent(messages)
-        elif self._provider == "openai":
+        if self._provider == "openai":
             return await self._call_openai(messages)
         elif self._provider == "fireworksai":
             return await self._call_fireworks(messages)
@@ -74,9 +77,7 @@ class LlmChat:
             return await self._call_groq(messages)
 
     async def send_messages(self, messages: list) -> str:
-        if self._provider == "emergent":
-            return await self._call_emergent(messages)
-        elif self._provider == "openai":
+        if self._provider == "openai":
             return await self._call_openai(messages)
         elif self._provider == "fireworksai":
             return await self._call_fireworks(messages)
@@ -86,10 +87,7 @@ class LlmChat:
             return await self._call_groq(messages)
 
     async def stream_messages(self, messages: list, max_tokens: int = 2048):
-        if self._provider == "emergent":
-            async for token in self._stream_emergent(messages, max_tokens):
-                yield token
-        elif self._provider == "openai":
+        if self._provider == "openai":
             async for token in self._stream_openai(messages, max_tokens):
                 yield token
         elif self._provider == "fireworksai":
@@ -102,27 +100,72 @@ class LlmChat:
             async for token in self._stream_groq(messages, max_tokens):
                 yield token
 
+    def _cf_cache_headers(self) -> dict | None:
+        if is_cf_gateway_up():
+            return {"cf-aig-cache-ttl": str(CF_CACHE_TTL)}
+        return None
+
+    @staticmethod
+    def _is_cf_conn_err(exc: Exception) -> bool:
+        err = str(exc).lower()
+        return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+    def _mark_cf_down(self, exc: Exception) -> None:
+        if self._is_cf_conn_err(exc):
+            mark_cf_gateway_down()
+            _log.warning(f"Cloudflare AI Gateway connection error — direct fallback for 5 min: {type(exc).__name__}")
+
     async def _call_groq(self, messages: list) -> str:
         from groq import AsyncGroq
-        client = AsyncGroq(api_key=self.api_key, max_retries=0, timeout=8.0)
-        response = await client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            max_tokens=2048,
-        )
+        base = get_provider_base_url("groq")
+        kwargs = {"api_key": self.api_key, "max_retries": 0, "timeout": 8.0}
+        if base:
+            kwargs["base_url"] = base
+        client = AsyncGroq(**kwargs)
+        try:
+            response = await client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                max_tokens=2048,
+                extra_headers=self._cf_cache_headers(),
+            )
+        except Exception as e:
+            if base and self._is_cf_conn_err(e):
+                self._mark_cf_down(e)
+                client = AsyncGroq(api_key=self.api_key, max_retries=0, timeout=8.0)
+                response = await client.chat.completions.create(
+                    model=self._model, messages=messages, max_tokens=2048,
+                )
+            else:
+                raise
         return response.choices[0].message.content or ""
 
     async def _stream_groq(self, messages: list, max_tokens: int = 2048):
         from groq import AsyncGroq
-        client = AsyncGroq(api_key=self.api_key, max_retries=0, timeout=8.0)
-        stream = await client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            max_tokens=max_tokens,
-            stream=True,
-            temperature=0.1,
-            top_p=0.95,
-        )
+        base = get_provider_base_url("groq")
+        kwargs = {"api_key": self.api_key, "max_retries": 0, "timeout": 8.0}
+        if base:
+            kwargs["base_url"] = base
+        client = AsyncGroq(**kwargs)
+        try:
+            stream = await client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                max_tokens=max_tokens,
+                stream=True,
+                temperature=0.1,
+                top_p=0.95,
+            )
+        except Exception as e:
+            if base and self._is_cf_conn_err(e):
+                self._mark_cf_down(e)
+                client = AsyncGroq(api_key=self.api_key, max_retries=0, timeout=8.0)
+                stream = await client.chat.completions.create(
+                    model=self._model, messages=messages, max_tokens=max_tokens,
+                    stream=True, temperature=0.1, top_p=0.95,
+                )
+            else:
+                raise
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
@@ -130,24 +173,54 @@ class LlmChat:
 
     async def _call_openai(self, messages: list) -> str:
         import openai
-        client = openai.AsyncOpenAI(api_key=self.api_key)
-        response = await client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-        )
+        base = get_provider_base_url("openai")
+        kwargs = {"api_key": self.api_key}
+        if base:
+            kwargs["base_url"] = base
+        client = openai.AsyncOpenAI(**kwargs)
+        try:
+            response = await client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                extra_headers=self._cf_cache_headers(),
+            )
+        except openai.APIConnectionError as e:
+            if base and self._is_cf_conn_err(e):
+                self._mark_cf_down(e)
+                client = openai.AsyncOpenAI(api_key=self.api_key)
+                response = await client.chat.completions.create(
+                    model=self._model, messages=messages,
+                )
+            else:
+                raise
         return response.choices[0].message.content or ""
 
     async def _stream_openai(self, messages: list, max_tokens: int = 1024):
         import openai
-        client = openai.AsyncOpenAI(api_key=self.api_key)
-        stream = await client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            max_tokens=max_tokens,
-            stream=True,
-            temperature=0.1,
-            top_p=0.95,
-        )
+        base = get_provider_base_url("openai")
+        kwargs = {"api_key": self.api_key}
+        if base:
+            kwargs["base_url"] = base
+        client = openai.AsyncOpenAI(**kwargs)
+        try:
+            stream = await client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                max_tokens=max_tokens,
+                stream=True,
+                temperature=0.1,
+                top_p=0.95,
+            )
+        except openai.APIConnectionError as e:
+            if base and self._is_cf_conn_err(e):
+                self._mark_cf_down(e)
+                client = openai.AsyncOpenAI(api_key=self.api_key)
+                stream = await client.chat.completions.create(
+                    model=self._model, messages=messages, max_tokens=max_tokens,
+                    stream=True, temperature=0.1, top_p=0.95,
+                )
+            else:
+                raise
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:
@@ -155,30 +228,50 @@ class LlmChat:
 
     async def _call_fireworks(self, messages: list) -> str:
         import openai
-        client = openai.AsyncOpenAI(
-            api_key=self.api_key,
-            base_url="https://api.fireworks.ai/inference/v1"
-        )
-        response = await client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-        )
+        direct_base = "https://api.fireworks.ai/inference/v1"
+        base = get_provider_base_url("fireworksai") or direct_base
+        client = openai.AsyncOpenAI(api_key=self.api_key, base_url=base)
+        try:
+            response = await client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                extra_headers=self._cf_cache_headers(),
+            )
+        except openai.APIConnectionError as e:
+            if base != direct_base and self._is_cf_conn_err(e):
+                self._mark_cf_down(e)
+                client = openai.AsyncOpenAI(api_key=self.api_key, base_url=direct_base)
+                response = await client.chat.completions.create(
+                    model=self._model, messages=messages,
+                )
+            else:
+                raise
         return response.choices[0].message.content or ""
 
     async def _stream_fireworks(self, messages: list, max_tokens: int = 1024):
         import openai
-        client = openai.AsyncOpenAI(
-            api_key=self.api_key,
-            base_url="https://api.fireworks.ai/inference/v1"
-        )
-        stream = await client.chat.completions.create(
-            model=self._model,
-            messages=messages,
-            max_tokens=max_tokens,
-            stream=True,
-            temperature=0.1,
-            top_p=0.95,
-        )
+        direct_base = "https://api.fireworks.ai/inference/v1"
+        base = get_provider_base_url("fireworksai") or direct_base
+        client = openai.AsyncOpenAI(api_key=self.api_key, base_url=base)
+        try:
+            stream = await client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                max_tokens=max_tokens,
+                stream=True,
+                temperature=0.1,
+                top_p=0.95,
+            )
+        except openai.APIConnectionError as e:
+            if base != direct_base and self._is_cf_conn_err(e):
+                self._mark_cf_down(e)
+                client = openai.AsyncOpenAI(api_key=self.api_key, base_url=direct_base)
+                stream = await client.chat.completions.create(
+                    model=self._model, messages=messages, max_tokens=max_tokens,
+                    stream=True, temperature=0.1, top_p=0.95,
+                )
+            else:
+                raise
         async for chunk in stream:
             delta = chunk.choices[0].delta if chunk.choices else None
             if delta and delta.content:

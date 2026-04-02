@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 
 __all__ = [
     "db", "redis_client", "supa", "pg_pool", "pwd_ctx", "security",
-    "sarvam_client", "sarvam_llm_client", "voyage_client", "logger",
+    "sarvam_client", "sarvam_llm_client",
+    "sarvam_client_direct", "sarvam_llm_client_direct",
+    "voyage_client", "logger",
     "is_mongo_available", "mark_mongo_down",
     "_cms_request_ctx", "_assert_not_cms_context", "_init_pg_pool",
     "_sarvam_headers", "_sarvam_timeout", "_sarvam_llm_timeout", "_sarvam_pool_limits",
@@ -30,6 +32,7 @@ from config import (
     MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_BASE_URL,
     REDIS_URL, REDIS_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _PG_DSN, VOYAGE_API_KEY,
+    CF_GATEWAY_ENABLED, get_provider_base_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -219,10 +222,12 @@ async def _init_pg_pool():
 # ── Sarvam AI — two persistent pooled HTTP/2 clients ─────────────────────────
 # Client A: translation / TTS / transliterate (short read timeout, 30s)
 # Client B: LLM chat (sarvam-m: ~124ms TTFT, full stream < 30s for 4096 tokens)
+# When Cloudflare AI Gateway is enabled, Sarvam routes through the gateway
+# (requires custom "sarvam" provider configured in CF dashboard).
 _sarvam_pool_limits = httpx.Limits(
-    max_keepalive_connections=100,        # up from 50
-    max_connections=200,                  # up from 100
-    keepalive_expiry=120,                 # up from 60 — reuse connections longer
+    max_keepalive_connections=100,
+    max_connections=200,
+    keepalive_expiry=120,
 )
 _sarvam_timeout       = httpx.Timeout(connect=3.0, read=30.0, write=10.0, pool=5.0)
 _sarvam_llm_timeout   = httpx.Timeout(connect=3.0, read=60.0, write=10.0, pool=5.0)
@@ -230,11 +235,15 @@ _sarvam_headers = {
     'api-subscription-key': SARVAM_API_KEY,
     'Content-Type': 'application/json',
 }
-sarvam_client: Optional[httpx.AsyncClient] = None      # translation / TTS / transliterate
-sarvam_llm_client: Optional[httpx.AsyncClient] = None  # LLM chat (long-lived streaming)
+_sarvam_gw_base = get_provider_base_url("sarvam") if CF_GATEWAY_ENABLED else None
+_sarvam_effective_base = _sarvam_gw_base or SARVAM_BASE_URL
+sarvam_client: Optional[httpx.AsyncClient] = None
+sarvam_llm_client: Optional[httpx.AsyncClient] = None
+sarvam_client_direct: Optional[httpx.AsyncClient] = None
+sarvam_llm_client_direct: Optional[httpx.AsyncClient] = None
 if SARVAM_API_KEY:
     sarvam_client = httpx.AsyncClient(
-        base_url=SARVAM_BASE_URL,
+        base_url=_sarvam_effective_base,
         headers=_sarvam_headers,
         limits=_sarvam_pool_limits,
         timeout=_sarvam_timeout,
@@ -242,14 +251,32 @@ if SARVAM_API_KEY:
         verify=True,
     )
     sarvam_llm_client = httpx.AsyncClient(
-        base_url=SARVAM_BASE_URL,
+        base_url=_sarvam_effective_base,
         headers={**_sarvam_headers, 'Accept': 'text/event-stream'},
         limits=_sarvam_pool_limits,
         timeout=_sarvam_llm_timeout,
         http2=True,
         verify=True,
     )
-    logging.getLogger(__name__).info("Sarvam AI client ready (HTTP/2 pooled, dual-client)")
+    if _sarvam_gw_base:
+        sarvam_client_direct = httpx.AsyncClient(
+            base_url=SARVAM_BASE_URL,
+            headers=_sarvam_headers,
+            limits=_sarvam_pool_limits,
+            timeout=_sarvam_timeout,
+            http2=True,
+            verify=True,
+        )
+        sarvam_llm_client_direct = httpx.AsyncClient(
+            base_url=SARVAM_BASE_URL,
+            headers={**_sarvam_headers, 'Accept': 'text/event-stream'},
+            limits=_sarvam_pool_limits,
+            timeout=_sarvam_llm_timeout,
+            http2=True,
+            verify=True,
+        )
+    _via = "Cloudflare AI Gateway" if _sarvam_gw_base else "direct"
+    logging.getLogger(__name__).info(f"Sarvam AI client ready (HTTP/2 pooled, dual-client, {_via}: {_sarvam_effective_base})")
 else:
     logging.getLogger(__name__).warning("SARVAM_API_KEY not set — Sarvam features disabled")
 

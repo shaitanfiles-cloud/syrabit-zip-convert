@@ -1,5 +1,5 @@
 """Syrabit.ai — LLM infrastructure: batching, smart key pool, streaming."""
-import os, re, json, asyncio, uuid, time, logging
+import os, re, json, asyncio, uuid, time, logging, httpx
 
 _MODEL_MAX_OUTPUT_TOKENS = {
     "llama-3.1-8b-instant": 8192,
@@ -18,8 +18,9 @@ from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
     _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
     _SARVAM_LLM_KEY, _CEREBRAS_KEY, _EMERGENT_KEY, _EMERGENT_BASE_URL, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
 )
-from deps import sarvam_llm_client, logger as _dep_logger
+from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
 from cache import _cache_key
 
 logger = logging.getLogger(__name__)
@@ -319,8 +320,9 @@ def _resolve_provider_for_model(model: str, provider_list=None):
 
 async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens: int) -> str:
     """Non-streaming call to Sarvam LLM — reuses persistent sarvam_llm_client (zero TCP overhead).
-    Adds SARVAM_THINK_BUFFER so the <think> block never consumes the user's answer budget."""
-    api_max = max_tokens + SARVAM_THINK_BUFFER  # thinking tokens don't count toward user quota
+    Adds SARVAM_THINK_BUFFER so the <think> block never consumes the user's answer budget.
+    Falls back to direct client if CF gateway connection fails."""
+    api_max = max_tokens + SARVAM_THINK_BUFFER
     payload = {
         "model": model,
         "messages": messages,
@@ -331,8 +333,16 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     client = sarvam_llm_client
     if client is None:
         raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
-    resp = await client.post("/v1/chat/completions", json=payload)
-    resp.raise_for_status()
+    try:
+        resp = await client.post("/v1/chat/completions", json=payload)
+        resp.raise_for_status()
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None:
+            _handle_cf_connection_error(e)
+            resp = await sarvam_llm_client_direct.post("/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+        else:
+            raise
     data = resp.json()
     choice = data["choices"][0]["message"]
     content = choice.get("content") or ""
@@ -342,29 +352,62 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
     result = re.sub(r'<think>.*$', '', result, flags=re.DOTALL).strip()
     return result
 
+def _cf_cache_headers() -> dict:
+    if is_cf_gateway_up():
+        return {"cf-aig-cache-ttl": str(CF_CACHE_TTL)}
+    return {}
+
+def _is_cf_connection_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "connect" in err or "timeout" in err or "unreachable" in err or "dns" in err
+
+def _handle_cf_connection_error(exc: Exception) -> None:
+    if _is_cf_connection_error(exc):
+        mark_cf_gateway_down()
+        logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
+
 async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
     """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
     import openai as _oai
-    client = _oai.AsyncOpenAI(
-        api_key=api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    )
-    resp = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
-    )
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _oai.AsyncOpenAI(api_key=api_key, base_url=direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
     content = resp.choices[0].message.content or ""
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
-async def _call_emergent(messages: list, api_key: str, model: str, max_tokens: int) -> str:
-    """Non-streaming call via the Emergent universal key (OpenAI-compatible gateway)."""
+async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
+    """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
     import openai as _oai
-    client = _oai.AsyncOpenAI(
-        api_key=api_key,
-        base_url=_EMERGENT_BASE_URL,
-    )
-    resp = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
-    )
+    base = get_provider_base_url(provider) or fallback_base
+    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    try:
+        resp = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            extra_headers=_cf_cache_headers() or None,
+        )
+    except _oai.APIConnectionError as e:
+        if base != fallback_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _oai.AsyncOpenAI(api_key=api_key, base_url=fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
     content = resp.choices[0].message.content or ""
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
@@ -390,6 +433,8 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
         return await _call_emergent(messages, api_key, model, max_tokens)
     if provider == "cerebras":
         return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "xai":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
 
     system_msg = ""
     user_msg = ""
@@ -506,9 +551,10 @@ def _inject_think_budget(messages: list) -> list:
 async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int):
     """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
     Adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the user's answer budget.
+    Falls back to direct client if CF gateway connection fails.
 
     Speed knobs applied:
-      • temperature=0.0  — greedy decoding, no sampling overhead
+      • temperature=0.1
       • top_p/freq/pres penalties all zeroed for minimal compute
       • _inject_think_budget — caps reasoning tokens at the prompt level
     """
@@ -527,51 +573,58 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
     client = sarvam_llm_client
     if client is None:
         raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
-    async with client.stream("POST", "/v1/chat/completions", json=payload) as resp:
-        if resp.status_code >= 400:
-            body = await resp.aread()
-            logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
-            resp.raise_for_status()
-        async for line in resp.aiter_lines():
-            if not line.startswith("data:"):
-                continue
-            raw = line[5:].strip()
-            if raw == "[DONE]":
-                break
-            try:
-                chunk = json.loads(raw)
-                delta = chunk["choices"][0]["delta"]
-                token = delta.get("content") or ""
-                if token:
-                    yield token
-            except Exception:
-                continue
+
+    async def _do_stream(c):
+        async with c.stream("POST", "/v1/chat/completions", json=payload) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                logger.error(f"Sarvam {resp.status_code} error body: {body.decode()[:500]}")
+                resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(raw)
+                    delta = chunk["choices"][0]["delta"]
+                    token = delta.get("content") or ""
+                    if token:
+                        yield token
+                except Exception:
+                    continue
+
+    try:
+        async for token in _do_stream(client):
+            yield token
+    except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+        if sarvam_llm_client_direct is not None:
+            _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
 
 async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
     """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
     import openai as _oai
-    client = _oai.AsyncOpenAI(
-        api_key=api_key,
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    )
-    stream = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
-    )
-    async for chunk in stream:
-        delta = chunk.choices[0].delta if chunk.choices else None
-        if delta and delta.content:
-            yield delta.content
-
-async def _stream_emergent(messages: list, api_key: str, model: str, max_tokens: int):
-    """Token-by-token streaming via the Emergent universal key (OpenAI-compatible gateway)."""
-    import openai as _oai
-    client = _oai.AsyncOpenAI(
-        api_key=api_key,
-        base_url=os.environ.get("EMERGENT_BASE_URL", "https://api.emergentmind.com/v1"),
-    )
-    stream = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
-    )
+    direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
+    base = get_provider_base_url("gemini") or direct_base
+    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _oai.AsyncOpenAI(api_key=api_key, base_url=direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta and delta.content:
@@ -594,13 +647,22 @@ async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens:
 async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
     """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
     import openai as _oai
-    client = _oai.AsyncOpenAI(
-        api_key=api_key,
-        base_url="https://api.x.ai/v1",
-    )
-    stream = await client.chat.completions.create(
-        model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
-    )
+    direct_base = "https://api.x.ai/v1"
+    base = get_provider_base_url("xai") or direct_base
+    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    try:
+        stream = await client.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+        )
+    except _oai.APIConnectionError as e:
+        if base != direct_base and _is_cf_connection_error(e):
+            _handle_cf_connection_error(e)
+            client = _oai.AsyncOpenAI(api_key=api_key, base_url=direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta and delta.content:

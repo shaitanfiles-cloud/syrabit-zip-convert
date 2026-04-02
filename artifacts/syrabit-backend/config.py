@@ -37,6 +37,71 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
 EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@syrabit.ai').strip()
 FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rstrip('/')
 
+# ── Cloudflare AI Gateway ────────────────────────────────────────────────────
+import time as _time
+
+_CF_ACCOUNT_ID = os.environ.get('CF_AI_GATEWAY_ACCOUNT_ID', '').strip()
+_CF_GATEWAY_ID = os.environ.get('CF_AI_GATEWAY_ID', '').strip()
+CF_GATEWAY_ENABLED = bool(_CF_ACCOUNT_ID and _CF_GATEWAY_ID)
+CF_GATEWAY_BASE = (
+    f"https://gateway.ai.cloudflare.com/v1/{_CF_ACCOUNT_ID}/{_CF_GATEWAY_ID}"
+    if CF_GATEWAY_ENABLED else ""
+)
+CF_CACHE_TTL = int(os.environ.get('CF_AI_GATEWAY_CACHE_TTL', '3600'))
+
+_CF_PROVIDER_SLUGS = {
+    "openai":      "openai",
+    "groq":        "groq",
+    "xai":         "grok",
+    "gemini":      "google-ai-studio/v1beta/openai",
+    "fireworksai": "fireworks-ai/inference/v1",
+    "sarvam":      "sarvam",
+}
+
+_DIRECT_PROVIDER_URLS = {
+    "openai":      None,
+    "groq":        None,
+    "xai":         "https://api.x.ai/v1",
+    "gemini":      "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "fireworksai": "https://api.fireworks.ai/inference/v1",
+    "sarvam":      "https://api.sarvam.ai",
+}
+
+_cf_gw_healthy = True
+_cf_gw_fail_ts = 0.0
+_CF_GW_RETRY_AFTER = 300
+
+def is_cf_gateway_up() -> bool:
+    global _cf_gw_healthy, _cf_gw_fail_ts
+    if not CF_GATEWAY_ENABLED:
+        return False
+    if not _cf_gw_healthy and _time.time() - _cf_gw_fail_ts > _CF_GW_RETRY_AFTER:
+        _cf_gw_healthy = True
+    return _cf_gw_healthy
+
+def mark_cf_gateway_down():
+    global _cf_gw_healthy, _cf_gw_fail_ts
+    _cf_gw_healthy = False
+    _cf_gw_fail_ts = _time.time()
+
+def cf_gateway_url(provider: str) -> str:
+    slug = _CF_PROVIDER_SLUGS.get(provider)
+    if slug:
+        return f"{CF_GATEWAY_BASE}/{slug}"
+    return ""
+
+def get_provider_base_url(provider: str) -> str | None:
+    if is_cf_gateway_up() and provider in _CF_PROVIDER_SLUGS:
+        return cf_gateway_url(provider)
+    return _DIRECT_PROVIDER_URLS.get(provider)
+
+import logging as _logging
+_cfg_log = _logging.getLogger(__name__)
+if CF_GATEWAY_ENABLED:
+    _cfg_log.info(f"Cloudflare AI Gateway ENABLED — base={CF_GATEWAY_BASE}, cache_ttl={CF_CACHE_TTL}s")
+else:
+    _cfg_log.info("Cloudflare AI Gateway DISABLED — using direct provider URLs")
+
 # ── LLM Configuration ─────────────────────────────────────────────────────────
 _GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
 _GROQ_KEY_2 = os.environ.get('GROQ_API_KEY_2', '').strip()
@@ -45,8 +110,6 @@ _GEMINI_KEY_2 = os.environ.get('GEMINI_API_KEY_2', '').strip()
 _XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
 _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 _FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '')
-_EMERGENT_KEY = os.environ.get('EMERGENT_API_KEY', '').strip()
-_EMERGENT_BASE_URL = os.environ.get('EMERGENT_BASE_URL', 'https://api.emergent.sh/v1').strip()
 _SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
 _CEREBRAS_KEY = os.environ.get('CEREBRAS_API_KEY', '').strip()
 _EMERGENT_KEY = os.environ.get('EMERGENT_API_KEY', '').strip()

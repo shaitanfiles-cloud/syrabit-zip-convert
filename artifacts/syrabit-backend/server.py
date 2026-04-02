@@ -84,6 +84,7 @@ from config import ROOT_DIR, CORS_ORIGINS, _CORS_ALLOW_CREDENTIALS
 import deps
 from deps import (
     db, supa, sarvam_client, sarvam_llm_client,
+    sarvam_client_direct, sarvam_llm_client_direct,
     mongo_client, logger, _rate_cleanup_task, _init_pg_pool,
     is_mongo_available,
 )
@@ -336,6 +337,10 @@ async def lifespan(app):
         await sarvam_client.aclose()
     if sarvam_llm_client:
         await sarvam_llm_client.aclose()
+    if sarvam_client_direct:
+        await sarvam_client_direct.aclose()
+    if sarvam_llm_client_direct:
+        await sarvam_llm_client_direct.aclose()
     mongo_client.close()
 
 
