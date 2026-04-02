@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Menu, X, ArrowRight, Shield } from 'lucide-react';
+import { Menu, X, ArrowRight } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { LogoFull } from '@/components/Logo';
 import { prefetchRoute } from '@/utils/prefetchRoute';
@@ -93,13 +93,6 @@ export const PublicNavbar = () => {
 
           {/* ─── Desktop CTAs ─── */}
           <div className="hidden lg:flex items-center gap-2">
-            <Link
-              to="/admin/login"
-              className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-violet-400/80 border border-violet-500/20 hover:bg-violet-500/10 hover:border-violet-500/40 hover:text-violet-300 transition-all duration-150"
-            >
-              <Shield size={13} /> Admin
-            </Link>
-
             {user ? (
               <Link
                 to="/library"
@@ -191,16 +184,6 @@ export const PublicNavbar = () => {
               )
             )}
             <div className="pt-3 space-y-2 mt-2" style={{ borderTop: '1px solid rgba(139,92,246,0.10)' }}>
-              {user?.is_admin && (
-                <Link
-                  to="/admin/login"
-                  role="menuitem"
-                  className="flex items-center gap-2 w-full px-3 min-h-[44px] rounded-xl text-sm text-violet-400 border border-violet-500/25 hover:bg-violet-500/10 transition-all"
-                  onClick={() => setMenuOpen(false)}
-                >
-                  <Shield size={14} /> Admin Panel
-                </Link>
-              )}
               {user ? (
                 <Link
                   to="/library"

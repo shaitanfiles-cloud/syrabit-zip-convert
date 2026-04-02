@@ -1,10 +1,9 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { BookOpen, MessageSquare, Clock, User, ShieldCheck, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
+import { BookOpen, MessageSquare, Clock, User, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { cn } from '@/lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import { Separator } from '@/components/ui/separator';
 import { LogoFull, LogoMark } from '@/components/Logo';
 import { pageImports } from '@/utils/pageImports';
 
@@ -119,26 +118,6 @@ export const Sidebar = () => {
             );
           })}
 
-          {user?.is_admin && (
-            <>
-              <Separator className="my-2 opacity-30" />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Link
-                    to="/admin"
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground transition-all duration-200"
-                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(139,92,246,0.08)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.background = ''; }}
-                    data-testid="sidebar-nav-admin"
-                  >
-                    <ShieldCheck size={18} className="flex-shrink-0" />
-                    {!collapsed && <span>Admin Panel</span>}
-                  </Link>
-                </TooltipTrigger>
-                {collapsed && <TooltipContent side="right">Admin Panel</TooltipContent>}
-              </Tooltip>
-            </>
-          )}
         </nav>
 
         {/* Bottom actions */}

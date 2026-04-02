@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { BookOpen, MessageSquare, Clock, User, ShieldCheck } from 'lucide-react';
+import { BookOpen, MessageSquare, Clock, User } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { pageImports } from '@/utils/pageImports';
 import { prefetchRoute } from '@/utils/prefetchRoute';
@@ -19,9 +19,7 @@ export function BottomNav() {
   const isActive = (path) =>
     location.pathname === path || location.pathname.startsWith(path + '/');
 
-  const items = user?.is_admin
-    ? [...NAV_ITEMS, { to: '/admin', icon: ShieldCheck, label: 'Admin' }]
-    : NAV_ITEMS;
+  const items = NAV_ITEMS;
 
   const handlePreload = useCallback((preloadKey, to) => {
     if (preloadKey && pageImports[preloadKey]) {
