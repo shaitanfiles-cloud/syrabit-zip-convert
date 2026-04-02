@@ -16,6 +16,7 @@ import EditFieldDialog from './profile/EditFieldDialog';
 import DeleteConfirmDialog from './profile/DeleteConfirmDialog';
 import PaymentModal from './profile/PaymentModal';
 import TopUpModal from './profile/TopUpModal';
+import PaymentHistory from './profile/PaymentHistory';
 
 export default function ProfilePage() {
   const { user, refreshUser } = useAuth();
@@ -292,6 +293,7 @@ export default function ProfilePage() {
           plan={plan} planInfo={planInfo} profile={profile}
           setPaymentPlan={setPaymentPlan} setShowPaymentModal={setShowPaymentModal}
         />
+        <PaymentHistory />
         <DangerZone
           profile={profile} deletionPending={deletionPending}
           setShowDeleteConfirm={setShowDeleteConfirm}

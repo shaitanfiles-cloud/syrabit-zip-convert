@@ -7,7 +7,7 @@ import GlowOrb from './GlowOrb';
 
 const PLANS = [
   {
-    id: 'free', name: 'Free', price: '₹0', period: '/ month', credits: '30/day',
+    id: 'free', name: 'Free', price: '₹0', period: 'forever', credits: '30/day',
     renewal: '30 credits/day · resets daily', icon: Zap, highlighted: false, badge: null,
     docAccess: '🔒 Zero document access',
     features: ['30 AI credits/day', '5 messages/min', 'All subjects access', 'Chat history (limited)', 'Zero document access'],

@@ -296,6 +296,12 @@ export const createCreditTopUp = (credits) =>
 export const verifyCreditTopUp = (data) =>
   axios.post(`${API_BASE}/payments/credit-topup/verify`, data, authConfig());
 
+export const getPaymentHistory = () =>
+  axios.get(`${API_BASE}/user/payments`, authConfig());
+
+export const requestRefund = (paymentId, reason = '') =>
+  axios.post(`${API_BASE}/payments/refund-request`, { payment_id: paymentId, reason }, authConfig());
+
 // ── Vertex AI / Gemini Services ──────────────────────────────────────────────
 export const vertexHealth = (token) =>
   axios.get(`${API_BASE}/admin/vertex/health`, { headers: adminHeaders(token), withCredentials: true });

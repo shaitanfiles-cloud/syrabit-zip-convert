@@ -787,6 +787,104 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
 
 
 # ─────────────────────────────────────────────
+# PAYMENT HISTORY (user-facing)
+# ─────────────────────────────────────────────
+@router.get("/user/payments")
+async def get_user_payments(user: dict = Depends(get_current_user)):
+    user_id = str(user["id"])
+    payments = await db.payments.find(
+        {"user_id": user_id},
+        {"_id": 0},
+    ).sort("verified_at", -1).to_list(100)
+    result = []
+    for p in payments:
+        amount_paise = p.get("amount_paise", 0)
+        amount_cents = p.get("amount_cents", 0)
+        if amount_paise:
+            display_amount = f"\u20b9{amount_paise / 100:.0f}"
+            currency = "INR"
+        elif amount_cents:
+            display_amount = f"${amount_cents / 100:.2f}"
+            currency = "USD"
+        else:
+            display_amount = "\u20b90"
+            currency = "INR"
+
+        plan_raw = p.get("plan", "")
+        if plan_raw == "topup":
+            description = f"Credit Top-up \u2014 {p.get('credits_added', 0)} credits"
+        else:
+            description = f"{plan_raw.capitalize()} Plan"
+
+        result.append({
+            "id": p.get("razorpay_payment_id") or p.get("stripe_session_id") or "",
+            "date": p.get("verified_at", ""),
+            "amount": display_amount,
+            "currency": currency,
+            "plan": plan_raw,
+            "description": description,
+            "status": p.get("status", "unknown"),
+            "provider": p.get("provider", ""),
+            "credits_added": p.get("credits_added", PLAN_CREDITS.get(plan_raw, 0) if plan_raw != "topup" else 0),
+            "refund_status": p.get("refund_status", None),
+            "refund_requested_at": p.get("refund_requested_at", None),
+        })
+    return result
+
+# ─────────────────────────────────────────────
+# REFUND REQUEST
+# ─────────────────────────────────────────────
+class RefundRequestBody(BaseModel):
+    payment_id: str
+    reason: str = ""
+
+@router.post("/payments/refund-request")
+async def request_refund(body: RefundRequestBody, user: dict = Depends(get_current_user)):
+    user_id = str(user["id"])
+    payment = await db.payments.find_one({
+        "user_id": user_id,
+        "$or": [
+            {"razorpay_payment_id": body.payment_id},
+            {"stripe_session_id": body.payment_id},
+        ],
+    })
+    if not payment:
+        raise HTTPException(404, "Payment not found.")
+    if payment.get("status") != "completed":
+        raise HTTPException(400, "Only completed payments can be refunded.")
+    if payment.get("refund_status") in ("requested", "processed"):
+        raise HTTPException(400, "A refund has already been requested for this payment.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    result = await db.payments.update_one(
+        {"_id": payment["_id"], "refund_status": None},
+        {"$set": {
+            "refund_status": "requested",
+            "refund_requested_at": now_iso,
+            "refund_reason": body.reason or "",
+        }},
+    )
+    if result.modified_count == 0:
+        raise HTTPException(400, "A refund has already been requested for this payment.")
+
+    await db.refund_requests.insert_one({
+        "user_id": user_id,
+        "user_email": user.get("email", ""),
+        "user_name": user.get("name", ""),
+        "payment_id": body.payment_id,
+        "plan": payment.get("plan", ""),
+        "amount_paise": payment.get("amount_paise", 0),
+        "amount_cents": payment.get("amount_cents", 0),
+        "provider": payment.get("provider", ""),
+        "reason": body.reason or "",
+        "status": "pending",
+        "created_at": now_iso,
+    })
+
+    logger.info(f"Refund requested: user={user_id} payment={body.payment_id}")
+    return {"success": True, "message": "Refund request submitted. Our team will review it within 3-5 business days."}
+
+# ─────────────────────────────────────────────
 # USAGE TRACKING
 # ─────────────────────────────────────────────
 @router.get("/usage/me")
