@@ -3,8 +3,7 @@ import { Edit2, X, CheckCircle2, Cpu, Zap, Globe, AlertTriangle } from 'lucide-r
 import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import axios from 'axios';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { API_BASE } from '@/utils/api';
 
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;

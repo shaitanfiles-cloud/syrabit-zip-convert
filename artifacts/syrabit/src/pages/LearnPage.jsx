@@ -10,10 +10,8 @@ import {
   FlipHorizontal, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { apiClient } from '@/utils/api';
+import { apiClient, API_BASE } from '@/utils/api';
 import { useShare } from '@/hooks/useShare';
-
-const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 function buildToc(headingsJson) {
   try {

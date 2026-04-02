@@ -2,10 +2,8 @@ import { useState, useEffect } from 'react';
 import { Key, Zap, CreditCard, Mail, Bell, BarChart3, Shield, CheckCircle2, Eye, EyeOff, TestTube2, Loader2, Database } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
-import { adminGetApiConfig, adminUpdateApiConfig } from '@/utils/api';
+import { adminGetApiConfig, adminUpdateApiConfig, API_BASE } from '@/utils/api';
 import axios from 'axios';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;

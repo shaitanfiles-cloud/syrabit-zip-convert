@@ -3,8 +3,7 @@ import { useLocation, matchPath } from 'react-router-dom';
 import axios from 'axios';
 import { Analytics } from './analytics';
 import ReactGA from 'react-ga4';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { API_BASE } from './api';
 
 const KNOWN_PATTERNS = [
   '/',

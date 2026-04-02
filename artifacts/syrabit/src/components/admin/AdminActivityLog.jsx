@@ -2,10 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { Activity, Trash2, RefreshCw, Download, Search, Info, AlertTriangle, AlertOctagon } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
-import { adminGetActivityLog } from '@/utils/api';
+import { adminGetActivityLog, API_BASE } from '@/utils/api';
 import axios from 'axios';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
 
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;

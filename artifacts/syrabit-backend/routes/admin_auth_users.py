@@ -62,14 +62,10 @@ async def admin_login(data: AdminLoginReq, response: Response):
         secret=ADMIN_JWT_SECRET,
         expires_delta=60 * 24,   # 24-hour session
     )
-    response.set_cookie(
-        key="syrabit_admin_session",
-        value=token,
-        httponly=True,
-        secure=SECURE_COOKIES,
-        samesite=COOKIE_SAMESITE,
-        max_age=60 * 24 * 60,
-    )
+    _ck = dict(key="syrabit_admin_session", value=token, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=60 * 24 * 60)
+    if COOKIE_DOMAIN:
+        _ck["domain"] = COOKIE_DOMAIN
+    response.set_cookie(**_ck)
     return {
         "access_token": token,
         "token_type":   "bearer",
@@ -103,27 +99,29 @@ async def refresh_token(
     role = "admin" if user.get("is_admin") else "student"
     new_access = create_access_token(user_id, role=role, plan=user.get("plan", "free"))
     _redis_invalidate_session(user_id)
-    response.set_cookie(
-        key="syrabit_session",
-        value=new_access,
-        httponly=True,
-        secure=SECURE_COOKIES,
-        samesite=COOKIE_SAMESITE,
-        max_age=JWT_ACCESS_EXPIRE_MINUTES * 60,
-    )
+    _ck = dict(key="syrabit_session", value=new_access, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=JWT_ACCESS_EXPIRE_MINUTES * 60)
+    if COOKIE_DOMAIN:
+        _ck["domain"] = COOKIE_DOMAIN
+    response.set_cookie(**_ck)
     return {"access_token": new_access, "token_type": "bearer"}
 
 @router.post("/auth/logout")
 async def logout(response: Response, user: dict = Depends(get_current_user_optional)):
     if user:
         _redis_invalidate_session(user.get("id", ""))
-    response.delete_cookie(key="syrabit_session", samesite=COOKIE_SAMESITE, secure=SECURE_COOKIES)
-    response.delete_cookie(key="syrabit_refresh", samesite=COOKIE_SAMESITE, secure=SECURE_COOKIES, path="/api/auth/refresh")
+    _del_kwargs = dict(samesite=COOKIE_SAMESITE, secure=SECURE_COOKIES)
+    if COOKIE_DOMAIN:
+        _del_kwargs["domain"] = COOKIE_DOMAIN
+    response.delete_cookie(key="syrabit_session", **_del_kwargs)
+    response.delete_cookie(key="syrabit_refresh", path="/api/auth/refresh", **_del_kwargs)
     return {"message": "Logged out"}
 
 @router.post("/admin/logout")
 async def admin_logout(response: Response):
-    response.delete_cookie(key="syrabit_admin_session", samesite=COOKIE_SAMESITE, secure=SECURE_COOKIES)
+    _del_kwargs = dict(samesite=COOKIE_SAMESITE, secure=SECURE_COOKIES)
+    if COOKIE_DOMAIN:
+        _del_kwargs["domain"] = COOKIE_DOMAIN
+    response.delete_cookie(key="syrabit_admin_session", **_del_kwargs)
     return {"message": "Logged out"}
 
 @router.get("/admin/verify")
@@ -139,14 +137,10 @@ async def admin_verify(response: Response, admin: dict = Depends(get_admin_user)
         secret=ADMIN_JWT_SECRET,
         expires_delta=60 * 24,
     )
-    response.set_cookie(
-        key="syrabit_admin_session",
-        value=refreshed,
-        httponly=True,
-        secure=SECURE_COOKIES,
-        samesite=COOKIE_SAMESITE,
-        max_age=60 * 24 * 60,
-    )
+    _ck = dict(key="syrabit_admin_session", value=refreshed, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=60 * 24 * 60)
+    if COOKIE_DOMAIN:
+        _ck["domain"] = COOKIE_DOMAIN
+    response.set_cookie(**_ck)
     return {"valid": True, "email": admin.get("email"), "name": admin.get("name", "Admin"), "access_token": refreshed}
 
 # ─────────────────────────────────────────────

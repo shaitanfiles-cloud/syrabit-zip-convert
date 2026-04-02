@@ -122,6 +122,7 @@ SUPABASE_ANON_KEY    = os.environ.get('SUPABASE_ANON_KEY', '') or os.environ.get
 # ── Cookie security (set SECURE_COOKIES=false in dev to allow HTTP) ───────────
 SECURE_COOKIES  = os.environ.get('SECURE_COOKIES', 'true').lower() not in ('false', '0', 'no')
 COOKIE_SAMESITE = "none" if SECURE_COOKIES else "lax"
+COOKIE_DOMAIN   = os.environ.get('COOKIE_DOMAIN', '').strip() or None
 
 _cors_raw = os.environ.get('CORS_ORIGINS', '').strip().strip('"').strip("'")
 if not _cors_raw or _cors_raw == '*':
@@ -138,6 +139,13 @@ else:
         if _rd and f"https://{_rd}" not in CORS_ORIGINS:
             CORS_ORIGINS.append(f"https://{_rd}")
     _CORS_ALLOW_CREDENTIALS = True
+
+_prod_origins_raw = os.environ.get('PRODUCTION_ORIGINS', '').strip()
+if _prod_origins_raw:
+    for _po in _prod_origins_raw.split(','):
+        _po = _po.strip()
+        if _po and _po not in CORS_ORIGINS:
+            CORS_ORIGINS.append(_po)
 
 # ── Admin accounts ────────────────────────────────────────────────────────────
 # Admin accounts loaded from environment (no credentials in source code)

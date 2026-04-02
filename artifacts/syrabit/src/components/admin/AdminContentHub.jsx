@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
+import { API_BASE } from '@/utils/api';
 
 import AdminSyllabusManager  from './AdminSyllabusManager';
 import AdminContentEditor    from './AdminContentEditor';
@@ -24,7 +25,7 @@ import AdminCmsDocEditor     from './AdminCmsDocEditor';
 import BlogPublishWizard     from './BlogPublishWizard';
 import PipelineProgressPanel from './PipelineProgressPanel';
 
-const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+const API = API_BASE;
 
 const TABS = [
   { id: 'syllabus', label: 'Syllabus',        icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },

@@ -3,9 +3,7 @@ import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi,
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
 import axios from 'axios';
-import { llmCosts } from '@/utils/api';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { llmCosts, API_BASE } from '@/utils/api';
 
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;

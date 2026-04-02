@@ -79,23 +79,13 @@ async def signup(data: UserCreate, response: Response):
         plan="free", credits_used=0, credits_limit=user.get("credits_limit", 30),
         onboarding_done=False, is_admin=False, created_at=now
     )
-    response.set_cookie(
-        key="syrabit_session",
-        value=token,
-        httponly=True,
-        secure=SECURE_COOKIES,
-        samesite=COOKIE_SAMESITE,
-        max_age=JWT_ACCESS_EXPIRE_MINUTES * 60,
-    )
-    response.set_cookie(
-        key="syrabit_refresh",
-        value=refresh,
-        httponly=True,
-        secure=SECURE_COOKIES,
-        samesite=COOKIE_SAMESITE,
-        path="/api/auth/refresh",
-        max_age=JWT_REFRESH_EXPIRE_MINUTES * 60,
-    )
+    _session_kwargs = dict(key="syrabit_session", value=token, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=JWT_ACCESS_EXPIRE_MINUTES * 60)
+    _refresh_kwargs = dict(key="syrabit_refresh", value=refresh, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, path="/api/auth/refresh", max_age=JWT_REFRESH_EXPIRE_MINUTES * 60)
+    if COOKIE_DOMAIN:
+        _session_kwargs["domain"] = COOKIE_DOMAIN
+        _refresh_kwargs["domain"] = COOKIE_DOMAIN
+    response.set_cookie(**_session_kwargs)
+    response.set_cookie(**_refresh_kwargs)
     return {"access_token": token, "token_type": "bearer", "user": user_out.dict()}
 
 @router.post("/auth/login", response_model=TokenOut)
@@ -123,23 +113,13 @@ async def login(data: UserLogin, response: Response):
         created_at=user.get("created_at", ""),
         avatar_url=user.get("avatar_url", ""),
     )
-    response.set_cookie(
-        key="syrabit_session",
-        value=token,
-        httponly=True,
-        secure=SECURE_COOKIES,
-        samesite=COOKIE_SAMESITE,
-        max_age=JWT_ACCESS_EXPIRE_MINUTES * 60,
-    )
-    response.set_cookie(
-        key="syrabit_refresh",
-        value=refresh,
-        httponly=True,
-        secure=SECURE_COOKIES,
-        samesite=COOKIE_SAMESITE,
-        path="/api/auth/refresh",
-        max_age=JWT_REFRESH_EXPIRE_MINUTES * 60,
-    )
+    _session_kwargs = dict(key="syrabit_session", value=token, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, max_age=JWT_ACCESS_EXPIRE_MINUTES * 60)
+    _refresh_kwargs = dict(key="syrabit_refresh", value=refresh, httponly=True, secure=SECURE_COOKIES, samesite=COOKIE_SAMESITE, path="/api/auth/refresh", max_age=JWT_REFRESH_EXPIRE_MINUTES * 60)
+    if COOKIE_DOMAIN:
+        _session_kwargs["domain"] = COOKIE_DOMAIN
+        _refresh_kwargs["domain"] = COOKIE_DOMAIN
+    response.set_cookie(**_session_kwargs)
+    response.set_cookie(**_refresh_kwargs)
     return TokenOut(access_token=token, user=user_out)
 
 async def _send_password_reset_email(email: str, token: str):

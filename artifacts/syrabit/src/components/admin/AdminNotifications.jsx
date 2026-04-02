@@ -3,9 +3,7 @@ import { Bell, Send, Clock, Trash2, Users, Loader2, Info, CheckCircle2, AlertTri
 import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { getNotificationTriggers, createNotificationTrigger, updateNotificationTrigger, deleteNotificationTrigger } from '@/utils/api';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { getNotificationTriggers, createNotificationTrigger, updateNotificationTrigger, deleteNotificationTrigger, API_BASE } from '@/utils/api';
 
 const adminHeaders = (token) => {
   const isRealJwt = token && typeof token === 'string' && token.split('.').length === 3;

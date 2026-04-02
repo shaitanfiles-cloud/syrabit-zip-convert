@@ -65,3 +65,13 @@ The project is a pnpm workspace monorepo comprising a React + Vite frontend (`ar
 - **API Codegen:** Orval (from OpenAPI spec).
 - **Build Tools:** esbuild, pnpm.
 - **Containerization:** Docker.
+
+## Cloudflare Deployment Configuration
+
+When deploying the frontend on Cloudflare Pages with the backend on Replit, set these environment variables on the backend:
+
+- `COOKIE_DOMAIN` — e.g., `.syrabit.ai` (leading dot for subdomain sharing). Leave unset in dev.
+- `PRODUCTION_ORIGINS` — e.g., `https://syrabit.ai,https://www.syrabit.ai`. Appended to CORS origins automatically.
+- `VITE_BACKEND_URL` — Set on the frontend build to point to the Replit backend URL.
+
+All frontend files use a single centralized `API_BASE` from `utils/api.jsx`. No local API base definitions.

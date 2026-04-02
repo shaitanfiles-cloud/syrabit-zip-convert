@@ -1,4 +1,5 @@
-export const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { API_BASE } from './api';
+export const API = API_BASE;
 
 export function authHeaders(token) {
   const isRealJwt = token && token.split('.').length === 3;

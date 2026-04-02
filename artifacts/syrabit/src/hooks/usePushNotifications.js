@@ -5,9 +5,7 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
-const API_BASE = `${BACKEND_URL}/api`;
+import { API_BASE } from '@/utils/api';
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);

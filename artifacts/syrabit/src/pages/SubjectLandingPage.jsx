@@ -7,10 +7,8 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { getSeoPageTypes } from '@/utils/api';
+import { getSeoPageTypes, API_BASE } from '@/utils/api';
 import axios from 'axios';
-
-const API_BASE = (import.meta.env.VITE_BACKEND_URL || '') + '/api';
 
 export default function SubjectLandingPage() {
   const { board, classSlug, subjectSlug } = useParams();

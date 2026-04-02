@@ -6,8 +6,7 @@ import { ChevronRight, BookOpen, GraduationCap, Layers, FileText, ExternalLink }
 import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
 import { BottomNav } from '@/components/layout/BottomNav';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { API_BASE } from '@/utils/api';
 
 function slugify(str = '') {
   return str.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');

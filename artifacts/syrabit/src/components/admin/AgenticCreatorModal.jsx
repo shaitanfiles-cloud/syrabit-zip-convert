@@ -6,8 +6,9 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
+import { API_BASE } from '@/utils/api';
 
-const API = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+const API = API_BASE;
 
 function authHeaders(token) {
   const isJwt = token && token.split('.').length === 3;

@@ -8,8 +8,7 @@ import { toast } from 'sonner';
 
 import axios from 'axios';
 import { LogoFull } from '@/components/Logo';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { API_BASE } from '@/utils/api';
 
 export default function ResetPasswordPage() {
   const [email, setEmail] = useState('');

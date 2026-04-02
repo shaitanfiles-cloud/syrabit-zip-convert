@@ -4,8 +4,7 @@
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
-
-const API_BASE = `${import.meta.env.VITE_BACKEND_URL || ''}/api`;
+import { API_BASE } from '@/utils/api';
 
 /**
  * useToggleSavedSubject — optimistic bookmark toggle.
