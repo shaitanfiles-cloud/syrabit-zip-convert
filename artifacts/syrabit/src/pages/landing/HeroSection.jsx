@@ -39,19 +39,21 @@ export default function HeroSection() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
             className="mb-6"
-            style={{ fontSize: 'clamp(2rem,5.5vw,5rem)', fontWeight: 900, lineHeight: 1.06, letterSpacing: '-0.03em' }}
+            style={{ fontSize: 'clamp(1.75rem,5vw,5rem)', fontWeight: 900, lineHeight: 1.06, letterSpacing: '-0.03em' }}
           >
             <span className="text-white">Educational Browser</span>
             <br />
-            <span className="text-white">For </span>
-            <span style={{
-              background: 'linear-gradient(135deg,#c4b5fd 0%,#a78bfa 40%,#7c3aed 80%)',
-              WebkitBackgroundClip: 'text',
-              WebkitTextFillColor: 'transparent',
-              backgroundClip: 'text',
-              filter: 'drop-shadow(0 0 30px rgba(139,92,246,0.30))',
-            }}>
-              AssamBoard Students
+            <span style={{ whiteSpace: 'nowrap' }}>
+              <span className="text-white">For </span>
+              <span style={{
+                background: 'linear-gradient(135deg,#c4b5fd 0%,#a78bfa 40%,#7c3aed 80%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                backgroundClip: 'text',
+                filter: 'drop-shadow(0 0 30px rgba(139,92,246,0.30))',
+              }}>
+                AssamBoard Students
+              </span>
             </span>
           </motion.h1>
 
