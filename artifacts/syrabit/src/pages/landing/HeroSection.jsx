@@ -34,23 +34,6 @@ export default function HeroSection() {
         />
 
         <div className="relative z-10 max-w-5xl mx-auto px-5 text-center py-24">
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.1 }}
-            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full mb-8"
-            style={{
-              background: 'rgba(124,58,237,0.12)',
-              border: '1px solid rgba(139,92,246,0.30)',
-              boxShadow: '0 0 20px rgba(139,92,246,0.12)',
-            }}
-          >
-            <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
-            <span className="text-xs font-semibold tracking-widest" style={{ color: '#a78bfa' }}>
-              EDUCATIONAL BROWSER FOR ASSAMBOARD STUDENTS
-            </span>
-          </motion.div>
-
           <motion.h1
             initial={{ opacity: 0, y: 32 }}
             animate={{ opacity: 1, y: 0 }}

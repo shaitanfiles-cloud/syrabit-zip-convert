@@ -202,9 +202,9 @@ export default function LibraryPage() {
               <div className="min-w-0">
                 <h1
                   className="text-foreground shimmer-text"
-                  style={{ fontSize: 'clamp(1.15rem, 4vw, 1.5rem)', fontWeight: 700, lineHeight: 1.3 }}
+                  style={{ fontSize: 'clamp(0.95rem, 3.2vw, 1.5rem)', fontWeight: 700, lineHeight: 1.25 }}
                 >
-                  Educational Browser For Assamboard Students
+                  Educational Browser<br />For Assamboard Students
                 </h1>
                 <p className="text-xs sm:text-sm text-muted-foreground mt-1">
                   Browse {subjects.length} subjects · {allChapters.length} lessons

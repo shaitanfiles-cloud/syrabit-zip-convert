@@ -48,9 +48,9 @@ export default function ResetPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#06060e] p-4">
+    <div className="min-h-screen flex items-start sm:items-center justify-center bg-[#06060e] p-4 pt-12 sm:pt-4">
       <div className="w-full max-w-sm">
-        <Link to="/login" className="flex items-center gap-2 mb-8">
+        <Link to="/login" className="flex items-center gap-2 mb-6">
           <LogoFull size="sm" textClassName="text-white" />
         </Link>
 
