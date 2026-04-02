@@ -43,7 +43,7 @@ export default function HeroSection() {
           >
             <span className="text-white">Educational Browser</span>
             <br />
-            <span style={{ whiteSpace: 'nowrap' }}>
+            <span>
               <span className="text-white">For </span>
               <span style={{
                 background: 'linear-gradient(135deg,#c4b5fd 0%,#a78bfa 40%,#7c3aed 80%)',
@@ -62,7 +62,7 @@ export default function HeroSection() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay: 0.35 }}
             className="max-w-2xl mx-auto mb-8 leading-relaxed"
-            style={{ fontSize: 'clamp(1rem,2vw,1.18rem)', color: 'rgba(255,255,255,0.50)', letterSpacing: '0.01em' }}
+            style={{ fontSize: 'clamp(1rem,2vw,1.18rem)', color: 'rgba(255,255,255,0.65)', letterSpacing: '0.01em' }}
           >
             Syrabit gives AssamBoard students (AHSEC, DEGREE &amp; SEBA) instant, syllabus-aligned AI answers,
             PYQ insights, and structured subject notes — all in one place.
@@ -119,7 +119,7 @@ export default function HeroSection() {
             animate={{ opacity: 1 }}
             transition={{ duration: 0.8, delay: 0.7 }}
             className="text-sm mt-7"
-            style={{ color: 'rgba(255,255,255,0.22)' }}
+            style={{ color: 'rgba(255,255,255,0.60)' }}
           >
             Free plan · No credits needed to browse · Upgrade from ₹99
           </motion.p>
@@ -161,7 +161,7 @@ export default function HeroSection() {
                     animate={{ opacity: 1 }}
                     transition={{ duration: 0.3 }}
                     className="text-xs"
-                    style={{ color: 'rgba(255,255,255,0.30)' }}
+                    style={{ color: 'rgba(255,255,255,0.60)' }}
                   >
                     syrabit.ai/{browserPath}
                   </motion.span>

@@ -153,14 +153,14 @@ export default function LoginPage() {
 
         {/* Bottom tagline */}
         <div className="relative z-10">
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>
             Trusted by 500+ Assam board students · Free to start
           </p>
         </div>
       </div>
 
       {/* ── Right panel — auth form ── */}
-      <div className="w-full lg:w-[48%] flex items-start lg:items-center justify-center p-4 sm:p-6 pt-4 lg:pt-6 relative overflow-y-auto" style={{ scrollPaddingBottom: '2rem' }}>
+      <div className="w-full lg:w-[48%] flex items-center justify-center p-4 sm:p-6 relative overflow-y-auto" style={{ scrollPaddingBottom: '2rem' }}>
         {/* Subtle background glow */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
@@ -186,7 +186,7 @@ export default function LoginPage() {
           >
             <div className="mb-7">
               <h1 className="text-2xl font-bold text-white tracking-tight">Welcome back</h1>
-              <p className="mt-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.45)' }}>Sign in to your account to continue</p>
+              <p className="mt-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.65)' }}>Sign in to your account to continue</p>
             </div>
 
             {error && (
@@ -266,7 +266,7 @@ export default function LoginPage() {
               </button>
             </form>
 
-            <p className="text-center text-sm mt-6" style={{ color: 'rgba(255,255,255,0.40)' }}>
+            <p className="text-center text-sm mt-6" style={{ color: 'rgba(255,255,255,0.65)' }}>
               Don't have an account?{' '}
               <Link to="/signup" className="font-semibold auth-link">
                 Sign up free

@@ -80,7 +80,7 @@ export default function FeaturesGrid() {
           <h2 className="text-white mb-4" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
             Built for AssamBoard. Optimised for results.
           </h2>
-          <p className="max-w-xl mx-auto" style={{ fontSize: '1.05rem', color: 'rgba(255,255,255,0.40)' }}>
+          <p className="max-w-xl mx-auto" style={{ fontSize: '1.05rem', color: 'rgba(255,255,255,0.60)' }}>
             Every feature is purpose-built for AHSEC, DEGREE, and SEBA students preparing for their AssamBoard exams.
           </p>
         </Reveal>
@@ -116,7 +116,7 @@ export default function FeaturesGrid() {
                 <f.icon className="w-5 h-5 text-white" />
               </div>
               <h3 className="text-white mb-2 relative z-10" style={{ fontWeight: 700, fontSize: '1rem' }}>{f.title}</h3>
-              <p className="text-sm leading-relaxed relative z-10" style={{ color: 'rgba(255,255,255,0.45)' }}>{f.desc}</p>
+              <p className="text-sm leading-relaxed relative z-10" style={{ color: 'rgba(255,255,255,0.65)' }}>{f.desc}</p>
             </motion.div>
           ))}
         </motion.div>
@@ -174,7 +174,7 @@ export default function FeaturesGrid() {
                 </div>
               </div>
               <h3 className="text-white mb-3" style={{ fontWeight: 700, fontSize: '1.05rem' }}>{step.title}</h3>
-              <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.45)' }}>{step.desc}</p>
+              <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.65)' }}>{step.desc}</p>
             </motion.div>
           ))}
         </motion.div>

@@ -75,10 +75,11 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               {timeStr && <span className="text-[11px] text-muted-foreground">{timeStr}</span>}
               <button
                 onClick={handleCopy}
-                className="w-6 h-6 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                className="w-11 h-11 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
                 title="Copy"
+                aria-label={copied ? 'Copied' : 'Copy'}
               >
-                {copied ? <Check size={12} style={{ color: '#34d399' }} /> : <Copy size={12} />}
+                {copied ? <Check size={14} style={{ color: '#34d399' }} /> : <Copy size={14} />}
               </button>
             </div>
           )}
@@ -190,20 +191,20 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     )}
                     <button
                       onClick={handleCopy}
-                      className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                      className="w-11 h-11 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
                       title="Copy"
                       aria-label={copied ? 'Copied' : 'Copy'}
                     >
-                      {copied ? <Check size={14} style={{ color: '#34d399' }} /> : <Copy size={14} />}
+                      {copied ? <Check size={16} style={{ color: '#34d399' }} /> : <Copy size={16} />}
                     </button>
                     {isLast && onRegenerate && (
                       <button
                         onClick={onRegenerate}
-                        className="w-7 h-7 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                        className="w-11 h-11 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
                         title="Regenerate"
                         aria-label="Regenerate"
                       >
-                        <RefreshCw size={14} />
+                        <RefreshCw size={16} />
                       </button>
                     )}
                   </div>

@@ -107,7 +107,7 @@ export default function PricingPage() {
           <Badge className="bg-violet-500/15 text-violet-400 border-violet-500/25 mb-4">
             Simple Pricing
           </Badge>
-          <h1 className="text-3xl sm:text-5xl font-semibold text-white mb-4" style={{ whiteSpace: 'nowrap' }}>
+          <h1 className="text-3xl sm:text-5xl font-semibold text-white mb-4">
             Affordable exam prep
           </h1>
           <p className="text-white/60 text-lg">

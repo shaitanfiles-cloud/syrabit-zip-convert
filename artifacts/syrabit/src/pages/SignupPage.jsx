@@ -151,14 +151,14 @@ export default function SignupPage() {
 
         {/* Bottom */}
         <div className="relative z-10">
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.25)' }}>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>
             Trusted by 500+ Assam board students
           </p>
         </div>
       </div>
 
       {/* ── Right panel — auth form ── */}
-      <div className="w-full lg:w-[48%] flex items-start lg:items-center justify-center p-4 sm:p-6 pt-4 lg:pt-6 relative overflow-y-auto" style={{ scrollPaddingBottom: '2rem' }}>
+      <div className="w-full lg:w-[48%] flex items-center justify-center p-4 sm:p-6 relative overflow-y-auto" style={{ scrollPaddingBottom: '2rem' }}>
         {/* Subtle background glow */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
@@ -183,7 +183,7 @@ export default function SignupPage() {
           >
             <div className="mb-7">
               <h1 className="text-2xl font-bold text-white tracking-tight">Create your account</h1>
-              <p className="mt-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.45)' }}>Start for free — no credit card required</p>
+              <p className="mt-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.65)' }}>Start for free — no credit card required</p>
             </div>
 
             {error && (
@@ -326,7 +326,7 @@ export default function SignupPage() {
                     {agreed && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                   </span>
                 </button>
-                <span className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>
+                <span className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>
                   I agree to the{' '}
                   <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Terms</Link>
                   {' '}and{' '}
@@ -345,7 +345,7 @@ export default function SignupPage() {
               </button>
             </form>
 
-            <p className="text-center text-sm mt-6" style={{ color: 'rgba(255,255,255,0.40)' }}>
+            <p className="text-center text-sm mt-6" style={{ color: 'rgba(255,255,255,0.65)' }}>
               Already have an account?{' '}
               <Link to="/login" className="font-semibold auth-link">
                 Sign in

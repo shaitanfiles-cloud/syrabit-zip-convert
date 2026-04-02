@@ -38,7 +38,7 @@ function TypingCursor() {
 
 function ThinkingIndicator() {
   return (
-    <div className="space-y-2 py-1" style={{ width: 180 }}>
+    <div className="space-y-2 py-1" style={{ width: '100%', maxWidth: 180 }}>
       <div className="flex items-center gap-1.5 mb-2">
         {[0, 1, 2].map((i) => (
           <motion.span
@@ -49,7 +49,7 @@ function ThinkingIndicator() {
             transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15, ease: 'easeInOut' }}
           />
         ))}
-        <span className="text-[10px] ml-1" style={{ color: 'rgba(255,255,255,0.30)' }}>Thinking</span>
+        <span className="text-xs ml-1" style={{ color: 'rgba(255,255,255,0.60)' }}>Thinking</span>
       </div>
       {[1, 0.7, 0.4].map((widthFrac, i) => (
         <motion.div
@@ -91,7 +91,7 @@ function SourceBadge({ pulsing, clicking }) {
       <span
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full relative overflow-hidden"
         style={{
-          fontSize: 10,
+          fontSize: 12,
           background: clicking ? 'rgba(139,92,246,0.45)' : 'rgba(139,92,246,0.20)',
           color: '#a78bfa',
           border: clicking ? '1px solid rgba(139,92,246,0.50)' : '1px solid rgba(139,92,246,0.22)',
@@ -137,8 +137,8 @@ function ContentPageView() {
         transition={{ delay: 0.1, duration: 0.3 }}
         className="flex items-center gap-2"
       >
-        <ArrowLeft size={14} style={{ color: 'rgba(255,255,255,0.4)' }} />
-        <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.35)' }}>Back to chat</span>
+        <ArrowLeft size={14} style={{ color: 'rgba(255,255,255,0.60)' }} />
+        <span className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>Back to chat</span>
       </motion.div>
 
       <motion.div
@@ -149,16 +149,16 @@ function ContentPageView() {
       >
         <div>
           <h3 className="text-sm font-bold text-white mb-1">Photoelectric Effect</h3>
-          <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.4)' }}>AHSEC Class 12 · Physics · Chapter 11</p>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>AHSEC Class 12 · Physics · Chapter 11</p>
         </div>
         <div className="flex items-center gap-2">
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full"
-            style={{ fontSize: 9, background: 'rgba(34,197,94,0.12)', color: 'rgba(34,197,94,0.7)', border: '1px solid rgba(34,197,94,0.15)' }}
+            style={{ fontSize: 12, background: 'rgba(34,197,94,0.12)', color: 'rgba(34,197,94,0.7)', border: '1px solid rgba(34,197,94,0.15)' }}
           >
             AHSEC Syllabus
           </span>
-          <Share2 size={11} style={{ color: 'rgba(255,255,255,0.3)' }} />
+          <Share2 size={11} style={{ color: 'rgba(255,255,255,0.60)' }} />
         </div>
       </motion.div>
 
@@ -186,7 +186,7 @@ function ContentPageView() {
         className="rounded-lg p-3"
         style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}
       >
-        <p className="text-[10px] font-semibold mb-2" style={{ color: 'rgba(255,255,255,0.5)' }}>Einstein's Photoelectric Equation</p>
+        <p className="text-xs font-semibold mb-2" style={{ color: 'rgba(255,255,255,0.60)' }}>Einstein's Photoelectric Equation</p>
         <code
           className="text-sm font-mono block text-center py-1"
           style={{ color: '#c4b5fd' }}
@@ -194,11 +194,11 @@ function ContentPageView() {
           E = hν = φ + ½mv²
         </code>
         <div className="mt-2 space-y-0.5">
-          <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.4)' }}><span style={{ color: '#a78bfa' }}>E</span> = energy of incident photon</p>
-          <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.4)' }}><span style={{ color: '#a78bfa' }}>h</span> = Planck's constant (6.626 × 10⁻³⁴ J·s)</p>
-          <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.4)' }}><span style={{ color: '#a78bfa' }}>ν</span> = frequency of incident light</p>
-          <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.4)' }}><span style={{ color: '#a78bfa' }}>φ</span> = work function of the metal</p>
-          <p className="text-[10px]" style={{ color: 'rgba(255,255,255,0.4)' }}><span style={{ color: '#a78bfa' }}>½mv²</span> = max kinetic energy of photoelectron</p>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>E</span> = energy of incident photon</p>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>h</span> = Planck's constant (6.626 × 10⁻³⁴ J·s)</p>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>ν</span> = frequency of incident light</p>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>φ</span> = work function of the metal</p>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>½mv²</span> = max kinetic energy of photoelectron</p>
         </div>
       </motion.div>
 
@@ -210,20 +210,20 @@ function ContentPageView() {
       >
         <span
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full"
-          style={{ fontSize: 9, background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.18)' }}
+          style={{ fontSize: 12, background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.18)' }}
         >
-          <Clock size={8} />
+          <Clock size={10} />
           2 credits used
         </span>
         <span
           className="px-2 py-0.5 rounded-full"
-          style={{ fontSize: 9, background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.30)', border: '1px solid rgba(255,255,255,0.06)' }}
+          style={{ fontSize: 12, background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.60)', border: '1px solid rgba(255,255,255,0.06)' }}
         >
           Wave Optics
         </span>
         <span
           className="px-2 py-0.5 rounded-full"
-          style={{ fontSize: 9, background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.30)', border: '1px solid rgba(255,255,255,0.06)' }}
+          style={{ fontSize: 12, background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.60)', border: '1px solid rgba(255,255,255,0.06)' }}
         >
           Quantum Theory
         </span>

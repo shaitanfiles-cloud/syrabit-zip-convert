@@ -32,7 +32,7 @@ export default function TestimonialsFooter({ year }) {
           <h2 className="text-white mb-3" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
             Students love Syrabit.ai
           </h2>
-          <p style={{ color: 'rgba(255,255,255,0.40)' }}>Real feedback from AssamBoard students across Assam</p>
+          <p style={{ color: 'rgba(255,255,255,0.60)' }}>Real feedback from AssamBoard students across Assam</p>
         </Reveal>
 
         <motion.div
@@ -68,7 +68,7 @@ export default function TestimonialsFooter({ year }) {
                 </div>
                 <div>
                   <p className="text-white text-sm font-semibold">{t.name}</p>
-                  <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>{t.classLabel}</p>
+                  <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{t.classLabel}</p>
                 </div>
               </div>
             </motion.div>
@@ -94,7 +94,7 @@ export default function TestimonialsFooter({ year }) {
           <h2 className="text-white mb-4" style={{ fontSize: 'clamp(2rem,4vw,3rem)', fontWeight: 900, letterSpacing: '-0.02em' }}>
             Ready to ace your boards?
           </h2>
-          <p className="mb-10 text-lg" style={{ color: 'rgba(255,255,255,0.45)' }}>
+          <p className="mb-10 text-lg" style={{ color: 'rgba(255,255,255,0.65)' }}>
             Join hundreds of AssamBoard students (AHSEC, DEGREE &amp; SEBA) who study smarter with Syrabit.ai. Free forever — no credit card required.
           </p>
 
@@ -146,7 +146,7 @@ export default function TestimonialsFooter({ year }) {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 md:gap-8 mb-12">
             <div className="col-span-2 md:col-span-1 space-y-4">
               <LogoFull size="sm" textClassName="text-white" />
-              <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.30)' }}>
+              <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.60)' }}>
                 AI-powered exam prep for AssamBoard students in Assam — AHSEC (Class 11–12), DEGREE (B.Com, B.A, B.Sc), and SEBA.
               </p>
               <div className="flex items-center gap-2">
@@ -165,32 +165,32 @@ export default function TestimonialsFooter({ year }) {
               </div>
             </div>
 
-            <div className="space-y-3">
-              <p className="text-xs font-bold tracking-[0.10em]" style={{ color: 'rgba(255,255,255,0.60)' }}>PRODUCT</p>
+            <div className="space-y-1">
+              <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>PRODUCT</p>
               {['Features', 'Pricing', 'Subjects', 'Chat'].map((item) => (
                 <a
                   key={item}
                   href={item === 'Features' ? '/#features' : item === 'Pricing' ? '/pricing' : '#'}
-                  className="block text-sm transition-colors hover:text-white/70"
-                  style={{ color: 'rgba(255,255,255,0.35)' }}
+                  className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center"
+                  style={{ color: 'rgba(255,255,255,0.60)' }}
                 >
                   {item}
                 </a>
               ))}
             </div>
 
-            <div className="space-y-3">
-              <p className="text-xs font-bold tracking-[0.10em]" style={{ color: 'rgba(255,255,255,0.60)' }}>LEGAL</p>
-              <Link to="/privacy" className="block text-sm transition-colors hover:text-white/70" style={{ color: 'rgba(255,255,255,0.35)' }}>Privacy Policy</Link>
-              <Link to="/terms" className="block text-sm transition-colors hover:text-white/70" style={{ color: 'rgba(255,255,255,0.35)' }}>Terms of Service</Link>
+            <div className="space-y-1">
+              <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>LEGAL</p>
+              <Link to="/privacy" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Privacy Policy</Link>
+              <Link to="/terms" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Terms of Service</Link>
             </div>
 
-            <div className="space-y-3">
-              <p className="text-xs font-bold tracking-[0.10em]" style={{ color: 'rgba(255,255,255,0.60)' }}>CONTACT</p>
-              <div className="flex items-center gap-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.35)' }}>
+            <div className="space-y-1">
+              <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>CONTACT</p>
+              <div className="flex items-center gap-1.5 text-sm min-h-[44px]" style={{ color: 'rgba(255,255,255,0.60)' }}>
                 <Mail size={14} /><span>support@syrabit.ai</span>
               </div>
-              <div className="flex items-center gap-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.35)' }}>
+              <div className="flex items-center gap-1.5 text-sm min-h-[44px]" style={{ color: 'rgba(255,255,255,0.60)' }}>
                 <Globe size={14} /><span>syrabit.ai</span>
               </div>
               <div className="mt-4">
@@ -209,10 +209,10 @@ export default function TestimonialsFooter({ year }) {
             className="border-t pt-6 flex flex-col md:flex-row items-center justify-between gap-3"
             style={{ borderColor: 'rgba(255,255,255,0.06)' }}
           >
-            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.20)' }}>
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>
               © {year} Syrabit.ai · Built for AssamBoard students in Assam, India (AHSEC · DEGREE · SEBA)
             </p>
-            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.15)' }}>
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>
               Made with ♥ for Class 11 &amp; 12 exam warriors
             </p>
           </div>

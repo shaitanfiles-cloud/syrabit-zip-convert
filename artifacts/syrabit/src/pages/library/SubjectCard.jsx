@@ -280,7 +280,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         <button
           onClick={() => { onToggleSave(sub.id); try { Analytics.subjectBookmarked(sub.name, !isSaved); } catch {} }}
           aria-label={isSaved ? `Unsave ${sub.name}` : `Save ${sub.name}`}
-          className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95"
+          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95"
           style={
             isSaved
               ? { color: 'hsl(var(--primary))', background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.25)' }
@@ -294,7 +294,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
         <Link
           to={subjectLandingPath}
-          className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
+          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
           style={{ color: 'hsl(var(--muted-foreground))', border: '1px solid rgba(139,92,246,0.12)' }}
         >
           <BookOpen size={12} />
@@ -304,7 +304,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         <button
           onClick={() => onAskAI(sub.id, hasDocument, sub.name)}
           aria-label={`Ask AI about ${sub.name}`}
-          className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-semibold text-white transition-all duration-200 hover:opacity-90 active:scale-95"
+          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-semibold text-white transition-all duration-200 hover:opacity-90 active:scale-95"
           style={{
             background: hasDocument
               ? 'linear-gradient(135deg, #059669, #10b981)'
@@ -321,7 +321,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           onClick={handleShare}
           disabled={sharing}
           aria-label={`Share ${sub.name}`}
-          className="flex items-center justify-center gap-1.5 h-10 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5 disabled:opacity-50"
+          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5 disabled:opacity-50"
           style={{ color: '#94a3b8', border: '1px solid rgba(148,163,184,0.22)' }}
           data-testid="subject-share"
         >
