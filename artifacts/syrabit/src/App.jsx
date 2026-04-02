@@ -126,6 +126,7 @@ function App() {
     };
 
     const onHoverLibrary = (e) => {
+      if (!e.target || typeof e.target.closest !== 'function') return;
       const link = e.target.closest('a[href="/library"]');
       if (link) trigger();
     };
