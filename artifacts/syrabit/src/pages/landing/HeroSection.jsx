@@ -47,7 +47,7 @@ export default function HeroSection() {
           >
             <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
             <span className="text-xs font-semibold tracking-widest" style={{ color: '#a78bfa' }}>
-              AI-POWERED EXAM PREP FOR ASSAMBOARD STUDENTS
+              EDUCATIONAL BROWSER FOR ASSAMBOARD STUDENTS
             </span>
           </motion.div>
 
