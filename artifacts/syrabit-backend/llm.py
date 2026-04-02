@@ -659,7 +659,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     buf = ""
 
     # Batch small tokens before serialising — reduces JSON ops from ~150 → ~8 per response
-    _SSE_BATCH = 8    # flush frequently — words appear one-by-one, not in large chunks
+    _SSE_BATCH = 4    # flush very frequently — minimal latency per token
 
     async def _emit_tokens(token_source):
         nonlocal in_think, buf

@@ -162,11 +162,34 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     _detected_intent = _classify_intent(msg.message)
     _is_casual_sync = _detected_intent == "casual"
 
+    conv_id = msg.conversation_id
+    user_id = user["id"] if user else None
+
+    async def _safe_web_search(**kw):
+        try:
+            return await web_search_with_fallback(**kw)
+        except Exception as e:
+            logger.warning(f"[NON-STREAM] Web search failed (degrading gracefully): {e}")
+            return []
+
+    async def _ns_fetch_history():
+        if conv_id and user_id:
+            conv = await supa_get_conversation(conv_id, user_id)
+            if conv:
+                raw = [
+                    {"role": m.get("role", ""), "content": m.get("content") or ""}
+                    for m in conv.get("messages", [])
+                    if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
+                ]
+                return _trim_history(raw)
+        return []
+
     if _is_casual_sync:
         web_results = []
         _ns_route = None
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
+        history_messages = await _ns_fetch_history()
     else:
         _ns_scoped_query, _ns_route = await build_search_scope(
             msg.message,
@@ -175,43 +198,28 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             subject_name=msg.subject_name or "",
             embedder=_get_syllabus_embedder(),
         )
-        rag_ctx = await resolve_rag_context(
-            msg.message,
-            subject_id=msg.subject_id,
-            subject_name=msg.subject_name,
-            document_text=document_text,
-            intent=_detected_intent,
+        rag_ctx, web_results, history_messages = await asyncio.gather(
+            resolve_rag_context(
+                msg.message,
+                subject_id=msg.subject_id,
+                subject_name=msg.subject_name,
+                document_text=document_text,
+                intent=_detected_intent,
+            ),
+            _safe_web_search(
+                query=msg.message, num_results=5,
+                board_name=ctx_board_name,
+                class_name=ctx_class_name,
+                subject_name=msg.subject_name or "",
+                scoped_query=_ns_scoped_query,
+            ),
+            _ns_fetch_history(),
         )
         _ns_rag_quality = rag_ctx.get("quality", "none")
-        if _ns_rag_quality in ("high", "tier0"):
-            logger.info(f"[NON-STREAM][INTERNAL-FIRST] RAG quality={_ns_rag_quality} | web search skipped")
-            web_results = []
-        elif _ns_rag_quality == "medium":
-            logger.info(f"[NON-STREAM][INTERNAL-FIRST] RAG quality=medium | running web search as supplement")
-            web_results = await web_search_with_fallback(
-                msg.message, num_results=8,
-                board_name=ctx_board_name,
-                class_name=ctx_class_name,
-                subject_name=msg.subject_name or "",
-                scoped_query=_ns_scoped_query,
-            )
-            if web_results:
-                logger.info(f"[NON-STREAM][INTERNAL-FIRST] Merged: internal medium + {len(web_results)} web results")
-        else:
-            logger.info("[NON-STREAM][INTERNAL-FIRST] RAG quality=none | [WEB-FALLBACK] running web search")
-            web_results = await web_search_with_fallback(
-                msg.message, num_results=8,
-                board_name=ctx_board_name,
-                class_name=ctx_class_name,
-                subject_name=msg.subject_name or "",
-                scoped_query=_ns_scoped_query,
-            )
-            if web_results:
-                logger.info(f"[NON-STREAM][WEB-FALLBACK] {len(web_results)} web results found")
-                rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                           "vector_hits": [], "source": "web", "quality": "web"}
-            else:
-                logger.info("[NON-STREAM][WEB-FALLBACK] Web search also empty — AI uses training knowledge")
+        if _ns_rag_quality == "none" and web_results:
+            rag_ctx["source"] = "web"
+            rag_ctx["quality"] = "web"
+        logger.info(f"[NON-STREAM][PARALLEL] RAG quality={_ns_rag_quality} | web results={len(web_results)}")
 
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -234,21 +242,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         syllabus=syllabus,
         web_results=web_results or None,
     )
-
-    conv_id = msg.conversation_id
-    history_messages = []
-    user_id = user["id"] if user else None
-
-    if conv_id and user_id:
-        conv = await supa_get_conversation(conv_id, user_id)
-        if conv:
-            raw_history = [
-                {"role": m.get("role", ""), "content": m.get("content") or ""}
-                for m in conv.get("messages", [])
-                if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
-            ]
-            history_messages = _trim_history(raw_history)
-    elif not conv_id and user_id:
+    if not conv_id and user_id:
         conv_id = str(uuid.uuid4())
         title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
         conv_doc = {
@@ -262,7 +256,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         await supa_upsert_conversation(conv_doc)
-    else:
+    elif not user_id:
         conv_id = None
 
     _MAX_PROMPT_CHARS_NS = 100_000
@@ -556,46 +550,33 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
             subject_name=msg.subject_name or "",
             embedder=_get_syllabus_embedder(),
         )
-        # Step 1: Internal RAG first (content cards, vector hits, DB chunks) + history
-        rag_ctx, raw_conv = await asyncio.gather(
+        async def _safe_web_search_stream():
+            try:
+                return await web_search_with_fallback(
+                    msg.message, num_results=5,
+                    board_name=ctx_board_name,
+                    class_name=ctx_class_name,
+                    subject_name=msg.subject_name or "",
+                    scoped_query=_sr_scoped_query,
+                )
+            except Exception as e:
+                logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
+                return []
+
+        rag_ctx, web_results, raw_conv = await asyncio.gather(
             resolve_rag_context(
                 msg.message, subject_id=msg.subject_id,
                 subject_name=msg.subject_name, document_text=document_text,
                 intent=_stream_intent,
             ),
+            _safe_web_search_stream(),
             _fetch_history(),
         )
         _rag_quality = rag_ctx.get("quality", "none")
-        # Step 2: Web search only when internal content is insufficient
-        if _rag_quality in ("high", "tier0"):
-            logger.info(f"[STREAM][INTERNAL-FIRST] RAG quality={_rag_quality} | web search skipped")
-            web_results = []
-        elif _rag_quality == "medium":
-            logger.info(f"[STREAM][INTERNAL-FIRST] RAG quality=medium | running web search as supplement")
-            web_results = await web_search_with_fallback(
-                msg.message, num_results=8,
-                board_name=ctx_board_name,
-                class_name=ctx_class_name,
-                subject_name=msg.subject_name or "",
-                scoped_query=_sr_scoped_query,
-            )
-            if web_results:
-                logger.info(f"[STREAM][INTERNAL-FIRST] Merged: internal medium + {len(web_results)} web results")
-        else:
-            logger.info("[STREAM][INTERNAL-FIRST] RAG quality=none | [WEB-FALLBACK] running web search")
-            web_results = await web_search_with_fallback(
-                msg.message, num_results=8,
-                board_name=ctx_board_name,
-                class_name=ctx_class_name,
-                subject_name=msg.subject_name or "",
-                scoped_query=_sr_scoped_query,
-            )
-            if web_results:
-                logger.info(f"[STREAM][WEB-FALLBACK] {len(web_results)} web results found")
-                rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                           "vector_hits": [], "source": "web", "quality": "web"}
-            else:
-                logger.info("[STREAM][WEB-FALLBACK] Web search also empty — AI uses training knowledge")
+        if _rag_quality == "none" and web_results:
+            rag_ctx["source"] = "web"
+            rag_ctx["quality"] = "web"
+        logger.info(f"[STREAM][PARALLEL] RAG quality={_rag_quality} | web results={len(web_results)}")
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
