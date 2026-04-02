@@ -1,3 +1,4 @@
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Send, Database, AlertTriangle, Square,
@@ -10,10 +11,27 @@ export function InputBar({
   textareaRef, adjustTextarea, sendMsg, handleStop,
 }) {
   const navigate = useNavigate();
+  const [maxTextareaHeight, setMaxTextareaHeight] = useState(160);
+
+  const updateMaxHeight = useCallback(() => {
+    if (window.visualViewport) {
+      const vpHeight = window.visualViewport.height;
+      const newMax = vpHeight < 500 ? 80 : vpHeight < 700 ? 120 : 160;
+      setMaxTextareaHeight(newMax);
+    }
+  }, []);
+
+  useEffect(() => {
+    updateMaxHeight();
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', updateMaxHeight);
+      return () => window.visualViewport.removeEventListener('resize', updateMaxHeight);
+    }
+  }, [updateMaxHeight]);
 
   return (
     <div
-      className="fixed bottom-0 left-0 right-0 z-20 border-t border-border/50 px-4 md:px-6 py-3 pb-[calc(0.75rem+64px+env(safe-area-inset-bottom,0px))] md:pb-3"
+      className="fixed bottom-0 left-0 right-0 z-20 border-t border-border/50 px-4 md:px-6 py-3 pb-[calc(0.75rem+68px+env(safe-area-inset-bottom,0px))] md:pb-3"
       style={{ background: 'var(--card)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }}
       data-testid="chat-input"
     >
@@ -53,7 +71,7 @@ export function InputBar({
             disabled={isOutOfCredits}
             rows={1}
             className="flex-1 bg-transparent resize-none outline-none text-sm text-foreground placeholder:text-muted-foreground disabled:cursor-not-allowed"
-            style={{ minHeight: 24, maxHeight: 160 }}
+            style={{ minHeight: 24, maxHeight: maxTextareaHeight }}
             aria-label="Type your message"
           />
           <div className="flex items-center gap-2 flex-shrink-0">

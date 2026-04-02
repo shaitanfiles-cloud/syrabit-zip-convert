@@ -135,7 +135,7 @@ export default function PersonalizedCmsPage() {
         <meta name="robots" content="noindex, nofollow" />
       </Helmet>
 
-      <div className="max-w-4xl mx-auto px-4 py-8  min-h-screen">
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-6 sm:py-8 min-h-screen">
         {/* Breadcrumb */}
         <nav className="flex items-center gap-2 text-xs text-white/40 mb-6">
           <Link to="/profile" className="hover:text-white/70 transition-colors">My Plans</Link>
@@ -188,13 +188,15 @@ export default function PersonalizedCmsPage() {
 
         {/* Content */}
         <article
-          className="prose prose-invert prose-sm max-w-none"
+          className="prose prose-invert prose-sm max-w-none px-0 sm:px-0"
           dangerouslySetInnerHTML={{ __html: doc.content_html || `<pre>${doc.content}</pre>` }}
           style={{
             '--tw-prose-headings': '#ffffff',
             '--tw-prose-body': 'rgba(255,255,255,0.75)',
             '--tw-prose-bold': '#ffffff',
             '--tw-prose-code': 'rgba(167,139,250,1)',
+            fontSize: '15px',
+            lineHeight: '1.75',
           }}
         />
 

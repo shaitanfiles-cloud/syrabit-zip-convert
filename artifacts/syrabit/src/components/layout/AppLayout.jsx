@@ -1,10 +1,18 @@
-import { Outlet } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { BottomNav } from './BottomNav';
 import { Navbar } from './Navbar';
 
 export function AppLayout(props) {
   const { pageTitle, hideNavbar, children } = props;
+  const location = useLocation();
+
+  useEffect(() => {
+    const mainEl = document.getElementById('main-content');
+    if (mainEl) mainEl.scrollTop = 0;
+  }, [location.pathname]);
+
   return (
     <div className="flex h-screen bg-background overflow-hidden">
       <Sidebar />

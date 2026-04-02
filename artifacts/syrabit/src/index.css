@@ -1209,3 +1209,45 @@
   .bottom-nav-item { min-width: 44px; min-height: 44px; }
   html, body { overflow-x: hidden; }
 }
+
+/* Auth form card — scroll-safe on short viewports */
+.auth-form-card {
+  max-height: calc(100vh - 6rem);
+  max-height: calc(100svh - 6rem);
+}
+
+/* Auth link hover/active states — touch-friendly */
+.auth-link {
+  color: #a78bfa;
+  transition: color 0.15s;
+}
+.auth-link:hover,
+.auth-link:active {
+  color: #c4b5fd;
+}
+
+/* Password toggle touch-friendly */
+.pass-toggle-btn {
+  color: rgba(255,255,255,0.28);
+  transition: color 0.15s;
+}
+.pass-toggle-btn:hover,
+.pass-toggle-btn:active {
+  color: rgba(255,255,255,0.60);
+}
+
+/* PublicNavbar mobile menu slide animation */
+.mobile-menu-slide {
+  animation: slideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: top center;
+}
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

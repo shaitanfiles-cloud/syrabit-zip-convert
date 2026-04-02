@@ -262,7 +262,7 @@ export default function LearnPage() {
       )}
 
       <div className="min-h-screen pb-20">
-        <div className="max-w-6xl mx-auto px-4 md:px-6 pt-6">
+        <div className="max-w-6xl mx-auto px-3 sm:px-4 md:px-6 pt-6">
 
           {/* Breadcrumb */}
           <nav className="flex items-center gap-1 text-xs text-white/35 mb-6" aria-label="Breadcrumb">
@@ -373,7 +373,7 @@ export default function LearnPage() {
                   />
                 </div>
               )}
-              <div className="p-6 md:p-10">
+              <div className="p-4 sm:p-6 md:p-10">
                 {processedHtml ? (
                   <div
                     className="learn-article max-w-none"

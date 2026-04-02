@@ -174,15 +174,6 @@
   .subject-strip-arts      { background: linear-gradient(180deg, rgba(245,158,11,0.22), transparent); }
   .subject-strip-science   { background: linear-gradient(180deg, rgba(34,211,238,0.22), transparent); }
 
-  .bottom-nav-active-dot {
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: hsl(var(--primary));
-    box-shadow: 0 0 4px var(--glow-primary);
-    animation: pulseGlow 6s ease-in-out infinite;
-  }
-
   ::-webkit-scrollbar { width: 3px; height: 3px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: hsl(var(--border) / 0.5); border-radius: 99px; }

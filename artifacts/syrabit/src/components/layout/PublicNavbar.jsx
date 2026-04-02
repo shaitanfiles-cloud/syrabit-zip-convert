@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Menu, X, ArrowRight, Shield } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -14,6 +14,17 @@ export const PublicNavbar = () => {
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
+
+  const handleEscape = useCallback((e) => {
+    if (e.key === 'Escape' && menuOpen) setMenuOpen(false);
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (menuOpen) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [menuOpen, handleEscape]);
 
   const navLinks = [
     { label: 'Curriculum',   href: '/curriculum',   internal: true  },
@@ -118,7 +129,7 @@ export const PublicNavbar = () => {
       {/* ─── Mobile Menu ─── */}
       {menuOpen && (
         <div
-          className="lg:hidden px-5 py-4 space-y-1"
+          className="lg:hidden px-5 py-4 space-y-1 mobile-menu-slide"
           style={{
             background: 'rgba(5,4,14,0.97)',
             backdropFilter: 'blur(28px)',
@@ -148,13 +159,15 @@ export const PublicNavbar = () => {
             )
           )}
           <div className="pt-3 space-y-2 mt-2" style={{ borderTop: '1px solid rgba(139,92,246,0.10)' }}>
-            <Link
-              to="/admin/login"
-              className="flex items-center gap-2 w-full px-3 min-h-[44px] rounded-xl text-sm text-violet-400 border border-violet-500/25 hover:bg-violet-500/10 transition-all"
-              onClick={() => setMenuOpen(false)}
-            >
-              <Shield size={14} /> Admin Panel
-            </Link>
+            {user?.is_admin && (
+              <Link
+                to="/admin/login"
+                className="flex items-center gap-2 w-full px-3 min-h-[44px] rounded-xl text-sm text-violet-400 border border-violet-500/25 hover:bg-violet-500/10 transition-all"
+                onClick={() => setMenuOpen(false)}
+              >
+                <Shield size={14} /> Admin Panel
+              </Link>
+            )}
             {user ? (
               <Link
                 to="/library"
@@ -187,3 +200,5 @@ export const PublicNavbar = () => {
     </nav>
   );
 };
+
+export default PublicNavbar;

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, Loader2, MessageSquare, BarChart3, AlertCircle, Sparkles } from 'lucide-react';
 import { Input } from '@/components/ui/input';
@@ -42,6 +42,12 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  const handleInputFocus = useCallback((e) => {
+    setTimeout(() => {
+      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 300);
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -154,7 +160,7 @@ export default function LoginPage() {
       </div>
 
       {/* ── Right panel — auth form ── */}
-      <div className="w-full lg:w-[48%] flex items-start lg:items-center justify-center p-6 pt-4 lg:pt-6 relative">
+      <div className="w-full lg:w-[48%] flex items-start lg:items-center justify-center p-4 sm:p-6 pt-4 lg:pt-6 relative overflow-y-auto" style={{ scrollPaddingBottom: '2rem' }}>
         {/* Subtle background glow */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
@@ -169,7 +175,7 @@ export default function LoginPage() {
 
           {/* Form card */}
           <div
-            className="rounded-2xl p-7"
+            className="rounded-2xl p-5 sm:p-7 overflow-y-auto auth-form-card"
             style={{
               background: 'rgba(255,255,255,0.04)',
               backdropFilter: 'blur(24px)',
@@ -205,7 +211,9 @@ export default function LoginPage() {
                     placeholder="your@email.com"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
+                    onFocus={handleInputFocus}
                     className="pl-10 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
+                    style={{ scrollMarginBottom: '4rem' }}
                     required
                     data-testid="auth-email-input"
                   />
@@ -225,17 +233,16 @@ export default function LoginPage() {
                     placeholder="••••••••"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
+                    onFocus={handleInputFocus}
                     className="pl-10 pr-11 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
+                    style={{ scrollMarginBottom: '4rem' }}
                     required
                     data-testid="auth-password-input"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
-                    style={{ color: 'rgba(255,255,255,0.28)' }}
-                    onMouseEnter={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.60)'; }}
-                    onMouseLeave={e => { e.currentTarget.style.color = 'rgba(255,255,255,0.28)'; }}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center pass-toggle-btn"
                   >
                     {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
@@ -243,9 +250,7 @@ export default function LoginPage() {
               </div>
 
               <div className="flex justify-end">
-                <Link to="/reset-password" className="text-xs font-medium transition-colors" style={{ color: '#a78bfa' }}
-                  onMouseEnter={e => { e.currentTarget.style.color = '#c4b5fd'; }}
-                  onMouseLeave={e => { e.currentTarget.style.color = '#a78bfa'; }}>
+                <Link to="/reset-password" className="text-xs font-medium auth-link">
                   Forgot password?
                 </Link>
               </div>
@@ -263,9 +268,7 @@ export default function LoginPage() {
 
             <p className="text-center text-sm mt-6" style={{ color: 'rgba(255,255,255,0.40)' }}>
               Don't have an account?{' '}
-              <Link to="/signup" className="font-semibold transition-colors" style={{ color: '#a78bfa' }}
-                onMouseEnter={e => { e.currentTarget.style.color = '#c4b5fd'; }}
-                onMouseLeave={e => { e.currentTarget.style.color = '#a78bfa'; }}>
+              <Link to="/signup" className="font-semibold auth-link">
                 Sign up free
               </Link>
             </p>

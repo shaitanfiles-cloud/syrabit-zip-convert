@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight, ChevronLeft, Globe, BookOpen, GraduationCap, FlaskConical, Leaf, Feather, Loader2, Sparkles, Check } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Globe, BookOpen, GraduationCap, FlaskConical, Leaf, Feather, Loader2, Sparkles, Check, AlertCircle, LogOut, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
 import { getBoards, getClasses, getStreams, saveOnboarding } from '@/utils/api';
@@ -31,7 +31,7 @@ const STREAM_COLORS = {
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
-  const { user, loading: authLoading, refreshUser, updateUser, justAuthenticated } = useAuth();
+  const { user, loading: authLoading, refreshUser, updateUser, justAuthenticated, logout } = useAuth();
   const [step, setStep] = useState(0);
 
   const [boards, setBoards] = useState([]);
@@ -47,6 +47,7 @@ export default function OnboardingPage() {
   const STEPS = isDegreeSel ? ['Board', 'Semester'] : ['Board', 'Class', 'Stream'];
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
 
   useEffect(() => {
     if (authLoading) return;
@@ -57,27 +58,59 @@ export default function OnboardingPage() {
     if (user?.onboarding_done) navigate('/library', { replace: true });
   }, [user, authLoading, navigate, justAuthenticated]);
 
+  const loadBoards = () => {
+    setFetchError(null);
+    setLoading(true);
+    getBoards()
+      .then((res) => setBoards(res.data))
+      .catch(() => setFetchError('boards'))
+      .finally(() => setLoading(false));
+  };
+
   useEffect(() => {
-    getBoards().then((res) => setBoards(res.data));
+    loadBoards();
   }, []);
 
   useEffect(() => {
     if (selectedBoard) {
+      setFetchError(null);
       setLoading(true);
       getClasses(selectedBoard.id)
         .then((res) => setClasses(res.data))
+        .catch(() => setFetchError('classes'))
         .finally(() => setLoading(false));
     }
   }, [selectedBoard]);
 
   useEffect(() => {
     if (selectedClass && !isDegreeSel) {
+      setFetchError(null);
       setLoading(true);
       getStreams(selectedClass.id)
         .then((res) => setStreams(res.data))
+        .catch(() => setFetchError('streams'))
         .finally(() => setLoading(false));
     }
   }, [selectedClass, isDegreeSel]);
+
+  const handleRetry = () => {
+    if (fetchError === 'boards') loadBoards();
+    else if (fetchError === 'classes' && selectedBoard) {
+      setFetchError(null);
+      setLoading(true);
+      getClasses(selectedBoard.id)
+        .then((res) => setClasses(res.data))
+        .catch(() => setFetchError('classes'))
+        .finally(() => setLoading(false));
+    } else if (fetchError === 'streams' && selectedClass) {
+      setFetchError(null);
+      setLoading(true);
+      getStreams(selectedClass.id)
+        .then((res) => setStreams(res.data))
+        .catch(() => setFetchError('streams'))
+        .finally(() => setLoading(false));
+    }
+  };
 
   const goNext = () => setStep((s) => s + 1);
   const goBack = () => setStep((s) => s - 1);
@@ -112,6 +145,13 @@ export default function OnboardingPage() {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch {}
+    navigate('/login', { replace: true });
+  };
+
   const canProceed = [
     selectedBoard !== null,
     selectedClass !== null,
@@ -122,7 +162,7 @@ export default function OnboardingPage() {
   const getStreamColor = (name) => STREAM_COLORS[name] || 'from-violet-500/20 to-purple-500/20 border-violet-500/30';
 
   return (
-    <div className="min-h-screen bg-[#06060e] flex items-center justify-center p-4">
+    <div className="min-h-screen bg-[#06060e] flex items-center justify-center p-4 overflow-y-auto">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
@@ -132,21 +172,21 @@ export default function OnboardingPage() {
           <p className="text-white/50 text-sm">Tell us about your studies so we can personalize your experience</p>
         </div>
 
-        <div className="flex items-center gap-2 mb-8">
+        <div className="flex items-center gap-1 sm:gap-2 mb-8">
           {STEPS.map((label, i) => (
-            <div key={label} className="flex items-center gap-2 flex-1">
-              <div className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold transition-colors ${
+            <div key={label} className="flex items-center gap-1 sm:gap-2 flex-1 min-w-0">
+              <div className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold transition-colors flex-shrink-0 ${
                 i < step ? 'bg-emerald-500 text-white' :
                 i === step ? 'bg-violet-600 text-white' :
                 'bg-white/10 text-white/40'
               }`}>
                 {i < step ? <Check size={14} /> : i + 1}
               </div>
-              <span className={`text-xs font-medium flex-1 ${
+              <span className={`text-xs font-medium truncate hidden min-[360px]:inline ${
                 i <= step ? 'text-white' : 'text-white/30'
               }`}>{label}</span>
               {i < STEPS.length - 1 && (
-                <div className={`h-px flex-1 ${
+                <div className={`h-px flex-1 min-w-[8px] ${
                   i < step ? 'bg-emerald-500/50' : 'bg-white/10'
                 }`} />
               )}
@@ -156,42 +196,59 @@ export default function OnboardingPage() {
 
         <div className="glass-card rounded-2xl p-6 border border-white/10 min-h-[300px]">
             <div>
-              {step === 0 && (
+              {fetchError && (
+                <div className="flex flex-col items-center justify-center py-8 gap-3">
+                  <AlertCircle size={32} className="text-red-400" />
+                  <p className="text-white/60 text-sm text-center">Failed to load data. Check your connection and try again.</p>
+                  <Button
+                    onClick={handleRetry}
+                    className="bg-violet-600 hover:bg-violet-500 text-white text-sm"
+                  >
+                    <RefreshCw size={14} className="mr-1.5" /> Retry
+                  </Button>
+                </div>
+              )}
+
+              {!fetchError && step === 0 && (
                 <div>
                   <h2 className="text-lg font-semibold text-white mb-1">Select your Division</h2>
                   <p className="text-white/50 text-sm mb-4">Choose your division under AssamBoard.</p>
                   <div className="mb-4 px-3 py-2 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center gap-2">
                     <span className="text-xs font-bold text-violet-400 uppercase tracking-widest">AssamBoard</span>
                   </div>
-                  <div className="space-y-3">
-                    {boards.map((board) => (
-                      <button
-                        key={board.id}
-                        onClick={() => setSelectedBoard(board)}
-                        className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
-                          selectedBoard?.id === board.id
-                            ? 'border-violet-500 bg-violet-500/15'
-                            : 'border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/8'
-                        }`}
-                        data-testid={`board-option-${board.id}`}
-                      >
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600/30 to-violet-800/30 flex items-center justify-center">
-                          <Globe size={20} className="text-violet-400" />
-                        </div>
-                        <div className="text-left">
-                          <p className="text-white font-semibold">{board.name}</p>
-                          <p className="text-white/50 text-xs">{board.description}</p>
-                        </div>
-                        {selectedBoard?.id === board.id && (
-                          <div className="ml-auto"><Check size={18} className="text-violet-400" /></div>
-                        )}
-                      </button>
-                    ))}
-                  </div>
+                  {loading ? (
+                    <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-400" /></div>
+                  ) : (
+                    <div className="space-y-3">
+                      {boards.map((board) => (
+                        <button
+                          key={board.id}
+                          onClick={() => setSelectedBoard(board)}
+                          className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
+                            selectedBoard?.id === board.id
+                              ? 'border-violet-500 bg-violet-500/15'
+                              : 'border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/8'
+                          }`}
+                          data-testid={`board-option-${board.id}`}
+                        >
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600/30 to-violet-800/30 flex items-center justify-center">
+                            <Globe size={20} className="text-violet-400" />
+                          </div>
+                          <div className="text-left">
+                            <p className="text-white font-semibold">{board.name}</p>
+                            <p className="text-white/50 text-xs">{board.description}</p>
+                          </div>
+                          {selectedBoard?.id === board.id && (
+                            <div className="ml-auto"><Check size={18} className="text-violet-400" /></div>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {step === 1 && (
+              {!fetchError && step === 1 && (
                 <div>
                   <h2 className="text-lg font-semibold text-white mb-1">Select your {isDegreeSel ? 'Semester' : 'Class'}</h2>
                   <p className="text-white/50 text-sm mb-6">{isDegreeSel ? 'Which semester are you currently in?' : 'Which class are you currently in?'}</p>
@@ -229,7 +286,7 @@ export default function OnboardingPage() {
                 </div>
               )}
 
-              {step === 2 && !isDegreeSel && (
+              {!fetchError && step === 2 && !isDegreeSel && (
                 <div>
                   <h2 className="text-lg font-semibold text-white mb-1">Select your Stream</h2>
                   <p className="text-white/50 text-sm mb-6">{streamStepHint(selectedBoard?.name)}</p>
@@ -279,12 +336,20 @@ export default function OnboardingPage() {
             >
               <ChevronLeft size={16} className="mr-1" /> Back
             </Button>
-          ) : <div />}
+          ) : (
+            <Button
+              variant="ghost"
+              onClick={handleLogout}
+              className="text-white/40 hover:text-white/70 hover:bg-white/10 text-xs"
+            >
+              <LogOut size={14} className="mr-1" /> Logout
+            </Button>
+          )}
 
           {!isLastStep ? (
             <Button
               onClick={goNext}
-              disabled={!canProceed[step]}
+              disabled={!canProceed[step] || !!fetchError}
               className="bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40"
               data-testid="onboarding-next-button"
             >
@@ -293,7 +358,7 @@ export default function OnboardingPage() {
           ) : (
             <Button
               onClick={handleFinish}
-              disabled={!canProceed[step] || saving}
+              disabled={!canProceed[step] || saving || !!fetchError}
               className="bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40"
               data-testid="onboarding-finish-button"
             >

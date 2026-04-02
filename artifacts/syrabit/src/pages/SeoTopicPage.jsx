@@ -471,7 +471,7 @@ export default function SeoTopicPage() {
       )}
 
       {/* Main layout: sidebar TOC + article */}
-      <div className="max-w-6xl mx-auto px-4 py-8">
+      <div className="max-w-6xl mx-auto px-3 sm:px-4 py-6 sm:py-8">
         <div className="flex gap-8 items-start">
           <SidebarTOC items={tocItems} activeId={activeHeadingId} />
 
@@ -480,7 +480,7 @@ export default function SeoTopicPage() {
 
             <article
               ref={articleRef}
-              className="rounded-2xl border border-white/5 p-6 md:p-10"
+              className="rounded-2xl border border-white/5 p-4 sm:p-6 md:p-10"
               style={{ background: 'rgba(255,255,255,0.02)' }}
             >
               <div

@@ -339,7 +339,7 @@ export default function ChatPage() {
             <button onClick={() => navigate('/profile')} className="text-xs font-semibold text-red-300 hover:text-red-200 transition-colors underline" aria-label="Go to profile to upgrade plan">Upgrade →</button>
           </div>
         )}
-        <div className="flex-1 overflow-y-auto min-h-0 pb-[calc(8rem+64px+env(safe-area-inset-bottom,0px))] md:pb-32" onClick={() => setShowModelMenu(false)} role="log" aria-label="Chat messages" aria-live="polite">
+        <div className="flex-1 overflow-y-auto min-h-0 pb-[calc(8rem+68px+env(safe-area-inset-bottom,0px))] md:pb-32" onClick={() => setShowModelMenu(false)} role="log" aria-label="Chat messages" aria-live="polite">
           <div className="max-w-3xl mx-auto px-4 md:px-6 py-4">
             {messages.length === 0 && (
               <EmptyState subject={subject} scopedChapters={scopedChapters} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />

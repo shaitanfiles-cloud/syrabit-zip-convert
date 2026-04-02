@@ -18,13 +18,19 @@
 .blog-view-tab .learn-article {
   background: #ffffff !important;
   color: #1a1a1a !important;
-  font-size: 16px !important;
+  font-size: 15px !important;
   line-height: 1.7 !important;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
   box-shadow: 0 1px 12px rgba(0,0,0,0.09) !important;
-  padding: 2rem 2.5rem 2.5rem !important;
+  padding: 1rem 1.25rem 1.5rem !important;
   border-radius: 0 0 4px 4px !important;
   max-width: none !important;
+}
+@media (min-width: 768px) {
+  .blog-view-tab .learn-article {
+    padding: 2rem 2.5rem 2.5rem !important;
+    font-size: 16px !important;
+  }
 }
 .blog-view-tab .learn-article h1,
 .blog-view-tab .learn-article h2,
@@ -104,7 +110,12 @@
 .learn-article {
   line-height: 1.85;
   color: #d5d1e8;
-  max-width: 68ch;
+  max-width: none;
+}
+@media (min-width: 768px) {
+  .learn-article {
+    max-width: 68ch;
+  }
 }
 .learn-article h1,
 .learn-article h2,
@@ -208,31 +219,3 @@
 .cms-editor-content th { background: rgba(0,0,0,0.04); font-weight: 600; padding: 0.45rem 0.7rem; border: 1px solid rgba(0,0,0,0.09); color: #111827 !important; }
 .cms-editor-content td { padding: 0.4rem 0.7rem; border: 1px solid rgba(0,0,0,0.07); color: #374151 !important; }
 
-.app-main-scroll {
-  padding-bottom: max(4rem, calc(4rem + env(safe-area-inset-bottom, 0px)));
-}
-@media (min-width: 768px) {
-  .app-main-scroll {
-    padding-bottom: 0;
-  }
-}
-
-.chat-viewport-height {
-  height: calc(100vh - 120px - env(safe-area-inset-bottom, 0px));
-  height: calc(100svh - 120px - env(safe-area-inset-bottom, 0px));
-}
-@media (min-width: 768px) {
-  .chat-viewport-height {
-    height: calc(100vh - 56px);
-    height: calc(100svh - 56px);
-  }
-}
-
-.cms-posts-masonry .igItemWrapper { min-width: 280px; }
-@media (max-width: 639px) {
-  .cms-posts-masonry .igItemWrapper { min-width: unset; width: 100% !important; }
-}
-
-@media (max-width: 767px) {
-  .bottom-nav-item { min-width: 44px; min-height: 44px; }
-}
