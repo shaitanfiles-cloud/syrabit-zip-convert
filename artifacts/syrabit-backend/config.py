@@ -41,6 +41,7 @@ FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rs
 _GROQ_KEY = os.environ.get('GROQ_API_KEY', '')
 _GROQ_KEY_2 = os.environ.get('GROQ_API_KEY_2', '').strip()
 _GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
+_GEMINI_KEY_2 = os.environ.get('GEMINI_API_KEY_2', '').strip()
 _XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
 _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '')
 _FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '')

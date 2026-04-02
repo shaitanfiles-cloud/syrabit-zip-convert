@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
-    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
+    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
     _SARVAM_LLM_KEY, _EMERGENT_KEY, _EMERGENT_BASE_URL, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
 )
 from deps import sarvam_llm_client, logger as _dep_logger
@@ -143,6 +143,8 @@ if _EMERGENT_KEY:
 # Fallback chain: Gemini → Groq → Fireworks → Sarvam → xAI → OpenAI
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
 if _GROQ_KEY and _GROQ_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
 if _GROQ_KEY_2 and _GROQ_KEY_2 != 'x':
@@ -196,6 +198,8 @@ _MODEL_ALIAS_MAP = {
 _SLM_SLOT_CANDIDATES = [
     # Gemini 2.5 Flash — primary: best accuracy + reasoning
     ("gemini",      "gemini-2.5-flash",                                  6),
+    # Gemini key 2 (doubles rate limit capacity)
+    ("gemini:2",    "gemini-2.5-flash",                                  6),
     # Groq key 1 (rate-limited but fast when available)
     ("groq",        "llama-3.3-70b-versatile",                           8),
     ("groq",        "llama-3.1-8b-instant",                              4),
@@ -445,6 +449,8 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
 _LLM_PROVIDERS_CONTENT: list[dict] = []
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
 for p in _LLM_PROVIDERS:
     if p["provider"] != "gemini" and p["provider"] != "emergent":
         _LLM_PROVIDERS_CONTENT.append(p)
