@@ -155,29 +155,68 @@ export default function LibraryPage() {
     });
   }, [enrichedSubjects, activeFilter, searchQuery, savedSubjectsSet, chaptersBySubject]);
 
+  const totalSeoTopics = useMemo(() => {
+    return enrichedSubjects.reduce((sum, s) => sum + (s.seo_stats?.topic_count || 0), 0);
+  }, [enrichedSubjects]);
+
+  const libraryJsonLd = useMemo(() => {
+    if (!filteredSubjects.length) return null;
+    return {
+      '@context': 'https://schema.org',
+      '@graph': [
+        {
+          '@type': 'ItemList',
+          name: 'Assamboard Subject Library',
+          description: 'Complete study material library for Assam Board (AHSEC/SEBA) students with notes, MCQs, definitions, and exam preparation resources.',
+          numberOfItems: filteredSubjects.length,
+          itemListElement: filteredSubjects.map((s, i) => ({
+            '@type': 'ListItem',
+            position: i + 1,
+            item: {
+              '@type': 'LearningResource',
+              name: s.name,
+              description: s.description || `Study ${s.name} — ${s.boardName} ${s.className}`,
+              url: s.boardSlug && s.classSlug && s.slug
+                ? `https://syrabit.ai/${s.boardSlug}/${s.classSlug}/${s.slug}`
+                : `https://syrabit.ai/subject/${s.id}`,
+              provider: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+              educationalLevel: `${s.className || ''} ${s.boardName || ''}`.trim(),
+              inLanguage: 'en-IN',
+              isAccessibleForFree: true,
+            },
+          })),
+        },
+        {
+          '@type': 'WebPage',
+          '@id': 'https://syrabit.ai/library',
+          name: 'Assamboard Subject Library — Study Notes, MCQs & Exam Prep',
+          description: 'Browse study materials for Assam Board subjects. AI-powered notes, MCQs, definitions, important questions, and examples.',
+          url: 'https://syrabit.ai/library',
+          isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
+          inLanguage: 'en-IN',
+        },
+        {
+          '@type': 'BreadcrumbList',
+          itemListElement: [
+            { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
+            { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
+          ],
+        },
+      ],
+    };
+  }, [filteredSubjects]);
+
   useEffect(() => {
-    if (!filteredSubjects.length) return;
+    if (!libraryJsonLd) return;
     const script = document.createElement('script');
     script.type = 'application/ld+json';
     script.id = 'library-jsonld';
-    script.text = JSON.stringify({
-      '@context': 'https://schema.org',
-      '@type': 'ItemList',
-      name: 'Assamboard Subject Library',
-      itemListElement: filteredSubjects.map((s, i) => ({
-        '@type': 'ListItem',
-        position: i + 1,
-        name: s.name,
-        url: s.boardSlug && s.classSlug && s.streamSlug && s.slug
-          ? `https://syrabit.ai/${s.boardSlug}/${s.classSlug}/${s.streamSlug}/${s.slug}`
-          : `https://syrabit.ai/subject/${s.id}`,
-      })),
-    });
+    script.text = JSON.stringify(libraryJsonLd);
     const existing = document.getElementById('library-jsonld');
     if (existing) existing.remove();
     document.head.appendChild(script);
     return () => { const el = document.getElementById('library-jsonld'); if (el) el.remove(); };
-  }, [filteredSubjects]);
+  }, [libraryJsonLd]);
 
   const handleAskAI = useCallback((subjectId, hasDocument = false, subjectName = '') => {
     try { Analytics.chatStart(subjectId, subjectName, 'openai/gpt-oss-20b'); } catch {}
@@ -194,13 +233,18 @@ export default function LibraryPage() {
   const handleFilterChange = useCallback((filterId) => setActiveFilter(filterId), []);
   const handleSearchClear = useCallback(() => setSearchQuery(''), []);
 
+  const seoTitle = 'Assamboard Subject Library — Notes, MCQs, Definitions & Exam Prep';
+  const seoDescription = `Explore ${subjects.length || ''} Assamboard Class 11-12 and Degree subjects with ${totalSeoTopics || ''} study topics. AI-powered notes, MCQs, definitions, important questions, and examples for Assam students.`.replace(/  +/g, ' ').trim();
+  const seoKeywords = 'Assam Board study material, AHSEC notes, SEBA notes, Class 11 notes Assam, Class 12 notes Assam, MCQs Assam Board, definitions, important questions, exam preparation Assam, Syrabit';
+
   if (bundleLoading) {
     return (
       <AppLayout pageTitle="Library" hideNavbar>
         <PageMeta
-          title="Assamboard Subject Library"
-          description="Explore Assamboard Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
+          title={seoTitle}
+          description="Explore Assamboard Class 11-12 and Degree subjects. AI-powered notes, MCQs, definitions, and exam preparation for Assam students."
           url="https://syrabit.ai/library"
+          keywords={seoKeywords}
         />
         <LibrarySkeleton />
       </AppLayout>
@@ -210,9 +254,10 @@ export default function LibraryPage() {
   return (
     <AppLayout pageTitle="Library" hideNavbar>
       <PageMeta
-        title="Assamboard Subject Library"
-        description="Explore Assamboard Class 11-12 and Degree subjects. AI-powered notes, chapters, and exam preparation for Assam students."
+        title={seoTitle}
+        description={seoDescription}
         url="https://syrabit.ai/library"
+        keywords={seoKeywords}
       />
       <div className="flex flex-col h-full w-full overflow-hidden">
 
@@ -235,7 +280,7 @@ export default function LibraryPage() {
                   Educational Browser<br />For Assamboard Students
                 </h1>
                 <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                  Browse {subjects.length} subjects · {allChapters.length} lessons
+                  Browse {subjects.length} subjects · {allChapters.length} lessons{totalSeoTopics > 0 ? ` · ${totalSeoTopics} study topics` : ''}
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">

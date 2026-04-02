@@ -70,12 +70,80 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
                 logger.warning("library-bundle MongoDB query timed out after 15s")
                 return {"boards": [], "classes": [], "streams": [], "subjects": []}
 
-        # ── Compute per-subject content coverage ─────────────────────────────
         chapters_by_subject: dict = {}
+        chapter_id_to_subject: dict = {}
         for ch in chapters_data:
             sid = ch.get("subject_id", "")
-            if sid:
+            ch_id = ch.get("id", "")
+            if sid and ch_id:
                 chapters_by_subject.setdefault(sid, []).append(ch)
+                chapter_id_to_subject[ch_id] = sid
+
+        all_chapter_ids = list(chapter_id_to_subject.keys())
+
+        seo_topics_data = []
+        seo_page_type_counts = []
+        try:
+            seo_topics_data = await asyncio.wait_for(
+                db.topics.find(
+                    {"chapter_id": {"$in": all_chapter_ids}, "status": "published"},
+                    {"_id": 0, "id": 1, "title": 1, "slug": 1, "chapter_id": 1, "order": 1},
+                ).sort("order", 1).to_list(10000),
+                timeout=10.0,
+            )
+            if seo_topics_data:
+                seo_topic_ids = [t["id"] for t in seo_topics_data]
+                seo_page_type_counts = await asyncio.wait_for(
+                    db.seo_pages.aggregate([
+                        {"$match": {"topic_id": {"$in": seo_topic_ids}, "status": "published"}},
+                        {"$group": {"_id": {"topic_id": "$topic_id", "page_type": "$page_type"}}},
+                    ]).to_list(50000),
+                    timeout=10.0,
+                )
+        except asyncio.TimeoutError:
+            logger.warning("library-bundle SEO query timed out — continuing without SEO data")
+        except Exception as seo_err:
+            logger.warning(f"library-bundle SEO query error: {seo_err}")
+
+        seo_page_types_by_topic: dict = {}
+        for doc in seo_page_type_counts:
+            tid = doc["_id"]["topic_id"]
+            pt = doc["_id"]["page_type"]
+            seo_page_types_by_topic.setdefault(tid, []).append(pt)
+
+        topics_by_chapter: dict = {}
+        topic_id_to_chapter: dict = {}
+        for t in seo_topics_data:
+            cid = t.get("chapter_id", "")
+            tid = t.get("id", "")
+            page_types = seo_page_types_by_topic.get(tid, [])
+            if not page_types:
+                continue
+            topic_id_to_chapter[tid] = cid
+            topics_by_chapter.setdefault(cid, []).append({
+                "id": tid,
+                "title": t.get("title", ""),
+                "slug": t.get("slug", ""),
+                "page_types": sorted(page_types),
+            })
+
+        seo_stats_by_subject: dict = {}
+        for tid, ptypes in seo_page_types_by_topic.items():
+            cid = topic_id_to_chapter.get(tid)
+            if not cid:
+                continue
+            sid = chapter_id_to_subject.get(cid)
+            if not sid:
+                continue
+            stats = seo_stats_by_subject.setdefault(sid, {"topic_count": 0, "notes": 0, "definition": 0, "important-questions": 0, "mcqs": 0, "examples": 0})
+            stats["topic_count"] += 1
+            for pt in ptypes:
+                if pt in stats:
+                    stats[pt] += 1
+
+        for ch in chapters_data:
+            ch_id = ch.get("id", "")
+            ch["seo_topics"] = topics_by_chapter.get(ch_id, [])
 
         pyq_total_by_subject: dict = {}
         for p in pyq_data:
@@ -101,6 +169,7 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
             s["notes_pct"]     = round(notes_ch / total_ch * 100) if total_ch else 0
             s["pyq_count"]     = pyq_total_by_subject.get(sid, 0)
             s["flash_count"]   = fc_total_by_subject.get(sid, 0)
+            s["seo_stats"]     = seo_stats_by_subject.get(sid, {})
 
         bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data, "chapters": chapters_data}
         _set_content_cache("library-bundle", bundle)

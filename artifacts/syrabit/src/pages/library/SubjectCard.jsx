@@ -4,6 +4,7 @@ import {
   Bookmark, BookmarkCheck,
   BookOpen, Layers, ChevronRight, Sparkles,
   Share2, ExternalLink, Lock, Loader2,
+  FileText, HelpCircle, List, Lightbulb, CheckSquare, ChevronDown,
 } from 'lucide-react';
 import { useShare } from '@/hooks/useShare';
 
@@ -16,18 +17,62 @@ const THUMB_GRADIENTS = {
   science:   ['#7c3aed', '#4f46e5'],
 };
 
+const SEO_TYPE_CONFIG = {
+  notes:                { label: 'Notes',     icon: FileText,    color: '#10b981', bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.25)' },
+  definition:           { label: 'Definitions', icon: List,      color: '#3b82f6', bg: 'rgba(59,130,246,0.12)', border: 'rgba(59,130,246,0.25)' },
+  mcqs:                 { label: 'MCQs',      icon: CheckSquare, color: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.25)' },
+  'important-questions': { label: 'Questions', icon: HelpCircle, color: '#ef4444', bg: 'rgba(239,68,68,0.12)',  border: 'rgba(239,68,68,0.25)' },
+  examples:             { label: 'Examples',  icon: Lightbulb,   color: '#8b5cf6', bg: 'rgba(139,92,246,0.12)', border: 'rgba(139,92,246,0.25)' },
+};
+
+const SEO_TYPE_ORDER = ['notes', 'definition', 'mcqs', 'important-questions', 'examples'];
+
+function TopicPageTypePills({ topic, basePath }) {
+  return (
+    <div className="flex flex-wrap gap-1 mt-1">
+      {SEO_TYPE_ORDER.filter(pt => topic.page_types.includes(pt)).map(pt => {
+        const cfg = SEO_TYPE_CONFIG[pt];
+        const href = pt === 'notes'
+          ? `${basePath}/${topic.slug}`
+          : `${basePath}/${topic.slug}/${pt}`;
+        return (
+          <Link
+            key={pt}
+            to={href}
+            className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full transition-all hover:opacity-80"
+            style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}
+          >
+            {cfg.label}
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
 const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onToggleSave, onAskAI, index }) {
+  const [showTopics, setShowTopics] = useState(null);
   const thumbColors = useMemo(() => THUMB_GRADIENTS[sub.gradient] || THUMB_GRADIENTS.math, [sub.gradient]);
   const tags = useMemo(() => Array.isArray(sub.tags) ? sub.tags : [], [sub.tags]);
   const visibleTags = useMemo(() => tags.slice(0, 3), [tags]);
   const chapterCount = useMemo(() => chapters.length || sub.chapter_count || sub.chapterCount || 0, [chapters.length, sub.chapter_count, sub.chapterCount]);
   const hasDocument = useMemo(() => sub.has_document === true, [sub.has_document]);
 
+  const seoStats = sub.seo_stats || {};
+  const hasSeoContent = seoStats.topic_count > 0;
+
   const seoPath = useMemo(() =>
     sub.boardSlug && sub.classSlug && sub.streamSlug && sub.slug
       ? `/${sub.boardSlug}/${sub.classSlug}/${sub.streamSlug}/${sub.slug}`
       : null,
     [sub.boardSlug, sub.classSlug, sub.streamSlug, sub.slug]
+  );
+
+  const seoTopicBasePath = useMemo(() =>
+    sub.boardSlug && sub.classSlug && sub.slug
+      ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}`
+      : null,
+    [sub.boardSlug, sub.classSlug, sub.slug]
   );
 
   const subjectLandingPath = useMemo(() =>
@@ -51,6 +96,10 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
   const visibleChapters = useMemo(() => chapters.slice(0, 3), [chapters]);
   const moreChapters = chapters.length - 3;
+
+  const handleToggleTopics = useCallback((chId) => {
+    setShowTopics(prev => prev === chId ? null : chId);
+  }, []);
 
   return (
     <div
@@ -167,6 +216,25 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
             )}
           </div>
         )}
+
+        {hasSeoContent && (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {SEO_TYPE_ORDER.filter(pt => seoStats[pt] > 0).map(pt => {
+              const cfg = SEO_TYPE_CONFIG[pt];
+              const Icon = cfg.icon;
+              return (
+                <span
+                  key={pt}
+                  className="flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
+                  style={{ background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}` }}
+                >
+                  <Icon size={8} />
+                  {seoStats[pt]} {cfg.label}
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {visibleChapters.length > 0 && (
@@ -236,28 +304,61 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
               const chPath = sub.boardSlug && sub.classSlug && sub.slug && ch.slug
                 ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}/${ch.slug}`
                 : subjectLandingPath;
+              const chTopics = ch.seo_topics || [];
+              const isExpanded = showTopics === ch.id;
               return (
-                <Link
-                  key={ch.id || i}
-                  to={chPath}
-                  className="flex items-center gap-2 px-3 py-2.5 sm:py-2 text-xs transition-all hover:bg-purple-500/8 group/lesson"
-                  style={{ borderBottom: i < visibleChapters.length - 1 ? '1px solid rgba(139,92,246,0.05)' : 'none' }}
-                  title={`${ch.title} — ${sub.name}`}
-                >
-                  <span
-                    className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0"
-                    style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))' }}
+                <div key={ch.id || i}>
+                  <div
+                    className="flex items-center gap-2 px-3 py-2.5 sm:py-2 text-xs transition-all hover:bg-purple-500/8 group/lesson"
+                    style={{ borderBottom: (i < visibleChapters.length - 1 && !isExpanded) ? '1px solid rgba(139,92,246,0.05)' : 'none' }}
                   >
-                    {i + 1}
-                  </span>
-                  <span className="text-foreground/75 group-hover/lesson:text-purple-300 truncate transition-colors flex-1">
-                    {ch.title}
-                  </span>
-                  <ExternalLink
-                    size={10}
-                    className="shrink-0 text-muted-foreground/20 group-hover/lesson:text-purple-400 transition-colors"
-                  />
-                </Link>
+                    <span
+                      className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0"
+                      style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))' }}
+                    >
+                      {i + 1}
+                    </span>
+                    <Link
+                      to={chPath}
+                      className="text-foreground/75 group-hover/lesson:text-purple-300 truncate transition-colors flex-1"
+                      title={`${ch.title} — ${sub.name}`}
+                    >
+                      {ch.title}
+                    </Link>
+                    {chTopics.length > 0 ? (
+                      <button
+                        onClick={() => handleToggleTopics(ch.id)}
+                        className="shrink-0 p-0.5 rounded transition-colors text-muted-foreground/40 hover:text-purple-400"
+                        aria-label={isExpanded ? 'Collapse topics' : 'Expand topics'}
+                      >
+                        <ChevronDown size={12} className={`transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} />
+                      </button>
+                    ) : (
+                      <ExternalLink
+                        size={10}
+                        className="shrink-0 text-muted-foreground/20 group-hover/lesson:text-purple-400 transition-colors"
+                      />
+                    )}
+                  </div>
+                  {isExpanded && chTopics.length > 0 && seoTopicBasePath && (
+                    <div
+                      className="px-3 pb-2 space-y-1.5"
+                      style={{ borderBottom: i < visibleChapters.length - 1 ? '1px solid rgba(139,92,246,0.05)' : 'none' }}
+                    >
+                      {chTopics.map(topic => (
+                        <div key={topic.id} className="pl-7">
+                          <Link
+                            to={`${seoTopicBasePath}/${topic.slug}`}
+                            className="text-[11px] text-foreground/60 hover:text-purple-300 transition-colors leading-tight"
+                          >
+                            {topic.title}
+                          </Link>
+                          <TopicPageTypePills topic={topic} basePath={seoTopicBasePath} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               );
             })}
             {moreChapters > 0 && (
