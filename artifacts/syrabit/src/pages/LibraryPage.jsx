@@ -219,7 +219,7 @@ export default function LibraryPage() {
   }, [libraryJsonLd]);
 
   const handleAskAI = useCallback((subjectId, hasDocument = false, subjectName = '') => {
-    try { Analytics.chatStart(subjectId, subjectName, 'openai/gpt-oss-20b'); } catch {}
+    try { Analytics.chatStart(subjectId, subjectName, 'syrabit-slm'); } catch {}
     const params = new URLSearchParams({ subject: subjectId });
     if (hasDocument) params.set('document_id', subjectId);
     navigate(`/chat?${params.toString()}`);

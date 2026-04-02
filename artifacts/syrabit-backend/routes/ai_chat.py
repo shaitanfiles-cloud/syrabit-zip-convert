@@ -302,7 +302,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
 
     if answer is None:
         try:
-            answer = await call_llm_api_chat(messages, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens)
+            answer = await call_llm_api_chat(messages, model=msg.model or "syrabit-slm", max_tokens=max_tokens)
             _redis_set("ai_cache", cache_key, answer, _cache_ttl)
             if not redis_client:
                 _ai_response_cache[cache_key] = answer
@@ -755,7 +755,7 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                 full_response.append(cached_answer)
             else:
                 _bp_count = 0
-                async for chunk in call_llm_api_stream(messages_payload, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens):
+                async for chunk in call_llm_api_stream(messages_payload, model=msg.model or "syrabit-slm", max_tokens=max_tokens):
                     if '"content"' in chunk:
                         try:
                             data = json.loads(chunk[6:])

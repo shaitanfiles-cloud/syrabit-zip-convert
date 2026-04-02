@@ -17,7 +17,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
     _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
-    _SARVAM_LLM_KEY, _CEREBRAS_KEY, _EMERGENT_KEY, _EMERGENT_BASE_URL, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    _SARVAM_LLM_KEY, _CEREBRAS_KEY, _EMERGENT_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
     CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
 )
 from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
@@ -138,8 +138,6 @@ class _LlmBatcher:
 _llm_batcher = _LlmBatcher()
 
 _LLM_PROVIDERS = []
-if _EMERGENT_KEY:
-    _LLM_PROVIDERS.append({"provider": "emergent",    "key": _EMERGENT_KEY,   "default_model": "openai/gpt-4o-mini"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b"})
 if _GEMINI_KEY:
@@ -175,7 +173,7 @@ if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 for _p in _LLM_PROVIDERS:
-    if _p["provider"] not in ("emergent", "fireworksai", "groq", "cerebras", "gemini", "sarvam"):
+    if _p["provider"] not in ("fireworksai", "groq", "cerebras", "gemini", "sarvam"):
         _LLM_PROVIDERS_CHAT.append(_p)
 
 _MODEL_PROVIDER_MAP = {
@@ -192,14 +190,11 @@ _MODEL_PROVIDER_MAP = {
     "llama-3.1-8b-instant": "groq",
     "llama-3.3-70b": "cerebras",
     "llama3.1-8b": "cerebras",
-    "openai/gpt-oss-20b": "groq",
-    "openai/gpt-oss-120b": "fireworksai",
 }
 
-# Map display-alias model names to the actual API model ID to send to the provider
 _MODEL_ALIAS_MAP = {
-    "openai/gpt-oss-20b":  "llama-3.1-8b-instant",                   # Groq highest TPS (~750 tok/s)
-    "openai/gpt-oss-120b": "accounts/fireworks/models/gpt-oss-120b", # Fireworks
+    "syrabit-slm": "accounts/fireworks/models/deepseek-v3p2",
+    "syrabit-mlm": "accounts/fireworks/models/deepseek-v3p2",
 }
 
 # ── SLM slot table ────────────────────────────────────────────────────────────
@@ -429,8 +424,6 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
         return await _call_sarvam_llm(messages, api_key, model, max_tokens)
     if provider == "gemini":
         return await _call_gemini(messages, api_key, model, max_tokens)
-    if provider == "emergent":
-        return await _call_emergent(messages, api_key, model, max_tokens)
     if provider == "cerebras":
         return await _call_cerebras(messages, api_key, model, max_tokens)
     if provider == "xai":
@@ -519,7 +512,7 @@ if _GEMINI_KEY:
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
 for p in _LLM_PROVIDERS:
-    if p["provider"] not in ("gemini", "emergent", "cerebras"):
+    if p["provider"] not in ("gemini", "cerebras"):
         _LLM_PROVIDERS_CONTENT.append(p)
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
@@ -732,11 +725,9 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     Real token-by-token streaming from the LLM provider.
     Uses native streaming APIs for instant first-token delivery.
     Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
-    If the requested model name is not in _MODEL_PROVIDER_MAP (e.g. a display-only alias
-    like 'openai/gpt-oss-20b'), the resolved provider's default model is used instead.
+    'syrabit-slm' triggers the smart SLM pool (round-robin across all providers).
     """
     use_model_raw = model or LLM_MODEL
-    # Resolve display-alias → real API model name (e.g. openai/gpt-oss-20b → llama-3.3-70b-versatile)
     use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
     provider, key = _resolve_provider_for_model(use_model_resolved, _LLM_PROVIDERS_CHAT)
     if use_model_raw != use_model_resolved:
@@ -847,10 +838,6 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             logger.info(f"LLM stream: provider=gemini, model={p_model}")
             async for token in _stream_gemini(messages, p_key, p_model, _mt):
                 yield token
-        elif p_name == "emergent":
-            logger.info(f"LLM stream: provider=emergent, model={p_model}")
-            async for token in _stream_emergent(messages, p_key, p_model, _mt):
-                yield token
         elif p_name == "cerebras":
             logger.info(f"LLM stream: provider=cerebras, model={p_model}")
             async for token in _stream_cerebras(messages, p_key, p_model, _mt):
@@ -883,7 +870,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             tokens.append(chunk)
         return tokens
 
-    if use_model_raw == "openai/gpt-oss-20b":
+    if use_model_raw == "syrabit-slm":
         _tried = 0
         while _tried < len(_slm_pool.all_slots):
             slot = _slm_pool.pick()
