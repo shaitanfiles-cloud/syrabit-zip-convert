@@ -424,27 +424,74 @@ async def publish_syllabus_as_card(
 # ─────────────────────────────────────────────
 
 @router.post("/admin/syllabus/seed-embeddings")
-async def admin_seed_syllabus_embeddings(admin: dict = Depends(get_admin_user)):
+async def admin_seed_syllabus_embeddings(
+    admin: dict = Depends(get_admin_user),
+    full: bool = Query(False, description="If true, drops all embeddings and re-embeds from scratch"),
+):
     """
-    Force a full re-embed of all SEED_DATA chapters into the `syllabus_embeddings`
-    collection. Safe to run multiple times — drops existing and re-seeds.
-    On first run after deployment this happens automatically in the background;
-    call this endpoint to trigger it manually or force a refresh.
+    Force re-embed of all chapters + topics into the `syllabus_embeddings`
+    collection. Use ?full=true to drop existing and rebuild from scratch
+    (required after upgrading to enriched embed text / topic-level embeddings).
+    Without ?full, only new/missing chapters are embedded incrementally.
     """
     emb = _get_syllabus_embedder()
     if emb is None:
         raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
-    result = await emb.reseed()
-    return result
+    if full:
+        return await emb.full_reseed()
+    return await emb.reseed()
+
+
+@router.post("/admin/syllabus/full-reseed")
+async def admin_full_reseed_embeddings(admin: dict = Depends(get_admin_user)):
+    """Drop all syllabus embeddings and re-embed everything from scratch with enriched text."""
+    emb = _get_syllabus_embedder()
+    if emb is None:
+        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
+    return await emb.full_reseed()
 
 
 @router.get("/admin/syllabus/embedding-stats")
 async def admin_syllabus_embedding_stats(admin: dict = Depends(get_admin_user)):
-    """Return counts for the syllabus_embeddings collection and in-memory cache."""
+    """Return detailed stats: total/chapter/topic embeddings, thin embed text, missing topics, avg lengths."""
     emb = _get_syllabus_embedder()
     if emb is None:
         raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
     return await emb.stats()
+
+
+@router.get("/admin/syllabus/test-classify")
+async def admin_test_classify(
+    q: str = Query(..., description="Query to test against the embedding space"),
+    top_n: int = Query(5, ge=1, le=20),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Diagnostic endpoint: test a query against the syllabus embedding space.
+    Returns top-N matches with similarity scores, embed text previews,
+    and whether each would pass the classification threshold.
+    """
+    emb = _get_syllabus_embedder()
+    if emb is None:
+        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
+
+    from syllabus_embedder import SIMILARITY_THRESHOLD
+
+    results = await emb.classify_top_n(q, top_n=top_n)
+    best_match = await emb.classify(q)
+
+    return {
+        "query": q,
+        "threshold": SIMILARITY_THRESHOLD,
+        "best_match": {
+            "subject": best_match.subject_name,
+            "chapter": best_match.chapter_title,
+            "level": best_match.level,
+            "topic": best_match.topic,
+            "similarity": best_match.similarity,
+        } if best_match else None,
+        "top_n": results,
+    }
 
 
 # ─────────────────────────────────────────────

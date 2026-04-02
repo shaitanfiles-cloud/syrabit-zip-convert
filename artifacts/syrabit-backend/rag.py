@@ -1,5 +1,5 @@
 """Syrabit.ai — RAG search, vector search, content card fetching, auto-chunking."""
-import re, asyncio, time, uuid, hashlib, logging
+import os, re, asyncio, time, uuid, hashlib, logging
 from typing import Optional, Dict
 from datetime import datetime, timezone
 from fastapi import HTTPException
@@ -1219,7 +1219,10 @@ async def resolve_rag_context(
             "quality": "tier0",
             "intent":  _resolved_intent_t0,
         }
-    _RELEVANCE_GATE = 0.60
+    try:
+        _RELEVANCE_GATE = float(os.getenv("RAG_RELEVANCE_GATE", "0.50"))
+    except ValueError:
+        _RELEVANCE_GATE = 0.50
 
     cached_rag, _card_result, vector_hits = await asyncio.gather(
         rag_search(query, subject_id=subject_id, subject_name=subject_name),
