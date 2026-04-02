@@ -152,7 +152,7 @@ async def create_payment_order(body: PaymentOrderRequest, user: dict = Depends(g
         order = client.order.create({
             "amount":   PLAN_PRICES_INR[plan],
             "currency": "INR",
-            "receipt":  f"syrabit_{user['id']}_{plan}_{int(time.time())}",
+            "receipt":  f"s_{str(user['id'])[:8]}_{plan}_{int(time.time())}"[:40],
             "notes": {
                 "user_id": str(user["id"]),
                 "plan":    plan,
@@ -633,7 +633,7 @@ async def credit_topup(body: CreditTopUpRequest, user: dict = Depends(get_curren
             order = client.order.create({
                 "amount": amount,
                 "currency": "INR",
-                "receipt": f"topup_{user_id}_{body.credits}_{int(time.time())}",
+                "receipt": f"t_{str(user_id)[:8]}_{body.credits}_{int(time.time())}"[:40],
                 "notes": {"user_id": str(user_id), "plan": "topup", "credits": str(body.credits)},
             })
             return {
