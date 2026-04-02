@@ -43,7 +43,8 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         cached = _get_content_cache("library-bundle")
         if cached:
             if response:
-                response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+                response.headers["Cache-Control"] = "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400"
+                response.headers["CDN-Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
             return cached
     try:
         if not await is_mongo_available():
@@ -104,7 +105,8 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data, "chapters": chapters_data}
         _set_content_cache("library-bundle", bundle)
         if response:
-            response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+            response.headers["Cache-Control"] = "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400"
+            response.headers["CDN-Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
         return bundle
     except Exception:
         return {"boards": [], "classes": [], "streams": [], "subjects": []}

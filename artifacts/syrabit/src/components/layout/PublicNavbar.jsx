@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Menu, X, ArrowRight, Shield } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { LogoFull } from '@/components/Logo';
+import { prefetchRoute } from '@/utils/prefetchRoute';
 
 export const PublicNavbar = () => {
   const [scrolled, setScrolled] = useState(false);
@@ -36,6 +37,10 @@ export const PublicNavbar = () => {
     { label: 'Pricing',      href: '/pricing',      internal: true  },
   ];
 
+  const handlePrefetch = useCallback((path) => {
+    prefetchRoute(path);
+  }, []);
+
   return (
     <nav
       className="fixed top-0 left-0 right-0 z-50 transition-all duration-400"
@@ -67,6 +72,9 @@ export const PublicNavbar = () => {
                 <Link
                   key={link.label}
                   to={link.href}
+                  onMouseEnter={() => handlePrefetch(link.href)}
+                  onTouchStart={() => handlePrefetch(link.href)}
+                  onFocus={() => handlePrefetch(link.href)}
                   className="px-4 py-2 rounded-xl text-sm font-medium text-white/55 hover:text-white hover:bg-white/[0.07] transition-all duration-150"
                 >
                   {link.label}
@@ -95,6 +103,8 @@ export const PublicNavbar = () => {
             {user ? (
               <Link
                 to="/library"
+                onMouseEnter={() => handlePrefetch('/library')}
+                onTouchStart={() => handlePrefetch('/library')}
                 className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-white font-semibold transition-all duration-150 hover:opacity-90 active:scale-95 hover:-translate-y-px btn-gradient"
               >
                 Go to App <ArrowRight size={14} />
@@ -103,12 +113,16 @@ export const PublicNavbar = () => {
               <>
                 <Link
                   to="/login"
+                  onMouseEnter={() => handlePrefetch('/login')}
+                  onTouchStart={() => handlePrefetch('/login')}
                   className="h-9 px-4 rounded-xl text-sm font-medium text-white/65 hover:text-white hover:bg-white/[0.08] transition-all duration-150"
                 >
                   Sign In
                 </Link>
                 <Link
                   to="/signup"
+                  onMouseEnter={() => handlePrefetch('/signup')}
+                  onTouchStart={() => handlePrefetch('/signup')}
                   className="flex items-center gap-1.5 h-9 px-4 rounded-xl text-sm text-white font-semibold transition-all duration-150 active:scale-95 btn-gradient"
                   data-testid="landing-nav-cta-button"
                 >

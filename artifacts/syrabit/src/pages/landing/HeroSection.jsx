@@ -5,6 +5,7 @@ import { Sparkles, Play, BookOpen, Users, TrendingUp } from 'lucide-react';
 import { fadeUp, staggerContainer } from './shared';
 import AnimatedStat from './AnimatedStat';
 import AnimatedChatDemo from './AnimatedChatDemo';
+import { prefetchRoute } from '@/utils/prefetchRoute';
 
 const STATS = [
   { value: '3',    label: 'AssamBoard Divisions', icon: BookOpen   },
@@ -77,6 +78,8 @@ export default function HeroSection() {
             <motion.div whileHover={{ scale: 1.04, y: -3 }} whileTap={{ scale: 0.97 }}>
               <Link
                 to="/signup"
+                onMouseEnter={() => prefetchRoute('/signup')}
+                onTouchStart={() => prefetchRoute('/signup')}
                 className="flex flex-wrap items-center justify-center gap-2.5 text-white font-bold btn-gradient"
                 style={{
                   minHeight: 54,

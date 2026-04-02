@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { BookOpen, MessageSquare, Clock, User, ShieldCheck } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { pageImports } from '@/utils/pageImports';
+import { prefetchRoute } from '@/utils/prefetchRoute';
 
 const NAV_ITEMS = [
   { to: '/library', icon: BookOpen,      label: 'Browser',  preloadKey: 'library' },
@@ -22,10 +23,11 @@ export function BottomNav() {
     ? [...NAV_ITEMS, { to: '/admin', icon: ShieldCheck, label: 'Admin' }]
     : NAV_ITEMS;
 
-  const handlePreload = useCallback((preloadKey) => {
+  const handlePreload = useCallback((preloadKey, to) => {
     if (preloadKey && pageImports[preloadKey]) {
       pageImports[preloadKey]();
     }
+    if (to) prefetchRoute(to);
   }, []);
 
   return (
@@ -50,9 +52,9 @@ export function BottomNav() {
             <Link
               key={to}
               to={to}
-              onTouchStart={() => handlePreload(preloadKey)}
-              onMouseEnter={() => handlePreload(preloadKey)}
-              onFocus={() => handlePreload(preloadKey)}
+              onTouchStart={() => handlePreload(preloadKey, to)}
+              onMouseEnter={() => handlePreload(preloadKey, to)}
+              onFocus={() => handlePreload(preloadKey, to)}
               className="flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 min-w-[44px] min-h-[44px] relative"
               style={active ? {
                 color: '#a78bfa',

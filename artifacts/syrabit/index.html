@@ -50,11 +50,23 @@
     <!-- ── Hreflang ── -->
     <link rel="alternate" hreflang="en-IN" href="https://syrabit.ai/" />
 
+    <!-- Backend API preconnect — injected at build time by Vite (see vite.config.js htmlPlugin) -->
+    <!--BACKEND_PRECONNECT-->
+
+    <!-- Preconnect to third-party origins used on initial load -->
+    <link rel="preconnect" href="https://us.i.posthog.com" crossorigin />
+    <link rel="dns-prefetch" href="https://us.i.posthog.com" />
+    <link rel="preconnect" href="https://us-assets.i.posthog.com" crossorigin />
+    <link rel="dns-prefetch" href="https://us-assets.i.posthog.com" />
+    <link rel="dns-prefetch" href="https://assets.emergent.sh" />
+
     <!-- Font preconnect — reduces DNS/TLS handshake latency -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <!-- Fonts loaded via CSS (display=swap prevents render blocking) -->
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+    <!-- Preload primary font weight to eliminate FOIT -->
+    <link rel="preload" href="https://fonts.gstatic.com/s/spacegrotesk/v16/V8mDoQDjQSkFtoMM3T6r8E7mPbF4Cw.woff2" as="font" type="font/woff2" crossorigin />
+    <!-- Fonts: display=swap in the URL ensures font-display: swap; loaded as non-blocking stylesheet -->
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
 
     <!-- ── Security Meta Headers ── -->
     <!-- Security: handled by backend HTTP headers, not meta tags -->
@@ -107,6 +119,23 @@
       }
     }
     </script>
+
+    <!-- Inline critical CSS for above-the-fold rendering -->
+    <style>
+      *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+      html{-webkit-text-size-adjust:100%;font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent;scroll-behavior:smooth}
+      body{font-family:'Space Grotesk','Inter',system-ui,-apple-system,sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+      html.dark{color-scheme:dark}
+      .dark body,.dark #root{background:#06060e;color:#e2e8f0}
+      #root{min-height:100vh;isolation:isolate}
+      .min-h-screen{min-height:100vh}
+      .flex{display:flex}.items-center{align-items:center}.justify-center{justify-content:center}
+      .flex-col{flex-direction:column}.gap-4{gap:1rem}
+      .text-white{color:#fff}.overflow-x-hidden{overflow-x:hidden}
+      .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border-width:0}
+      .animate-spin{animation:spin 1s linear infinite}
+      @keyframes spin{to{transform:rotate(360deg)}}
+    </style>
 
     <!-- Emergent scripts (do not remove) -->
     <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>

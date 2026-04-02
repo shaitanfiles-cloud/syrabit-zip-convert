@@ -386,6 +386,23 @@ function botRenderPlugin() {
   };
 }
 
+function backendPreconnectPlugin() {
+  const backendUrl = process.env.VITE_BACKEND_URL || '';
+  return {
+    name: 'syrabit-backend-preconnect',
+    transformIndexHtml(html) {
+      if (!backendUrl) return html;
+      try {
+        const origin = new URL(backendUrl).origin;
+        const tags = `<link rel="preconnect" href="${origin}" crossorigin />\n    <link rel="dns-prefetch" href="${origin}" />`;
+        return html.replace('<!--BACKEND_PRECONNECT-->', tags);
+      } catch {
+        return html;
+      }
+    },
+  };
+}
+
 export default defineConfig({
   oxc: {
     include: /\.(m?[jt]sx?)$/,
@@ -401,6 +418,7 @@ export default defineConfig({
     react({
       include: /\.(js|jsx|ts|tsx)$/,
     }),
+    backendPreconnectPlugin(),
     pyqPagePlugin(),
     botRenderPlugin(),
   ],

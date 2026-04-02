@@ -68,7 +68,7 @@ const PageFallbackContent = () => (
           className="w-14 h-14 rounded-2xl flex items-center justify-center pulse-glow overflow-hidden"
           aria-hidden="true"
         >
-          <img src="/logo.png" alt="" className="w-14 h-14 object-cover" />
+          <img src="/logo.png" alt="" width="56" height="56" fetchpriority="high" className="w-14 h-14 object-cover" />
         </div>
         <div
           className="absolute orbit-ring"
@@ -103,14 +103,43 @@ function App() {
   useEffect(() => { initGA4(); }, []);
 
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const prefetchBundle = () => {
       queryClient.prefetchQuery({
         queryKey: ['library-bundle'],
         queryFn: () => apiClient().get('/content/library-bundle').then((r) => r.data),
         staleTime: 30 * 60 * 1000,
       });
-    }, 1000);
-    return () => clearTimeout(timer);
+    };
+
+    const token = localStorage.getItem('token');
+    if (token) {
+      prefetchBundle();
+      return;
+    }
+
+    let done = false;
+    const trigger = () => {
+      if (done) return;
+      done = true;
+      prefetchBundle();
+      detach();
+    };
+
+    const onHoverLibrary = (e) => {
+      const link = e.target.closest('a[href="/library"]');
+      if (link) trigger();
+    };
+
+    document.addEventListener('mouseenter', onHoverLibrary, { capture: true, passive: true });
+    document.addEventListener('touchstart', onHoverLibrary, { capture: true, passive: true });
+
+    const detach = () => {
+      document.removeEventListener('mouseenter', onHoverLibrary, { capture: true });
+      document.removeEventListener('touchstart', onHoverLibrary, { capture: true });
+    };
+
+    const fallback = setTimeout(trigger, 1000);
+    return () => { clearTimeout(fallback); detach(); };
   }, []);
 
   // Nuke Emergent badge completely — fast interval + all hiding properties
