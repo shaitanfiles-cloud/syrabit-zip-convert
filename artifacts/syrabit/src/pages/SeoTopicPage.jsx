@@ -308,8 +308,9 @@ export default function SeoTopicPage() {
   const { sharing, share } = useShare();
   const handleShare = useCallback(() => {
     const subjectName = page?.topic_title || topicSlug;
-    share(subjectName, basePath);
-  }, [page, topicSlug, basePath, share]);
+    const sharePath = currentType !== 'notes' ? `${basePath}/${currentType}` : basePath;
+    share(subjectName, sharePath);
+  }, [page, topicSlug, basePath, currentType, share]);
 
   const readTimeMin = useMemo(() => {
     if (!page?.word_count) return 0;

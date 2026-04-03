@@ -1695,7 +1695,7 @@ _BOT_UA_RE = re.compile(
 )
 
 _BOT_SKIP_PREFIXES = (
-    "/api/", "/admin", "/chat", "/history", "/profile", "/static/",
+    "/api/", "/admin", "/history", "/profile", "/static/",
     "/health", "/docs", "/openapi.json", "/assets/", "/icons/",
     "/fonts/", "/robots.txt", "/sitemap",
 )
@@ -1800,6 +1800,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             cache_key = "_terms_"
         elif n == 1 and parts[0] == "privacy":
             cache_key = "_privacy_"
+        elif n == 1 and parts[0] == "chat":
+            cache_key = "_chat_"
         elif n == 2 and parts[0] == "learn":
             cache_key = f"_learn_/{parts[1]}"
         elif n == 2 and parts[0] == "pyq":
@@ -1824,6 +1826,38 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
         try:
             _seo_port = int(os.environ.get("PORT", "8000"))
             api_base = f"http://localhost:{_seo_port}/api/seo"
+
+            if cache_key == "_chat_":
+                html_content = """<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Syra AI — Your Study Assistant | Syrabit.ai</title>
+<meta name="description" content="Ask Syra anything about your syllabus. AI-powered study assistant for AHSEC, SEBA &amp; Degree students in Assam.">
+<link rel="canonical" href="https://syrabit.ai/chat">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:title" content="Syra AI — Your Study Assistant | Syrabit.ai">
+<meta property="og:description" content="Ask Syra anything about your syllabus. AI-powered study assistant for AHSEC, SEBA &amp; Degree students in Assam.">
+<meta property="og:url" content="https://syrabit.ai/chat">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Syra AI — Your Study Assistant | Syrabit.ai">
+<meta name="twitter:description" content="Ask Syra anything about your syllabus. AI-powered study assistant for AHSEC, SEBA &amp; Degree students in Assam.">
+<meta name="twitter:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="robots" content="index, follow">
+</head>
+<body>
+<h1>Syra AI — Your Study Assistant</h1>
+<p>Ask Syra anything about your syllabus. AI-powered study assistant for AHSEC, SEBA &amp; Degree students in Assam.</p>
+<p><a href="https://syrabit.ai/chat">Start chatting with Syra</a></p>
+</body>
+</html>"""
+                _bot_html_cache[cache_key] = html_content
+                return _bot_html_response(html_content)
 
             if cache_key in ("_pricing_", "_terms_", "_privacy_"):
                 page_name = cache_key.strip("_")

@@ -31,7 +31,7 @@ const STREAM_COLORS = {
 
 export default function OnboardingPage() {
   const navigate = useNavigate();
-  const { user, loading: authLoading, refreshUser, updateUser, justAuthenticated, logout } = useAuth();
+  const { user, authChecked, refreshUser, updateUser, justAuthenticated, logout } = useAuth();
   const [step, setStep] = useState(0);
 
   const [boards, setBoards] = useState([]);
@@ -50,13 +50,13 @@ export default function OnboardingPage() {
   const [fetchError, setFetchError] = useState(null);
 
   useEffect(() => {
-    if (authLoading) return;
+    if (!authChecked) return;
     if (!user && !justAuthenticated.current) {
       navigate('/login', { replace: true });
       return;
     }
     if (user?.onboarding_done) navigate('/library', { replace: true });
-  }, [user, authLoading, navigate, justAuthenticated]);
+  }, [user, authChecked, navigate, justAuthenticated]);
 
   const loadBoards = () => {
     setFetchError(null);

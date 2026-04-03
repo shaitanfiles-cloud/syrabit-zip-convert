@@ -11,6 +11,7 @@ export const getInMemoryToken = () => _inMemoryToken;
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [authChecked, setAuthChecked] = useState(false);
   const justAuthenticated = useRef(false);
 
   const fetchMe = useCallback(async () => {
@@ -35,6 +36,8 @@ export const AuthProvider = ({ children }) => {
         setUser(null);
       }
       return false;
+    } finally {
+      setAuthChecked(true);
     }
   }, []);
 
@@ -125,6 +128,7 @@ export const AuthProvider = ({ children }) => {
       user,
       token: _inMemoryToken,
       loading,
+      authChecked,
       login,
       signup,
       googleLogin,
