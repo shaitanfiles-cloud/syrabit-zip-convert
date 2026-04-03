@@ -49,6 +49,9 @@ _rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=600)
 # Vector RAG cache — 300-second TTL (Gemini embed API calls are expensive to re-run)
 _vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
 
+# Query embedding cache — avoids repeated Gemini embed calls for the same/similar queries
+_query_embed_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=600)
+
 # Content card cache — 180-second TTL (avoids duplicate seo_pages + chapters queries)
 _content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
 

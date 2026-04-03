@@ -8,6 +8,7 @@ from cache import (
     _rag_cache, _rag_cache_key, _vector_rag_cache, _vector_rag_cache_key,
     _content_card_cache, _content_card_cache_key,
     _cache_key, _redis_get_search, _redis_cache_search,
+    _query_embed_cache,
 )
 from utils import _extract_keywords, _slow_query
 import vertex_services
@@ -587,14 +588,37 @@ async def vector_rag_search(
     Falls back to empty list if embedding fails or no vectors exist yet.
     Caches results for 300 seconds — Gemini embed calls are expensive.
     """
-    # Fast path: in-memory cache (skips Gemini API call + 300-doc MongoDB fetch)
     _vk = _vector_rag_cache_key(query, subject_id, top_k)
     if _vk in _vector_rag_cache:
         logger.info(f"Vector RAG cache hit: query='{query[:40]}'")
         return _vector_rag_cache[_vk]
 
     try:
-        query_vec = await vertex_services.embed_text(query, task_type="RETRIEVAL_QUERY")
+        return await asyncio.wait_for(
+            _vector_rag_search_inner(query, subject_id, top_k, _vk),
+            timeout=2.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"vector_rag_search timed out (2s budget): query='{query[:40]}'")
+        return []
+    except Exception as e:
+        logger.error(f"vector_rag_search failed: {e}")
+        return []
+
+
+async def _vector_rag_search_inner(
+    query: str,
+    subject_id: Optional[str],
+    top_k: int,
+    _vk: str,
+) -> list:
+    try:
+        _embed_key = query.strip().lower()
+        query_vec = _query_embed_cache.get(_embed_key)
+        if query_vec is None:
+            query_vec = await vertex_services.embed_text(query, task_type="RETRIEVAL_QUERY")
+            if query_vec:
+                _query_embed_cache[_embed_key] = query_vec
         if not query_vec:
             return []
 
@@ -619,9 +643,9 @@ async def vector_rag_search(
             cms_filter["$or"] = [{"linked_subject_id": subject_id}, {"subject_id": subject_id}]
 
         pages, chapters, cms_docs = await asyncio.gather(
-            db.seo_pages.find(page_filter, _page_proj).limit(50).to_list(50),
-            db.chapters.find(ch_filter, _ch_proj).limit(30).to_list(30),
-            db.cms_documents.find(cms_filter, _cms_proj).limit(20).to_list(20),
+            db.seo_pages.find(page_filter, _page_proj).limit(15).to_list(15),
+            db.chapters.find(ch_filter, _ch_proj).limit(10).to_list(10),
+            db.cms_documents.find(cms_filter, _cms_proj).limit(5).to_list(5),
         )
 
         scored = []

@@ -20,8 +20,8 @@ REDIS_URL_CACHE_TTL = 3600
 
 _DOMAIN_LAST_FETCH: Dict[str, float] = {}
 _DOMAIN_COOLDOWN = 2.0
-_MAX_FETCHES_PER_QUERY = 4
-_GLOBAL_TIMEOUT_BUDGET = 10.0
+_MAX_FETCHES_PER_QUERY = 2
+_GLOBAL_TIMEOUT_BUDGET = 3.0
 _MAX_CONTENT_CHARS = 3000
 
 _MIN_USEFUL_CONTENT_LEN = 80
@@ -326,11 +326,11 @@ async def enrich_search_results(results: list, max_enrich: int = _MAX_FETCHES_PE
         try:
             if _is_pdf_url(url):
                 content = await asyncio.wait_for(
-                    fetch_pdf_from_url(url), timeout=min(remaining, 8.0)
+                    fetch_pdf_from_url(url), timeout=min(remaining, 2.0)
                 )
             else:
                 content = await asyncio.wait_for(
-                    fetch_url_content(url), timeout=min(remaining, 8.0)
+                    fetch_url_content(url), timeout=min(remaining, 2.0)
                 )
             return result, content
         except asyncio.TimeoutError:

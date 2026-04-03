@@ -498,20 +498,15 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    # ── Resolve subject's own board/class/stream (overrides user profile) ────
-    subj_ctx = await _resolve_subject_context(msg.subject_id)
-    ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
-    ctx_class_id   = subj_ctx.get("class_id")   or msg.class_id
-    ctx_stream_id  = subj_ctx.get("stream_id")  or getattr(msg, 'stream_id', None)
-    ctx_board_name = subj_ctx.get("board_name") or msg.board_name or (user.get("board_name", "") if user else "")
-    ctx_class_name = subj_ctx.get("class_name") or msg.class_name or (user.get("class_name", "") if user else "")
-    ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or (user.get("stream_name", "") if user else "")
-    if subj_ctx:
-        logger.info(f"Chat [STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
+    _PRE_LLM_BUDGET = 3.0
 
-    # ── Phase 1: document + syllabus in parallel ──────────────────────────────
+    _stream_intent = _classify_intent(msg.message)
+    _is_casual = _stream_intent == "casual"
+
+    # ── Phase 0+1 fully parallel: context, semester, doc, search scope all at once ──
+    _t_phase0 = _time_mod.time()
+
     async def _fetch_doc():
-        # card_context (library card scrape) takes highest priority — same as PDF Tier 0
         if msg.card_context and msg.card_context.strip():
             logger.info(f"Chat [STREAM]: Tier 0 card_context ({len(msg.card_context)} chars) used as grounding")
             return msg.card_context
@@ -520,56 +515,73 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
         subj = await db.subjects.find_one({"id": msg.document_id}, {"_id": 0, "document_text": 1})
         return (subj or {}).get("document_text")
 
-    _sem_class_id_s = await _resolve_semester_class_id(msg.message, ctx_board_id) if ctx_board_id else None
-    _syl_class_id_s = _sem_class_id_s or ctx_class_id
-    if _sem_class_id_s:
-        logger.info(f"Chat [STREAM]: Semester override class_id={_sem_class_id_s} (from query)")
-
-    async def _fetch_syllabus():
-        if not (ctx_board_id and _syl_class_id_s):
-            return None
-        _sck = _syllabus_cache_key(ctx_board_id, _syl_class_id_s, ctx_stream_id, msg.subject_id)
-        if _sck in _syllabus_cache:
-            return _syllabus_cache[_sck]
-        try:
-            queries = []
-            if ctx_stream_id and msg.subject_id:
-                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0}))
-            if ctx_stream_id:
-                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id}, {"_id": 0}))
-            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": {"$exists": False}}, {"_id": 0}))
-            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s}, {"_id": 0}))
-            results = await asyncio.gather(*queries, return_exceptions=True)
-            s = None
-            for r in results:
-                if r and not isinstance(r, Exception):
-                    s = r
-                    break
-            if s:
-                _syllabus_cache[_sck] = s
-            return s
-        except Exception:
-            return None
-
-    _stream_intent = _classify_intent(msg.message)
-    _is_casual = _stream_intent == "casual"
-
-    async def _fetch_search_scope():
+    async def _fetch_search_scope_early():
         if _is_casual:
             return "", None
         return await build_search_scope(
             msg.message,
-            board_name=ctx_board_name,
-            class_name=ctx_class_name,
+            board_name=msg.board_name or (user.get("board_name", "") if user else ""),
+            class_name=msg.class_name or (user.get("class_name", "") if user else ""),
             subject_name=msg.subject_name or "",
             embedder=_get_syllabus_embedder(),
         )
 
-    document_text, syllabus, (_sr_scoped_query, _sr_route) = await asyncio.gather(
-        _fetch_doc(), _fetch_syllabus(), _fetch_search_scope(),
+    _subj_ctx_result, _sem_class_result, document_text, (_sr_scoped_query, _sr_route) = await asyncio.gather(
+        _resolve_subject_context(msg.subject_id),
+        _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
+        _fetch_doc(),
+        _fetch_search_scope_early(),
     )
 
-    # ── Phase 2: RAG + conversation history in parallel ───────────────────────
+    subj_ctx = _subj_ctx_result
+    ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
+    ctx_class_id   = subj_ctx.get("class_id")   or msg.class_id
+    ctx_stream_id  = subj_ctx.get("stream_id")  or getattr(msg, 'stream_id', None)
+    ctx_board_name = subj_ctx.get("board_name") or msg.board_name or (user.get("board_name", "") if user else "")
+    ctx_class_name = subj_ctx.get("class_name") or msg.class_name or (user.get("class_name", "") if user else "")
+    ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or (user.get("stream_name", "") if user else "")
+
+    if not _sem_class_result and ctx_board_id and ctx_board_id != msg.board_id:
+        _sem_class_result = await _resolve_semester_class_id(msg.message, ctx_board_id)
+
+    _syl_class_id_s = _sem_class_result or ctx_class_id
+
+    if subj_ctx:
+        logger.info(f"Chat [STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
+    if _sem_class_result:
+        logger.info(f"Chat [STREAM]: Semester override class_id={_sem_class_result} (from query)")
+
+    syllabus = None
+    if ctx_board_id and _syl_class_id_s:
+        _sck = _syllabus_cache_key(ctx_board_id, _syl_class_id_s, ctx_stream_id, msg.subject_id)
+        if _sck in _syllabus_cache:
+            syllabus = _syllabus_cache[_sck]
+        else:
+            try:
+                queries = []
+                if ctx_stream_id and msg.subject_id:
+                    queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0}))
+                if ctx_stream_id:
+                    queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id}, {"_id": 0}))
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": {"$exists": False}}, {"_id": 0}))
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s}, {"_id": 0}))
+                results = await asyncio.gather(*queries, return_exceptions=True)
+                for r in results:
+                    if r and not isinstance(r, Exception):
+                        syllabus = r
+                        break
+                if syllabus:
+                    _syllabus_cache[_sck] = syllabus
+            except Exception:
+                pass
+
+    _t_phase1_done = _time_mod.time()
+    logger.info(f"[STREAM][TIMING] Phase 0+1 (context+doc+syllabus+scope): {_t_phase1_done - _t_phase0:.3f}s")
+
+    # ── Phase 2: RAG + history (essential, gate LLM), web search (best-effort, never blocks LLM) ──
+    _t_phase2 = _time_mod.time()
+    _deadline = _stream_t0 + _PRE_LLM_BUDGET
+
     async def _fetch_history():
         if not msg.conversation_id or not user_id:
             return None
@@ -581,6 +593,13 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
+        _rag_task = asyncio.create_task(resolve_rag_context(
+            msg.message, subject_id=msg.subject_id,
+            subject_name=msg.subject_name, document_text=document_text,
+            intent=_stream_intent,
+        ))
+        _history_task = asyncio.create_task(_fetch_history())
+
         async def _safe_web_search_stream():
             try:
                 return await web_search_with_fallback(
@@ -594,15 +613,55 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                 logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
                 return []
 
-        rag_ctx, web_results, raw_conv = await asyncio.gather(
-            resolve_rag_context(
-                msg.message, subject_id=msg.subject_id,
-                subject_name=msg.subject_name, document_text=document_text,
-                intent=_stream_intent,
-            ),
-            _safe_web_search_stream(),
-            _fetch_history(),
-        )
+        _web_task = asyncio.create_task(_safe_web_search_stream())
+
+        _essential = {_rag_task, _history_task}
+        _essential_budget = max(0.1, _deadline - _time_mod.time())
+        done, _ = await asyncio.wait(_essential, timeout=_essential_budget, return_when=asyncio.ALL_COMPLETED)
+
+        _empty_rag = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+                      "vector_hits": [], "source": "none", "quality": "none"}
+
+        if _rag_task not in done:
+            _rag_task.cancel()
+            try:
+                await _rag_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            logger.warning("[STREAM] RAG timed out — proceeding without RAG context")
+
+        if _history_task not in done:
+            _history_task.cancel()
+            try:
+                await _history_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            logger.warning("[STREAM] History fetch timed out")
+
+        try:
+            rag_ctx = _rag_task.result() if _rag_task.done() and not _rag_task.cancelled() else _empty_rag
+        except Exception as _rag_exc:
+            logger.warning(f"[STREAM] RAG task raised: {_rag_exc}")
+            rag_ctx = _empty_rag
+        try:
+            raw_conv = _history_task.result() if _history_task.done() and not _history_task.cancelled() else None
+        except Exception:
+            raw_conv = None
+
+        if _web_task.done() and not _web_task.cancelled():
+            try:
+                web_results = _web_task.result()
+            except Exception:
+                web_results = []
+        else:
+            web_results = []
+            _web_task.cancel()
+            try:
+                await _web_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            logger.info("[STREAM] Web search dropped (exceeded time budget) — proceeding with RAG only")
+
         _rag_quality = rag_ctx.get("quality", "none")
         if _rag_quality == "none":
             rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
@@ -613,6 +672,9 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
             logger.info(f"[STREAM] No embeddings match (outside syllabus) → RAG skipped | web={len(web_results)} (web+LLM mode)")
         else:
             logger.info(f"[STREAM] RAG quality={_rag_quality} | web={len(web_results)} (RAG=base, web=polish)")
+
+    _t_phase2_done = _time_mod.time()
+    logger.info(f"[STREAM][TIMING] Phase 2 (RAG+web+history): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -749,7 +811,7 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                 logger.info(f"Memory cache HIT (STREAM): {cache_key}")
 
             if cached_answer:
-                # Yield in small chunks to preserve streaming UX for cache hits
+                logger.info(f"[STREAM][TIMING] TTFT (cache hit): {_time_mod.time() - _stream_t0:.3f}s")
                 _CHUNK_SIZE = 50
                 for _ci in range(0, len(cached_answer), _CHUNK_SIZE):
                     yield f"data: {json.dumps({'content': cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
@@ -757,8 +819,12 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                 full_response.append(cached_answer)
             else:
                 _bp_count = 0
+                _first_token_logged = False
                 async for chunk in call_llm_api_stream(messages_payload, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens):
                     if '"content"' in chunk:
+                        if not _first_token_logged:
+                            logger.info(f"[STREAM][TIMING] TTFT (first LLM token): {_time_mod.time() - _stream_t0:.3f}s")
+                            _first_token_logged = True
                         try:
                             data = json.loads(chunk[6:])
                             full_response.append(data.get("content", ""))
