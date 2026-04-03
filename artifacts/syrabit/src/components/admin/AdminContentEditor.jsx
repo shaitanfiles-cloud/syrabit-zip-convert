@@ -38,12 +38,9 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const fileInputRef = useRef(null);
   const editorRef = useRef(null);
 
-  const [selectedChapters, setSelectedChapters] = useState(new Set());
   const [showPreview, setShowPreview] = useState(false);
   const [chapterAssets, setChapterAssets] = useState({});
   const [editorKey, setEditorKey] = useState(0);
-
-  useEffect(() => { setSelectedChapters(new Set()); }, [selSubject]);
 
   const subjectData = subjects.find(s => s.id === selSubject);
   const boardData = boards.find(b => b.id === selBoard);
@@ -326,7 +323,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                   </div>
                   <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => load(true)} />
                   <ChapterList
-                    chapters={chapters} chapterAssets={chapterAssets} selectedChapters={selectedChapters} setSelectedChapters={setSelectedChapters}
+                    chapters={chapters} chapterAssets={chapterAssets}
                     generatingNotes={generatingNotes}
                     onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
                     onViewChapter={(ch) => setViewerItem(ch)}

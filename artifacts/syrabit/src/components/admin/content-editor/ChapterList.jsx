@@ -15,7 +15,7 @@ const MARK_COLORS = {
 const SEO_TYPE_LABELS = { notes: 'Notes', definition: 'Defs', 'important-questions': 'ImpQ', mcqs: 'MCQs', examples: 'Ex', faq: 'FAQ' };
 
 export default function ChapterList({
-  chapters, chapterAssets, selectedChapters, setSelectedChapters,
+  chapters, chapterAssets,
   generatingNotes,
   onGenerateNotes, onDeleteChapter,
   onViewChapter, onEditChapter,
@@ -36,16 +36,6 @@ export default function ChapterList({
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-sm font-semibold text-white">Chapters ({chapters.length})</p>
-          <div className="flex items-center gap-2">
-            {chapters.length > 0 && (
-              <button
-                onClick={() => setSelectedChapters(prev => prev.size === chapters.length ? new Set() : new Set(chapters.map(c => c.id)))}
-                className="text-[10px] text-white/30 hover:text-white transition-colors"
-              >
-                {selectedChapters.size === chapters.length ? 'Deselect all' : 'Select all'}
-              </button>
-            )}
-          </div>
         </div>
 
         {chapters.length === 0 && <p className="text-xs text-white/30 py-4 text-center">No chapters yet — create the first one above</p>}
@@ -61,26 +51,14 @@ export default function ChapterList({
           const hasSeoPages  = (assets.seoPagesPublished || 0) > 0;
           const markWise  = assets.markWiseCounts || {};
           const seoTypes  = assets.seoPageTypes || {};
-          const isSelected = selectedChapters.has(ch.id);
           return (
             <div key={ch.id}
               className="rounded-xl border transition-all"
               style={{
-                borderColor: isSelected ? 'rgba(149,117,224,0.40)' : hasNotes ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.08)',
-                background:  isSelected ? 'rgba(149,117,224,0.05)' : 'rgba(255,255,255,0.02)',
+                borderColor: hasNotes ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.08)',
+                background:  'rgba(255,255,255,0.02)',
               }}>
               <div className="flex items-start gap-2 p-3 pb-2">
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={e => setSelectedChapters(prev => {
-                    const next = new Set(prev);
-                    if (e.target.checked) next.add(ch.id); else next.delete(ch.id);
-                    return next;
-                  })}
-                  className="rounded flex-shrink-0 accent-violet-500 cursor-pointer mt-0.5"
-                  onClick={e => e.stopPropagation()}
-                />
                 <div className="flex-shrink-0 mt-1">
                   {hasNotes
                     ? <div className="w-2 h-2 rounded-full bg-emerald-400" title="Notes generated" />
