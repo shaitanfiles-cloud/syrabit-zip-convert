@@ -6,7 +6,7 @@ import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
 import { toast } from 'sonner';
 import { LogoFull } from '@/components/Logo';
-import GoogleSignInButton from '@/components/GoogleSignInButton';
+
 
 const getPasswordStrength = (password) => {
   if (password.length === 0) return { score: 0, label: '' };
@@ -194,8 +194,6 @@ export default function SignupPage() {
                 {error}
               </div>
             )}
-
-            <GoogleSignInButton mode="signup" />
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
