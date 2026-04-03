@@ -38,6 +38,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+async def _cascade_delete_subject_assets(subject_id: str):
+    await db.chapters.delete_many({"subject_id": subject_id})
+    for coll_name in ["syllabus_embeddings", "ai_pyq_collections", "flashcard_collections", "seo_topics", "chunks"]:
+        try:
+            await getattr(db, coll_name).delete_many({"subject_id": subject_id})
+        except Exception as exc:
+            logger.warning(f"Cascade cleanup failed for {coll_name} (subject {subject_id}): {exc}")
+
+async def _cascade_delete_stream_children(stream_id: str):
+    child_subjects = await db.subjects.find({"stream_id": stream_id}).to_list(None)
+    for subj in child_subjects:
+        await _cascade_delete_subject_assets(subj["id"])
+    await db.subjects.delete_many({"stream_id": stream_id})
+
 @router.get("/admin/content/boards")
 async def admin_list_boards(admin: dict = Depends(get_admin_user)):
     return await get_boards()
@@ -103,9 +117,23 @@ async def admin_update_board(board_id: str, data: dict, admin: dict = Depends(ge
 
 @router.delete("/admin/content/boards/{board_id}")
 async def admin_delete_board(board_id: str, admin: dict = Depends(get_admin_user)):
+    board = await db.boards.find_one({"id": board_id})
+    if not board:
+        raise HTTPException(status_code=404, detail="Board not found")
+    child_classes = await db.classes.find({"board_id": board_id}).to_list(None)
+    for cls in child_classes:
+        child_streams = await db.streams.find({"class_id": cls["id"]}).to_list(None)
+        for stream in child_streams:
+            await _cascade_delete_stream_children(stream["id"])
+        await db.streams.delete_many({"class_id": cls["id"]})
+    await db.classes.delete_many({"board_id": board_id})
     await db.boards.delete_one({"id": board_id})
     _invalidate_content_cache("boards")
-    return {"message": "Board deleted"}
+    _invalidate_content_cache("classes")
+    _invalidate_content_cache("streams")
+    _invalidate_content_cache("subjects")
+    _invalidate_content_cache("chapters")
+    return {"message": "Board and all children deleted"}
 
 @router.post("/admin/content/classes")
 async def admin_create_class(data: dict, admin: dict = Depends(get_admin_user)):
@@ -142,9 +170,19 @@ async def admin_update_class(class_id: str, data: dict, admin: dict = Depends(ge
 
 @router.delete("/admin/content/classes/{class_id}")
 async def admin_delete_class(class_id: str, admin: dict = Depends(get_admin_user)):
+    cls = await db.classes.find_one({"id": class_id})
+    if not cls:
+        raise HTTPException(status_code=404, detail="Class not found")
+    child_streams = await db.streams.find({"class_id": class_id}).to_list(None)
+    for stream in child_streams:
+        await _cascade_delete_stream_children(stream["id"])
+    await db.streams.delete_many({"class_id": class_id})
     await db.classes.delete_one({"id": class_id})
     _invalidate_content_cache("classes")
-    return {"message": "Class deleted"}
+    _invalidate_content_cache("streams")
+    _invalidate_content_cache("subjects")
+    _invalidate_content_cache("chapters")
+    return {"message": "Class and all children deleted"}
 
 @router.post("/admin/content/streams")
 async def admin_create_stream(data: dict, admin: dict = Depends(get_admin_user)):
@@ -182,9 +220,15 @@ async def admin_update_stream(stream_id: str, data: dict, admin: dict = Depends(
 
 @router.delete("/admin/content/streams/{stream_id}")
 async def admin_delete_stream(stream_id: str, admin: dict = Depends(get_admin_user)):
+    stream = await db.streams.find_one({"id": stream_id})
+    if not stream:
+        raise HTTPException(status_code=404, detail="Stream not found")
+    await _cascade_delete_stream_children(stream_id)
     await db.streams.delete_one({"id": stream_id})
     _invalidate_content_cache("streams")
-    return {"message": "Stream deleted"}
+    _invalidate_content_cache("subjects")
+    _invalidate_content_cache("chapters")
+    return {"message": "Stream and all children deleted"}
 
 
 # ─────────────────────────────────────────────
@@ -908,19 +952,11 @@ async def generate_chapter_card_thumbnails(
 
 @router.delete("/admin/content/subjects/{subject_id}")
 async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_user)):
+    subj = await db.subjects.find_one({"id": subject_id})
+    if not subj:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    await _cascade_delete_subject_assets(subject_id)
     await db.subjects.delete_one({"id": subject_id})
-    await db.chapters.delete_many({"subject_id": subject_id})
-    try:
-        await db.syllabus_embeddings.delete_many({"subject_id": subject_id})
-    except Exception:
-        pass
-    try:
-        await db.ai_pyq_collections.delete_many({"subject_id": subject_id})
-        await db.flashcard_collections.delete_many({"subject_id": subject_id})
-        await db.seo_topics.delete_many({"subject_id": subject_id})
-        await db.chunks.delete_many({"subject_id": subject_id})
-    except Exception:
-        pass
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
     return {"message": "Deleted"}

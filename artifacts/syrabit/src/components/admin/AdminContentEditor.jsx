@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Layers, ChevronRight, Trash2, Loader2 } from 'lucide-react';
+import { Search, Layers, ChevronRight, Trash2, Loader2, Edit2, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { isDegreeBoard } from '@/utils/courseTypes';
@@ -41,6 +41,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [showPreview, setShowPreview] = useState(false);
   const [chapterAssets, setChapterAssets] = useState({});
   const [editorKey, setEditorKey] = useState(0);
+  const [editingSubject, setEditingSubject] = useState(null);
+  const [subjectEditForm, setSubjectEditForm] = useState({ name: '', description: '' });
+  const [savingSubject, setSavingSubject] = useState(false);
+  const [bulkGenerating, setBulkGenerating] = useState(false);
 
   const subjectData = subjects.find(s => s.id === selSubject);
   const boardData = boards.find(b => b.id === selBoard);
@@ -202,17 +206,51 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
 
   const handleDeleteChapter = async (id) => { if (!confirm('Delete this chapter?')) return; try { await axios.delete(`${API}/admin/content/chapters/${id}`, authHeaders(adminToken)); setChapters(p => p.filter(c => c.id !== id)); toast.success('Chapter deleted'); } catch { toast.error('Failed to delete'); } };
 
-  const handleGenerateNotes = async (chapterId, chapterTitle) => {
+  const handleGenerateNotes = async (chapterId, chapterTitle, { silent = false } = {}) => {
     setGeneratingNotes(prev => new Set([...prev, chapterId]));
     try {
       const res = await axios.post(`${API}/admin/content/chapters/${chapterId}/generate-notes`, {}, authHeaders(adminToken));
       const generated = res.data?.content;
       if (generated) {
         setChapters(prev => prev.map(ch => ch.id === chapterId ? { ...ch, content: generated, content_type: 'notes', notes_generated: true, _word_count: res.data?.word_count } : ch));
-        toast.success(`Notes generated for "${chapterTitle}"${res.data?.word_count ? ` — ${res.data.word_count.toLocaleString()} words` : ''}`);
+        if (!silent) toast.success(`Notes generated for "${chapterTitle}"${res.data?.word_count ? ` — ${res.data.word_count.toLocaleString()} words` : ''}`);
+        return true;
       }
-    } catch (e) { toast.error(e?.response?.data?.detail || `Failed to generate notes for "${chapterTitle}"`); }
-    finally { setGeneratingNotes(prev => { const next = new Set(prev); next.delete(chapterId); return next; }); }
+      return false;
+    } catch (e) {
+      if (!silent) toast.error(e?.response?.data?.detail || `Failed to generate notes for "${chapterTitle}"`);
+      return false;
+    } finally { setGeneratingNotes(prev => { const next = new Set(prev); next.delete(chapterId); return next; }); }
+  };
+
+  const handleUpdateSubject = async () => {
+    if (!editingSubject || !subjectEditForm.name.trim()) return;
+    setSavingSubject(true);
+    try {
+      await axios.patch(`${API}/admin/content/subjects/${editingSubject}`, { name: subjectEditForm.name.trim(), description: subjectEditForm.description.trim() }, authHeaders(adminToken));
+      toast.success('Subject updated');
+      setEditingSubject(null);
+      await load(true);
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed to update subject'); }
+    finally { setSavingSubject(false); }
+  };
+
+  const handleBulkGenerateNotes = async () => {
+    if (!selSubject || chapters.length === 0) return;
+    const noNotes = chapters.filter(ch => !(ch.content && ch.content.trim().length > 50));
+    if (noNotes.length === 0) { toast.info('All chapters already have notes'); return; }
+    if (!confirm(`Generate AI notes for ${noNotes.length} chapter(s) without content?`)) return;
+    setBulkGenerating(true);
+    let success = 0, failed = 0;
+    for (const ch of noNotes) {
+      const ok = await handleGenerateNotes(ch.id, ch.title, { silent: true });
+      if (ok) success++; else failed++;
+    }
+    setBulkGenerating(false);
+    if (success > 0) toast.success(`Bulk generation: ${success} succeeded${failed ? `, ${failed} failed` : ''}`);
+    else toast.error(`Bulk generation failed for all ${failed} chapters`);
+    refreshChapters(selSubject);
+    loadChapterCards(selSubject);
   };
 
   const breadcrumb = [];
@@ -301,13 +339,29 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                         <div className="flex items-center justify-between">
                           <p className="text-sm font-medium text-white">{s.icon || '📚'} {s.name}</p>
                           <div className="flex items-center gap-1">
+                            <button onClick={(e) => { e.stopPropagation(); setEditingSubject(s.id); setSubjectEditForm({ name: s.name || '', description: s.description || '' }); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-violet-400"><Edit2 size={12} /></button>
                             <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={12} /></button>
                           </div>
                         </div>
-                        <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
-                        <div className="flex items-center justify-between mt-2">
-                          <p className="text-[10px] text-white/25">{s.chapter_count || 0} chapters</p>
-                        </div>
+                        {editingSubject === s.id ? (
+                          <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+                            <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-8 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" autoFocus />
+                            <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-8 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+                            <div className="flex gap-2">
+                              <button onClick={() => setEditingSubject(null)} className="flex-1 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 text-xs">Cancel</button>
+                              <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="flex-1 h-7 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
+                                {savingSubject ? <Loader2 size={10} className="animate-spin" /> : null} Save
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
+                            <div className="flex items-center justify-between mt-2">
+                              <p className="text-[10px] text-white/25">{s.chapter_count || 0} chapters</p>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -316,10 +370,37 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
               ) : selSubject ? (
                 <div className="p-6 max-w-5xl mx-auto space-y-5">
                   <div className="flex items-start justify-between">
-                    <div>
-                      <h3 className="text-xl font-bold text-white">{subjectData?.icon} {subjectData?.name}</h3>
-                      <p className="text-sm text-white/40">{subjectData?.description}</p>
-                    </div>
+                    {editingSubject === selSubject ? (
+                      <div className="flex-1 max-w-md space-y-2">
+                        <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-10 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 text-lg font-bold" autoFocus />
+                        <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-9 px-4 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+                        <div className="flex gap-2">
+                          <button onClick={() => setEditingSubject(null)} className="h-8 px-4 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 text-xs">Cancel</button>
+                          <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="h-8 px-4 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
+                            {savingSubject ? <Loader2 size={10} className="animate-spin" /> : null} Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-xl font-bold text-white">{subjectData?.icon} {subjectData?.name}</h3>
+                          <button onClick={() => { setEditingSubject(selSubject); setSubjectEditForm({ name: subjectData?.name || '', description: subjectData?.description || '' }); }} className="p-1 rounded text-white/20 hover:text-violet-400"><Edit2 size={14} /></button>
+                        </div>
+                        <p className="text-sm text-white/40">{subjectData?.description}</p>
+                      </div>
+                    )}
+                    {chapters.length > 0 && (
+                      <button
+                        onClick={handleBulkGenerateNotes}
+                        disabled={bulkGenerating || generatingNotes.size > 0}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all"
+                        style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.25),rgba(79,70,229,0.25))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.30)' }}
+                      >
+                        {bulkGenerating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                        {bulkGenerating ? 'Generating...' : 'Bulk AI Notes'}
+                      </button>
+                    )}
                   </div>
                   <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => load(true)} />
                   <ChapterList
