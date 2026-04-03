@@ -26,6 +26,7 @@ from cache import _cache_key
 logger = logging.getLogger(__name__)
 
 _LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 20)))
+_ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCURRENT", 6)))
 
 _LLM_PROVIDER_METRICS: list = []
 _LLM_PROVIDER_METRICS_MAX = 20_000
@@ -92,8 +93,13 @@ class _LlmBatcher:
         self._lock = asyncio.Lock()
         self._stats = {"batched": 0, "deduped": 0, "solo": 0, "errors": 0}
 
-    async def call(self, messages: list, model: str = None, max_tokens: int = 1024, provider_list=None) -> str:
-        provider_tag = "chat" if provider_list is _LLM_PROVIDERS_CHAT else "all"
+    async def call(self, messages: list, model: str = None, max_tokens: int = 1024, provider_list=None, use_admin_sem: bool = False) -> str:
+        if provider_list is _LLM_PROVIDERS_CHAT:
+            provider_tag = "chat"
+        elif provider_list is _LLM_PROVIDERS_CONTENT:
+            provider_tag = "admin"
+        else:
+            provider_tag = "all"
         batch_key = _cache_key(
             provider_tag + ":" + "".join(m.get("content", "") for m in messages if m.get("role") in ("user", "system"))
         )
@@ -108,7 +114,7 @@ class _LlmBatcher:
                 future = asyncio.get_event_loop().create_future()
                 self._pending[batch_key] = future
                 self._stats["batched"] += 1
-                asyncio.ensure_future(self._execute(batch_key, messages, model, max_tokens, future, provider_list))
+                asyncio.ensure_future(self._execute(batch_key, messages, model, max_tokens, future, provider_list, use_admin_sem))
 
         try:
             return await asyncio.wait_for(future, timeout=120)
@@ -116,11 +122,12 @@ class _LlmBatcher:
             logger.error(f"LLM batch TIMEOUT: {batch_key}")
             raise HTTPException(status_code=504, detail="AI response timed out. Please try again.")
 
-    async def _execute(self, batch_key: str, messages: list, model: str, max_tokens: int, future: asyncio.Future, provider_list=None):
+    async def _execute(self, batch_key: str, messages: list, model: str, max_tokens: int, future: asyncio.Future, provider_list=None, use_admin_sem: bool = False):
         await asyncio.sleep(_LLM_BATCH_WINDOW_MS / 1000.0)
 
+        sem = _ADMIN_LLM_SEMAPHORE if use_admin_sem else _LLM_SEMAPHORE
         try:
-            async with _LLM_SEMAPHORE:
+            async with sem:
                 result = await _call_llm_raw(messages, model, max_tokens, provider_list=provider_list)
             future.set_result(result)
         except Exception as e:
@@ -502,19 +509,29 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     return await _llm_batcher.call(messages, model, max_tokens)
 
 _LLM_PROVIDERS_CONTENT: list[dict] = []
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
+if _OPENROUTER_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
+if _FIREWORKS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
-for p in _LLM_PROVIDERS:
-    if p["provider"] not in ("gemini", "cerebras"):
-        _LLM_PROVIDERS_CONTENT.append(p)
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+
+logger.info(
+    f"Admin content providers (reversed priority): "
+    f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
+)
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
-    """LLM call for admin content generation — Cerebras-primary, Gemini fallback."""
-    return await _llm_batcher.call(messages, model or "llama3.1-8b", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT)
+    """LLM call for admin content generation — uses OPPOSITE priority from chat.
+    OpenRouter/Fireworks first (high-capacity, slower), keeping Sarvam/Cerebras
+    reserved for student chat. Separate concurrency semaphore (6 vs 20)."""
+    return await _llm_batcher.call(messages, model or "deepseek/deepseek-chat-v3-0324", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
 
 async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
     """LLM call for student chat — excludes Emergent provider (admin-only)."""

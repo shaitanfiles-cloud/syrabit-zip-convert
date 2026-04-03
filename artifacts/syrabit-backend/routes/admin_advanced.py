@@ -28,7 +28,7 @@ from auth_deps import (
     get_current_user_optional,
 )
 from db_ops import *
-from llm import call_llm_api, call_llm_api_stream, _call_llm_raw
+from llm import call_llm_api, call_llm_api_content, call_llm_api_stream, _call_llm_raw
 from seo_engine import _normalize_headings
 from rag import *
 from utils import *
@@ -1352,7 +1352,7 @@ Write **exam-focused, topic-wise summary notes** for the chapter below. These ar
 6. Write as though every word costs marks — no filler, no repetition.
 """
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
+        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=2048)
         text = result.strip() if result and len(result.strip()) > 50 else ""
         if text:
             text = _normalize_headings(text)
@@ -1462,7 +1462,7 @@ Rules:
 Chapter content for context:
 {content[:3000]}"""
     try:
-        raw_resp = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=1600)
+        raw_resp = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=1600)
         if not raw_resp:
             return {}
         json_match = _re.search(r'\{[\s\S]*\}', raw_resp)
@@ -1544,7 +1544,7 @@ Chapter content:
 {content[:5000]}
 """
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4000)
+        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=4000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -1606,7 +1606,7 @@ Chapter content to base cards on:
 {content[:4500]}
 """
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -1662,7 +1662,7 @@ Chapter content to reference:
 {content[:3000]}
 """
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2500)
+        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=2500)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -2457,7 +2457,7 @@ async def admin_content_auto_heal(admin: dict = Depends(get_admin_user)):
             "- Write in clear, student-friendly language"
         )
         try:
-            new_content = await call_llm_api(
+            new_content = await call_llm_api_content(
                 [{"role": "system", "content": "You are an expert educational content writer for Indian university students."},
                  {"role": "user", "content": prompt}],
                 model="gemini-2.5-flash", max_tokens=4096

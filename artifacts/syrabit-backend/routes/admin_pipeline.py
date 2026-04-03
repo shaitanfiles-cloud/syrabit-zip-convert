@@ -28,7 +28,7 @@ from auth_deps import (
     get_current_user_optional,
 )
 from db_ops import *
-from llm import call_llm_api, call_llm_api_stream
+from llm import call_llm_api, call_llm_api_content, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
@@ -57,7 +57,7 @@ async def _pipeline_generate_mcqs(
         f"Chapter content:\n{content[:4500]}"
     )
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -94,7 +94,7 @@ async def _pipeline_generate_flashcards(
         f"Chapter content:\n{content[:4500]}"
     )
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=3000)
+        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -188,7 +188,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 """
 
     try:
-        generated = await call_llm_api(
+        generated = await call_llm_api_content(
             [{"role": "user", "content": prompt}],
             max_tokens=2048
         )
@@ -307,7 +307,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 - Target: ~400-700 words.
 """
         try:
-            generated = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2048)
+            generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=2048)
             if generated and len(generated.strip()) > 50:
                 gen_text = _normalize_headings(generated.strip())
                 if topics:
@@ -423,7 +423,7 @@ Generate detailed study notes for:
 - Start directly with content, no preamble"""
 
         try:
-            generated = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4000)
+            generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=4000)
             if generated and len(generated.split()) >= 200:
                 generated = _normalize_headings(generated)
                 wc = len(generated.split())
@@ -681,7 +681,7 @@ Return ONLY valid JSON in this exact schema (no markdown, no explanation):
   "10_mark": [{{"question": "...", "type": "long_answer/essay"}},{{"question": "...", "type": "long_answer/essay"}},{{"question": "...", "type": "long_answer/essay"}}]
 }}
 Rules: 3 questions per mark bucket, total 15 questions. Specific to "{chapter_title}". Every listed topic must be addressed by at least one question. Pure JSON only."""
-                raw_resp = await call_llm_api([{"role": "user", "content": generate_prompt}], max_tokens=1600)
+                raw_resp = await call_llm_api_content([{"role": "user", "content": generate_prompt}], max_tokens=1600)
                 json_match = _re.search(r'\{[\s\S]*\}', raw_resp or "")
                 if json_match:
                     parsed = json.loads(json_match.group())
@@ -1276,7 +1276,7 @@ Rules:
 - Pure JSON only, no markdown fences"""
 
         try:
-            raw_resp = await call_llm_api(
+            raw_resp = await call_llm_api_content(
                 [{"role": "user", "content": generate_prompt}],
                 max_tokens=1600,
             )

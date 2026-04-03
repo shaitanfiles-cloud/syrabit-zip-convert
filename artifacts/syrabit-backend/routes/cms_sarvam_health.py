@@ -33,7 +33,7 @@ from auth_deps import (
     get_current_user_optional,
 )
 from db_ops import *
-from llm import call_llm_api, call_llm_api_stream, _LLM_PROVIDERS, _llm_batcher
+from llm import call_llm_api, call_llm_api_content, call_llm_api_stream, _LLM_PROVIDERS, _llm_batcher
 from cache import _content_cache, _ai_response_cache, _redis_hit_count, _redis_miss_count
 import metrics as _metrics_mod
 from metrics import (
@@ -756,7 +756,7 @@ async def generate_personalized_plan(body: PersonalizePlanRequest, user: dict = 
     )
 
     try:
-        plan_md = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=2000)
+        plan_md = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=2000)
     except Exception as e:
         logger.error(f"Personalize plan generation failed: {e}")
         raise HTTPException(500, "Plan generation failed. Please try again.")
@@ -2217,7 +2217,7 @@ Return ONLY valid JSON array. Example:
 [{{"type":"summary","title":"Chapter Overview","content":"..."}},{{"type":"definition","title":"Term Name","content":"..."}},{{"type":"faq","title":"FAQ: What is...?","content":"Q: What is...?\\nA: According to NCERT, ..."}}]"""
 
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=4096)
+        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=4096)
         json_match = re.search(r'\[.*\]', result, re.DOTALL)
         if json_match:
             blocks = json.loads(json_match.group())
@@ -2448,7 +2448,7 @@ Return ONLY valid JSON — no markdown fences, no commentary:
 {{"seo_title":"...","meta_description":"...","primary_keyword":"...","seo_tags":"tag1, tag2, tag3, tag4, tag5, tag6, tag7, tag8, tag9, tag10","geo_phrases":["...","...","..."],"schema_type":"Article","char_counts":{{"title":0,"meta":0}}}}"""
 
     try:
-        result = await call_llm_api([{"role": "user", "content": prompt}], max_tokens=700)
+        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=700)
         json_match = re.search(r'\{.*\}', result, re.DOTALL)
         if not json_match:
             raise ValueError("No JSON in LLM response")
