@@ -483,10 +483,16 @@ async def _persist_chat_turn(
         logger.warning(f"_persist_chat_turn failed: {e}")
 
 @router.post("/ai/chat/stream")
-async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_optional)):
+async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] = Depends(rate_limit_chat_optional)):
     _stream_t0 = _time_mod.time()
     is_anon = user is None
     user_id = user["id"] if user else None
+    anon_id = None
+    if is_anon:
+        _raw_anon = request.headers.get("x-anon-id", "")
+        import re as _re_mod
+        if _raw_anon and _re_mod.match(r"^anon_[a-f0-9]{32}$", _raw_anon):
+            anon_id = _raw_anon
     credits_info = None
     if not is_anon:
         credits_info = await get_user_credits(user)
@@ -607,9 +613,14 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
     _deadline = _stream_t0 + _PRE_LLM_BUDGET
 
     async def _fetch_history():
-        if not msg.conversation_id or not user_id:
+        if not msg.conversation_id:
             return None
-        return await supa_get_conversation(msg.conversation_id, user_id)
+        if user_id:
+            return await supa_get_conversation(msg.conversation_id, user_id)
+        if anon_id:
+            from cache import redis_get_anon_conversation
+            return redis_get_anon_conversation(anon_id, msg.conversation_id)
+        return None
 
     if _is_casual:
         web_results = []
@@ -747,6 +758,21 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         asyncio.create_task(supa_upsert_conversation(conv_doc))
+    elif not conv_id and anon_id:
+        conv_id = str(uuid.uuid4())
+        title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
+        _anon_conv_doc = {
+            "id": conv_id,
+            "anon_id": anon_id,
+            "title": title,
+            "subject_id": msg.subject_id or "",
+            "subject_name": msg.subject_name or "",
+            "messages": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        from cache import redis_save_anon_conversation
+        redis_save_anon_conversation(anon_id, conv_id, _anon_conv_doc)
     elif not conv_id:
         conv_id = None
 
@@ -972,6 +998,25 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                         class_name=ctx_class_name,
                         conversation_id=conv_id,
                     ))
+                elif anon_id and conv_id:
+                    try:
+                        from cache import redis_get_anon_conversation, redis_save_anon_conversation
+                        _now = datetime.now(timezone.utc).isoformat()
+                        _existing = redis_get_anon_conversation(anon_id, conv_id)
+                        _prev_msgs = (_existing.get("messages") or []) if _existing else []
+                        _prev_msgs.append({"role": "user", "content": user_msg_saved, "timestamp": _now})
+                        _prev_msgs.append({"role": "assistant", "content": answer, "timestamp": _now,
+                                           "rag_source": rag_source_saved, "rag_chunks": rag_chunks_count})
+                        _anon_doc = _existing or {}
+                        _anon_doc.update({
+                            "id": conv_id, "anon_id": anon_id,
+                            "messages": _prev_msgs,
+                            "preview": answer[:100],
+                            "updated_at": _now,
+                        })
+                        redis_save_anon_conversation(anon_id, conv_id, _anon_doc)
+                    except Exception as _anon_err:
+                        logger.warning(f"anon persist failed: {_anon_err}")
         finally:
             if not _credit_saved and user_id and credits_info:
                 asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))

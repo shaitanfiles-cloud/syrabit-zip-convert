@@ -44,6 +44,35 @@ async def get_conversations(user: Optional[dict] = Depends(get_current_user_opti
     convs = await supa_get_conversations(user["id"])
     return convs
 
+_ANON_ID_RE = re.compile(r"^anon_[a-f0-9]{32}$")
+
+def _validate_anon_id(anon_id: str) -> str:
+    if not anon_id or not _ANON_ID_RE.match(anon_id):
+        raise HTTPException(status_code=400, detail="Invalid anonymous ID")
+    return anon_id
+
+@router.get("/conversations/anon")
+async def list_anon_conversations(request: Request):
+    anon_id = request.headers.get("x-anon-id", "")
+    anon_id = _validate_anon_id(anon_id)
+    return redis_list_anon_conversations(anon_id)
+
+@router.get("/conversations/anon/{conv_id}")
+async def get_anon_conversation(conv_id: str, request: Request):
+    anon_id = request.headers.get("x-anon-id", "")
+    anon_id = _validate_anon_id(anon_id)
+    conv = redis_get_anon_conversation(anon_id, conv_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found or expired")
+    return conv
+
+@router.delete("/conversations/anon/{conv_id}")
+async def delete_anon_conversation(conv_id: str, request: Request):
+    anon_id = request.headers.get("x-anon-id", "")
+    anon_id = _validate_anon_id(anon_id)
+    redis_delete_anon_conversation(anon_id, conv_id)
+    return {"message": "Deleted"}
+
 @router.get("/conversations/{conv_id}")
 async def get_conversation(conv_id: str, user: Optional[dict] = Depends(get_current_user_optional)):
     if not user:

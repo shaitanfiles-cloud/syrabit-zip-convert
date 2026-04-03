@@ -10,6 +10,19 @@ export const setAuthToken = (token) => {
   _authToken = token;
 };
 
+export function getAnonId() {
+  let id = localStorage.getItem('syrabit_anon_id');
+  if (!id) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    id = 'anon_' + Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+    localStorage.setItem('syrabit_anon_id', id);
+  }
+  return id;
+}
+
+const anonHeaders = () => ({ 'x-anon-id': getAnonId() });
+
 const authConfig = () => {
   const config = { withCredentials: true };
   if (_authToken) {
@@ -80,6 +93,15 @@ export const deleteConversation = (id) =>
 
 export const updateConversation = (id, data) =>
   axios.patch(`${API_BASE}/conversations/${id}`, data, authConfig());
+
+export const getAnonConversations = () =>
+  axios.get(`${API_BASE}/conversations/anon`, { headers: anonHeaders() });
+
+export const getAnonConversation = (id) =>
+  axios.get(`${API_BASE}/conversations/anon/${id}`, { headers: anonHeaders() });
+
+export const deleteAnonConversation = (id) =>
+  axios.delete(`${API_BASE}/conversations/anon/${id}`, { headers: anonHeaders() });
 
 export const saveOnboarding = (data) =>
   axios.post(`${API_BASE}/user/onboarding`, data, authConfig());

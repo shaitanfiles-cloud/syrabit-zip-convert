@@ -8,7 +8,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { getConversation, getSubject, getChapters, API_BASE, apiClient } from '@/utils/api';
+import { getConversation, getAnonConversation, getSubject, getChapters, API_BASE, apiClient, getAnonId } from '@/utils/api';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { toast } from 'sonner';
 
@@ -78,7 +78,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (!convId) return;
     setSyncState('syncing');
-    getConversation(convId)
+    const fetcher = user ? getConversation(convId) : getAnonConversation(convId);
+    fetcher
       .then((r) => { const conv = r.data; setConversationId(conv.id); setMessages(conv.messages || []); setSyncState('idle'); })
       .catch(() => setSyncState('offline'));
   }, [convId, user]);
@@ -184,8 +185,10 @@ export default function ChatPage() {
       card_context: cardContext || null, document_id: documentId || null,
     };
     try {
+      const fetchHeaders = { 'Content-Type': 'application/json' };
+      if (!user) fetchHeaders['x-anon-id'] = getAnonId();
       const response = await fetch(`${API_BASE}/ai/chat/stream`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: fetchHeaders,
         credentials: 'include', body: JSON.stringify(payload), signal: controller.signal,
       });
       if (!response.ok) {

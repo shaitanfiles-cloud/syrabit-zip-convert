@@ -6,8 +6,11 @@ from deps import redis_client
 
 logger = logging.getLogger(__name__)
 
+REDIS_ANON_CONV_TTL = 604800
+
 __all__ = [
-    "CONTENT_CACHE_SECONDS", "REDIS_AI_CACHE_TTL", "REDIS_CASUAL_CACHE_TTL",
+    "CONTENT_CACHE_SECONDS", "REDIS_AI_CACHE_TTL", "REDIS_ANON_CONV_TTL",
+    "REDIS_CASUAL_CACHE_TTL",
     "REDIS_CHAT_CACHE_TTL", "REDIS_CONTENT_PREFIX", "REDIS_RATE_WINDOW",
     "REDIS_SEARCH_CACHE_TTL", "REDIS_SESSION_CACHE_TTL",
     "_ai_response_cache", "_cache_key", "_content_cache",
@@ -20,6 +23,8 @@ __all__ = [
     "_redis_invalidate_conversation", "_redis_invalidate_session", "_redis_miss_count",
     "_redis_set", "_set_content_cache", "_syllabus_cache", "_syllabus_cache_key",
     "_user_cache", "_vector_rag_cache", "_vector_rag_cache_key",
+    "redis_save_anon_conversation", "redis_get_anon_conversation",
+    "redis_list_anon_conversations", "redis_delete_anon_conversation",
 ]
 
 _ai_response_cache = cachetools.TTLCache(maxsize=512, ttl=3600)
@@ -208,4 +213,76 @@ def _set_content_cache(key: str, value):
             redis_client.set(f"{REDIS_CONTENT_PREFIX}{key}", json.dumps(value, default=str), ex=CONTENT_CACHE_SECONDS)
         except Exception:
             pass
+
+
+_ANON_CONV_PREFIX = "anon_conv:"
+_ANON_INDEX_PREFIX = "anon_idx:"
+_ANON_MAX_CONVS = 20
+
+def redis_save_anon_conversation(anon_id: str, conv_id: str, conv_data: dict):
+    if not redis_client:
+        return
+    try:
+        key = f"{_ANON_CONV_PREFIX}{anon_id}:{conv_id}"
+        redis_client.set(key, json.dumps(conv_data, default=str), ex=REDIS_ANON_CONV_TTL)
+        idx_key = f"{_ANON_INDEX_PREFIX}{anon_id}"
+        redis_client.zadd(idx_key, {conv_id: time.time()})
+        redis_client.expire(idx_key, REDIS_ANON_CONV_TTL)
+        count = redis_client.zcard(idx_key)
+        if count and count > _ANON_MAX_CONVS:
+            old_ids = redis_client.zrange(idx_key, 0, count - _ANON_MAX_CONVS - 1)
+            for oid in old_ids:
+                oid_str = oid if isinstance(oid, str) else oid.decode()
+                redis_client.delete(f"{_ANON_CONV_PREFIX}{anon_id}:{oid_str}")
+            redis_client.zremrangebyrank(idx_key, 0, count - _ANON_MAX_CONVS - 1)
+    except Exception as e:
+        logger.warning(f"redis_save_anon_conversation: {e}")
+
+def redis_get_anon_conversation(anon_id: str, conv_id: str) -> Optional[dict]:
+    if not redis_client:
+        return None
+    try:
+        val = redis_client.get(f"{_ANON_CONV_PREFIX}{anon_id}:{conv_id}")
+        if val:
+            return json.loads(val) if isinstance(val, str) else json.loads(val.decode())
+    except Exception as e:
+        logger.warning(f"redis_get_anon_conversation: {e}")
+    return None
+
+def redis_list_anon_conversations(anon_id: str) -> list:
+    if not redis_client:
+        return []
+    try:
+        idx_key = f"{_ANON_INDEX_PREFIX}{anon_id}"
+        conv_ids = redis_client.zrevrange(idx_key, 0, _ANON_MAX_CONVS - 1)
+        results = []
+        for cid in conv_ids:
+            cid_str = cid if isinstance(cid, str) else cid.decode()
+            val = redis_client.get(f"{_ANON_CONV_PREFIX}{anon_id}:{cid_str}")
+            if val:
+                data = json.loads(val) if isinstance(val, str) else json.loads(val.decode())
+                results.append({
+                    "id": data.get("id", cid_str),
+                    "title": data.get("title", "Untitled"),
+                    "preview": data.get("preview", ""),
+                    "subject_name": data.get("subject_name", ""),
+                    "created_at": data.get("created_at", ""),
+                    "updated_at": data.get("updated_at", ""),
+                    "message_count": len(data.get("messages", [])),
+                })
+        return results
+    except Exception as e:
+        logger.warning(f"redis_list_anon_conversations: {e}")
+    return []
+
+def redis_delete_anon_conversation(anon_id: str, conv_id: str) -> bool:
+    if not redis_client:
+        return False
+    try:
+        redis_client.delete(f"{_ANON_CONV_PREFIX}{anon_id}:{conv_id}")
+        redis_client.zrem(f"{_ANON_INDEX_PREFIX}{anon_id}", conv_id)
+        return True
+    except Exception as e:
+        logger.warning(f"redis_delete_anon_conversation: {e}")
+    return False
 

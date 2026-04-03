@@ -15,7 +15,7 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
 import { useAuth } from '@/context/AuthContext';
-import { getConversations, deleteConversation, updateConversation } from '@/utils/api';
+import { getConversations, deleteConversation, updateConversation, getAnonConversations, deleteAnonConversation } from '@/utils/api';
 import { toast } from 'sonner';
 
 import { formatDistanceToNow, isToday, isYesterday } from 'date-fns';
@@ -81,7 +81,7 @@ function SkeletonRow({ i }) {
 }
 
 // ── Conversation Card ─────────────────────────────────────────────────────────
-function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename }) {
+function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename, isAnon }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const timeLabel = conv.updated_at || conv.created_at
@@ -208,7 +208,7 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
                     action: () => { setMenuOpen(false); onOpen(conv.id); },
                     className: '',
                   },
-                  {
+                  ...(!isAnon ? [{
                     icon: Pencil, label: 'Rename',
                     action: () => { setMenuOpen(false); onRename(conv); },
                     className: '',
@@ -223,12 +223,12 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename 
                     label: conv.archived ? 'Unarchive' : 'Archive',
                     action: () => { setMenuOpen(false); onArchive(conv); },
                     className: '',
-                  },
+                  }] : []),
                   {
                     icon: Trash2, label: 'Delete',
                     action: () => { setMenuOpen(false); onDelete(conv.id); },
                     className: 'text-destructive',
-                    separator: true,
+                    separator: !isAnon,
                   },
                 ].map(({ icon: Icon, label, action, className, separator }) => (
                   <div key={label}>
@@ -313,10 +313,11 @@ export default function HistoryPage() {
 
   const searchRef = useRef(null);
 
-  // ── Load conversations (server-first, localStorage fallback) ──────────────
+  const isAnon = !user;
+
   const loadConversations = useCallback(async () => {
     try {
-      const res = await getConversations();
+      const res = isAnon ? await getAnonConversations() : await getConversations();
       const data = (res.data || []).map((c) => ({
         ...c,
         tokens:   Math.round((c.preview || '').length * 1.3),
@@ -324,12 +325,10 @@ export default function HistoryPage() {
         archived: c.archived || false,
       }));
       setConversations(data);
-      // Mirror to localStorage for offline fallback
       try {
         localStorage.setItem('syrabit:conversations', JSON.stringify(data));
       } catch {}
     } catch {
-      // localStorage fallback
       try {
         const cached = localStorage.getItem('syrabit:conversations');
         if (cached) setConversations(JSON.parse(cached));
@@ -337,7 +336,7 @@ export default function HistoryPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isAnon]);
 
   // ── Initial load + visibilitychange cross-device sync ─────────────────────
   useEffect(() => {
@@ -398,10 +397,10 @@ export default function HistoryPage() {
     setDeleteTarget(null);
     setConversations((prev) => prev.filter((c) => c.id !== idToDelete));
     try {
-      await deleteConversation(idToDelete);
+      isAnon ? await deleteAnonConversation(idToDelete) : await deleteConversation(idToDelete);
       toast.success('Conversation deleted');
     } catch {
-      await loadConversations(); // re-fetch on failure
+      await loadConversations();
       toast.error('Failed to delete');
     }
   };
@@ -431,30 +430,6 @@ export default function HistoryPage() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
-  if (!user) {
-    return (
-      <AppLayout pageTitle="History">
-        <PageTitle title="Chat History | Syrabit.ai" />
-        <div className="flex flex-col items-center justify-center h-full px-4 py-20 text-center">
-          <MessageSquare size={48} className="text-muted-foreground mb-4 opacity-40" />
-          <h2 className="text-lg font-semibold text-foreground mb-2">Sign in to see your history</h2>
-          <p className="text-muted-foreground text-sm mb-6 max-w-xs">
-            Your conversations will be saved when you create an account.
-          </p>
-          <button
-            onClick={() => navigate('/login')}
-            className="h-10 px-6 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-95"
-            style={{
-              background: 'linear-gradient(135deg, hsl(var(--primary)), #8b5cf6)',
-              boxShadow: '0 4px 15px var(--glow-primary, rgba(139,92,246,0.35))',
-            }}
-          >
-            Sign In
-          </button>
-        </div>
-      </AppLayout>
-    );
-  }
 
   return (
     <AppLayout pageTitle="History">
@@ -462,6 +437,25 @@ export default function HistoryPage() {
 
       <div className="flex flex-col h-full overflow-y-auto" data-testid="history-conversation-list">
         <div className="w-full max-w-3xl mx-auto px-4 md:px-6 py-5 space-y-5">
+
+          {isAnon && conversations.length > 0 && (
+            <div
+              className="flex items-center gap-3 p-3 rounded-xl text-sm"
+              style={{
+                background: 'rgba(139,92,246,0.08)',
+                border: '1px solid rgba(139,92,246,0.15)',
+              }}
+            >
+              <Sparkles size={16} style={{ color: 'hsl(var(--primary))' }} className="flex-shrink-0" />
+              <span className="text-muted-foreground">
+                Guest chats expire after 7 days.{' '}
+                <button onClick={() => navigate('/login')} className="text-primary font-semibold hover:underline">
+                  Sign up
+                </button>{' '}
+                to save them permanently.
+              </span>
+            </div>
+          )}
 
           {/* ── Header ── */}
           <div className="flex items-center justify-between">
@@ -671,6 +665,7 @@ export default function HistoryPage() {
                             onArchive={handleArchive}
                             onDelete={(id) => setDeleteTarget(id)}
                             onRename={handleRenameOpen}
+                            isAnon={isAnon}
                           />
                         ))}
                     </div>
