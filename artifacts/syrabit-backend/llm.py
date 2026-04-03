@@ -900,16 +900,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
     # pick() returns the fastest available slot (by speed tier) with spare capacity.
     # async with slot["sem"] lets up to max_concurrent requests run in parallel.
-    # asyncio.wait_for enforces a per-slot timeout so a slow provider never
-    # blocks the pool — the next slot is tried immediately on timeout.
-    _SLM_SLOT_TIMEOUT = 10.0   # max seconds to wait for first token from any slot
-
-    async def _collect_stream(p_name, p_key, p_model):
-        """Buffer entire token stream into a list and return it (for timeout wrapper)."""
-        tokens = []
-        async for chunk in _emit_tokens(_stream_from_provider(p_name, p_key, p_model)):
-            tokens.append(chunk)
-        return tokens
+    # Tokens are yielded in real-time as they arrive (true streaming).
+    # TTFT timeout ensures fast failover when a provider is unresponsive.
+    _SLM_SLOT_TIMEOUT = 5.0    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 3.0    # max seconds to wait for FIRST token from a slot
 
     if use_model_raw == "openai/gpt-oss-20b":
         _tried = 0
@@ -920,18 +914,63 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             _tried += 1
             p_name, p_key, p_model = slot["provider"], slot["key"], slot["model"]
             try:
-                async with slot["sem"]:          # acquire capacity; released after stream
-                    chunks = await asyncio.wait_for(
-                        _collect_stream(p_name, p_key, p_model),
-                        timeout=_SLM_SLOT_TIMEOUT,
-                    )
-                if chunks:
-                    _slm_pool.mark_ok(slot)
-                    for chunk in chunks:
-                        yield chunk
-                    return
-                _slm_pool.mark_err(slot)
-                logger.warning(f"SLM pool: {p_name}/{p_model} yielded no tokens")
+                async with slot["sem"]:
+                    token_q: asyncio.Queue = asyncio.Queue()
+                    _producer_error = None
+                    _stream_ok = False
+
+                    async def _producer(_pn=p_name, _pk=p_key, _pm=p_model):
+                        nonlocal _producer_error
+                        try:
+                            async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                                await token_q.put(chunk)
+                        except Exception as exc:
+                            _producer_error = exc
+                        finally:
+                            await token_q.put(None)
+
+                    producer_task = asyncio.create_task(_producer())
+                    try:
+                        try:
+                            first_chunk = await asyncio.wait_for(token_q.get(), timeout=_SLM_TTFT_TIMEOUT)
+                        except asyncio.TimeoutError:
+                            _slm_pool.mark_err(slot)
+                            logger.warning(f"SLM pool: {p_name}/{p_model} TTFT timeout after {_SLM_TTFT_TIMEOUT}s → trying next")
+                            continue
+
+                        if first_chunk is None:
+                            if _producer_error:
+                                raise _producer_error
+                            _slm_pool.mark_err(slot)
+                            logger.warning(f"SLM pool: {p_name}/{p_model} yielded no tokens")
+                            continue
+
+                        yield first_chunk
+
+                        while True:
+                            try:
+                                chunk = await asyncio.wait_for(token_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                            except asyncio.TimeoutError:
+                                _slm_pool.mark_err(slot)
+                                logger.warning(f"SLM pool: {p_name}/{p_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s")
+                                break
+                            if chunk is None:
+                                break
+                            yield chunk
+
+                        if _producer_error:
+                            _slm_pool.mark_err(slot)
+                            logger.warning(f"SLM pool: {p_name}/{p_model} error during stream: {type(_producer_error).__name__}: {str(_producer_error)[:80]}")
+                        else:
+                            _stream_ok = True
+                            _slm_pool.mark_ok(slot)
+                    finally:
+                        producer_task.cancel()
+                        try:
+                            await producer_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                return
             except asyncio.TimeoutError:
                 _slm_pool.mark_err(slot)
                 logger.warning(f"SLM pool: {p_name}/{p_model} timed out after {_SLM_SLOT_TIMEOUT}s → trying next")

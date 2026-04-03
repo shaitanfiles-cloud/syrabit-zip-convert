@@ -500,6 +500,9 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
 
     _PRE_LLM_BUDGET = 3.0
 
+    _t_auth_done = _time_mod.time()
+    _auth_elapsed = _t_auth_done - _stream_t0
+
     _stream_intent = _classify_intent(msg.message)
     _is_casual = _stream_intent == "casual"
 
@@ -776,6 +779,17 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
     # Derive sources from the same RAG context sent to the LLM (no mismatch)
     rag_sources = _sources_from_rag_ctx(rag_ctx)
 
+    # ── Cache check (moved BEFORE SSE generator for faster cached responses) ──
+    _cache_is_casual = _stream_intent == "casual"
+    _cache_key_val = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
+    _cache_ttl_val = REDIS_CASUAL_CACHE_TTL if _cache_is_casual else REDIS_AI_CACHE_TTL
+    _cached_answer = _redis_get_ai_cache(_cache_key_val)
+    if _cached_answer:
+        logger.info(f"Redis cache HIT (pre-SSE): {_cache_key_val}")
+    elif _cache_key_val in _ai_response_cache:
+        _cached_answer = _ai_response_cache[_cache_key_val]
+        logger.info(f"Memory cache HIT (pre-SSE): {_cache_key_val}")
+
     _src_sid_s = rag_subject_id or msg.subject_id
     if _src_sid_s and _src_sid_s == msg.subject_id and subj_ctx:
         _src_ctx_s = subj_ctx
@@ -797,18 +811,7 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                 _meta_event['content_card_subject'] = content_card_meta.get('subject_name', '')
             yield f"data: {json.dumps(_meta_event)}\n\n"
 
-            # ── Cache check (Streaming) — Redis first, in-memory fallback ────────
-            is_casual = _stream_intent == "casual"
-            cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
-            _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
-            cached_answer = None
-
-            cached_answer = _redis_get_ai_cache(cache_key)
-            if cached_answer:
-                logger.info(f"Redis cache HIT (STREAM): {cache_key}")
-            elif cache_key in _ai_response_cache:
-                cached_answer = _ai_response_cache[cache_key]
-                logger.info(f"Memory cache HIT (STREAM): {cache_key}")
+            cached_answer = _cached_answer
 
             if cached_answer:
                 logger.info(f"[STREAM][TIMING] TTFT (cache hit): {_time_mod.time() - _stream_t0:.3f}s")
@@ -838,10 +841,10 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                 if full_response:
                     answer_str = "".join(full_response)
                     if answer_str:
-                        _redis_set("ai_cache", cache_key, answer_str, _cache_ttl)
+                        _redis_set("ai_cache", _cache_key_val, answer_str, _cache_ttl_val)
                         if not redis_client:
-                            _ai_response_cache[cache_key] = answer_str
-                        logger.info(f"Cache MISS → stored (STREAM, ttl={_cache_ttl}s): {cache_key}")
+                            _ai_response_cache[_cache_key_val] = answer_str
+                        logger.info(f"Cache MISS → stored (STREAM, ttl={_cache_ttl_val}s): {_cache_key_val}")
 
             # Yield DONE immediately — DB writes happen in background
             answer = "".join(full_response)
@@ -865,6 +868,21 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                 done_payload["content_card_lesson"] = content_card_meta.get("lesson_name", "")
             yield f"data: {json.dumps(done_payload)}\n\n"
             yield "data: [DONE]\n\n"
+
+            _t_stream_end = _time_mod.time()
+            _total_stream_time = _t_stream_end - _stream_t0
+            logger.info(
+                f"[STREAM][TIMING][SUMMARY] "
+                f"auth={_auth_elapsed:.3f}s | "
+                f"phase0+1={_t_phase1_done - _t_phase0:.3f}s | "
+                f"phase2(RAG+web)={_t_phase2_done - _t_phase2:.3f}s | "
+                f"pre-LLM={_t_phase2_done - _stream_t0:.3f}s | "
+                f"total={_total_stream_time:.3f}s | "
+                f"cached={'yes' if cached_answer else 'no'} | "
+                f"model={msg.model or 'openai/gpt-oss-20b'} | "
+                f"intent={_stream_intent} | "
+                f"words={len(answer.split()) if answer else 0}"
+            )
 
             try:
                 _record_chat_latency((_time_mod.time() - _stream_t0) * 1000)
