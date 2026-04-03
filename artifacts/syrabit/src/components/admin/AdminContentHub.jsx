@@ -12,7 +12,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   PenTool, FileText, ArrowRight,
-  Loader2, Globe, Zap,
+  Loader2, Globe,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -21,7 +21,7 @@ import { API_BASE } from '@/utils/api';
 import AdminContentEditor    from './AdminContentEditor';
 import AdminCmsDocEditor     from './AdminCmsDocEditor';
 import BlogPublishWizard     from './BlogPublishWizard';
-import PipelineProgressPanel from './PipelineProgressPanel';
+
 
 const API = API_BASE;
 
@@ -86,8 +86,6 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
   }, [navContext]);
 
   const [hubContext, setHubContextRaw] = useState(loadPersistedCtx);
-  const [showPipeline, setShowPipeline] = useState(false);
-  const [pipelineSkipExisting, setPipelineSkipExisting] = useState(false);
 
   const setHubContext = useCallback((ctxOrFn) => {
     setHubContextRaw(prev => {
@@ -163,22 +161,6 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
                 title="Clear context"
               >×</button>
             </span>
-            <button
-              onClick={() => { setPipelineSkipExisting(false); setShowPipeline(true); }}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition hover:opacity-90"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#5b21b6)', color: '#fff' }}
-              title="Auto-Generate Full Subject — 1 click generates all content, MCQs & blogs"
-            >
-              <Zap size={11} /> Auto-Generate Full Subject
-            </button>
-            <button
-              onClick={() => { setPipelineSkipExisting(true); setShowPipeline(true); }}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold transition hover:opacity-90"
-              style={{ background: 'linear-gradient(135deg,#0ea5e9,#0284c7)', color: '#fff' }}
-              title="SEO Polish — reuses existing notes, only re-publishes blogs & PYQ pages"
-            >
-              <Globe size={11} /> SEO Polish
-            </button>
           </span>
         )}
         {!hubContext.subjectName && (
@@ -254,18 +236,6 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
         )}
       </div>
 
-      {showPipeline && (
-        <PipelineProgressPanel
-          adminToken={adminToken}
-          subjectId={hubContext.subjectId}
-          subjectName={hubContext.subjectName}
-          skipExisting={pipelineSkipExisting}
-          onClose={() => { setShowPipeline(false); setPipelineSkipExisting(false); }}
-          onComplete={(summary) => {
-            toast.success(`${summary.total_blogs || 0} blogs published for "${hubContext.subjectName}"`);
-          }}
-        />
-      )}
     </div>
   );
 }

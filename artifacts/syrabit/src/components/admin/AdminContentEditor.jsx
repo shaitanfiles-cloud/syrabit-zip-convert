@@ -1,10 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Layers, ChevronRight, CheckCircle, Trash2, Globe, Loader2 } from 'lucide-react';
-import PipelineProgressPanel from './PipelineProgressPanel';
-import AgenticCreatorModal from './AgenticCreatorModal';
+import { Search, Layers, ChevronRight, Trash2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
-import { adminSeoExtractTopics } from '@/utils/api';
 import { isDegreeBoard } from '@/utils/courseTypes';
 import { API, authHeaders, autoSlug } from '@/utils/adminHelpers';
 
@@ -13,9 +10,7 @@ import InlineCreator from './content-editor/InlineCreator';
 import ChapterEditForm from './content-editor/ChapterEditForm';
 import HierarchyTree from './content-editor/HierarchyTree';
 import ChapterList from './content-editor/ChapterList';
-import ContentGapsPanel from './content-editor/ContentGapsPanel';
 import ThumbnailStudio from './content-editor/ThumbnailStudio';
-import WorkflowTracker from './content-editor/WorkflowTracker';
 
 export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext }) {
   const [boards, setBoards] = useState([]);
@@ -40,32 +35,13 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [uploading, setUploading] = useState(false);
   const [aiParsing, setAiParsing] = useState(false);
   const [generatingNotes, setGeneratingNotes] = useState(new Set());
-  const [bulkGenerating, setBulkGenerating] = useState(false);
-  const [showAgenticCreator, setShowAgenticCreator] = useState(false);
-  const [autoAgentic, setAutoAgentic] = useState(false);
   const fileInputRef = useRef(null);
   const editorRef = useRef(null);
 
-  const [publishingBlog, setPublishingBlog] = useState(false);
   const [selectedChapters, setSelectedChapters] = useState(new Set());
-  const [bulkMerging, setBulkMerging] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
-  const [mergedSubjectIds, setMergedSubjectIds] = useState(new Set());
-  const [seoTopicsGeneratedIds, setSeoTopicsGeneratedIds] = useState(new Set());
-  const [assetsGeneratedIds, setAssetsGeneratedIds] = useState(new Set());
   const [chapterAssets, setChapterAssets] = useState({});
-  const [generatingSeoTopics, setGeneratingSeoTopics] = useState(false);
   const [editorKey, setEditorKey] = useState(0);
-  const [showPipeline, setShowPipeline] = useState(false);
-
-  const [showGapPanel, setShowGapPanel] = useState(false);
-  const [gapSubjects, setGapSubjects] = useState([]);
-  const [loadingGaps, setLoadingGaps] = useState(false);
-  const [gapGenStatus, setGapGenStatus] = useState({});
-  const [gapGenSubject, setGapGenSubject] = useState(null);
-  const [bulkGapSelected, setBulkGapSelected] = useState(new Set());
-  const [bulkGapGenerating, setBulkGapGenerating] = useState(false);
-  const [bulkGapProgress, setBulkGapProgress] = useState({ done: 0, total: 0 });
 
   useEffect(() => { setSelectedChapters(new Set()); }, [selSubject]);
 
@@ -82,7 +58,6 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const searchFiltered = searchQuery
     ? subjects.filter(s => s.name?.toLowerCase().includes(searchQuery.toLowerCase()) || s.description?.toLowerCase().includes(searchQuery.toLowerCase()))
     : null;
-  const allChaptersHaveNotes = chapters.length > 0 && chapters.every(ch => ch.notes_generated || (ch.content && ch.content.trim().length > 100));
 
   const loadChapterCards = useCallback(async (subjectId) => {
     if (!subjectId) return;
@@ -166,137 +141,6 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     finally { setAiParsing(false); }
   }, [contentForm.content, contentForm.title, selSubject, subjects]);
 
-  const handlePublishAsBlog = useCallback(async (subjectId, subjectName) => {
-    if (!subjectId) return;
-    setPublishingBlog(true);
-    try {
-      const res = await axios.post(`${API}/admin/cms/merge-by-chapter/${subjectId}`, {}, authHeaders(adminToken));
-      const chapterDocs = res.data?.chapters || [];
-      const className = res.data?.class_name || '';
-      if (!chapterDocs.length) {
-        toast.error('No chapters found to publish');
-        return;
-      }
-      const firstChapter = chapterDocs[0];
-      const toSlug = str => (str || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-      const autoKeyword = `${toSlug(firstChapter.title).replace(/-/g, ' ')}${className ? ` ${className.toLowerCase()}` : ''} assamboard notes`;
-      localStorage.setItem('syrabit_blog_prefill', JSON.stringify({
-        subjectId,
-        subjectName: res.data?.subject_name || subjectName,
-        workingTitle: firstChapter.title,
-        primaryKeyword: autoKeyword,
-        draftContent: firstChapter.merged_md,
-        docId: firstChapter.doc_id,
-        seoSlug: firstChapter.seo_slug,
-        autoFlow: false,
-        chapterWise: true,
-        allChapters: chapterDocs.map(c => ({ doc_id: c.doc_id, title: c.title, seo_slug: c.seo_slug, word_count: c.word_count, merged_md: c.merged_md || '' })),
-        timestamp: Date.now(),
-      }));
-      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({
-        subjectId,
-        title: firstChapter.title,
-        content: firstChapter.merged_md,
-        seo_slug: firstChapter.seo_slug,
-        meta_description: `Complete ${firstChapter.title}${className ? ` (${className})` : ''} — definitions, PYQ, MCQs per Assamboard syllabus. Free on Syrabit.`,
-        timestamp: Date.now(),
-      }));
-      setMergedSubjectIds(s => new Set([...s, subjectId]));
-      toast.success(`${chapterDocs.length} chapter drafts created — opening Blog Publisher`);
-      onNavigate?.('blog');
-    } catch (e) { toast.error(e.response?.data?.detail || 'Merge failed'); }
-    finally { setPublishingBlog(false); }
-  }, [adminToken, onNavigate]);
-
-  const handleBulkMerge = useCallback(async () => {
-    if (!selSubject) return;
-    setBulkMerging(true);
-    try {
-      const res = await axios.post(`${API}/admin/cms/merge-by-chapter/${selSubject}`, {}, authHeaders(adminToken));
-      const chapterDocs = res.data?.chapters || [];
-      if (!chapterDocs.length) {
-        toast.error('No chapters found to merge');
-        return;
-      }
-      const firstChapter = chapterDocs[0];
-      const className = res.data?.class_name || '';
-      localStorage.setItem('syrabit_cms_prefill', JSON.stringify({
-        subjectId: selSubject,
-        title: firstChapter.title,
-        content: firstChapter.merged_md,
-        seo_slug: firstChapter.seo_slug,
-        meta_description: `Complete ${firstChapter.title}${className ? ` (${className})` : ''} — notes, PYQ per Assamboard syllabus. Free on Syrabit.`,
-        timestamp: Date.now(),
-      }));
-      setMergedSubjectIds(s => new Set([...s, selSubject]));
-      setSelectedChapters(new Set());
-      toast.success(`${chapterDocs.length} chapter drafts created — opening CMS Editor`);
-      onNavigate?.('cms');
-    } catch (e) { toast.error(e.response?.data?.detail || 'Bulk merge failed'); }
-    finally { setBulkMerging(false); }
-  }, [adminToken, selSubject, subjectData, selectedChapters, onNavigate]);
-
-  const handleGenerateSeoTopics = useCallback(async () => {
-    if (!selSubject) return;
-    const subjectName = subjects.find(s => s.id === selSubject)?.name || selSubject;
-    setGeneratingSeoTopics(true);
-    toast.loading(`Extracting SEO topics for "${subjectName}"…`, { id: 'seo-extract' });
-    try {
-      const res = await adminSeoExtractTopics(adminToken, selSubject, false);
-      const d = res.data || {};
-      setSeoTopicsGeneratedIds(prev => new Set([...prev, selSubject]));
-      const topicCount = (d.created || 0) + (d.skipped || 0);
-      toast.success(`${topicCount} SEO topics ready for "${subjectName}" — now run Full Pipeline to generate ${topicCount * 5}+ pages`, { id: 'seo-extract', duration: 8000, action: { label: 'Run Full Pipeline →', onClick: () => setShowPipeline(true) } });
-      onNavigate?.('seomanager', { subjectId: selSubject, subjectName });
-    } catch (e) { toast.error(e?.response?.data?.detail || 'SEO topic extraction failed', { id: 'seo-extract' }); }
-    finally { setGeneratingSeoTopics(false); }
-  }, [adminToken, selSubject, subjects, onNavigate]);
-
-  const loadGapSubjects = useCallback(async () => {
-    setLoadingGaps(true);
-    try {
-      const res = await axios.get(`${API}/content/subjects`);
-      setGapSubjects((res.data || []).filter(s => (s.chapter_count || 0) < 3));
-    } catch { toast.error('Could not load subjects'); }
-    finally { setLoadingGaps(false); }
-  }, []);
-
-  const handleAutoGenerateGap = useCallback(async (s) => {
-    setGapGenSubject(s.id);
-    setGapGenStatus(prev => ({ ...prev, [s.id]: 'generating' }));
-    try {
-      const prompt = `Generate comprehensive educational notes for AssamBoard students on: ${s.name}.\nInclude: key concepts (with AssamBoard exam frequency), textbook definitions, worked examples, PYQ-style questions with marks, and 2 FAQ blocks.`;
-      const res = await axios.post(`${API}/admin/studio/parse`, { raw_text: prompt, subject: s.name, chapter: 'Overview' }, { withCredentials: true });
-      const parsed = res.data.blocks || [];
-      if (!parsed.length) { setGapGenStatus(prev => ({ ...prev, [s.id]: 'failed' })); return; }
-      const markdown = parsed.map(b => `## ${b.title}\n\n${b.content}`).join('\n\n---\n\n');
-      await axios.post(`${API}/admin/content/chapters`, { subject_id: s.id, title: `${s.name} — Overview`, slug: s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-overview', content: markdown, content_type: 'notes', order: 1 }, { headers: adminToken && adminToken.split('.').length === 3 ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true });
-      setGapGenStatus(prev => ({ ...prev, [s.id]: 'done' }));
-      toast.success(`Auto-generated chapter for "${s.name}"`);
-      loadGapSubjects();
-    } catch { setGapGenStatus(prev => ({ ...prev, [s.id]: 'failed' })); toast.error(`Auto-generate failed for "${s.name}"`); }
-    finally { setGapGenSubject(null); }
-  }, [adminToken, loadGapSubjects]);
-
-  const handleMergeGapToCms = async (s) => {
-    try {
-      await axios.post(`${API}/admin/cms/merge/${s.id}`, {}, { headers: adminToken && adminToken.split('.').length === 3 ? { Authorization: `Bearer ${adminToken}` } : {}, withCredentials: true });
-      toast.success(`Merged "${s.name}" → CMS`);
-      onNavigate?.('cms');
-    } catch (e) { toast.error(e.response?.data?.detail || 'Merge failed'); }
-  };
-
-  const handleBulkGapAutoGen = async () => {
-    const selected = [...bulkGapSelected].map(id => gapSubjects.find(s => s.id === id)).filter(Boolean);
-    if (!selected.length) return;
-    setBulkGapGenerating(true);
-    setBulkGapProgress({ done: 0, total: selected.length });
-    await Promise.allSettled(selected.map(s => handleAutoGenerateGap(s).then(() => setBulkGapProgress(p => ({ ...p, done: p.done + 1 })))));
-    setBulkGapGenerating(false);
-    setBulkGapSelected(new Set());
-    toast.success(`Bulk generation complete (${selected.length} subjects)`);
-  };
-
   const load = useCallback(async (bustCache = false) => {
     try {
       const nc = bustCache ? '?nocache=1' : '';
@@ -306,12 +150,6 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   }, []);
 
   useEffect(() => { load(true); }, [load]);
-  useEffect(() => { if (!selSubject) return; loadGapSubjects(); }, [selSubject, loadGapSubjects]);
-  useEffect(() => { if (!selSubject || !seoTopicsGeneratedIds.has(selSubject) || assetsGeneratedIds.has(selSubject)) return; toast(`Topics ready — run "Auto-Generate Full Subject" to produce 300+ assets`, { id: `auto-nudge-${selSubject}`, duration: 5000, action: { label: 'Run Now', onClick: () => setShowPipeline(true) } }); }, [seoTopicsGeneratedIds, selSubject]);
-  useEffect(() => { if (!selSubject || !assetsGeneratedIds.has(selSubject)) return; toast.success(`Assets ready — click "Publish as Blog" to go live`, { id: `publish-nudge-${selSubject}`, duration: 6000 }); }, [assetsGeneratedIds, selSubject]);
-  useEffect(() => { (async () => { try { const res = await axios.get(`${API}/admin/content/cms-documents/merged-subject-ids`, authHeaders(adminToken)); const ids = new Set((res.data || []).filter(Boolean)); if (ids.size > 0) setMergedSubjectIds(prev => new Set([...prev, ...ids])); } catch {} })(); }, [adminToken]);
-  useEffect(() => { (async () => { try { const res = await axios.get(`${API}/admin/content/cms-documents/seo-topics-subject-ids`, authHeaders(adminToken)); const ids = new Set((res.data || []).filter(Boolean)); if (ids.size > 0) setSeoTopicsGeneratedIds(prev => new Set([...prev, ...ids])); } catch {} })(); }, [adminToken]);
-  useEffect(() => { (async () => { try { const res = await axios.get(`${API}/admin/content/cms-documents/assets-generated-subject-ids`, authHeaders(adminToken)); const ids = new Set((res.data || []).filter(Boolean)); if (ids.size > 0) setAssetsGeneratedIds(prev => new Set([...prev, ...ids])); } catch {} })(); }, [adminToken]);
   useEffect(() => { try { const raw = localStorage.getItem('syrabit_editor_prefill'); if (!raw) return; const pf = JSON.parse(raw); if (Date.now() - (pf.timestamp || 0) > 10 * 60 * 1000) { localStorage.removeItem('syrabit_editor_prefill'); return; } localStorage.removeItem('syrabit_editor_prefill'); setContentForm(f => ({ ...f, title: pf.title || f.title || '', content: pf.content || f.content || '' })); setEditView('new-chapter'); toast.success(`Pre-filled from CMS Doc "${pf.title || 'Untitled'}" — select a subject and save`); } catch {} }, []);
   useEffect(() => { if (!hubContext?.subjectId || !subjects.length || selSubject) return; const sub = subjects.find(s => s.id === hubContext.subjectId); if (!sub) return; setSelBoard(hubContext.boardId || null); setSelClass(hubContext.classId || null); setSelStream(hubContext.streamId || null); setSelSubject(sub.id); }, [hubContext?.subjectId, subjects]);
   useEffect(() => { if (!onHubContext || !selSubject) return; const sub = subjects.find(s => s.id === selSubject); const str = streams.find(s => s.id === selStream); const cls = classes.find(c => c.id === selClass); const brd = boards.find(b => b.id === selBoard); onHubContext({ boardId: selBoard || '', boardName: brd?.name || '', classId: selClass || '', className: cls?.name || '', streamId: selStream || '', streamName: str?.name || '', subjectId: selSubject, subjectName: sub?.name || '' }); }, [selSubject]);
@@ -374,26 +212,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const generated = res.data?.content;
       if (generated) {
         setChapters(prev => prev.map(ch => ch.id === chapterId ? { ...ch, content: generated, content_type: 'notes', notes_generated: true, _word_count: res.data?.word_count } : ch));
-        toast.success(`Notes generated for "${chapterTitle}"${res.data?.word_count ? ` — ${res.data.word_count.toLocaleString()} words` : ''}`, { action: autoAgentic ? undefined : { label: 'Run Agentic ⚡', onClick: () => setShowAgenticCreator(true) } });
-        if (autoAgentic) setShowAgenticCreator(true);
+        toast.success(`Notes generated for "${chapterTitle}"${res.data?.word_count ? ` — ${res.data.word_count.toLocaleString()} words` : ''}`);
       }
     } catch (e) { toast.error(e?.response?.data?.detail || `Failed to generate notes for "${chapterTitle}"`); }
     finally { setGeneratingNotes(prev => { const next = new Set(prev); next.delete(chapterId); return next; }); }
-  };
-
-  const handleGenerateAllNotes = async () => {
-    if (!selSubject) return;
-    const subjectName = subjects.find(s => s.id === selSubject)?.name || selSubject;
-    if (!confirm(`Generate AI notes for all ${chapters.length} chapters in "${subjectName}"? This may take a moment.`)) return;
-    setBulkGenerating(true);
-    try {
-      const res = await axios.post(`${API}/admin/subjects/${selSubject}/generate-notes-bulk`, { skip_existing: allChaptersHaveNotes }, authHeaders(adminToken));
-      const ok = res.data?.generated || 0; const skipped = res.data?.skipped || 0;
-      toast.success(skipped > 0 ? `Generated ${ok} chapters · ${skipped} already had notes (skipped)` : `Generated notes for ${ok} of ${res.data?.total || chapters.length} chapters`);
-      const freshRes = await axios.get(`${API}/content/chapters?subject_id=${selSubject}`, authHeaders(adminToken));
-      if (freshRes.data?.chapters) setChapters(freshRes.data.chapters);
-    } catch (e) { toast.error(e?.response?.data?.detail || 'Bulk note generation failed'); }
-    finally { setBulkGenerating(false); }
   };
 
   const breadcrumb = [];
@@ -482,18 +304,12 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                         <div className="flex items-center justify-between">
                           <p className="text-sm font-medium text-white">{s.icon || '📚'} {s.name}</p>
                           <div className="flex items-center gap-1">
-                            {mergedSubjectIds.has(s.id) && <CheckCircle size={11} className="text-violet-400" />}
                             <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={12} /></button>
                           </div>
                         </div>
                         <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
                         <div className="flex items-center justify-between mt-2">
                           <p className="text-[10px] text-white/25">{s.chapter_count || 0} chapters</p>
-                          <button onClick={(e) => { e.stopPropagation(); handlePublishAsBlog(s.id, s.name); }} disabled={publishingBlog}
-                            className="flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium disabled:opacity-40 transition-all hover:brightness-110"
-                            style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.30),rgba(79,70,229,0.30))', color: '#c4b0f0' }}>
-                            {publishingBlog ? <Loader2 size={10} className="animate-spin" /> : <Globe size={10} />} Publish
-                          </button>
                         </div>
                       </div>
                     ))}
@@ -508,33 +324,15 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                       <p className="text-sm text-white/40">{subjectData?.description}</p>
                     </div>
                   </div>
-                  <WorkflowTracker
-                    chapters={chapters} selSubject={selSubject} allChaptersHaveNotes={allChaptersHaveNotes}
-                    seoTopicsGeneratedIds={seoTopicsGeneratedIds} assetsGeneratedIds={assetsGeneratedIds} mergedSubjectIds={mergedSubjectIds}
-                    generatingSeoTopics={generatingSeoTopics} publishingBlog={publishingBlog}
-                    onGenerateSeoTopics={handleGenerateSeoTopics} onShowPipeline={() => setShowPipeline(true)} onPublishAsBlog={handlePublishAsBlog}
-                    subjectData={subjectData} onNavigate={onNavigate}
-                  />
                   <ThumbnailStudio adminToken={adminToken} selSubject={selSubject} subjectData={subjectData} onReload={() => load(true)} />
                   <ChapterList
                     chapters={chapters} chapterAssets={chapterAssets} selectedChapters={selectedChapters} setSelectedChapters={setSelectedChapters}
-                    generatingNotes={generatingNotes} bulkGenerating={bulkGenerating}
+                    generatingNotes={generatingNotes}
                     onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
                     onViewChapter={(ch) => setViewerItem(ch)}
                     onEditChapter={(ch) => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1, topics: ch.topics || [] }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
-                    showAgenticCreator={showAgenticCreator} setShowAgenticCreator={setShowAgenticCreator}
-                    autoAgentic={autoAgentic} setAutoAgentic={setAutoAgentic}
-                    onBulkMerge={handleBulkMerge} bulkMerging={bulkMerging}
                     selSubject={selSubject} subjectData={subjectData}
                     onCreateNew={() => { setEditView('new-chapter'); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: chapters.length + 1, topics: [] }); setChapterStats(null); }}
-                  />
-                  <ContentGapsPanel
-                    showGapPanel={showGapPanel} setShowGapPanel={setShowGapPanel}
-                    gapSubjects={gapSubjects} loadGapSubjects={loadGapSubjects} loadingGaps={loadingGaps}
-                    gapGenStatus={gapGenStatus} gapGenSubject={gapGenSubject}
-                    bulkGapSelected={bulkGapSelected} setBulkGapSelected={setBulkGapSelected}
-                    bulkGapGenerating={bulkGapGenerating} bulkGapProgress={bulkGapProgress}
-                    onAutoGenerateGap={handleAutoGenerateGap} onMergeGapToCms={handleMergeGapToCms} onBulkGapAutoGen={handleBulkGapAutoGen}
                   />
                 </div>
               ) : null}
@@ -544,46 +342,6 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       </>
 
       {viewerItem && <ContentViewerPopup item={viewerItem} onClose={() => setViewerItem(null)} />}
-
-      {showPipeline && (
-        <PipelineProgressPanel
-          adminToken={adminToken} subjectId={selSubject} subjectName={subjectData?.name || selSubject}
-          skipExisting={allChaptersHaveNotes} onClose={() => setShowPipeline(false)}
-          onComplete={(summary) => {
-            const total = (summary.total_blogs || 0) + (summary.total_topic_pyqs || 0) + (summary.total_flashcards || 0) + (summary.total_pyq_pages || 0);
-            toast.success(`${total} assets generated for "${subjectData?.name}" — ${summary.total_blogs || 0} blogs live`);
-            setAssetsGeneratedIds(prev => new Set([...prev, selSubject]));
-            setMergedSubjectIds(prev => new Set([...prev, selSubject]));
-            if (summary.chapter_results?.length > 0) {
-              setChapterAssets(prev => {
-                const next = { ...prev };
-                for (const r of summary.chapter_results) {
-                  if (r.chapter_id) {
-                    next[r.chapter_id] = {
-                      ...next[r.chapter_id],
-                      notesGenerated: r.notes_generated,
-                      pyqCount: r.topic_pyq_count || 0,
-                      flashcardCount: r.flashcards_count || 0,
-                      blogCount: r.blogs_count || 0,
-                      pyqPage: r.pyq_page || false,
-                    };
-                  }
-                }
-                return next;
-              });
-            }
-            if (selSubject) loadChapterCards(selSubject);
-          }}
-        />
-      )}
-
-      {showAgenticCreator && selSubject && (
-        <AgenticCreatorModal
-          adminToken={adminToken} subjectId={selSubject} subjectName={subjectData?.name || selSubject}
-          chapterCount={chapters.length} onClose={() => setShowAgenticCreator(false)}
-          onComplete={() => { toast.success('Agentic generation complete — refreshing chapters…'); refreshChapters(selSubject); }}
-        />
-      )}
     </div>
   );
 }

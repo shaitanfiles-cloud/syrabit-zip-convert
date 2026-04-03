@@ -1,7 +1,7 @@
 import {
   Sparkles, Loader2, Eye, Edit2, Trash2,
   CheckCircle, FileText, Layers, Globe, AlertTriangle,
-  Zap, BookOpen, Hash, Search, ChevronDown, ChevronUp,
+  BookOpen, Hash, Search, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { useState } from 'react';
 
@@ -16,12 +16,9 @@ const SEO_TYPE_LABELS = { notes: 'Notes', definition: 'Defs', 'important-questio
 
 export default function ChapterList({
   chapters, chapterAssets, selectedChapters, setSelectedChapters,
-  generatingNotes, bulkGenerating,
+  generatingNotes,
   onGenerateNotes, onDeleteChapter,
   onViewChapter, onEditChapter,
-  showAgenticCreator, setShowAgenticCreator,
-  autoAgentic, setAutoAgentic,
-  onBulkMerge, bulkMerging,
   selSubject, subjectData, onCreateNew,
 }) {
   const [expandedCard, setExpandedCard] = useState(null);
@@ -48,51 +45,8 @@ export default function ChapterList({
                 {selectedChapters.size === chapters.length ? 'Deselect all' : 'Select all'}
               </button>
             )}
-            {chapters.length > 0 && (
-              <button
-                onClick={() => setShowAgenticCreator(true)}
-                className="flex items-center gap-1 h-6 px-2.5 rounded-lg text-[10px] font-semibold transition-all hover:brightness-110"
-                style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.30),rgba(79,70,229,0.30))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.30)' }}
-                title="Agentic content creator — notes, MCQs, flashcards"
-              >
-                <Zap size={10} />
-                Agentic Generate
-              </button>
-            )}
-            <button
-              onClick={() => setAutoAgentic(v => !v)}
-              className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-medium transition-all"
-              style={autoAgentic
-                ? { background: 'rgba(245,158,11,0.20)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.35)' }
-                : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.25)', border: '1px solid rgba(255,255,255,0.08)' }}
-              title={autoAgentic ? 'Auto-Agentic ON — notes generation will auto-trigger Agentic Generate' : 'Auto-Agentic OFF — click to enable auto-cascade after notes generation'}
-            >
-              <Zap size={9} className={autoAgentic ? 'text-amber-400' : ''} />
-              Auto-Agentic {autoAgentic ? 'ON' : 'OFF'}
-            </button>
           </div>
         </div>
-
-        {selectedChapters.size > 0 && (
-          <div className="flex items-center gap-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(149,117,224,0.10)', border: '1px solid rgba(149,117,224,0.20)' }}>
-            <span className="text-xs text-violet-300 font-medium">{selectedChapters.size} selected</span>
-            <button
-              onClick={onBulkMerge}
-              disabled={bulkMerging}
-              className="flex items-center gap-1.5 h-7 px-3 rounded-lg text-xs font-medium disabled:opacity-40 transition-colors"
-              style={{ background: 'rgba(149,117,224,0.25)', color: '#c4b0f0' }}
-            >
-              {bulkMerging ? <Loader2 size={11} className="animate-spin" /> : <Globe size={11} />}
-              Merge to Blog
-            </button>
-            <button
-              onClick={() => setSelectedChapters(new Set())}
-              className="ml-auto text-[10px] text-white/30 hover:text-white transition-colors"
-            >
-              Clear
-            </button>
-          </div>
-        )}
 
         {chapters.length === 0 && <p className="text-xs text-white/30 py-4 text-center">No chapters yet — create the first one above</p>}
         {chapters.map(ch => {
@@ -155,7 +109,7 @@ export default function ChapterList({
                 <div className="flex gap-0.5 flex-shrink-0 ml-1">
                   <button
                     onClick={() => onGenerateNotes(ch.id, ch.title)}
-                    disabled={generatingNotes.has(ch.id) || bulkGenerating}
+                    disabled={generatingNotes.has(ch.id)}
                     className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-semibold disabled:opacity-40 transition-all hover:brightness-110"
                     style={hasNotes
                       ? { background: 'rgba(16,185,129,0.15)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.25)' }

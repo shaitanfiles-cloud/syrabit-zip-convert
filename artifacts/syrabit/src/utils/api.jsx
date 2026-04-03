@@ -421,25 +421,6 @@ export const updateNotificationTrigger = (token, id, data) =>
 export const deleteNotificationTrigger = (token, id) =>
   axios.delete(`${API_BASE}/admin/notifications/triggers/${id}`, { headers: adminHeaders(token), withCredentials: true });
 
-export const syllabusImportPdf = (token, formData) =>
-  axios.post(`${API_BASE}/admin/syllabus/import-pdf`, formData, { headers: { ...adminHeaders(token), 'Content-Type': 'multipart/form-data' }, withCredentials: true });
-
-export const syllabusExtractPdf = (token, formData) => {
-  formData.append('dry_run', 'true');
-  return axios.post(`${API_BASE}/admin/syllabus/import-pdf`, formData, { headers: { ...adminHeaders(token), 'Content-Type': 'multipart/form-data' }, withCredentials: true });
-};
-
-export const syllabusConfirmImport = (token, payload) =>
-  axios.post(`${API_BASE}/admin/syllabus/confirm-import`, payload, { headers: adminHeaders(token), withCredentials: true });
-
-export const syllabusGetImports = (token, paper_type = '') =>
-  axios.get(`${API_BASE}/admin/syllabus/pdf-imports`, { headers: adminHeaders(token), withCredentials: true, params: paper_type ? { paper_type } : {} });
-
-export const syllabusDeleteImport = (token, import_id, remove_content = false) =>
-  axios.delete(`${API_BASE}/admin/syllabus/pdf-imports/${import_id}`, { headers: adminHeaders(token), withCredentials: true, params: { remove_content } });
-
-export const syllabusUpdateImport = (token, import_id, payload) =>
-  axios.put(`${API_BASE}/admin/syllabus/pdf-imports/${import_id}`, payload, { headers: adminHeaders(token), withCredentials: true });
 
 export const cmsAiSuggest = (token, text, action, subject = '', topic = '') =>
   axios.post(`${API_BASE}/admin/cms/ai-suggest`, { text, action, subject, topic }, { headers: adminHeaders(token), withCredentials: true });
