@@ -146,7 +146,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                         <div className="flex items-center gap-2 mb-1.5">
                           <SourceIcon size={13} style={{ color: '#a78bfa' }} />
                           <span className="text-[12px] font-semibold" style={{ color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            {isDocument ? 'Uploaded Document' : isWeb ? 'Web Search' : 'Syrabit Library'}
+                            {isDocument ? 'Uploaded Document' : isWeb ? 'Web Search' : 'Syrabit Browser'}
                           </span>
                         </div>
                       )}
