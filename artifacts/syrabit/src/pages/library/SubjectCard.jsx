@@ -347,9 +347,10 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           {isSaved ? 'Saved' : 'Save'}
         </button>
 
-        <button
-          onClick={() => setShowAllChapters(prev => !prev)}
-          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-semibold transition-all duration-200 active:scale-95"
+        <Link
+          to={subjectLandingPath}
+          onMouseEnter={handlePrefetch}
+          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-semibold transition-all duration-200 active:scale-95 relative z-[3]"
           style={{
             color: hasWP ? 'rgba(255,255,255,0.85)' : 'hsl(var(--muted-foreground))',
             background: hasWP ? 'rgba(255,255,255,0.08)' : 'transparent',
@@ -358,8 +359,8 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           }}
         >
           <BookOpen size={12} />
-          {showAllChapters ? 'Collapse' : 'Browse'}
-        </button>
+          Browse
+        </Link>
 
         <button
           onClick={() => onAskAI(sub.id, hasDocument, sub.name)}
