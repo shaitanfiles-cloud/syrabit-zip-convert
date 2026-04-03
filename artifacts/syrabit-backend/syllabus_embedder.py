@@ -266,15 +266,28 @@ class SyllabusEmbedder:
             return None
 
         try:
-            q_vec = await asyncio.wait_for(
-                embed_text(query, task_type="RETRIEVAL_QUERY"),
-                timeout=3.0,
-            )
-            if not q_vec:
+            from cache import _query_embed_cache
+        except ImportError:
+            _query_embed_cache = None
+
+        _embed_key = query.strip().lower()
+        q_vec = _query_embed_cache.get(_embed_key) if _query_embed_cache is not None else None
+
+        if q_vec is None:
+            try:
+                q_vec = await asyncio.wait_for(
+                    embed_text(query, task_type="RETRIEVAL_QUERY"),
+                    timeout=3.0,
+                )
+                if not q_vec:
+                    return None
+                if _query_embed_cache is not None:
+                    _query_embed_cache[_embed_key] = q_vec
+            except Exception as exc:
+                logger.warning(f"Embed query failed: {exc}")
                 return None
-        except Exception as exc:
-            logger.warning(f"Embed query failed: {exc}")
-            return None
+        else:
+            logger.info(f"SyllabusEmbed: reusing cached query embedding for '{query[:40]}'")
 
         entries = await self._get_cache()
         if not entries:

@@ -433,6 +433,7 @@ async def _fetch_content_card(
         _top_card_name: str = ""
         _top_lesson_name: str = ""
         _top_subject_name: str = ""
+        _intent_for_extract = (intent or "").lower()
         for p in ordered_pages[:3]:
             content = p.get("content", "")
             if not content:
@@ -449,7 +450,7 @@ async def _fetch_content_card(
                 header = f"[Content: {topic_title} | type={page_type}]" if page_type else f"[Content: {topic_title}]"
             else:
                 header = f"[Content Page | type={page_type}]" if page_type else "[Content Page]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=_page_max)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_page_max, intent=_intent_for_extract)
             cards.append(f"{header}\n{relevant}")
 
         for cms in cms_pages[:2]:
@@ -465,7 +466,7 @@ async def _fetch_content_card(
                 _top_subject_name = cms.get("linked_subject_name") or subject_name or ""
             cat = cms.get("category", "article")
             header = f"[CMS {cat}: {cms_title}]" if cms_title else f"[CMS {cat}]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=_cms_max)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_cms_max, intent=_intent_for_extract)
             cards.append(f"{header}\n{relevant}")
 
         for ch in chapter_pages[:2]:
@@ -475,7 +476,7 @@ async def _fetch_content_card(
             if not _top_lesson_name:
                 _top_lesson_name = ch.get("title") or ""
             header = f"[Chapter: {ch.get('title', '')} | type=lesson]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=_ch_max)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_ch_max, intent=_intent_for_extract)
             cards.append(f"{header}\n{relevant}")
 
         if not cards:
@@ -495,19 +496,67 @@ async def _fetch_content_card(
         return None
 
 
-def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 2500) -> str:
-    """Extract the most relevant sections from a content page based on keywords."""
+_INTENT_SECTION_SIGNALS: dict = {
+    "notes": {
+        "boost": ["definition", "define", "explain", "meaning", "concept", "theory",
+                   "formula", "derivation", "principle", "law", "theorem"],
+        "skip_patterns": [r'^\d+\.\s+(?:What|How|Why|Define|Explain|State|Discuss)',
+                          r'^\*\*\d+-Mark\s+Questions?\*\*'],
+        "header_bonus": 1.0,
+    },
+    "pyq": {
+        "boost": ["mark", "marks", "question", "year", "paper", "solve", "answer",
+                   "section", "part"],
+        "skip_patterns": [],
+        "header_bonus": 0.5,
+    },
+    "important_questions": {
+        "boost": ["important", "question", "mark", "marks", "frequently", "repeated",
+                   "weightage", "expected"],
+        "skip_patterns": [],
+        "header_bonus": 0.5,
+    },
+    "syllabus": {
+        "boost": ["unit", "chapter", "topic", "module", "syllabus", "semester",
+                   "course", "outline"],
+        "skip_patterns": [],
+        "header_bonus": 1.5,
+    },
+}
+
+
+def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 2500, intent: str = "") -> str:
+    """Extract the most relevant sections from a content page based on keywords and intent."""
     paragraphs = [p.strip() for p in content.split('\n') if p.strip()]
     if not paragraphs:
         return content[:max_chars]
 
+    if intent == "syllabus":
+        return content[:max_chars]
+
+    signals = _INTENT_SECTION_SIGNALS.get(intent, {})
+    boost_terms = signals.get("boost", [])
+    skip_patterns = signals.get("skip_patterns", [])
+    header_bonus = signals.get("header_bonus", 0.5)
+
+    skip_res = [re.compile(p, re.I) for p in skip_patterns] if skip_patterns else []
+
     scored = []
     for i, para in enumerate(paragraphs):
         para_lower = para.lower()
+
+        if skip_res and any(r.search(para) for r in skip_res):
+            scored.append((-1, i, para))
+            continue
+
         score = sum(1 for kw in keywords if kw in para_lower)
+
+        if boost_terms:
+            score += sum(0.3 for bt in boost_terms if bt in para_lower)
+
         is_header = para.startswith('#') or para.startswith('**')
         if is_header:
-            score += 0.5
+            score += header_bonus
         scored.append((score, i, para))
 
     scored.sort(key=lambda x: (-x[0], x[1]))
@@ -517,6 +566,8 @@ def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 25
     for score, idx, para in scored:
         if score <= 0 and total_chars > 500:
             break
+        if score < 0:
+            continue
         for j in range(max(0, idx - 1), min(len(paragraphs), idx + 2)):
             if j not in selected_indices:
                 selected_indices.add(j)
@@ -1315,7 +1366,7 @@ async def resolve_rag_context(
             "quality": "tier0",
             "intent":  _resolved_intent_t0,
         }
-    from rag_router import should_trigger_rag, filter_rag_by_category, RAG_RELEVANCE_GATE
+    from rag_router import should_trigger_rag, filter_rag_by_category, RAG_RELEVANCE_GATE, HIGH_CONFIDENCE_THRESHOLD
     try:
         _RELEVANCE_GATE = float(os.getenv("RAG_RELEVANCE_GATE", str(RAG_RELEVANCE_GATE)))
     except ValueError:
@@ -1345,19 +1396,39 @@ async def resolve_rag_context(
             "source": "none", "quality": "none", "intent": _resolved_intent,
         }
 
-    _gather_tasks = [
-        rag_search(query, subject_id=subject_id, subject_name=subject_name),
-        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
-    ]
-    if _want_enrichment:
-        _gather_tasks.append(
-            _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
-        )
+    _high_confidence = _best_vec_sim >= HIGH_CONFIDENCE_THRESHOLD and any(
+        h.get("content") and len(h.get("content", "")) > 100 for h in vector_hits
+    )
 
-    _results = await asyncio.gather(*_gather_tasks)
-    cached_rag = _results[0]
-    _card_result = _results[1]
-    _enrichment_result = _results[2] if _want_enrichment else ""
+    if _high_confidence:
+        logger.info(
+            f"RAG resolve: HIGH-CONFIDENCE fast-path (best_sim={_best_vec_sim:.3f} >= {HIGH_CONFIDENCE_THRESHOLD}) — "
+            f"skipping keyword rag_search | intent={_resolved_intent} | query: {query[:50]}"
+        )
+        _gather_tasks = [
+            _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
+        ]
+        if _want_enrichment:
+            _gather_tasks.append(
+                _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
+            )
+        _results = await asyncio.gather(*_gather_tasks)
+        _card_result = _results[0]
+        _enrichment_result = _results[1] if _want_enrichment else ""
+        cached_rag = {"chunks": [], "chapters": [], "subjects": [], "source": "rag", "quality": "high"}
+    else:
+        _gather_tasks = [
+            rag_search(query, subject_id=subject_id, subject_name=subject_name),
+            _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
+        ]
+        if _want_enrichment:
+            _gather_tasks.append(
+                _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
+            )
+        _results = await asyncio.gather(*_gather_tasks)
+        cached_rag = _results[0]
+        _card_result = _results[1]
+        _enrichment_result = _results[2] if _want_enrichment else ""
 
     rag_ctx = dict(cached_rag)
 
@@ -1752,6 +1823,9 @@ def build_rag_system_prompt(
     if source == "rag" and (chunks or subjects or chapters or content_card or vector_hits):
 
         if quality == "high":
+            _GROUNDING_BUDGET = 8000 if _intent == "syllabus" else 6000
+            _budget_used = 0
+
             grounding += (
                 "\n\n---\n"
                 "**GROUNDING CONTEXT (Syrabit Library — PRIMARY AUTHORITY):**\n"
@@ -1759,31 +1833,54 @@ def build_rag_system_prompt(
                 "This is your PRIMARY source of truth — use it as the foundation (80-90%) of your answer. "
                 "Only supplement with your own knowledge to explain, add examples, or fill minor gaps.\n\n"
             )
-            if vector_hits:
+
+            if content_card and _budget_used < _GROUNDING_BUDGET:
+                _card_budget = min(len(content_card), _GROUNDING_BUDGET - _budget_used)
+                _trimmed_card = content_card[:_card_budget]
+                grounding += f"**[CONTENT CARD — Full page content]:**\n{_trimmed_card}\n\n"
+                _budget_used += len(_trimmed_card)
+
+            if vector_hits and _budget_used < _GROUNDING_BUDGET:
                 grounding += "**[VECTOR SEARCH RESULTS — Semantically matched pages]:**\n\n"
-                _VH_CONTENT_LIMIT = 2000
-                _VH_MAX_HITS = 4
+                _VH_MAX_HITS = 3
+                _seen_titles = set()
                 for hit in vector_hits[:_VH_MAX_HITS]:
+                    if _budget_used >= _GROUNDING_BUDGET:
+                        break
                     slug = hit.get("slug", "")
                     title = hit.get("title", slug)
+                    if title.lower() in _seen_titles:
+                        continue
+                    _seen_titles.add(title.lower())
                     content = hit.get("content", "")
-                    if len(content) > _VH_CONTENT_LIMIT:
-                        content = content[:_VH_CONTENT_LIMIT] + "…"
+                    _vh_budget = min(1500, _GROUNDING_BUDGET - _budget_used)
+                    if len(content) > _vh_budget:
+                        content = content[:_vh_budget] + "…"
                     score = hit.get("score", 0)
                     _pt = hit.get("page_type", "")
                     _pt_label = f" | type={_pt}" if _pt else ""
-                    grounding += f"[PAGE: {slug}{_pt_label}] — {title} (relevance: {score:.2f})\n{content}\n\n"
+                    _vh_block = f"[PAGE: {slug}{_pt_label}] — {title} (relevance: {score:.2f})\n{content}\n\n"
+                    grounding += _vh_block
+                    _budget_used += len(_vh_block)
 
-            if content_card:
-                grounding += f"**[CONTENT CARD — Full page content]:**\n{content_card}\n\n"
-            _chunk_limit = 3000 if _intent == "syllabus" else 2000
-            for i, c in enumerate(chunks, 1):
-                title = c.get("content_type", "content").capitalize()
-                grounding += f"**[BLOCK {i} — {title}]:**\n{c.get('content', '')[:_chunk_limit]}\n\n"
+            _chunk_base_limit = 3000 if _intent == "syllabus" else 2000
+            if chunks and _budget_used < _GROUNDING_BUDGET:
+                for i, c in enumerate(chunks[:3], 1):
+                    _remaining = _GROUNDING_BUDGET - _budget_used
+                    if _remaining < 200:
+                        break
+                    title = c.get("content_type", "content").capitalize()
+                    _per_chunk = min(_chunk_base_limit, _remaining)
+                    _c_text = c.get('content', '')[:_per_chunk]
+                    _chunk_block = f"**[BLOCK {i} — {title}]:**\n{_c_text}\n\n"
+                    grounding += _chunk_block
+                    _budget_used += len(_chunk_block)
 
             _enrichment = rag_context.get("enrichment_blocks", "")
-            if _enrichment:
-                grounding += f"{_enrichment}\n\n"
+            if _enrichment and _budget_used < _GROUNDING_BUDGET:
+                _enr_budget = min(len(_enrichment), _GROUNDING_BUDGET - _budget_used)
+                grounding += f"{_enrichment[:_enr_budget]}\n\n"
+                _budget_used += _enr_budget
 
             _extraction_rules = get_intent_extraction_rules(_intent)
             if _extraction_rules:
