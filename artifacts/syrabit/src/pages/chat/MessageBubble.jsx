@@ -175,14 +175,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
                             {subjectLabel}
                           </span>
-                          {classLabel && (
-                            <>
-                              <span className="text-[11px] text-muted-foreground/40">·</span>
-                              <span className="text-[11px]" style={{ color: 'hsl(var(--foreground) / 0.5)' }}>Semester</span>
-                              <span className="text-[11px] text-muted-foreground/40">·</span>
-                              <span className="text-[11px]" style={{ color: 'hsl(var(--foreground) / 0.5)' }}>{classLabel}</span>
-                            </>
-                          )}
                           {courseLabel && (
                             <>
                               <span className="text-[11px] text-muted-foreground/40">·</span>
