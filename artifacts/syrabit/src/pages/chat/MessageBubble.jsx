@@ -135,35 +135,31 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                 <>
                   <div
                     onClick={subjectUrl && !isDocument && !isWeb ? () => navigate(subjectUrl) : undefined}
-                    className={`mt-3 rounded-xl overflow-hidden ${subjectUrl && !isDocument && !isWeb ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
-                    style={{ background: 'rgba(124,58,237,0.05)', border: '1px solid rgba(124,58,237,0.12)' }}
+                    className={`mt-3 inline-flex items-center gap-2.5 rounded-lg px-3 py-2 ${subjectUrl && !isDocument && !isWeb ? 'cursor-pointer hover:opacity-85 transition-opacity' : ''}`}
+                    style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.12)' }}
                     role={subjectUrl && !isDocument && !isWeb ? 'link' : undefined}
                     aria-label={subjectUrl && !isDocument && !isWeb ? `View ${subjectLabel}` : undefined}
                   >
-                    <div className="px-3 py-2.5">
-                      {lessonLabel && (
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <SourceIcon size={13} style={{ color: '#a78bfa' }} />
-                          <span className="text-[12.5px] font-semibold truncate" style={{ color: '#c4b5fd' }}>{lessonLabel}</span>
-                        </div>
-                      )}
-                      {!lessonLabel && (
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <SourceIcon size={13} style={{ color: '#a78bfa' }} />
-                          <span className="text-[12px] font-semibold" style={{ color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            {isDocument ? 'Uploaded Document' : isWeb ? 'Web Search' : 'Syrabit Browser'}
-                          </span>
-                        </div>
-                      )}
-                      {subjectLabel && (
-                        <p className="text-[11.5px] font-medium truncate mb-1" style={{ color: 'hsl(var(--foreground) / 0.75)' }}>{subjectLabel}</p>
+                    <SourceIcon size={14} className="shrink-0" style={{ color: '#a78bfa' }} />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#a78bfa' }}>Source</span>
+                        <span className="text-[10px]" style={{ color: 'hsl(var(--foreground) / 0.3)' }}>·</span>
+                        <span className="text-[10.5px] font-medium" style={{ color: '#c4b5fd' }}>
+                          {isDocument ? 'Uploaded Document' : isWeb ? 'Web Search' : 'Syrabit Browser'}
+                        </span>
+                      </div>
+                      {(lessonLabel || subjectLabel) && (
+                        <p className="text-[11px] font-medium truncate mt-0.5" style={{ color: 'hsl(var(--foreground) / 0.7)' }}>
+                          {lessonLabel || subjectLabel}
+                          {lessonLabel && subjectLabel && <span className="text-muted-foreground/50"> · </span>}
+                          {lessonLabel && subjectLabel && subjectLabel}
+                        </p>
                       )}
                       {(classLabel || courseLabel) && (
-                        <div className="flex items-center gap-1.5">
-                          {classLabel && <span className="text-[10.5px] text-muted-foreground">{classLabel}</span>}
-                          {classLabel && courseLabel && <span className="text-[10.5px] text-muted-foreground/50">·</span>}
-                          {courseLabel && <span className="text-[10.5px] text-muted-foreground">{courseLabel}</span>}
-                        </div>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          {[classLabel, courseLabel].filter(Boolean).join(' · ')}
+                        </p>
                       )}
                     </div>
                   </div>
