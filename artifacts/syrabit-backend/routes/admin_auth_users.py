@@ -158,7 +158,7 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
         try:
             async with deps.pg_pool.acquire() as conn:
                 rows = await conn.fetch(
-                    "SELECT id, messages, created_at FROM conversations ORDER BY created_at ASC"
+                    "SELECT id, user_id, messages, created_at FROM conversations ORDER BY created_at ASC"
                 )
                 for r in _pg_rows(rows):
                     pg_conv_map[r["id"]] = r
@@ -210,8 +210,7 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
     oldest_conv = min(all_dates)[:10] if all_dates else None
     newest_conv = max(all_dates)[:10] if all_dates else None
 
-    # Unique users who have ever chatted
-    unique_chatters = len({c.get("user_id") for c in supa_conv_rows if c.get("user_id")})
+    unique_chatters = len({c.get("user_id") for c in merged_convs.values() if c.get("user_id")})
 
     try:
         total_subjects = await db.subjects.count_documents({}) if await is_mongo_available() else 0

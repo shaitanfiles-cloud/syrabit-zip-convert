@@ -530,7 +530,16 @@ async def supa_upsert_conversation(conv: dict):
                     msgs, conv.get("tokens",0),
                     conv.get("created_at",""), conv.get("updated_at","")
                 )
-            _supa_mirror(lambda: supa.table("conversations").upsert({k: v for k, v in conv.items() if k in {"id","user_id","title","preview","subject_id","subject_name","starred","archived","tokens","created_at","updated_at"}}).execute())
+            _mirror_fields = {"id","user_id","title","preview","subject_id","subject_name","starred","archived","messages","tokens","created_at","updated_at"}
+            _mirror_data = {}
+            for k, v in conv.items():
+                if k not in _mirror_fields:
+                    continue
+                if k == "messages" and isinstance(v, list):
+                    _mirror_data[k] = json.dumps(v)
+                else:
+                    _mirror_data[k] = v
+            _supa_mirror(lambda d=_mirror_data: supa.table("conversations").upsert(d).execute())
             return
         except Exception as e:
             logger.warning(f"pg supa_upsert_conversation failed: {e}")
@@ -563,6 +572,12 @@ async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
                 sql = f"UPDATE conversations SET {', '.join(cols)} WHERE id = ${len(vals)-1} AND user_id = ${len(vals)}"
                 async with _deps_mod.pg_pool.acquire() as conn:
                     await conn.execute(sql, *vals)
+            if supa:
+                _supa_allowed = {"title","preview","subject_id","subject_name","starred","archived","messages","tokens","updated_at"}
+                _su = {k: v for k, v in updates.items() if k in _supa_allowed}
+                if isinstance(_su.get("messages"), list): _su["messages"] = json.dumps(_su["messages"])
+                if _su:
+                    _supa_mirror(lambda d=_su, cid=conv_id, u=uid: supa.table("conversations").update(d).eq("id", cid).eq("user_id", u).execute())
             return
         except Exception as e:
             logger.warning(f"pg supa_update_conversation failed: {e}")
