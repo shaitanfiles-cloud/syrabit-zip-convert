@@ -127,38 +127,38 @@ if _EXPLICIT_PROVIDER == 'sarvam' and _SARVAM_LLM_KEY:
     LLM_PROVIDER = 'sarvam'
     LLM_API_KEY = _SARVAM_LLM_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'sarvam-m')
+elif _EXPLICIT_PROVIDER == 'cerebras' and _CEREBRAS_KEY:
+    LLM_PROVIDER = 'cerebras'
+    LLM_API_KEY = _CEREBRAS_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'llama3.1-8b')
 elif _EXPLICIT_PROVIDER == 'fireworksai' and _FIREWORKS_KEY:
     LLM_PROVIDER = 'fireworksai'
     LLM_API_KEY = _FIREWORKS_KEY
-    LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/qwen2p5-72b-instruct')
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/deepseek-v3p2')
 elif _EXPLICIT_PROVIDER == 'openai' and _OPENAI_KEY and _OPENAI_KEY != 'x':
     LLM_PROVIDER = 'openai'
     LLM_API_KEY = _OPENAI_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'gpt-4o-mini')
-elif _EXPLICIT_PROVIDER == 'groq' and ((_GROQ_KEY and _GROQ_KEY != 'x') or (_GROQ_KEY_2 and _GROQ_KEY_2 != 'x')):
-    LLM_PROVIDER = 'groq'
-    LLM_API_KEY = (_GROQ_KEY if _GROQ_KEY and _GROQ_KEY != 'x' else _GROQ_KEY_2)
-    LLM_MODEL = os.environ.get('LLM_MODEL', 'llama-3.1-8b-instant')
 elif _SARVAM_LLM_KEY:
     LLM_PROVIDER = 'sarvam'
     LLM_API_KEY = _SARVAM_LLM_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'sarvam-m')
+elif _CEREBRAS_KEY:
+    LLM_PROVIDER = 'cerebras'
+    LLM_API_KEY = _CEREBRAS_KEY
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'llama3.1-8b')
 elif _FIREWORKS_KEY:
     LLM_PROVIDER = 'fireworksai'
     LLM_API_KEY = _FIREWORKS_KEY
-    LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/qwen2p5-72b-instruct')
-elif (_GROQ_KEY and _GROQ_KEY != 'x') or (_GROQ_KEY_2 and _GROQ_KEY_2 != 'x'):
-    LLM_PROVIDER = 'groq'
-    LLM_API_KEY = (_GROQ_KEY if _GROQ_KEY and _GROQ_KEY != 'x' else _GROQ_KEY_2)
-    LLM_MODEL = os.environ.get('LLM_MODEL', 'llama-3.1-8b-instant')
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/deepseek-v3p2')
 elif _OPENAI_KEY and _OPENAI_KEY != 'x':
     LLM_PROVIDER = 'openai'
     LLM_API_KEY = _OPENAI_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'gpt-4o-mini')
 else:
-    LLM_PROVIDER = 'groq'
+    LLM_PROVIDER = 'sarvam'
     LLM_API_KEY = ''
-    LLM_MODEL = os.environ.get('LLM_MODEL', 'llama-3.1-8b-instant')
+    LLM_MODEL = os.environ.get('LLM_MODEL', 'sarvam-m')
 OPENAI_API_KEY = LLM_API_KEY
 
 # ── Sarvam AI Configuration ──────────────────────────────────────────────────

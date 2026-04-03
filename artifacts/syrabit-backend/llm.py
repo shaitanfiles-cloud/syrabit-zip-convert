@@ -138,6 +138,8 @@ class _LlmBatcher:
 _llm_batcher = _LlmBatcher()
 
 _LLM_PROVIDERS = []
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
@@ -146,38 +148,26 @@ if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
 if _FIREWORKS_KEY:
     _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/deepseek-v3p2"})
-if _GROQ_KEY and _GROQ_KEY != 'x':
-    _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY,       "default_model": "llama-3.1-8b-instant"})
-if _GROQ_KEY_2 and _GROQ_KEY_2 != 'x':
-    _LLM_PROVIDERS.append({"provider": "groq",        "key": _GROQ_KEY_2,     "default_model": "llama-3.3-70b-versatile"})
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
-if _XAI_KEY:
-    _LLM_PROVIDERS.append({"provider": "xai",         "key": _XAI_KEY,        "default_model": "grok-3-fast"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
-if _FIREWORKS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
-if _GROQ_KEY and _GROQ_KEY != 'x':
-    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.1-8b-instant"})
-if _GROQ_KEY_2 and _GROQ_KEY_2 != 'x':
-    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY_2, "default_model": "llama-3.3-70b-versatile"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _FIREWORKS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 for _p in _LLM_PROVIDERS:
-    if _p["provider"] not in ("fireworksai", "groq", "cerebras", "gemini", "sarvam", "openrouter"):
+    if _p["provider"] not in ("fireworksai", "cerebras", "gemini", "sarvam", "openrouter"):
         _LLM_PROVIDERS_CHAT.append(_p)
 
 _MODEL_PROVIDER_MAP = {
@@ -212,18 +202,13 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("groq",        "llama-3.1-8b-instant",                              8, 0),
-    ("groq:2",      "llama-3.1-8b-instant",                              8, 0),
+    ("sarvam",      "sarvam-m",                                          4, 0),
     ("cerebras",    "llama3.1-8b",                                       6, 1),
-    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 2),
-    ("groq",        "llama-3.3-70b-versatile",                           4, 3),
-    ("groq:2",      "llama-3.3-70b-versatile",                           4, 3),
-    ("gemini",      "gemini-2.5-flash",                                  6, 4),
-    ("gemini:2",    "gemini-2.5-flash",                                  6, 4),
-    ("sarvam",      "sarvam-m",                                          4, 5),
-    ("openai",      "gpt-4o-mini",                                       4, 5),
-    ("xai",         "grok-3-fast",                                       4, 5),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 5),
+    ("gemini",      "gemini-2.5-flash",                                  6, 2),
+    ("gemini:2",    "gemini-2.5-flash",                                  6, 2),
+    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 3),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 4),
+    ("openai",      "gpt-4o-mini",                                       4, 4),
     ("bedrock",     "amazon.nova-micro-v1:0",                            2, 5),
 ]
 
