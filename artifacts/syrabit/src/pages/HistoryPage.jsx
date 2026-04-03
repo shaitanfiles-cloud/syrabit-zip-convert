@@ -446,13 +446,15 @@ export default function HistoryPage() {
                 border: '1px solid rgba(139,92,246,0.15)',
               }}
             >
-              <Sparkles size={16} style={{ color: 'hsl(var(--primary))' }} className="flex-shrink-0" />
-              <span className="text-muted-foreground">
-                Guest chats expire after 7 days.{' '}
-                <button onClick={() => navigate('/login')} className="text-primary font-semibold hover:underline">
-                  Sign up
-                </button>{' '}
-                to save them permanently.
+              <img src="/logo.png" alt="Syrabit.ai" width="20" height="20" className="w-5 h-5 rounded flex-shrink-0" />
+              <span className="text-muted-foreground flex flex-col leading-snug">
+                <span>Guest chats expire after 7 days.</span>
+                <span>
+                  <button onClick={() => navigate('/login')} className="text-primary font-semibold hover:underline">
+                    Sign up
+                  </button>{' '}
+                  to save them permanently.
+                </span>
               </span>
             </div>
           )}
