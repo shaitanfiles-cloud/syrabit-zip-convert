@@ -188,45 +188,21 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     </div>
                   )}
                   {(() => {
-                    const libSources = (msg.sources || []).filter(s => s.url || s.slug);
                     const sourceParts = sourceLine ? sourceLine.split('·').map(s => s.replace(/\s*\([^)]*\)\s*$/, '').trim()).filter(Boolean) : [];
-                    const hasLibSources = libSources.length > 0;
-                    const hasSourceLine = sourceParts.length > 0;
-                    if (!hasLibSources && !hasSourceLine) return null;
+                    if (!sourceParts.length) return null;
                     return (
                       <div className="mt-3 rounded-xl overflow-hidden" style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.12)' }}>
                         <div className="flex items-center gap-2 px-3 pt-2.5 pb-1.5">
                           <BookOpen size={14} style={{ color: '#a78bfa' }} />
                           <span className="text-[12px] font-semibold" style={{ color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sources</span>
                         </div>
-                        {hasSourceLine && (
-                          <div className="flex flex-wrap gap-1.5 px-3 pb-2">
-                            {sourceParts.map((part, i) => (
-                              <span key={i} className="text-[12px] px-2 py-0.5 rounded-md" style={{ background: 'rgba(124,58,237,0.08)', color: 'hsl(var(--foreground) / 0.75)' }}>
-                                {part}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                        {hasLibSources && (
-                          <div className="flex flex-col gap-1 px-3 pb-2.5">
-                            {libSources.slice(0, 5).map((s, i) => {
-                              const label = s.title || s.slug || '';
-                              const url = s.url || (s.slug ? `/learn/${s.slug}` : '');
-                              if (!label) return null;
-                              return (
-                                <button
-                                  key={i}
-                                  onClick={() => url && navigate(url)}
-                                  className="text-left text-[12.5px] truncate hover:underline"
-                                  style={{ color: '#a78bfa', cursor: url ? 'pointer' : 'default' }}
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
+                        <div className="flex flex-wrap gap-1.5 px-3 pb-2.5">
+                          {sourceParts.map((part, i) => (
+                            <span key={i} className="text-[12px] px-2 py-0.5 rounded-md" style={{ background: 'rgba(124,58,237,0.08)', color: 'hsl(var(--foreground) / 0.75)' }}>
+                              {part}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     );
                   })()}
