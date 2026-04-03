@@ -1,6 +1,6 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, BookOpen } from 'lucide-react';
 import { log } from '@/utils/logger';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
@@ -40,12 +40,14 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
     ? new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : '';
 
-  const cleanContent = useMemo(() => {
-    if (!msg.content) return msg.content;
-    return msg.content
+  const { cleanContent, sourceLine } = useMemo(() => {
+    if (!msg.content) return { cleanContent: msg.content, sourceLine: '' };
+    let extracted = '';
+    const cleaned = msg.content
       .replace(/\n*\n?Sources?:\s*((\[(PAGE|CHAPTER):[^\]]+\][,\s]*)+\.?\s*)$/gi, '')
-      .replace(/\n*\n?SOURCE\s*:\s*.+$/i, '')
+      .replace(/\n*\n?SOURCE\s*:\s*(.+)$/i, (_, match) => { extracted = match.trim(); return ''; })
       .trim();
+    return { cleanContent: cleaned, sourceLine: extracted };
   }, [msg.content]);
 
   return (
@@ -185,6 +187,49 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
                     </div>
                   )}
+                  {(() => {
+                    const libSources = (msg.sources || []).filter(s => s.url || s.slug);
+                    const sourceParts = sourceLine ? sourceLine.split('·').map(s => s.replace(/\s*\([^)]*\)\s*$/, '').trim()).filter(Boolean) : [];
+                    const hasLibSources = libSources.length > 0;
+                    const hasSourceLine = sourceParts.length > 0;
+                    if (!hasLibSources && !hasSourceLine) return null;
+                    return (
+                      <div className="mt-3 rounded-xl overflow-hidden" style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.12)' }}>
+                        <div className="flex items-center gap-2 px-3 pt-2.5 pb-1.5">
+                          <BookOpen size={14} style={{ color: '#a78bfa' }} />
+                          <span className="text-[12px] font-semibold" style={{ color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sources</span>
+                        </div>
+                        {hasSourceLine && (
+                          <div className="flex flex-wrap gap-1.5 px-3 pb-2">
+                            {sourceParts.map((part, i) => (
+                              <span key={i} className="text-[12px] px-2 py-0.5 rounded-md" style={{ background: 'rgba(124,58,237,0.08)', color: 'hsl(var(--foreground) / 0.75)' }}>
+                                {part}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {hasLibSources && (
+                          <div className="flex flex-col gap-1 px-3 pb-2.5">
+                            {libSources.slice(0, 5).map((s, i) => {
+                              const label = s.title || s.slug || '';
+                              const url = s.url || (s.slug ? `/learn/${s.slug}` : '');
+                              if (!label) return null;
+                              return (
+                                <button
+                                  key={i}
+                                  onClick={() => url && navigate(url)}
+                                  className="text-left text-[12.5px] truncate hover:underline"
+                                  style={{ color: '#a78bfa', cursor: url ? 'pointer' : 'default' }}
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                   <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     {timeStr && (
                       <span className="text-[11px] text-muted-foreground">{timeStr}</span>
