@@ -439,3 +439,12 @@ export const adminContentAutoHeal = (token) =>
 
 export const adminContentVersionHistory = (token, chapterId) =>
   axios.get(`${API_BASE}/admin/content/version-history/${chapterId}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const postChatFeedback = (data) =>
+  axios.post(`${API_BASE}/chat-feedback`, data, { withCredentials: true });
+
+export const adminGetChatFeedback = (token, limit = 100, offset = 0) =>
+  axios.get(`${API_BASE}/chat-feedback?limit=${limit}&offset=${offset}`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminGetFeedbackStats = (token) =>
+  axios.get(`${API_BASE}/chat-feedback/stats`, { headers: adminHeaders(token), withCredentials: true });

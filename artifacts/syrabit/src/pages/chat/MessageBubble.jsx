@@ -1,19 +1,36 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2 } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send } from 'lucide-react';
 import { useShare } from '@/hooks/useShare';
+import { postChatFeedback } from '@/utils/api';
 import { log } from '@/utils/logger';
+import { toast } from 'sonner';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
 
-export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast }) {
+export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast, messageIndex, conversationId }) {
   const [copied, setCopied] = useState(false);
   const [reaction, setReaction] = useState(null);
   const [showComment, setShowComment] = useState(false);
   const [comment, setComment] = useState('');
+  const [commentSent, setCommentSent] = useState(false);
   const { share } = useShare();
   const navigate = useNavigate();
   const isUser = msg.role === 'user';
+
+  const sendFeedback = async (type, value) => {
+    try {
+      await postChatFeedback({
+        conversation_id: conversationId || null,
+        message_index: messageIndex ?? null,
+        message_preview: (msg.content || '').slice(0, 300),
+        reaction: type === 'reaction' ? value : (reaction || undefined),
+        comment: type === 'comment' ? value : undefined,
+      });
+    } catch (e) {
+      log('feedback-error', e);
+    }
+  };
 
   const handleCopy = async () => {
     try {
@@ -213,7 +230,11 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       </button>
                     )}
                     <button
-                      onClick={() => setReaction(r => r === 'like' ? null : 'like')}
+                      onClick={() => {
+                        const next = reaction === 'like' ? null : 'like';
+                        setReaction(next);
+                        if (next) sendFeedback('reaction', next);
+                      }}
                       className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${reaction === 'like' ? 'bg-green-500/15 text-green-400' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
                       title="Like"
                       aria-label="Like"
@@ -221,7 +242,11 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       <ThumbsUp size={15} fill={reaction === 'like' ? 'currentColor' : 'none'} />
                     </button>
                     <button
-                      onClick={() => setReaction(r => r === 'dislike' ? null : 'dislike')}
+                      onClick={() => {
+                        const next = reaction === 'dislike' ? null : 'dislike';
+                        setReaction(next);
+                        if (next) sendFeedback('reaction', next);
+                      }}
                       className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${reaction === 'dislike' ? 'bg-red-500/15 text-red-400' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
                       title="Dislike"
                       aria-label="Dislike"
@@ -249,15 +274,42 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     </button>
                   </div>
                   {showComment && (
-                    <div className="mt-1.5 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="mt-1.5 flex items-center gap-2">
                       <input
                         type="text"
                         value={comment}
                         onChange={e => setComment(e.target.value)}
-                        placeholder="Add feedback..."
-                        className="flex-1 text-[12px] px-3 py-1.5 rounded-lg bg-muted/50 border border-border/50 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/40"
-                        onKeyDown={e => { if (e.key === 'Enter' && comment.trim()) { setShowComment(false); } }}
+                        placeholder={commentSent ? 'Feedback sent!' : 'Add feedback...'}
+                        disabled={commentSent}
+                        className="flex-1 text-[12px] px-3 py-1.5 rounded-lg bg-muted/50 border border-border/50 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/40 disabled:opacity-50"
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && comment.trim() && !commentSent) {
+                            sendFeedback('comment', comment.trim());
+                            setCommentSent(true);
+                            setComment('');
+                            toast.success('Feedback sent!');
+                          }
+                        }}
                       />
+                      {!commentSent && (
+                        <button
+                          onClick={() => {
+                            if (!comment.trim()) return;
+                            sendFeedback('comment', comment.trim());
+                            setCommentSent(true);
+                            setComment('');
+                            toast.success('Feedback sent!');
+                          }}
+                          disabled={!comment.trim()}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center bg-primary/15 text-primary hover:bg-primary/25 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                          title="Send feedback"
+                        >
+                          <Send size={14} />
+                        </button>
+                      )}
+                      {commentSent && (
+                        <Check size={16} style={{ color: '#34d399' }} />
+                      )}
                     </div>
                   )}
                 </>

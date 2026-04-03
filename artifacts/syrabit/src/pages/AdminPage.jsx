@@ -10,7 +10,7 @@ import {
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
   Shield, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, Globe,
-  Crown, Cpu, Layers, Zap, BarChart2,
+  Crown, Cpu, Layers, Zap, BarChart2, ThumbsUp,
 } from 'lucide-react';
 import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
@@ -36,6 +36,7 @@ import AdminMonetization     from '@/components/admin/AdminMonetization';
 import AdminVertexPanel      from '@/components/admin/AdminVertexPanel';
 import AdminAutomation       from '@/components/admin/AdminAutomation';
 import AdminIntelligence     from '@/components/admin/AdminIntelligence';
+import AdminFeedback         from '@/components/admin/AdminFeedback';
 
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
@@ -46,6 +47,7 @@ const SECTIONS = [
   { id: 'automation',    icon: Zap,             label: 'Automation',        group: 'content'  },
   { id: 'users',         icon: Users,           label: 'Users',             group: 'audience' },
   { id: 'conversations', icon: MessageSquare,   label: 'Conversations',     group: 'audience' },
+  { id: 'feedback',      icon: ThumbsUp,        label: 'Chat Feedback',     group: 'audience' },
   { id: 'analytics',     icon: TrendingUp,      label: 'Analytics',         group: 'insights' },
   { id: 'monetization',  icon: Crown,           label: 'Monetization',      group: 'insights' },
   { id: 'plans',         icon: CreditCard,      label: 'Plans & Credits',   group: 'insights' },
@@ -78,6 +80,7 @@ const SECTION_COMPONENTS = {
   automation:    AdminAutomation,
   users:         AdminUsers,
   conversations: AdminConversations,
+  feedback:      AdminFeedback,
   analytics:     AdminAnalytics,
   monetization:  AdminMonetization,
   plans:         AdminPlans,

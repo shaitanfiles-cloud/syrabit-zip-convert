@@ -108,5 +108,65 @@ async def update_conversation(conv_id: str, data: dict, user: dict = Depends(get
     return {"message": "Updated"}
 
 # ─────────────────────────────────────────────
+# CHAT FEEDBACK (like / dislike / comment)
+# ─────────────────────────────────────────────
+
+class FeedbackPayload(BaseModel):
+    conversation_id: Optional[str] = None
+    message_index: Optional[int] = None
+    message_preview: Optional[str] = None
+    reaction: Optional[str] = None
+    comment: Optional[str] = None
+
+@router.post("/chat-feedback")
+async def post_chat_feedback(payload: FeedbackPayload, user: Optional[dict] = Depends(get_current_user_optional)):
+    uid = user["id"] if user else None
+    if not payload.reaction and not payload.comment:
+        raise HTTPException(status_code=400, detail="Nothing to save")
+    if payload.reaction and payload.reaction not in ("like", "dislike"):
+        raise HTTPException(status_code=400, detail="Invalid reaction")
+    preview = (payload.message_preview or "")[:300]
+    try:
+        if pg_pool:
+            async with pg_pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO chat_feedback (user_id, conversation_id, message_index, message_preview, reaction, comment)
+                       VALUES ($1, $2, $3, $4, $5, $6)""",
+                    uid, payload.conversation_id, payload.message_index, preview,
+                    payload.reaction, (payload.comment or "")[:1000] if payload.comment else None,
+                )
+        return {"ok": True}
+    except Exception as e:
+        logger.error(f"chat-feedback save error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save feedback")
+
+@router.get("/chat-feedback")
+async def get_chat_feedback(admin: dict = Depends(get_admin_user), limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
+    if not pg_pool:
+        return []
+    async with pg_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT f.*, u.name as user_name, u.email as user_email
+               FROM chat_feedback f LEFT JOIN users u ON f.user_id::text = u.id::text
+               ORDER BY f.created_at DESC LIMIT $1 OFFSET $2""",
+            limit, offset,
+        )
+        return [dict(r) for r in rows]
+
+@router.get("/chat-feedback/stats")
+async def get_feedback_stats(admin: dict = Depends(get_admin_user)):
+    if not pg_pool:
+        return {"total": 0, "likes": 0, "dislikes": 0, "comments": 0}
+    async with pg_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT COUNT(*) as total,
+                      COUNT(*) FILTER (WHERE reaction='like') as likes,
+                      COUNT(*) FILTER (WHERE reaction='dislike') as dislikes,
+                      COUNT(*) FILTER (WHERE comment IS NOT NULL AND comment != '') as comments
+               FROM chat_feedback"""
+        )
+        return dict(row)
+
+# ─────────────────────────────────────────────
 # USER PROFILE ROUTES
 # ─────────────────────────────────────────────
