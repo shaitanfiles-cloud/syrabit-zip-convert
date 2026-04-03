@@ -1848,7 +1848,10 @@ async def admin_delete_chapter(chapter_id: str, admin: dict = Depends(get_admin_
         raise HTTPException(status_code=404, detail="Chapter not found")
     
     await db.chapters.delete_one({"id": chapter_id})
-    # Decrement subject chapter count
+    try:
+        await db.syllabus_embeddings.delete_many({"chapter_id": chapter_id})
+    except Exception:
+        pass
     if chapter.get("subject_id"):
         await db.subjects.update_one(
             {"id": chapter["subject_id"]},

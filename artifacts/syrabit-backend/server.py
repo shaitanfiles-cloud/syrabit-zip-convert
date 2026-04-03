@@ -205,18 +205,6 @@ async def _seed_syllabus_embeddings():
         logger.warning(f"SyllabusEmbedder background seed failed: {exc}")
 
 
-async def _reseed_syllabus_embeddings():
-    global _syllabus_embedder
-    if _syllabus_embedder is None:
-        return
-    try:
-        inserted = await _syllabus_embedder.reseed()
-        if inserted > 0:
-            logger.info(f"SyllabusEmbedder: re-seeded {inserted} new chapter embeddings after PDF import")
-    except Exception as exc:
-        logger.warning(f"SyllabusEmbedder re-seed failed: {exc}")
-
-
 @asynccontextmanager
 async def lifespan(app):
     import deps as _deps_mod

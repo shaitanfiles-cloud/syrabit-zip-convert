@@ -145,6 +145,98 @@ class SyllabusEmbedder:
         self._seed_lock = asyncio.Lock()
         self._seeded    = False
 
+    async def embed_chapter(
+        self,
+        chapter_id: str,
+        subject_id: str,
+        title: str,
+        description: str = "",
+        topics: list = None,
+        content: str = "",
+    ) -> int:
+        if self._col is None:
+            return 0
+        try:
+            from vertex_services import embed_text as _embed_fn
+        except ImportError:
+            logger.warning("vertex_services unavailable — skipping chapter embedding")
+            return 0
+
+        db = self._db
+        subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0}) or {}
+        board_name = subj.get("boardName", "")
+        class_name = subj.get("className", "")
+        stream_name = subj.get("streamName", "")
+        subject_name = subj.get("title") or subj.get("name", "")
+
+        try:
+            from vertex_services import _EMBED_MODEL as _current_embed_model
+        except ImportError:
+            _current_embed_model = "unknown"
+
+        embed_text_input = _build_rich_embed_text(
+            board_name, class_name, stream_name, subject_name,
+            title, description, topics or [], content,
+        )
+
+        try:
+            vec = await asyncio.wait_for(
+                _embed_fn(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
+                timeout=5.0,
+            )
+        except Exception as exc:
+            logger.warning(f"Embed chapter failed for {title[:40]}: {exc}")
+            vec = None
+
+        now = __import__("datetime").datetime.utcnow().isoformat()
+        doc = {
+            "chapter_id": chapter_id,
+            "subject_id": subject_id,
+            "board": board_name,
+            "class_name": class_name,
+            "stream": stream_name,
+            "subject_name": subject_name,
+            "chapter_title": title,
+            "chapter_number": 0,
+            "embed_text": embed_text_input,
+            "embedding": vec,
+            "embedding_model": _current_embed_model,
+            "level": "chapter",
+            "description": description,
+            "topics": topics or [],
+            "status": "active",
+            "source": "content_editor",
+            "created_at": now,
+        }
+        await self._col.update_one(
+            {"chapter_id": chapter_id, "level": "chapter"},
+            {"$set": doc},
+            upsert=True,
+        )
+        inserted = 1
+
+        await self._col.delete_many(
+            {"chapter_id": chapter_id, "level": "topic"}
+        )
+        inserted += await self._seed_topic_embeddings(
+            chapter_id, subject_id, board_name, class_name, stream_name,
+            subject_name, title, 0, topics or [], _embed_fn,
+            _current_embed_model, set(),
+        )
+
+        self._cache = []
+        self._cache_loaded_at = 0.0
+        logger.info(f"Embedded chapter '{title[:40]}' + {inserted - 1} topics on save")
+        return inserted
+
+    async def remove_chapter_embeddings(self, chapter_id: str) -> int:
+        if self._col is None:
+            return 0
+        result = await self._col.delete_many({"chapter_id": chapter_id})
+        self._cache = []
+        self._cache_loaded_at = 0.0
+        return result.deleted_count
+
     async def ensure_seeded(self) -> int:
         if self._col is None:
             return 0

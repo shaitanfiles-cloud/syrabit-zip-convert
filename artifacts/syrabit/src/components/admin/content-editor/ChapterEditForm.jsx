@@ -81,6 +81,29 @@ export default function ChapterEditForm({
           </div>
         </div>
 
+        <div className="flex-shrink-0">
+          <label className="text-sm text-white/60 block mb-1.5">Topics <span className="text-white/30">(used for AI embeddings — comma-separated)</span></label>
+          <input
+            value={(contentForm.topics || []).join(', ')}
+            onChange={(e) => {
+              const topics = e.target.value.split(',').map(t => t.trim()).filter(Boolean);
+              setContentForm(f => ({ ...f, topics }));
+            }}
+            placeholder="e.g. Photosynthesis, Carbon cycle, Nitrogen fixation"
+            className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 text-sm"
+          />
+          {(contentForm.topics || []).length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {contentForm.topics.map((topic, i) => (
+                <span key={i} className="px-2 py-0.5 rounded-full text-[11px] bg-violet-500/15 text-violet-300 border border-violet-500/20">
+                  {topic}
+                  <button onClick={() => setContentForm(f => ({ ...f, topics: f.topics.filter((_, j) => j !== i) }))} className="ml-1 text-white/30 hover:text-white/60">×</button>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
         {chapterStats && (
           <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs flex-wrap">
             <div className="flex items-center gap-1.5 text-white/60">

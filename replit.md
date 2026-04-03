@@ -14,7 +14,7 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 
 **Backend Architecture:**
 - **Modular Design:** The backend uses an app factory, shared modules, and route modules for clear separation of concerns.
-- **AI-Powered Syllabus Uploader:** An agentic pipeline extracts syllabus information, generates board-aware LLM notes, chunks content for RAG, embeds chapters, creates CMS blog drafts, and performs SEO/GEO tagging, streaming real-time progress via SSE.
+- **On-Demand Embeddings:** Chapter embeddings are generated automatically on chapter create/update via `_embed_chapter_bg()` background task. The chapter `topics` field serves as embedding content. Embedding cleanup happens on chapter/subject delete.
 - **Observability Layer:** Tracks LLM provider metrics, vector search similarity, and pipeline runs, consolidated in an Admin Intelligence endpoint.
 - **Content Feedback Loop:** Includes auto-detection of thin chapters, an auto-heal endpoint with version history, and quality gates for content generation.
 - **Vertex AI / Gemini Integration:** Nine AI services are integrated for tasks like text embeddings, translation, vision analysis, content enhancement, quality scoring, and SEO meta generation.
@@ -30,7 +30,7 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 
 **Frontend Architecture:**
 - **UI/UX:** React + Vite, React Router, and Tailwind CSS, with a mobile-first responsive design.
-- **Admin Panel:** A comprehensive interface with 21 sections, including Content Editor, SEO Manager, QA Review, and an Intelligence panel displaying system health and metrics.
+- **Admin Panel:** A comprehensive interface with Content Editor (default tab), CMS/Docs, Blog Publisher, SEO Manager, QA Review, and an Intelligence panel displaying system health and metrics. Content Editor includes a Topics input for AI embeddings.
 - **Component Refactoring:** Large files are split into sub-components for maintainability.
 - **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` serves cached pre-rendered HTML for search engine bots on key pages.
 - **Performance Optimizations:** Includes emergent badge suppression, PWA icon optimization, lazy-loading CMS sections, React Query for caching, CSS grid for content display, and prefetching for navigation.

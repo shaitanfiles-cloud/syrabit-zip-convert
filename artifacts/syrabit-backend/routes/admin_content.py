@@ -912,9 +912,31 @@ async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Subject not found")
     await db.chapters.delete_many({"subject_id": subject_id})
+    try:
+        await db.syllabus_embeddings.delete_many({"subject_id": subject_id})
+    except Exception:
+        pass
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
     return {"message": "Deleted"}
+
+async def _embed_chapter_bg(chapter_id: str, subject_id: str, title: str, description: str, topics: list, content: str):
+    try:
+        import server as _s
+        emb = _s._syllabus_embedder
+        if emb:
+            count = await emb.embed_chapter(
+                chapter_id=chapter_id,
+                subject_id=subject_id,
+                title=title,
+                description=description,
+                topics=topics,
+                content=content,
+            )
+            logger.info(f"Embedded chapter '{title[:40]}': {count} embeddings")
+    except Exception as exc:
+        logger.warning(f"Chapter embedding failed for {chapter_id}: {exc}")
+
 
 @router.post("/admin/content/chapters")
 async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_admin_user)):
@@ -926,6 +948,7 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
     existing = await db.chapters.find_one({"subject_id": data.subject_id, "slug": _slug})
     if existing:
         _slug = f"{_slug}-{chapter_id[:6]}"
+    _topics = data.topics or []
     chap = {
         "id": chapter_id,
         "subject_id": data.subject_id,
@@ -938,17 +961,16 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
         "order": _order,
         "order_index": _order,
         "status": data.status,
+        "topics": _topics,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.chapters.insert_one(chap)
     
-    # Mark subject as having content
     await db.subjects.update_one(
         {"id": data.subject_id}, 
         {"$inc": {"chapter_count": 1}, "$set": {"has_document": True}}
     )
     
-    # 🆕 AUTO-CHUNK CONTENT
     chunks_created = []
     if data.content and len(data.content.strip()) > 100:
         try:
@@ -957,9 +979,14 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
                 content=data.content,
                 subject_id=data.subject_id
             )
-            logger.info(f"✅ Auto-chunked new chapter '{data.title}': {len(chunks_created)} chunks")
+            logger.info(f"Auto-chunked new chapter '{data.title}': {len(chunks_created)} chunks")
         except Exception as chunk_error:
-            logger.error(f"❌ Auto-chunking failed for chapter {chapter_id}: {chunk_error}")
+            logger.error(f"Auto-chunking failed for chapter {chapter_id}: {chunk_error}")
+    
+    asyncio.create_task(_embed_chapter_bg(
+        chapter_id, data.subject_id, data.title,
+        data.description or "", _topics, data.content or "",
+    ))
     
     result = {k: v for k, v in chap.items() if k != "_id"}
     result["chunks_created"] = len(chunks_created)
@@ -1315,8 +1342,7 @@ async def delete_content_upload(content_id: str, admin: dict = Depends(get_admin
 
 @router.patch("/admin/content/chapters/{chapter_id}")
 async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depends(get_admin_user)):
-    """Update existing chapter - auto-rechunks if content changed"""
-    allowed = {k: v for k, v in data.items() if k in ["title", "slug", "description", "content", "content_type", "order", "status", "attached_files"]}
+    allowed = {k: v for k, v in data.items() if k in ["title", "slug", "description", "content", "content_type", "order", "status", "attached_files", "topics"]}
     if "slug" in allowed:
         allowed["slug"] = re.sub(r'[^a-z0-9]+', '-', (allowed["slug"] or "").lower()).strip('-')
     if "title" in allowed and not allowed.get("slug"):
@@ -1329,14 +1355,14 @@ async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depend
                 allowed["slug"] = f"{allowed['slug']}-{chapter_id[:6]}"
     allowed["updated_at"] = datetime.now(timezone.utc).isoformat()
     
-    # Check if content is being updated
     content_updated = "content" in allowed and allowed["content"]
+    topics_updated = "topics" in allowed
+    title_updated = "title" in allowed
     
     result = await db.chapters.update_one({"id": chapter_id}, {"$set": allowed})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Chapter not found")
     
-    # 🆕 AUTO RE-CHUNK if content was updated
     chunks_info = {}
     if content_updated:
         try:
@@ -1345,10 +1371,22 @@ async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depend
                 "chunks_deleted": rechunk_result["chunks_deleted"],
                 "chunks_created": rechunk_result["chunks_created"]
             }
-            logger.info(f"✅ Re-chunked updated chapter {chapter_id}: {chunks_info}")
+            logger.info(f"Re-chunked updated chapter {chapter_id}: {chunks_info}")
         except Exception as chunk_error:
-            logger.error(f"❌ Re-chunking failed for chapter {chapter_id}: {chunk_error}")
+            logger.error(f"Re-chunking failed for chapter {chapter_id}: {chunk_error}")
             chunks_info = {"error": str(chunk_error)}
+    
+    if content_updated or topics_updated or title_updated:
+        updated_ch = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
+        if updated_ch:
+            asyncio.create_task(_embed_chapter_bg(
+                chapter_id,
+                updated_ch.get("subject_id", ""),
+                updated_ch.get("title", ""),
+                updated_ch.get("description", ""),
+                updated_ch.get("topics", []),
+                updated_ch.get("content", ""),
+            ))
     
     _invalidate_content_cache("chapters")
     _invalidate_content_cache("subjects")

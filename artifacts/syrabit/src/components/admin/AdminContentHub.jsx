@@ -1,25 +1,23 @@
 /**
  * AdminContentHub — Centralized content workflow
- * Tabs: Syllabus → Content Editor → CMS/Docs → Blog Publisher
+ * Tabs: Content Editor → CMS/Docs → Blog Publisher
  *
  * Shared hubContext propagates Board/Class/Stream/Subject selection across
  * all tabs so the user never has to re-pick the same hierarchy.
  *
  * Cross-tab wiring:
- *   Syllabus  →  Editor  : hubContext + onNavigate('editor')
  *   Editor    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')
  *   CMS       →  Editor  : localStorage(syrabit_content_prefill)+ onNavigate('editor')
  */
 import { useState, useEffect, useCallback } from 'react';
 import {
-  FolderTree, PenTool, FileText, ArrowRight,
+  PenTool, FileText, ArrowRight,
   Loader2, Globe, Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { API_BASE } from '@/utils/api';
 
-import AdminSyllabusManager  from './AdminSyllabusManager';
 import AdminContentEditor    from './AdminContentEditor';
 import AdminCmsDocEditor     from './AdminCmsDocEditor';
 import BlogPublishWizard     from './BlogPublishWizard';
@@ -28,14 +26,12 @@ import PipelineProgressPanel from './PipelineProgressPanel';
 const API = API_BASE;
 
 const TABS = [
-  { id: 'syllabus', label: 'Syllabus',        icon: FolderTree,  color: 'indigo',  desc: 'Manage board/class/stream hierarchy & import PDFs' },
   { id: 'editor',   label: 'Content Editor',  icon: PenTool,     color: 'violet',  desc: 'Write & edit chapter-level markdown content' },
   { id: 'cms',      label: 'CMS / Docs',      icon: FileText,    color: 'emerald', desc: 'Manage published pages, SEO docs & blog posts' },
   { id: 'blog',     label: 'Blog Publisher',  icon: Globe,       color: 'sky',     desc: 'SEO & GEO-rich 5-step blog publish wizard' },
 ];
 
 const FLOW = [
-  { label: 'Syllabus',      sub: 'Import structure',   tab: 'syllabus', arrow: true  },
   { label: 'Editor',        sub: 'Write content',      tab: 'editor',   arrow: true  },
   { label: 'CMS / Docs',   sub: 'Manage docs',        tab: 'cms',      arrow: true  },
   { label: 'Blog Publisher', sub: 'SEO & publish',     tab: 'blog',     arrow: false },
@@ -73,10 +69,10 @@ function loadPersistedCtx() {
   } catch { return EMPTY_CTX; }
 }
 
-const INTERNAL_TABS = new Set(['editor', 'syllabus', 'cms', 'blog']);
+const INTERNAL_TABS = new Set(['editor', 'cms', 'blog']);
 
 export default function AdminContentHub({ adminToken, onNavigate: topNavigate, navContext }) {
-  const [activeTab, setActiveTab] = useState(navContext?.initialTab || 'syllabus');
+  const [activeTab, setActiveTab] = useState(navContext?.initialTab || 'editor');
   const [boards, setBoards]       = useState([]);
   const [classes, setClasses]     = useState([]);
   const [streams, setStreams]     = useState([]);
@@ -155,7 +151,6 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
           </span>
         ))}
 
-        {/* Hub context pill — shows currently active subject */}
         {hubContext.subjectName && (
           <span className="ml-auto flex items-center gap-1.5 flex-wrap">
             <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]"
@@ -226,23 +221,6 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
           </div>
         )}
 
-        {activeTab === 'syllabus' && (
-          <div className="h-full overflow-y-auto">
-            <div className="p-6 max-w-4xl mx-auto w-full">
-              <SyllabusTabHeader onNavigate={navigate} hubContext={hubContext} />
-              <AdminSyllabusManager
-                adminToken={adminToken}
-                boards={boards}
-                classes={classes}
-                streams={streams}
-                subjects={subjects}
-                onNavigate={navigate}
-                onHubContext={setHubContext}
-              />
-            </div>
-          </div>
-        )}
-
         {activeTab === 'editor' && (
           <div className="h-full overflow-hidden">
             <AdminContentEditor
@@ -276,7 +254,6 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
         )}
       </div>
 
-      {/* ── Pipeline Progress Panel ───────────────────────────────────── */}
       {showPipeline && (
         <PipelineProgressPanel
           adminToken={adminToken}
@@ -290,57 +267,5 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
         />
       )}
     </div>
-  );
-}
-
-/* ── Tab header components ─────────────────────────────────────────── */
-
-function SyllabusTabHeader({ onNavigate, hubContext }) {
-  return (
-    <div className="flex items-center justify-between mb-5 flex-wrap gap-2">
-      <div>
-        <h2 className="text-base font-bold text-white">Syllabus Manager</h2>
-        <p className="text-xs text-white/35 mt-0.5">
-          Import PDFs, manage board → class → stream → subject hierarchy
-        </p>
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        {hubContext?.subjectName && (
-          <>
-            <QuickActionBtn
-              label="Content Editor"
-              color="#8b5cf6"
-              onClick={() => onNavigate('editor')}
-            />
-            <QuickActionBtn
-              label="Blog Publisher"
-              color="#0ea5e9"
-              onClick={() => onNavigate('blog')}
-            />
-          </>
-        )}
-        {!hubContext?.subjectName && (
-          <button
-            onClick={() => onNavigate('editor')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition"
-            style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}
-          >
-            Write content <ArrowRight size={12} />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function QuickActionBtn({ label, color, onClick }) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition hover:opacity-90"
-      style={{ background: `${color}22`, color, border: `1px solid ${color}44` }}
-    >
-      {label} <ArrowRight size={11} />
-    </button>
   );
 }

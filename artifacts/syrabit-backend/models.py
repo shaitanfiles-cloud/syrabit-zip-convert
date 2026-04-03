@@ -103,6 +103,7 @@ class ChapterCreate(BaseModel):
     order_index: Optional[int] = 0
     order: Optional[int] = 1
     status: Optional[str] = "published"
+    topics: Optional[List[str]] = []
 
 
 class ChunkCreate(BaseModel):

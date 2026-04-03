@@ -42,6 +42,9 @@ def _get_syllabus_embedder():
 
 router = APIRouter()
 
+
+
+
 @router.get("/syllabi/{board_id}/{class_id}")
 async def get_syllabus(board_id: str, class_id: str):
     """Fetch syllabus for a board+class. Returns structured syllabus content to inject into LLM prompts."""
