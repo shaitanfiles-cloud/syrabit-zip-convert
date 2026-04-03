@@ -130,9 +130,9 @@ export function getLangLabel(code) {
 }
 
 export function getTTSLang() {
-  const stored = localStorage.getItem(TTS_LANG_KEY) || 'as-IN';
+  const stored = localStorage.getItem(TTS_LANG_KEY) || 'en-IN';
   if (_sarvamStatus?.languages?.length && !_sarvamStatus.languages.includes(stored)) {
-    return 'as-IN';
+    return 'en-IN';
   }
   return stored;
 }
@@ -194,7 +194,7 @@ export function useTTS() {
           body: JSON.stringify({
             text: chunks[i],
             target_language_code: lang,
-            speaker: 'anushka',
+            speaker: 'meera',
           }),
           signal: controller.signal,
         });
