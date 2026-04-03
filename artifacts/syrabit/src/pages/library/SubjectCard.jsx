@@ -103,8 +103,9 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
     }
   }, [queryClient, sub.boardSlug, sub.classSlug, sub.slug]);
 
-  const visibleChapters = useMemo(() => chapters.slice(0, 3), [chapters]);
-  const moreChapters = chapters.length - 3;
+  const [showAllChapters, setShowAllChapters] = useState(false);
+  const visibleChapters = useMemo(() => showAllChapters ? chapters : chapters.slice(0, 3), [chapters, showAllChapters]);
+  const moreChapters = showAllChapters ? 0 : chapters.length - 3;
 
   const handleToggleTopics = useCallback((chId) => {
     setShowTopics(prev => prev === chId ? null : chId);
@@ -371,14 +372,14 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
               );
             })}
             {moreChapters > 0 && (
-              <Link
-                to={subjectLandingPath}
-                className="flex items-center justify-center gap-1 px-3 py-2 text-[11px] font-medium text-purple-400/70 hover:text-purple-300 hover:bg-purple-500/5 transition-colors"
+              <button
+                onClick={() => setShowAllChapters(true)}
+                className="flex items-center justify-center gap-1 px-3 py-2 text-[11px] font-medium text-purple-400/70 hover:text-purple-300 hover:bg-purple-500/5 transition-colors w-full"
                 style={{ borderTop: '1px solid rgba(139,92,246,0.06)' }}
               >
                 +{moreChapters} more lessons
-                <ChevronRight size={11} />
-              </Link>
+                <ChevronDown size={11} />
+              </button>
             )}
           </div>
         </div>
@@ -403,16 +404,14 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           {isSaved ? 'Saved' : 'Save'}
         </button>
 
-        <Link
-          to={subjectLandingPath}
-          onMouseEnter={handlePrefetch}
-          onTouchStart={handlePrefetch}
+        <button
+          onClick={() => setShowAllChapters(prev => !prev)}
           className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
           style={{ color: 'hsl(var(--muted-foreground))', border: '1px solid rgba(139,92,246,0.12)' }}
         >
           <BookOpen size={12} />
-          Browse
-        </Link>
+          {showAllChapters ? 'Collapse' : 'Browse'}
+        </button>
 
         <button
           onClick={() => onAskAI(sub.id, hasDocument, sub.name)}
