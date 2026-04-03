@@ -1880,6 +1880,19 @@ _ORG_NODE = {
     "name": "Syrabit.ai",
     "url": "https://syrabit.ai",
     "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
+    "description": (
+        "Syrabit.ai is an AI-powered academic platform that produces syllabus-aligned study material "
+        "for AHSEC (Assam Higher Secondary Education Council), SEBA (Board of Secondary Education, Assam), "
+        "and NEP FYUGP Degree students. Content follows official board/university curricula "
+        "and is reviewed for accuracy, exam relevance, and academic depth."
+    ),
+    "foundingDate": "2025",
+    "knowsAbout": [
+        "AHSEC syllabus", "SEBA syllabus", "NEP FYUGP curriculum",
+        "Assam Board examinations", "Gauhati University syllabus",
+        "Dibrugarh University syllabus", "Higher education in Assam",
+    ],
+    "sameAs": ["https://twitter.com/SyrabitAI"],
     "areaServed": {
         "@type": "State",
         "name": "Assam",
@@ -1890,6 +1903,21 @@ _ORG_NODE = {
         "addressRegion": "Assam",
         "addressCountry": "IN",
     },
+}
+
+_BOARD_SYLLABUS_SOURCE = {
+    "AHSEC": "Assam Higher Secondary Education Council (AHSEC) official syllabus",
+    "SEBA": "Board of Secondary Education, Assam (SEBA) official syllabus",
+    "NEP FYUGP": "National Education Policy (NEP) 2020 FYUGP curriculum as adopted by Assam universities (Gauhati University, Dibrugarh University, Cotton University)",
+    "Degree": "National Education Policy (NEP) 2020 FYUGP curriculum as adopted by Assam universities (Gauhati University, Dibrugarh University, Cotton University)",
+}
+
+_PAGE_TYPE_METHODOLOGY = {
+    "notes": "structured study notes following the definition → explanation → examples → exam tips format, aligned to the official syllabus",
+    "definition": "formal academic definitions with context, etymology where relevant, and exam-oriented explanations",
+    "important-questions": "mark-wise important questions curated from previous year papers and syllabus weightage analysis",
+    "mcqs": "multiple choice questions with correct answers and explanations, covering key concepts from the syllabus",
+    "examples": "solved examples following the problem → approach → step-by-step solution → exam tip format",
 }
 
 
@@ -1917,6 +1945,16 @@ def _render_seo_html(
     edu_level = f"{board} {cls}".strip()
     subject_url = f"https://syrabit.ai/{page.get('board_slug','')}/{page.get('class_slug','')}/{page.get('subject_slug','')}"
 
+    syllabus_source = ""
+    for bkey in _BOARD_SYLLABUS_SOURCE:
+        if bkey.lower() in board.lower() or bkey.lower() in edu_level.lower():
+            syllabus_source = _BOARD_SYLLABUS_SOURCE[bkey]
+            break
+    if not syllabus_source:
+        syllabus_source = _BOARD_SYLLABUS_SOURCE.get("Degree", "Official board/university syllabus")
+
+    content_methodology = _PAGE_TYPE_METHODOLOGY.get(page_type, "syllabus-aligned study material")
+
     # ── Schema.org graph ────────────────────────────────────────────────────
     graph_nodes = [
         {
@@ -1941,6 +1979,14 @@ def _render_seo_html(
                 "educationalRole": "student",
                 "geographicArea": {"@type": "State", "name": "Assam, India"},
             },
+            "educationalAlignment": {
+                "@type": "AlignmentObject",
+                "alignmentType": "educationalSubject",
+                "educationalFramework": syllabus_source,
+                "targetName": page.get("subject_name", ""),
+                "targetDescription": f"{page.get('chapter_title', '')} — {page.get('topic_title', '')}",
+            },
+            "sourceOrganization": _ORG_NODE,
         },
         {
             "@type": "LearningResource",
@@ -1952,6 +1998,15 @@ def _render_seo_html(
             "inLanguage": "en-IN",
             "learningResourceType": {"notes": "Study Notes", "definition": "Definitions", "important-questions": "Practice Questions", "mcqs": "Multiple Choice Questions", "examples": "Examples"}.get(page_type, "Study Material"),
             "isAccessibleForFree": True,
+            "educationalAlignment": {
+                "@type": "AlignmentObject",
+                "alignmentType": "educationalSubject",
+                "educationalFramework": syllabus_source,
+                "targetName": page.get("subject_name", ""),
+            },
+            "teaches": page.get("topic_title", ""),
+            "assesses": page.get("topic_title", "") if page_type in ("mcqs", "important-questions") else None,
+            "competencyRequired": f"Basic understanding of {page.get('subject_name', '')}",
         },
         {
             "@type": "BreadcrumbList",
@@ -2048,7 +2103,13 @@ def _render_seo_html(
             "mainEntity": faq_items,
         })
 
-    ld_json = json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False)
+    def _strip_none(obj):
+        if isinstance(obj, dict):
+            return {k: _strip_none(v) for k, v in obj.items() if v is not None}
+        if isinstance(obj, list):
+            return [_strip_none(i) for i in obj]
+        return obj
+    ld_json = json.dumps({"@context": "https://schema.org", "@graph": _strip_none(graph_nodes)}, ensure_ascii=False)
 
     # ── Page-type navigation HTML ────────────────────────────────────────────
     pt_nav_html = ""
@@ -2152,6 +2213,8 @@ table{{width:100%;border-collapse:collapse;margin:1rem 0}}th,td{{border:1px soli
 .pn-prev,.pn-next{{color:#7c3aed;text-decoration:none;font-size:.9rem;max-width:45%}}.pn-prev:hover,.pn-next:hover{{text-decoration:underline}}
 nav[aria-label="Breadcrumb"]{{font-size:.85rem;color:#6b7280;margin-bottom:.5rem}}
 nav[aria-label="Breadcrumb"] a{{color:#7c3aed;text-decoration:none}}
+.content-info{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem 1.25rem;margin:2rem 0}}
+.content-info h2{{margin-top:0;font-size:1rem;color:#334155}}.content-info dl{{margin:0}}.content-info dt{{font-weight:600;color:#475569;margin-top:.5rem;font-size:.9rem}}.content-info dd{{margin:0 0 .25rem 0;color:#64748b;font-size:.85rem}}
 footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-top:1px solid #e5e7eb}}
 .geo-footer{{font-size:.8rem;color:#9ca3af;margin-top:.5rem}}
 @media(max-width:640px){{body{{padding:.75rem}}h1{{font-size:1.35rem}}h2{{font-size:1.1rem}}.pn-nav{{flex-direction:column;gap:.75rem}}.pn-prev,.pn-next{{max-width:100%}}.pt-nav{{gap:.3rem}}.pt-link,.pt-active{{font-size:.8rem;padding:.25rem .6rem}}}}
@@ -2176,10 +2239,24 @@ footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-t
 </article>
 {related_html}
 {prevnext_html}
+<section class="content-info">
+<h2>About This Study Material</h2>
+<dl>
+<dt>Syllabus Source</dt><dd>{html_mod.escape(syllabus_source)}</dd>
+<dt>Content Type</dt><dd>This page contains {html_mod.escape(content_methodology)}.</dd>
+<dt>Subject</dt><dd>{subject} — {board} {cls}</dd>
+<dt>Chapter</dt><dd>{chapter}</dd>
+<dt>Topic</dt><dd>{topic}</dd>
+<dt>Editorial Process</dt><dd>Content is generated using AI models trained on academic texts, cross-referenced with the official {html_mod.escape(board)} syllabus, and reviewed for factual accuracy, exam relevance, and completeness. Each page follows a structured academic format: formal definitions, detailed explanations, solved examples with Assam-specific context, exam tips, and practice questions with model answers.</dd>
+<dt>Last Updated</dt><dd>{html_mod.escape(updated[:10] if updated else '')}</dd>
+<dt>Publisher</dt><dd>Syrabit.ai — Academic content platform for Assam students</dd>
+</dl>
+</section>
 <footer>
 <p>Source: <a href="{html_mod.escape(page_url)}">Syrabit.ai — {topic}</a></p>
-<p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
-<p class="geo-footer">Serving students in Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, and across Assam, India</p>
+<p>&copy; Syrabit.ai — Syllabus-aligned study material for {html_mod.escape(board)} ({html_mod.escape(cls)}) students</p>
+<p>Content follows the official {html_mod.escape(board)} curriculum. For the latest syllabus, refer to your board/university website.</p>
+<p class="geo-footer">Serving students across Assam, India — Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, Nagaon, Barpeta, and more.</p>
 </footer>
 </main>
 </body>
