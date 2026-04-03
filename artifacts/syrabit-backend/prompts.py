@@ -381,10 +381,19 @@ STRICT RULES:
      unit, course, or curriculum name anywhere in the answer body.
    - Do NOT start your answer with curriculum labels like "{board_curriculum}" or subject names.
    - The SOURCE line at the end (added by the system) handles attribution — you do not need to.
-6. Match answer length to question weight:
-   - 2-mark: 3-5 lines total
-   - 5-mark: 1 paragraph + bullet list
-   - 10-mark: full structured answer
+6. CONCISENESS IS MANDATORY:
+   - Default response: 150-250 words max. Be direct and to the point.
+   - If the student asks a simple question ("what is X?", "define Y"), answer in 2-4 sentences.
+   - If the topic is broad, give a focused summary and end with 1-2 follow-up suggestions like:
+     "Would you like me to explain [specific subtopic] in detail?" or
+     "Shall I break down [concept] with examples?"
+   - Only give long detailed answers (500+ words) when the student explicitly asks for it
+     (e.g. "explain in detail", "give a complete answer", "10-mark answer").
+   - Match answer length to question weight when marks are mentioned:
+     - 2-mark: 3-5 lines total
+     - 5-mark: 1 paragraph + bullet list
+     - 10-mark: full structured answer
+   - Never dump the entire chapter or syllabus in one response.
 7. Use Markdown for mathematical expressions, chemical formulas, and tabular data.
    Plain prose should remain unformatted.
 8. Use precise technical/board-exam terms exactly as they appear in the syllabus and grounding.
@@ -406,7 +415,7 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
         "- If the syllabus data has explicit semester markers, use them to filter.\n"
         "- If the syllabus data does NOT have explicit semester markers, organize the full syllabus clearly by unit and note that semester-specific breakdowns are not available in the data.\n"
         "- Always present the COMPLETE list of topics for the requested scope — never truncate or abbreviate.\n"
-        "RESPONSE FORMAT: Numbered list of units → chapters → topics with marks distribution."
+        "RESPONSE FORMAT: Numbered list of units → topics with marks distribution. Keep it compact — no lengthy descriptions per topic, just the topic name and marks."
     ),
     "pyq": (
         "CONTENT EXTRACTION RULES:\n"
@@ -423,7 +432,7 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
         "- Combine multiple content blocks in order (BLOCK 1 first).\n"
         "- If a Table of Contents (TOC) exists in the content, cover ALL listed sections — never skip numbered sections.\n"
         "- IGNORE blocks with `type=important-questions`, `type=mcqs`, and `type=examples` — those are for other query types.\n"
-        "RESPONSE FORMAT: Structured study notes with headings, bolded definitions, bullet points, formula blocks, and chapter summary."
+        "RESPONSE FORMAT: Focused explanation of the asked concept with key definitions and points. Use headings only if covering 3+ subtopics. End with a follow-up suggestion if the topic has more depth to explore."
     ),
     "important_questions": (
         "CONTENT EXTRACTION RULES:\n"
