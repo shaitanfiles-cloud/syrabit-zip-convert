@@ -616,7 +616,6 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
 
 export default function SubjectPage() {
   const { subjectId }          = useParams();
-  const [activeTab, setActiveTab] = useState('legacy');
 
   const { data: subject, isLoading: subjectLoading, isError: subjectError, refetch: refetchSubject } = useSubject(subjectId);
   const { data: chapters = [], isLoading: chaptersLoading } = useChapters(subjectId);
@@ -706,10 +705,6 @@ export default function SubjectPage() {
   const subjectDesc  = subject.description
     || ('Complete ' + subject.name + ' notes, chapters, and AI explanations for ' + (classLabel || boardLabel) + ' ' + (subject.stream_name || '') + ' students.');
 
-  const TABS = [
-    { id: 'blog',    label: 'Blog View',       icon: BookText },
-    { id: 'legacy',  label: 'Chapters',        icon: Layers  },
-  ];
 
   return (
     <AppLayout pageTitle={subject.name}>
@@ -785,32 +780,8 @@ export default function SubjectPage() {
           </div>
         )}
 
-        {/* Tab bar */}
-        <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
-          {TABS.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 h-9 px-4 rounded-lg text-sm font-medium transition-all ${
-                activeTab === tab.id
-                  ? 'text-white'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              style={activeTab === tab.id ? { background: 'rgba(149,117,224,0.25)', boxShadow: '0 0 12px rgba(149,117,224,0.15)' } : {}}
-            >
-              <tab.icon size={14} />
-              {tab.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab content */}
-        {activeTab === 'blog' && (
-          <BlogView subject={subject} subjectId={subjectId} />
-        )}
-        {activeTab === 'legacy' && (
-          <LegacyAccordion subject={subject} subjectId={subjectId} chapters={chapters} />
-        )}
+        {/* Chapters */}
+        <LegacyAccordion subject={subject} subjectId={subjectId} chapters={chapters} />
       </div>
     </AppLayout>
   );
