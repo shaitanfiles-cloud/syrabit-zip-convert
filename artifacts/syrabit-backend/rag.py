@@ -1135,13 +1135,16 @@ async def _fetch_enrichment_blocks(
                 "_id": 0, "title": 1, "mark_wise_questions": 1,
                 "important_questions": 1, "subject_id": 1,
             }
-            chapters = await db.chapters.find(
+            all_iq_chapters = await db.chapters.find(
                 {**ch_filter, "$or": [
                     {"mark_wise_questions": {"$exists": True, "$ne": {}}},
                     {"important_questions": {"$exists": True, "$ne": []}},
                 ]},
                 _proj,
-            ).limit(5).to_list(5)
+            ).to_list(20)
+
+            chapters = all_iq_chapters[:1]
+            remaining_ch_names = [c.get("title", "") for c in all_iq_chapters[1:] if c.get("title")]
 
             for ch in chapters:
                 ch_title = ch.get("title", "Chapter")
@@ -1149,18 +1152,51 @@ async def _fetch_enrichment_blocks(
                 imp = ch.get("important_questions", [])
                 if not mw and not imp:
                     continue
-                block = f"**[CHAPTER QUESTIONS: {ch_title}]**\n"
+
+                unified: dict[int, list[str]] = {}
                 if mw and isinstance(mw, dict):
-                    for mark_val, questions in sorted(mw.items(), key=lambda x: str(x[0])):
-                        block += f"### {mark_val}-mark questions\n"
-                        for qi, q in enumerate(questions[:10], 1):
+                    for mark_val, questions in mw.items():
+                        try:
+                            mk = int(mark_val)
+                        except (ValueError, TypeError):
+                            mk = 0
+                        if mk not in unified:
+                            unified[mk] = []
+                        for q in questions[:10]:
                             q_text = q.get("question", q) if isinstance(q, dict) else str(q)
-                            block += f"{qi}. {q_text}\n"
+                            if q_text and q_text not in unified[mk]:
+                                unified[mk].append(q_text)
                 if imp:
-                    block += "### Important Questions\n"
-                    for qi, q in enumerate(imp[:15], 1):
+                    for q in imp[:15]:
                         q_text = q.get("question", q) if isinstance(q, dict) else str(q)
+                        placed = False
+                        if isinstance(q, dict) and q.get("marks"):
+                            try:
+                                mk = int(q["marks"])
+                                if mk not in unified:
+                                    unified[mk] = []
+                                if q_text not in unified[mk]:
+                                    unified[mk].append(q_text)
+                                placed = True
+                            except (ValueError, TypeError):
+                                pass
+                        if not placed and q_text:
+                            mk = 0
+                            if mk not in unified:
+                                unified[mk] = []
+                            if q_text not in unified[mk]:
+                                unified[mk].append(q_text)
+
+                block = f"[Questions: {ch_title}]\n"
+                for mk in sorted(unified.keys()):
+                    if mk == 0:
+                        block += "**General Important Questions**\n"
+                    else:
+                        block += f"**{mk}-Mark Questions**\n"
+                    for qi, q_text in enumerate(unified[mk], 1):
                         block += f"{qi}. {q_text}\n"
+                if remaining_ch_names:
+                    block += f"\n[OTHER CHAPTERS WITH QUESTIONS: {', '.join(remaining_ch_names)}]\n"
                 blocks.append(block)
 
         if intent == "flashcards":
