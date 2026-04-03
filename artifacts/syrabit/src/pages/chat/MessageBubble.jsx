@@ -133,36 +133,63 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
 
               return (
                 <>
-                  <div
-                    onClick={subjectUrl && !isDocument && !isWeb ? () => navigate(subjectUrl) : undefined}
-                    className={`mt-3 inline-flex items-center gap-2.5 rounded-lg px-3 py-2 ${subjectUrl && !isDocument && !isWeb ? 'cursor-pointer hover:opacity-85 transition-opacity' : ''}`}
-                    style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.12)' }}
-                    role={subjectUrl && !isDocument && !isWeb ? 'link' : undefined}
-                    aria-label={subjectUrl && !isDocument && !isWeb ? `View ${subjectLabel}` : undefined}
-                  >
-                    <SourceIcon size={14} className="shrink-0" style={{ color: '#a78bfa' }} />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#a78bfa' }}>Source</span>
-                        <span className="text-[10px]" style={{ color: 'hsl(var(--foreground) / 0.3)' }}>·</span>
-                        <span className="text-[10.5px] font-medium" style={{ color: '#c4b5fd' }}>
-                          {isDocument ? 'Uploaded Document' : isWeb ? 'Web Search' : 'Syrabit Browser'}
-                        </span>
+                  {!isDocument && !isWeb && subjectLabel && (
+                    <div
+                      onClick={subjectUrl ? () => navigate(subjectUrl) : undefined}
+                      className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
+                      style={{ background: 'var(--card, rgba(20,20,30,0.9))', border: '1px solid rgba(74,222,128,0.15)', maxWidth: 'fit-content' }}
+                      role={subjectUrl ? 'link' : undefined}
+                      aria-label={subjectUrl ? `View ${subjectLabel}` : undefined}
+                    >
+                      <div className="px-3 py-2.5">
+                        <div className="flex items-center gap-1.5 mb-1">
+                          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#4ade80', opacity: 0.7 }}>Source</span>
+                          <span className="text-[10px]" style={{ color: 'hsl(var(--foreground) / 0.25)' }}>·</span>
+                          <span className="text-[10.5px] font-medium" style={{ color: '#86efac' }}>Syrabit Browser</span>
+                        </div>
+                        {lessonLabel && (
+                          <h4 className="font-bold leading-tight truncate" style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: '#4ade80' }}>
+                            {lessonLabel}
+                          </h4>
+                        )}
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1">
+                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>
+                            {subjectLabel}
+                          </span>
+                          {classLabel && (
+                            <>
+                              <span className="text-[11px] text-muted-foreground/60">·</span>
+                              <span className="text-[11px] text-muted-foreground">{classLabel}</span>
+                            </>
+                          )}
+                          {courseLabel && (
+                            <>
+                              <span className="text-[11px] text-muted-foreground/60">·</span>
+                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>
+                                {courseLabel}
+                              </span>
+                            </>
+                          )}
+                        </div>
                       </div>
-                      {(lessonLabel || subjectLabel) && (
-                        <p className="text-[11px] font-medium truncate mt-0.5" style={{ color: 'hsl(var(--foreground) / 0.7)' }}>
-                          {lessonLabel || subjectLabel}
-                          {lessonLabel && subjectLabel && <span className="text-muted-foreground/50"> · </span>}
-                          {lessonLabel && subjectLabel && subjectLabel}
-                        </p>
-                      )}
-                      {(classLabel || courseLabel) && (
-                        <p className="text-[10px] text-muted-foreground mt-0.5">
-                          {[classLabel, courseLabel].filter(Boolean).join(' · ')}
-                        </p>
-                      )}
                     </div>
-                  </div>
+                  )}
+                  {isDocument && (
+                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.18)', maxWidth: 'fit-content' }}>
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(167,139,250,0.15)' }}>
+                        <FileText size={16} style={{ color: '#a78bfa' }} />
+                      </div>
+                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Uploaded Document</span>
+                    </div>
+                  )}
+                  {isWeb && (
+                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.18)', maxWidth: 'fit-content' }}>
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(56,189,248,0.15)' }}>
+                        <Globe size={16} style={{ color: '#38bdf8' }} />
+                      </div>
+                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     {timeStr && (
                       <span className="text-[11px] text-muted-foreground">{timeStr}</span>
