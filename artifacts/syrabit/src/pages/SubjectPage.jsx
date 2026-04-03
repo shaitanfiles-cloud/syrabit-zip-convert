@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { getChunks, apiClient } from '@/utils/api';
 import { useShare } from '@/hooks/useShare';
-import { useSubject, useChapters } from '@/hooks/useContent';
+import { useSubject, useChapters, useSeoTopics } from '@/hooks/useContent';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { toast } from 'sonner';
 
@@ -386,6 +386,22 @@ export default function SubjectPage() {
   const { data: chapters = [], isLoading: chaptersLoading } = useChapters(subjectId);
   const loading = subjectLoading || chaptersLoading;
 
+  const hasSeoSlugs = !!(subject?.board_slug && subject?.class_slug && subject?.slug);
+  const { data: seoTopicsRaw = [] } = useSeoTopics(
+    subject?.board_slug, subject?.class_slug, subject?.slug
+  );
+  const seoTopics = Array.isArray(seoTopicsRaw) ? seoTopicsRaw : [];
+
+  const topicsByChapter = useMemo(() => {
+    const map = new Map();
+    for (const t of seoTopics) {
+      const key = t.chapter_slug || '_ungrouped';
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(t);
+    }
+    return map;
+  }, [seoTopics]);
+
   if (subjectError && !subjectLoading) return (
     <AppLayout>
       <div className="p-6 text-center space-y-4">
@@ -499,6 +515,39 @@ export default function SubjectPage() {
             </div>
           )}
         </div>
+
+        {hasSeoSlugs && seoTopics.length > 0 && (
+          <div className="glass-card rounded-2xl p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <FileText size={16} className="text-primary" />
+              <h2 className="text-sm font-semibold text-foreground">Topic Wise Notes</h2>
+            </div>
+            <div className="space-y-3">
+              {[...topicsByChapter.entries()].map(([chapterSlug, chTopics]) => {
+                const chapterTitle = chTopics[0]?.chapter_title || chapterSlug.replace(/-/g, ' ');
+                const basePath = `/${subject.board_slug}/${subject.class_slug}/${subject.slug}`;
+                return (
+                  <div key={chapterSlug}>
+                    {chapterSlug !== '_ungrouped' && (
+                      <p className="text-xs font-medium text-muted-foreground mb-1.5 capitalize">{chapterTitle}</p>
+                    )}
+                    <div className="flex flex-wrap gap-1.5">
+                      {chTopics.map((t) => (
+                        <Link
+                          key={t.id || t.topic_slug}
+                          to={`${basePath}/${t.topic_slug}`}
+                          className="text-[11px] px-2.5 py-1 rounded-lg bg-white/[0.04] text-gray-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors border border-white/[0.06]"
+                        >
+                          {t.title || t.topic_slug}
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Tab bar */}
         <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.07)' }}>
