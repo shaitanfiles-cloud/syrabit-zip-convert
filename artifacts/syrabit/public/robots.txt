@@ -1,149 +1,177 @@
 # Syrabit.ai — robots.txt
 
 User-agent: *
+Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
 Sitemap: https://syrabit.ai/sitemap.xml
+Sitemap: https://syrabit.ai/sitemap-index.xml
 
 Crawl-delay: 1
 
-# ── AI Search & Training Crawlers ────────────────────────────────────────────
-# OpenAI (ChatGPT web search + training)
+# AI Search & Training Crawlers
 User-agent: GPTBot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
 User-agent: OAI-SearchBot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
 User-agent: ChatGPT-User
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
-# Google (Gemini AI + Search)
 User-agent: Google-Extended
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
 User-agent: Googlebot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
-# Perplexity AI
 User-agent: PerplexityBot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
-# Anthropic (Claude)
 User-agent: ClaudeBot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
 User-agent: anthropic-ai
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
-# Meta AI
-User-agent: FacebookBot
-Allow: /
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-
-User-agent: meta-externalagent
-Allow: /
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-
-# Microsoft (Copilot / Bing)
 User-agent: Bingbot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
-# Apple (Siri / Spotlight)
 User-agent: Applebot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
 User-agent: Applebot-Extended
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
-# Other AI crawlers
+User-agent: FacebookBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: meta-externalagent
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
 User-agent: cohere-ai
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
 User-agent: Bytespider
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/
 
 User-agent: CCBot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
+Disallow: /api/

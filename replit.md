@@ -33,6 +33,7 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 - **Admin Panel:** A comprehensive interface with Content Editor (default tab), CMS/Docs, Blog Publisher, SEO Manager, QA Review, and an Intelligence panel displaying system health and metrics. Content Editor includes a Topics input for AI embeddings.
 - **Component Refactoring:** Large files are split into sub-components for maintainability.
 - **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` serves cached pre-rendered HTML for search engine bots on key pages.
+- **Bot Crawlability:** Backend serves `/robots.txt` (with rules for 16+ bot user-agents), `/sitemap.xml` (301→`/api/seo/sitemap.xml`), and `/sitemap-index.xml` (301→`/api/seo/sitemap-index.xml`) directly. `Allow: /api/seo/` ensures sitemap sub-files are crawlable despite `Disallow: /api/`. Vite `public/robots.txt` mirrors the backend version for consistency.
 - **Performance Optimizations:** Includes emergent badge suppression, PWA icon optimization, lazy-loading CMS sections, React Query for caching, CSS grid for content display, and prefetching for navigation.
 - **Content Display:** Library page features subject cards with SEO badges, expandable chapters, and topic links. Lesson pages have a blog-style layout with reading progress and sticky TOC.
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.

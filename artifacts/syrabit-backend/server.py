@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.exceptions import HTTPException as _StarletteHTTPException
@@ -481,6 +481,198 @@ app.include_router(api)
 
 from routes.pyq import router as pyq_router
 app.include_router(pyq_router)
+
+@app.get("/robots.txt", response_class=Response)
+async def serve_robots_txt():
+    txt = """# Syrabit.ai — robots.txt
+
+User-agent: *
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+Sitemap: https://syrabit.ai/sitemap.xml
+Sitemap: https://syrabit.ai/sitemap-index.xml
+
+Crawl-delay: 1
+
+# AI Search & Training Crawlers
+User-agent: GPTBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: OAI-SearchBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: ChatGPT-User
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: Google-Extended
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: Googlebot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: PerplexityBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: ClaudeBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: anthropic-ai
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: Bingbot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: Applebot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: Applebot-Extended
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: FacebookBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: meta-externalagent
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: cohere-ai
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: Bytespider
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: CCBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+"""
+    return Response(content=txt.strip(), media_type="text/plain")
+
+@app.get("/sitemap.xml")
+async def serve_root_sitemap():
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url="/api/seo/sitemap.xml", status_code=301)
+
+@app.get("/sitemap-index.xml")
+async def serve_root_sitemap_index():
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url="/api/seo/sitemap-index.xml", status_code=301)
 
 from middleware import SecurityHeadersMiddleware, GlobalRateLimitMiddleware
 from routes.cms_sarvam_health import CmsNoIndexMiddleware, BotRenderMiddleware
