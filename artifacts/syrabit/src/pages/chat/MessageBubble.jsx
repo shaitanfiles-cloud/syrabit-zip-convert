@@ -118,7 +118,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
             </div>
             <span className="text-xs font-semibold text-foreground/70">Syrabit AI</span>
           </div>
-          <div className="w-full chat-blog-card">
+          <div className="w-full">
             {msg.streaming && !msg.content && <ThinkingIndicator />}
 
             {msg.streaming && msg.content && (
@@ -155,32 +155,32 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     <div
                       onClick={subjectUrl ? () => navigate(subjectUrl) : undefined}
                       className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
-                      style={{ background: '#f5f3ff', border: '1px solid #e5e1f5', maxWidth: 'fit-content' }}
+                      style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.14)', maxWidth: 'fit-content' }}
                       role={subjectUrl ? 'link' : undefined}
                       aria-label={subjectUrl ? `View ${subjectLabel}` : undefined}
                     >
                       <div className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5 mb-1">
-                          <BookOpen size={11} style={{ color: '#7c3aed' }} />
-                          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#7c3aed', opacity: 0.8 }}>Source</span>
-                          <span className="text-[10px]" style={{ color: '#999' }}>·</span>
-                          <span className="text-[10.5px] font-medium" style={{ color: '#92714a' }}>Syrabit Browser</span>
+                          <BookOpen size={11} style={{ color: '#a78bfa' }} />
+                          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#a78bfa', opacity: 0.8 }}>Source</span>
+                          <span className="text-[10px]" style={{ color: 'hsl(var(--foreground) / 0.2)' }}>·</span>
+                          <span className="text-[10.5px] font-medium" style={{ color: '#c4a882' }}>Syrabit Browser</span>
                         </div>
                         {lessonLabel && (
-                          <h4 className="font-semibold leading-tight truncate" style={{ fontSize: '0.85rem', letterSpacing: '0.01em', color: '#16a34a' }}>
+                          <h4 className="font-semibold leading-tight truncate" style={{ fontSize: '0.85rem', letterSpacing: '0.01em', color: '#4ade80' }}>
                             {lessonLabel}
                           </h4>
                         )}
                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1.5">
                           {courseLabel && (
                             <>
-                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: '#ede9fe', color: '#6d28d9' }}>
+                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
                                 {courseLabel}
                               </span>
-                              <span className="text-[11px]" style={{ color: '#bbb' }}>·</span>
+                              <span className="text-[11px] text-muted-foreground/40">·</span>
                             </>
                           )}
-                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: '#ede9fe', color: '#6d28d9' }}>
+                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
                             {subjectLabel}
                           </span>
                         </div>
@@ -188,19 +188,19 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     </div>
                   )}
                   {isDocument && (
-                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: '#f5f3ff', border: '1px solid #e5e1f5', maxWidth: 'fit-content' }}>
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: '#ede9fe' }}>
-                        <FileText size={16} style={{ color: '#7c3aed' }} />
+                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.18)', maxWidth: 'fit-content' }}>
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(167,139,250,0.15)' }}>
+                        <FileText size={16} style={{ color: '#a78bfa' }} />
                       </div>
-                      <span className="text-[13px] font-bold" style={{ textTransform: 'uppercase', letterSpacing: '0.03em', color: '#333' }}>Uploaded Document</span>
+                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Uploaded Document</span>
                     </div>
                   )}
                   {isWeb && (
-                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: '#f0f9ff', border: '1px solid #e0f2fe', maxWidth: 'fit-content' }}>
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: '#e0f2fe' }}>
-                        <Globe size={16} style={{ color: '#0284c7' }} />
+                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.18)', maxWidth: 'fit-content' }}>
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(56,189,248,0.15)' }}>
+                        <Globe size={16} style={{ color: '#38bdf8' }} />
                       </div>
-                      <span className="text-[13px] font-bold" style={{ textTransform: 'uppercase', letterSpacing: '0.03em', color: '#333' }}>Web Search</span>
+                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
                     </div>
                   )}
                   <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
