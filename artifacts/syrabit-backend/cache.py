@@ -195,13 +195,10 @@ def _invalidate_content_cache(prefix: str):
     keys_to_del = [k for k in list(_content_cache.keys()) if k == prefix or k.startswith(f"{prefix}:") or k == "library-bundle"]
     for k in keys_to_del:
         _content_cache.pop(k, None)
-        if redis_client:
-            try:
-                redis_client.delete(f"{REDIS_CONTENT_PREFIX}{k}")
-            except Exception:
-                pass
     if redis_client:
         try:
+            for rk in redis_client.scan_iter(f"{REDIS_CONTENT_PREFIX}{prefix}*"):
+                redis_client.delete(rk)
             redis_client.delete(f"{REDIS_CONTENT_PREFIX}library-bundle")
         except Exception:
             pass

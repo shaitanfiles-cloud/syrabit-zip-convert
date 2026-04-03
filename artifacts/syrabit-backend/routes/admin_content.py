@@ -41,7 +41,7 @@ router = APIRouter()
 
 async def _cascade_delete_subject_assets(subject_id: str):
     await db.chapters.delete_many({"subject_id": subject_id})
-    for coll_name in ["syllabus_embeddings", "ai_pyq_collections", "flashcard_collections", "seo_topics", "chunks"]:
+    for coll_name in ["syllabus_embeddings", "ai_pyq_collections", "flashcard_collections", "seo_topics", "chunks", "seo_pages", "cms_posts"]:
         try:
             await getattr(db, coll_name).delete_many({"subject_id": subject_id})
         except Exception as exc:
@@ -1087,8 +1087,14 @@ async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_
     await _cascade_delete_subject_assets(subject_id)
     await db.subjects.delete_one({"id": subject_id})
     _invalidate_content_cache("subjects")
+    _invalidate_content_cache("subjects_by_course_type")
     _invalidate_content_cache("chapters")
     return {"message": "Deleted"}
+
+@router.delete("/admin/content/seo-pages/rejected")
+async def admin_delete_rejected_seo_pages(admin: dict = Depends(get_admin_user)):
+    result = await db.seo_pages.delete_many({"status": "rejected"})
+    return {"deleted": result.deleted_count}
 
 async def _embed_chapter_bg(chapter_id: str, subject_id: str, title: str, description: str, topics: list, content: str):
     try:
