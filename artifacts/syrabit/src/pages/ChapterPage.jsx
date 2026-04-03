@@ -3,7 +3,7 @@ import { useParams, Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import {
   BookOpen, ArrowLeft, ChevronRight, Home, Share2,
-  Clock, Hash, Sparkles, Loader2, FileText,
+  Clock, Hash, Sparkles, Loader2, FileText, HelpCircle, ChevronDown,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -105,11 +105,98 @@ function StickyToc({ headings, activeId }) {
   );
 }
 
+function ImportantQuestions({ chapterTitle, pyqData }) {
+  const [expandedMark, setExpandedMark] = useState(null);
+  if (!pyqData || pyqData.total === 0) return null;
+
+  const markWise = pyqData.mark_wise || {};
+  const sortedMarks = Object.keys(markWise).sort((a, b) => Number(a) - Number(b));
+  const flatPyqs = pyqData.pyqs || [];
+
+  const hasMW = sortedMarks.length > 0 && sortedMarks.some(m => (markWise[m] || []).length > 0);
+
+  return (
+    <div className="chapter-textbook rounded-2xl p-5 sm:p-8 mt-6">
+      <div className="flex items-center gap-2 mb-4">
+        <HelpCircle size={20} className="text-purple-600" />
+        <h2 className="text-xl font-bold text-gray-900" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", border: 'none', margin: 0, padding: 0 }}>
+          Important Questions
+        </h2>
+      </div>
+      <p className="text-sm text-gray-500 mb-5" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
+        Previous year and expected questions for {chapterTitle} ({pyqData.total} questions)
+      </p>
+
+      {hasMW ? (
+        <div className="space-y-3">
+          {sortedMarks.map(mark => {
+            const questions = markWise[mark] || [];
+            if (questions.length === 0) return null;
+            const isOpen = expandedMark === mark;
+            return (
+              <div key={mark} className="border border-gray-200 rounded-xl overflow-hidden">
+                <button
+                  onClick={() => setExpandedMark(isOpen ? null : mark)}
+                  className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-50 transition-colors"
+                  style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-sm font-bold text-white"
+                      style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}
+                    >
+                      {mark}
+                    </span>
+                    <span className="font-semibold text-gray-800">{mark}-Mark Questions</span>
+                    <span className="text-xs text-gray-400">({questions.length})</span>
+                  </div>
+                  <ChevronDown size={16} className={`text-gray-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                </button>
+                {isOpen && (
+                  <div className="px-4 pb-4 pt-1">
+                    <ol className="space-y-2" style={{ color: '#333', listStyle: 'decimal', paddingLeft: '1.25rem' }}>
+                      {questions.map((q, i) => {
+                        const qText = typeof q === 'string' ? q : q.question || q.text || JSON.stringify(q);
+                        return (
+                          <li key={i} className="text-sm leading-relaxed text-gray-700 pl-1">
+                            {qText}
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : flatPyqs.length > 0 ? (
+        <ol className="space-y-2" style={{ color: '#333', listStyle: 'decimal', paddingLeft: '1.25rem' }}>
+          {flatPyqs.map((q, i) => {
+            const qText = typeof q === 'string' ? q : q.question || q.text || JSON.stringify(q);
+            const marks = q.marks;
+            return (
+              <li key={i} className="text-sm leading-relaxed text-gray-700 pl-1">
+                {qText}
+                {marks && (
+                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
+                    {marks}M
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
 export default function ChapterPage() {
   const { board, classSlug, subjectSlug, chapterSlug } = useParams();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [pyqData, setPyqData] = useState(null);
   const articleRef = useRef(null);
   const [activeId, setActiveId] = useState('');
   const { sharing, share, serpPreview, confirmShare, dismissPreview } = useShare();
@@ -126,6 +213,17 @@ export default function ChapterPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [board, classSlug, subjectSlug, chapterSlug]);
+
+  useEffect(() => {
+    setPyqData(null);
+    if (!data?.chapter_id) return;
+    let cancelled = false;
+    apiClient()
+      .get(`/content/chapters/${data.chapter_id}/topic-pyqs?limit=50`)
+      .then(r => { if (!cancelled) setPyqData(r.data); })
+      .catch(() => { if (!cancelled) setPyqData(null); });
+    return () => { cancelled = true; };
+  }, [data?.chapter_id]);
 
   const headings = useMemo(() => {
     if (!data?.content) return [];
@@ -320,6 +418,8 @@ export default function ChapterPage() {
                 {data.content}
               </ReactMarkdown>
             </div>
+
+            <ImportantQuestions chapterTitle={chapterTitle} pyqData={pyqData} />
 
             <div className="mt-8 p-5 rounded-2xl" style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)' }}>
               <p className="text-sm font-semibold text-purple-300 mb-1">Have a question about {chapterTitle}?</p>

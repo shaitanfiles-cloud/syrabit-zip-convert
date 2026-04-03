@@ -551,6 +551,7 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
     result = {
         "title": f"{chapter.get('title', chapter_slug)} — {subj['name']}",
         "topic_title": chapter.get("title", chapter_slug),
+        "chapter_id": chapter.get("id", ""),
         "content": content or f"# {chapter.get('title', chapter_slug)}\n\nContent for this chapter is being prepared. Check back soon!",
         "meta_description": chapter.get("description", f"{chapter.get('title', '')} notes for {subj['name']}"),
         "board_name": board.get("name", ""), "class_name": cls.get("name", ""),
