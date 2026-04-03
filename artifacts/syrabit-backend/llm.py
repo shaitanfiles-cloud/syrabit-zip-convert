@@ -180,8 +180,6 @@ _MODEL_PROVIDER_MAP = {
     "accounts/fireworks/models/qwen3-235b-a22b": "fireworksai",
     "accounts/fireworks/models/deepseek-v3p2": "fireworksai",
     "accounts/fireworks/models/gpt-oss-120b": "fireworksai",
-    "llama-3.3-70b-versatile": "groq",
-    "llama-3.1-8b-instant": "groq",
     "llama3.1-8b": "cerebras",
     "qwen-3-235b-a22b-instruct-2507": "cerebras",
     "deepseek/deepseek-chat-v3-0324": "openrouter",
