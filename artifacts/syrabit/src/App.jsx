@@ -26,7 +26,7 @@ const queryClient = new QueryClient({
 });
 
 
-import { pageImports } from "@/utils/pageImports";
+import { pageImports, prefetchCriticalRoutes } from "@/utils/pageImports";
 
 // ── React.lazy() code splitting — all pages ────────────────────────────────
 const LandingPage        = lazy(() => import("@/pages/LandingPage"));
@@ -100,7 +100,7 @@ function DeferredFallback({ delay = 300 }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
-  useEffect(() => { initGA4(); }, []);
+  useEffect(() => { initGA4(); prefetchCriticalRoutes(); }, []);
 
   useEffect(() => {
     const prefetchBundle = () => {
@@ -164,15 +164,14 @@ function App() {
       for (const m of mutations) {
         for (const node of m.addedNodes) {
           if (node.nodeType !== 1) continue;
-          if (node.id?.includes('emergent') || node.href?.includes('emergent.sh') ||
-              node.querySelector?.('#emergent-badge, a[href*="emergent.sh"], [id*="emergent"]')) {
+          if (node.id?.includes('emergent') || node.href?.includes('emergent.sh')) {
             nuke();
             return;
           }
         }
       }
     });
-    mo.observe(document.documentElement, { childList: true, subtree: true });
+    mo.observe(document.body, { childList: true });
 
     return () => { mo.disconnect(); style.remove(); };
   }, []);

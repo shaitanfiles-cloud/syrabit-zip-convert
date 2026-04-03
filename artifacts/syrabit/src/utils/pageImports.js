@@ -4,3 +4,17 @@ export const pageImports = {
   history: () => import("@/pages/HistoryPage"),
   profile: () => import("@/pages/ProfilePage"),
 };
+
+export function prefetchCriticalRoutes() {
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(() => {
+      pageImports.chat();
+      pageImports.library();
+    });
+  } else {
+    setTimeout(() => {
+      pageImports.chat();
+      pageImports.library();
+    }, 1500);
+  }
+}
