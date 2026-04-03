@@ -183,6 +183,7 @@ export default function TestimonialsFooter({ year }) {
               <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>LEGAL</p>
               <Link to="/privacy" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Privacy Policy</Link>
               <Link to="/terms" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Terms of Service</Link>
+              <Link to="/status" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>System Status</Link>
             </div>
 
             <div className="space-y-1">
