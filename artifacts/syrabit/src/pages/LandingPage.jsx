@@ -15,7 +15,6 @@ export default function LandingPage() {
   useEffect(() => {
     if (user) {
       navigate('/library', { replace: true });
-      return;
     }
     const timer = setTimeout(() => {
       navigate('/library', { replace: true });
