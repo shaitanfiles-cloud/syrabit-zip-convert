@@ -119,12 +119,13 @@ Topic: {topic}
 Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 Primary keyword: "{topic} notes {board} {class_name}"
 
-IMPORTANT SEO & WRITING RULES:
-- First paragraph must be 2-3 sentences MAX, keyword-focused, starting with "{topic}" directly
+CRITICAL CONTENT RULES:
+- Write ONLY about what {topic} actually covers according to the {board} {subject} syllabus under chapter "{chapter}". Do NOT invent content outside the topic's scope.
+- First paragraph must be 2-3 sentences MAX, keyword-focused, starting with "{topic}" directly.
+- Do NOT include generic math-style "solved examples" or "step-by-step problems" unless the topic genuinely involves calculations or problem-solving. For conceptual/theoretical topics, use illustrative case studies, real-world applications, or exam-style descriptive answers instead.
 - Use keyword variations naturally: "{topic} notes", "{topic} summary", "{topic} {subject} notes {class_name}", "{topic} important points"
-- Add human touches: "In simple terms…", "You can remember this as…", "Many students confuse X and Y — here's the difference.", "This is one of the most important topics for exams."
+- Add human touches: "In simple terms…", "You can remember this as…", "Many students confuse X and Y — here's the difference."
 - When mentioning other units/chapters, name them clearly (e.g., "Unit I: Introduction to..." or "Unit III: ...")
-- Include featured-snippet-ready sections with quick direct answers
 
 Write study notes using EXACTLY this structure — all sections required:
 
@@ -132,29 +133,32 @@ Write study notes using EXACTLY this structure — all sections required:
 [2-3 sentences ONLY. Direct, keyword-rich definition suitable for Google featured snippet. Start with "{topic} is..." or "{topic} refers to...". End with its relevance to {board} {class_name} {subject}.]
 
 ## {topic} — Detailed Notes for {board} {class_name}
-[250-350 words. Cover core concepts, sub-topics, and connections to other topics in "{chapter}". Use natural student-friendly language with occasional informal lines like "Think of it this way..." or "Here's a tip that saves marks in exams." Include at least one Assam/Northeast India example if relevant. Reference how this topic builds on or leads to related syllabus topics by NAME.]
+[350-500 words. Cover ALL core concepts, sub-topics, and key ideas that {topic} contains according to the {board} syllabus for "{chapter}". Go deep into each concept — explain why it matters, how it works, and how it connects to other topics in this chapter. Use natural student-friendly language. Include Assam/Northeast India examples where relevant. Reference related syllabus topics by NAME.]
 
 ## Key Points for Revision
-[6-8 bullet points for last-minute revision. Each starts with an action verb. Add one bullet like "Don't confuse [X] with [Y] — examiners love testing this."]
+[8-10 bullet points covering the most important facts, definitions, and concepts from {topic}. Each should be a complete, exam-ready statement. Add one bullet like "Don't confuse [X] with [Y] — examiners love testing this."]
 
-## Solved Examples
-Example 1: [Complete step-by-step solution relevant to {board} exam pattern]
-Example 2: [Complete step-by-step solution — use Assam context if applicable]
+## Important Concepts & Applications
+[For each major concept in {topic}, explain it with a real-world application or case study. Use Assam/India examples where they naturally fit. Format as 3-4 sub-sections with ### headings. This should demonstrate understanding, not math-style problem solving.]
 
 ## Exam-Style Questions with Answers
-[5 questions with model answers — include 1-mark, 2-mark, and 5-mark types. Format each as "Q (X marks): ..." Add a note like "This type of question appeared in [recent year] {board} exam."]
+[6 questions with complete model answers covering {topic}:
+- 2× short answer (1-2 marks): definition/factual recall
+- 2× medium answer (3 marks): explain/compare/distinguish
+- 2× long answer (5-7 marks): detailed analysis/discussion
+Format: "Q (X marks): ..." with full model answer below each.]
 
 ## Frequently Asked Questions
 Q1: What is {topic}? (1-mark answer)
 A1: [Crisp 1-line answer]
-Q2: Define {topic} in {subject}.
-A2: [2-sentence definition]
+Q2: What are the key concepts covered in {topic}?
+A2: [List 4-5 main concepts]
 Q3: Why is {topic} important for {board} exams?
-A3: [Answer with exam relevance]
-Q4: What are the key features of {topic}?
-A4: [3-4 features as bullet points]
+A3: [Answer with exam relevance and mark weightage]
+Q4: How does {topic} connect to other topics in {chapter}?
+A4: [Show connections by naming related topics]
 
-Language: simple, clear, and exam-focused for {class_name} students in Assam. Sound like a helpful teacher, not a textbook.""",
+Language: simple, clear, and exam-focused for {class_name} students in Assam. Sound like a helpful teacher, not a textbook. Every section must contain substantive academic content specific to {topic}.""",
 
         """You are a {subject} expert specialising in {board} {class_name} exam preparation.
 
@@ -162,8 +166,9 @@ Topic: {topic}
 Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 Primary keyword: "{topic} notes {board} {class_name}"
 
-SEO & WRITING RULES:
-- Opening must be concise (2-3 sentences), keyword-rich, starting with the topic name
+CRITICAL CONTENT RULES:
+- Write ONLY about the actual academic content of {topic} as defined in the {board} syllabus under "{chapter}". Study the topic name carefully — it tells you exactly what to cover.
+- Do NOT add generic "solved examples" with step-by-step math unless {topic} genuinely requires calculations. For descriptive/conceptual topics, use case studies, real-world illustrations, and application-based discussions instead.
 - Naturally include search terms: "{topic} notes", "{topic} summary", "{topic} {subject} notes", "{topic} important questions"
 - Add student-friendly lines: "Many students find this tricky — but it's actually straightforward.", "Pro tip:", "Common mistake:"
 - Name other units/chapters explicitly when cross-referencing
@@ -171,38 +176,42 @@ SEO & WRITING RULES:
 Write comprehensive study notes using EXACTLY this structure:
 
 ## {topic} — Overview
-[2-3 sentences ONLY. Start with "{topic}" directly. State what it is, which chapter it belongs to, and why it matters for {board} {class_name} exams. This is your featured snippet paragraph.]
+[2-3 sentences ONLY. Start with "{topic}" directly. State what it covers, which chapter it belongs to, and why it matters for {board} {class_name} exams. Featured snippet paragraph.]
 
 ## Why {topic} Matters
-[50-70 words: real-world scenario from Assam/Northeast India context connecting {topic} to everyday life, then link to {board} importance. Add a line like "This is one of the most scoring topics in {subject}."]
+[50-70 words: connect {topic} to real-world relevance using Assam/Northeast India context if applicable, then link to {board} importance. Add: "This is one of the most scoring topics in {subject}."]
 
 ## Core Concept
-[Formal definition citing {board} curriculum. Then simplified: "In simple terms, {topic} means..." Mention prerequisite knowledge needed.]
+[Formal definition citing {board} curriculum. Then simplified: "In simple terms, {topic} means..." Mention what prerequisite knowledge is needed from earlier topics.]
 
 ## Detailed Breakdown
-[300-400 words. Break into 3-4 numbered sub-concepts. For each, include one real-world application. Add informal touches: "You can remember this as...", "A common exam mistake here is...". Cross-reference other units by name.]
+[400-500 words. Break {topic} into 3-5 sub-concepts based on what the topic actually covers in the syllabus. Use numbered ### sub-headings. For each sub-concept:
+- Explain the concept thoroughly (what, why, how)
+- Give one real-world application or Assam-relevant example
+- Add an informal touch: "You can remember this as...", "A common exam mistake here is..."
+Cross-reference other units by name where relevant.]
 
 ## Key Points for Revision
-[6-8 crisp bullet points — exam-ready, action verbs. Include one "Don't confuse X with Y" point.]
-
-## Worked Examples
-Example 1: [Problem + full solution matching {board} exam standard]
-Example 2: [Problem + full solution]
+[8-10 crisp bullet points — exam-ready, complete statements. Include one "Don't confuse X with Y" point.]
 
 ## Exam Corner
-[4 questions with model answers: 2× short (2 marks), 2× long (5 marks). Add tips like "Examiners expect you to mention..." for each.]
+[5 questions with model answers directly testing knowledge of {topic}:
+- 1× define/identify (1 mark)
+- 2× explain/describe (2-3 marks)
+- 2× discuss/analyze (5 marks)
+Add tips like "Examiners expect you to mention..." for long answers.]
 
 ## FAQ
 Q1: What is {topic}? (Define in one line)
 A1: [Single crisp sentence]
-Q2: What are the main features of {topic}?
-A2: [3-4 features]
+Q2: What are the main concepts covered in {topic}?
+A2: [List 3-4 key concepts]
 Q3: How is {topic} different from [related concept in {chapter}]?
 A3: [Precise comparison]
 Q4: What are common mistakes students make with {topic}?
-A4: [2-3 common errors]
+A4: [2-3 common errors and how to avoid them]
 
-Write for {class_name} students in Assam. Be specific, helpful, and slightly conversational.""",
+Write for {class_name} students in Assam. Every section must contain genuine academic content specific to what {topic} actually covers — no filler, no generic examples.""",
 
         """You are a senior {board} examiner and {subject} faculty.
 
@@ -210,9 +219,10 @@ Topic: {topic}
 Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
 Primary keyword: "{topic} notes {board} {class_name}"
 
-SEO & WRITING RULES:
-- First paragraph: 2-3 sentences, keyword-rich, starts with "{topic}"
-- Include variations: "{topic} notes PDF", "{topic} summary", "{topic} {subject} notes {class_name}"
+CRITICAL CONTENT RULES:
+- Focus EXCLUSIVELY on the academic content of {topic} as covered in the {board} {subject} syllabus under "{chapter}". The topic title tells you exactly what to write about.
+- Do NOT force mathematical "solved examples" or "step-by-step problems" unless the topic involves actual problem-solving. For theory-based topics, use illustrative examples, case studies, comparisons, or exam-style descriptive answers instead.
+- Include keyword variations: "{topic} notes", "{topic} summary", "{topic} {subject} notes {class_name}"
 - Human signals: "This is arguably the most important concept in {chapter}.", "Here's what most toppers do...", "Don't skip this section."
 - Name all cross-referenced units/chapters explicitly
 
@@ -225,31 +235,37 @@ Create study notes from an examiner's perspective using EXACTLY this structure:
 - **Topic**: {topic}
 - **Chapter**: {chapter}
 - **Subject**: {subject} ({board} {class_name})
-- **Exam Weight**: [estimated marks]
-- **Key Formula/Rule**: [if any]
+- **Exam Weight**: [estimated marks based on topic importance]
+- **Key Concepts**: [list 3-4 main concepts covered]
 - **Related Topics**: [name 2-3 from same/nearby chapters]
 
 ## The Basics
 [Academic definition with textbook citation. Then plain-English: "In simple terms..." Note prerequisite topics by name.]
 
-## Deep Dive
-[250-350 words. Cause-and-effect or chronological flow. Include cross-references to other chapters BY NAME. Add: "Many students confuse this with... — here's how to tell them apart." and "A helpful way to remember this is..."]
+## In-Depth Analysis
+[350-500 words. Cover every important concept within {topic} thoroughly. Use cause-and-effect or thematic flow — NOT bullet lists. Include:
+- Deep explanations of each sub-concept within {topic}
+- Cross-references to other chapters BY NAME
+- Real-world applications or case studies relevant to Assam/India
+- "Many students confuse this with... — here's how to tell them apart."
+- "A helpful way to remember this is..."]
 
 ## Common Exam Patterns
-[How {board} examiners frame questions. What traps to watch for. What earns full marks. Add: "Pro tip: Always mention [X] in your answer — it's worth 1 extra mark."]
+[How {board} examiners frame questions on {topic}. What aspects they test most. What traps to watch for. What earns full marks. Add: "Pro tip: Always mention [X] in your answer — it's worth 1 extra mark."]
 
-## Practice Questions with Solutions
+## Exam Questions with Model Answers
 Q1 (1 mark): Define {topic}. → [1-line answer]
-Q2 (2 marks): [Question] → [Answer]
-Q3 (5 marks): [Question] → [Detailed answer with marking scheme]
+Q2 (2 marks): [Explain/describe question on {topic}] → [Complete answer]
+Q3 (3 marks): [Compare/distinguish question] → [Structured answer]
+Q4 (5 marks): [Discuss/analyze question on {topic}] → [Detailed answer with marking scheme points]
 
 ## Memory Aids
-[2-3 mnemonics or tricks. Format as memorable phrases students can actually use.]
+[2-3 mnemonics or tricks specific to {topic}. Format as memorable phrases students can actually use in exams.]
 
 ## Quick Revision Points
-[5-7 bullet points for the night before the {board} exam. Include: "If you remember nothing else, remember THIS: ..."]
+[7-10 bullet points covering everything a student must know about {topic} the night before the {board} exam. Each should be a complete statement. Include: "If you remember nothing else, remember THIS: ..."]
 
-Tone: authoritative but warm. Sound like a teacher who genuinely wants students to pass.""",
+Tone: authoritative but warm. Every section must contain high-quality academic content specific to {topic} — no filler or generic content.""",
     ],
 
     "definition": [
@@ -635,7 +651,7 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
 
     has_faq = bool(re.search(r'#{2,4}\s*(FAQ|Frequently Asked|Common Question)', content, re.IGNORECASE))
     has_exam_q = bool(re.search(r'#{2,4}\s*(Exam.Style|Commonly Tested|Board Pattern|Previous Year|PYQ|Frequently Repeated|Board Question|Exam Question|Exam.Ready|Practice Question)', content, re.IGNORECASE))
-    has_examples = bool(re.search(r'(Example\s*\d|#{2,4}\s*(Example|Solved Example|Illustration|Worked Example))', content, re.IGNORECASE))
+    has_examples = bool(re.search(r'(Example\s*\d|#{2,4}\s*(Example|Solved Example|Illustration|Worked Example|Important Concepts|Applications|Case Stud|In.Depth Analysis))', content, re.IGNORECASE))
     has_key_points = bool(re.search(r'#{2,4}\s*(Key Point|Key Takeaway|Important Point|Revision|Summary|Points to Remember|Quick Recap|At a Glance)', content, re.IGNORECASE))
     has_tips = bool(re.search(r'(exam tip|revision tip|remember|important note|pro tip|study tip|scoring tip)', content_lower))
     has_citations = bool(re.search(r'(syllabus|NCERT|SCERT|textbook|curriculum|prescribed|as per the)', content, re.IGNORECASE))
@@ -1222,7 +1238,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
             if not diag.get("has_exam_q"):
                 boost += "- Add a '## Exam-Style Questions' section with 2-mark, 5-mark, and long-answer board-pattern questions\n"
             if not diag.get("has_examples"):
-                boost += "- Add labeled examples (Example 1, Example 2, etc.)\n"
+                boost += "- Add an 'Important Concepts & Applications' or 'Case Studies' section with real-world applications of the topic (NOT generic math-style solved examples unless the topic involves calculations)\n"
             if diag.get("heading_count", 0) < 8:
                 boost += "- Add more ## and ### headings (need at least 8 for comprehensive lesson coverage)\n"
             if diag.get("word_count", 0) < 800:
