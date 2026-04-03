@@ -46,7 +46,7 @@ const NotFoundPage       = lazy(() => import("@/pages/NotFoundPage"));
 const AdminLoginPage     = lazy(() => import("@/pages/AdminLoginPage"));
 const AdminPage          = lazy(() => import("@/pages/AdminPage"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
-const SeoTopicPage       = lazy(() => import("@/pages/SeoTopicPage"));
+const SeoTopicPage       = lazy(pageImports.seoTopic);
 const SubjectLandingPage = lazy(() => import("@/pages/SubjectLandingPage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));

@@ -181,6 +181,11 @@ export const getSeoPage = (board, classSlug, subjectSlug, topicSlug, pageType) =
   return axios.get(url);
 };
 
+export const getSeoPageBundle = (board, classSlug, subjectSlug, topicSlug, pageType) =>
+  axios.get(`${API_BASE}/seo/page-bundle/${board}/${classSlug}/${subjectSlug}/${topicSlug}`, {
+    params: pageType && pageType !== 'notes' ? { pt: pageType } : undefined,
+  });
+
 export const getSeoPageTypes = (board, classSlug, subjectSlug, topicSlug) =>
   axios.get(`${API_BASE}/seo/page-types/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
 

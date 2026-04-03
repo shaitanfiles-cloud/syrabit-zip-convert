@@ -7,7 +7,7 @@ import { BookOpen, ChevronRight, ArrowLeft, ArrowRight, FileText, HelpCircle,
 import { useShare } from '@/hooks/useShare';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { getSeoPage, getSeoPageTypes, getSeoRelated, getChapterBySlug } from '@/utils/api';
+import { getSeoPage, getSeoPageBundle, getSeoPageTypes, getSeoRelated, getChapterBySlug } from '@/utils/api';
 import CommonQuestions from '@/components/seo/CommonQuestions';
 
 const PAGE_TYPE_META = {
@@ -325,46 +325,34 @@ export default function SeoTopicPage() {
     setError(null);
     setIqContent(null);
 
-    Promise.allSettled([
-      getSeoPage(board, classSlug, subjectSlug, topicSlug, currentType),
-      getSeoPageTypes(board, classSlug, subjectSlug, topicSlug),
-      getSeoRelated(topicSlug),
-    ])
-      .then(async ([pageResult, typesResult, relatedResult]) => {
+    getSeoPageBundle(board, classSlug, subjectSlug, topicSlug, currentType)
+      .then(res => {
         if (cancelled) return;
-
-        const pageOk = pageResult.status === 'fulfilled';
-        const typesOk = typesResult.status === 'fulfilled';
-        const relatedOk = relatedResult.status === 'fulfilled';
-
-        if (pageOk) {
-          setPage(pageResult.value.data);
-          const types = typesOk ? (typesResult.value.data || []) : [];
-          setPageTypes(types);
-          setRelated(relatedOk ? (relatedResult.value.data || { related: [], prev: null, next: null }) : { related: [], prev: null, next: null });
-          try { Analytics.seoPageView(board, classSlug, subjectSlug, topicSlug, currentType); } catch {}
-          if (currentType === 'notes' && types.some(p => p.page_type === 'important-questions')) {
-            getSeoPage(board, classSlug, subjectSlug, topicSlug, 'important-questions')
-              .then(res => { if (!cancelled) setIqContent(res.data?.content || null); })
-              .catch(() => {});
+        const { page: pageData, pageTypes: types, iqContent: iq } = res.data;
+        setPage(pageData);
+        setPageTypes(types || []);
+        setIqContent(iq || null);
+        try { Analytics.seoPageView(board, classSlug, subjectSlug, topicSlug, currentType); } catch {}
+        getSeoRelated(topicSlug)
+          .then(r => { if (!cancelled) setRelated(r.data || { related: [], prev: null, next: null }); })
+          .catch(() => {});
+      })
+      .catch(async (err) => {
+        if (cancelled) return;
+        const status = err?.response?.status;
+        if (status === 404 && currentType === 'notes') {
+          try {
+            const fallbackRes = await getChapterBySlug(board, classSlug, subjectSlug, topicSlug);
+            if (!cancelled) {
+              setPage(fallbackRes.data);
+              setPageTypes([]);
+              setRelated({ related: [], prev: null, next: null });
+            }
+          } catch {
+            if (!cancelled) setError('Page not found');
           }
         } else {
-          const err = pageResult.reason;
-          const status = err?.response?.status;
-          if (status === 404 && currentType === 'notes') {
-            try {
-              const fallbackRes = await getChapterBySlug(board, classSlug, subjectSlug, topicSlug);
-              if (!cancelled) {
-                setPage(fallbackRes.data);
-                setPageTypes([]);
-                setRelated({ related: [], prev: null, next: null });
-              }
-            } catch {
-              if (!cancelled) setError('Page not found');
-            }
-          } else {
-            setError(status === 404 ? 'Page not found' : 'Failed to load content');
-          }
+          setError(status === 404 ? 'Page not found' : 'Failed to load content');
         }
       })
       .finally(() => { if (!cancelled) setLoading(false); });

@@ -1807,26 +1807,9 @@ async def _inject_qa(page: dict) -> dict:
     return page
 
 
-@router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}")
-async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, topic_slug: str):
-    page = await _db.seo_pages.find_one(
-        {
-            "board_slug": board,
-            "class_slug": class_slug,
-            "subject_slug": subject_slug,
-            "topic_slug": topic_slug,
-            "page_type": "notes",
-            "status": "published",
-        },
-        {"_id": 0},
-    )
-    if not page:
-        raise HTTPException(status_code=404, detail="Page not found")
-    return await _inject_qa(page)
-
-
 @router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}")
 async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, topic_slug: str, page_type: str):
+    from starlette.responses import JSONResponse
     if page_type not in ALL_PAGE_TYPES:
         raise HTTPException(status_code=404, detail="Invalid page type")
     page = await _db.seo_pages.find_one(
@@ -1842,7 +1825,10 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
     )
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
-    return await _inject_qa(page)
+    result = await _inject_qa(page)
+    resp = JSONResponse(result)
+    resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    return resp
 
 
 def _md_to_html(text: str) -> str:
@@ -2720,6 +2706,7 @@ async def get_seo_html_typed(board: str, class_slug: str, subject_slug: str, top
 
 @router.get("/page-types/{board}/{class_slug}/{subject_slug}/{topic_slug}")
 async def get_available_page_types(board: str, class_slug: str, subject_slug: str, topic_slug: str):
+    from starlette.responses import JSONResponse
     pages = await _db.seo_pages.find(
         {
             "board_slug": board,
@@ -2730,7 +2717,9 @@ async def get_available_page_types(board: str, class_slug: str, subject_slug: st
         },
         {"_id": 0, "page_type": 1, "title": 1, "word_count": 1, "id": 1},
     ).to_list(10)
-    return pages
+    resp = JSONResponse(pages)
+    resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    return resp
 
 
 @router.get("/related/{topic_slug}")
@@ -2794,11 +2783,64 @@ async def get_related_topics(topic_slug: str, chapter_id: Optional[str] = None, 
         h = await _resolve_hierarchy(next_topic)
         next_topic["seo_path"] = f"/{h.get('board_slug', '')}/{h.get('class_slug', '')}/{h.get('subject_slug', '')}/{next_topic['slug']}" if h else ""
 
-    return {
+    from starlette.responses import JSONResponse
+    result = {
         "related": same_chapter + adjacent_topics,
         "prev": prev_topic,
         "next": next_topic,
     }
+    resp = JSONResponse(result)
+    resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    return resp
+
+
+@router.get("/page-bundle/{board}/{class_slug}/{subject_slug}/{topic_slug}")
+async def get_seo_page_bundle(board: str, class_slug: str, subject_slug: str, topic_slug: str, pt: str = "notes"):
+    from starlette.responses import JSONResponse
+    page_type = pt if pt in ALL_PAGE_TYPES else "notes"
+    page_q = _db.seo_pages.find_one(
+        {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
+         "topic_slug": topic_slug, "page_type": page_type, "status": "published"},
+        {"_id": 0},
+    )
+    types_q = _db.seo_pages.find(
+        {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
+         "topic_slug": topic_slug, "status": "published"},
+        {"_id": 0, "page_type": 1, "title": 1, "word_count": 1, "id": 1},
+    ).to_list(10)
+    import asyncio
+    page_raw, types_raw = await asyncio.gather(page_q, types_q)
+    if not page_raw:
+        raise HTTPException(status_code=404, detail="Page not found")
+    page = await _inject_qa(page_raw)
+    iq_content = None
+    if page_type == "notes" and any(t.get("page_type") == "important-questions" for t in types_raw):
+        iq_page = await _db.seo_pages.find_one(
+            {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
+             "topic_slug": topic_slug, "page_type": "important-questions", "status": "published"},
+            {"_id": 0, "content": 1},
+        )
+        if iq_page:
+            iq_content = iq_page.get("content")
+    resp = JSONResponse({"page": page, "pageTypes": types_raw, "iqContent": iq_content})
+    resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    return resp
+
+
+@router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}")
+async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, topic_slug: str):
+    from starlette.responses import JSONResponse
+    page = await _db.seo_pages.find_one(
+        {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
+         "topic_slug": topic_slug, "page_type": "notes", "status": "published"},
+        {"_id": 0},
+    )
+    if not page:
+        raise HTTPException(status_code=404, detail="Page not found")
+    result = await _inject_qa(page)
+    resp = JSONResponse(result)
+    resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    return resp
 
 
 # ─── PUBLIC: Sitemap entries (JSON) ─────────────────────────────────────────
