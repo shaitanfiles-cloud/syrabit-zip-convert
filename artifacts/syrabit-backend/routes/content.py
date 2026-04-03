@@ -564,6 +564,177 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
     if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
     return result
 
+@router.get("/content/chapters/{chapter_id}/topic-content")
+async def get_chapter_topic_content(chapter_id: str, response: Response = None):
+    """
+    Returns SEO topic content grouped for a chapter.
+    Each topic includes all available page types (notes, MCQs, definitions, etc.)
+    rendered inline for the content card lesson view.
+    """
+    ck = f"ch-topic-content:{chapter_id}"
+    cached = _get_content_cache(ck)
+    if cached:
+        if response:
+            response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return cached
+
+    try:
+        if not await is_mongo_available():
+            return {"topics": [], "chapter_id": chapter_id}
+
+        topics = await db.topics.find(
+            {"chapter_id": chapter_id, "status": "published"},
+            {"_id": 0}
+        ).sort("order", 1).to_list(100)
+
+        if not topics:
+            result = {"topics": [], "chapter_id": chapter_id}
+            _set_content_cache(ck, result)
+            return result
+
+        topic_ids = [t["id"] for t in topics]
+        pages = await db.seo_pages.find(
+            {"topic_id": {"$in": topic_ids}, "status": "published"},
+            {"_id": 0, "id": 1, "topic_id": 1, "page_type": 1, "title": 1,
+             "content": 1, "word_count": 1, "meta_description": 1}
+        ).to_list(500)
+
+        pages_by_topic = {}
+        for p in pages:
+            tid = p["topic_id"]
+            if tid not in pages_by_topic:
+                pages_by_topic[tid] = []
+            pages_by_topic[tid].append({
+                "page_type": p.get("page_type", "notes"),
+                "title": p.get("title", ""),
+                "content": p.get("content", ""),
+                "word_count": p.get("word_count", 0),
+                "meta_description": p.get("meta_description", ""),
+            })
+
+        enriched = []
+        for t in topics:
+            topic_pages = pages_by_topic.get(t["id"], [])
+            if not topic_pages:
+                continue
+            enriched.append({
+                "id": t["id"],
+                "title": t.get("title", ""),
+                "slug": t.get("slug", ""),
+                "definition": t.get("definition", ""),
+                "order": t.get("order", 0),
+                "page_types": [p["page_type"] for p in topic_pages],
+                "pages": topic_pages,
+            })
+
+        result = {"topics": enriched, "chapter_id": chapter_id, "total": len(enriched)}
+        _set_content_cache(ck, result)
+        if response:
+            response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return result
+    except Exception as exc:
+        logger.error(f"topic-content error: {exc}")
+        return {"topics": [], "chapter_id": chapter_id}
+
+
+@router.get("/content/chapters/{chapter_id}/topic-summary")
+async def get_chapter_topic_summary(chapter_id: str, response: Response = None):
+    """
+    Lightweight: returns topics list with available page_types (no content).
+    Used for initial chapter card rendering before user expands a topic.
+    """
+    ck = f"ch-topic-summary:{chapter_id}"
+    cached = _get_content_cache(ck)
+    if cached:
+        if response:
+            response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return cached
+
+    try:
+        if not await is_mongo_available():
+            return {"topics": [], "chapter_id": chapter_id}
+
+        topics = await db.topics.find(
+            {"chapter_id": chapter_id, "status": "published"},
+            {"_id": 0, "id": 1, "title": 1, "slug": 1, "definition": 1, "order": 1}
+        ).sort("order", 1).to_list(100)
+
+        if not topics:
+            result = {"topics": [], "chapter_id": chapter_id}
+            _set_content_cache(ck, result)
+            return result
+
+        topic_ids = [t["id"] for t in topics]
+        pages = await db.seo_pages.find(
+            {"topic_id": {"$in": topic_ids}, "status": "published"},
+            {"_id": 0, "topic_id": 1, "page_type": 1}
+        ).to_list(500)
+
+        types_by_topic = {}
+        for p in pages:
+            tid = p["topic_id"]
+            if tid not in types_by_topic:
+                types_by_topic[tid] = []
+            types_by_topic[tid].append(p["page_type"])
+
+        enriched = []
+        for t in topics:
+            pt = types_by_topic.get(t["id"], [])
+            enriched.append({
+                "id": t["id"],
+                "title": t.get("title", ""),
+                "slug": t.get("slug", ""),
+                "definition": t.get("definition", ""),
+                "order": t.get("order", 0),
+                "page_types": pt,
+                "has_content": len(pt) > 0,
+            })
+
+        result = {"topics": enriched, "chapter_id": chapter_id, "total": len(enriched)}
+        _set_content_cache(ck, result)
+        if response:
+            response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return result
+    except Exception as exc:
+        logger.error(f"topic-summary error: {exc}")
+        return {"topics": [], "chapter_id": chapter_id}
+
+
+@router.get("/content/topic/{topic_id}/page/{page_type}")
+async def get_single_topic_page(topic_id: str, page_type: str, response: Response = None):
+    """
+    Returns a single SEO page content for a topic.
+    Used for lazy-loading individual page types when user expands a topic tab.
+    """
+    ck = f"topic-page:{topic_id}:{page_type}"
+    cached = _get_content_cache(ck)
+    if cached:
+        if response:
+            response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return cached
+
+    try:
+        if not await is_mongo_available():
+            raise HTTPException(503, "Content database unavailable")
+
+        page = await db.seo_pages.find_one(
+            {"topic_id": topic_id, "page_type": page_type, "status": "published"},
+            {"_id": 0, "id": 1, "title": 1, "content": 1, "word_count": 1,
+             "page_type": 1, "meta_description": 1, "topic_id": 1}
+        )
+        if not page:
+            raise HTTPException(404, "Page not found")
+
+        _set_content_cache(ck, page)
+        if response:
+            response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
+        return page
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Failed to load topic content")
+
+
 @router.get("/content/chunks/{chapter_id}")
 async def get_chunks(chapter_id: str):
     ck = f"chunks:{chapter_id}"
