@@ -1961,6 +1961,19 @@ _PAGE_TYPE_METHODOLOGY = {
 }
 
 
+async def _resolve_og_image(subject_slug: str) -> str:
+    fallback = "https://syrabit.ai/opengraph.jpg"
+    if not subject_slug:
+        return fallback
+    doc = await _db.subjects.find_one(
+        {"slug": subject_slug, "thumbnailUrl": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "id": 1},
+    )
+    if doc and doc.get("id"):
+        return f"https://syrabit.ai/api/content/subjects/{doc['id']}/og-image.png"
+    return fallback
+
+
 def _render_seo_html(
     page: dict,
     page_url: str,
@@ -1968,6 +1981,7 @@ def _render_seo_html(
     related_topics: list = None,    # [{title, seo_path, slug}]
     prev_topic: dict = None,
     next_topic: dict = None,
+    og_image_url: str = "https://syrabit.ai/opengraph.jpg",
 ) -> str:
     title = html_mod.escape(page.get("title", ""))
     desc = html_mod.escape(page.get("meta_description", ""))
@@ -2006,7 +2020,7 @@ def _render_seo_html(
             "publisher": _ORG_NODE,
             "datePublished": generated,
             "dateModified": updated,
-            "image": "https://syrabit.ai/opengraph.jpg",
+            "image": og_image_url,
             "mainEntityOfPage": {"@type": "WebPage", "@id": page_url},
             "educationalLevel": edu_level,
             "about": {"@type": "Thing", "name": page.get("topic_title", "")},
@@ -2202,7 +2216,7 @@ def _render_seo_html(
 <meta property="og:description" content="{desc}">
 <meta property="og:type" content="article">
 <meta property="og:url" content="{html_mod.escape(page_url)}">
-<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta property="og:image" content="{og_image_url}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="article:published_time" content="{html_mod.escape(generated)}">
@@ -2215,7 +2229,7 @@ def _render_seo_html(
 <meta name="twitter:site" content="@SyrabitAI">
 <meta name="twitter:title" content="{title}">
 <meta name="twitter:description" content="{desc}">
-<meta name="twitter:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="twitter:image" content="{og_image_url}">
 <meta name="citation_title" content="{title}">
 <meta name="citation_author" content="Syrabit.ai">
 <meta name="citation_publication_date" content="{html_mod.escape(generated[:10] if generated else '')}">
@@ -2464,15 +2478,26 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
         subject_query["board_id"] = board_doc["id"]
     subject_doc = await _db.subjects.find_one(
         subject_query,
-        {"_id": 0, "name": 1, "description": 1, "id": 1},
+        {"_id": 0, "name": 1, "description": 1, "id": 1, "thumbnailUrl": 1, "thumbnail_url": 1},
     )
     if not subject_doc:
         subject_doc = await _db.subjects.find_one(
             {"slug": subject_slug},
-            {"_id": 0, "name": 1, "description": 1, "id": 1},
+            {"_id": 0, "name": 1, "description": 1, "id": 1, "thumbnailUrl": 1, "thumbnail_url": 1},
         )
     subject_name = subject_doc["name"] if subject_doc else subject_slug.replace("-", " ").title()
     subject_desc_raw = subject_doc.get("description", "") if subject_doc else ""
+    subject_id = subject_doc.get("id", "") if subject_doc else ""
+    _has_thumb = bool(subject_doc and (subject_doc.get("thumbnailUrl") or subject_doc.get("thumbnail_url")))
+    if not _has_thumb and subject_id:
+        _thumb_doc = await _db.subjects.find_one(
+            {"slug": subject_slug, "thumbnailUrl": {"$exists": True, "$ne": ""}},
+            {"_id": 0, "thumbnailUrl": 1, "thumbnail_url": 1, "id": 1},
+        )
+        if _thumb_doc:
+            subject_doc["thumbnailUrl"] = _thumb_doc.get("thumbnailUrl") or _thumb_doc.get("thumbnail_url", "")
+            subject_id = _thumb_doc.get("id") or subject_id
+            _has_thumb = True
     board_label = board.upper() if board in ("ahsec", "seba") else board.title()
     class_label = class_slug.replace("-", " ").title()
 
@@ -2652,7 +2677,10 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
 <meta name="geo.placename" content="Assam, India">
 <meta name="geo.position" content="26.2006;92.9376">
 <meta name="ICBM" content="26.2006, 92.9376">
-<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta property="og:image" content="{f'https://syrabit.ai/api/content/subjects/{html_mod.escape(subject_id)}/og-image.png' if subject_id and (subject_doc.get('thumbnailUrl') or subject_doc.get('thumbnail_url')) else 'https://syrabit.ai/opengraph.jpg'}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:image" content="{f'https://syrabit.ai/api/content/subjects/{html_mod.escape(subject_id)}/og-image.png' if subject_id and (subject_doc.get('thumbnailUrl') or subject_doc.get('thumbnail_url')) else 'https://syrabit.ai/opengraph.jpg'}">
 <meta property="og:locale" content="en_IN">
 <meta http-equiv="content-language" content="en-IN">
 <link rel="alternate" hreflang="en-IN" href="{html_mod.escape(page_url)}">
@@ -2731,11 +2759,12 @@ async def get_seo_html_default(board: str, class_slug: str, subject_slug: str, t
         raise HTTPException(status_code=404, detail="Page not found")
     page = await _inject_qa(page)
     page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{topic_slug}"
-    pt_links, (related, prev_t, next_t) = await asyncio.gather(
+    pt_links, (related, prev_t, next_t), og_img = await asyncio.gather(
         _build_page_type_links(page, "notes", board, class_slug, subject_slug, topic_slug),
         _build_related_data(page, board, class_slug, subject_slug, topic_slug),
+        _resolve_og_image(subject_slug),
     )
-    return HTMLResponse(content=_render_seo_html(page, page_url, pt_links, related, prev_t, next_t))
+    return HTMLResponse(content=_render_seo_html(page, page_url, pt_links, related, prev_t, next_t, og_image_url=og_img))
 
 
 @router.get("/html/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}", response_class=HTMLResponse)
@@ -2751,11 +2780,12 @@ async def get_seo_html_typed(board: str, class_slug: str, subject_slug: str, top
         raise HTTPException(status_code=404, detail="Page not found")
     page = await _inject_qa(page)
     page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}"
-    pt_links, (related, prev_t, next_t) = await asyncio.gather(
+    pt_links, (related, prev_t, next_t), og_img = await asyncio.gather(
         _build_page_type_links(page, page_type, board, class_slug, subject_slug, topic_slug),
         _build_related_data(page, board, class_slug, subject_slug, topic_slug),
+        _resolve_og_image(subject_slug),
     )
-    return HTMLResponse(content=_render_seo_html(page, page_url, pt_links, related, prev_t, next_t))
+    return HTMLResponse(content=_render_seo_html(page, page_url, pt_links, related, prev_t, next_t, og_image_url=og_img))
 
 
 @router.get("/page-types/{board}/{class_slug}/{subject_slug}/{topic_slug}")

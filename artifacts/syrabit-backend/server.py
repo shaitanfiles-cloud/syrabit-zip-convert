@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -733,10 +733,91 @@ if FRONTEND_BUILD.is_dir():
 
     _SPA_SKIP_PREFIXES = ("api/", "docs", "openapi.json", "health")
 
+    import re as _spa_re
+    _OG_BOT_RE = _spa_re.compile(
+        r"facebookexternalhit|facebookbot|whatsapp|twitterbot|linkedinbot|"
+        r"telegrambot|slackbot|discordbot|pinterest|snapchat|skype",
+        _spa_re.IGNORECASE,
+    )
+    _SUBJECT_PATH_RE = _spa_re.compile(
+        r"^(?P<board>[^/]+)/(?P<class>[^/]+)(?:/(?P<stream>[^/]+))?/(?P<subject>[^/]+)/?$"
+    )
+
+    async def _og_html_for_subject(path: str) -> Optional[str]:
+        m = _SUBJECT_PATH_RE.match(path)
+        if not m:
+            return None
+        try:
+            from deps import db
+            if not db:
+                return None
+            board_slug = m.group("board")
+            subject_slug = m.group("subject")
+            stream_slug = m.group("stream") or m.group("class")
+
+            subj = await db.subjects.find_one(
+                {"slug": subject_slug, "status": "published"},
+                {"_id": 0, "id": 1, "name": 1, "description": 1, "slug": 1,
+                 "thumbnailUrl": 1, "thumbnail_url": 1, "board_name": 1,
+                 "class_name": 1, "stream_name": 1, "chapter_count": 1},
+            )
+            if not subj:
+                return None
+
+            name = subj.get("name", "")
+            desc = subj.get("description") or f"Complete {name} notes, chapters, and AI explanations for Assam board students."
+            thumb = subj.get("thumbnailUrl") or subj.get("thumbnail_url") or ""
+            subj_id = subj.get("id", "")
+            board = subj.get("board_name", "")
+            cls = subj.get("class_name", "")
+            stream = subj.get("stream_name", "")
+            label = f"{cls} {board} {stream}".strip() or "Assam Board"
+
+            title = f"{name} Notes — {label}"
+            page_url = f"https://syrabit.ai/{path}"
+
+            if thumb and subj_id:
+                og_image = f"https://syrabit.ai/api/content/subjects/{subj_id}/og-image.png"
+            else:
+                og_image = "https://syrabit.ai/opengraph.jpg"
+
+            from html import escape
+            return (
+                '<!DOCTYPE html><html lang="en"><head>'
+                '<meta charset="utf-8">'
+                f'<title>{escape(title)} | Syrabit.ai</title>'
+                f'<meta name="description" content="{escape(desc)}">'
+                f'<meta property="og:site_name" content="Syrabit.ai">'
+                f'<meta property="og:title" content="{escape(title)}">'
+                f'<meta property="og:description" content="{escape(desc)}">'
+                f'<meta property="og:type" content="article">'
+                f'<meta property="og:url" content="{escape(page_url)}">'
+                f'<meta property="og:image" content="{escape(og_image)}">'
+                '<meta property="og:image:width" content="1200">'
+                '<meta property="og:image:height" content="630">'
+                '<meta name="twitter:card" content="summary_large_image">'
+                f'<meta name="twitter:title" content="{escape(title)}">'
+                f'<meta name="twitter:description" content="{escape(desc)}">'
+                f'<meta name="twitter:image" content="{escape(og_image)}">'
+                f'<link rel="canonical" href="{escape(page_url)}">'
+                f'<meta http-equiv="refresh" content="0;url={escape(page_url)}">'
+                '</head><body></body></html>'
+            )
+        except Exception as _og_err:
+            logger.warning(f"OG tag injection error: {_og_err}")
+            return None
+
     @app.get("/{full_path:path}")
-    async def serve_spa(full_path: str):
+    async def serve_spa(request: Request, full_path: str):
         if any(full_path.startswith(p) for p in _SPA_SKIP_PREFIXES):
             return JSONResponse(status_code=404, content={"detail": "Not found"})
+
+        ua = (request.headers.get("user-agent") or "").lower()
+        if _OG_BOT_RE.search(ua) and full_path and "/" in full_path:
+            og_html = await _og_html_for_subject(full_path)
+            if og_html:
+                return Response(content=og_html, media_type="text/html")
+
         index_file = FRONTEND_BUILD / "index.html"
         if index_file.exists():
             from fastapi.responses import FileResponse
