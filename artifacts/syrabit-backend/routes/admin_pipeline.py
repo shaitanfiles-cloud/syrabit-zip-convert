@@ -46,11 +46,12 @@ async def _pipeline_generate_mcqs(
     if not content or len(content.strip()) < 100:
         return []
     prompt = (
-        f"You are an expert examiner for AHSEC/SEBA/Degree students in Assam.\n"
+        f"You are an expert examiner for AHSEC/SEBA/Degree students in Assam, India.\n"
         f"Generate exactly {count} MCQ questions for:\n"
         f"Subject: {subject_name} ({class_name})\nChapter: {chapter_title}\n\n"
         f"Each MCQ must have exactly 4 options (A, B, C, D), one correct answer, and a brief explanation.\n"
         f"Mix difficulties: 30% easy, 40% medium, 30% hard.\n"
+        f"Questions must use exam-style language matching AHSEC/SEBA/Degree paper patterns.\n"
         f"Return ONLY valid JSON (no markdown fences):\n"
         f'[{{"id": 1, "question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, '
         f'"correct_answer": "A", "explanation": "...", "difficulty": "medium", "topic": "...", "marks": 1}}]\n\n'
@@ -83,11 +84,12 @@ async def _pipeline_generate_flashcards(
         topic_list = ", ".join(str(t) for t in topics[:15])
         topic_instruction = f"\nFlashcards MUST collectively cover ALL of these syllabus topics: {topic_list}\nEnsure at least one flashcard per topic.\n"
     prompt = (
-        f"You are an expert memory coach for AHSEC/SEBA/Degree students in Assam.\n"
+        f"You are an expert memory coach for AHSEC/SEBA/Degree students in Assam, India.\n"
         f"Generate exactly {count} HIGH-IMPACT memory-trick flashcards for:\n"
         f"Subject: {subject_name} ({class_name})\nChapter: {chapter_title}\n"
         f"{topic_instruction}\n"
-        f"Card types (distribute evenly): mnemonic, mindmap, shortcut, memory_hack, key_fact\n\n"
+        f"Card types (distribute evenly): mnemonic, mindmap, shortcut, memory_hack, key_fact\n"
+        f"Each card should use exam-relevant terms matching AHSEC/SEBA/Degree paper patterns.\n\n"
         f"Return ONLY valid JSON (no markdown fences):\n"
         f'{{"flashcards": [{{"id": 1, "front": "...", "back": "...", "type": "mnemonic", '
         f'"difficulty": "easy", "exam_tip": "...", "tags": ["..."]}}]}}\n\n'
@@ -159,32 +161,31 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
             + "\n".join(f"  - {kw}" for kw in seo_keywords[:15])
         )
 
-    prompt = f"""You are an expert academic content writer for Indian university degree students (NEP/FYUGP curriculum).
+    prompt = f"""You are an expert academic content writer for AHSEC/SEBA/Degree (NEP/FYUGP) students in Assam, India.
 
-Generate **detailed, topic-wise summary notes** for the following chapter. These notes will be the primary study material for students.
+Generate **exam-focused, topic-wise study notes** for the chapter below.
 
 **Chapter:** {title}
 **Subject:** {subject_name or "Degree Course"} ({(paper_type or "").upper()} — {class_name or "FYUGP"})
 **Description:** {description or "No additional description provided."}
 
-**Syllabus Topics to cover:**
+**Syllabus Topics to cover (MANDATORY — every topic MUST get its own section):**
 {topic_block}{seo_seed_block}
 
 ---
 
 **INSTRUCTIONS:**
-- Write a brief **introduction** (2-3 sentences) about the chapter as a whole.
-- For EACH topic listed above, write a dedicated section with:
-  - A clear **heading** (use ## for the topic name)
-  - A concise explanation of the topic (3-6 sentences) in simple academic language
-  - **Key Points** in bullet form (4-6 bullets) covering definitions, significance, and important facts
-  - Use **bold** to highlight key terms/definitions
-- If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
-- End with a brief **Summary** section recapping the chapter's main takeaways.
-- Use markdown formatting (##, ###, **, -, etc.)
-- Write for degree-level students — clear, precise, and educational
-- Do NOT add any disclaimers or preamble. Start directly with the introduction.
-- Target length: ~400-700 words total across all topics.
+1. Open with a crisp **introduction** (2-3 sentences) — state the chapter's exam relevance.
+2. For EACH topic listed above, write:
+   - A ## Heading matching the topic name exactly
+   - 3-5 sentence explanation using simple, precise academic language
+   - **Key Points** as 4-6 bullets: definitions in **bold**, significance, and facts examiners look for
+   - Where applicable, include a brief real-world example or Assam-specific context
+3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
+4. End with a **Summary** section listing the 5-7 most exam-critical takeaways.
+5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
+6. Quality over length — target 400-700 words of dense, high-value content.
+7. Write as though every word costs marks — no filler, no repetition.
 """
 
     try:
@@ -282,29 +283,29 @@ async def admin_generate_subject_notes_bulk(subject_id: str, body: BulkNotesRequ
             results.append({"chapter_id": chapter_id, "title": title, "status": "skipped", "reason": "no description, topics, or content"})
             continue
 
-        prompt = f"""You are an expert academic content writer for Indian university degree students (NEP/FYUGP curriculum).
+        prompt = f"""You are an expert academic content writer for AHSEC/SEBA/Degree (NEP/FYUGP) students in Assam, India.
 
-Generate **detailed, topic-wise summary notes** for the following chapter. These notes will be the primary study material for students.
+Generate **exam-focused, topic-wise study notes** for the chapter below.
 
 **Chapter:** {title}
 **Subject:** {subject_name or "Degree Course"} ({(paper_type or "").upper()} — {class_name or "FYUGP"})
 **Description:** {description or "No additional description provided."}
 
-**Syllabus Topics to cover (MANDATORY — every topic MUST be covered):**
+**Syllabus Topics to cover (MANDATORY — every topic MUST get its own section):**
 {topic_block}
 
 ---
 
 **INSTRUCTIONS:**
-- Write a brief **introduction** (2-3 sentences) about the chapter.
-- You MUST cover EVERY topic listed above. For EACH topic listed, write:
-  - A ## Heading matching the topic name
-  - 3-5 sentence explanation in simple academic language
-  - **Key Points** in 4-6 bullets with definitions/significance/**bold key terms**
-- Do NOT skip any topic from the list. If the syllabus lists N topics, your notes must have N corresponding sections.
-- End with a **Summary** section.
-- Use markdown. Do NOT add disclaimers. Start directly with the introduction.
-- Target: ~400-700 words.
+1. Open with a crisp **introduction** (2-3 sentences) — state the chapter's exam relevance.
+2. You MUST cover EVERY topic listed above. For EACH topic, write:
+   - A ## Heading matching the topic name exactly
+   - 3-5 sentence explanation using simple, precise academic language
+   - **Key Points** as 4-6 bullets: definitions in **bold**, significance, and facts examiners look for
+3. Do NOT skip any topic. If the syllabus lists N topics, your notes must have N corresponding sections.
+4. End with a **Summary** section listing the 5-7 most exam-critical takeaways.
+5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
+6. Quality over length — target 400-700 words of dense, high-value content.
 """
         try:
             generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=2048)
@@ -405,7 +406,7 @@ async def admin_regenerate_thin_chapters(
         topics = chapter.get("topics") or []
         topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else f"  {title}"
 
-        prompt = f"""You are an expert academic content writer for Indian degree students (NEP/FYUGP).
+        prompt = f"""You are an expert academic content writer for AHSEC/SEBA/Degree (NEP/FYUGP) students in Assam, India.
 
 Generate detailed study notes for:
 **Chapter:** {title}
@@ -415,12 +416,13 @@ Generate detailed study notes for:
 {topic_block}
 
 **INSTRUCTIONS:**
-- Write 800-1200 words of detailed, well-structured notes
-- Use ## headings for each topic, ### for subtopics
-- Include key definitions in **bold**, bullet points for key facts
-- End with a brief Summary section
-- Use markdown formatting throughout
-- Start directly with content, no preamble"""
+1. Write 800-1200 words of detailed, exam-focused notes
+2. Use ## headings for each topic (match topic names exactly), ### for subtopics
+3. Include key definitions in **bold**, 4-6 bullet points per topic for key facts examiners look for
+4. Where applicable, include Assam-specific context or real-world examples
+5. End with a **Summary** section listing 5-7 most exam-critical takeaways
+6. Use markdown formatting throughout. NO disclaimers, NO preamble.
+7. Quality over length — no filler, no repetition"""
 
         try:
             generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=4000)
@@ -664,23 +666,26 @@ async def _run_subject_content_pipeline(job_id: str, subject_id: str):
                 topics     = chapter.get("topics") or []
                 description = (chapter.get("description") or "").strip()
                 topic_block = ", ".join(str(t) for t in topics[:15]) if topics else (description[:200] if description else chapter_title)
-                generate_prompt = f"""You are an expert exam question setter for {class_name} {subject_name}.
+                generate_prompt = f"""You are an expert exam question setter for AHSEC/SEBA/Degree students in Assam.
 
-Generate the MOST IMPORTANT exam questions for the chapter below, organised strictly by mark weight.
+Generate the MOST IMPORTANT exam questions for "{chapter_title}" from {subject_name} ({class_name}).
 Questions MUST collectively cover ALL of these syllabus topics: {topic_block}
 
-Chapter: {chapter_title}
-Topics: {topic_block}
-
-Return ONLY valid JSON in this exact schema (no markdown, no explanation):
+Return ONLY valid JSON in this exact schema (no markdown, no explanation).
+Mark categories MUST be in ASCENDING order: 1_mark, 2_mark, 3_mark, 5_mark, 10_mark.
 {{
-  "1_mark": [{{"question": "...", "type": "MCQ/very_short_answer"}},{{"question": "...", "type": "MCQ/very_short_answer"}},{{"question": "...", "type": "MCQ/very_short_answer"}}],
-  "2_mark": [{{"question": "...", "type": "short_answer"}},{{"question": "...", "type": "short_answer"}},{{"question": "...", "type": "short_answer"}}],
-  "3_mark": [{{"question": "...", "type": "brief_answer"}},{{"question": "...", "type": "brief_answer"}},{{"question": "...", "type": "brief_answer"}}],
-  "5_mark": [{{"question": "...", "type": "medium_answer"}},{{"question": "...", "type": "medium_answer"}},{{"question": "...", "type": "medium_answer"}}],
-  "10_mark": [{{"question": "...", "type": "long_answer/essay"}},{{"question": "...", "type": "long_answer/essay"}},{{"question": "...", "type": "long_answer/essay"}}]
+  "1_mark": [{{"question": "...", "type": "very_short_answer"}}, ...],
+  "2_mark": [{{"question": "...", "type": "short_answer"}}, ...],
+  "3_mark": [{{"question": "...", "type": "brief_answer"}}, ...],
+  "5_mark": [{{"question": "...", "type": "medium_answer"}}, ...],
+  "10_mark": [{{"question": "...", "type": "long_answer/essay"}}, ...]
 }}
-Rules: 3 questions per mark bucket, total 15 questions. Specific to "{chapter_title}". Every listed topic must be addressed by at least one question. Pure JSON only."""
+Rules:
+- 3 questions per mark bucket, total 15 questions.
+- Questions must be specific to "{chapter_title}" — no generic questions.
+- Every listed syllabus topic must be addressed by at least one question.
+- Use exam-style language matching AHSEC/SEBA/Degree paper patterns.
+- Pure JSON only — no markdown fences, no explanation."""
                 raw_resp = await call_llm_api_content([{"role": "user", "content": generate_prompt}], max_tokens=1600)
                 json_match = _re.search(r'\{[\s\S]*\}', raw_resp or "")
                 if json_match:

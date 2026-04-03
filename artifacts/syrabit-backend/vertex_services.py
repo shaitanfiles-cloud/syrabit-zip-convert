@@ -507,7 +507,7 @@ async def enhance_content(content: str, page_type: str = "notes",
         "notes":               "Make the notes clearer, add more examples, better structure with headers, and ensure exam relevance.",
         "mcqs":                "Improve MCQ distractors to be more plausible, ensure questions test understanding not just recall.",
         "definition":          "Make the definition precise, include etymology if helpful, and give a real-world analogy.",
-        "important-questions": "Ensure questions cover all board exam patterns (2-mark, 5-mark, 10-mark). Add model answer hints.",
+        "important-questions": "Ensure questions cover all mark categories in ascending order (1-mark, 2-mark, 3-mark, 5-mark, 10-mark). Use AHSEC/SEBA/Degree exam-style language. Add model answer hints.",
         "examples":            "Add more relatable, Assam-context examples that AssamBoard students will recognize.",
     }
 

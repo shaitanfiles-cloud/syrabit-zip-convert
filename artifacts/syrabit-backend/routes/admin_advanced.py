@@ -1448,12 +1448,14 @@ Return ONLY valid JSON in this exact schema (no markdown, no explanation):
 }}
 
 Rules:
+- Mark categories MUST be in ASCENDING order: 1_mark → 2_mark → 3_mark → 5_mark → 10_mark
 - 1-mark: MCQ options OR one-word/one-line answers
 - 2-mark: short answers (2-3 sentences)
 - 3-mark: brief answers with 3 clear points
 - 5-mark: medium answers with points/explanation
 - 10-mark: detailed essay or long-answer questions
 - Questions must be specific to "{chapter_title}", not generic
+- Use exam-style language matching AHSEC/SEBA/Degree paper patterns
 - Every listed topic must be addressed by at least one question
 - Exactly 3 questions per mark bucket, total 15 questions
 - If you found real PYQs from web data above, use "web_pyq" as source; otherwise "ai_generated"
