@@ -635,7 +635,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         return (subj or {}).get("document_text")
 
     async def _fetch_search_scope_early():
-        if _skip_rag_stream:
+        if _skip_rag_stream and _stream_intent == "casual":
             return "", None
         if msg.card_context and msg.subject_id and msg.subject_name:
             return msg.subject_name, None
