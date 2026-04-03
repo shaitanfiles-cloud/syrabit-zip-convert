@@ -9,6 +9,7 @@ export function InputBar({
   isLoading, isOutOfCredits, isLow, credits,
   effectiveLimit, remaining, creditPercent,
   textareaRef, adjustTextarea, sendMsg, handleStop,
+  ttsLanguagePicker,
 }) {
   const navigate = useNavigate();
   const [maxTextareaHeight, setMaxTextareaHeight] = useState(160);
@@ -75,6 +76,7 @@ export function InputBar({
             aria-label="Type your message"
           />
           <div className="flex items-center gap-2 flex-shrink-0">
+            {ttsLanguagePicker}
             <span className="text-xs text-muted-foreground hidden sm:inline">↵ Enter</span>
             {isLoading ? (
               <button

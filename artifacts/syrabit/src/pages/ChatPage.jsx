@@ -18,6 +18,8 @@ import { MessageBubble } from './chat/MessageBubble';
 import { EmptyState } from './chat/EmptyState';
 import { InputBar } from './chat/InputBar';
 import { ModelSelector, MODELS } from './chat/ModelSelector';
+import { TTSLanguagePicker } from './chat/TTSLanguagePicker';
+import { useTTS, useSarvamStatus } from '@/hooks/useTTS';
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
@@ -39,6 +41,9 @@ export default function ChatPage() {
   const [syncState, setSyncState]         = useState('idle');
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
+
+  const tts = useTTS();
+  const { enabled: sarvamEnabled } = useSarvamStatus();
 
   const messagesEndRef    = useRef(null);
   const textareaRef       = useRef(null);
@@ -348,7 +353,7 @@ export default function ChatPage() {
               <EmptyState subject={subject} scopedChapters={scopedChapters} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
             )}
               {messages.map((msg, i) => (
-                <MessageBubble key={msg.id || i} msg={msg} isLast={i === messages.length - 1} onCopy={() => setCopiedMsgId(msg.id)} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} />
+                <MessageBubble key={msg.id || i} msg={msg} isLast={i === messages.length - 1} onCopy={() => setCopiedMsgId(msg.id)} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} tts={tts} sarvamEnabled={sarvamEnabled} />
               ))}
             <div ref={messagesEndRef} />
           </div>
@@ -359,6 +364,7 @@ export default function ChatPage() {
           isOutOfCredits={isOutOfCredits} isLow={isLow} credits={credits}
           effectiveLimit={effectiveLimit} remaining={remaining} creditPercent={creditPercent}
           textareaRef={textareaRef} adjustTextarea={adjustTextarea} sendMsg={sendMsg} handleStop={handleStop}
+          ttsLanguagePicker={<TTSLanguagePicker />}
         />
       </div>
     </AppLayout>
