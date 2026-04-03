@@ -602,7 +602,7 @@ async def admin_subject_coverage(subject_id: str, admin: dict = Depends(get_admi
     """Compute per-chapter syllabus topic coverage scores for a subject."""
     chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(None)
     if not chapters:
-        raise HTTPException(status_code=404, detail="No chapters found")
+        return {"subject_id": subject_id, "chapters": []}
     chapter_ids = [c["id"] for c in chapters]
     pyq_docs, fc_docs = await asyncio.gather(
         db.ai_pyq_collections.find({"chapter_id": {"$in": chapter_ids}}, {"_id": 0}).to_list(None),

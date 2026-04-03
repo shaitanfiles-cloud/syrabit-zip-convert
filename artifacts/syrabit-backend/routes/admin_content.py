@@ -908,12 +908,17 @@ async def generate_chapter_card_thumbnails(
 
 @router.delete("/admin/content/subjects/{subject_id}")
 async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_user)):
-    result = await db.subjects.delete_one({"id": subject_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Subject not found")
+    await db.subjects.delete_one({"id": subject_id})
     await db.chapters.delete_many({"subject_id": subject_id})
     try:
         await db.syllabus_embeddings.delete_many({"subject_id": subject_id})
+    except Exception:
+        pass
+    try:
+        await db.ai_pyq_collections.delete_many({"subject_id": subject_id})
+        await db.flashcard_collections.delete_many({"subject_id": subject_id})
+        await db.seo_topics.delete_many({"subject_id": subject_id})
+        await db.chunks.delete_many({"subject_id": subject_id})
     except Exception:
         pass
     _invalidate_content_cache("subjects")
