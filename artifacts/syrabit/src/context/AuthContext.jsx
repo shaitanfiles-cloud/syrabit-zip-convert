@@ -39,16 +39,13 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    const init = async () => {
-      const savedToken = sessionStorage.getItem('syrabit_token');
-      if (savedToken) {
-        _inMemoryToken = savedToken;
-        setAuthToken(savedToken);
-      }
-      await fetchMe();
-      setLoading(false);
-    };
-    init();
+    const savedToken = sessionStorage.getItem('syrabit_token');
+    if (savedToken) {
+      _inMemoryToken = savedToken;
+      setAuthToken(savedToken);
+    }
+    setLoading(false);
+    fetchMe();
   }, [fetchMe]);
 
   const _storeToken = (token) => {

@@ -1804,6 +1804,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             cache_key = f"_learn_/{parts[1]}"
         elif n == 2 and parts[0] == "pyq":
             cache_key = f"_pyq_/{parts[1]}"
+        elif n == 2 and parts[0] == "subject":
+            cache_key = f"_subject_id_/{parts[1]}"
         elif n == 3:
             cache_key = f"_subj_/{parts[0]}/{parts[1]}/{parts[2]}"
         elif n in (4, 5):
@@ -1909,6 +1911,53 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 <nav><a href="https://syrabit.ai">Home</a> &rsaquo; <a href="https://syrabit.ai/library">Library</a> &rsaquo; <span>{doc_title}</span></nav>
 <article><h1>{doc_title}</h1>{doc_body}</article>
 <footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                _bot_html_cache[cache_key] = html_content
+                return _bot_html_response(html_content)
+
+            if cache_key.startswith("_subject_id_/"):
+                subj_id = parts[1]
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    subj_resp = await client.get(f"http://localhost:{_seo_port}/api/content/subjects/{subj_id}")
+                if subj_resp.status_code != 200:
+                    return await self._safe_call_next(request, call_next)
+                subj = subj_resp.json()
+                subj_name = _html_mod.escape(subj.get("name", "Subject"))
+                subj_desc = _html_mod.escape(subj.get("description", "")[:300]) if subj.get("description") else f"Study {subj_name} on Syrabit.ai"
+                board_name = _html_mod.escape(subj.get("board_name", ""))
+                class_name = _html_mod.escape(subj.get("class_name", ""))
+                stream_name = _html_mod.escape(subj.get("stream_name", ""))
+                og_title = f"{subj_name} — {class_name} {stream_name}".strip() if class_name else subj_name
+                page_url = f"https://syrabit.ai/subject/{subj_id}"
+                html_content = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{og_title} | Syrabit.ai</title>
+<meta name="description" content="{subj_desc}">
+<link rel="canonical" href="{page_url}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:title" content="{og_title} | Syrabit.ai">
+<meta property="og:description" content="{subj_desc}">
+<meta property="og:url" content="{page_url}">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{og_title} | Syrabit.ai">
+<meta name="twitter:description" content="{subj_desc}">
+<meta name="twitter:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="robots" content="index, follow">
+</head>
+<body>
+<h1>{og_title}</h1>
+<p>{subj_desc}</p>
+{f'<p>Board: {board_name}</p>' if board_name else ''}
+{f'<p>Class: {class_name}</p>' if class_name else ''}
+<p><a href="{page_url}">View {subj_name} on Syrabit.ai</a></p>
 </body>
 </html>"""
                 _bot_html_cache[cache_key] = html_content
