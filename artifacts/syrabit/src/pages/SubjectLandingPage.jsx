@@ -2,13 +2,12 @@ import { useState, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import {
-  BookOpen, ChevronRight, Home, Sparkles, FileText,
-  Clock, Layers, ArrowLeft, Search,
+  BookOpen, ChevronRight, Home, Sparkles,
+  Layers, ArrowLeft, Search,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { getSeoPageTypes } from '@/utils/api';
-import { useResolveSubject, useChapters, useSeoTopics } from '@/hooks/useContent';
+import { useResolveSubject, useChapters } from '@/hooks/useContent';
 
 export default function SubjectLandingPage() {
   const { board, classSlug, subjectSlug } = useParams();
@@ -17,23 +16,10 @@ export default function SubjectLandingPage() {
   const { data: subject = null, isLoading: subjectLoading, error: subjectError } = useResolveSubject(board, classSlug, subjectSlug);
   const subjectId = subject?.id || subject?._id;
   const { data: chapters = [], isLoading: chaptersLoading } = useChapters(subjectId);
-  const { data: topicsRaw = [] } = useSeoTopics(board, classSlug, subjectSlug);
-  const topics = Array.isArray(topicsRaw) ? topicsRaw : [];
-
   const loading = subjectLoading || (!!subjectId && chaptersLoading);
   const error = subjectError
     ? (subjectError.response?.status === 404 ? 'Subject not found' : 'Failed to load subject')
     : null;
-
-  const topicsByChapter = useMemo(() => {
-    const map = new Map();
-    for (const t of topics) {
-      const key = t.chapter_slug || t.topic_slug || '';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(t);
-    }
-    return map;
-  }, [topics]);
 
   const filteredChapters = useMemo(() => {
     if (!searchQuery.trim()) return chapters;
@@ -128,12 +114,6 @@ export default function SubjectLandingPage() {
                   <Layers size={12} />
                   {chapters.length} chapters
                 </span>
-                {topics.length > 0 && (
-                  <span className="flex items-center gap-1">
-                    <FileText size={12} />
-                    {topics.length} lessons
-                  </span>
-                )}
               </div>
             </div>
           </div>
@@ -185,7 +165,6 @@ export default function SubjectLandingPage() {
               const chPath = ch.slug
                 ? `${basePath}/${ch.slug}`
                 : `${basePath}`;
-              const chTopics = topicsByChapter.get(ch.slug) || [];
 
               return (
                 <div
@@ -221,25 +200,6 @@ export default function SubjectLandingPage() {
                       <ChevronRight size={16} className="text-gray-600 group-hover/ch:text-purple-400 transition-colors" />
                     </div>
                   </Link>
-
-                  {chTopics.length > 0 && (
-                    <div className="px-5 pb-3" style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}>
-                      <div className="flex flex-wrap gap-1.5 pt-3">
-                        {chTopics.slice(0, 5).map((t) => (
-                          <Link
-                            key={t.id || t.topic_slug}
-                            to={`${basePath}/${t.topic_slug}`}
-                            className="text-[11px] px-2.5 py-1 rounded-lg bg-white/[0.04] text-gray-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors"
-                          >
-                            {t.title || t.topic_slug}
-                          </Link>
-                        ))}
-                        {chTopics.length > 5 && (
-                          <span className="text-[11px] px-2 py-1 text-gray-600">+{chTopics.length - 5} more</span>
-                        )}
-                      </div>
-                    </div>
-                  )}
                 </div>
               );
             })

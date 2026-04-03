@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
 import { initGA4 } from "@/utils/analytics";
@@ -46,7 +46,7 @@ const NotFoundPage       = lazy(() => import("@/pages/NotFoundPage"));
 const AdminLoginPage     = lazy(() => import("@/pages/AdminLoginPage"));
 const AdminPage          = lazy(() => import("@/pages/AdminPage"));
 const ExamRoutinePage    = lazy(() => import("@/pages/ExamRoutinePage"));
-const SeoTopicPage       = lazy(pageImports.seoTopic);
+const ChapterPage        = lazy(pageImports.chapter);
 const SubjectLandingPage = lazy(() => import("@/pages/SubjectLandingPage"));
 const CurriculumMap      = lazy(() => import("@/pages/CurriculumMap"));
 const PaymentSuccessPage = lazy(() => import("@/pages/PaymentSuccessPage"));
@@ -97,6 +97,11 @@ function DeferredFallback({ delay = 300 }) {
     return () => clearTimeout(timer);
   }, [delay]);
   return show ? <PageFallbackContent /> : null;
+}
+
+function LegacyTopicRedirect() {
+  const { board, classSlug, subjectSlug, chapterSlug } = useParams();
+  return <Navigate to={`/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`} replace />;
 }
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -222,9 +227,9 @@ function App() {
                   {/* ── PYQ HTML Replica pages ── */}
                   <Route path="/pyq/:slug" element={<PYQReplicaPage />} />
 
-                  {/* ── Programmatic SEO routes: /{board}/{class-N}/{subject}/{topic}/{type?} ── */}
-                  <Route path="/:board/:classSlug/:subjectSlug/:topicSlug/:pageType" element={<SeoTopicPage />} />
-                  <Route path="/:board/:classSlug/:subjectSlug/:topicSlug" element={<SeoTopicPage />} />
+                  {/* ── SEO routes: /{board}/{class}/{subject} and /{board}/{class}/{subject}/{chapter} ── */}
+                  <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
+                  <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/:pageType" element={<LegacyTopicRedirect />} />
                   <Route path="/:board/:classSlug/:subjectSlug" element={<SubjectLandingPage />} />
 
                   {/* ── Protected routes (require login) ── */}

@@ -13,9 +13,9 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { Skeleton } from '@/components/ui/skeleton';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { getChunks, getChapterTopicSummary, getTopicPage, apiClient } from '@/utils/api';
+import { getChunks, getChapterTopicSummary, apiClient } from '@/utils/api';
 import { useShare } from '@/hooks/useShare';
-import { useSubject, useChapters, useSeoTopics } from '@/hooks/useContent';
+import { useSubject, useChapters } from '@/hooks/useContent';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { toast } from 'sonner';
 
@@ -284,144 +284,6 @@ function BlogView({ subject, subjectId }) {
   );
 }
 
-const PAGE_TYPE_META = {
-  'notes':               { label: 'Notes',               icon: FileText,   color: 'bg-blue-500/15 text-blue-400 border-blue-500/25' },
-  'definition':          { label: 'Definition',           icon: BookOpen,   color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25' },
-  'important-questions': { label: 'Important Questions',  icon: HelpCircle, color: 'bg-amber-500/15 text-amber-400 border-amber-500/25' },
-  'mcqs':                { label: 'MCQs',                 icon: Calculator, color: 'bg-violet-500/15 text-violet-400 border-violet-500/25' },
-  'examples':            { label: 'Examples',             icon: BookMarked, color: 'bg-pink-500/15 text-pink-400 border-pink-500/25' },
-};
-
-function TopicContentCard({ topic, subject }) {
-  const [expanded, setExpanded] = useState(false);
-  const [activeTab, setActiveTab] = useState('notes');
-  const [pageCache, setPageCache] = useState({});
-  const [loadingPage, setLoadingPage] = useState(null);
-
-  const availableTypes = topic.page_types || [];
-  const defaultType = availableTypes.includes('notes') ? 'notes' : availableTypes[0];
-
-  const loadPage = useCallback(async (pageType) => {
-    if (pageCache[pageType]) return;
-    setLoadingPage(pageType);
-    try {
-      const res = await getTopicPage(topic.id, pageType);
-      setPageCache(prev => ({ ...prev, [pageType]: res.data }));
-    } catch {
-      toast.error('Failed to load content');
-    } finally {
-      setLoadingPage(null);
-    }
-  }, [topic.id, pageCache]);
-
-  const handleExpand = useCallback(() => {
-    if (!expanded && defaultType) {
-      loadPage(defaultType);
-      setActiveTab(defaultType);
-    }
-    setExpanded(prev => !prev);
-  }, [expanded, defaultType, loadPage]);
-
-  const handleTabChange = useCallback((type) => {
-    setActiveTab(type);
-    loadPage(type);
-  }, [loadPage]);
-
-  const currentPage = pageCache[activeTab];
-  const seoPath = subject?.board_slug && subject?.class_slug && subject?.slug && topic.slug
-    ? `/${subject.board_slug}/${subject.class_slug}/${subject.slug}/${topic.slug}`
-    : null;
-
-  return (
-    <div className="rounded-xl border border-white/[0.06] overflow-hidden transition-all" style={{ background: 'rgba(255,255,255,0.02)' }}>
-      <button
-        onClick={handleExpand}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/[0.03] transition-colors text-left"
-      >
-        <div className="w-6 h-6 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-          <Sparkles size={12} className="text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <span className="text-sm font-medium text-foreground block truncate">{topic.title}</span>
-          {topic.definition && (
-            <span className="text-xs text-muted-foreground line-clamp-1 mt-0.5 block">{topic.definition}</span>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {availableTypes.map(pt => {
-            const meta = PAGE_TYPE_META[pt];
-            if (!meta) return null;
-            const Icon = meta.icon;
-            return (
-              <span key={pt} className={`w-5 h-5 rounded flex items-center justify-center ${meta.color} border`} title={meta.label}>
-                <Icon size={10} />
-              </span>
-            );
-          })}
-        </div>
-        <ChevronDown size={14} className={`text-muted-foreground transition-transform flex-shrink-0 ${expanded ? 'rotate-180' : ''}`} />
-      </button>
-
-      {expanded && (
-        <div className="border-t border-white/[0.06]">
-          {availableTypes.length > 1 && (
-            <div className="flex gap-1 px-3 pt-3 pb-1 overflow-x-auto">
-              {availableTypes.map(pt => {
-                const meta = PAGE_TYPE_META[pt];
-                if (!meta) return null;
-                const Icon = meta.icon;
-                const isActive = activeTab === pt;
-                return (
-                  <button
-                    key={pt}
-                    onClick={() => handleTabChange(pt)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all whitespace-nowrap border ${
-                      isActive
-                        ? meta.color + ' shadow-sm'
-                        : 'text-muted-foreground hover:text-foreground bg-white/[0.02] border-transparent hover:border-white/[0.08]'
-                    }`}
-                  >
-                    <Icon size={12} />
-                    {meta.label}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          <div className="px-4 py-3">
-            {loadingPage === activeTab ? (
-              <div className="space-y-2 animate-pulse">
-                <div className="h-4 w-3/4 rounded bg-white/[0.06]" />
-                <div className="h-3 w-full rounded bg-white/[0.04]" />
-                <div className="h-3 w-5/6 rounded bg-white/[0.04]" />
-                <div className="h-3 w-2/3 rounded bg-white/[0.04]" />
-              </div>
-            ) : currentPage?.content ? (
-              <div className="md-content-light text-sm max-h-[500px] overflow-y-auto pr-2" style={{ scrollbarWidth: 'thin' }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{currentPage.content}</ReactMarkdown>
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground text-center py-4">Content not available</p>
-            )}
-
-            <div className="flex items-center gap-2 mt-3 pt-2 border-t border-white/[0.06]">
-              {seoPath && (
-                <Link to={seoPath} className="text-xs text-primary hover:text-primary/80 flex items-center gap-1">
-                  <FileText size={11} /> Full Page <ChevronRight size={11} />
-                </Link>
-              )}
-              {currentPage?.word_count > 0 && (
-                <span className="text-[10px] text-muted-foreground ml-auto">{currentPage.word_count} words</span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function LegacyAccordion({ subject, subjectId, chapters }) {
   const [topicSummaries, setTopicSummaries] = useState({});
   const [loadingTopics, setLoadingTopics] = useState({});
@@ -460,13 +322,6 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
         const chapterSeoPath = subject?.board_slug && subject?.class_slug && subject?.slug && chapter.slug
           ? `/${subject.board_slug}/${subject.class_slug}/${subject.slug}/${chapter.slug}`
           : null;
-        const topicData = topicSummaries[chapter.id];
-        const contentTopics = (topicData?.topics || []).filter(
-          t => t.has_content || (t.page_types?.length > 0)
-        );
-        const hasTopics = contentTopics.length > 0;
-        const isLoadingTopics = loadingTopics[chapter.id];
-
         return (
           <AccordionItem key={chapter.id} value={chapter.id} className="glass-card rounded-xl border-0 px-4">
             <AccordionTrigger className="hover:no-underline py-4" onClick={() => loadChapterData(chapter.id)}>
@@ -498,48 +353,7 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
                   <p className="text-xs text-muted-foreground mb-3 px-1 leading-relaxed">{chapter.description}</p>
                 )}
 
-                {isLoadingTopics && (
-                  <div className="space-y-2 mb-3 animate-pulse">
-                    {[...Array(3)].map((_, i) => (
-                      <div key={i} className="rounded-xl border border-white/[0.06] p-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-6 h-6 rounded-lg bg-white/[0.06]" />
-                          <div className="flex-1 space-y-1">
-                            <div className="h-4 w-2/3 rounded bg-white/[0.06]" />
-                            <div className="h-3 w-1/3 rounded bg-white/[0.04]" />
-                          </div>
-                          <div className="flex gap-1">
-                            <div className="w-5 h-5 rounded bg-white/[0.04]" />
-                            <div className="w-5 h-5 rounded bg-white/[0.04]" />
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {hasTopics && (
-                  <div className="space-y-1.5 mb-3">
-                    <div className="flex items-center gap-2 mb-2 px-1">
-                      <Layers size={12} className="text-primary" />
-                      <span className="text-xs font-semibold text-foreground">
-                        Topics ({contentTopics.length})
-                      </span>
-                    </div>
-                    {contentTopics.map(topic => {
-                      const dedupedTopic = { ...topic, page_types: [...new Set(topic.page_types || [])] };
-                      return (
-                        <TopicContentCard
-                          key={topic.id}
-                          topic={dedupedTopic}
-                          subject={subject}
-                        />
-                      );
-                    })}
-                  </div>
-                )}
-
-                {!hasTopics && !isLoadingTopics && chapter.topics?.length > 0 && (
+                {chapter.topics?.length > 0 && (
                   <div className="mb-3">
                     <div className="flex items-center gap-2 mb-2 px-1">
                       <List size={12} className="text-primary" />
@@ -577,8 +391,8 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
                   </Link>
                 )}
 
-                {!isLoadingTopics && chapter.content && (
-                  <details className="group/details" open={!hasTopics}>
+                {chapter.content && (
+                  <details className="group/details" open>
                     <summary className="cursor-pointer flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground py-2 px-1">
                       <BookText size={12} />
                       <span>Chapter Notes</span>
@@ -592,7 +406,7 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
                   </details>
                 )}
 
-                {!hasTopics && !isLoadingTopics && !chapter.content && !chapter.topics?.length && (
+                {!chapter.content && !chapter.topics?.length && (
                   <div className="text-center py-4">
                     <p className="text-sm text-muted-foreground">No content added yet</p>
                   </div>
@@ -621,21 +435,6 @@ export default function SubjectPage() {
   const { data: chapters = [], isLoading: chaptersLoading } = useChapters(subjectId);
   const loading = subjectLoading || chaptersLoading;
 
-  const hasSeoSlugs = !!(subject?.board_slug && subject?.class_slug && subject?.slug);
-  const { data: seoTopicsRaw = [] } = useSeoTopics(
-    subject?.board_slug, subject?.class_slug, subject?.slug
-  );
-  const seoTopics = Array.isArray(seoTopicsRaw) ? seoTopicsRaw : [];
-
-  const topicsByChapter = useMemo(() => {
-    const map = new Map();
-    for (const t of seoTopics) {
-      const key = t.chapter_slug || '_ungrouped';
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(t);
-    }
-    return map;
-  }, [seoTopics]);
 
   if (subjectError && !subjectLoading) return (
     <AppLayout>
@@ -746,39 +545,6 @@ export default function SubjectPage() {
             </div>
           )}
         </div>
-
-        {hasSeoSlugs && seoTopics.length > 0 && (
-          <div className="glass-card rounded-2xl p-5 space-y-4">
-            <div className="flex items-center gap-2">
-              <FileText size={16} className="text-primary" />
-              <h2 className="text-sm font-semibold text-foreground">Topic Wise Notes</h2>
-            </div>
-            <div className="space-y-3">
-              {[...topicsByChapter.entries()].map(([chapterSlug, chTopics]) => {
-                const chapterTitle = chTopics[0]?.chapter_title || chapterSlug.replace(/-/g, ' ');
-                const basePath = `/${subject.board_slug}/${subject.class_slug}/${subject.slug}`;
-                return (
-                  <div key={chapterSlug}>
-                    {chapterSlug !== '_ungrouped' && (
-                      <p className="text-xs font-medium text-muted-foreground mb-1.5 capitalize">{chapterTitle}</p>
-                    )}
-                    <div className="flex flex-wrap gap-1.5">
-                      {chTopics.map((t) => (
-                        <Link
-                          key={t.id || t.topic_slug}
-                          to={`${basePath}/${t.topic_slug}`}
-                          className="text-[11px] px-2.5 py-1 rounded-lg bg-white/[0.04] text-gray-400 hover:text-purple-300 hover:bg-purple-500/10 transition-colors border border-white/[0.06]"
-                        >
-                          {t.title || t.topic_slug}
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         {/* Chapters */}
         <LegacyAccordion subject={subject} subjectId={subjectId} chapters={chapters} />

@@ -353,26 +353,69 @@ function botRenderPlugin() {
           }
         }
 
-        const currentType = pageTypePart || 'notes';
-        const VALID_TYPES = new Set(['notes', 'definition', 'important-questions', 'mcqs', 'examples']);
-        if (pageTypePart && !VALID_TYPES.has(pageTypePart)) return next();
-
         try {
-          const apiBase = `http://localhost:8000/api/seo`;
-          const [pageRes, relatedRes] = await Promise.allSettled([
-            fetch(`${apiBase}/page/${board}/${classSlug}/${subjectSlug}/${topicSlug}/${currentType}`),
-            fetch(`${apiBase}/related/${topicSlug}`),
-          ]);
+          const apiBase = `http://localhost:8000/api/content`;
+          const chapterRes = await fetch(`${apiBase}/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
+          if (!chapterRes.ok) return next();
 
-          if (pageRes.status !== 'fulfilled' || !pageRes.value.ok) return next();
+          const chapter = await chapterRes.json();
+          const canonical = `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
+          const chTitle = chapter.topic_title || chapter.chapter_title || topicSlug;
+          const subName = chapter.subject_name || subjectSlug;
+          const bName = chapter.board_name || board;
+          const cName = chapter.class_name || classSlug;
+          const title = `${chTitle} — ${subName} | ${bName} ${cName} Notes`;
+          const desc = chapter.meta_description || `${chTitle} notes for ${subName}. Study material for ${bName} ${cName} students.`;
+          const contentHtml = mdToHtml(chapter.content || '');
 
-          const page = await pageRes.value.json();
-          let related = { related: [], prev: null, next: null };
-          if (relatedRes.status === 'fulfilled' && relatedRes.value.ok) {
-            related = await relatedRes.value.json();
-          }
+          const articleSchema = {
+            '@context': 'https://schema.org', '@type': 'Article',
+            headline: title, description: desc,
+            author: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+            publisher: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai',
+              logo: { '@type': 'ImageObject', url: 'https://syrabit.ai/icons/icon-192x192.png' } },
+            datePublished: chapter.generated_at, dateModified: chapter.updated_at || chapter.generated_at,
+            image: 'https://syrabit.ai/opengraph.jpg',
+            mainEntityOfPage: { '@type': 'WebPage', '@id': canonical },
+            educationalLevel: `${cName} ${bName}`.trim(),
+            wordCount: chapter.word_count || 0, inLanguage: 'en-IN',
+          };
+          const breadcrumbSchema = {
+            '@context': 'https://schema.org', '@type': 'BreadcrumbList',
+            itemListElement: [
+              { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
+              { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
+              { '@type': 'ListItem', position: 3, name: subName, item: `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}` },
+              { '@type': 'ListItem', position: 4, name: chTitle, item: canonical },
+            ],
+          };
 
-          const html = buildBotHtml(page, rawPath, board, classSlug, subjectSlug, topicSlug, currentType, related);
+          const html = `<!DOCTYPE html>
+<html lang="en-IN"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
+<meta name="description" content="${desc.replace(/"/g, '&quot;')}">
+<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
+<link rel="canonical" href="${canonical}">
+<meta property="og:type" content="article"><meta property="og:title" content="${title.replace(/"/g, '&quot;')}">
+<meta property="og:description" content="${desc.replace(/"/g, '&quot;')}"><meta property="og:url" content="${canonical}">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg"><meta property="og:site_name" content="Syrabit.ai">
+<meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${title.replace(/"/g, '&quot;')}">
+<meta name="twitter:description" content="${desc.replace(/"/g, '&quot;')}">
+<script type="application/ld+json">${JSON.stringify(articleSchema)}</script>
+<script type="application/ld+json">${JSON.stringify(breadcrumbSchema)}</script>
+<style>body{font-family:system-ui,sans-serif;background:#0a0a1a;color:#e2e8f0;margin:0;padding:0}.wrap{max-width:860px;margin:0 auto;padding:24px 16px}a{color:#a78bfa;text-decoration:none}a:hover{text-decoration:underline}h1{font-size:1.8rem;font-weight:700;margin:0 0 8px}h2{font-size:1.3rem;font-weight:600;color:#f1f5f9;margin:24px 0 8px;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:6px}h3,h4{font-size:1.1rem;font-weight:600;color:#e2e8f0;margin:16px 0 6px}p{color:#94a3b8;line-height:1.7;margin:0 0 12px}li{color:#94a3b8;margin:4px 0;line-height:1.6}strong{color:#f1f5f9}code{background:rgba(255,255,255,0.1);color:#c4b5fd;padding:2px 6px;border-radius:4px;font-size:0.9em}hr{border:none;border-top:1px solid rgba(255,255,255,0.1);margin:20px 0}.breadcrumb{font-size:0.82rem;color:#475569;margin-bottom:16px}.breadcrumb a{color:#6d28d9}.badges{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.badge{padding:2px 10px;border-radius:20px;font-size:0.78rem;border:1px solid rgba(139,92,246,0.3);color:#a78bfa}.content{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:16px;padding:24px;margin:20px 0}.cta{text-align:center;margin:32px 0;padding:24px;background:rgba(124,58,237,0.1);border:1px solid rgba(124,58,237,0.2);border-radius:16px}.cta a{display:inline-block;padding:10px 24px;background:#7c3aed;color:#fff;border-radius:10px;font-weight:600;margin-top:8px}</style>
+</head><body><div class="wrap">
+<nav class="breadcrumb" aria-label="Breadcrumb"><a href="/">Home</a> &rsaquo; <a href="/library">Library</a> &rsaquo; <a href="/${board}/${classSlug}/${subjectSlug}">${subName}</a> &rsaquo; <span>${chTitle}</span></nav>
+<div class="badges"><span class="badge">${bName}</span><span class="badge">${cName}</span><span class="badge">${subName}</span></div>
+<h1>${chTitle}</h1>
+<p style="color:#64748b;font-size:0.85rem">${chapter.word_count || 0} words &middot; Updated ${new Date(chapter.updated_at || chapter.generated_at || Date.now()).toLocaleDateString('en-IN')}</p>
+<p>${desc}</p>
+<div class="content">${contentHtml}</div>
+<div class="cta"><strong>Study smarter with AI-powered tutoring</strong><p>Get instant answers for ${bName} ${cName} ${subName}</p><a href="/signup">Start for Free</a></div>
+<p style="font-size:0.8rem;color:#334155;margin-top:32px;text-align:center"><a href="/">Syrabit.ai</a> &mdash; AI-powered exam prep for Assam Board students &mdash; <a href="/library">Study Library</a></p>
+</div></body></html>`;
+
           res.statusCode = 200;
           res.setHeader('Content-Type', 'text/html; charset=utf-8');
           res.setHeader('X-Bot-Rendered', '1');

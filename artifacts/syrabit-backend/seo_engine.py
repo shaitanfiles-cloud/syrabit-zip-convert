@@ -3008,6 +3008,7 @@ async def get_sitemap_index():
     always_include = [
         "sitemap-pages.xml",
         "sitemap-subjects.xml",
+        "sitemap-chapters.xml",
         "sitemap-learn.xml",
         "sitemap-notes.xml",
     ]
@@ -3051,26 +3052,12 @@ async def get_sitemap_pages():
 @router.get("/sitemap-subjects.xml", response_class=Response)
 async def get_sitemap_subjects():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    subjects = await _db.seo_pages.aggregate([
-        {"$match": {"status": "published", "page_type": "notes"}},
-        {"$group": {
-            "_id": {"board": "$board_slug", "cls": "$class_slug", "subj": "$subject_slug"},
-        }},
-    ]).to_list(500)
-    seen_keys = set()
-    entries = []
-    for s in subjects:
-        key = (s['_id']['board'], s['_id']['cls'], s['_id']['subj'])
-        if key not in seen_keys:
-            seen_keys.add(key)
-            entries.append({
-                "loc": f"{BASE_URL}/{key[0]}/{key[1]}/{key[2]}",
-                "lastmod": today, "pri": "0.7", "freq": "weekly",
-            })
     lib_subjects = await _db.subjects.find({}, {"_id": 0}).to_list(500)
     lib_streams = {s["id"]: s for s in await _db.streams.find({}, {"_id": 0}).to_list(500)}
     lib_classes = {c["id"]: c for c in await _db.classes.find({}, {"_id": 0}).to_list(500)}
     lib_boards = {b["id"]: b for b in await _db.boards.find({}, {"_id": 0}).to_list(500)}
+    seen_keys = set()
+    entries = []
     for sub in lib_subjects:
         stream = lib_streams.get(sub.get("stream_id", ""))
         cls = lib_classes.get(stream.get("class_id", "")) if stream else None
@@ -3083,6 +3070,37 @@ async def get_sitemap_subjects():
                     "loc": f"{BASE_URL}/{key[0]}/{key[1]}/{key[2]}",
                     "lastmod": today, "pri": "0.7", "freq": "weekly",
                 })
+    return _xml_response(_build_urlset(entries))
+
+
+@router.get("/sitemap-chapters.xml", response_class=Response)
+async def get_sitemap_chapters():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    lib_subjects = await _db.subjects.find({}, {"_id": 0}).to_list(500)
+    lib_streams = {s["id"]: s for s in await _db.streams.find({}, {"_id": 0}).to_list(500)}
+    lib_classes = {c["id"]: c for c in await _db.classes.find({}, {"_id": 0}).to_list(500)}
+    lib_boards = {b["id"]: b for b in await _db.boards.find({}, {"_id": 0}).to_list(500)}
+    chapters = await _db.chapters.find({}, {"_id": 0, "id": 1, "subject_id": 1, "slug": 1, "title": 1, "updated_at": 1, "created_at": 1}).to_list(5000)
+    sub_map = {s["id"]: s for s in lib_subjects}
+    entries = []
+    for ch in chapters:
+        sub = sub_map.get(ch.get("subject_id", ""))
+        if not sub or not ch.get("slug"):
+            continue
+        stream = lib_streams.get(sub.get("stream_id", ""))
+        cls = lib_classes.get(stream.get("class_id", "")) if stream else None
+        board = lib_boards.get(cls.get("board_id", "")) if cls else None
+        if not board or not cls or not sub.get("slug"):
+            continue
+        ch_slug = ch.get("slug") or re.sub(r'[^a-z0-9]+', '-', (ch.get("title") or "").lower()).strip('-')
+        if not ch_slug:
+            continue
+        raw = ch.get("updated_at", "") or ch.get("created_at", "")
+        lastmod = raw[:10] if raw else today
+        entries.append({
+            "loc": f"{BASE_URL}/{board.get('slug', '')}/{cls.get('slug', '')}/{sub['slug']}/{ch_slug}",
+            "lastmod": lastmod, "pri": "0.8", "freq": "monthly",
+        })
     return _xml_response(_build_urlset(entries))
 
 

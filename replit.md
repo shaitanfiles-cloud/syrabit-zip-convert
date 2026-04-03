@@ -36,7 +36,8 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 - **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` serves cached pre-rendered HTML for search engine bots on key pages.
 - **Bot Crawlability:** Backend serves `/robots.txt` (with rules for 16+ bot user-agents), `/sitemap.xml` (301→`/api/seo/sitemap.xml`), and `/sitemap-index.xml` (301→`/api/seo/sitemap-index.xml`) directly. `Allow: /api/seo/` ensures sitemap sub-files are crawlable despite `Disallow: /api/`. Vite `public/robots.txt` mirrors the backend version for consistency.
 - **Performance Optimizations:** Includes emergent badge suppression, PWA icon optimization, lazy-loading CMS sections, React Query for caching, CSS grid for content display, and prefetching for navigation.
-- **Content Display:** Library page features subject cards with SEO badges, expandable chapters, and topic links. Lesson pages have a blog-style layout with reading progress and sticky TOC.
+- **SEO Chapter Pages:** Chapter pages (`ChapterPage.jsx`) serve as the single SEO landing pages at `/{board}/{class}/{subject}/{chapter}`. Old 5-segment topic URLs redirect to the parent chapter. Share button includes SERP preview modal. Sitemap includes `sitemap-chapters.xml` for all chapter URLs.
+- **Content Display:** Library page features subject cards with chapter links to chapter pages. Lesson pages have a blog-style layout with reading progress and sticky TOC.
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.
 - **Profile Course Type Selector:** DEGREE students can select course types and subjects via an expandable selector.
 - **Chat Interface:** Uses a standardized 0.1 temperature for LLMs and increased RAG chunk size for academic concepts.
