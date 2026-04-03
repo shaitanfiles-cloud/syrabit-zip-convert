@@ -61,7 +61,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
     <div
       className="w-full rounded-2xl overflow-hidden transition-all duration-300 group/card hover:-translate-y-0.5 relative cursor-pointer"
       style={{
-        background: 'var(--card)',
+        background: sub.thumbnailUrl ? '#0a0518' : 'var(--card)',
         border: isSaved
           ? '1px solid rgba(139,92,246,0.40)'
           : '1px solid rgba(139,92,246,0.10)',
@@ -74,24 +74,24 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       data-subject-id={sub.id}
     >
       {sub.thumbnailUrl && (
-        <div className="absolute inset-0 pointer-events-none" style={{ zIndex: 0 }}>
+        <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-2xl" style={{ zIndex: 1 }}>
           <img
             src={sub.thumbnailUrl}
             alt=""
             loading="lazy"
             className="absolute inset-0 w-full h-full object-cover"
-            style={{ opacity: 0.18 }}
+            style={{ opacity: 0.25 }}
           />
           <div
             className="absolute inset-0"
-            style={{ background: 'linear-gradient(180deg, rgba(0,0,0,0.40) 0%, rgba(0,0,0,0.60) 50%, rgba(0,0,0,0.50) 100%)' }}
+            style={{ background: 'linear-gradient(180deg, rgba(10,5,25,0.35) 0%, rgba(10,5,25,0.50) 50%, rgba(10,5,25,0.40) 100%)' }}
           />
         </div>
       )}
       <div
-        className="flex items-center justify-between px-3.5 py-2.5 relative z-[1]"
+        className="flex items-center justify-between px-3.5 py-2.5 relative z-[2]"
         style={{
-          background: `linear-gradient(135deg, ${thumbColors[0]}22, ${thumbColors[1]}14)`,
+          background: sub.thumbnailUrl ? 'transparent' : `linear-gradient(135deg, ${thumbColors[0]}22, ${thumbColors[1]}14)`,
           borderBottom: `1px solid ${thumbColors[0]}28`,
         }}
       >
@@ -119,7 +119,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         </div>
       </div>
 
-      <div className="px-3 sm:px-4 pt-3 pb-2 relative z-[1]">
+      <div className="px-3 sm:px-4 pt-3 pb-2 relative z-[2]">
         <Link to={subjectLandingPath} className="block group/title static" aria-label={`View ${sub.name}`}>
           <span className="absolute inset-0 z-0" aria-hidden="true" />
           <div className="flex items-start gap-3 mb-2">
@@ -192,7 +192,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
       {visibleChapters.length > 0 && (
         <div
-          className="mx-3 mb-2 sm:mb-3 rounded-xl overflow-hidden relative z-[1]"
+          className="mx-3 mb-2 sm:mb-3 rounded-xl overflow-hidden relative z-[2]"
           style={{
             background: 'rgba(139,92,246,0.03)',
             border: '1px solid rgba(139,92,246,0.08)',
@@ -285,7 +285,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       )}
 
       <div
-        className="grid grid-cols-2 gap-1.5 px-3 py-2.5 relative z-[1]"
+        className="grid grid-cols-2 gap-1.5 px-3 py-2.5 relative z-[2]"
         style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
       >
         <button
