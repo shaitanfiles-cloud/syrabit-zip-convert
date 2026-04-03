@@ -37,6 +37,7 @@ from analytics_helpers import *
 from prompts import _classify_intent, _is_out_of_scope_response, extract_semester_number
 from subject_router import build_search_scope
 from qa_engine import log_chat_message as _log_chat_message
+from guardrails.prompt_safety import evaluate_prompt_safety, validate_llm_output
 
 logger = logging.getLogger(__name__)
 
@@ -495,6 +496,22 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
         if not deducted:
             raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
 
+    safe_prompt, fallback_msg, guardrail_tag = evaluate_prompt_safety(msg.message)
+    if fallback_msg:
+        logger.info(f"[guardrails] Prompt blocked ({guardrail_tag}) for user {user_id or 'anon'}: {msg.message[:80]!r}")
+        async def _blocked_stream():
+            yield f"data: {json.dumps({'conversation_id': msg.conversation_id or '', 'rag_source': 'none', 'rag_quality': 'none', 'rag_chunks': 0, 'guardrail_blocked': True})}\n\n"
+            _CHUNK = 40
+            for i in range(0, len(fallback_msg), _CHUNK):
+                yield f"data: {json.dumps({'content': fallback_msg[i:i+_CHUNK]})}\n\n"
+                await asyncio.sleep(0.01)
+            yield f"data: {json.dumps({'event': 'syrabit_done', 'conversation_id': msg.conversation_id or '', 'guardrail_tag': guardrail_tag})}\n\n"
+            yield "data: [DONE]\n\n"
+        if not is_anon and credits_info:
+            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
+        return StreamingResponse(_blocked_stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
@@ -830,6 +847,8 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
             else:
                 _bp_count = 0
                 _first_token_logged = False
+                _output_buf = ""
+                _output_violation = False
                 async for chunk in call_llm_api_stream(messages_payload, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens):
                     if '"content"' in chunk:
                         if not _first_token_logged:
@@ -837,13 +856,29 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
                             _first_token_logged = True
                         try:
                             data = json.loads(chunk[6:])
-                            full_response.append(data.get("content", ""))
+                            _piece = data.get("content", "")
+                            full_response.append(_piece)
+                            _output_buf += _piece
+                            if len(_output_buf) > 200:
+                                _out_safe, _out_tag = validate_llm_output(_output_buf)
+                                if not _out_safe:
+                                    _output_violation = True
+                                    logger.warning(f"[guardrails] LLM output violation mid-stream ({_out_tag})")
+                                    break
+                                _output_buf = _output_buf[-80:]
                         except:
                             pass
+                    if _output_violation:
+                        break
                     yield chunk
                     _bp_count += 1
                     if _bp_count % 20 == 0:
                         await asyncio.sleep(0)
+                if _output_violation:
+                    full_response.clear()
+                    _fallback = "I need to stop here — my response was heading in a direction that doesn't align with my guidelines. Please try rephrasing your question."
+                    full_response.append(_fallback)
+                    yield f"data: {json.dumps({'content': _fallback})}\n\n"
 
                 if full_response:
                     answer_str = "".join(full_response)

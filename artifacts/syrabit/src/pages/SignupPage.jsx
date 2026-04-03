@@ -37,6 +37,7 @@ export default function SignupPage() {
   const [showPass, setShowPass] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [agreed, setAgreed] = useState(false);
+  const [consentDpdp, setConsentDpdp] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { signup } = useAuth();
@@ -62,9 +63,13 @@ export default function SignupPage() {
       setError('Please agree to the Terms of Service');
       return;
     }
+    if (!consentDpdp) {
+      setError('Please provide consent for data processing under the DPDP Act');
+      return;
+    }
     setLoading(true);
     try {
-      await signup(name, email, password);
+      await signup(name, email, password, consentDpdp);
       toast.success('Account created! Welcome to Syrabit.ai!');
       navigate('/onboarding');
     } catch (err) {
@@ -332,6 +337,27 @@ export default function SignupPage() {
                   <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Terms</Link>
                   {' '}and{' '}
                   <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Privacy Policy</Link>
+                </span>
+              </div>
+
+              <div className="flex items-start gap-1 py-1">
+                <button
+                  type="button"
+                  onClick={() => setConsentDpdp(!consentDpdp)}
+                  className="-ml-3 p-3 min-w-[44px] min-h-[44px] rounded flex-shrink-0 flex items-center justify-center transition-all cursor-pointer"
+                  aria-label="Consent to data processing"
+                >
+                  <span
+                    className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${consentDpdp ? 'border-violet-500' : 'border-white/25 bg-white/5'}`}
+                    style={consentDpdp ? { background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' } : {}}
+                  >
+                    {consentDpdp && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </span>
+                </button>
+                <span className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>
+                  I consent to the processing of my personal data as described in the{' '}
+                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Privacy Policy</Link>
+                  {' '}under the DPDP Act, 2023
                 </span>
               </div>
 

@@ -24,7 +24,8 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 - **RAG Pipeline:** Features a 4-way parallel search (keyword chunks, chapter keywords, subject keywords, vector cosine similarity) with grounding citations. It runs RAG search, web search, and conversation history fetch in parallel, with graceful degradation. Performance optimizations include caching, parallelized lookups, and reduced vector search candidates.
 - **Monetization:** Supports free, starter, and pro plans with daily-resetting credit-based usage. Integrates Razorpay (INR) and Stripe (USD) for payments.
 - **Optional Authentication:** Chat, History, and Profile pages are accessible without login, with anonymous users subject to IP-based rate limiting and non-persisted conversations.
-- **Security:** Uses ASGI-native `SecurityHeadersMiddleware` for HSTS, CSP, and X-Frame-Options.
+- **Security:** Uses ASGI-native `SecurityHeadersMiddleware` with env-toggleable headers (`SEC_HSTS`, `SEC_XCTO`, `SEC_XFRAME`, `SEC_REFERRER`, `SEC_PERM`, `SEC_CSP_REPORT_ONLY`). CSP report-only mode available. Includes prompt safety guardrails module (`guardrails/prompt_safety.py`) for injection/cheating/sensitive content blocking.
+- **Privacy:** DPDP Act consent tracked per-user (version + timestamp). `/api/privacy/consent` GET/POST for viewing/withdrawing consent. Consent checkbox on signup.
 - **Performance Optimizations:** Implements bounded content caching, efficient JWT decoding, thread pooling for Supabase calls, and MongoDB indexing.
 - **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection, and SEO prompts generate FAQ blocks and specific citations.
 

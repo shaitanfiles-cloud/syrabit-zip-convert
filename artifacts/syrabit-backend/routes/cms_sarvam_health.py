@@ -1300,7 +1300,27 @@ async def health():
     rp_key_secret = (rp_payment.get("razorpay_key_secret") or os.environ.get("RAZORPAY_KEY_SECRET", "")).strip()
     rp_status = "configured" if (rp_key_id and rp_key_secret) else "not_configured"
 
-    # Overall status: degraded if any critical dependency is down
+    llm_status = "not_configured"
+    llm_latency = 0
+    if _LLM_PROVIDERS:
+        cached_llm = _health_deps_cache.get("llm")
+        if cached_llm and (_time_mod.time() - _health_deps_cache_at) < _HEALTH_CACHE_TTL_S:
+            llm_status = cached_llm.get("status", "degraded")
+            llm_latency = cached_llm.get("latencyMs", 0)
+        else:
+            try:
+                _llm_t0 = _time_mod.time()
+                _test_resp = await call_llm_api(
+                    [{"role": "user", "content": "Reply with exactly: ok"}],
+                    model=None,
+                    max_tokens=4,
+                )
+                llm_latency = int((_time_mod.time() - _llm_t0) * 1000)
+                llm_status = "ok" if (_test_resp and len(_test_resp.strip()) > 0) else "degraded"
+            except Exception:
+                llm_status = "degraded"
+            _health_deps_cache["llm"] = {"status": llm_status, "latencyMs": llm_latency}
+
     critical_ok = kv_ok and pg_ok
     overall = "ok" if critical_ok else "degraded"
 
@@ -1315,7 +1335,8 @@ async def health():
             "postgresql": {"status": "ok" if pg_ok else "unavailable", "latencyMs": pg_latency},
             "redis": {"status": "ok" if redis_ok else "not_connected"},
             "llm": {
-                "status": "ok" if OPENAI_API_KEY else "not_configured",
+                "status": llm_status,
+                "latencyMs": llm_latency,
                 "provider": LLM_PROVIDER,
                 "model": LLM_MODEL,
                 "providers": [p["provider"] for p in _LLM_PROVIDERS],

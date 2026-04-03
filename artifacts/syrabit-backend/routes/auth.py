@@ -46,6 +46,9 @@ async def signup(data: UserCreate, response: Response):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
+    if not data.consent_dpdp:
+        raise HTTPException(status_code=400, detail="You must consent to data processing under the DPDP Act to create an account")
+
     settings = await supa_get_settings()
     if not settings.get("registrations_open", True):
         raise HTTPException(status_code=403, detail="Registrations are currently closed")
@@ -60,7 +63,7 @@ async def signup(data: UserCreate, response: Response):
         "password_hash": await asyncio.to_thread(pwd_ctx.hash, data.password),
         "plan": "free",
         "credits_used": 0,
-        "credits_limit": 30,     # Legacy field preserved for backwards compatibility
+        "credits_limit": 30,
         "document_access": "zero",
         "onboarding_done": False,
         "is_admin": False,
@@ -69,9 +72,21 @@ async def signup(data: UserCreate, response: Response):
         "phone": "",
         "saved_subjects": [],
         "has_free_credits_issued": True,
+        "consent_dpdp": data.consent_dpdp,
+        "consent_dpdp_version": "1.0" if data.consent_dpdp else None,
+        "consent_dpdp_at": now if data.consent_dpdp else None,
         "created_at": now,
     }
     await supa_insert_user(user)
+    if data.consent_dpdp:
+        try:
+            await supa_update_user(user_id, {
+                "consent_dpdp": True,
+                "consent_dpdp_version": "1.0",
+                "consent_dpdp_at": now,
+            })
+        except Exception:
+            pass
 
     token = create_access_token(user_id, role="student", plan="free")
     refresh = create_refresh_token(user_id)
@@ -297,6 +312,54 @@ async def get_me(user: Optional[dict] = Depends(get_current_user_optional)):
         created_at=user.get("created_at", ""),
         avatar_url=user.get("avatar_url", ""),
     )
+
+
+class _ConsentWithdrawReq(BaseModel):
+    withdraw: bool = True
+
+
+@router.get("/privacy/consent")
+async def get_consent(user: dict = Depends(get_current_user)):
+    return {
+        "consent_dpdp": user.get("consent_dpdp", False),
+        "consent_dpdp_version": user.get("consent_dpdp_version"),
+        "consent_dpdp_at": user.get("consent_dpdp_at"),
+    }
+
+
+@router.post("/privacy/consent")
+async def update_consent(body: _ConsentWithdrawReq, user: dict = Depends(get_current_user)):
+    now = datetime.now(timezone.utc).isoformat()
+    if body.withdraw:
+        updates = {
+            "consent_dpdp": False,
+            "consent_dpdp_version": None,
+            "consent_dpdp_at": None,
+        }
+        await supa_update_user(user["id"], updates)
+        logger.info(f"[privacy] User {user['id']} withdrew DPDP consent")
+        return {"status": "withdrawn", "consent_dpdp": False, "withdrawn_at": now}
+    else:
+        updates = {
+            "consent_dpdp": True,
+            "consent_dpdp_version": "1.0",
+            "consent_dpdp_at": now,
+        }
+        await supa_update_user(user["id"], updates)
+        logger.info(f"[privacy] User {user['id']} granted DPDP consent v1.0")
+        return {"status": "granted", "consent_dpdp": True, "consent_dpdp_version": "1.0", "consent_dpdp_at": now}
+
+
+@router.post("/security/csp-report")
+async def csp_report(request: Request):
+    try:
+        body = await request.json()
+        report = body.get("csp-report", body)
+        logger.warning(f"[CSP-VIOLATION] {json.dumps(report, default=str)[:500]}")
+    except Exception:
+        pass
+    return JSONResponse(status_code=204, content=None)
+
 
 # ─────────────────────────────────────────────
 # CONTENT ROUTES

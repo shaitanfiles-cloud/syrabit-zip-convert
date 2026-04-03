@@ -1,5 +1,5 @@
 """Syrabit.ai — ASGI middleware classes."""
-import re, time as _time_mod, logging
+import os, re, time as _time_mod, logging
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -11,6 +11,32 @@ from metrics import _metrics
 
 logger = logging.getLogger(__name__)
 
+def _env_bool(key: str, default: bool = True) -> bool:
+    val = os.environ.get(key, "").strip().lower()
+    if not val:
+        return default
+    return val in ("1", "true", "yes", "on")
+
+_SEC_HSTS = _env_bool("SEC_HSTS", True)
+_SEC_XCTO = _env_bool("SEC_XCTO", True)
+_SEC_XFRAME = _env_bool("SEC_XFRAME", True)
+_SEC_REFERRER = _env_bool("SEC_REFERRER", True)
+_SEC_PERM = _env_bool("SEC_PERM", True)
+_SEC_CSP_REPORT_ONLY = _env_bool("SEC_CSP_REPORT_ONLY", False)
+
+_CSP_VALUE = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://accounts.google.com https://apis.google.com; "
+    "style-src 'self' 'unsafe-inline' https://accounts.google.com; "
+    "img-src 'self' data: https:; "
+    "font-src 'self' data:; "
+    "connect-src 'self' https:; "
+    "frame-src https://accounts.google.com; "
+    "frame-ancestors 'self'; "
+    "report-uri /api/security/csp-report"
+)
+
+
 class SecurityHeadersMiddleware:
     def __init__(self, app: ASGIApp):
         self.app = app
@@ -20,17 +46,29 @@ class SecurityHeadersMiddleware:
             await self.app(scope, receive, send)
             return
 
+        method = scope.get("method", "GET")
+        if method == "OPTIONS":
+            await self.app(scope, receive, send)
+            return
+
         async def send_with_security_headers(message):
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
-                headers.append("X-Content-Type-Options", "nosniff")
-                headers.append("X-Frame-Options", "SAMEORIGIN")
-                headers.append("Referrer-Policy", "strict-origin-when-cross-origin")
-                headers.append("Permissions-Policy", "camera=(), microphone=(), geolocation=(), identity-credentials-get=(self https://accounts.google.com)")
+                if _SEC_XCTO:
+                    headers.append("X-Content-Type-Options", "nosniff")
+                if _SEC_XFRAME:
+                    headers.append("X-Frame-Options", "SAMEORIGIN")
+                if _SEC_REFERRER:
+                    headers.append("Referrer-Policy", "strict-origin-when-cross-origin")
+                if _SEC_PERM:
+                    headers.append("Permissions-Policy", "camera=(), microphone=(), geolocation=(), identity-credentials-get=(self https://accounts.google.com)")
                 headers.append("X-XSS-Protection", "1; mode=block")
-                if SECURE_COOKIES:
+                if _SEC_HSTS and SECURE_COOKIES:
                     headers.append("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
-                headers.append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-src https://accounts.google.com; frame-ancestors 'self'")
+                if _SEC_CSP_REPORT_ONLY:
+                    headers.append("Content-Security-Policy-Report-Only", _CSP_VALUE)
+                else:
+                    headers.append("Content-Security-Policy", _CSP_VALUE)
                 ct = headers.get("content-type", "")
                 if "text/html" in ct:
                     headers.append("Content-Language", "en-IN")

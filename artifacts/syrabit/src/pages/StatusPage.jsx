@@ -5,9 +5,11 @@ import axios from 'axios';
 import { CheckCircle2, XCircle, AlertTriangle, RefreshCw, Activity } from 'lucide-react';
 
 const SERVICE_CHECKS = [
-  { key: 'api', label: 'API Server', description: 'Core backend services' },
-  { key: 'database', label: 'Database', description: 'PostgreSQL data store' },
-  { key: 'ai', label: 'AI Engine', description: 'LLM response generation' },
+  { key: 'api', label: 'Backend API', description: 'Core backend services' },
+  { key: 'postgresql', label: 'PostgreSQL', description: 'Primary data store' },
+  { key: 'mongodb', label: 'RAG Index', description: 'Content & search database' },
+  { key: 'redis', label: 'Redis Cache', description: 'Session & response cache' },
+  { key: 'llm', label: 'LLM Pool', description: 'AI response generation' },
   { key: 'cdn', label: 'Frontend', description: 'Web application delivery' },
 ];
 
@@ -44,20 +46,30 @@ export default function StatusPage() {
       setLatency(ms);
       const data = res.data;
       const deps = data.dependencies || {};
-      const pgStatus = (deps.postgresql?.status || deps.postgres?.status || deps.postgresql || deps.postgres || '').toLowerCase();
-      const llmStatus = (deps.llm?.status || '').toLowerCase();
+      const mapStatus = (s) => {
+        const v = (s || '').toLowerCase();
+        if (v === 'ok' || v === 'configured') return 'operational';
+        if (v === 'degraded') return 'degraded';
+        if (v === 'not_connected' || v === 'not_configured') return 'degraded';
+        if (v === 'unavailable' || v === 'error') return 'down';
+        return 'down';
+      };
       setServices({
         api: 'operational',
-        database: pgStatus === 'ok' ? 'operational' : pgStatus === 'degraded' ? 'degraded' : 'down',
-        ai: llmStatus === 'ok' ? 'operational' : llmStatus === 'degraded' ? 'degraded' : 'down',
+        postgresql: mapStatus(deps.postgresql?.status),
+        mongodb: mapStatus(deps.mongodb?.status),
+        redis: mapStatus(deps.redis?.status),
+        llm: mapStatus(deps.llm?.status),
         cdn: 'operational',
       });
     } catch {
       setLatency(null);
       setServices({
         api: 'down',
-        database: 'down',
-        ai: 'down',
+        postgresql: 'down',
+        mongodb: 'down',
+        redis: 'down',
+        llm: 'down',
         cdn: 'operational',
       });
     }

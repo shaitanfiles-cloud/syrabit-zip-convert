@@ -10,6 +10,7 @@ class UserCreate(BaseModel):
     name: str
     email: EmailStr
     password: str
+    consent_dpdp: bool = False
 
 
 class UserLogin(BaseModel):

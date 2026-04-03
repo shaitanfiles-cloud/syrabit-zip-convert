@@ -74,9 +74,9 @@ export const AuthProvider = ({ children }) => {
     return userData;
   };
 
-  const signup = async (name, email, password) => {
+  const signup = async (name, email, password, consent_dpdp = false) => {
     const res = await axios.post(`${API_BASE}/auth/signup`, {
-      name, email, password,
+      name, email, password, consent_dpdp,
     }, { withCredentials: true });
     const { user: userData, access_token } = res.data;
     if (access_token) _storeToken(access_token);

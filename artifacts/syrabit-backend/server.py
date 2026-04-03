@@ -181,6 +181,30 @@ async def _heal_credits_limit():
         logger.warning(f"[migration] credits_limit heal failed: {e}")
 
 
+async def _migrate_consent_columns():
+    if not deps.pg_pool:
+        return
+    try:
+        async with deps.pg_pool.acquire() as conn:
+            await conn.execute(
+                """DO $$
+                BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='consent_dpdp') THEN
+                        ALTER TABLE users ADD COLUMN consent_dpdp BOOLEAN DEFAULT FALSE;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='consent_dpdp_version') THEN
+                        ALTER TABLE users ADD COLUMN consent_dpdp_version TEXT;
+                    END IF;
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='consent_dpdp_at') THEN
+                        ALTER TABLE users ADD COLUMN consent_dpdp_at TEXT;
+                    END IF;
+                END $$;"""
+            )
+        logger.info("[migration] consent_dpdp columns ensured")
+    except Exception as e:
+        logger.warning(f"[migration] consent columns migration failed: {e}")
+
+
 async def _load_ga4_from_db():
     try:
         if not os.getenv("GA4_REFRESH_TOKEN"):
@@ -348,6 +372,10 @@ async def lifespan(app):
     if _is_leader:
         asyncio.create_task(_migrate_supabase_users_to_pg())
         asyncio.create_task(_heal_credits_limit())
+        try:
+            await asyncio.wait_for(_migrate_consent_columns(), timeout=10)
+        except Exception as _mc_err:
+            logger.warning(f"consent columns migration deferred: {_mc_err}")
     asyncio.create_task(_bg_health_loop())
     global _syllabus_embedder
     if db is not None:

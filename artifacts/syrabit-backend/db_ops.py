@@ -54,7 +54,8 @@ def _pg_user_cols():
               avatar_url, saved_subjects::text, has_free_credits_issued,
               board_id, board_name, class_id, class_name, stream_id, stream_name,
               credits_used_today, credits_reset_date, created_at,
-              google_id, auth_provider"""
+              google_id, auth_provider,
+              consent_dpdp, consent_dpdp_version, consent_dpdp_at"""
 
 # ── Supabase mirror helper ────────────────────────────────────────────────────
 def _supa_mirror(fn):
@@ -191,6 +192,7 @@ _ALLOWED_USER_COLUMNS = frozenset({
     "stream_id", "stream_name",
     "referred_by_code", "referred_by_user_id",
     "google_id", "auth_provider",
+    "consent_dpdp", "consent_dpdp_version", "consent_dpdp_at",
 })
 
 _ALLOWED_CONV_COLUMNS = frozenset({

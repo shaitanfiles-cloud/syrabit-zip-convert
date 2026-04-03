@@ -1,6 +1,6 @@
 import { PublicLayout } from '@/components/layout/PublicLayout';
 
-const LAST_UPDATED = 'April 2025';
+const LAST_UPDATED = 'April 2026';
 const CONTACT_EMAIL = 'privacy@syrabit.ai';
 
 const sections = [
@@ -29,7 +29,7 @@ const sections = [
   },
   {
     title: '3. Consent & Lawful Basis',
-    body: `By creating an account on Syrabit.ai, you provide consent for us to collect and process your personal data as described in this policy, in accordance with Section 6 of the DPDP Act, 2023. You may withdraw consent at any time by deleting your account from the Profile page. Withdrawal of consent will result in deletion of your data as described in Section 7 below.`,
+    body: `By creating an account on Syrabit.ai and checking the DPDP consent checkbox during signup, you provide explicit consent for us to collect and process your personal data as described in this policy, in accordance with Section 6 of the DPDP Act, 2023. You may withdraw consent at any time from your Profile page or by contacting us at ${CONTACT_EMAIL}. Withdrawal of consent will result in cessation of data processing within 30 days and deletion of your data as described in Section 4 below.`,
   },
   {
     title: '4. Data Storage & Retention',
@@ -37,8 +37,9 @@ const sections = [
     list: [
       'Your account data and chat conversations are stored in encrypted databases hosted on secure cloud infrastructure.',
       'AI conversations are stored server-side to provide continuity across devices and sessions.',
+      'Chat history is automatically anonymized after 90 days — your name and email are removed from conversation records, leaving only anonymized academic content for quality improvement.',
       'We retain your personal data only as long as your account is active or as needed to provide services.',
-      'Upon account deletion, your personal data is permanently erased within 72 hours.',
+      'Upon account deletion or consent withdrawal, your personal data is permanently erased within 30 days.',
       'Anonymized and aggregated data (which cannot identify you) may be retained for analytics and service improvement.',
     ],
   },
@@ -98,11 +99,12 @@ const sections = [
     title: '13. Grievance Officer & Contact',
     body: null,
     subsections: [
-      { label: 'Data Protection Officer', value: 'Dipak Rai' },
+      { label: 'Grievance Officer / Data Protection Officer', value: 'Dipak Rai' },
       { label: 'Email', value: CONTACT_EMAIL },
       { label: 'Response time', value: 'Within 72 hours of receiving your request' },
+      { label: 'Postal address', value: 'Syrabit.ai, Assam, India' },
     ],
-    footer: 'If your grievance is not resolved satisfactorily, you may approach the Data Protection Board of India established under Section 18 of the DPDP Act, 2023.',
+    footer: 'If your grievance is not resolved satisfactorily within 30 days, you may approach the Data Protection Board of India established under Section 18 of the DPDP Act, 2023.',
   },
 ];
 
