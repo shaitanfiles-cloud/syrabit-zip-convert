@@ -902,8 +902,8 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # async with slot["sem"] lets up to max_concurrent requests run in parallel.
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
-    _SLM_SLOT_TIMEOUT = 5.0    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 3.0    # max seconds to wait for FIRST token from a slot
+    _SLM_SLOT_TIMEOUT = 8.0    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 10.0   # max seconds to wait for FIRST token from a slot
 
     if use_model_raw == "openai/gpt-oss-20b":
         _tried = 0
