@@ -207,24 +207,24 @@ _MODEL_ALIAS_MAP = {
 }
 
 # ── SLM slot table ────────────────────────────────────────────────────────────
-# Each entry: (provider, model, max_concurrent)
-# Models chosen for HIGHEST RPS on their respective providers.
-# Multiple slots per provider = parallel streams up to max_concurrent each.
+# Each entry: (provider, model, max_concurrent, speed_tier)
+# speed_tier: lower = faster provider, used by pick() to prefer fast slots.
+# Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8),
-    ("groq",        "llama-3.1-8b-instant",                              8),
-    ("groq:2",      "llama-3.1-8b-instant",                              8),
-    ("cerebras",    "llama3.1-8b",                                       6),
-    ("gemini",      "gemini-2.5-flash",                                  6),
-    ("gemini:2",    "gemini-2.5-flash",                                  6),
-    ("groq",        "llama-3.3-70b-versatile",                           4),
-    ("groq:2",      "llama-3.3-70b-versatile",                           4),
-    ("sarvam",      "sarvam-m",                                          4),
-    ("openai",      "gpt-4o-mini",                                       4),
-    ("xai",         "grok-3-fast",                                       4),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4),
-    ("bedrock",     "amazon.nova-micro-v1:0",                            2),
+    ("groq",        "llama-3.1-8b-instant",                              8, 0),
+    ("groq:2",      "llama-3.1-8b-instant",                              8, 0),
+    ("cerebras",    "llama3.1-8b",                                       6, 1),
+    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 2),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 3),
+    ("groq:2",      "llama-3.3-70b-versatile",                           4, 3),
+    ("gemini",      "gemini-2.5-flash",                                  6, 4),
+    ("gemini:2",    "gemini-2.5-flash",                                  6, 4),
+    ("sarvam",      "sarvam-m",                                          4, 5),
+    ("openai",      "gpt-4o-mini",                                       4, 5),
+    ("xai",         "grok-3-fast",                                       4, 5),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 5),
+    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 5),
 ]
 
 class _SmartKeyPool:
@@ -232,12 +232,13 @@ class _SmartKeyPool:
 
     Each slot has:
       sem            asyncio.Semaphore(max_concurrent) — caps parallel in-flight requests
-      last_used      float timestamp — drives LRU round-robin between equal-capacity slots
+      priority       int — list-order index; lower = faster provider, always preferred
+      last_used      float timestamp — for mark_ok tracking
       cooldown_until float timestamp — set after 429 / errors
       errors         int            — error count for exponential back-off
 
-    pick() prefers slots with spare semaphore capacity first (lowest in-flight),
-    then falls back to LRU among all non-cooled slots.
+    pick() prefers slots with spare capacity first, then among those picks
+    the fastest provider (lowest priority index).
     """
     _RL_COOLDOWN  = 60.0   # 429 rate-limit → skip slot for 60 s
     _ERR_COOLDOWN = 15.0   # any other error → skip for 15 s
@@ -250,7 +251,7 @@ class _SmartKeyPool:
                 pmap[pname] = []
             pmap[pname].append(p["key"])
         self._slots = []
-        for pname, model_id, max_con in candidates:
+        for pname, model_id, max_con, tier in candidates:
             real_provider = pname.split(":")[0]
             key_idx = int(pname.split(":")[1]) - 1 if ":" in pname else 0
             keys = pmap.get(real_provider, [])
@@ -263,6 +264,7 @@ class _SmartKeyPool:
                     "provider": real_provider, "key": key, "model": model_id,
                     "sem": asyncio.Semaphore(max_con), "max_con": max_con,
                     "last_used": 0.0, "cooldown_until": 0.0, "errors": 0,
+                    "priority": tier,
                 })
         logger.info(
             f"SLM SmartKeyPool active slots: "
@@ -270,16 +272,14 @@ class _SmartKeyPool:
         )
 
     def pick(self):
-        """Return best slot: not cooling down, prefer spare capacity, then LRU."""
+        """Return best slot: not cooling down, prefer spare capacity, then fastest provider."""
         now = time.time()
         available = [s for s in self._slots if now >= s["cooldown_until"]]
         if not available:
             return None
-        # Primary: slots that still have semaphore capacity → lowest in-flight first
         with_capacity = [s for s in available if s["sem"]._value > 0]
         pool = with_capacity if with_capacity else available
-        # Among equal-capacity slots, pick least-recently-used to spread load
-        return min(pool, key=lambda s: (s["max_con"] - s["sem"]._value, s["last_used"]))
+        return min(pool, key=lambda s: (s["priority"], s["max_con"] - s["sem"]._value))
 
     def mark_ok(self, slot):
         slot["last_used"] = time.time()
@@ -898,7 +898,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 yield token
 
     # ── Syrabit SLM: concurrent smart pool ──────────────────────────────────────
-    # pick() returns highest-capacity, least-recently-used slot not in cooldown.
+    # pick() returns the fastest available slot (by speed tier) with spare capacity.
     # async with slot["sem"] lets up to max_concurrent requests run in parallel.
     # asyncio.wait_for enforces a per-slot timeout so a slow provider never
     # blocks the pool — the next slot is tried immediately on timeout.
