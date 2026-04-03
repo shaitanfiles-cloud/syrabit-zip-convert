@@ -112,100 +112,63 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const courseLabel = msg.rag_stream_name || null;
               const boardLabel = msg.rag_board_name || null;
               const classLabel = msg.rag_class_name || null;
+              const chapterLabel = msg.rag_chapter_name || null;
               const subjectUrl = msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null;
-              const handleCardNav = () => {
-                if (!subjectUrl) return;
-                navigate(subjectUrl);
-              };
               const isDocument = msg.rag_source === 'document';
               const isWeb = msg.rag_source === 'web';
               const hasContext = boardLabel || subjectLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
 
+              const sourceParts = sourceLine ? sourceLine.split('·').map(s => s.replace(/\s*\([^)]*\)\s*$/, '').trim()).filter(Boolean) : [];
+              const hasAnything = hasContext || sourceParts.length > 0;
+              if (!hasAnything) return null;
+
+              const sourceIcon = isDocument ? FileText : isWeb ? Globe : BookOpen;
+              const SourceIcon = sourceIcon;
+              const sourceTypeLabel = isDocument ? 'Uploaded Document' : isWeb ? 'Web Search' : 'Syrabit Library';
+
+              const tags = [];
+              if (chapterLabel) tags.push(chapterLabel);
+              for (const sp of sourceParts) {
+                if (!tags.some(t => t.toLowerCase() === sp.toLowerCase())) tags.push(sp);
+              }
+              if (subjectLabel && !tags.some(t => t.toLowerCase() === subjectLabel.toLowerCase())) tags.push(subjectLabel);
+
               return (
                 <>
-                  {hasContext && subjectLabel && !isDocument && !isWeb && (
-                    <div
-                      onClick={subjectUrl ? handleCardNav : undefined}
-                      className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
-                      style={{
-                        background: 'var(--card, rgba(20,20,30,0.9))',
-                        border: '1px solid rgba(74,222,128,0.15)',
-                        maxWidth: 'fit-content',
-                      }}
-                      role={subjectUrl ? 'link' : undefined}
-                      aria-label={subjectUrl ? `View ${subjectLabel}` : undefined}
-                    >
-                      <div className="px-3 py-2.5">
-                        <h4
-                          className="font-bold leading-tight truncate"
-                          style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: '#4ade80' }}
-                        >
-                          {subjectLabel}
-                        </h4>
-                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1">
-                          {boardLabel && (
-                            <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))' }}>
-                              {boardLabel}
-                            </span>
-                          )}
-                          {classLabel && (
-                            <span className="text-[11px] text-muted-foreground">
-                              {classLabel}
-                            </span>
-                          )}
-                          {courseLabel && (
-                            <>
-                              <span className="text-[11px] text-muted-foreground/60">·</span>
-                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>
-                                {courseLabel}
-                              </span>
-                            </>
-                          )}
-                        </div>
-                      </div>
+                  <div
+                    onClick={subjectUrl && !isDocument && !isWeb ? () => navigate(subjectUrl) : undefined}
+                    className={`mt-3 rounded-xl overflow-hidden ${subjectUrl && !isDocument && !isWeb ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
+                    style={{ background: 'rgba(124,58,237,0.05)', border: '1px solid rgba(124,58,237,0.12)' }}
+                    role={subjectUrl && !isDocument && !isWeb ? 'link' : undefined}
+                    aria-label={subjectUrl && !isDocument && !isWeb ? `View ${subjectLabel}` : undefined}
+                  >
+                    <div className="flex items-center gap-2 px-3 pt-2.5 pb-1">
+                      <SourceIcon size={14} style={{ color: '#a78bfa' }} />
+                      <span className="text-[12px] font-semibold" style={{ color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{sourceTypeLabel}</span>
                     </div>
-                  )}
-                  {hasContext && isDocument && (
-                    <div
-                      className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl"
-                      style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.18)', maxWidth: 'fit-content' }}
-                    >
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(167,139,250,0.15)' }}>
-                        <FileText size={16} style={{ color: '#a78bfa' }} />
+                    {tags.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
+                        {tags.map((tag, i) => (
+                          <span key={i} className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,58,237,0.1)', color: 'hsl(var(--foreground) / 0.7)' }}>
+                            {tag}
+                          </span>
+                        ))}
+                        {boardLabel && !tags.some(t => t.toLowerCase() === boardLabel.toLowerCase()) && (
+                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,58,237,0.1)', color: 'hsl(var(--foreground) / 0.7)' }}>
+                            {boardLabel}
+                          </span>
+                        )}
+                        {classLabel && (
+                          <span className="text-[11px] text-muted-foreground">{classLabel}</span>
+                        )}
+                        {courseLabel && !tags.some(t => t.toLowerCase() === courseLabel.toLowerCase()) && (
+                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,58,237,0.1)', color: 'hsl(var(--foreground) / 0.7)' }}>
+                            {courseLabel}
+                          </span>
+                        )}
                       </div>
-                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Uploaded Document</span>
-                    </div>
-                  )}
-                  {hasContext && isWeb && (
-                    <div
-                      className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl"
-                      style={{ background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.18)', maxWidth: 'fit-content' }}
-                    >
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(96,165,250,0.15)' }}>
-                        <Globe size={16} style={{ color: '#60a5fa' }} />
-                      </div>
-                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
-                    </div>
-                  )}
-                  {(() => {
-                    const sourceParts = sourceLine ? sourceLine.split('·').map(s => s.replace(/\s*\([^)]*\)\s*$/, '').trim()).filter(Boolean) : [];
-                    if (!sourceParts.length) return null;
-                    return (
-                      <div className="mt-3 rounded-xl overflow-hidden" style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.12)' }}>
-                        <div className="flex items-center gap-2 px-3 pt-2.5 pb-1.5">
-                          <BookOpen size={14} style={{ color: '#a78bfa' }} />
-                          <span className="text-[12px] font-semibold" style={{ color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Sources</span>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5 px-3 pb-2.5">
-                          {sourceParts.map((part, i) => (
-                            <span key={i} className="text-[12px] px-2 py-0.5 rounded-md" style={{ background: 'rgba(124,58,237,0.08)', color: 'hsl(var(--foreground) / 0.75)' }}>
-                              {part}
-                            </span>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })()}
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     {timeStr && (
                       <span className="text-[11px] text-muted-foreground">{timeStr}</span>
