@@ -1881,10 +1881,10 @@ _ORG_NODE = {
     "url": "https://syrabit.ai",
     "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
     "description": (
-        "Syrabit.ai is an AI-powered academic platform that produces syllabus-aligned study material "
+        "Syrabit.ai is an academic content platform that produces syllabus-aligned study material "
         "for AHSEC (Assam Higher Secondary Education Council), SEBA (Board of Secondary Education, Assam), "
         "and NEP FYUGP Degree students. Content follows official board/university curricula "
-        "and is reviewed for accuracy, exam relevance, and academic depth."
+        "and is editorially reviewed for accuracy, exam relevance, and academic depth."
     ),
     "foundingDate": "2025",
     "knowsAbout": [
@@ -2247,7 +2247,7 @@ footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-t
 <dt>Subject</dt><dd>{subject} — {board} {cls}</dd>
 <dt>Chapter</dt><dd>{chapter}</dd>
 <dt>Topic</dt><dd>{topic}</dd>
-<dt>Editorial Process</dt><dd>Content is generated using AI models trained on academic texts, cross-referenced with the official {html_mod.escape(board)} syllabus, and reviewed for factual accuracy, exam relevance, and completeness. Each page follows a structured academic format: formal definitions, detailed explanations, solved examples with Assam-specific context, exam tips, and practice questions with model answers.</dd>
+<dt>Editorial Process</dt><dd>Content is prepared by subject-matter contributors, cross-referenced with the official {html_mod.escape(board)} syllabus, and editorially reviewed for factual accuracy, exam relevance, and completeness. Each page follows a structured academic format: formal definitions, detailed explanations, solved examples with Assam-specific context, exam tips, and practice questions with model answers.</dd>
 <dt>Last Updated</dt><dd>{html_mod.escape(updated[:10] if updated else '')}</dd>
 <dt>Publisher</dt><dd>Syrabit.ai — Academic content platform for Assam students</dd>
 </dl>
@@ -2311,8 +2311,8 @@ async def get_homepage_html():
 
     title = "Syrabit.ai — Free AHSEC, SEBA & Degree Study Notes, PYQs & MCQs for Assam Students"
     desc = (
-        "AI-powered study platform for Assam Board (AHSEC/SEBA) and Degree students. "
-        "Free topic-wise notes, previous year questions, MCQs, and important questions "
+        "Comprehensive study platform for Assam Board (AHSEC/SEBA) and Degree students. "
+        "Free syllabus-aligned notes, previous year questions, MCQs, and important questions "
         f"across {len(subjects)} subjects and {total_pages}+ pages."
     )
 
@@ -2333,7 +2333,7 @@ async def get_homepage_html():
                              "query-input": "required name=search_term_string"}},
         _ORG_NODE,
         {"@type": "EducationalOrganization", "name": "Syrabit.ai",
-         "description": "AI-powered study platform for Assam Board students",
+         "description": "Syllabus-aligned study platform for Assam Board students",
          "areaServed": {"@type": "State", "name": "Assam", "containedInPlace": {"@type": "Country", "name": "India"}},
          "address": {"@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN"}},
     ]}, ensure_ascii=False)
@@ -2377,7 +2377,7 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <body>
 <header>
 <h1>Syrabit.ai</h1>
-<p>Free AI-powered study material for <strong>AHSEC</strong>, <strong>SEBA</strong>, and <strong>Degree</strong> students in Assam.</p>
+<p>Free syllabus-aligned study material for <strong>AHSEC</strong>, <strong>SEBA</strong>, and <strong>Degree</strong> students in Assam.</p>
 <div class="stats">
 <div class="stat"><strong>{total_pages}+</strong>Study pages</div>
 <div class="stat"><strong>{len(subjects)}</strong>Subjects</div>
@@ -2398,7 +2398,7 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 </ul>
 </main>
 <footer>
-<p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
+<p>&copy; Syrabit.ai — Free syllabus-aligned exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
 <p class="geo-footer">Serving students in Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, and across Assam, India</p>
 <p><a href="https://syrabit.ai/library">Full Library</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></p>
 </footer>
@@ -2518,7 +2518,7 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 {topics_html}
 </main>
 <footer>
-<p>&copy; Syrabit.ai — Free AI-powered exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
+<p>&copy; Syrabit.ai — Free syllabus-aligned exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
 <p class="geo-footer">Serving students in Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, and across Assam, India</p>
 </footer>
 </body>
