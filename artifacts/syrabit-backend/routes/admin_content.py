@@ -20,6 +20,7 @@ from models import (
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
 from config import *
+from config import _GROQ_KEY
 from deps import *
 from cache import *
 from auth_deps import (
