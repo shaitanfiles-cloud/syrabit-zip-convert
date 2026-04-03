@@ -2032,6 +2032,21 @@ def _render_seo_html(
                 if len(faq_items) >= 10:
                     break
 
+    if not faq_items and topic:
+        faq_items.append({
+            "@type": "Question",
+            "name": f"What is {page.get('topic_title', '')} in {page.get('subject_name', '')}?",
+            "acceptedAnswer": {
+                "@type": "Answer",
+                "text": f"{page.get('topic_title', '')} is a topic in {page.get('subject_name', '')} covered under {page.get('chapter_title', '')} for {page.get('board_name', '')} {page.get('class_name', '')} students. Visit Syrabit.ai for detailed study notes, examples, and practice questions.",
+            },
+        })
+
+    if faq_items:
+        graph_nodes.append({
+            "@type": "FAQPage",
+            "mainEntity": faq_items,
+        })
 
     ld_json = json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False)
 
@@ -2666,6 +2681,7 @@ async def get_sitemap_index():
     sitemap_names = [
         "sitemap-pages.xml",
         "sitemap-subjects.xml",
+        "sitemap-learn.xml",
         "sitemap-notes.xml",
         "sitemap-mcqs.xml",
         "sitemap-pyqs.xml",
@@ -2731,6 +2747,37 @@ async def get_sitemap_subjects():
     return _xml_response(_build_urlset(entries))
 
 
+async def _fetch_learn_entries(today: str) -> list[dict]:
+    try:
+        docs = await _db.cms_documents.find(
+            {"status": "published", "doc_type": {"$ne": "personalized"}},
+            {"_id": 0, "seo_slug": 1, "id": 1, "updated_at": 1, "created_at": 1},
+        ).to_list(5000)
+        entries = []
+        for doc in docs:
+            slug = doc.get("seo_slug") or doc.get("id", "")
+            if not slug:
+                continue
+            raw = doc.get("updated_at", "") or doc.get("created_at", "")
+            lastmod = raw[:10] if raw else today
+            entries.append({
+                "loc": f"{BASE_URL}/learn/{slug}",
+                "lastmod": lastmod,
+                "pri": "0.8",
+                "freq": "monthly",
+            })
+        return entries
+    except Exception:
+        return []
+
+
+@router.get("/sitemap-learn.xml", response_class=Response)
+async def get_sitemap_learn():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    entries = await _fetch_learn_entries(today)
+    return _xml_response(_build_urlset(entries))
+
+
 @router.get("/sitemap-notes.xml", response_class=Response)
 async def get_sitemap_notes():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -2782,6 +2829,8 @@ async def get_dynamic_sitemap():
         e = _page_to_entry(p, today)
         if e:
             entries.append(e)
+    learn_entries = await _fetch_learn_entries(today)
+    entries.extend(learn_entries)
     return _xml_response(_build_urlset(entries))
 
 

@@ -1,5 +1,5 @@
 """Syrabit.ai — ASGI middleware classes."""
-import time as _time_mod, logging
+import re, time as _time_mod, logging
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -38,6 +38,27 @@ class SecurityHeadersMiddleware:
 
         await self.app(scope, receive, send_with_security_headers)
 
+_SEARCH_BOT_UA_RE = re.compile(
+    r"googlebot|bingbot|yandexbot|duckduckbot|baiduspider|slurp|"
+    r"applebot|applebot-extended|facebookexternalhit|facebookbot|"
+    r"twitterbot|linkedinbot|telegrambot|whatsapp|"
+    r"gptbot|oai-searchbot|chatgpt-user|"
+    r"claudebot|anthropic-ai|"
+    r"perplexitybot|"
+    r"google-extended|meta-externalagent|cohere-ai|bytespider|ccbot|"
+    r"ia_archiver|msnbot|petalbot",
+    re.IGNORECASE,
+)
+
+_ABUSIVE_SCRAPER_UA_RE = re.compile(
+    r"scrapy|wget|curl|python-requests|go-http-client|java/|"
+    r"ahrefsbot|semrushbot|nmap|masscan|zgrab|heritrix",
+    re.IGNORECASE,
+)
+
+_BOT_RATE_LIMIT = 600
+
+
 class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
     """Plan-aware IP rate limiting for all /api routes + request tracking.
     Plan is read from JWT claim (refreshed on login, plan change invalidates session).
@@ -52,6 +73,9 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if not path.startswith("/api/"):
             return await call_next(request)
+
+        ua = request.headers.get("user-agent", "")
+        is_legit_bot = bool(ua and _SEARCH_BOT_UA_RE.search(ua) and not _ABUSIVE_SCRAPER_UA_RE.search(ua))
 
         exempt = any(path.startswith(p) for p in self._RATE_LIMIT_EXEMPT_PREFIXES)
         if exempt:
@@ -86,13 +110,14 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             pass
 
         client_ip = request.client.host if request.client else "unknown"
-        if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
+        effective_limit = max(ip_limit, _BOT_RATE_LIMIT) if is_legit_bot else ip_limit
+        if not check_rate_limit(f"ip:{client_ip}", max_requests=effective_limit, window_seconds=60):
             from fastapi.responses import JSONResponse
             _metrics.record_request(path, 429)
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Too many requests — please slow down."},
-                headers={"Retry-After": "60", "X-RateLimit-Limit": str(ip_limit)}
+                headers={"Retry-After": "60", "X-RateLimit-Limit": str(effective_limit)}
             )
 
         _metrics.inc_active()

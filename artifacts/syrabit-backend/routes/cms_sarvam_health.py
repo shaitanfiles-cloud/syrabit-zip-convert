@@ -1705,6 +1705,39 @@ _VALID_PAGE_TYPES = {"notes", "definition", "important-questions", "mcqs", "exam
 _bot_html_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=3600)
 
 
+def _extract_faq_items(content: str, title: str = "") -> list[dict]:
+    """Extract FAQ Q&A pairs from content text for FAQPage JSON-LD.
+    Looks for lines ending in '?' followed by answer lines. Falls back to
+    generating a canonical 'What is X?' FAQ from the title and description."""
+    faq_items = []
+    if content:
+        lines = content.split("\n")
+        current_q = None
+        for line in lines:
+            stripped = line.strip().lstrip("#").strip().replace("**", "").strip()
+            if stripped.endswith("?") and len(stripped) > 15:
+                current_q = stripped
+            elif current_q and len(stripped) > 20:
+                faq_items.append({
+                    "@type": "Question",
+                    "name": current_q,
+                    "acceptedAnswer": {"@type": "Answer", "text": stripped},
+                })
+                current_q = None
+                if len(faq_items) >= 10:
+                    break
+    if not faq_items and title:
+        faq_items.append({
+            "@type": "Question",
+            "name": f"What is {title}?",
+            "acceptedAnswer": {
+                "@type": "Answer",
+                "text": f"{title} is a topic covered on Syrabit.ai with detailed study notes, examples, and practice questions for exam preparation.",
+            },
+        })
+    return faq_items
+
+
 def _bot_html_response(html: str):
     from fastapi.responses import HTMLResponse
     return HTMLResponse(
@@ -1831,7 +1864,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 doc_desc = _html_mod.escape(doc.get("meta_description", doc.get("description", ""))[:300])
                 doc_body = doc.get("content_html", "") or _html_mod.escape(doc.get("content", "")[:2000])
                 page_url = f"https://syrabit.ai/learn/{learn_slug}"
-                schema = json.dumps({"@context": "https://schema.org", "@graph": [
+                graph_nodes = [
                     {"@type": "Article", "headline": doc.get("title", ""), "description": doc.get("meta_description", ""),
                      "url": page_url, "inLanguage": "en-IN",
                      "author": {"@type": "Organization", "name": "Syrabit.ai"},
@@ -1847,7 +1880,11 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                         {"@type": "ListItem", "position": 2, "name": "Library", "item": "https://syrabit.ai/library"},
                         {"@type": "ListItem", "position": 3, "name": doc.get("title", ""), "item": page_url},
                     ]},
-                ]}, ensure_ascii=False)
+                ]
+                faq_items = _extract_faq_items(doc.get("content", ""), doc.get("title", ""))
+                if faq_items:
+                    graph_nodes.append({"@type": "FAQPage", "mainEntity": faq_items})
+                schema = json.dumps({"@context": "https://schema.org", "@graph": graph_nodes}, ensure_ascii=False)
                 html_content = f"""<!DOCTYPE html>
 <html lang="en-IN">
 <head>
@@ -1908,14 +1945,15 @@ class CmsNoIndexMiddleware(BaseHTTPMiddleware):
     Hard scraper block for all /cms/{user_id}/* routes.
     - Adds X-Robots-Tag: noindex, nofollow on every CMS response.
     - Adds Cache-Control: private, no-store on every CMS response.
-    - Blocks known scraper/bot user-agents with 403.
+    - Blocks abusive scraper user-agents with 403.
+    Legitimate search/AI bots (GPTBot, ClaudeBot, Googlebot, etc.) are NOT
+    blocked — they should be able to access public CMS API data.
     Outbound web-search calls are structurally impossible in CMS handlers
     (they only call call_slm / MongoDB). This middleware provides defence-in-depth.
     """
     _CMS_BOT_UA_RE = re.compile(
         r"scrapy|wget|curl|python-requests|go-http-client|java/|"
-        r"ahrefsbot|semrushbot|gptbot|claudebot|perplexitybot|"
-        r"bingbot|googlebot|yandexbot|duckduckbot",
+        r"ahrefsbot|semrushbot|nmap|masscan|zgrab|heritrix",
         re.IGNORECASE,
     )
     _CMS_PUBLIC_PATHS = ("/api/cms/posts", "/api/cms/post/")
