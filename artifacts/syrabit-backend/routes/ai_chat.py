@@ -509,9 +509,11 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
     # ── Phase 0+1 fully parallel: context, semester, doc, search scope all at once ──
     _t_phase0 = _time_mod.time()
 
+    _is_card_context = bool(msg.card_context and msg.card_context.strip())
+
     async def _fetch_doc():
-        if msg.card_context and msg.card_context.strip():
-            logger.info(f"Chat [STREAM]: Tier 0 card_context ({len(msg.card_context)} chars) used as grounding")
+        if _is_card_context:
+            logger.info(f"Chat [STREAM]: card_context ({len(msg.card_context)} chars) used as grounding (library source)")
             return msg.card_context
         if not msg.document_id:
             return None
@@ -521,6 +523,8 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
     async def _fetch_search_scope_early():
         if _is_casual:
             return "", None
+        if msg.card_context and msg.subject_id and msg.subject_name:
+            return msg.subject_name, None
         return await build_search_scope(
             msg.message,
             board_name=msg.board_name or (user.get("board_name", "") if user else ""),
@@ -750,6 +754,9 @@ async def chat_stream(msg: ChatMessage, user: Optional[dict] = Depends(rate_limi
 
     user_msg_saved   = msg.message
     rag_source_saved = rag_ctx.get("source",  "none")
+    if _is_card_context and rag_source_saved == "document":
+        rag_source_saved = "library"
+        rag_ctx["source"] = "library"
     rag_quality_saved = rag_ctx.get("quality", "none")
     rag_chunks_count = len(rag_ctx.get("chunks",   []))
     rag_subjects_count = len(rag_ctx.get("subjects", []))

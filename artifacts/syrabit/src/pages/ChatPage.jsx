@@ -70,9 +70,8 @@ export default function ChatPage() {
   useEffect(() => {
     if (!subjectId) return;
     setSyncState('syncing');
-    getSubject(subjectId)
-      .then((r) => { setSubject(r.data); return getChapters(subjectId); })
-      .then((r) => { setScopedChapters(r.data || []); setSyncState('idle'); })
+    Promise.all([getSubject(subjectId), getChapters(subjectId)])
+      .then(([subRes, chRes]) => { setSubject(subRes.data); setScopedChapters(chRes.data || []); setSyncState('idle'); })
       .catch(() => setSyncState('idle'));
   }, [subjectId]);
 
@@ -133,11 +132,11 @@ export default function ChatPage() {
           const num = ch.chapter_number ?? ch.order_index ?? i + 1;
           let entry = `Chapter ${num} — ${ch.title}`;
           if (ch.description) entry += `: ${ch.description}`;
-          if (ch.content) entry += `\n${ch.content.slice(0, 200)}`;
+          if (ch.content) entry += `\n${ch.content.slice(0, 400)}`;
           lines.push(entry);
         });
     }
-    return lines.join('\n').slice(0, 2500);
+    return lines.join('\n').slice(0, 4000);
   }, [subjectId, subject, scopedChapters, user]);
 
   const effectiveLimit = credits.limit ?? user?.credits_limit ?? null;

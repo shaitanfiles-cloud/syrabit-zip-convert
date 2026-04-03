@@ -1671,6 +1671,20 @@ def build_rag_system_prompt(
         )
         return base_prompt + grounding
 
+    # ── Tier 0-L: Library card context (from Ask AI button) ──────────────────
+    if source == "library" and document_text:
+        grounding += (
+            "\n\n---\n"
+            "**GROUNDING CONTEXT (Subject Library Context):**\n"
+            "The student opened AI chat from a specific subject in the Syrabit library. "
+            "Use this syllabus and chapter context to give accurate, curriculum-aligned answers. "
+            "You may supplement with your general knowledge, but prioritize the syllabus content.\n\n"
+            "**Subject & syllabus:**\n"
+            f"{document_text}\n\n"
+            "---\n"
+        )
+        return base_prompt + grounding
+
     content_card = rag_context.get("content_card", "")
 
     # ── Tier 1/2: Curriculum DB context (including vector hits) ─────────────

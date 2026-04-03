@@ -137,6 +137,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const chapterLabel = msg.rag_chapter_name || null;
               const subjectUrl = msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null;
               const isDocument = msg.rag_source === 'document';
+              const isLibrary = msg.rag_source === 'library';
               const isWeb = msg.rag_source === 'web';
               const hasContext = boardLabel || subjectLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
 
@@ -150,7 +151,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
 
               return (
                 <>
-                  {!isDocument && !isWeb && subjectLabel && (
+                  {(isLibrary || (!isDocument && !isWeb)) && subjectLabel && (
                     <div
                       onClick={subjectUrl ? () => navigate(subjectUrl) : undefined}
                       className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
