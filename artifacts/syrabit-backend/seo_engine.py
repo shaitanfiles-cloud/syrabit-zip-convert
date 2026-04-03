@@ -2461,6 +2461,364 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
     return HTMLResponse(content=html_out)
 
 
+@router.get("/html/about", response_class=HTMLResponse)
+async def get_about_html():
+    total_pages = await _db.seo_pages.count_documents({"status": "published"})
+    total_subjects = await _db.subjects.count_documents({})
+    total_chapters = await _db.chapters.count_documents({})
+
+    subjects_agg = await _db.seo_pages.aggregate([
+        {"$match": {"status": "published", "page_type": "notes"}},
+        {"$group": {
+            "_id": {"board": "$board_slug", "cls": "$class_slug", "subj": "$subject_slug"},
+            "subject_name": {"$first": "$subject_name"},
+            "board_name": {"$first": "$board_name"},
+            "class_name": {"$first": "$class_name"},
+            "count": {"$sum": 1},
+        }},
+        {"$sort": {"count": -1}},
+    ]).to_list(100)
+
+    subj_items = []
+    for s in subjects_agg:
+        g = s["_id"]
+        url = f"https://syrabit.ai/{g['board']}/{g['cls']}/{g['subj']}"
+        label = f"{s.get('subject_name', g['subj'])} ({s.get('board_name', g['board'])} {s.get('class_name', g['cls'])})"
+        subj_items.append(f'<li><a href="{url}">{html_mod.escape(label)}</a> &mdash; {s["count"]} topics</li>')
+    subj_list_html = "\n".join(subj_items)
+
+    title = "About Syrabit.ai — AI-Powered Study Platform for Assam Board & Degree Students"
+    desc = (
+        "Syrabit.ai is a free, AI-powered educational platform built for AHSEC, SEBA, and Degree (NEP FYUGP) "
+        "students in Assam, India. It provides syllabus-aligned study notes, MCQs, previous year questions, "
+        "and an AI tutor (Syra) covering subjects across Assam Higher Secondary Education Council, "
+        "Board of Secondary Education Assam, and university degree programmes."
+    )
+    page_url = "https://syrabit.ai/about"
+
+    schema = json.dumps({"@context": "https://schema.org", "@graph": [
+        {
+            "@type": "Organization",
+            "name": "Syrabit.ai",
+            "alternateName": ["Syrabit", "Syra AI"],
+            "url": "https://syrabit.ai",
+            "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
+            "image": "https://syrabit.ai/opengraph.jpg",
+            "description": desc,
+            "foundingDate": "2025",
+            "foundingLocation": {"@type": "Place", "name": "Assam, India"},
+            "knowsAbout": [
+                "AHSEC syllabus and examinations",
+                "SEBA syllabus and examinations",
+                "NEP FYUGP curriculum for Assam universities",
+                "Gauhati University syllabus",
+                "Dibrugarh University syllabus",
+                "Cotton University syllabus",
+                "Higher education in Assam",
+                "Assam Board exam preparation",
+                "AI-powered education",
+                "Syllabus-aligned study material",
+            ],
+            "sameAs": ["https://twitter.com/SyrabitAI"],
+            "areaServed": {
+                "@type": "State",
+                "name": "Assam",
+                "containedInPlace": {"@type": "Country", "name": "India"},
+            },
+            "address": {
+                "@type": "PostalAddress",
+                "addressRegion": "Assam",
+                "addressCountry": "IN",
+            },
+            "slogan": "Your AI study companion for Assam Board exams",
+            "serviceType": "Educational Technology",
+            "hasOfferCatalog": {
+                "@type": "OfferCatalog",
+                "name": "Study Material",
+                "itemListElement": [
+                    {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Syllabus-aligned study notes", "description": "Topic-wise notes for AHSEC, SEBA, and Degree subjects aligned to official board syllabi"}},
+                    {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "AI Tutor (Syra)", "description": "AI-powered study assistant that answers curriculum-specific questions with grounded, syllabus-aligned responses"}},
+                    {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "MCQs and Practice Questions", "description": "Multiple-choice questions with explanations for exam revision"}},
+                    {"@type": "Offer", "itemOffered": {"@type": "Service", "name": "Previous Year Questions", "description": "Solved previous year questions with model answers for Assam Board exams"}},
+                ],
+            },
+        },
+        {
+            "@type": "WebSite",
+            "name": "Syrabit.ai",
+            "url": "https://syrabit.ai",
+            "description": desc,
+            "inLanguage": "en-IN",
+            "potentialAction": {
+                "@type": "SearchAction",
+                "target": "https://syrabit.ai/search?q={search_term_string}",
+                "query-input": "required name=search_term_string",
+            },
+        },
+        {
+            "@type": "EducationalOrganization",
+            "name": "Syrabit.ai",
+            "url": "https://syrabit.ai",
+            "description": (
+                "Syrabit.ai is an AI-powered academic content platform that produces syllabus-aligned study material "
+                "for AHSEC (Assam Higher Secondary Education Council), SEBA (Board of Secondary Education, Assam), "
+                "and NEP FYUGP Degree students. Content follows official board and university curricula "
+                "and is editorially reviewed for accuracy, exam relevance, and academic depth."
+            ),
+            "areaServed": {"@type": "State", "name": "Assam", "containedInPlace": {"@type": "Country", "name": "India"}},
+            "address": {"@type": "PostalAddress", "addressRegion": "Assam", "addressCountry": "IN"},
+        },
+        {
+            "@type": "WebPage",
+            "@id": page_url,
+            "name": title,
+            "description": desc,
+            "url": page_url,
+            "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
+            "about": {"@type": "Organization", "name": "Syrabit.ai"},
+            "inLanguage": "en-IN",
+        },
+        {
+            "@type": "FAQPage",
+            "mainEntity": [
+                {
+                    "@type": "Question",
+                    "name": "What is Syrabit.ai?",
+                    "acceptedAnswer": {"@type": "Answer", "text": "Syrabit.ai is a free, AI-powered educational platform designed specifically for students in Assam, India. It covers AHSEC (Higher Secondary), SEBA (Secondary), and Degree (NEP FYUGP) curricula with syllabus-aligned study notes, MCQs, previous year questions, and an AI tutor named Syra."},
+                },
+                {
+                    "@type": "Question",
+                    "name": "Which boards and universities does Syrabit cover?",
+                    "acceptedAnswer": {"@type": "Answer", "text": "Syrabit covers three educational boards: AHSEC (Assam Higher Secondary Education Council) for Class 11-12, SEBA (Board of Secondary Education, Assam) for Class 9-10, and Degree programmes under the NEP 2020 FYUGP curriculum adopted by Gauhati University, Dibrugarh University, Cotton University, and other Assam universities."},
+                },
+                {
+                    "@type": "Question",
+                    "name": "What is Syra AI?",
+                    "acceptedAnswer": {"@type": "Answer", "text": "Syra is an AI-powered study assistant built into Syrabit.ai. Students can ask Syra questions about any topic in their syllabus and receive accurate, curriculum-aligned answers. Syra uses Retrieval-Augmented Generation (RAG) to ground its responses in actual syllabus content, ensuring factual accuracy for Assam Board exams."},
+                },
+                {
+                    "@type": "Question",
+                    "name": "Is Syrabit.ai free?",
+                    "acceptedAnswer": {"@type": "Answer", "text": "Syrabit.ai offers free access to study notes, MCQs, previous year questions, and the AI tutor. Premium features with additional daily AI chat limits and priority access are available through affordable subscription plans designed for Assam students."},
+                },
+                {
+                    "@type": "Question",
+                    "name": "What subjects are available on Syrabit?",
+                    "acceptedAnswer": {"@type": "Answer", "text": f"Syrabit currently covers {total_subjects} subjects across AHSEC, SEBA, and Degree programmes. Content is continuously expanding with new subjects, chapters, and topics being added regularly. Each subject includes topic-wise notes, solved examples, MCQs, important questions, and previous year questions."},
+                },
+                {
+                    "@type": "Question",
+                    "name": "How is content quality maintained on Syrabit?",
+                    "acceptedAnswer": {"@type": "Answer", "text": "Content on Syrabit is prepared by subject-matter contributors and cross-referenced with the official AHSEC, SEBA, and university syllabi. Each page follows a structured academic format: formal definitions, detailed explanations, solved examples with Assam-specific context, exam tips, and practice questions with model answers. The AI tutor (Syra) uses RAG technology to ground responses in verified syllabus content."},
+                },
+            ],
+        },
+    ]}, ensure_ascii=False)
+
+    html_out = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{html_mod.escape(title)}</title>
+<meta name="description" content="{html_mod.escape(desc)}">
+<link rel="canonical" href="{html_mod.escape(page_url)}">
+<meta property="og:title" content="{html_mod.escape(title)}">
+<meta property="og:description" content="{html_mod.escape(desc)}">
+<meta property="og:url" content="{html_mod.escape(page_url)}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@SyrabitAI">
+<meta name="twitter:title" content="{html_mod.escape(title)}">
+<meta name="twitter:description" content="{html_mod.escape(desc)}">
+<meta name="twitter:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
+<meta name="geo.region" content="IN-AS">
+<meta name="geo.placename" content="Assam, India">
+<meta name="geo.position" content="26.2006;92.9376">
+<meta name="ICBM" content="26.2006, 92.9376">
+<meta property="og:locale" content="en_IN">
+<meta http-equiv="content-language" content="en-IN">
+<link rel="alternate" hreflang="en-IN" href="{html_mod.escape(page_url)}">
+<script type="application/ld+json">{schema}</script>
+<style>
+body{{font-family:system-ui,-apple-system,sans-serif;max-width:860px;margin:0 auto;padding:1.25rem;color:#1a1a1a;line-height:1.7}}
+a{{color:#7c3aed;text-decoration:none}}a:hover{{text-decoration:underline}}
+h1{{font-size:2rem;margin-bottom:.25rem}}h2{{font-size:1.4rem;margin-top:2.5rem;border-bottom:1px solid #e5e7eb;padding-bottom:.35rem}}
+h3{{font-size:1.15rem;margin-top:1.5rem;color:#374151}}
+p{{margin:.75rem 0}}
+ul{{padding-left:1.5rem}}li{{margin:.4rem 0}}
+.highlight{{background:#f5f3ff;border-left:4px solid #7c3aed;padding:.75rem 1rem;margin:1rem 0;border-radius:0 6px 6px 0}}
+.stats-row{{display:flex;gap:1.5rem;margin:1.25rem 0;flex-wrap:wrap}}
+.stat-card{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:.75rem 1.25rem;text-align:center;min-width:100px}}
+.stat-card strong{{display:block;font-size:1.6rem;color:#7c3aed}}
+.stat-card span{{font-size:.85rem;color:#64748b}}
+table{{border-collapse:collapse;width:100%;margin:1rem 0}}
+th,td{{border:1px solid #e5e7eb;padding:.5rem .75rem;text-align:left;font-size:.9rem}}
+th{{background:#f8fafc;font-weight:600}}
+.faq-q{{font-weight:600;margin-top:1.25rem;color:#1e1b4b}}
+.faq-a{{margin:.25rem 0 1rem 0;color:#374151}}
+nav[aria-label="Breadcrumb"]{{font-size:.9rem;color:#6b7280;margin-bottom:1.25rem}}
+nav[aria-label="Breadcrumb"] a{{color:#7c3aed}}
+.section-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;margin:1rem 0}}
+.grid-card{{background:#fafafa;border:1px solid #e5e7eb;border-radius:8px;padding:1rem}}
+.grid-card h3{{margin-top:0;font-size:1rem;color:#7c3aed}}
+footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:.85rem;color:#9ca3af}}
+.geo-footer{{font-size:.8rem;color:#9ca3af;margin-top:.5rem}}
+@media(max-width:640px){{body{{padding:.75rem}}h1{{font-size:1.5rem}}h2{{font-size:1.2rem}}.stats-row{{flex-direction:column;gap:.75rem}}.section-grid{{grid-template-columns:1fr}}}}
+</style>
+</head>
+<body>
+<nav aria-label="Breadcrumb">
+<a href="https://syrabit.ai">Home</a> &rsaquo;
+<span>About Syrabit.ai</span>
+</nav>
+
+<header>
+<h1>About Syrabit.ai</h1>
+<p><strong>Syrabit.ai</strong> is a free, AI-powered educational platform purpose-built for students in <strong>Assam, India</strong>. It serves students across three educational boards — <strong>AHSEC</strong> (Assam Higher Secondary Education Council), <strong>SEBA</strong> (Board of Secondary Education, Assam), and <strong>Degree</strong> (NEP 2020 FYUGP curriculum) — with syllabus-aligned study material and an AI tutor named <strong>Syra</strong>.</p>
+
+<div class="stats-row">
+<div class="stat-card"><strong>{total_pages}+</strong><span>Study Pages</span></div>
+<div class="stat-card"><strong>{total_subjects}</strong><span>Subjects</span></div>
+<div class="stat-card"><strong>{total_chapters}</strong><span>Chapters</span></div>
+<div class="stat-card"><strong>3</strong><span>Boards Covered</span></div>
+</div>
+</header>
+
+<main>
+
+<h2>What Is Syrabit.ai?</h2>
+<p>Syrabit.ai is an academic content platform and AI study assistant that produces syllabus-aligned study material for students in Assam. Unlike generic educational sites, every piece of content on Syrabit is mapped directly to the official syllabi of AHSEC, SEBA, or the NEP FYUGP degree curriculum adopted by Assam universities (Gauhati University, Dibrugarh University, Cotton University, and others).</p>
+
+<div class="highlight">
+<strong>Mission:</strong> To make quality, exam-relevant study material freely accessible to every student in Assam — regardless of location, coaching access, or economic background.
+</div>
+
+<h2>Boards &amp; Curricula Covered</h2>
+<table>
+<thead>
+<tr><th>Board / Programme</th><th>Full Name</th><th>Classes</th><th>Syllabus Source</th></tr>
+</thead>
+<tbody>
+<tr><td>AHSEC</td><td>Assam Higher Secondary Education Council</td><td>Class 11 &amp; 12 (HS 1st &amp; 2nd Year)</td><td>Official AHSEC syllabus</td></tr>
+<tr><td>SEBA</td><td>Board of Secondary Education, Assam</td><td>Class 9 &amp; 10 (HSLC)</td><td>Official SEBA syllabus</td></tr>
+<tr><td>Degree (NEP FYUGP)</td><td>National Education Policy 2020 Four-Year Undergraduate Programme</td><td>Semesters 1–8</td><td>NEP 2020 FYUGP as adopted by Gauhati University, Dibrugarh University, Cotton University</td></tr>
+</tbody>
+</table>
+
+<h2>What Syrabit Offers</h2>
+<div class="section-grid">
+<div class="grid-card">
+<h3>Study Notes</h3>
+<p>Topic-wise notes following a structured academic format: definition, explanation, solved examples with Assam-specific context, and exam tips. Every note is aligned to the official board syllabus.</p>
+</div>
+<div class="grid-card">
+<h3>Syra AI Tutor</h3>
+<p>An AI-powered study assistant that answers syllabus-specific questions. Syra uses Retrieval-Augmented Generation (RAG) to ground every answer in actual chapter content — no hallucinated or off-syllabus information.</p>
+</div>
+<div class="grid-card">
+<h3>MCQs &amp; Practice</h3>
+<p>Multiple-choice questions with correct answers and explanations for quick revision, covering key concepts from each chapter of the syllabus.</p>
+</div>
+<div class="grid-card">
+<h3>Previous Year Questions</h3>
+<p>Solved previous year questions (PYQs) with model answers, curated from actual AHSEC, SEBA, and university exams for targeted exam preparation.</p>
+</div>
+<div class="grid-card">
+<h3>Important Questions</h3>
+<p>Mark-wise important questions identified from syllabus weightage analysis and previous year paper trends, organized by chapter and topic.</p>
+</div>
+<div class="grid-card">
+<h3>Definitions &amp; Examples</h3>
+<p>Formal academic definitions and solved examples following the problem, approach, step-by-step solution, and exam tip format.</p>
+</div>
+</div>
+
+<h2>How Syra AI Works</h2>
+<p>Syra is the AI tutor built into Syrabit.ai. It is designed specifically for Assam Board exam preparation:</p>
+<ul>
+<li><strong>Syllabus-Grounded Answers:</strong> Syra uses RAG (Retrieval-Augmented Generation) to retrieve relevant chapter content before generating a response. Every answer is grounded in actual syllabus material — not generic internet knowledge.</li>
+<li><strong>Multi-Subject Support:</strong> Students can ask questions about any subject and topic in their enrolled curriculum. Syra identifies the relevant board, subject, and chapter automatically.</li>
+<li><strong>Exam-Focused:</strong> Responses include exam tips, mark allocations, and important distinctions frequently tested in Assam Board exams.</li>
+<li><strong>Quality Guards:</strong> Syra explicitly declines questions outside the student's syllabus to prevent misinformation and keep study sessions focused.</li>
+</ul>
+
+<h2>Content Quality &amp; Editorial Process</h2>
+<p>Content on Syrabit follows a rigorous editorial process:</p>
+<ul>
+<li>Content is prepared by subject-matter contributors familiar with Assam Board curricula</li>
+<li>Every page is cross-referenced with the official AHSEC, SEBA, or university syllabus</li>
+<li>Content is reviewed for factual accuracy, exam relevance, and academic depth</li>
+<li>Each study note follows a structured format: formal definitions, detailed explanations, solved examples, exam tips, and practice questions with model answers</li>
+<li>AI-generated content undergoes quality scoring and human review before publication</li>
+</ul>
+
+<h2>Available Subjects</h2>
+<ul>
+{subj_list_html}
+</ul>
+<p>New subjects, chapters, and topics are added regularly. Visit the <a href="https://syrabit.ai/library">full library</a> for the latest content.</p>
+
+<h2>Who Is Syrabit For?</h2>
+<ul>
+<li><strong>AHSEC students</strong> preparing for Higher Secondary (HS) 1st and 2nd Year exams in Assam</li>
+<li><strong>SEBA students</strong> preparing for HSLC (Class 10) and Class 9 exams</li>
+<li><strong>Degree students</strong> enrolled in NEP FYUGP programmes at Gauhati University, Dibrugarh University, Cotton University, and other Assam universities</li>
+<li><strong>Teachers and educators</strong> looking for structured, syllabus-aligned reference material</li>
+<li><strong>Parents</strong> seeking a free, reliable study resource for their children's Assam Board exams</li>
+</ul>
+
+<h2>Geographic Focus</h2>
+<p>Syrabit.ai is specifically designed for students in <strong>Assam, India</strong>. The platform's content follows Assam-specific board syllabi and university curricula. It serves students across all districts including Guwahati (Kamrup Metropolitan), Jorhat, Dibrugarh, Tezpur (Sonitpur), Silchar (Cachar), Nagaon, Barpeta, Dhemaji, Nalbari, Bongaigaon, Goalpara, Kokrajhar, Lakhimpur, Sivasagar, Golaghat, Tinsukia, Darrang, and more.</p>
+
+<h2>Technology</h2>
+<p>Syrabit.ai uses modern AI and web technologies to deliver a fast, reliable study experience:</p>
+<ul>
+<li><strong>AI-Powered Content Generation:</strong> Study material is generated using large language models and then reviewed for accuracy against official syllabi</li>
+<li><strong>Retrieval-Augmented Generation (RAG):</strong> The Syra AI tutor retrieves relevant syllabus content before answering questions, ensuring factual grounding</li>
+<li><strong>Semantic Search:</strong> Students can search for topics using natural language queries, not just exact keyword matching</li>
+<li><strong>Progressive Web App (PWA):</strong> Syrabit works on any device — mobile, tablet, or desktop — and can be installed as an app for offline access</li>
+<li><strong>Multilingual Support:</strong> Text-to-speech and voice input support via Sarvam AI for regional language accessibility</li>
+</ul>
+
+<h2>Frequently Asked Questions</h2>
+
+<p class="faq-q">What is Syrabit.ai?</p>
+<p class="faq-a">Syrabit.ai is a free, AI-powered educational platform designed specifically for students in Assam, India. It covers AHSEC (Higher Secondary), SEBA (Secondary), and Degree (NEP FYUGP) curricula with syllabus-aligned study notes, MCQs, previous year questions, and an AI tutor named Syra.</p>
+
+<p class="faq-q">Which boards and universities does Syrabit cover?</p>
+<p class="faq-a">Syrabit covers three educational boards: AHSEC (Assam Higher Secondary Education Council) for Class 11-12, SEBA (Board of Secondary Education, Assam) for Class 9-10, and Degree programmes under the NEP 2020 FYUGP curriculum adopted by Gauhati University, Dibrugarh University, Cotton University, and other Assam universities.</p>
+
+<p class="faq-q">What is Syra AI?</p>
+<p class="faq-a">Syra is an AI-powered study assistant built into Syrabit.ai. Students can ask Syra questions about any topic in their syllabus and receive accurate, curriculum-aligned answers. Syra uses Retrieval-Augmented Generation (RAG) to ground its responses in actual syllabus content, ensuring factual accuracy for Assam Board exams.</p>
+
+<p class="faq-q">Is Syrabit.ai free?</p>
+<p class="faq-a">Syrabit.ai offers free access to study notes, MCQs, previous year questions, and the AI tutor. Premium features with additional daily AI chat limits and priority access are available through affordable subscription plans designed for Assam students.</p>
+
+<p class="faq-q">What subjects are available on Syrabit?</p>
+<p class="faq-a">Syrabit currently covers {total_subjects} subjects across AHSEC, SEBA, and Degree programmes. Content is continuously expanding with new subjects, chapters, and topics being added regularly.</p>
+
+<p class="faq-q">How is content quality maintained on Syrabit?</p>
+<p class="faq-a">Content on Syrabit is prepared by subject-matter contributors and cross-referenced with the official AHSEC, SEBA, and university syllabi. Each page follows a structured academic format: formal definitions, detailed explanations, solved examples with Assam-specific context, exam tips, and practice questions with model answers.</p>
+
+</main>
+
+<footer>
+<p><a href="https://syrabit.ai">Syrabit.ai</a> &mdash; Free, AI-powered study material for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
+<p><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/chat">Chat with Syra</a> &middot; <a href="https://syrabit.ai/pricing">Pricing</a> &middot; <a href="https://syrabit.ai/terms">Terms</a> &middot; <a href="https://syrabit.ai/privacy">Privacy</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></p>
+<p class="geo-footer">Serving students across Assam, India &mdash; Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, Nagaon, Barpeta, and more.</p>
+<p>&copy; Syrabit.ai</p>
+</footer>
+</body>
+</html>"""
+    return HTMLResponse(content=html_out)
+
+
 @router.get("/html/subject/{board}/{class_slug}/{subject_slug}", response_class=HTMLResponse)
 async def get_subject_landing_html(board: str, class_slug: str, subject_slug: str):
     pages = await _db.seo_pages.find(
@@ -2965,6 +3323,7 @@ BASE_URL = "https://syrabit.ai"
 
 STATIC_PAGES = [
     ("/", "weekly", "1.0"),
+    ("/about", "monthly", "0.9"),
     ("/pricing", "monthly", "0.8"),
     ("/signup", "monthly", "0.9"),
     ("/library", "weekly", "0.9"),

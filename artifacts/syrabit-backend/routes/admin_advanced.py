@@ -789,56 +789,116 @@ async def seo_sitemap_validate(admin: dict = Depends(get_admin_user)):
 
 @router.get("/llms.txt")
 async def serve_llms_txt():
+    from fastapi.responses import PlainTextResponse
+    text = await _build_llms_txt()
+    return PlainTextResponse(text, media_type="text/plain; charset=utf-8")
+
+
+async def _build_llms_txt() -> str:
     lines = [
         "# Syrabit.ai",
-        "> AI-powered exam preparation for AssamBoard students (AHSEC, DEGREE &amp; SEBA) in Assam, India.",
         "",
-        "## About",
-        "Syrabit.ai provides AI-generated study notes, definitions, important questions, MCQs,",
-        "and solved examples aligned with the AssamBoard curriculum (AHSEC, DEGREE, and SEBA divisions).",
-        "Content is grounded in NCERT/SCERT textbooks and",
-        "covers subjects like Physics, Chemistry, Mathematics, Biology, Economics, and more.",
+        "> Syrabit.ai is a free, AI-powered educational platform purpose-built for students in Assam, India.",
+        "> It provides syllabus-aligned study notes, MCQs, previous year questions, important questions,",
+        "> definitions, solved examples, and an AI tutor (Syra) for AHSEC, SEBA, and Degree (NEP FYUGP) students.",
         "",
-        "## Content Structure",
+        "## What Is Syrabit.ai",
+        "",
+        "Syrabit.ai is an academic content platform and AI study assistant that produces",
+        "syllabus-aligned study material for students in Assam. Every piece of content is",
+        "mapped directly to the official syllabi of AHSEC (Assam Higher Secondary Education Council),",
+        "SEBA (Board of Secondary Education, Assam), or the NEP 2020 FYUGP degree curriculum",
+        "adopted by Assam universities (Gauhati University, Dibrugarh University, Cotton University).",
+        "",
+        "The platform includes Syra, an AI-powered study assistant that answers syllabus-specific",
+        "questions using Retrieval-Augmented Generation (RAG) to ground every answer in actual",
+        "chapter content — ensuring no hallucinated or off-syllabus information.",
+        "",
+        "## Boards & Curricula Covered",
+        "",
+        "- AHSEC (Assam Higher Secondary Education Council) — Class 11 & 12 (HS 1st & 2nd Year)",
+        "- SEBA (Board of Secondary Education, Assam) — Class 9 & 10 (HSLC)",
+        "- Degree (NEP FYUGP) — Semesters 1-8 at Gauhati University, Dibrugarh University, Cotton University",
+        "",
+        "## Content Types",
+        "",
+        "- Study Notes: Topic-wise notes with definitions, explanations, examples, and exam tips",
+        "- MCQs: Multiple-choice questions with answers and explanations",
+        "- Previous Year Questions (PYQs): Solved PYQs with model answers from AHSEC/SEBA exams",
+        "- Important Questions: Mark-wise questions curated from syllabus weightage analysis",
+        "- Definitions: Formal academic definitions with context",
+        "- Solved Examples: Step-by-step solutions following problem-approach-solution-tip format",
+        "- AI Tutor (Syra): RAG-based AI assistant for syllabus-grounded Q&A",
+        "",
+        "## Content Quality",
+        "",
+        "- All content is cross-referenced with official AHSEC, SEBA, and university syllabi",
+        "- Content follows structured academic format: definition → explanation → examples → exam tips",
+        "- AI-generated content undergoes quality scoring and review before publication",
+        "- Syra AI uses RAG to retrieve relevant chapter content before generating responses",
+        "- Off-syllabus queries are explicitly declined to prevent misinformation",
+        "",
+        "## URL Structure",
+        "",
+        "- / — Homepage",
+        "- /about — About Syrabit.ai (this description in HTML)",
         "- /library — Browse all subjects and chapters",
-        "- /{board}/{class}/{subject}/{topic} — Study notes for a topic",
-        "- /{board}/{class}/{subject}/{topic}/definition — Definitions",
-        "- /{board}/{class}/{subject}/{topic}/important-questions — PYQ bank",
+        "- /chat — Chat with Syra AI tutor",
+        "- /pricing — Plans and pricing",
+        "- /{board}/{class}/{subject} — Subject landing page with all topics",
+        "- /{board}/{class}/{subject}/{topic} — Study notes for a specific topic",
+        "- /{board}/{class}/{subject}/{topic}/definition — Definitions for a topic",
+        "- /{board}/{class}/{subject}/{topic}/important-questions — Important questions",
         "- /{board}/{class}/{subject}/{topic}/mcqs — Multiple choice questions",
         "- /{board}/{class}/{subject}/{topic}/examples — Solved examples",
+        "- /learn/{slug} — Editorial articles and guides",
         "",
-        "## API",
-        "- /api/seo/sitemap-index.xml — Master sitemap index",
-        "- /api/seo/sitemap-pages.xml — Static pages",
-        "- /api/seo/sitemap-notes.xml — Notes pages",
-        "- /api/seo/sitemap-mcqs.xml — MCQ pages",
-        "- /api/seo/sitemap-pyqs.xml — PYQ/important questions",
-        "- /api/seo/sitemap-examples.xml — Examples pages",
-        "- /api/seo/sitemap-definitions.xml — Definition pages",
-        "- /api/seo/sitemap.xml — Legacy combined sitemap",
-        "- /api/seo/sitemap-entries — JSON sitemap entries",
-        "- /api/seo/page/{board}/{class}/{subject}/{topic} — JSON page data",
-        "- /api/seo/html/{board}/{class}/{subject}/{topic} — Pre-rendered HTML",
+        "## Machine-Readable Resources",
         "",
-        "## Boards Covered",
-        "- AHSEC (Assam Higher Secondary Education Council) — Class 11, Class 12",
-        "- Degree (Gauhati University, Dibrugarh University, etc.) — 2nd Sem, 4th Sem",
+        "- /sitemap.xml — Legacy combined sitemap",
+        "- /sitemap-index.xml — Master sitemap index",
+        "- /robots.txt — Robots directives",
+        "- /llms.txt — This file",
+        "- /api/seo/sitemap-pages.xml — Static pages sitemap",
+        "- /api/seo/sitemap-notes.xml — Notes pages sitemap",
+        "- /api/seo/sitemap-mcqs.xml — MCQ pages sitemap",
+        "- /api/seo/sitemap-definitions.xml — Definition pages sitemap",
+        "- /api/seo/sitemap-examples.xml — Examples pages sitemap",
+        "",
+        "## Geographic Focus",
+        "",
+        "Assam, India. Serves students across all districts including Guwahati (Kamrup Metropolitan),",
+        "Jorhat, Dibrugarh, Tezpur (Sonitpur), Silchar (Cachar), Nagaon, Barpeta, Dhemaji,",
+        "Nalbari, Bongaigaon, Goalpara, Kokrajhar, Lakhimpur, Sivasagar, Golaghat, Tinsukia, Darrang.",
+        "",
+        "## Technology",
+        "",
+        "- AI content generation with LLMs, reviewed against official syllabi",
+        "- Retrieval-Augmented Generation (RAG) for syllabus-grounded AI tutor responses",
+        "- Semantic search for natural language topic discovery",
+        "- Progressive Web App (PWA) — works on mobile, tablet, and desktop",
+        "- Text-to-speech and voice input support for regional language accessibility",
         "",
         "## Contact",
+        "",
         "- Website: https://syrabit.ai",
-        "- Purpose: Educational content for AssamBoard students (AHSEC, DEGREE, SEBA)",
+        "- About: https://syrabit.ai/about",
+        "- Twitter: https://twitter.com/SyrabitAI",
+        "- Purpose: Free educational content for Assam Board students (AHSEC, SEBA, Degree)",
     ]
     try:
         page_count = await db.seo_pages.count_documents({"status": "published"})
-        topic_count = await db.topics.count_documents({"status": "published"})
+        subject_count = await db.subjects.count_documents({})
+        chapter_count = await db.chapters.count_documents({})
         lines.append("")
-        lines.append(f"## Stats")
-        lines.append(f"- Published topics: {topic_count}")
+        lines.append("## Stats")
+        lines.append(f"- Subjects: {subject_count}")
+        lines.append(f"- Chapters: {chapter_count}")
         lines.append(f"- Published pages: {page_count}")
+        lines.append(f"- Boards: 3 (AHSEC, SEBA, Degree)")
     except Exception:
         pass
-    from fastapi.responses import PlainTextResponse
-    return PlainTextResponse("\n".join(lines), media_type="text/plain; charset=utf-8")
+    return "\n".join(lines)
 
 
 # ── Vector Search: Admin batch-embed endpoint ──────────────────────────────

@@ -1821,6 +1821,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             cache_key = "_terms_"
         elif n == 1 and parts[0] == "privacy":
             cache_key = "_privacy_"
+        elif n == 1 and parts[0] == "about":
+            cache_key = "_about_"
         elif n == 1 and parts[0] == "chat":
             cache_key = "_chat_"
         elif n == 2 and parts[0] == "learn":
@@ -1847,6 +1849,15 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
         try:
             _seo_port = int(os.environ.get("PORT", "8000"))
             api_base = f"http://localhost:{_seo_port}/api/seo"
+
+            if cache_key == "_about_":
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(f"{api_base}/html/about")
+                if resp.status_code == 200:
+                    html_content = resp.text
+                    _bot_html_cache[cache_key] = html_content
+                    return _bot_html_response(html_content)
+                return await self._safe_call_next(request, call_next)
 
             if cache_key == "_chat_":
                 html_content = """<!DOCTYPE html>

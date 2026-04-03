@@ -527,6 +527,9 @@ Disallow: /api/
 Sitemap: https://syrabit.ai/sitemap.xml
 Sitemap: https://syrabit.ai/sitemap-index.xml
 
+# AI LLM description
+# https://syrabit.ai/llms.txt
+
 Crawl-delay: 1
 
 # AI Search & Training Crawlers
@@ -691,6 +694,12 @@ Disallow: /cms/
 Disallow: /api/
 """
     return Response(content=txt.strip(), media_type="text/plain")
+
+@app.get("/llms.txt", response_class=Response)
+async def serve_llms_txt_root():
+    from routes.admin_advanced import _build_llms_txt
+    txt = await _build_llms_txt()
+    return Response(content=txt, media_type="text/plain; charset=utf-8")
 
 @app.get("/sitemap.xml")
 async def serve_root_sitemap():
