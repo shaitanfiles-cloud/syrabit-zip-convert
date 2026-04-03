@@ -2754,11 +2754,11 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <div class="section-grid">
 <div class="grid-card">
 <h3>Zero-Hallucination AI Tutor</h3>
-<p>Unlike generic AI chatbots, Syra refuses to answer questions outside the student's syllabus. It uses a 6-stage RAG pipeline with relevance gating (similarity thresholds 0.55–0.65) to ensure every answer is grounded in actual chapter content. If the system cannot find relevant material with high confidence, it explicitly declines rather than making something up.</p>
+<p>Unlike generic AI chatbots, Syra refuses to answer questions outside the student's syllabus. It uses a multi-stage RAG pipeline with relevance gating to ensure every answer is grounded in actual chapter content. If the system cannot find relevant material with high confidence, it explicitly declines rather than making something up.</p>
 </div>
 <div class="grid-card">
 <h3>5-Provider LLM Failover</h3>
-<p>No single point of AI failure. If Sarvam AI is slow, the system instantly cascades to Cerebras, then Gemini, then DeepSeek via Fireworks, then OpenRouter — all within 10 seconds. Students almost never experience AI downtime because all 5 providers would have to fail simultaneously. Each provider has independent timeout controls and the priority order reverses for admin tasks.</p>
+<p>No single point of AI failure. The system uses a multi-provider cascade — if one AI provider is slow or unavailable, it automatically fails over to the next in milliseconds. Multiple independent providers ensure students almost never experience AI downtime. Each provider has independent timeout controls.</p>
 </div>
 <div class="grid-card">
 <h3>Syllabus-Native Architecture</h3>
@@ -2774,7 +2774,7 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 </div>
 <div class="grid-card">
 <h3>Sarvam AI Voice Integration</h3>
-<p>Built-in text-to-speech via Sarvam AI's Bulbul v2 model with 40+ Indian voice speakers. Supports Assamese (as-IN), Hindi (hi-IN), and English (en-IN). TTS responses are cached as base64 audio to minimize repeated API calls. Translation between Indian languages via Sarvam Mayura v1.</p>
+<p>Built-in text-to-speech with support for Assamese, Hindi, and English using multiple Indian voice speakers. TTS responses are cached to minimize latency. Translation and transliteration between major Indian languages is also supported.</p>
 </div>
 <div class="grid-card">
 <h3>Intelligent Content Analytics</h3>
@@ -2812,16 +2812,13 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 </ul>
 
 <h2>Pricing &amp; Access Model</h2>
-<p>Syrabit uses a freemium credit system designed for Indian students:</p>
-<table>
-<thead><tr><th>Plan</th><th>Price</th><th>Daily AI Credits</th><th>Rate Limit</th><th>Max Tokens</th><th>Document Access</th></tr></thead>
-<tbody>
-<tr><td>Free</td><td>₹0</td><td>30</td><td>5 messages/min</td><td>10,000</td><td>Limited</td></tr>
-<tr><td>Starter</td><td>₹99 (one-time)</td><td>500</td><td>10 messages/min</td><td>15,000</td><td>Full</td></tr>
-<tr><td>Pro</td><td>₹999 (one-time)</td><td>4,000</td><td>15 messages/min</td><td>20,000</td><td>Full</td></tr>
-</tbody>
-</table>
-<p>All study notes, MCQs, definitions, and examples are freely accessible without login. The AI tutor (Syra) requires credits. Payments are processed via Razorpay (UPI, cards, net banking) in INR — designed for the Indian student market where ₹99 is an accessible price point.</p>
+<p>Syrabit uses a freemium model designed for Indian students:</p>
+<ul>
+<li><strong>Free tier:</strong> All study notes, MCQs, definitions, and examples are freely accessible without login.</li>
+<li><strong>Paid plans:</strong> The AI tutor (Syra) uses a daily credit system. Affordable one-time payment plans starting from ₹99 provide higher daily AI credits, faster rate limits, and full document access.</li>
+<li><strong>Payments:</strong> Processed in INR via UPI, cards, and net banking — designed for the Indian student market.</li>
+</ul>
+<p>Visit the <a href="https://syrabit.ai/pricing">pricing page</a> for current plan details.</p>
 
 <h2>Geographic Focus</h2>
 <p>Syrabit.ai is specifically designed for students in <strong>Assam, India</strong>. The platform's content follows Assam-specific board syllabi and university curricula. It serves students across all districts including Guwahati (Kamrup Metropolitan), Jorhat, Dibrugarh, Tezpur (Sonitpur), Silchar (Cachar), Nagaon, Barpeta, Dhemaji, Nalbari, Bongaigaon, Goalpara, Kokrajhar, Lakhimpur, Sivasagar, Golaghat, Tinsukia, Darrang, and more.</p>
@@ -2837,9 +2834,9 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <tr><td>Backend API</td><td>Python FastAPI + Gunicorn</td><td>Async API server with multi-worker concurrency for handling concurrent student requests</td></tr>
 <tr><td>Primary Database</td><td>MongoDB</td><td>Stores subjects, chapters, syllabus content, SEO pages, and content embeddings</td></tr>
 <tr><td>User Database</td><td>PostgreSQL (Replit)</td><td>User accounts, session tracking, credit management, and activity logs</td></tr>
-<tr><td>Cache &amp; Rate Limiting</td><td>Upstash Redis</td><td>In-memory caching for API responses, rate limiting, and session state</td></tr>
-<tr><td>Authentication</td><td>Google OAuth 2.0 (PKCE)</td><td>Secure sign-in via Google accounts — no password management required</td></tr>
-<tr><td>Payments</td><td>Razorpay</td><td>UPI, cards, and net banking for Indian students — INR pricing with webhook verification</td></tr>
+<tr><td>Cache &amp; Rate Limiting</td><td>Redis</td><td>Distributed caching for API responses, rate limiting, and session state</td></tr>
+<tr><td>Authentication</td><td>Google OAuth 2.0</td><td>Secure sign-in via Google accounts — no password management required</td></tr>
+<tr><td>Payments</td><td>Razorpay</td><td>UPI, cards, and net banking for Indian students — INR pricing with secure webhook verification</td></tr>
 </tbody>
 </table>
 
@@ -2847,26 +2844,21 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <p>Syra is not a generic chatbot. It uses a multi-stage Retrieval-Augmented Generation (RAG) pipeline specifically designed to prevent hallucination and keep answers within the student's syllabus:</p>
 <ol>
 <li><strong>Syllabus Matching:</strong> When a student asks a question, the system first identifies which board (AHSEC/SEBA/Degree), subject, and chapter the question relates to. This uses semantic similarity matching against pre-embedded syllabus topics and chapter headings.</li>
-<li><strong>Content Retrieval:</strong> The RAG engine retrieves the most relevant chapter sections using vector similarity search. A relevance gate (similarity threshold) ensures only high-quality matches are used — if no content passes the threshold, Syra declines the question rather than hallucinating.</li>
-<li><strong>Reranking:</strong> Retrieved content chunks are reranked using Voyage AI's reranking model to prioritize the most exam-relevant sections before they are passed to the language model.</li>
-<li><strong>Topic-Aware Extraction:</strong> A fuzzy heading matcher (<code>SequenceMatcher</code>) extracts the precise topic section from chapter content — not just the first N characters, but the actual section about the queried topic (e.g., extracting the "Personality and Dresses of Yogi" section from a Yoga chapter, not the etymology section that happens to appear first).</li>
+<li><strong>Content Retrieval:</strong> The RAG engine retrieves the most relevant chapter sections using vector similarity search. A relevance gate ensures only high-quality matches are used — if no content passes the confidence threshold, Syra declines the question rather than hallucinating.</li>
+<li><strong>Reranking:</strong> Retrieved content chunks are reranked using a dedicated reranking model to prioritize the most exam-relevant sections before they are passed to the language model.</li>
+<li><strong>Topic-Aware Extraction:</strong> A fuzzy heading matcher extracts the precise topic section from chapter content — not just the first N characters, but the actual section about the queried topic (e.g., extracting the "Personality and Dresses of Yogi" section from a Yoga chapter, not the etymology section that happens to appear first).</li>
 <li><strong>Grounded Generation:</strong> The extracted syllabus content is injected into the LLM prompt as grounding context. The prompt includes strict instructions to answer only from the provided content, cite chapter references, and include exam tips.</li>
 <li><strong>Out-of-Syllabus Guard:</strong> If a question falls outside the student's enrolled syllabus, Syra explicitly declines with a helpful message — preventing misinformation. This guard is only relaxed when there is a confirmed high-confidence syllabus topic match.</li>
 </ol>
 
-<h3>Multi-Provider LLM Failover (SLM Pool)</h3>
-<p>Syrabit does not depend on a single AI provider. The system uses a <strong>Smart Key Pool</strong> — an ordered cascade of multiple LLM providers that automatically fails over if one provider is down, rate-limited, or slow:</p>
-<table>
-<thead><tr><th>Priority</th><th>Provider</th><th>Model</th><th>Use Case</th></tr></thead>
-<tbody>
-<tr><td>1st</td><td>Sarvam AI</td><td>Sarvam-M</td><td>India-optimized model, low latency for Assam students</td></tr>
-<tr><td>2nd</td><td>Cerebras</td><td>Llama 3.1 8B</td><td>Ultra-fast inference on dedicated hardware</td></tr>
-<tr><td>3rd</td><td>Google Gemini</td><td>Gemini 2.5 Flash</td><td>High-quality responses with fast throughput</td></tr>
-<tr><td>4th</td><td>Fireworks AI</td><td>DeepSeek V3</td><td>Deep reasoning for complex academic questions</td></tr>
-<tr><td>5th</td><td>OpenRouter</td><td>DeepSeek Chat V3</td><td>Final fallback with broad model availability</td></tr>
-</tbody>
-</table>
-<p>Each provider slot has independent timeout controls (10-second time-to-first-token, 8-second per-slot timeout). If a provider fails or is too slow, the system instantly moves to the next provider — students never see a hard failure. For admin content generation tasks, the priority order is reversed (starting with the most capable models first).</p>
+<h3>Multi-Provider LLM Failover</h3>
+<p>Syrabit does not depend on a single AI provider. The system uses an ordered cascade of multiple LLM providers that automatically fails over if one provider is down, rate-limited, or slow. The cascade includes India-optimized models for low latency, ultra-fast inference providers, and high-quality general-purpose models as fallbacks.</p>
+<ul>
+<li>Each provider slot has independent timeout controls for fast failover</li>
+<li>If a provider fails or is too slow, the system instantly moves to the next provider</li>
+<li>Students almost never experience AI downtime — all providers must fail simultaneously</li>
+<li>The provider selection is optimized for the Indian student use case, prioritizing low-latency models first</li>
+</ul>
 
 <h3>Content Generation &amp; Quality Pipeline</h3>
 <p>Study material on Syrabit is not manually typed — it goes through a structured AI-assisted content pipeline:</p>
@@ -2882,23 +2874,19 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <h3>Semantic Search &amp; Syllabus Embeddings</h3>
 <p>Syrabit uses vector embeddings for intelligent content discovery:</p>
 <ul>
-<li><strong>Syllabus Embedding:</strong> Every chapter heading and topic name across all boards is embedded using Sarvam AI's embedding model. When a student asks a question, the query is compared against these embeddings to identify the relevant subject and chapter — even if the student phrases the question differently from the textbook heading.</li>
-<li><strong>Fuzzy Topic Matching:</strong> A <code>SequenceMatcher</code>-based fuzzy matching system maps student queries to exact syllabus topics. This handles variations in naming (e.g., "Yogini dress" matches "Personality and Dresses of Yogi") that pure keyword search would miss.</li>
-<li><strong>Relevance Gating:</strong> The system uses configurable similarity thresholds — a relevance gate at 0.55, a high-confidence threshold at 0.60, and a strict similarity threshold at 0.65 — to ensure only genuinely relevant content is retrieved. Below-threshold queries are declined rather than answered with irrelevant material.</li>
+<li><strong>Syllabus Embedding:</strong> Every chapter heading and topic name across all boards is embedded as vectors. When a student asks a question, the query is compared against these embeddings to identify the relevant subject and chapter — even if the student phrases the question differently from the textbook heading.</li>
+<li><strong>Fuzzy Topic Matching:</strong> A fuzzy matching system maps student queries to exact syllabus topics. This handles variations in naming (e.g., "Yogini dress" matches "Personality and Dresses of Yogi") that pure keyword search would miss.</li>
+<li><strong>Relevance Gating:</strong> The system uses multiple configurable similarity thresholds to ensure only genuinely relevant content is retrieved. Below-threshold queries are declined rather than answered with irrelevant material.</li>
 </ul>
 
-<h3>Sarvam AI Voice &amp; Language Services</h3>
-<p>Many students in Assam are more comfortable in Assamese or Hindi than English. Syrabit integrates deeply with <strong>Sarvam AI</strong> for Indian language intelligence:</p>
-<table>
-<thead><tr><th>Service</th><th>Model</th><th>Languages</th><th>Details</th></tr></thead>
-<tbody>
-<tr><td>Text-to-Speech (TTS)</td><td>Bulbul v2</td><td>Assamese, Hindi, English (40+ voice speakers)</td><td>Study notes and AI responses can be read aloud. Audio responses are cached as base64 to minimize repeated API calls. Configurable pace, pitch, and loudness. Hard-capped at 500 characters per request.</td></tr>
-<tr><td>Translation</td><td>Mayura v1 / Sarvam-Translate v1</td><td>Assamese, Hindi, Bengali, English + 10 Indian languages</td><td>Content can be translated between Indian languages. Mayura v1 for specific language pairs, Sarvam-Translate v1 for general coverage.</td></tr>
-<tr><td>Transliteration</td><td>Sarvam Transliterate</td><td>All major Indian scripts</td><td>Script conversion between Devanagari, Assamese, Bengali, and Latin scripts.</td></tr>
-<tr><td>LLM (Chat)</td><td>Sarvam-M</td><td>English + Indian languages</td><td>India-optimized language model, first in the SLM failover chain. Trained on Indian educational content for better comprehension of mixed-language queries.</td></tr>
-</tbody>
-</table>
-<p>All Sarvam AI requests use persistent HTTP/2 connection pools with configurable timeouts (connect: 3s, read: 30s). When Cloudflare AI Gateway is enabled, requests are routed through it for additional metrics, caching, and rate-limit protection.</p>
+<h3>Voice &amp; Multilingual Services</h3>
+<p>Many students in Assam are more comfortable in Assamese or Hindi than English. Syrabit integrates voice and language services for Indian language accessibility:</p>
+<ul>
+<li><strong>Text-to-Speech:</strong> AI responses and study notes can be read aloud in Assamese, Hindi, and English with multiple Indian voice speakers. Audio is cached to reduce latency on repeat plays. Configurable pace, pitch, and loudness.</li>
+<li><strong>Translation:</strong> Content can be translated between major Indian languages including Assamese, Hindi, Bengali, and English.</li>
+<li><strong>Transliteration:</strong> Script conversion between Devanagari, Assamese, Bengali, and Latin scripts.</li>
+<li><strong>India-Optimized LLM:</strong> The primary language model is trained on Indian content for better comprehension of mixed-language queries (English + Assamese/Hindi).</li>
+</ul>
 
 <h3>SEO &amp; Crawler Architecture</h3>
 <p>Syrabit uses a dual-rendering architecture to serve both students and search engines optimally:</p>
@@ -2913,33 +2901,29 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <h3>Performance &amp; Reliability</h3>
 <p>Syrabit is optimized for students on slow mobile networks (2G/3G) and low-end Android devices common in rural Assam:</p>
 
-<h4>Multi-Layer Caching Architecture</h4>
-<table>
-<thead><tr><th>Cache Layer</th><th>Technology</th><th>TTL</th><th>What It Caches</th></tr></thead>
-<tbody>
-<tr><td>In-Memory (L1)</td><td>cachetools TTLCache</td><td>5–60 min</td><td>User sessions (300s), RAG results (600s), syllabus data (3600s), AI responses (3600s)</td></tr>
-<tr><td>Distributed (L2)</td><td>Upstash Redis</td><td>Configurable</td><td>Content responses, LLM response cache (reduces AI costs), anonymous conversations, rate-limit counters</td></tr>
-<tr><td>CDN (L3)</td><td>Replit CDN</td><td>Browser-managed</td><td>Static assets, PWA shell, fonts, icons</td></tr>
-<tr><td>Service Worker (L4)</td><td>Browser SW</td><td>Network-first / Cache-first</td><td>Network-first for HTML/JS/CSS; Cache-first for images. AI streaming routes are explicitly bypassed.</td></tr>
-<tr><td>Bot HTML Cache</td><td>In-memory dict</td><td>Permanent (per-worker)</td><td>Pre-rendered HTML for crawler requests — repeated bot visits don't trigger DB queries</td></tr>
-</tbody>
-</table>
+<h4>Multi-Layer Caching</h4>
+<p>Syrabit uses a 4-layer caching architecture to minimize latency and database load:</p>
+<ul>
+<li><strong>L1 — In-Memory Cache:</strong> Process-local TTL caches for user sessions, RAG results, syllabus data, and AI responses. Fastest access, no network hop.</li>
+<li><strong>L2 — Distributed Redis Cache:</strong> Shared cache layer for content responses, LLM response deduplication (reduces AI costs), and rate-limit state.</li>
+<li><strong>L3 — CDN + Service Worker:</strong> Static assets served via CDN. A service worker provides offline support with network-first strategy for dynamic content and cache-first for images. AI streaming routes are explicitly bypassed.</li>
+<li><strong>L4 — Bot HTML Cache:</strong> Pre-rendered HTML for crawler requests is cached permanently per worker — repeated bot visits never trigger database queries.</li>
+</ul>
 
 <h4>Frontend Performance</h4>
 <ul>
-<li><strong>Code Splitting:</strong> All major page components use <code>React.lazy()</code> — ChatPage, LibraryPage, AdminPanel, etc. are loaded on-demand, not upfront.</li>
-<li><strong>Manual Chunk Splitting:</strong> Vite config splits vendor bundles (React, Router, TanStack Query, Framer Motion, Radix UI) into separate cached chunks so library updates don't invalidate the entire bundle.</li>
-<li><strong>Critical Route Prefetching:</strong> ChatPage and LibraryPage are prefetched during browser idle time using <code>requestIdleCallback</code>. The library bundle API response is prefetched on hover or after 1-second delay.</li>
-<li><strong>React Query:</strong> Server state management with 5-minute stale time and 60-minute garbage collection — eliminates redundant API calls when navigating between pages.</li>
-<li><strong>GZip Compression:</strong> All responses above 500 bytes are compressed via GZipMiddleware.</li>
-<li><strong>Modern Image Formats:</strong> WebP format for background images and covers, reducing payload by 30–50% vs PNG/JPEG.</li>
+<li><strong>Code Splitting:</strong> All major page components are loaded on-demand, not upfront — reducing initial bundle size.</li>
+<li><strong>Vendor Chunk Splitting:</strong> Third-party libraries are split into separate cached chunks so framework updates don't invalidate the entire bundle.</li>
+<li><strong>Smart Prefetching:</strong> Critical pages are prefetched during browser idle time. API responses are prefetched on user intent signals (hover, navigation).</li>
+<li><strong>Server State Management:</strong> Intelligent client-side caching eliminates redundant API calls when navigating between pages.</li>
+<li><strong>Compression:</strong> GZip compression on all API responses. Modern image formats (WebP) for visual assets.</li>
 </ul>
 
 <h4>AI Response Performance</h4>
 <ul>
-<li><strong>Streaming SSE:</strong> AI chat responses use Server-Sent Events (SSE) to stream tokens in real-time as they arrive from the LLM provider. Students see the first word within 1–3 seconds, not waiting 10–20 seconds for the full response.</li>
-<li><strong>Parallel Fetching:</strong> RAG context retrieval, web search, and conversation history are fetched in parallel using <code>asyncio.gather</code> — cutting total latency by 40–60% compared to sequential fetching.</li>
-<li><strong>Timeout Cascade:</strong> Each LLM provider in the failover chain has independent timeouts (10s TTFT, 8s per-slot). If a provider is slow, the system moves to the next provider within seconds.</li>
+<li><strong>Streaming Responses:</strong> AI chat responses stream tokens in real-time as they are generated. Students see the first word within seconds, not waiting for the full response to complete.</li>
+<li><strong>Parallel Fetching:</strong> RAG context retrieval, web search, and conversation history are fetched in parallel — significantly reducing total latency compared to sequential fetching.</li>
+<li><strong>Automatic Failover:</strong> Each LLM provider in the failover chain has independent timeouts. If a provider is slow, the system moves to the next provider within seconds.</li>
 <li><strong>Thinking Indicator:</strong> A UI component shows students that the AI is "thinking" (retrieving content, searching) — reducing perceived latency even on slow connections.</li>
 </ul>
 
@@ -2953,12 +2937,12 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 
 <h3>Security</h3>
 <ul>
-<li><strong>Authentication:</strong> Google OAuth 2.0 with PKCE flow — no passwords stored on Syrabit servers.</li>
-<li><strong>Security Headers:</strong> Content-Security-Policy, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, and X-XSS-Protection headers on all responses.</li>
-<li><strong>CORS:</strong> Strict Cross-Origin Resource Sharing configuration allowing only authorized origins.</li>
-<li><strong>Webhook Verification:</strong> Razorpay payment webhooks are cryptographically verified using HMAC-SHA256 before processing — preventing forged payment confirmations.</li>
-<li><strong>Input Sanitization:</strong> All user inputs (chat queries, search terms) are sanitized before processing to prevent injection attacks.</li>
+<li><strong>Authentication:</strong> Google OAuth 2.0 — no passwords stored on Syrabit servers.</li>
+<li><strong>Security Headers:</strong> Comprehensive security headers on all responses including CSP, frame protection, referrer policy, and XSS protection.</li>
+<li><strong>Webhook Verification:</strong> Payment webhooks are cryptographically verified before processing — preventing forged payment confirmations.</li>
+<li><strong>Input Sanitization:</strong> All user inputs are sanitized before processing to prevent injection attacks.</li>
 <li><strong>Admin Access Control:</strong> Admin routes are protected by role-based authentication with separate authorization checks.</li>
+<li><strong>Rate Limiting:</strong> Per-user rate limiting via distributed cache protects against abuse and excessive API usage.</li>
 </ul>
 
 <h3>Tech Stack Summary</h3>
@@ -2967,11 +2951,11 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <tbody>
 <tr><td>Frontend</td><td>React 19, Vite, Tailwind CSS, PWA (Service Worker, Web App Manifest)</td></tr>
 <tr><td>Backend</td><td>Python 3, FastAPI, Gunicorn, async/await</td></tr>
-<tr><td>Databases</td><td>MongoDB (content), PostgreSQL (users), Upstash Redis (cache)</td></tr>
-<tr><td>AI / LLM</td><td>Sarvam AI, Cerebras, Google Gemini, Fireworks AI (DeepSeek V3), OpenRouter</td></tr>
-<tr><td>RAG</td><td>Sarvam AI Embeddings, Voyage AI Reranking, custom similarity gating</td></tr>
-<tr><td>Voice / TTS</td><td>Sarvam AI (Indian languages — Assamese, Hindi, English)</td></tr>
-<tr><td>Auth</td><td>Google OAuth 2.0 (PKCE)</td></tr>
+<tr><td>Databases</td><td>MongoDB (content), PostgreSQL (users), Redis (cache)</td></tr>
+<tr><td>AI / LLM</td><td>Multi-provider failover cascade with India-optimized and general-purpose models</td></tr>
+<tr><td>RAG</td><td>Vector embeddings, semantic reranking, custom similarity gating</td></tr>
+<tr><td>Voice / TTS</td><td>Indian language TTS (Assamese, Hindi, English), translation, transliteration</td></tr>
+<tr><td>Auth</td><td>Google OAuth 2.0</td></tr>
 <tr><td>Payments</td><td>Razorpay (UPI, cards, net banking — INR)</td></tr>
 <tr><td>SEO</td><td>Schema.org (JSON-LD), OpenGraph, Twitter Cards, segmented XML sitemaps, llms.txt</td></tr>
 <tr><td>Hosting</td><td>Replit (auto-scaling, TLS, CDN)</td></tr>
