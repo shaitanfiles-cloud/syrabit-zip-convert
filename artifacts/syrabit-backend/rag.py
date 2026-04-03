@@ -1595,9 +1595,30 @@ async def resolve_rag_context(
     _has_card = bool(content_card_text)
     _has_enrichment = bool(_enrichment_result)
     if rag_ctx["quality"] == "high" and not (_has_chunks or _has_vectors or _has_card or _has_enrichment):
-        rag_ctx["quality"] = "none"
-        rag_ctx["source"] = "none"
-        logger.info(f"RAG resolve: quality downgraded to NONE after category filtering — intent={_resolved_intent}")
+        if _syllabus_high_conf and _syllabus_chapter_title:
+            try:
+                _ch_doc = await db.chapters.find_one(
+                    {"title": {"$regex": re.escape(_syllabus_chapter_title), "$options": "i"},
+                     **({"subject_id": subject_id} if subject_id else {})},
+                    {"_id": 0, "content": 1, "title": 1, "topics": 1},
+                )
+                _ch_content = (_ch_doc or {}).get("content", "") if _ch_doc else ""
+                if _ch_content and len(_ch_content) > 50:
+                    rag_ctx["content_card"] = _ch_content
+                    content_card_text = _ch_content
+                    _has_card = True
+                    rag_ctx["quality"] = "high"
+                    rag_ctx["source"] = "rag"
+                    logger.info(
+                        f"RAG resolve: chapter content fallback ({len(_ch_content)} chars) "
+                        f"for syllabus match '{_syllabus_chapter_title}' | query: {query[:50]}"
+                    )
+            except Exception as _fb_err:
+                logger.warning(f"RAG resolve: chapter fallback error: {_fb_err}")
+        if not _has_card:
+            rag_ctx["quality"] = "none"
+            rag_ctx["source"] = "none"
+            logger.info(f"RAG resolve: quality downgraded to NONE after category filtering — intent={_resolved_intent}")
 
     _final_quality = rag_ctx["quality"]
     rag_ctx["intent"] = _resolved_intent
