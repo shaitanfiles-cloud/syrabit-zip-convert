@@ -78,6 +78,8 @@ export default function GoogleSignInButton({ mode = 'login' }) {
         callback: stableCallback,
         auto_select: false,
         cancel_on_tap_outside: true,
+        use_fedcm_for_prompt: false,
+        ux_mode: 'popup',
       });
       if (btnContainerRef.current) {
         window.google.accounts.id.renderButton(btnContainerRef.current, {
@@ -108,12 +110,17 @@ export default function GoogleSignInButton({ mode = 'login' }) {
 
   const handleClick = () => {
     if (!gsiReady || loading) return;
-    window.google.accounts.id.prompt((notification) => {
-      if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
-        const rendered = btnContainerRef.current?.querySelector('div[role="button"]');
-        if (rendered) rendered.click();
-      }
-    });
+    try {
+      window.google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+          const rendered = btnContainerRef.current?.querySelector('div[role="button"]');
+          if (rendered) rendered.click();
+        }
+      });
+    } catch {
+      const rendered = btnContainerRef.current?.querySelector('div[role="button"]');
+      if (rendered) rendered.click();
+    }
   };
 
   return (

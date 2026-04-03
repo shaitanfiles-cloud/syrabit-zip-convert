@@ -26,11 +26,11 @@ class SecurityHeadersMiddleware:
                 headers.append("X-Content-Type-Options", "nosniff")
                 headers.append("X-Frame-Options", "SAMEORIGIN")
                 headers.append("Referrer-Policy", "strict-origin-when-cross-origin")
-                headers.append("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+                headers.append("Permissions-Policy", "camera=(), microphone=(), geolocation=(), identity-credentials-get=(self https://accounts.google.com)")
                 headers.append("X-XSS-Protection", "1; mode=block")
                 if SECURE_COOKIES:
                     headers.append("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
-                headers.append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-ancestors 'self'")
+                headers.append("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; frame-src https://accounts.google.com; frame-ancestors 'self'")
                 ct = headers.get("content-type", "")
                 if "text/html" in ct:
                     headers.append("Content-Language", "en-IN")
