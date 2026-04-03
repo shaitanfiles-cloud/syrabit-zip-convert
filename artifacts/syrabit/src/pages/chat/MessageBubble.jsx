@@ -118,20 +118,13 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const isWeb = msg.rag_source === 'web';
               const hasContext = boardLabel || subjectLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
 
-              const sourceParts = sourceLine ? sourceLine.split('·').map(s => s.replace(/\s*\([^)]*\)\s*$/, '').trim()).filter(Boolean) : [];
-              const hasAnything = hasContext || sourceParts.length > 0;
+              const hasAnything = hasContext || sourceLine;
               if (!hasAnything) return null;
 
               const sourceIcon = isDocument ? FileText : isWeb ? Globe : BookOpen;
               const SourceIcon = sourceIcon;
-              const sourceTypeLabel = isDocument ? 'Uploaded Document' : isWeb ? 'Web Search' : 'Syrabit Library';
 
-              const tags = [];
-              if (chapterLabel) tags.push(chapterLabel);
-              for (const sp of sourceParts) {
-                if (!tags.some(t => t.toLowerCase() === sp.toLowerCase())) tags.push(sp);
-              }
-              if (subjectLabel && !tags.some(t => t.toLowerCase() === subjectLabel.toLowerCase())) tags.push(subjectLabel);
+              const lessonLabel = chapterLabel || null;
 
               return (
                 <>
@@ -142,32 +135,32 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     role={subjectUrl && !isDocument && !isWeb ? 'link' : undefined}
                     aria-label={subjectUrl && !isDocument && !isWeb ? `View ${subjectLabel}` : undefined}
                   >
-                    <div className="flex items-center gap-2 px-3 pt-2.5 pb-1">
-                      <SourceIcon size={14} style={{ color: '#a78bfa' }} />
-                      <span className="text-[12px] font-semibold" style={{ color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{sourceTypeLabel}</span>
+                    <div className="px-3 py-2.5">
+                      {lessonLabel && (
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <SourceIcon size={13} style={{ color: '#a78bfa' }} />
+                          <span className="text-[12.5px] font-semibold truncate" style={{ color: '#c4b5fd' }}>{lessonLabel}</span>
+                        </div>
+                      )}
+                      {!lessonLabel && (
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <SourceIcon size={13} style={{ color: '#a78bfa' }} />
+                          <span className="text-[12px] font-semibold" style={{ color: '#a78bfa', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            {isDocument ? 'Uploaded Document' : isWeb ? 'Web Search' : 'Syrabit Library'}
+                          </span>
+                        </div>
+                      )}
+                      {subjectLabel && (
+                        <p className="text-[11.5px] font-medium truncate mb-1" style={{ color: 'hsl(var(--foreground) / 0.75)' }}>{subjectLabel}</p>
+                      )}
+                      {(classLabel || courseLabel) && (
+                        <div className="flex items-center gap-1.5">
+                          {classLabel && <span className="text-[10.5px] text-muted-foreground">{classLabel}</span>}
+                          {classLabel && courseLabel && <span className="text-[10.5px] text-muted-foreground/50">·</span>}
+                          {courseLabel && <span className="text-[10.5px] text-muted-foreground">{courseLabel}</span>}
+                        </div>
+                      )}
                     </div>
-                    {tags.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1.5 px-3 pb-2.5">
-                        {tags.map((tag, i) => (
-                          <span key={i} className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,58,237,0.1)', color: 'hsl(var(--foreground) / 0.7)' }}>
-                            {tag}
-                          </span>
-                        ))}
-                        {boardLabel && !tags.some(t => t.toLowerCase() === boardLabel.toLowerCase()) && (
-                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,58,237,0.1)', color: 'hsl(var(--foreground) / 0.7)' }}>
-                            {boardLabel}
-                          </span>
-                        )}
-                        {classLabel && (
-                          <span className="text-[11px] text-muted-foreground">{classLabel}</span>
-                        )}
-                        {courseLabel && !tags.some(t => t.toLowerCase() === courseLabel.toLowerCase()) && (
-                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,58,237,0.1)', color: 'hsl(var(--foreground) / 0.7)' }}>
-                            {courseLabel}
-                          </span>
-                        )}
-                      </div>
-                    )}
                   </div>
                   <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     {timeStr && (
