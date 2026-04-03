@@ -450,7 +450,7 @@ async def _fetch_content_card(
                 header = f"[Content: {topic_title} | type={page_type}]" if page_type else f"[Content: {topic_title}]"
             else:
                 header = f"[Content Page | type={page_type}]" if page_type else "[Content Page]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=_page_max, intent=_intent_for_extract)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_page_max, intent=_intent_for_extract, query=query)
             cards.append(f"{header}\n{relevant}")
 
         for cms in cms_pages[:2]:
@@ -466,7 +466,7 @@ async def _fetch_content_card(
                 _top_subject_name = cms.get("linked_subject_name") or subject_name or ""
             cat = cms.get("category", "article")
             header = f"[CMS {cat}: {cms_title}]" if cms_title else f"[CMS {cat}]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=_cms_max, intent=_intent_for_extract)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_cms_max, intent=_intent_for_extract, query=query)
             cards.append(f"{header}\n{relevant}")
 
         for ch in chapter_pages[:2]:
@@ -476,7 +476,7 @@ async def _fetch_content_card(
             if not _top_lesson_name:
                 _top_lesson_name = ch.get("title") or ""
             header = f"[Chapter: {ch.get('title', '')} | type=lesson]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=_ch_max, intent=_intent_for_extract)
+            relevant = _extract_relevant_sections(content, keywords, max_chars=_ch_max, intent=_intent_for_extract, query=query)
             cards.append(f"{header}\n{relevant}")
 
         if not cards:
@@ -494,6 +494,41 @@ async def _fetch_content_card(
     except Exception as e:
         logger.error(f"Content card fetch error: {e}")
         return None
+
+
+_NOTES_SUB_INTENTS = {
+    "definition": {
+        "triggers": ["define", "definition", "meaning of", "what is", "what are", "what do you mean"],
+        "boost": ["definition", "define", "meaning", "refers to", "is defined as", "known as"],
+        "skip_patterns": [r'^\d+\.\s+(?:What|How|Why|Define|Explain|State|Discuss)',
+                          r'^\*\*\d+-Mark\s+Questions?\*\*'],
+        "header_bonus": 0.8,
+    },
+    "explanation": {
+        "triggers": ["explain", "describe", "discuss", "elaborate", "how does", "why does", "what happens"],
+        "boost": ["explain", "because", "therefore", "process", "mechanism", "steps",
+                   "occurs when", "leads to", "results in", "due to"],
+        "skip_patterns": [r'^\*\*\d+-Mark\s+Questions?\*\*'],
+        "header_bonus": 1.0,
+    },
+    "exam_tips": {
+        "triggers": ["tips", "how to score", "how to prepare", "revision", "remember",
+                      "trick", "mnemonic", "shortcut", "easy way"],
+        "boost": ["remember", "tip", "trick", "mnemonic", "shortcut", "key point",
+                   "important", "exam", "revision", "formula"],
+        "skip_patterns": [],
+        "header_bonus": 0.5,
+    },
+}
+
+
+def _detect_notes_sub_intent(query: str) -> str:
+    q = query.strip().lower()
+    for sub_intent, config in _NOTES_SUB_INTENTS.items():
+        for trigger in config["triggers"]:
+            if trigger in q:
+                return sub_intent
+    return ""
 
 
 _INTENT_SECTION_SIGNALS: dict = {
@@ -525,8 +560,8 @@ _INTENT_SECTION_SIGNALS: dict = {
 }
 
 
-def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 2500, intent: str = "") -> str:
-    """Extract the most relevant sections from a content page based on keywords and intent."""
+def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 2500, intent: str = "", query: str = "") -> str:
+    """Extract the most relevant sections from a content page based on keywords, intent, and sub-intent."""
     paragraphs = [p.strip() for p in content.split('\n') if p.strip()]
     if not paragraphs:
         return content[:max_chars]
@@ -535,9 +570,20 @@ def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 25
         return content[:max_chars]
 
     signals = _INTENT_SECTION_SIGNALS.get(intent, {})
-    boost_terms = signals.get("boost", [])
-    skip_patterns = signals.get("skip_patterns", [])
+    boost_terms = list(signals.get("boost", []))
+    skip_patterns = list(signals.get("skip_patterns", []))
     header_bonus = signals.get("header_bonus", 0.5)
+
+    _sub_intent = ""
+    if intent == "notes":
+        _sub_intent = _detect_notes_sub_intent(query or " ".join(keywords))
+        if not _sub_intent:
+            _sub_intent = _detect_notes_sub_intent(" ".join(keywords))
+        if _sub_intent and _sub_intent in _NOTES_SUB_INTENTS:
+            sub_cfg = _NOTES_SUB_INTENTS[_sub_intent]
+            boost_terms = sub_cfg["boost"] + boost_terms
+            skip_patterns = sub_cfg["skip_patterns"] + skip_patterns
+            header_bonus = sub_cfg.get("header_bonus", header_bonus)
 
     skip_res = [re.compile(p, re.I) for p in skip_patterns] if skip_patterns else []
 
@@ -552,7 +598,7 @@ def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 25
         score = sum(1 for kw in keywords if kw in para_lower)
 
         if boost_terms:
-            score += sum(0.3 for bt in boost_terms if bt in para_lower)
+            score += sum(0.5 for bt in boost_terms if bt in para_lower)
 
         is_header = para.startswith('#') or para.startswith('**')
         if is_header:
@@ -561,24 +607,42 @@ def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 25
 
     scored.sort(key=lambda x: (-x[0], x[1]))
 
-    selected_indices = set()
+    selected = []
     total_chars = 0
     for score, idx, para in scored:
         if score <= 0 and total_chars > 500:
             break
         if score < 0:
             continue
-        for j in range(max(0, idx - 1), min(len(paragraphs), idx + 2)):
-            if j not in selected_indices:
-                selected_indices.add(j)
-                total_chars += len(paragraphs[j])
+        selected.append((idx, score))
+        total_chars += len(paragraphs[idx])
         if total_chars >= max_chars:
             break
 
-    if not selected_indices:
+    if not selected:
         return content[:max_chars]
 
-    result = "\n".join(paragraphs[i] for i in sorted(selected_indices))
+    selected.sort(key=lambda x: x[0])
+
+    final_indices = set()
+    remaining_budget = max_chars
+    for idx, _sc in selected:
+        neighbor_start = max(0, idx - 1)
+        neighbor_end = min(len(paragraphs), idx + 2)
+        for j in range(neighbor_start, neighbor_end):
+            if j not in final_indices:
+                p_len = len(paragraphs[j])
+                if remaining_budget - p_len < 0 and final_indices:
+                    continue
+                final_indices.add(j)
+                remaining_budget -= p_len
+        if remaining_budget <= 0:
+            break
+
+    if not final_indices:
+        return content[:max_chars]
+
+    result = "\n".join(paragraphs[i] for i in sorted(final_indices))
     return result[:max_chars]
 
 
@@ -1377,14 +1441,38 @@ async def resolve_rag_context(
     _db_category = db_category or INTENT_TO_DB_CATEGORY.get(_resolved_intent)
     _want_enrichment = _resolved_intent in ENRICHMENT_INTENTS
 
+    _syllabus_sim = 0.0
+    _syllabus_chapter_title = ""
+    try:
+        import server as _srv
+        _embedder = getattr(_srv, "_syllabus_embedder", None)
+        if _embedder is not None:
+            _syl_match = await asyncio.wait_for(
+                _embedder.classify(query, subject_id=subject_id),
+                timeout=2.0,
+            )
+            if _syl_match:
+                _syllabus_sim = _syl_match.similarity
+                _syllabus_chapter_title = _syl_match.chapter_title or ""
+                logger.info(
+                    f"RAG resolve: syllabus classify sim={_syllabus_sim:.3f} "
+                    f"chapter='{_syllabus_chapter_title}' | query: {query[:50]}"
+                )
+    except Exception as _syl_exc:
+        logger.warning(f"RAG resolve: syllabus classify failed: {_syl_exc}")
+
+    _primary_sim = max(_syllabus_sim, 0.0)
+
     vector_hits = await vector_rag_search(query, subject_id=subject_id, top_k=5, db_category=_db_category)
     _best_vec_sim = max((h.get("score", 0) for h in vector_hits), default=0.0) if vector_hits else 0.0
 
-    _rag_should_trigger = should_trigger_rag(_resolved_intent, _best_vec_sim)
+    _gate_sim = max(_primary_sim, _best_vec_sim)
+    _rag_should_trigger = should_trigger_rag(_resolved_intent, _gate_sim)
 
     if not _rag_should_trigger:
         logger.info(
-            f"RAG resolve: SKIPPED (early gate) — intent={_resolved_intent}, best_sim={_best_vec_sim:.3f}, gate={_RELEVANCE_GATE} "
+            f"RAG resolve: SKIPPED (early gate) — intent={_resolved_intent}, "
+            f"syllabus_sim={_syllabus_sim:.3f}, vec_sim={_best_vec_sim:.3f}, gate={_RELEVANCE_GATE} "
             f"| query: {query[:50]}"
         )
         try:
@@ -1396,13 +1484,19 @@ async def resolve_rag_context(
             "source": "none", "quality": "none", "intent": _resolved_intent,
         }
 
-    _high_confidence = _best_vec_sim >= HIGH_CONFIDENCE_THRESHOLD and any(
-        h.get("content") and len(h.get("content", "")) > 100 for h in vector_hits
+    _high_confidence = (
+        _syllabus_sim >= HIGH_CONFIDENCE_THRESHOLD
+        or (
+            _best_vec_sim >= HIGH_CONFIDENCE_THRESHOLD
+            and any(h.get("content") and len(h.get("content", "")) > 100 for h in vector_hits)
+        )
     )
 
     if _high_confidence:
+        _fast_path_source = "syllabus" if _syllabus_sim >= HIGH_CONFIDENCE_THRESHOLD else "vector"
         logger.info(
-            f"RAG resolve: HIGH-CONFIDENCE fast-path (best_sim={_best_vec_sim:.3f} >= {HIGH_CONFIDENCE_THRESHOLD}) — "
+            f"RAG resolve: HIGH-CONFIDENCE fast-path ({_fast_path_source}: "
+            f"syl={_syllabus_sim:.3f}, vec={_best_vec_sim:.3f} >= {HIGH_CONFIDENCE_THRESHOLD}) — "
             f"skipping keyword rag_search | intent={_resolved_intent} | query: {query[:50]}"
         )
         _gather_tasks = [
@@ -1410,7 +1504,10 @@ async def resolve_rag_context(
         ]
         if _want_enrichment:
             _gather_tasks.append(
-                _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
+                _fetch_enrichment_blocks(
+                    _resolved_intent, subject_id=subject_id,
+                    chapter_title=_syllabus_chapter_title,
+                )
             )
         _results = await asyncio.gather(*_gather_tasks)
         _card_result = _results[0]
@@ -1844,7 +1941,8 @@ def build_rag_system_prompt(
                 grounding += "**[VECTOR SEARCH RESULTS — Semantically matched pages]:**\n\n"
                 _VH_MAX_HITS = 3
                 _seen_titles = set()
-                for hit in vector_hits[:_VH_MAX_HITS]:
+                _sorted_hits = sorted(vector_hits, key=lambda h: h.get("score", 0), reverse=True)
+                for hit in _sorted_hits[:_VH_MAX_HITS]:
                     if _budget_used >= _GROUNDING_BUDGET:
                         break
                     slug = hit.get("slug", "")
@@ -1852,14 +1950,19 @@ def build_rag_system_prompt(
                     if title.lower() in _seen_titles:
                         continue
                     _seen_titles.add(title.lower())
-                    content = hit.get("content", "")
+                    _raw_content = hit.get("content", "")
                     _vh_budget = min(1500, _GROUNDING_BUDGET - _budget_used)
-                    if len(content) > _vh_budget:
-                        content = content[:_vh_budget] + "…"
+                    if _raw_content and _intent == "notes" and query:
+                        _raw_content = _extract_relevant_sections(
+                            _raw_content, _extract_keywords(query),
+                            max_chars=_vh_budget, intent=_intent, query=query,
+                        )
+                    elif len(_raw_content) > _vh_budget:
+                        _raw_content = _raw_content[:_vh_budget] + "…"
                     score = hit.get("score", 0)
                     _pt = hit.get("page_type", "")
                     _pt_label = f" | type={_pt}" if _pt else ""
-                    _vh_block = f"[PAGE: {slug}{_pt_label}] — {title} (relevance: {score:.2f})\n{content}\n\n"
+                    _vh_block = f"[PAGE: {slug}{_pt_label}] — {title} (relevance: {score:.2f})\n{_raw_content}\n\n"
                     grounding += _vh_block
                     _budget_used += len(_vh_block)
 
