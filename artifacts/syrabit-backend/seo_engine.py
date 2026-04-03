@@ -2776,15 +2776,121 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <h2>Geographic Focus</h2>
 <p>Syrabit.ai is specifically designed for students in <strong>Assam, India</strong>. The platform's content follows Assam-specific board syllabi and university curricula. It serves students across all districts including Guwahati (Kamrup Metropolitan), Jorhat, Dibrugarh, Tezpur (Sonitpur), Silchar (Cachar), Nagaon, Barpeta, Dhemaji, Nalbari, Bongaigaon, Goalpara, Kokrajhar, Lakhimpur, Sivasagar, Golaghat, Tinsukia, Darrang, and more.</p>
 
-<h2>Technology</h2>
-<p>Syrabit.ai uses modern AI and web technologies to deliver a fast, reliable study experience:</p>
+<h2>Technical Architecture &amp; Build Quality</h2>
+<p>Syrabit.ai is built as a production-grade, full-stack AI application engineered for reliability, accuracy, and low-cost operation — optimized for students in Assam who often have limited bandwidth and older devices.</p>
+
+<h3>System Architecture</h3>
+<table>
+<thead><tr><th>Layer</th><th>Technology</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td>Frontend</td><td>React + Vite (PWA)</td><td>Single-page application with offline support, installable on mobile/desktop</td></tr>
+<tr><td>Backend API</td><td>Python FastAPI + Gunicorn</td><td>Async API server with multi-worker concurrency for handling concurrent student requests</td></tr>
+<tr><td>Primary Database</td><td>MongoDB</td><td>Stores subjects, chapters, syllabus content, SEO pages, and content embeddings</td></tr>
+<tr><td>User Database</td><td>PostgreSQL (Replit)</td><td>User accounts, session tracking, credit management, and activity logs</td></tr>
+<tr><td>Cache &amp; Rate Limiting</td><td>Upstash Redis</td><td>In-memory caching for API responses, rate limiting, and session state</td></tr>
+<tr><td>Authentication</td><td>Google OAuth 2.0 (PKCE)</td><td>Secure sign-in via Google accounts — no password management required</td></tr>
+<tr><td>Payments</td><td>Razorpay</td><td>UPI, cards, and net banking for Indian students — INR pricing with webhook verification</td></tr>
+</tbody>
+</table>
+
+<h3>AI &amp; RAG Pipeline — How Syra Answers Questions</h3>
+<p>Syra is not a generic chatbot. It uses a multi-stage Retrieval-Augmented Generation (RAG) pipeline specifically designed to prevent hallucination and keep answers within the student's syllabus:</p>
+<ol>
+<li><strong>Syllabus Matching:</strong> When a student asks a question, the system first identifies which board (AHSEC/SEBA/Degree), subject, and chapter the question relates to. This uses semantic similarity matching against pre-embedded syllabus topics and chapter headings.</li>
+<li><strong>Content Retrieval:</strong> The RAG engine retrieves the most relevant chapter sections using vector similarity search. A relevance gate (similarity threshold) ensures only high-quality matches are used — if no content passes the threshold, Syra declines the question rather than hallucinating.</li>
+<li><strong>Reranking:</strong> Retrieved content chunks are reranked using Voyage AI's reranking model to prioritize the most exam-relevant sections before they are passed to the language model.</li>
+<li><strong>Topic-Aware Extraction:</strong> A fuzzy heading matcher (<code>SequenceMatcher</code>) extracts the precise topic section from chapter content — not just the first N characters, but the actual section about the queried topic (e.g., extracting the "Personality and Dresses of Yogi" section from a Yoga chapter, not the etymology section that happens to appear first).</li>
+<li><strong>Grounded Generation:</strong> The extracted syllabus content is injected into the LLM prompt as grounding context. The prompt includes strict instructions to answer only from the provided content, cite chapter references, and include exam tips.</li>
+<li><strong>Out-of-Syllabus Guard:</strong> If a question falls outside the student's enrolled syllabus, Syra explicitly declines with a helpful message — preventing misinformation. This guard is only relaxed when there is a confirmed high-confidence syllabus topic match.</li>
+</ol>
+
+<h3>Multi-Provider LLM Failover (SLM Pool)</h3>
+<p>Syrabit does not depend on a single AI provider. The system uses a <strong>Smart Key Pool</strong> — an ordered cascade of multiple LLM providers that automatically fails over if one provider is down, rate-limited, or slow:</p>
+<table>
+<thead><tr><th>Priority</th><th>Provider</th><th>Model</th><th>Use Case</th></tr></thead>
+<tbody>
+<tr><td>1st</td><td>Sarvam AI</td><td>Sarvam-M</td><td>India-optimized model, low latency for Assam students</td></tr>
+<tr><td>2nd</td><td>Cerebras</td><td>Llama 3.1 8B</td><td>Ultra-fast inference on dedicated hardware</td></tr>
+<tr><td>3rd</td><td>Google Gemini</td><td>Gemini 2.5 Flash</td><td>High-quality responses with fast throughput</td></tr>
+<tr><td>4th</td><td>Fireworks AI</td><td>DeepSeek V3</td><td>Deep reasoning for complex academic questions</td></tr>
+<tr><td>5th</td><td>OpenRouter</td><td>DeepSeek Chat V3</td><td>Final fallback with broad model availability</td></tr>
+</tbody>
+</table>
+<p>Each provider slot has independent timeout controls (10-second time-to-first-token, 8-second per-slot timeout). If a provider fails or is too slow, the system instantly moves to the next provider — students never see a hard failure. For admin content generation tasks, the priority order is reversed (starting with the most capable models first).</p>
+
+<h3>Content Generation &amp; Quality Pipeline</h3>
+<p>Study material on Syrabit is not manually typed — it goes through a structured AI-assisted content pipeline:</p>
+<ol>
+<li><strong>Syllabus Ingestion:</strong> Official board syllabi (AHSEC, SEBA, university FYUGP) are parsed into structured subject → chapter → topic hierarchies and stored in MongoDB.</li>
+<li><strong>Document Upload &amp; Chunking:</strong> Textbook PDFs and reference materials are uploaded, chunked, and indexed. Each chunk is embedded using vector embeddings for later retrieval.</li>
+<li><strong>AI Content Generation:</strong> For each topic, the system generates study notes following a strict format: formal definition → detailed explanation → solved examples with Assam-specific context → exam tips → practice questions with model answers.</li>
+<li><strong>Quality Scoring:</strong> Generated content is scored on completeness, syllabus alignment, and factual accuracy. Content below the quality threshold is flagged for regeneration or manual review.</li>
+<li><strong>SEO Optimization:</strong> Published content is automatically wrapped in SEO-optimized HTML with Schema.org structured data (Article, LearningResource, FAQPage, BreadcrumbList), OpenGraph tags, and geo-targeting meta tags for Assam.</li>
+<li><strong>Multi-Format Publishing:</strong> Each topic can be published as multiple page types — notes, definitions, MCQs, important questions, solved examples — each with its own optimized template and structured data.</li>
+</ol>
+
+<h3>Semantic Search &amp; Syllabus Embeddings</h3>
+<p>Syrabit uses vector embeddings for intelligent content discovery:</p>
 <ul>
-<li><strong>AI-Powered Content Generation:</strong> Study material is generated using large language models and then reviewed for accuracy against official syllabi</li>
-<li><strong>Retrieval-Augmented Generation (RAG):</strong> The Syra AI tutor retrieves relevant syllabus content before answering questions, ensuring factual grounding</li>
-<li><strong>Semantic Search:</strong> Students can search for topics using natural language queries, not just exact keyword matching</li>
-<li><strong>Progressive Web App (PWA):</strong> Syrabit works on any device — mobile, tablet, or desktop — and can be installed as an app for offline access</li>
-<li><strong>Multilingual Support:</strong> Text-to-speech and voice input support via Sarvam AI for regional language accessibility</li>
+<li><strong>Syllabus Embedding:</strong> Every chapter heading and topic name across all boards is embedded using Sarvam AI's embedding model. When a student asks a question, the query is compared against these embeddings to identify the relevant subject and chapter — even if the student phrases the question differently from the textbook heading.</li>
+<li><strong>Fuzzy Topic Matching:</strong> A <code>SequenceMatcher</code>-based fuzzy matching system maps student queries to exact syllabus topics. This handles variations in naming (e.g., "Yogini dress" matches "Personality and Dresses of Yogi") that pure keyword search would miss.</li>
+<li><strong>Relevance Gating:</strong> The system uses configurable similarity thresholds — a relevance gate at 0.55, a high-confidence threshold at 0.60, and a strict similarity threshold at 0.65 — to ensure only genuinely relevant content is retrieved. Below-threshold queries are declined rather than answered with irrelevant material.</li>
 </ul>
+
+<h3>Voice &amp; Multilingual Accessibility</h3>
+<p>Many students in Assam are more comfortable in Assamese or Hindi than English. Syrabit integrates with <strong>Sarvam AI</strong> for:</p>
+<ul>
+<li><strong>Text-to-Speech (TTS):</strong> AI-generated study notes and Syra's responses can be read aloud, helping students who prefer listening over reading.</li>
+<li><strong>Voice Input:</strong> Students can speak their questions instead of typing — useful on mobile devices and for students less comfortable with English keyboards.</li>
+<li><strong>Regional Language Understanding:</strong> The Sarvam-M model is specifically trained on Indian languages, providing better comprehension of questions that mix English with Assamese or Hindi terms.</li>
+</ul>
+
+<h3>SEO &amp; Crawler Architecture</h3>
+<p>Syrabit uses a dual-rendering architecture to serve both students and search engines optimally:</p>
+<ul>
+<li><strong>Bot Detection Middleware:</strong> A middleware layer detects Googlebot, GPTBot, ChatGPT-User, ClaudeBot, PerplexityBot, Bingbot, and other crawlers by user-agent. Detected bots receive fully pre-rendered HTML with Schema.org structured data, while regular users get the fast SPA experience.</li>
+<li><strong>Pre-Rendered HTML:</strong> Each subject landing page and topic page has a complete HTML representation with full meta tags (OpenGraph, Twitter Cards, geo-targeting, citation metadata), structured data (Article, LearningResource, FAQPage, BreadcrumbList, Course), and clean semantic HTML.</li>
+<li><strong>Dynamic OG Images:</strong> Subject pages serve subject-specific thumbnail images as OpenGraph images for WhatsApp, Facebook, and Twitter link previews — not generic placeholder images.</li>
+<li><strong>Segmented Sitemaps:</strong> The sitemap is split by content type (notes, MCQs, definitions, examples, important questions) with per-page priority scoring and last-modified timestamps, following the sitemaps.org protocol.</li>
+<li><strong>llms.txt:</strong> A machine-readable plain-text description file at <code>/llms.txt</code> provides AI systems with structured information about the platform, its content, and URL patterns.</li>
+</ul>
+
+<h3>Performance &amp; Reliability</h3>
+<ul>
+<li><strong>Multi-Worker Concurrency:</strong> The backend runs multiple Gunicorn workers with async request handling to serve concurrent student requests without blocking.</li>
+<li><strong>Response Caching:</strong> Frequently accessed content (library bundles, subject metadata, SEO pages) is cached in-memory and in Redis with configurable TTLs, reducing database load and response times.</li>
+<li><strong>Bot HTML Caching:</strong> Pre-rendered HTML for crawler requests is cached per-URL, so repeated bot visits don't trigger database queries.</li>
+<li><strong>Timeout Cascade:</strong> Each LLM provider in the failover chain has independent timeouts. If a provider's time-to-first-token exceeds 10 seconds, the system moves to the next provider without making the student wait.</li>
+<li><strong>Graceful Degradation:</strong> If all LLM providers fail, the system returns a helpful error message rather than crashing. If the database is temporarily unavailable, cached content continues to serve.</li>
+<li><strong>Credit &amp; Rate Limiting:</strong> Per-user credit tracking with configurable daily limits prevents abuse while ensuring fair access. Rate limiting via Redis protects against DDoS and excessive API usage.</li>
+</ul>
+
+<h3>Security</h3>
+<ul>
+<li><strong>Authentication:</strong> Google OAuth 2.0 with PKCE flow — no passwords stored on Syrabit servers.</li>
+<li><strong>Security Headers:</strong> Content-Security-Policy, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy, and X-XSS-Protection headers on all responses.</li>
+<li><strong>CORS:</strong> Strict Cross-Origin Resource Sharing configuration allowing only authorized origins.</li>
+<li><strong>Webhook Verification:</strong> Razorpay payment webhooks are cryptographically verified using HMAC-SHA256 before processing — preventing forged payment confirmations.</li>
+<li><strong>Input Sanitization:</strong> All user inputs (chat queries, search terms) are sanitized before processing to prevent injection attacks.</li>
+<li><strong>Admin Access Control:</strong> Admin routes are protected by role-based authentication with separate authorization checks.</li>
+</ul>
+
+<h3>Tech Stack Summary</h3>
+<table>
+<thead><tr><th>Category</th><th>Technologies</th></tr></thead>
+<tbody>
+<tr><td>Frontend</td><td>React 19, Vite, Tailwind CSS, PWA (Service Worker, Web App Manifest)</td></tr>
+<tr><td>Backend</td><td>Python 3, FastAPI, Gunicorn, async/await</td></tr>
+<tr><td>Databases</td><td>MongoDB (content), PostgreSQL (users), Upstash Redis (cache)</td></tr>
+<tr><td>AI / LLM</td><td>Sarvam AI, Cerebras, Google Gemini, Fireworks AI (DeepSeek V3), OpenRouter</td></tr>
+<tr><td>RAG</td><td>Sarvam AI Embeddings, Voyage AI Reranking, custom similarity gating</td></tr>
+<tr><td>Voice / TTS</td><td>Sarvam AI (Indian languages — Assamese, Hindi, English)</td></tr>
+<tr><td>Auth</td><td>Google OAuth 2.0 (PKCE)</td></tr>
+<tr><td>Payments</td><td>Razorpay (UPI, cards, net banking — INR)</td></tr>
+<tr><td>SEO</td><td>Schema.org (JSON-LD), OpenGraph, Twitter Cards, segmented XML sitemaps, llms.txt</td></tr>
+<tr><td>Hosting</td><td>Replit (auto-scaling, TLS, CDN)</td></tr>
+</tbody>
+</table>
 
 <h2>Frequently Asked Questions</h2>
 
