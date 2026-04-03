@@ -1,12 +1,15 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, BookOpen } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare } from 'lucide-react';
 import { log } from '@/utils/logger';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
 
 export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast }) {
   const [copied, setCopied] = useState(false);
+  const [reaction, setReaction] = useState(null);
+  const [showComment, setShowComment] = useState(false);
+  const [comment, setComment] = useState('');
   const navigate = useNavigate();
   const isUser = msg.role === 'user';
 
@@ -184,7 +187,43 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                         <RefreshCw size={16} />
                       </button>
                     )}
+                    <button
+                      onClick={() => setReaction(r => r === 'like' ? null : 'like')}
+                      className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${reaction === 'like' ? 'bg-green-500/15 text-green-400' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
+                      title="Like"
+                      aria-label="Like"
+                    >
+                      <ThumbsUp size={15} fill={reaction === 'like' ? 'currentColor' : 'none'} />
+                    </button>
+                    <button
+                      onClick={() => setReaction(r => r === 'dislike' ? null : 'dislike')}
+                      className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${reaction === 'dislike' ? 'bg-red-500/15 text-red-400' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
+                      title="Dislike"
+                      aria-label="Dislike"
+                    >
+                      <ThumbsDown size={15} fill={reaction === 'dislike' ? 'currentColor' : 'none'} />
+                    </button>
+                    <button
+                      onClick={() => setShowComment(v => !v)}
+                      className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${showComment ? 'bg-primary/15 text-primary' : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'}`}
+                      title="Comment"
+                      aria-label="Comment"
+                    >
+                      <MessageSquare size={15} />
+                    </button>
                   </div>
+                  {showComment && (
+                    <div className="mt-1.5 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <input
+                        type="text"
+                        value={comment}
+                        onChange={e => setComment(e.target.value)}
+                        placeholder="Add feedback..."
+                        className="flex-1 text-[12px] px-3 py-1.5 rounded-lg bg-muted/50 border border-border/50 text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:border-primary/40"
+                        onKeyDown={e => { if (e.key === 'Enter' && comment.trim()) { setShowComment(false); } }}
+                      />
+                    </div>
+                  )}
                 </>
               );
             })()}
