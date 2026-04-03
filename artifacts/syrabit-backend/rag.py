@@ -410,6 +410,8 @@ async def _fetch_content_card(
             ch_filter_fb: dict = {"content": {"$exists": True, "$ne": ""}}
             if subject_id:
                 ch_filter_fb["subject_id"] = subject_id
+            if chapter_title:
+                ch_filter_fb["title"] = {"$regex": re.escape(chapter_title), "$options": "i"}
             ch_filter_fb["$or"] = [
                 {"content": {"$regex": escaped_kw_re, "$options": "i"}},
                 {"title":   {"$regex": escaped_kw_re, "$options": "i"}},
