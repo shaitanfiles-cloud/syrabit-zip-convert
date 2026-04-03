@@ -13,9 +13,13 @@ import rehypeRaw from 'rehype-raw';
 import { apiClient } from '@/utils/api';
 import { useShare, SerpPreviewModal } from '@/hooks/useShare';
 
-function ChapterJsonLd({ data, url }) {
+function ChapterJsonLd({ data, url, basePath }) {
   useEffect(() => {
     if (!data) return;
+    const subjectName = data.subject_name || '';
+    const boardName = data.board_name || '';
+    const className = data.class_name || '';
+    const chapterTitle = data.topic_title || data.chapter_title || '';
     const graphNodes = [
       {
         '@type': 'Article',
@@ -29,8 +33,8 @@ function ChapterJsonLd({ data, url }) {
         },
         datePublished: data.generated_at || new Date().toISOString(),
         dateModified: data.updated_at || data.generated_at || new Date().toISOString(),
-        educationalLevel: `${data.class_name || ''} ${data.board_name || ''}`.trim(),
-        about: { '@type': 'Thing', name: data.topic_title || data.chapter_title },
+        educationalLevel: `${className} ${boardName}`.trim(),
+        about: { '@type': 'Thing', name: chapterTitle },
         wordCount: data.word_count || 0,
         inLanguage: 'en-IN',
         mainEntityOfPage: { '@type': 'WebPage', '@id': url },
@@ -38,13 +42,22 @@ function ChapterJsonLd({ data, url }) {
       },
       {
         '@type': 'LearningResource',
-        name: data.topic_title || data.chapter_title,
+        name: chapterTitle,
         description: data.meta_description,
-        educationalLevel: `${data.class_name || ''} ${data.board_name || ''}`.trim(),
+        educationalLevel: `${className} ${boardName}`.trim(),
         learningResourceType: 'Study Notes',
         provider: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
         inLanguage: 'en-IN',
         url,
+      },
+      {
+        '@type': 'BreadcrumbList',
+        itemListElement: [
+          { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai/' },
+          { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
+          { '@type': 'ListItem', position: 3, name: subjectName, item: `https://syrabit.ai${basePath}` },
+          { '@type': 'ListItem', position: 4, name: chapterTitle, item: url },
+        ],
       },
     ];
     const script = document.createElement('script');
@@ -226,7 +239,7 @@ export default function ChapterPage() {
         url={canonical}
         keywords={`${chapterTitle}, ${subjectName}, ${boardName} notes, ${className} study material, AHSEC, SEBA, exam preparation`}
       />
-      <ChapterJsonLd data={data} url={canonical} />
+      <ChapterJsonLd data={data} url={canonical} basePath={basePath} />
 
       <header className="border-b border-white/5" style={{ background: 'rgba(10,10,26,0.95)', backdropFilter: 'blur(12px)' }}>
         <div className="max-w-4xl mx-auto px-4 py-5">
