@@ -283,6 +283,7 @@ async def _fetch_content_card(
     subject_id: Optional[str] = None,
     subject_name: Optional[str] = None,
     intent: Optional[str] = None,
+    chapter_title: Optional[str] = None,
 ) -> Optional[tuple]:
     """
     Search seo_pages + chapters for the most relevant content card.
@@ -314,6 +315,9 @@ async def _fetch_content_card(
         if not subject_id and subject_name:
             match_filter["subject_name"] = {"$regex": re.escape(subject_name), "$options": "i"}
 
+        if chapter_title:
+            match_filter["chapter_title"] = {"$regex": re.escape(chapter_title), "$options": "i"}
+
         search_str = " ".join(keywords)
         match_filter["$text"] = {"$search": search_str}
         _text_proj = {
@@ -328,6 +332,8 @@ async def _fetch_content_card(
         ch_filter: dict = {"content": {"$exists": True, "$ne": ""}}
         if subject_id:
             ch_filter["subject_id"] = subject_id
+        if chapter_title:
+            ch_filter["title"] = {"$regex": re.escape(chapter_title), "$options": "i"}
         ch_filter["$text"] = {"$search": search_str}
         _ch_proj = {
             "_id": 0, "title": 1, "content": 1, "subject_id": 1,
@@ -1461,46 +1467,22 @@ async def resolve_rag_context(
     except Exception as _syl_exc:
         logger.warning(f"RAG resolve: syllabus classify failed: {_syl_exc}")
 
-    _primary_sim = max(_syllabus_sim, 0.0)
+    _syllabus_high_conf = _syllabus_sim >= HIGH_CONFIDENCE_THRESHOLD
 
-    vector_hits = await vector_rag_search(query, subject_id=subject_id, top_k=5, db_category=_db_category)
-    _best_vec_sim = max((h.get("score", 0) for h in vector_hits), default=0.0) if vector_hits else 0.0
-
-    _gate_sim = max(_primary_sim, _best_vec_sim)
-    _rag_should_trigger = should_trigger_rag(_resolved_intent, _gate_sim)
-
-    if not _rag_should_trigger:
+    if _syllabus_high_conf:
         logger.info(
-            f"RAG resolve: SKIPPED (early gate) — intent={_resolved_intent}, "
-            f"syllabus_sim={_syllabus_sim:.3f}, vec_sim={_best_vec_sim:.3f}, gate={_RELEVANCE_GATE} "
-            f"| query: {query[:50]}"
+            f"RAG resolve: SYLLABUS HIGH-CONFIDENCE fast-path "
+            f"(syl_sim={_syllabus_sim:.3f} >= {HIGH_CONFIDENCE_THRESHOLD}) — "
+            f"skipping vector_rag_search + keyword rag_search, chapter-scoped retrieval "
+            f"for '{_syllabus_chapter_title}' | intent={_resolved_intent} | query: {query[:50]}"
         )
-        try:
-            _record_rag_event("none", 0, query, intent=_resolved_intent)
-        except Exception:
-            pass
-        return {
-            "chunks": [], "chapters": [], "subjects": [], "vector_hits": [],
-            "source": "none", "quality": "none", "intent": _resolved_intent,
-        }
-
-    _high_confidence = (
-        _syllabus_sim >= HIGH_CONFIDENCE_THRESHOLD
-        or (
-            _best_vec_sim >= HIGH_CONFIDENCE_THRESHOLD
-            and any(h.get("content") and len(h.get("content", "")) > 100 for h in vector_hits)
-        )
-    )
-
-    if _high_confidence:
-        _fast_path_source = "syllabus" if _syllabus_sim >= HIGH_CONFIDENCE_THRESHOLD else "vector"
-        logger.info(
-            f"RAG resolve: HIGH-CONFIDENCE fast-path ({_fast_path_source}: "
-            f"syl={_syllabus_sim:.3f}, vec={_best_vec_sim:.3f} >= {HIGH_CONFIDENCE_THRESHOLD}) — "
-            f"skipping keyword rag_search | intent={_resolved_intent} | query: {query[:50]}"
-        )
+        vector_hits = []
+        _best_vec_sim = 0.0
         _gather_tasks = [
-            _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
+            _fetch_content_card(
+                query, subject_id=subject_id, subject_name=subject_name,
+                intent=intent, chapter_title=_syllabus_chapter_title,
+            ),
         ]
         if _want_enrichment:
             _gather_tasks.append(
@@ -1513,19 +1495,67 @@ async def resolve_rag_context(
         _card_result = _results[0]
         _enrichment_result = _results[1] if _want_enrichment else ""
         cached_rag = {"chunks": [], "chapters": [], "subjects": [], "source": "rag", "quality": "high"}
+
     else:
-        _gather_tasks = [
-            rag_search(query, subject_id=subject_id, subject_name=subject_name),
-            _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
-        ]
-        if _want_enrichment:
-            _gather_tasks.append(
-                _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
+        vector_hits = await vector_rag_search(query, subject_id=subject_id, top_k=5, db_category=_db_category)
+        _best_vec_sim = max((h.get("score", 0) for h in vector_hits), default=0.0) if vector_hits else 0.0
+
+        _gate_sim = max(_syllabus_sim, _best_vec_sim)
+        _rag_should_trigger = should_trigger_rag(_resolved_intent, _gate_sim)
+
+        if not _rag_should_trigger:
+            logger.info(
+                f"RAG resolve: SKIPPED (early gate) — intent={_resolved_intent}, "
+                f"syllabus_sim={_syllabus_sim:.3f}, vec_sim={_best_vec_sim:.3f}, gate={_RELEVANCE_GATE} "
+                f"| query: {query[:50]}"
             )
-        _results = await asyncio.gather(*_gather_tasks)
-        cached_rag = _results[0]
-        _card_result = _results[1]
-        _enrichment_result = _results[2] if _want_enrichment else ""
+            try:
+                _record_rag_event("none", 0, query, intent=_resolved_intent)
+            except Exception:
+                pass
+            return {
+                "chunks": [], "chapters": [], "subjects": [], "vector_hits": [],
+                "source": "none", "quality": "none", "intent": _resolved_intent,
+            }
+
+        _vec_high_conf = (
+            _best_vec_sim >= HIGH_CONFIDENCE_THRESHOLD
+            and any(h.get("content") and len(h.get("content", "")) > 100 for h in vector_hits)
+        )
+
+        if _vec_high_conf:
+            logger.info(
+                f"RAG resolve: VECTOR HIGH-CONFIDENCE fast-path "
+                f"(vec_sim={_best_vec_sim:.3f} >= {HIGH_CONFIDENCE_THRESHOLD}) — "
+                f"skipping keyword rag_search | intent={_resolved_intent} | query: {query[:50]}"
+            )
+            _gather_tasks = [
+                _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
+            ]
+            if _want_enrichment:
+                _gather_tasks.append(
+                    _fetch_enrichment_blocks(
+                        _resolved_intent, subject_id=subject_id,
+                        chapter_title=_syllabus_chapter_title,
+                    )
+                )
+            _results = await asyncio.gather(*_gather_tasks)
+            _card_result = _results[0]
+            _enrichment_result = _results[1] if _want_enrichment else ""
+            cached_rag = {"chunks": [], "chapters": [], "subjects": [], "source": "rag", "quality": "high"}
+        else:
+            _gather_tasks = [
+                rag_search(query, subject_id=subject_id, subject_name=subject_name),
+                _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
+            ]
+            if _want_enrichment:
+                _gather_tasks.append(
+                    _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
+                )
+            _results = await asyncio.gather(*_gather_tasks)
+            cached_rag = _results[0]
+            _card_result = _results[1]
+            _enrichment_result = _results[2] if _want_enrichment else ""
 
     rag_ctx = dict(cached_rag)
 
