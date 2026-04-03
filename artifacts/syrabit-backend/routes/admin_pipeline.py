@@ -212,7 +212,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
 
     # Re-chunk for RAG search
     try:
-        await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"))
+        await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"))
     except Exception:
         pass
 
@@ -326,7 +326,7 @@ Generate **detailed, topic-wise summary notes** for the following chapter. These
                     }}
                 )
                 try:
-                    await auto_chunk_content(chapter_id=chapter_id, content=gen_text, subject_id=subject_id)
+                    await auto_chunk_content(chapter_id=chapter_id, content=gen_text, subject_id=subject_id, category=chapter.get("category", "notes"))
                 except Exception:
                     pass
                 results.append({"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": len(gen_text.split())})
@@ -437,7 +437,7 @@ Generate detailed study notes for:
                     update_fields["needs_review"] = True
                 await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
                 try:
-                    await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"))
+                    await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"))
                 except Exception:
                     pass
                 results.append({"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": wc})
@@ -641,7 +641,7 @@ async def _run_subject_content_pipeline(job_id: str, subject_id: str):
                             }}
                         )
                         try:
-                            await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=subject_id)
+                            await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=subject_id, category=chapter.get("category", "notes"))
                         except Exception:
                             pass
                         notes_content = generated.strip()

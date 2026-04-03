@@ -948,6 +948,7 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
     existing = await db.chapters.find_one({"subject_id": data.subject_id, "slug": _slug})
     if existing:
         _slug = f"{_slug}-{chapter_id[:6]}"
+    _category = data.category or "notes"
     _topics = data.topics or []
     chap = {
         "id": chapter_id,
@@ -956,7 +957,8 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
         "slug": _slug,
         "description": data.description,
         "content": data.content,
-        "content_type": data.content_type or "notes",
+        "content_type": _category,
+        "category": _category,
         "chapter_number": data.chapter_number,
         "order": _order,
         "order_index": _order,
@@ -977,7 +979,8 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
             chunks_created = await auto_chunk_content(
                 chapter_id=chapter_id,
                 content=data.content,
-                subject_id=data.subject_id
+                subject_id=data.subject_id,
+                category=_category,
             )
             logger.info(f"Auto-chunked new chapter '{data.title}': {len(chunks_created)} chunks")
         except Exception as chunk_error:
@@ -998,11 +1001,14 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
 async def admin_create_chunk(data: ChunkCreate, admin: dict = Depends(get_admin_user)):
     """Create content chunk"""
     chunk_id = str(uuid.uuid4())
+    _chunk_category = data.category or "notes"
+    _chunk_content_type = _chunk_category
     chunk = {
         "id": chunk_id,
         "chapter_id": data.chapter_id,
         "content": data.content,
-        "content_type": data.content_type,
+        "content_type": _chunk_content_type,
+        "category": _chunk_category,
         "tags": data.tags,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }

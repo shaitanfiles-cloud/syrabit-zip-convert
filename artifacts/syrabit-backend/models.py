@@ -2,8 +2,10 @@
 Syrabit.ai — Pydantic request/response models.
 Imported by server.py and any future router modules.
 """
-from pydantic import BaseModel, EmailStr
-from typing import List, Optional
+from pydantic import BaseModel, EmailStr, field_validator
+from typing import List, Literal, Optional
+
+VALID_CATEGORIES = ("notes", "important_questions", "question_paper")
 
 
 class UserCreate(BaseModel):
@@ -100,18 +102,40 @@ class ChapterCreate(BaseModel):
     description: Optional[str] = ""
     content: Optional[str] = ""
     content_type: Optional[str] = "notes"
+    category: Optional[Literal["notes", "important_questions", "question_paper"]] = "notes"
     chapter_number: Optional[int] = 1
     order_index: Optional[int] = 0
     order: Optional[int] = 1
     status: Optional[str] = "published"
     topics: Optional[List[str]] = []
 
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, v: str | None) -> str:
+        if v is None:
+            return "notes"
+        v = v.strip().lower()
+        if v not in VALID_CATEGORIES:
+            raise ValueError(f"category must be one of {VALID_CATEGORIES}, got '{v}'")
+        return v
+
 
 class ChunkCreate(BaseModel):
     chapter_id: str
     content: str
     content_type: Optional[str] = "notes"
+    category: Optional[Literal["notes", "important_questions", "question_paper"]] = "notes"
     tags: Optional[List[str]] = []
+
+    @field_validator("category", mode="before")
+    @classmethod
+    def _normalize_category(cls, v: str | None) -> str:
+        if v is None:
+            return "notes"
+        v = v.strip().lower()
+        if v not in VALID_CATEGORIES:
+            raise ValueError(f"category must be one of {VALID_CATEGORIES}, got '{v}'")
+        return v
 
 
 class DocumentUpload(BaseModel):

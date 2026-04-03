@@ -1996,7 +1996,7 @@ async def _pipeline_process_one_chapter(
 
         if generated_notes:
             try:
-                await auto_chunk_content(chapter_id=chapter_id, content=generated_notes, subject_id=subject_id)
+                await auto_chunk_content(chapter_id=chapter_id, content=generated_notes, subject_id=subject_id, category="notes")
             except Exception as chunk_err:
                 chapter_result["errors"].append(f"chunking: {str(chunk_err)[:60]}")
             try:
@@ -2479,7 +2479,7 @@ async def admin_content_auto_heal(admin: dict = Depends(get_admin_user)):
                         },
                     }}
                 )
-                chunks = await auto_chunk_content(ch["id"], new_content, ch.get("subject_id"))
+                chunks = await auto_chunk_content(ch["id"], new_content, ch.get("subject_id"), category=ch.get("category", "notes"))
                 regen_results.append({"id": ch["id"], "title": title, "old_wc": wc, "new_wc": new_wc, "chunks": len(chunks), "status": "regenerated"})
             else:
                 await db.chapters.update_one({"id": ch["id"]}, {"$set": {"needs_review": True}})

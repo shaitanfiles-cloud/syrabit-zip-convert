@@ -34,8 +34,19 @@ from llm import call_llm_api, call_llm_api_chat, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
-from prompts import _classify_intent, _is_out_of_scope_response, extract_semester_number
+from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
 from subject_router import build_search_scope
+from followup_context import detect_followup, build_followup_context, merge_followup_into_query
+
+def _safe_metadata(raw) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
 from qa_engine import log_chat_message as _log_chat_message
 from guardrails.prompt_safety import evaluate_prompt_safety, validate_llm_output
 
@@ -166,14 +177,35 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         except Exception:
             return None
 
-    _detected_intent = _classify_intent(msg.message)
-    _is_casual_sync = _detected_intent == "casual"
+    _detected_intent, _detected_db_category = classify_intent(msg.message)
 
     conv_id = msg.conversation_id
     user_id = user["id"] if user else None
 
+    _followup_info = None
+    if conv_id and user_id:
+        try:
+            _conv_for_followup = await supa_get_conversation(conv_id, user_id)
+            if _conv_for_followup:
+                _conv_meta = _safe_metadata(_conv_for_followup.get("metadata"))
+                _followup_info = detect_followup(msg.message, _conv_meta)
+                if _followup_info:
+                    _detected_intent = _followup_info["prev_intent"]
+                    _detected_db_category = {"notes": "notes", "important_questions": "important_questions", "pyq": "question_paper"}.get(_detected_intent)
+                    msg.message = merge_followup_into_query(
+                        msg.message, _followup_info,
+                        subject_name=msg.subject_name or "",
+                        chapter_name=msg.chapter_name or "",
+                    )
+                    logger.info(f"[NON-STREAM] Follow-up detected: intent={_detected_intent}, rewritten query='{msg.message[:60]}'")
+        except Exception as _fu_err:
+            logger.warning(f"Follow-up detection failed: {_fu_err}")
+
+    _is_casual_sync = _detected_intent == "casual"
+    _skip_rag_sync = _detected_intent in ("casual", "syllabus", "chapter_meta")
+
     async def _ns_fetch_search_scope():
-        if _is_casual_sync:
+        if _skip_rag_sync:
             return "", None
         return await build_search_scope(
             msg.message,
@@ -206,7 +238,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
                 return _trim_history(raw)
         return []
 
-    if _is_casual_sync:
+    if _skip_rag_sync:
         web_results = []
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
@@ -219,6 +251,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
                 subject_name=msg.subject_name,
                 document_text=document_text,
                 intent=_detected_intent,
+                db_category=_detected_db_category,
             ),
             _safe_web_search(
                 query=msg.message, num_results=5,
@@ -350,12 +383,43 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
                 try: existing_msgs = json.loads(existing_msgs)
                 except: existing_msgs = []
             updated_msgs = existing_msgs + new_messages
-            await supa_update_conversation(conv_id, user_id, {
+            _update_payload = {
                 "messages": json.dumps(updated_msgs) if supa else updated_msgs,
                 "updated_at": now,
                 "preview": answer[:100],
                 "tokens": len(answer.split()),
-            })
+            }
+            if _detected_intent in ("notes", "important_questions", "pyq"):
+                _existing_meta = _safe_metadata(conv.get("metadata"))
+                _prev_followup = _existing_meta.get("followup_context") or {}
+                _completed = list(_prev_followup.get("completed", []))
+                _current = _prev_followup.get("current_item", "")
+                if _current and _current not in _completed:
+                    _completed.append(_current)
+                _remaining = list(_prev_followup.get("remaining", []))
+                if _current in _remaining:
+                    _remaining.remove(_current)
+                if not _remaining:
+                    if _detected_intent == "pyq":
+                        _remaining = [m for m in ["1m", "2m", "3m", "5m", "10m"] if m not in _completed]
+                    else:
+                        _rag_chapters = rag_ctx.get("chapters", [])
+                        _remaining = [
+                            ch.get("title", "") for ch in _rag_chapters
+                            if ch.get("title", "") and ch.get("title", "") not in _completed
+                        ]
+                _new_current = msg.chapter_name or _current
+                if _new_current in _remaining:
+                    _remaining.remove(_new_current)
+                _new_followup = build_followup_context(
+                    intent=_detected_intent,
+                    current_item=_new_current,
+                    completed=_completed,
+                    remaining=_remaining,
+                )
+                _existing_meta["followup_context"] = _new_followup
+                _update_payload["metadata"] = _existing_meta
+            await supa_update_conversation(conv_id, user_id, _update_payload)
 
         deducted = await atomic_deduct_credit(user_id, credits_info["used"], credits_info["limit"])
         if not deducted:
@@ -440,6 +504,7 @@ async def _persist_chat_turn(
     rag_board_name: str | None = None,
     rag_class_name: str | None = None,
     rag_stream_name: str | None = None,
+    followup_context: dict | None = None,
 ):
     """Background: save conversation messages. Optionally deduct 1 credit. Non-blocking."""
     try:
@@ -471,12 +536,17 @@ async def _persist_chat_turn(
                 try: existing = json.loads(existing)
                 except: existing = []
             updated = existing + new_msgs
-            await supa_update_conversation(conv_id, user_id, {
+            _persist_payload = {
                 "messages": json.dumps(updated) if supa else updated,
                 "updated_at": now,
                 "preview": answer[:100],
                 "tokens": len(answer.split()),
-            })
+            }
+            if followup_context:
+                _existing_meta = _safe_metadata(conv.get("metadata"))
+                _existing_meta["followup_context"] = followup_context
+                _persist_payload["metadata"] = _existing_meta
+            await supa_update_conversation(conv_id, user_id, _persist_payload)
         if deduct_credit:
             await atomic_deduct_credit(user_id, credits_used_before, 999999)
     except Exception as e:
@@ -526,8 +596,29 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
 
-    _stream_intent = _classify_intent(msg.message)
+    _stream_intent, _stream_db_category = classify_intent(msg.message)
+
+    _stream_followup_info = None
+    if msg.conversation_id and user_id:
+        try:
+            _conv_for_fu_s = await supa_get_conversation(msg.conversation_id, user_id)
+            if _conv_for_fu_s:
+                _conv_meta_s = _safe_metadata(_conv_for_fu_s.get("metadata"))
+                _stream_followup_info = detect_followup(msg.message, _conv_meta_s)
+                if _stream_followup_info:
+                    _stream_intent = _stream_followup_info["prev_intent"]
+                    _stream_db_category = {"notes": "notes", "important_questions": "important_questions", "pyq": "question_paper"}.get(_stream_intent)
+                    msg.message = merge_followup_into_query(
+                        msg.message, _stream_followup_info,
+                        subject_name=msg.subject_name or "",
+                        chapter_name=msg.chapter_name or "",
+                    )
+                    logger.info(f"[STREAM] Follow-up detected: intent={_stream_intent}, rewritten query='{msg.message[:60]}'")
+        except Exception as _fu_err_s:
+            logger.warning(f"[STREAM] Follow-up detection failed: {_fu_err_s}")
+
     _is_casual = _stream_intent == "casual"
+    _skip_rag_stream = _stream_intent in ("casual", "syllabus", "chapter_meta")
 
     # ── Phase 0+1 fully parallel: context, semester, doc, search scope all at once ──
     _t_phase0 = _time_mod.time()
@@ -544,7 +635,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         return (subj or {}).get("document_text")
 
     async def _fetch_search_scope_early():
-        if _is_casual:
+        if _skip_rag_stream:
             return "", None
         if msg.card_context and msg.subject_id and msg.subject_name:
             return msg.subject_name, None
@@ -622,7 +713,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             return redis_get_anon_conversation(anon_id, msg.conversation_id)
         return None
 
-    if _is_casual:
+    if _skip_rag_stream:
         web_results = []
         raw_conv = await _fetch_history()
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
@@ -632,6 +723,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             msg.message, subject_id=msg.subject_id,
             subject_name=msg.subject_name, document_text=document_text,
             intent=_stream_intent,
+            db_category=_stream_db_category,
         ))
         _history_task = asyncio.create_task(_fetch_history())
 
@@ -976,6 +1068,36 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             if answer and (not _is_out_of_scope_response(answer) or rag_source_saved != "none"):
                 _credit_saved = True
                 if user_id:
+                    _stream_followup_ctx = None
+                    if _stream_intent in ("notes", "important_questions", "pyq"):
+                        _prev_fu_completed = []
+                        _prev_fu_remaining = []
+                        _prev_fu_current = msg.chapter_name or ""
+                        if _stream_followup_info:
+                            _prev_fu_completed = list(_stream_followup_info.get("completed", []))
+                            _next = _stream_followup_info.get("next_item", "")
+                            if _next:
+                                if _next not in _prev_fu_completed:
+                                    _prev_fu_completed.append(_next)
+                                _prev_fu_current = _next
+                            _prev_fu_remaining = [r for r in _stream_followup_info.get("remaining", []) if r not in _prev_fu_completed]
+                        if not _prev_fu_remaining:
+                            if _stream_intent == "pyq":
+                                _prev_fu_remaining = [m for m in ["1m", "2m", "3m", "5m", "10m"] if m not in _prev_fu_completed]
+                            else:
+                                _s_rag_chapters = rag_ctx.get("chapters", [])
+                                _prev_fu_remaining = [
+                                    ch.get("title", "") for ch in _s_rag_chapters
+                                    if ch.get("title", "") and ch.get("title", "") not in _prev_fu_completed
+                                ]
+                        if _prev_fu_current in _prev_fu_remaining:
+                            _prev_fu_remaining.remove(_prev_fu_current)
+                        _stream_followup_ctx = build_followup_context(
+                            intent=_stream_intent,
+                            current_item=_prev_fu_current,
+                            completed=_prev_fu_completed,
+                            remaining=_prev_fu_remaining,
+                        )
                     asyncio.create_task(_persist_chat_turn(
                         conv_id, user_id,
                         user_msg_saved, answer,
@@ -987,6 +1109,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         rag_board_name=_src_board_s,
                         rag_class_name=_src_class_s,
                         rag_stream_name=_src_stream_s,
+                        followup_context=_stream_followup_ctx,
                     ))
                     asyncio.create_task(_log_chat_message(
                         user_id=user_id,

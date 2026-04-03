@@ -173,7 +173,7 @@ def _sentence_split_with_overlap(text: str, target: int = _CHUNK_TARGET, max_len
         start += advance
     return chunks
 
-async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None, chapter_title: str = None) -> list:
+async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None, chapter_title: str = None, category: str = "notes") -> list:
     """
     Semantically split chapter content into RAG-optimised chunks.
 
@@ -214,13 +214,16 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
         if len(chunk_text) < _CHUNK_MIN:
             continue
         chunk_keywords = _extract_keywords(chunk_text)
+        _VALID_CATEGORIES = {"notes", "important_questions", "question_paper"}
+        _chunk_category = category if category in _VALID_CATEGORIES else "notes"
         chunk = {
             "id": str(uuid.uuid4()),
             "chapter_id": chapter_id,
             "subject_id": subject_id,
             "chapter_title": chapter_title or "",
             "content": chunk_text,
-            "content_type": "notes",
+            "content_type": _chunk_category,
+            "category": _chunk_category,
             "chunk_index": idx,
             "tags": chunk_keywords[:5],
             "char_count": len(chunk_text),
@@ -263,7 +266,8 @@ async def rechunk_chapter(chapter_id: str) -> dict:
     chunks_created = await auto_chunk_content(
         chapter_id=chapter_id,
         content=content,
-        subject_id=chapter.get("subject_id")
+        subject_id=chapter.get("subject_id"),
+        category=chapter.get("category", "notes"),
     )
     
     return {
@@ -580,6 +584,7 @@ async def vector_rag_search(
     query: str,
     subject_id: Optional[str] = None,
     top_k: int = 12,
+    db_category: Optional[str] = None,
 ) -> list:
     """
     Vector similarity search over all published seo_pages + chapters.
@@ -589,13 +594,14 @@ async def vector_rag_search(
     Caches results for 300 seconds — Gemini embed calls are expensive.
     """
     _vk = _vector_rag_cache_key(query, subject_id, top_k)
-    if _vk in _vector_rag_cache:
+    _vk_cat = f"{_vk}:{db_category or ''}"
+    if _vk_cat in _vector_rag_cache:
         logger.info(f"Vector RAG cache hit: query='{query[:40]}'")
-        return _vector_rag_cache[_vk]
+        return _vector_rag_cache[_vk_cat]
 
     try:
         return await asyncio.wait_for(
-            _vector_rag_search_inner(query, subject_id, top_k, _vk),
+            _vector_rag_search_inner(query, subject_id, top_k, _vk_cat, db_category=db_category),
             timeout=2.0,
         )
     except asyncio.TimeoutError:
@@ -611,6 +617,7 @@ async def _vector_rag_search_inner(
     subject_id: Optional[str],
     top_k: int,
     _vk: str,
+    db_category: Optional[str] = None,
 ) -> list:
     try:
         _embed_key = query.strip().lower()
@@ -637,6 +644,8 @@ async def _vector_rag_search_inner(
         ch_filter: dict = {"embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
         if subject_id:
             ch_filter["subject_id"] = subject_id
+        if db_category:
+            ch_filter["category"] = db_category
 
         cms_filter: dict = {"status": "published", "embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
         if subject_id:
@@ -1219,6 +1228,7 @@ async def resolve_rag_context(
     subject_name: Optional[str] = None,
     document_text: Optional[str] = None,
     intent: Optional[str] = None,
+    db_category: Optional[str] = None,
 ) -> dict:
     """
     Master RAG resolver — 4-tier priority chain:
@@ -1269,38 +1279,26 @@ async def resolve_rag_context(
             "quality": "tier0",
             "intent":  _resolved_intent_t0,
         }
+    from rag_router import should_trigger_rag, filter_rag_by_category, RAG_RELEVANCE_GATE
     try:
-        _RELEVANCE_GATE = float(os.getenv("RAG_RELEVANCE_GATE", "0.50"))
+        _RELEVANCE_GATE = float(os.getenv("RAG_RELEVANCE_GATE", str(RAG_RELEVANCE_GATE)))
     except ValueError:
-        _RELEVANCE_GATE = 0.50
+        _RELEVANCE_GATE = RAG_RELEVANCE_GATE
 
-    from prompts import ENRICHMENT_INTENTS
-    _resolved_intent = intent or "general"
+    from prompts import ENRICHMENT_INTENTS, INTENT_TO_DB_CATEGORY
+    _resolved_intent = intent or "notes"
+    _db_category = db_category or INTENT_TO_DB_CATEGORY.get(_resolved_intent)
     _want_enrichment = _resolved_intent in ENRICHMENT_INTENTS
 
-    _gather_tasks = [
-        rag_search(query, subject_id=subject_id, subject_name=subject_name),
-        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
-        vector_rag_search(query, subject_id=subject_id, top_k=5),
-    ]
-    if _want_enrichment:
-        _gather_tasks.append(
-            _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
-        )
-
-    _results = await asyncio.gather(*_gather_tasks)
-    cached_rag = _results[0]
-    _card_result = _results[1]
-    vector_hits = _results[2]
-    _enrichment_result = _results[3] if _want_enrichment else ""
-
+    vector_hits = await vector_rag_search(query, subject_id=subject_id, top_k=5, db_category=_db_category)
     _best_vec_sim = max((h.get("score", 0) for h in vector_hits), default=0.0) if vector_hits else 0.0
-    _embeddings_relevant = _best_vec_sim >= _RELEVANCE_GATE
 
-    if not _embeddings_relevant:
+    _rag_should_trigger = should_trigger_rag(_resolved_intent, _best_vec_sim)
+
+    if not _rag_should_trigger:
         logger.info(
-            f"RAG resolve: EMBEDDINGS MISS — best_sim={_best_vec_sim:.3f} < gate={_RELEVANCE_GATE} "
-            f"→ outside syllabus, skipping RAG | intent: {_resolved_intent} | query: {query[:50]}"
+            f"RAG resolve: SKIPPED (early gate) — intent={_resolved_intent}, best_sim={_best_vec_sim:.3f}, gate={_RELEVANCE_GATE} "
+            f"| query: {query[:50]}"
         )
         try:
             _record_rag_event("none", 0, query, intent=_resolved_intent)
@@ -1310,6 +1308,20 @@ async def resolve_rag_context(
             "chunks": [], "chapters": [], "subjects": [], "vector_hits": [],
             "source": "none", "quality": "none", "intent": _resolved_intent,
         }
+
+    _gather_tasks = [
+        rag_search(query, subject_id=subject_id, subject_name=subject_name),
+        _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
+    ]
+    if _want_enrichment:
+        _gather_tasks.append(
+            _fetch_enrichment_blocks(_resolved_intent, subject_id=subject_id, chapter_title="")
+        )
+
+    _results = await asyncio.gather(*_gather_tasks)
+    cached_rag = _results[0]
+    _card_result = _results[1]
+    _enrichment_result = _results[2] if _want_enrichment else ""
 
     rag_ctx = dict(cached_rag)
 
@@ -1328,10 +1340,10 @@ async def resolve_rag_context(
     if vector_hits:
         deduped = [h for h in vector_hits if h.get("slug") not in content_card_slugs]
         rag_ctx["vector_hits"] = deduped
-        if rag_ctx["quality"] == "none":
+        if rag_ctx["quality"] == "none" and deduped:
             rag_ctx["quality"] = "high"
             rag_ctx["source"] = "rag"
-        logger.info(f"RAG resolve: vector hits={len(deduped)} (deduped from {len(vector_hits)}, best_sim={deduped[0]['score']:.3f}) | query: {query[:50]}" if deduped else f"RAG resolve: vector hits=0 (all deduped by content card)")
+        logger.info(f"RAG resolve: vector hits={len(deduped)} (from {len(vector_hits)}, best_sim={_best_vec_sim:.3f}, cat_filter={'yes' if _db_category else 'no'}) | query: {query[:50]}" if deduped else f"RAG resolve: vector hits=0 (all filtered/deduped)")
 
     if _enrichment_result:
         rag_ctx["enrichment_blocks"] = _enrichment_result
@@ -1339,11 +1351,24 @@ async def resolve_rag_context(
             rag_ctx["quality"] = "high"
             rag_ctx["source"] = "rag"
 
+    if _db_category and rag_ctx.get("chunks"):
+        rag_ctx["chunks"] = filter_rag_by_category(rag_ctx["chunks"], _db_category)
+
+    _has_chunks = bool(rag_ctx.get("chunks"))
+    _has_vectors = bool(rag_ctx.get("vector_hits"))
+    _has_card = bool(content_card_text)
+    _has_enrichment = bool(_enrichment_result)
+    if rag_ctx["quality"] == "high" and not (_has_chunks or _has_vectors or _has_card or _has_enrichment):
+        rag_ctx["quality"] = "none"
+        rag_ctx["source"] = "none"
+        logger.info(f"RAG resolve: quality downgraded to NONE after category filtering — intent={_resolved_intent}")
+
     _final_quality = rag_ctx["quality"]
     rag_ctx["intent"] = _resolved_intent
+    rag_ctx["db_category"] = _db_category
 
     if _final_quality == "high":
-        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(rag_ctx.get('vector_hits', []))}, card: {'yes' if content_card_text else 'no'}, best_sim={_best_vec_sim:.3f}, intent: {_resolved_intent}) | query: {query[:50]}")
+        logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(rag_ctx.get('vector_hits', []))}, card: {'yes' if _has_card else 'no'}, best_sim={_best_vec_sim:.3f}, intent: {_resolved_intent}) | query: {query[:50]}")
     elif _final_quality == "medium":
         logger.info(f"RAG resolve: MEDIUM metadata only | intent: {_resolved_intent} | query: {query[:50]}")
     else:
@@ -1579,7 +1604,7 @@ def build_rag_system_prompt(
       Tier 2 — Subject metadata (descriptions, tags, chapter titles)
       Tier 3 — Web search results (fallback when library has no content)
     """
-    from prompts import build_system_prompt, _classify_question, _classify_intent, _format_board_label as _fbl, get_intent_extraction_rules
+    from prompts import build_system_prompt, _classify_question, classify_intent, _format_board_label as _fbl, get_intent_extraction_rules
     base_prompt = build_system_prompt(context, user_info=user_info, query=query)
     source      = rag_context.get("source",  "none")
     quality     = rag_context.get("quality", "none")
@@ -1596,7 +1621,7 @@ def build_rag_system_prompt(
     _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard"
     _curriculum_label = f"{_board_label} Curriculum"
 
-    _intent = _classify_intent(query) if query else "general"
+    _intent, _db_cat = classify_intent(query) if query else ("notes", None)
     _is_casual = _intent == "casual"
 
     if not _is_casual:

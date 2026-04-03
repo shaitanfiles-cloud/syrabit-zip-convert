@@ -1,5 +1,5 @@
 import pytest
-from prompts import _classify_question, _classify_intent, _is_out_of_scope_response
+from prompts import _classify_question, _classify_intent, _is_out_of_scope_response, classify_intent
 
 
 class TestClassifyQuestion:
@@ -28,22 +28,22 @@ class TestClassifyQuestion:
         "what is the boiling point of ethanol",
         "calculate the pH of 0.1M HCl",
     ])
-    def test_concise_queries(self, query):
-        assert _classify_question(query) == "concise"
+    def test_academic_queries_are_structured(self, query):
+        assert _classify_question(query) == "structured"
 
     def test_empty_query(self):
         result = _classify_question("")
-        assert result in ("casual", "concise")
+        assert result in ("casual", "structured")
 
 
 class TestClassifyIntent:
     @pytest.mark.parametrize("query,expected", [
-        ("MCQ", "mcq"),
+        ("MCQ", "notes"),
         ("PYQ", "pyq"),
-        ("mcq", "mcq"),
+        ("mcq", "notes"),
         ("pyq", "pyq"),
         ("notes", "notes"),
-        ("MCQ on photosynthesis", "mcq"),
+        ("MCQ on photosynthesis", "notes"),
         ("PYQ 2024", "pyq"),
         ("notes for chapter 1", "notes"),
     ])
@@ -56,6 +56,8 @@ class TestClassifyIntent:
         ("thanks", "casual"),
         ("good morning", "casual"),
         ("...", "casual"),
+        ("help", "casual"),
+        ("help me", "casual"),
     ])
     def test_casual_intents(self, query, expected):
         assert _classify_intent(query) == expected
@@ -63,32 +65,64 @@ class TestClassifyIntent:
     @pytest.mark.parametrize("query,expected", [
         ("syllabus of business studies", "syllabus"),
         ("previous year question paper 2024", "pyq"),
-        ("solve question 3 from 2023 pyq", "solved_pyq"),
+        ("solve question 3 from 2023 pyq", "pyq"),
         ("important questions for exam", "important_questions"),
-        ("important topics", "important_topics"),
-        ("questions from chapter 2", "lesson_questions"),
-        ("flashcard for revision", "flashcards"),
-        ("exam pattern of physics", "exam_pattern"),
-        ("5 mark questions list", "marks_wise"),
-        ("explain the law of demand", "explain"),
-        ("solve x^2 + 5x = 0", "solve"),
+        ("important topics", "important_questions"),
+        ("questions from chapter 2", "important_questions"),
+        ("flashcard for revision", "notes"),
+        ("exam pattern of physics", "chapter_meta"),
+        ("5 mark questions list", "pyq"),
+        ("explain the law of demand", "notes"),
+        ("solve x^2 + 5x = 0", "notes"),
     ])
     def test_academic_intents(self, query, expected):
         assert _classify_intent(query) == expected
 
     @pytest.mark.parametrize("query,expected", [
         ("hi, give me PYQ for 2024", "pyq"),
-        ("hello can you explain photosynthesis", "explain"),
+        ("hello can you explain photosynthesis", "notes"),
         ("hey give me important questions", "important_questions"),
     ])
     def test_mixed_greeting_academic(self, query, expected):
         assert _classify_intent(query) == expected
 
-    def test_empty_returns_general(self):
-        assert _classify_intent("") == "general"
+    def test_empty_returns_notes(self):
+        assert _classify_intent("") == "notes"
 
-    def test_general_queries(self):
-        assert _classify_intent("what is DNA") == "general"
+    def test_general_queries_map_to_notes(self):
+        assert _classify_intent("what is DNA") == "notes"
+
+
+class TestClassifyIntentTuple:
+    def test_returns_tuple(self):
+        intent, db_cat = classify_intent("notes for chapter 1")
+        assert intent == "notes"
+        assert db_cat == "notes"
+
+    def test_pyq_returns_question_paper_category(self):
+        intent, db_cat = classify_intent("PYQ 2024")
+        assert intent == "pyq"
+        assert db_cat == "question_paper"
+
+    def test_casual_returns_none_category(self):
+        intent, db_cat = classify_intent("hello")
+        assert intent == "casual"
+        assert db_cat is None
+
+    def test_syllabus_returns_none_category(self):
+        intent, db_cat = classify_intent("syllabus of physics")
+        assert intent == "syllabus"
+        assert db_cat is None
+
+    def test_important_questions_returns_category(self):
+        intent, db_cat = classify_intent("important questions for exam")
+        assert intent == "important_questions"
+        assert db_cat == "important_questions"
+
+    def test_chapter_meta_returns_none_category(self):
+        intent, db_cat = classify_intent("exam pattern of physics")
+        assert intent == "chapter_meta"
+        assert db_cat is None
 
 
 class TestOutOfScopeDetection:

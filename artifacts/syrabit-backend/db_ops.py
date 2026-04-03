@@ -43,6 +43,9 @@ def _pg_row(row) -> dict:
         if field in d and isinstance(d[field], str):
             try: d[field] = json.loads(d[field])
             except: d[field] = [] if field == "messages" else []
+    if "metadata" in d and isinstance(d["metadata"], str):
+        try: d["metadata"] = json.loads(d["metadata"])
+        except: d["metadata"] = {}
     return d
 
 def _pg_rows(rows) -> list:
@@ -198,6 +201,7 @@ _ALLOWED_USER_COLUMNS = frozenset({
 _ALLOWED_CONV_COLUMNS = frozenset({
     "title", "preview", "subject_id", "subject_name",
     "starred", "archived", "messages", "tokens", "updated_at",
+    "metadata",
 })
 
 _ALLOWED_SETTINGS_COLUMNS = frozenset({
@@ -566,6 +570,7 @@ async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
             if unknown:
                 raise ValueError(f"supa_update_conversation: disallowed column(s): {unknown}")
             if isinstance(u.get("messages"), list): u["messages"] = json.dumps(u["messages"])
+            if isinstance(u.get("metadata"), dict): u["metadata"] = json.dumps(u["metadata"])
             if u:
                 cols = [f"{_quote_ident(k)} = ${i}" for i, k in enumerate(u.keys(), start=1)]
                 vals = list(u.values()) + [conv_id, uid]
@@ -573,7 +578,7 @@ async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
                 async with _deps_mod.pg_pool.acquire() as conn:
                     await conn.execute(sql, *vals)
             if supa:
-                _supa_allowed = {"title","preview","subject_id","subject_name","starred","archived","messages","tokens","updated_at"}
+                _supa_allowed = {"title","preview","subject_id","subject_name","starred","archived","messages","tokens","updated_at","metadata"}
                 _su = {k: v for k, v in updates.items() if k in _supa_allowed}
                 if isinstance(_su.get("messages"), list): _su["messages"] = json.dumps(_su["messages"])
                 if _su:
@@ -583,7 +588,7 @@ async def supa_update_conversation(conv_id: str, uid: str, updates: dict):
             logger.warning(f"pg supa_update_conversation failed: {e}")
     if supa:
         try:
-            allowed = {"title","preview","subject_id","subject_name","starred","archived","messages","tokens","updated_at"}
+            allowed = {"title","preview","subject_id","subject_name","starred","archived","messages","tokens","updated_at","metadata"}
             u = {k: v for k, v in updates.items() if k in allowed}
             if isinstance(u.get("messages"), list): u["messages"] = json.dumps(u["messages"])
             if u:
