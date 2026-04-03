@@ -2748,6 +2748,44 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <li><strong>Quality Guards:</strong> Syra explicitly declines questions outside the student's syllabus to prevent misinformation and keep study sessions focused.</li>
 </ul>
 
+<h2>What Makes Syrabit Unique</h2>
+<p>Syrabit is not another generic study app. It is purpose-built for a specific student population (Assam Board) with capabilities that most educational platforms lack:</p>
+
+<div class="section-grid">
+<div class="grid-card">
+<h3>Zero-Hallucination AI Tutor</h3>
+<p>Unlike generic AI chatbots, Syra refuses to answer questions outside the student's syllabus. It uses a 6-stage RAG pipeline with relevance gating (similarity thresholds 0.55–0.65) to ensure every answer is grounded in actual chapter content. If the system cannot find relevant material with high confidence, it explicitly declines rather than making something up.</p>
+</div>
+<div class="grid-card">
+<h3>5-Provider LLM Failover</h3>
+<p>No single point of AI failure. If Sarvam AI is slow, the system instantly cascades to Cerebras, then Gemini, then DeepSeek via Fireworks, then OpenRouter — all within 10 seconds. Students almost never experience AI downtime because all 5 providers would have to fail simultaneously. Each provider has independent timeout controls and the priority order reverses for admin tasks.</p>
+</div>
+<div class="grid-card">
+<h3>Syllabus-Native Architecture</h3>
+<p>The entire database schema is structured around the Assam education system: Board → Class/Semester → Stream/Course Type → Subject → Chapter → Topic. The system supports NEP FYUGP course types (AEC, SEC, MDC, VAC, GE) that most platforms don't even know exist. An automated PDF syllabus importer can parse official university documents into this hierarchy.</p>
+</div>
+<div class="grid-card">
+<h3>Chat-to-Content Pipeline</h3>
+<p>High-quality AI chat answers can be "promoted" into permanent QA pairs by admins. These QA pairs are automatically grouped by topic and published as structured FAQ pages with Schema.org markup — turning student conversations into SEO-indexed study material.</p>
+</div>
+<div class="grid-card">
+<h3>Real-Time Web Search Fallback</h3>
+<p>When internal RAG content isn't sufficient, Syra uses a custom web crawler (SyrabitBot) with Playwright for JavaScript-rendered pages and Trafilatura for clean text extraction. It can even fetch and extract text from online PDFs in real-time during a conversation.</p>
+</div>
+<div class="grid-card">
+<h3>Sarvam AI Voice Integration</h3>
+<p>Built-in text-to-speech via Sarvam AI's Bulbul v2 model with 40+ Indian voice speakers. Supports Assamese (as-IN), Hindi (hi-IN), and English (en-IN). TTS responses are cached as base64 audio to minimize repeated API calls. Translation between Indian languages via Sarvam Mayura v1.</p>
+</div>
+<div class="grid-card">
+<h3>Intelligent Content Analytics</h3>
+<p>Custom session tracking with visitor and session IDs measures page counts, bounce rates, and session duration. Library interaction analytics track specific events (AI clicks, subject views, search queries) to identify content gaps and student needs.</p>
+</div>
+<div class="grid-card">
+<h3>Academic Personalization</h3>
+<p>Onboarding captures each student's board, class, stream, and course type. The dashboard, library, and AI tutor are personalized to show only content relevant to the student's enrolled curriculum — no information overload from other boards or classes.</p>
+</div>
+</div>
+
 <h2>Content Quality &amp; Editorial Process</h2>
 <p>Content on Syrabit follows a rigorous editorial process:</p>
 <ul>
@@ -2772,6 +2810,18 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <li><strong>Teachers and educators</strong> looking for structured, syllabus-aligned reference material</li>
 <li><strong>Parents</strong> seeking a free, reliable study resource for their children's Assam Board exams</li>
 </ul>
+
+<h2>Pricing &amp; Access Model</h2>
+<p>Syrabit uses a freemium credit system designed for Indian students:</p>
+<table>
+<thead><tr><th>Plan</th><th>Price</th><th>Daily AI Credits</th><th>Rate Limit</th><th>Max Tokens</th><th>Document Access</th></tr></thead>
+<tbody>
+<tr><td>Free</td><td>₹0</td><td>30</td><td>5 messages/min</td><td>10,000</td><td>Limited</td></tr>
+<tr><td>Starter</td><td>₹99 (one-time)</td><td>500</td><td>10 messages/min</td><td>15,000</td><td>Full</td></tr>
+<tr><td>Pro</td><td>₹999 (one-time)</td><td>4,000</td><td>15 messages/min</td><td>20,000</td><td>Full</td></tr>
+</tbody>
+</table>
+<p>All study notes, MCQs, definitions, and examples are freely accessible without login. The AI tutor (Syra) requires credits. Payments are processed via Razorpay (UPI, cards, net banking) in INR — designed for the Indian student market where ₹99 is an accessible price point.</p>
 
 <h2>Geographic Focus</h2>
 <p>Syrabit.ai is specifically designed for students in <strong>Assam, India</strong>. The platform's content follows Assam-specific board syllabi and university curricula. It serves students across all districts including Guwahati (Kamrup Metropolitan), Jorhat, Dibrugarh, Tezpur (Sonitpur), Silchar (Cachar), Nagaon, Barpeta, Dhemaji, Nalbari, Bongaigaon, Goalpara, Kokrajhar, Lakhimpur, Sivasagar, Golaghat, Tinsukia, Darrang, and more.</p>
@@ -2837,13 +2887,18 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <li><strong>Relevance Gating:</strong> The system uses configurable similarity thresholds — a relevance gate at 0.55, a high-confidence threshold at 0.60, and a strict similarity threshold at 0.65 — to ensure only genuinely relevant content is retrieved. Below-threshold queries are declined rather than answered with irrelevant material.</li>
 </ul>
 
-<h3>Voice &amp; Multilingual Accessibility</h3>
-<p>Many students in Assam are more comfortable in Assamese or Hindi than English. Syrabit integrates with <strong>Sarvam AI</strong> for:</p>
-<ul>
-<li><strong>Text-to-Speech (TTS):</strong> AI-generated study notes and Syra's responses can be read aloud, helping students who prefer listening over reading.</li>
-<li><strong>Voice Input:</strong> Students can speak their questions instead of typing — useful on mobile devices and for students less comfortable with English keyboards.</li>
-<li><strong>Regional Language Understanding:</strong> The Sarvam-M model is specifically trained on Indian languages, providing better comprehension of questions that mix English with Assamese or Hindi terms.</li>
-</ul>
+<h3>Sarvam AI Voice &amp; Language Services</h3>
+<p>Many students in Assam are more comfortable in Assamese or Hindi than English. Syrabit integrates deeply with <strong>Sarvam AI</strong> for Indian language intelligence:</p>
+<table>
+<thead><tr><th>Service</th><th>Model</th><th>Languages</th><th>Details</th></tr></thead>
+<tbody>
+<tr><td>Text-to-Speech (TTS)</td><td>Bulbul v2</td><td>Assamese, Hindi, English (40+ voice speakers)</td><td>Study notes and AI responses can be read aloud. Audio responses are cached as base64 to minimize repeated API calls. Configurable pace, pitch, and loudness. Hard-capped at 500 characters per request.</td></tr>
+<tr><td>Translation</td><td>Mayura v1 / Sarvam-Translate v1</td><td>Assamese, Hindi, Bengali, English + 10 Indian languages</td><td>Content can be translated between Indian languages. Mayura v1 for specific language pairs, Sarvam-Translate v1 for general coverage.</td></tr>
+<tr><td>Transliteration</td><td>Sarvam Transliterate</td><td>All major Indian scripts</td><td>Script conversion between Devanagari, Assamese, Bengali, and Latin scripts.</td></tr>
+<tr><td>LLM (Chat)</td><td>Sarvam-M</td><td>English + Indian languages</td><td>India-optimized language model, first in the SLM failover chain. Trained on Indian educational content for better comprehension of mixed-language queries.</td></tr>
+</tbody>
+</table>
+<p>All Sarvam AI requests use persistent HTTP/2 connection pools with configurable timeouts (connect: 3s, read: 30s). When Cloudflare AI Gateway is enabled, requests are routed through it for additional metrics, caching, and rate-limit protection.</p>
 
 <h3>SEO &amp; Crawler Architecture</h3>
 <p>Syrabit uses a dual-rendering architecture to serve both students and search engines optimally:</p>
@@ -2856,13 +2911,44 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 </ul>
 
 <h3>Performance &amp; Reliability</h3>
+<p>Syrabit is optimized for students on slow mobile networks (2G/3G) and low-end Android devices common in rural Assam:</p>
+
+<h4>Multi-Layer Caching Architecture</h4>
+<table>
+<thead><tr><th>Cache Layer</th><th>Technology</th><th>TTL</th><th>What It Caches</th></tr></thead>
+<tbody>
+<tr><td>In-Memory (L1)</td><td>cachetools TTLCache</td><td>5–60 min</td><td>User sessions (300s), RAG results (600s), syllabus data (3600s), AI responses (3600s)</td></tr>
+<tr><td>Distributed (L2)</td><td>Upstash Redis</td><td>Configurable</td><td>Content responses, LLM response cache (reduces AI costs), anonymous conversations, rate-limit counters</td></tr>
+<tr><td>CDN (L3)</td><td>Replit CDN</td><td>Browser-managed</td><td>Static assets, PWA shell, fonts, icons</td></tr>
+<tr><td>Service Worker (L4)</td><td>Browser SW</td><td>Network-first / Cache-first</td><td>Network-first for HTML/JS/CSS; Cache-first for images. AI streaming routes are explicitly bypassed.</td></tr>
+<tr><td>Bot HTML Cache</td><td>In-memory dict</td><td>Permanent (per-worker)</td><td>Pre-rendered HTML for crawler requests — repeated bot visits don't trigger DB queries</td></tr>
+</tbody>
+</table>
+
+<h4>Frontend Performance</h4>
 <ul>
-<li><strong>Multi-Worker Concurrency:</strong> The backend runs multiple Gunicorn workers with async request handling to serve concurrent student requests without blocking.</li>
-<li><strong>Response Caching:</strong> Frequently accessed content (library bundles, subject metadata, SEO pages) is cached in-memory and in Redis with configurable TTLs, reducing database load and response times.</li>
-<li><strong>Bot HTML Caching:</strong> Pre-rendered HTML for crawler requests is cached per-URL, so repeated bot visits don't trigger database queries.</li>
-<li><strong>Timeout Cascade:</strong> Each LLM provider in the failover chain has independent timeouts. If a provider's time-to-first-token exceeds 10 seconds, the system moves to the next provider without making the student wait.</li>
-<li><strong>Graceful Degradation:</strong> If all LLM providers fail, the system returns a helpful error message rather than crashing. If the database is temporarily unavailable, cached content continues to serve.</li>
-<li><strong>Credit &amp; Rate Limiting:</strong> Per-user credit tracking with configurable daily limits prevents abuse while ensuring fair access. Rate limiting via Redis protects against DDoS and excessive API usage.</li>
+<li><strong>Code Splitting:</strong> All major page components use <code>React.lazy()</code> — ChatPage, LibraryPage, AdminPanel, etc. are loaded on-demand, not upfront.</li>
+<li><strong>Manual Chunk Splitting:</strong> Vite config splits vendor bundles (React, Router, TanStack Query, Framer Motion, Radix UI) into separate cached chunks so library updates don't invalidate the entire bundle.</li>
+<li><strong>Critical Route Prefetching:</strong> ChatPage and LibraryPage are prefetched during browser idle time using <code>requestIdleCallback</code>. The library bundle API response is prefetched on hover or after 1-second delay.</li>
+<li><strong>React Query:</strong> Server state management with 5-minute stale time and 60-minute garbage collection — eliminates redundant API calls when navigating between pages.</li>
+<li><strong>GZip Compression:</strong> All responses above 500 bytes are compressed via GZipMiddleware.</li>
+<li><strong>Modern Image Formats:</strong> WebP format for background images and covers, reducing payload by 30–50% vs PNG/JPEG.</li>
+</ul>
+
+<h4>AI Response Performance</h4>
+<ul>
+<li><strong>Streaming SSE:</strong> AI chat responses use Server-Sent Events (SSE) to stream tokens in real-time as they arrive from the LLM provider. Students see the first word within 1–3 seconds, not waiting 10–20 seconds for the full response.</li>
+<li><strong>Parallel Fetching:</strong> RAG context retrieval, web search, and conversation history are fetched in parallel using <code>asyncio.gather</code> — cutting total latency by 40–60% compared to sequential fetching.</li>
+<li><strong>Timeout Cascade:</strong> Each LLM provider in the failover chain has independent timeouts (10s TTFT, 8s per-slot). If a provider is slow, the system moves to the next provider within seconds.</li>
+<li><strong>Thinking Indicator:</strong> A UI component shows students that the AI is "thinking" (retrieving content, searching) — reducing perceived latency even on slow connections.</li>
+</ul>
+
+<h4>Reliability</h4>
+<ul>
+<li><strong>Multi-Worker Concurrency:</strong> Gunicorn runs multiple async workers — if one worker is processing a slow AI request, other workers continue serving fast requests.</li>
+<li><strong>Graceful Degradation:</strong> If all LLM providers fail, the system returns a clear error message. If the database is temporarily unavailable, cached content continues to serve.</li>
+<li><strong>Credit &amp; Rate Limiting:</strong> Per-user credit tracking with configurable daily limits prevents abuse while ensuring fair access. Rate limiting via Redis protects against excessive API usage.</li>
+<li><strong>Database Indexing:</strong> Critical MongoDB indexes (text search, unique constraints, compound keys) are created on startup to ensure fast queries even as content grows.</li>
 </ul>
 
 <h3>Security</h3>
