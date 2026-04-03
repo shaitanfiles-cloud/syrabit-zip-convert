@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import { Analytics } from '@/utils/analytics';
 import { BookOpen, ChevronRight, ArrowLeft, ArrowRight, FileText, HelpCircle,
-  Calculator, BookMarked, Home, Sparkles, GraduationCap, Lightbulb, List, Clock, ChevronDown, Share2, Loader2 } from 'lucide-react';
+  Calculator, BookMarked, Home, Sparkles, GraduationCap, Lightbulb, List, Clock, ChevronDown, Share2, Loader2, Brain, Zap, RotateCcw } from 'lucide-react';
 import { useShare } from '@/hooks/useShare';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -61,26 +61,26 @@ function renderMarkdownWithIds(text) {
   let html = text
     .replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/^#### (.+)$/gm, (_, t) => {
-      return `<h4 id="${makeId(t)}" class="text-base font-semibold text-white mt-6 mb-3">${t}</h4>`;
+      return `<h4 id="${makeId(t)}" class="seo-h4">${t}</h4>`;
     })
     .replace(/^### (.+)$/gm, (_, t) => {
-      return `<h3 id="${makeId(t)}" class="text-lg font-semibold text-white mt-8 mb-3">${t}</h3>`;
+      return `<h3 id="${makeId(t)}" class="seo-h3">${t}</h3>`;
     })
     .replace(/^## (.+)$/gm, (_, t) => {
-      return `<h2 id="${makeId(t)}" class="text-xl font-bold text-white mt-10 mb-4 pb-2 border-b border-white/10">${t}</h2>`;
+      return `<h2 id="${makeId(t)}" class="seo-h2">${t}</h2>`;
     })
     .replace(/^# (.+)$/gm, (_, t) => {
-      return `<h2 id="${makeId(t)}" class="text-2xl font-bold text-white mt-10 mb-5">${t}</h2>`;
+      return `<h2 id="${makeId(t)}" class="seo-h1">${t}</h2>`;
     })
-    .replace(/\*\*(.+?)\*\*/g, '<strong class="text-white font-semibold">$1</strong>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/^---$/gm, '<hr class="border-white/10 my-8" />')
-    .replace(/^- (.+)$/gm, '<li class="ml-4 mb-1.5 text-gray-300 list-disc leading-relaxed">$1</li>')
-    .replace(/^(\d+)\. (.+)$/gm, '<li class="ml-4 mb-1.5 text-gray-300 list-decimal leading-relaxed" value="$1">$2</li>')
-    .replace(/`([^`]+)`/g, '<code class="bg-white/10 text-purple-300 px-1.5 py-0.5 rounded text-sm font-mono">$1</code>')
-    .replace(/\n\n/g, '</p><p class="text-gray-300 leading-[1.8] mb-4 text-[15px]">')
+    .replace(/^---$/gm, '<hr />')
+    .replace(/^- (.+)$/gm, '<li class="seo-li-disc">$1</li>')
+    .replace(/^(\d+)\. (.+)$/gm, '<li class="seo-li-decimal" value="$1">$2</li>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\n\n/g, '</p><p class="seo-p">')
     .replace(/\n/g, '<br/>');
-  return sanitizeHtml(`<p class="text-gray-300 leading-[1.8] mb-4 text-[15px]">${html}</p>`);
+  return sanitizeHtml(`<p class="seo-p">${html}</p>`);
 }
 
 function ReadingProgressBar() {
@@ -172,6 +172,139 @@ const MobileTOC = ({ items }) => {
   );
 };
 
+function extractFlashcards(content) {
+  if (!content) return [];
+  const cards = [];
+  const boldTerms = [...content.matchAll(/\*\*(.+?)\*\*/g)];
+  const seen = new Set();
+  for (const match of boldTerms) {
+    const term = match[1].trim();
+    if (term.length < 3 || term.length > 80 || seen.has(term.toLowerCase())) continue;
+    seen.add(term.toLowerCase());
+    const idx = match.index;
+    const before = content.substring(Math.max(0, idx - 200), idx);
+    const after = content.substring(idx + match[0].length, idx + match[0].length + 300);
+    const sentences = (before + match[0] + after).split(/[.!?]\s+/);
+    const relevant = sentences.filter(s => s.includes(term)).slice(0, 2).join('. ').trim();
+    const definition = relevant
+      .replace(/\*\*/g, '')
+      .replace(/^#+\s+/gm, '')
+      .replace(/^[-*]\s+/gm, '')
+      .trim();
+    if (definition.length > 20 && definition.length < 400) {
+      cards.push({ term, definition: definition + (definition.endsWith('.') ? '' : '.') });
+    }
+    if (cards.length >= 10) break;
+  }
+  return cards;
+}
+
+function extractMnemonics(content) {
+  if (!content) return [];
+  const mnemonics = [];
+  const listBlocks = [...content.matchAll(/(?:^|\n)((?:[-*]\s+.+\n?){3,})/gm)];
+  for (const block of listBlocks) {
+    const items = block[1].split('\n').map(l => l.replace(/^[-*]\s+/, '').trim()).filter(l => l.length > 2);
+    if (items.length >= 3 && items.length <= 8) {
+      const firstLetters = items.map(i => i[0].toUpperCase()).join('');
+      if (/^[A-Z]+$/.test(firstLetters)) {
+        mnemonics.push({
+          letters: firstLetters,
+          items: items.map(i => i.replace(/\*\*/g, '')),
+          hint: `Remember: ${firstLetters}`,
+        });
+      }
+    }
+    if (mnemonics.length >= 5) break;
+  }
+  return mnemonics;
+}
+
+function FlashcardSection({ cards, topicTitle }) {
+  const [flipped, setFlipped] = useState({});
+  if (!cards || cards.length === 0) return null;
+  return (
+    <div className="mt-8">
+      <div className="flex items-center gap-2 mb-4 px-1">
+        <RotateCcw size={18} className="text-blue-400" />
+        <h2 className="text-lg font-bold text-white">Flash Cards</h2>
+        <span className="text-xs text-gray-500 ml-auto">{cards.length} cards</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {cards.map((card, i) => (
+          <button
+            key={i}
+            onClick={() => setFlipped(p => ({ ...p, [i]: !p[i] }))}
+            className="text-left w-full rounded-2xl border border-white/10 p-5 transition-all duration-300 hover:border-blue-500/30 min-h-[120px] flex flex-col"
+            style={{ background: flipped[i] ? 'rgba(59,130,246,0.06)' : 'rgba(255,255,255,0.03)' }}
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+                style={{ background: flipped[i] ? 'rgba(59,130,246,0.15)' : 'rgba(139,92,246,0.12)', color: flipped[i] ? '#60a5fa' : '#a78bfa' }}>
+                {flipped[i] ? 'Answer' : 'Term'}
+              </span>
+              <span className="text-[10px] text-gray-600 ml-auto">tap to flip</span>
+            </div>
+            {flipped[i] ? (
+              <p className="text-sm text-gray-300 leading-relaxed flex-1">{card.definition}</p>
+            ) : (
+              <p className="text-base font-semibold text-white flex-1 flex items-center">{card.term}</p>
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MnemonicSection({ mnemonics, topicTitle }) {
+  if (!mnemonics || mnemonics.length === 0) return null;
+  return (
+    <div className="mt-8">
+      <div className="flex items-center gap-2 mb-4 px-1">
+        <Brain size={18} className="text-emerald-400" />
+        <h2 className="text-lg font-bold text-white">Memory Aids</h2>
+      </div>
+      <div className="space-y-3">
+        {mnemonics.map((m, i) => (
+          <div key={i} className="rounded-2xl border border-white/10 p-5" style={{ background: 'rgba(16,185,129,0.04)' }}>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="flex gap-1">
+                {m.letters.split('').map((l, j) => (
+                  <span key={j} className="w-7 h-7 rounded-lg bg-emerald-500/15 text-emerald-400 font-bold text-sm flex items-center justify-center">{l}</span>
+                ))}
+              </div>
+            </div>
+            <ul className="space-y-1.5">
+              {m.items.map((item, j) => (
+                <li key={j} className="text-sm text-gray-300 flex items-start gap-2">
+                  <span className="text-emerald-400 font-bold shrink-0 w-5">{m.letters[j]}</span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ImportantQuestionsSection({ content }) {
+  if (!content) return null;
+  return (
+    <div className="mt-8">
+      <div className="flex items-center gap-2 mb-4 px-1">
+        <HelpCircle size={18} className="text-amber-400" />
+        <h2 className="text-lg font-bold text-white">Important Questions</h2>
+      </div>
+      <div className="seo-article rounded-2xl p-5 sm:p-8">
+        <div className="article-content" dangerouslySetInnerHTML={{ __html: renderMarkdownWithIds(content) }} />
+      </div>
+    </div>
+  );
+}
+
 export default function SeoTopicPage() {
   const { board, classSlug, subjectSlug, topicSlug, pageType } = useParams();
   const navigate = useNavigate();
@@ -184,11 +317,13 @@ export default function SeoTopicPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [activeHeadingId, setActiveHeadingId] = useState('');
+  const [iqContent, setIqContent] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setIqContent(null);
 
     Promise.allSettled([
       getSeoPage(board, classSlug, subjectSlug, topicSlug, currentType),
@@ -204,9 +339,15 @@ export default function SeoTopicPage() {
 
         if (pageOk) {
           setPage(pageResult.value.data);
-          setPageTypes(typesOk ? (typesResult.value.data || []) : []);
+          const types = typesOk ? (typesResult.value.data || []) : [];
+          setPageTypes(types);
           setRelated(relatedOk ? (relatedResult.value.data || { related: [], prev: null, next: null }) : { related: [], prev: null, next: null });
           try { Analytics.seoPageView(board, classSlug, subjectSlug, topicSlug, currentType); } catch {}
+          if (currentType === 'notes' && types.some(p => p.page_type === 'important-questions')) {
+            getSeoPage(board, classSlug, subjectSlug, topicSlug, 'important-questions')
+              .then(res => { if (!cancelled) setIqContent(res.data?.content || null); })
+              .catch(() => {});
+          }
         } else {
           const err = pageResult.reason;
           const status = err?.response?.status;
@@ -232,6 +373,8 @@ export default function SeoTopicPage() {
   }, [board, classSlug, subjectSlug, topicSlug, currentType]);
 
   const tocItems = useMemo(() => extractTocItems(page?.content), [page?.content]);
+  const flashcards = useMemo(() => currentType === 'notes' ? extractFlashcards(page?.content) : [], [page?.content, currentType]);
+  const mnemonics = useMemo(() => currentType === 'notes' ? extractMnemonics(page?.content) : [], [page?.content, currentType]);
 
   useEffect(() => {
     if (!tocItems.length) return;
@@ -481,14 +624,21 @@ export default function SeoTopicPage() {
 
             <article
               ref={articleRef}
-              className="rounded-2xl border border-white/5 p-4 sm:p-6 md:p-10"
-              style={{ background: 'rgba(255,255,255,0.02)' }}
+              className="seo-article rounded-2xl p-5 sm:p-8 md:p-10"
             >
               <div
                 className="article-content"
                 dangerouslySetInnerHTML={{ __html: renderMarkdownWithIds(page.content) }}
               />
             </article>
+
+            {currentType === 'notes' && (
+              <>
+                <ImportantQuestionsSection content={iqContent} />
+                <FlashcardSection cards={flashcards} topicTitle={page.topic_title} />
+                <MnemonicSection mnemonics={mnemonics} topicTitle={page.topic_title} />
+              </>
+            )}
 
             {/* Board exam tips */}
             <div className="mt-8 bg-amber-500/5 border border-amber-500/15 rounded-2xl p-6">
