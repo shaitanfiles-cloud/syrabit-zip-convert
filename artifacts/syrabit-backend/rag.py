@@ -538,7 +538,11 @@ async def _fetch_content_card(
             if not _top_lesson_name:
                 _top_lesson_name = ch.get("title") or ""
             header = f"[Chapter: {ch.get('title', '')} | type=lesson]"
-            relevant = _extract_relevant_sections(content, keywords, max_chars=_ch_max, intent=_intent_for_extract, query=query)
+            topic_section = _extract_topic_section(content, query, query=query, max_chars=_ch_max + 500)
+            if topic_section and len(topic_section) > 50:
+                relevant = topic_section
+            else:
+                relevant = _extract_relevant_sections(content, keywords, max_chars=_ch_max, intent=_intent_for_extract, query=query)
             cards.append(f"{header}\n{relevant}")
 
         if not cards:
@@ -620,6 +624,49 @@ _INTENT_SECTION_SIGNALS: dict = {
         "header_bonus": 1.5,
     },
 }
+
+
+def _extract_topic_section(content: str, topic_name: str, query: str = "", max_chars: int = 3000) -> str:
+    """Extract a specific topic section from chapter content using heading matching."""
+    import difflib
+    lines = content.split('\n')
+    topic_lower = topic_name.lower().rstrip('.')
+    query_lower = (query or topic_name).lower()
+
+    best_start = -1
+    best_ratio = 0.0
+    for i, line in enumerate(lines):
+        stripped = line.strip().lstrip('#').strip().rstrip('.').lower()
+        stripped_no_num = re.sub(r'^\d+[\.\)]\s*', '', stripped)
+        for candidate in (stripped, stripped_no_num):
+            if not candidate:
+                continue
+            ratio = difflib.SequenceMatcher(None, topic_lower, candidate).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_start = i
+            ratio2 = difflib.SequenceMatcher(None, query_lower, candidate).ratio()
+            if ratio2 > best_ratio:
+                best_ratio = ratio2
+                best_start = i
+
+    if best_start < 0 or best_ratio < 0.5:
+        return ""
+
+    section_lines = [lines[best_start]]
+    heading_level = len(lines[best_start]) - len(lines[best_start].lstrip('#'))
+    for j in range(best_start + 1, len(lines)):
+        line = lines[j]
+        if line.strip().startswith('#'):
+            cur_level = len(line) - len(line.lstrip('#'))
+            if cur_level <= heading_level and cur_level > 0:
+                break
+        section_lines.append(line)
+
+    section = '\n'.join(section_lines).strip()
+    if len(section) > max_chars:
+        section = section[:max_chars]
+    return section if len(section) > 30 else ""
 
 
 def _extract_relevant_sections(content: str, keywords: list, max_chars: int = 2500, intent: str = "", query: str = "") -> str:
@@ -1505,6 +1552,7 @@ async def resolve_rag_context(
 
     _syllabus_sim = 0.0
     _syllabus_chapter_title = ""
+    _syllabus_topic_name = ""
     try:
         import server as _srv
         _embedder = getattr(_srv, "_syllabus_embedder", None)
@@ -1516,6 +1564,7 @@ async def resolve_rag_context(
             if _syl_match:
                 _syllabus_sim = _syl_match.similarity
                 _syllabus_chapter_title = _syl_match.chapter_title or ""
+                _syllabus_topic_name = _syl_match.topic or ""
                 logger.info(
                     f"RAG resolve: syllabus classify sim={_syllabus_sim:.3f} "
                     f"chapter='{_syllabus_chapter_title}' | query: {query[:50]}"
@@ -1658,6 +1707,10 @@ async def resolve_rag_context(
                 )
                 _ch_content = (_ch_doc or {}).get("content", "") if _ch_doc else ""
                 if _ch_content and len(_ch_content) > 50:
+                    if _syllabus_topic_name:
+                        _topic_section = _extract_topic_section(_ch_content, _syllabus_topic_name, query)
+                        if _topic_section:
+                            _ch_content = _topic_section
                     rag_ctx["content_card"] = _ch_content
                     content_card_text = _ch_content
                     _has_card = True
@@ -1677,6 +1730,7 @@ async def resolve_rag_context(
     _final_quality = rag_ctx["quality"]
     rag_ctx["intent"] = _resolved_intent
     rag_ctx["db_category"] = _db_category
+    rag_ctx["syllabus_topic_name"] = _syllabus_topic_name
 
     if _final_quality == "high":
         logger.info(f"RAG resolve: HIGH-QUALITY content (chunks: {len(rag_ctx.get('chunks', []))}, vector: {len(rag_ctx.get('vector_hits', []))}, card: {'yes' if _has_card else 'no'}, best_sim={_best_vec_sim:.3f}, intent: {_resolved_intent}) | query: {query[:50]}")
@@ -1916,9 +1970,27 @@ def build_rag_system_prompt(
       Tier 3 — Web search results (fallback when library has no content)
     """
     from prompts import build_system_prompt, _classify_question, classify_intent, _format_board_label as _fbl, get_intent_extraction_rules
+    import re as _re
     base_prompt = build_system_prompt(context, user_info=user_info, query=query)
     source      = rag_context.get("source",  "none")
     quality     = rag_context.get("quality", "none")
+
+    _has_syllabus_topic = bool(rag_context.get("syllabus_topic_name"))
+    if quality == "high" and _has_syllabus_topic:
+        base_prompt = _re.sub(
+            r'2\. OUT-OF-SCOPE GUARD:.*?(?=3\. FOCUS)',
+            '2. GROUNDING IS PRESENT: The grounding context below contains curriculum content '
+            'that matches the student\'s question. You MUST answer from it. '
+            'The student\'s wording may differ from the content (e.g. misspellings, alternate '
+            'forms) — always treat the grounding as the correct match.\n',
+            base_prompt,
+            flags=_re.DOTALL,
+        )
+        base_prompt = _re.sub(
+            r"If grounding context is empty or missing AND the question is non-academic.*?\n",
+            "",
+            base_prompt,
+        )
     chunks      = rag_context.get("chunks",   [])
     chapters    = rag_context.get("chapters", [])
     subjects    = rag_context.get("subjects", [])
@@ -2030,10 +2102,20 @@ def build_rag_system_prompt(
             _GROUNDING_BUDGET = 8000 if _intent == "syllabus" else 6000
             _budget_used = 0
 
+            _syl_topic = rag_context.get("syllabus_topic_name", "")
+            _topic_note = (
+                f" The student is asking about the syllabus topic \"{_syl_topic}\" "
+                f"(their query: \"{query[:80]}\"). "
+                "The student's wording may differ from the content — treat the grounding as the correct match."
+            ) if _syl_topic else (
+                f" The student asked: \"{query[:80]}\". "
+                "The student's wording may differ from the content headings — treat the grounding as the correct match."
+            )
             grounding += (
                 "\n\n---\n"
                 "**GROUNDING CONTEXT (Syrabit Library — PRIMARY AUTHORITY):**\n"
-                "The following content is from the student's verified curriculum database. "
+                "The following content is from the student's verified curriculum database."
+                f"{_topic_note} "
                 "This is your PRIMARY source of truth — use it as the foundation (80-90%) of your answer. "
                 "Only supplement with your own knowledge to explain, add examples, or fill minor gaps.\n\n"
             )
@@ -2041,7 +2123,8 @@ def build_rag_system_prompt(
             if content_card and _budget_used < _GROUNDING_BUDGET:
                 _card_budget = min(len(content_card), _GROUNDING_BUDGET - _budget_used)
                 _trimmed_card = content_card[:_card_budget]
-                grounding += f"**[CONTENT CARD — Full page content]:**\n{_trimmed_card}\n\n"
+                _query_label = f" (answering: {query[:80]})" if query else ""
+                grounding += f"**[CONTENT CARD{_query_label} — Full page content]:**\n{_trimmed_card}\n\n"
                 _budget_used += len(_trimmed_card)
 
             if vector_hits and _budget_used < _GROUNDING_BUDGET:
@@ -2105,7 +2188,9 @@ def build_rag_system_prompt(
                 "4. ADAPT to the student: Simplify language for board-exam students. Use analogies to make concepts click. Focus on what helps them understand and score well.\n"
                 "5. Structure: Direct answer → Explanation with examples → Key points to remember.\n"
                 "6. Do NOT add source citations inline — the system appends the SOURCE line automatically.\n"
-                "7. NEVER hallucinate or invent facts. When unsure, stick to what the grounding provides.*"
+                "7. NEVER hallucinate or invent facts. When unsure, stick to what the grounding provides.*\n\n"
+                "⚠️ MANDATORY: Grounding context IS present above. This means the topic IS in the student's curriculum. "
+                "You MUST answer from the grounding. Do NOT say 'outside your syllabus' or decline. Answer the question now."
             )
 
         else:
