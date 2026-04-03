@@ -2418,27 +2418,111 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
     if not pages:
         raise HTTPException(status_code=404, detail="No published topics for this subject")
 
-    subject_doc = await _db.subjects.find_one({"slug": subject_slug}, {"_id": 0, "name": 1})
+    board_doc = await _db.boards.find_one({"slug": board}, {"_id": 0, "id": 1})
+    subject_query = {"slug": subject_slug}
+    if board_doc:
+        subject_query["board_id"] = board_doc["id"]
+    subject_doc = await _db.subjects.find_one(
+        subject_query,
+        {"_id": 0, "name": 1, "description": 1, "id": 1},
+    )
+    if not subject_doc:
+        subject_doc = await _db.subjects.find_one(
+            {"slug": subject_slug},
+            {"_id": 0, "name": 1, "description": 1, "id": 1},
+        )
     subject_name = subject_doc["name"] if subject_doc else subject_slug.replace("-", " ").title()
+    subject_desc_raw = subject_doc.get("description", "") if subject_doc else ""
     board_label = board.upper() if board in ("ahsec", "seba") else board.title()
     class_label = class_slug.replace("-", " ").title()
 
+    chapters_docs = []
+    if subject_doc and subject_doc.get("id"):
+        chapters_docs = await _db.chapters.find(
+            {"subject_id": subject_doc["id"]},
+            {"_id": 0, "title": 1, "topics": 1, "order_index": 1},
+        ).sort("order_index", 1).to_list(50)
+
+    page_type_counts = {}
+    async for rec in _db.seo_pages.aggregate([
+        {"$match": {"board_slug": board, "class_slug": class_slug,
+                     "subject_slug": subject_slug, "status": "published"}},
+        {"$group": {"_id": "$page_type", "count": {"$sum": 1}}},
+    ]):
+        page_type_counts[rec["_id"]] = rec["count"]
+    total_notes = page_type_counts.get("notes", 0)
+    total_mcqs = page_type_counts.get("mcqs", 0)
+    total_pyqs = page_type_counts.get("important-questions", 0)
+
     page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}"
-    title = f"{subject_name} — {board_label} {class_label} Study Notes, MCQs & PYQs | Syrabit.ai"
-    desc = f"Free {subject_name} study material for {board_label} {class_label}. Topic-wise notes, MCQs, important questions, and previous year questions."
+    title = f"{subject_name} — {board_label} {class_label} Complete Study Guide | Syrabit.ai"
+    desc = (
+        f"Complete {subject_name} study guide for {board_label} {class_label} students. "
+        f"Covers {len(chapters_docs) or len(set(p.get('chapter_title','') for p in pages))} chapters with "
+        f"topic-wise notes, solved examples, MCQs, important questions, and previous year questions "
+        f"aligned to the official syllabus."
+    )
+
+    syllabus_source = ""
+    for bkey in _BOARD_SYLLABUS_SOURCE:
+        if bkey.lower() in board.lower() or bkey.lower() in board_label.lower():
+            syllabus_source = _BOARD_SYLLABUS_SOURCE[bkey]
+            break
+    if not syllabus_source:
+        syllabus_source = _BOARD_SYLLABUS_SOURCE.get("Degree", "Official board/university syllabus")
 
     by_chapter: dict = {}
     for p in pages:
         ch = p.get("chapter_title", "General")
         by_chapter.setdefault(ch, []).append(p)
 
+    subject_intro_html = ""
+    if subject_desc_raw:
+        subject_intro_html = f"<p>{html_mod.escape(subject_desc_raw)}</p>"
+
+    chapter_names = list(by_chapter.keys())
+    if not chapter_names and chapters_docs:
+        chapter_names = [c.get("title", "") for c in chapters_docs]
+
+    overview_parts = []
+    overview_parts.append(f"<h2>Course Overview</h2>")
+    if subject_intro_html:
+        overview_parts.append(subject_intro_html)
+    overview_parts.append(f"<p>This {html_mod.escape(subject_name)} course for {html_mod.escape(board_label)} {html_mod.escape(class_label)} students covers <strong>{len(chapter_names)} chapters</strong> and <strong>{len(pages)} topics</strong>. Content is prepared following the {html_mod.escape(syllabus_source)}.</p>")
+
+    stats_parts = [f"<strong>{total_notes}</strong> study notes"]
+    if total_mcqs:
+        stats_parts.append(f"<strong>{total_mcqs}</strong> MCQ sets")
+    if total_pyqs:
+        stats_parts.append(f"<strong>{total_pyqs}</strong> PYQ sets")
+    overview_parts.append(f'<p>Available resources: {", ".join(stats_parts)}.</p>')
+
+    if chapters_docs:
+        overview_parts.append("<h2>Syllabus Structure</h2>")
+        overview_parts.append("<ol>")
+        for ch in chapters_docs:
+            ch_title = html_mod.escape(ch.get("title", ""))
+            ch_topics = ch.get("topics", "")
+            if ch_topics:
+                if isinstance(ch_topics, list):
+                    topic_list = ", ".join(str(t).strip() for t in ch_topics[:5])
+                else:
+                    topic_list = ", ".join(t.strip() for t in str(ch_topics).split(",")[:5])
+                overview_parts.append(f"<li><strong>{ch_title}</strong> — {html_mod.escape(topic_list)}</li>")
+            else:
+                overview_parts.append(f"<li><strong>{ch_title}</strong></li>")
+        overview_parts.append("</ol>")
+
+    overview_html = "\n".join(overview_parts)
+
     topics_html_parts = []
+    topics_html_parts.append("<h2>Topic-wise Study Material</h2>")
     for ch, ch_pages in by_chapter.items():
-        topics_html_parts.append(f'<h2>{html_mod.escape(ch)}</h2><ul>')
+        topics_html_parts.append(f'<h3>{html_mod.escape(ch)}</h3><ul>')
         for tp in ch_pages:
             t_slug = tp.get("topic_slug", "")
             t_title = html_mod.escape(tp.get("topic_title", t_slug))
-            t_desc = html_mod.escape(tp.get("meta_description", "")[:120])
+            t_desc = html_mod.escape(tp.get("meta_description", "")[:150])
             url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{t_slug}"
             topics_html_parts.append(
                 f'<li><a href="{url}"><strong>{t_title}</strong></a>'
@@ -2447,11 +2531,49 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
         topics_html_parts.append("</ul>")
     topics_html = "\n".join(topics_html_parts)
 
+    learning_outcomes = [
+        f"Understand core concepts of {subject_name} as prescribed in the {board_label} {class_label} syllabus",
+        f"Apply theoretical knowledge to solve exam-style problems and case studies",
+        f"Review previous year questions and understand marking patterns",
+        f"Build exam confidence through topic-wise MCQs and practice questions",
+    ]
+    lo_html = "<h2>Learning Outcomes</h2><ul class='lo-list'>" + "".join(f"<li>{html_mod.escape(lo)}</li>" for lo in learning_outcomes) + "</ul>"
+
     items_ld = [
         {"@type": "ListItem", "position": i + 1, "name": p.get("topic_title", ""),
          "url": f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{p.get('topic_slug', '')}"}
         for i, p in enumerate(pages)
     ]
+
+    course_node = {
+        "@type": "Course",
+        "name": f"{subject_name} — {board_label} {class_label}",
+        "description": desc,
+        "provider": _ORG_NODE,
+        "url": page_url,
+        "educationalLevel": f"{board_label} {class_label}",
+        "inLanguage": "en-IN",
+        "isAccessibleForFree": True,
+        "numberOfCredits": len(chapters_docs) or len(by_chapter),
+        "hasCourseInstance": {
+            "@type": "CourseInstance",
+            "courseMode": "online",
+            "courseWorkload": f"{len(pages)} topics across {len(chapters_docs) or len(by_chapter)} chapters",
+        },
+        "educationalAlignment": {
+            "@type": "AlignmentObject",
+            "alignmentType": "educationalSubject",
+            "educationalFramework": syllabus_source,
+            "targetName": subject_name,
+        },
+        "teaches": [p.get("topic_title", "") for p in pages[:10]],
+        "audience": {
+            "@type": "EducationalAudience",
+            "educationalRole": "student",
+            "geographicArea": {"@type": "State", "name": "Assam, India"},
+        },
+    }
+
     schema = json.dumps({"@context": "https://schema.org", "@graph": [
         {"@type": "CollectionPage", "name": title, "description": desc, "url": page_url,
          "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
@@ -2460,6 +2582,7 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
          "audience": {"@type": "EducationalAudience", "educationalRole": "student",
                       "geographicArea": "Assam, India"},
          "educationalLevel": f"{board_label} {class_label}"},
+        course_node,
         {"@type": "ItemList", "itemListElement": items_ld},
         {"@type": "BreadcrumbList", "itemListElement": [
             {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
@@ -2482,6 +2605,8 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Syrabit.ai">
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{html_mod.escape(title)}">
+<meta name="twitter:description" content="{html_mod.escape(desc)}">
 <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
 <meta name="geo.region" content="IN-AS">
 <meta name="geo.placename" content="Assam, India">
@@ -2491,16 +2616,26 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
 <meta property="og:locale" content="en_IN">
 <meta http-equiv="content-language" content="en-IN">
 <link rel="alternate" hreflang="en-IN" href="{html_mod.escape(page_url)}">
+<meta name="citation_title" content="{html_mod.escape(title)}">
+<meta name="citation_author" content="Syrabit.ai">
+<meta name="citation_publisher" content="Syrabit.ai">
 <script type="application/ld+json">{schema}</script>
 <style>
 body{{font-family:system-ui,-apple-system,sans-serif;max-width:800px;margin:0 auto;padding:1rem;color:#1a1a1a;line-height:1.6}}
-a{{color:#2563eb;text-decoration:none}}a:hover{{text-decoration:underline}}
+a{{color:#7c3aed;text-decoration:none}}a:hover{{text-decoration:underline}}
 h1{{font-size:1.8rem;margin-bottom:.5rem}}h2{{font-size:1.3rem;margin-top:2rem;border-bottom:1px solid #e5e7eb;padding-bottom:.3rem}}
+h3{{font-size:1.1rem;margin-top:1.5rem;color:#374151}}
 ul{{list-style:none;padding:0}}li{{margin:.8rem 0;padding:.5rem;border:1px solid #e5e7eb;border-radius:6px}}
-small{{color:#6b7280}}nav{{font-size:.9rem;color:#6b7280;margin-bottom:1rem}}
+ol{{padding-left:1.5rem}}ol li{{border:none;padding:.3rem 0;margin:.3rem 0}}
+.lo-list li{{border:none;padding:.2rem 0;margin:.2rem 0;list-style:disc inside}}
+small{{color:#6b7280}}nav[aria-label="Breadcrumb"]{{font-size:.9rem;color:#6b7280;margin-bottom:1rem}}
+nav[aria-label="Breadcrumb"] a{{color:#7c3aed}}
+.stats-row{{display:flex;gap:1.5rem;margin:1rem 0;flex-wrap:wrap}}.stat-badge{{background:#f3f4f6;padding:.4rem .8rem;border-radius:6px;font-size:.9rem}}
+.content-info{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem 1.25rem;margin:2rem 0}}
+.content-info h2{{margin-top:0;font-size:1rem;color:#334155}}.content-info dt{{font-weight:600;color:#475569;margin-top:.5rem;font-size:.9rem}}.content-info dd{{margin:0 0 .25rem 0;color:#64748b;font-size:.85rem}}
 footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:.85rem;color:#9ca3af}}
 .geo-footer{{font-size:.8rem;color:#9ca3af;margin-top:.5rem}}
-@media(max-width:640px){{body{{padding:.75rem}}h1{{font-size:1.4rem}}h2{{font-size:1.1rem}}li{{padding:.4rem}}}}
+@media(max-width:640px){{body{{padding:.75rem}}h1{{font-size:1.4rem}}h2{{font-size:1.1rem}}li{{padding:.4rem}}.stats-row{{flex-direction:column;gap:.5rem}}}}
 </style>
 </head>
 <body>
@@ -2512,14 +2647,33 @@ footer{{margin-top:3rem;border-top:1px solid #e5e7eb;padding-top:1rem;font-size:
 <header>
 <h1>{html_mod.escape(subject_name)} — {html_mod.escape(board_label)} {html_mod.escape(class_label)}</h1>
 <p>{html_mod.escape(desc)}</p>
-<p><strong>{len(pages)} topics</strong> available with notes, MCQs, and important questions.</p>
+<div class="stats-row">
+<span class="stat-badge">{len(chapters_docs) or len(by_chapter)} Chapters</span>
+<span class="stat-badge">{len(pages)} Topics</span>
+<span class="stat-badge">{total_notes} Notes</span>
+{"<span class='stat-badge'>" + str(total_mcqs) + " MCQ Sets</span>" if total_mcqs else ""}
+{"<span class='stat-badge'>" + str(total_pyqs) + " PYQ Sets</span>" if total_pyqs else ""}
+</div>
 </header>
 <main>
+{overview_html}
+{lo_html}
 {topics_html}
+<section class="content-info">
+<h2>About This Study Guide</h2>
+<dl>
+<dt>Syllabus Source</dt><dd>{html_mod.escape(syllabus_source)}</dd>
+<dt>Board</dt><dd>{html_mod.escape(board_label)} — {html_mod.escape(class_label)}</dd>
+<dt>Editorial Process</dt><dd>Content is prepared by subject-matter contributors, cross-referenced with the official {html_mod.escape(board_label)} syllabus, and editorially reviewed for factual accuracy, exam relevance, and completeness.</dd>
+<dt>Publisher</dt><dd>Syrabit.ai — Academic content platform for Assam students</dd>
+</dl>
+</section>
 </main>
 <footer>
-<p>&copy; Syrabit.ai — Free syllabus-aligned exam prep for Assam Board (AHSEC/SEBA) &amp; Degree students</p>
-<p class="geo-footer">Serving students in Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, and across Assam, India</p>
+<p>Source: <a href="{html_mod.escape(page_url)}">Syrabit.ai — {html_mod.escape(subject_name)}</a></p>
+<p>&copy; Syrabit.ai — Syllabus-aligned study material for {html_mod.escape(board_label)} ({html_mod.escape(class_label)}) students</p>
+<p>Content follows the official {html_mod.escape(board_label)} curriculum. For the latest syllabus, refer to your board/university website.</p>
+<p class="geo-footer">Serving students across Assam, India — Guwahati, Jorhat, Dibrugarh, Dhemaji, Tezpur, Silchar, Nagaon, Barpeta, and more.</p>
 </footer>
 </body>
 </html>"""
@@ -2755,16 +2909,28 @@ def _page_to_entry(p: dict, today: str) -> dict | None:
 @router.get("/sitemap-index.xml", response_class=Response)
 async def get_sitemap_index():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    sitemap_names = [
+    always_include = [
         "sitemap-pages.xml",
         "sitemap-subjects.xml",
         "sitemap-learn.xml",
         "sitemap-notes.xml",
-        "sitemap-mcqs.xml",
-        "sitemap-pyqs.xml",
-        "sitemap-examples.xml",
-        "sitemap-definitions.xml",
     ]
+    type_to_sitemap = {
+        "mcqs": "sitemap-mcqs.xml",
+        "important-questions": "sitemap-pyqs.xml",
+        "examples": "sitemap-examples.xml",
+        "definition": "sitemap-definitions.xml",
+    }
+    published_types = set()
+    async for rec in _db.seo_pages.aggregate([
+        {"$match": {"status": "published", "page_type": {"$in": list(type_to_sitemap.keys())}}},
+        {"$group": {"_id": "$page_type"}},
+    ]):
+        published_types.add(rec["_id"])
+    sitemap_names = list(always_include)
+    for pt, sm_name in type_to_sitemap.items():
+        if pt in published_types:
+            sitemap_names.append(sm_name)
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
