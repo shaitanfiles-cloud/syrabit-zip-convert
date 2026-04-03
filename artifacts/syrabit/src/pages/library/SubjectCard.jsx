@@ -53,6 +53,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
     }
   }, [queryClient, sub.boardSlug, sub.classSlug, sub.slug]);
 
+  const hasWP = !!sub.thumbnailUrl;
   const [showAllChapters, setShowAllChapters] = useState(false);
   const visibleChapters = useMemo(() => showAllChapters ? chapters : chapters.slice(0, 3), [chapters, showAllChapters]);
   const moreChapters = showAllChapters ? 0 : chapters.length - 3;
@@ -102,7 +103,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           >
             <Layers size={10} className="text-white" />
           </div>
-          <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: thumbColors[0] }}>
+          <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: hasWP ? '#ffffff' : thumbColors[0] }}>
             {sub.streamName || sub.boardName || 'Subject'}
           </span>
         </div>
@@ -134,22 +135,29 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
             </div>
             <div className="min-w-0 flex-1">
               <h3
-                className="text-foreground font-bold group-hover/title:text-purple-300 transition-colors leading-tight"
-                style={{ fontSize: '0.95rem' }}
+                className="font-bold group-hover/title:text-purple-300 transition-colors leading-tight"
+                style={{
+                  fontSize: '0.95rem',
+                  color: hasWP ? '#ffffff' : 'hsl(var(--foreground))',
+                  textShadow: hasWP ? '0 1px 4px rgba(0,0,0,0.7)' : 'none',
+                }}
               >
                 {sub.name}
               </h3>
               <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-0.5">
-                <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.12)', color: 'hsl(var(--primary))' }}>
+                <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded" style={{
+                  background: hasWP ? 'rgba(255,255,255,0.15)' : 'rgba(139,92,246,0.12)',
+                  color: hasWP ? '#ffffff' : 'hsl(var(--primary))',
+                }}>
                   {sub.boardName}
                 </span>
-                <span className="text-[11px] text-muted-foreground">
+                <span className="text-[11px] font-medium" style={{ color: hasWP ? 'rgba(255,255,255,0.85)' : 'hsl(var(--muted-foreground))' }}>
                   {sub.className}
                 </span>
                 {sub.streamName && (
                   <>
-                    <span className="text-[11px] text-muted-foreground/60">·</span>
-                    <span className="text-[11px] text-muted-foreground/60">
+                    <span className="text-[11px]" style={{ color: hasWP ? 'rgba(255,255,255,0.50)' : 'hsl(var(--muted-foreground) / 0.6)' }}>·</span>
+                    <span className="text-[11px] font-medium" style={{ color: hasWP ? 'rgba(255,255,255,0.70)' : 'hsl(var(--muted-foreground) / 0.6)' }}>
                       {sub.streamName}
                     </span>
                   </>
@@ -160,7 +168,11 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         </Link>
 
         {sub.description && (
-          <p className="text-muted-foreground text-xs leading-relaxed mb-1.5 sm:mb-2 line-clamp-1 sm:line-clamp-2">
+          <p className="text-xs leading-relaxed mb-1.5 sm:mb-2 line-clamp-1 sm:line-clamp-2 font-medium"
+            style={{
+              color: hasWP ? 'rgba(255,255,255,0.80)' : 'hsl(var(--muted-foreground))',
+              textShadow: hasWP ? '0 1px 3px rgba(0,0,0,0.5)' : 'none',
+            }}>
             {sub.description}
           </p>
         )}
@@ -170,18 +182,18 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
             {visibleTags.map((tag) => (
               <span
                 key={tag}
-                className="px-2 py-0.5 rounded-full text-[10px] font-medium"
+                className="px-2 py-0.5 rounded-full text-[10px] font-semibold"
                 style={{
-                  color: 'hsl(var(--primary) / 0.8)',
-                  background: 'rgba(139,92,246,0.06)',
-                  border: '1px solid rgba(139,92,246,0.12)',
+                  color: hasWP ? '#ffffff' : 'hsl(var(--primary) / 0.8)',
+                  background: hasWP ? 'rgba(255,255,255,0.12)' : 'rgba(139,92,246,0.06)',
+                  border: hasWP ? '1px solid rgba(255,255,255,0.20)' : '1px solid rgba(139,92,246,0.12)',
                 }}
               >
                 {tag}
               </span>
             ))}
             {tags.length > 3 && (
-              <span className="text-[10px] text-muted-foreground/40 px-1">
+              <span className="text-[10px] px-1" style={{ color: hasWP ? 'rgba(255,255,255,0.50)' : 'hsl(var(--muted-foreground) / 0.4)' }}>
                 +{tags.length - 3}
               </span>
             )}
@@ -194,15 +206,16 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         <div
           className="mx-3 mb-2 sm:mb-3 rounded-xl overflow-hidden relative z-[2]"
           style={{
-            background: 'rgba(139,92,246,0.03)',
-            border: '1px solid rgba(139,92,246,0.08)',
+            background: hasWP ? 'rgba(0,0,0,0.30)' : 'rgba(139,92,246,0.03)',
+            border: hasWP ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(139,92,246,0.08)',
+            backdropFilter: hasWP ? 'blur(8px)' : 'none',
           }}
         >
           <div className="relative z-10">
-            <div className="flex items-center justify-between gap-1.5 px-3 py-1.5" style={{ borderBottom: '1px solid rgba(139,92,246,0.06)' }}>
+            <div className="flex items-center justify-between gap-1.5 px-3 py-1.5" style={{ borderBottom: hasWP ? '1px solid rgba(255,255,255,0.08)' : '1px solid rgba(139,92,246,0.06)' }}>
               <div className="flex items-center gap-1.5">
-                <Layers size={11} className="text-purple-400/60" />
-                <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wider">
+                <Layers size={11} style={{ color: hasWP ? 'rgba(255,255,255,0.70)' : undefined }} className={hasWP ? '' : 'text-purple-400/60'} />
+                <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: hasWP ? 'rgba(255,255,255,0.75)' : 'hsl(var(--muted-foreground) / 0.7)' }}>
                   {chapterCount} Lessons
                 </span>
               </div>
@@ -246,25 +259,35 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
               return (
                 <div key={ch.id || i}>
                   <div
-                    className="flex items-center gap-2 px-3 py-2.5 sm:py-2 text-xs transition-all hover:bg-purple-500/8 group/lesson"
-                    style={{ borderBottom: i < visibleChapters.length - 1 ? '1px solid rgba(139,92,246,0.05)' : 'none' }}
+                    className="flex items-center gap-2 px-3 py-2.5 sm:py-2 text-xs transition-all group/lesson"
+                    style={{
+                      borderBottom: i < visibleChapters.length - 1 ? `1px solid ${hasWP ? 'rgba(255,255,255,0.06)' : 'rgba(139,92,246,0.05)'}` : 'none',
+                    }}
                   >
                     <span
                       className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0"
-                      style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))' }}
+                      style={{
+                        background: hasWP ? 'rgba(59,130,246,0.20)' : 'rgba(139,92,246,0.10)',
+                        color: hasWP ? '#60a5fa' : 'hsl(var(--primary))',
+                      }}
                     >
                       {i + 1}
                     </span>
                     <Link
                       to={chPath}
-                      className="text-foreground/75 group-hover/lesson:text-purple-300 truncate transition-colors flex-1"
+                      className="truncate transition-colors flex-1 font-medium"
                       title={`${ch.title} — ${sub.name}`}
+                      style={{
+                        color: hasWP ? '#93c5fd' : 'hsl(var(--foreground) / 0.75)',
+                        textShadow: hasWP ? '0 1px 3px rgba(0,0,0,0.5)' : 'none',
+                      }}
                     >
                       {ch.title}
                     </Link>
                     <ExternalLink
                       size={10}
-                      className="shrink-0 text-muted-foreground/20 group-hover/lesson:text-purple-400 transition-colors"
+                      className="shrink-0 transition-colors"
+                      style={{ color: hasWP ? 'rgba(147,197,253,0.40)' : 'hsl(var(--muted-foreground) / 0.2)' }}
                     />
                   </div>
                 </div>
@@ -273,8 +296,11 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
             {moreChapters > 0 && (
               <button
                 onClick={() => setShowAllChapters(true)}
-                className="flex items-center justify-center gap-1 px-3 py-2 text-[11px] font-medium text-purple-400/70 hover:text-purple-300 hover:bg-purple-500/5 transition-colors w-full"
-                style={{ borderTop: '1px solid rgba(139,92,246,0.06)' }}
+                className="flex items-center justify-center gap-1 px-3 py-2 text-[11px] font-medium transition-colors w-full"
+                style={{
+                  borderTop: `1px solid ${hasWP ? 'rgba(255,255,255,0.06)' : 'rgba(139,92,246,0.06)'}`,
+                  color: hasWP ? 'rgba(147,197,253,0.80)' : 'rgba(167,139,250,0.70)',
+                }}
               >
                 +{moreChapters} more lessons
                 <ChevronDown size={11} />
@@ -286,16 +312,26 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
       <div
         className="grid grid-cols-2 gap-1.5 px-3 py-2.5 relative z-[2]"
-        style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
+        style={{ borderTop: `1px solid ${hasWP ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)'}` }}
       >
         <button
           onClick={() => { onToggleSave(sub.id); try { Analytics.subjectBookmarked(sub.name, !isSaved); } catch {} }}
           aria-label={isSaved ? `Unsave ${sub.name}` : `Save ${sub.name}`}
-          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95"
+          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-semibold transition-all duration-200 active:scale-95"
           style={
             isSaved
-              ? { color: 'hsl(var(--primary))', background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.25)' }
-              : { color: 'hsl(var(--muted-foreground))', background: 'transparent', border: '1px solid rgba(139,92,246,0.12)' }
+              ? {
+                  color: hasWP ? '#ffffff' : 'hsl(var(--primary))',
+                  background: hasWP ? 'rgba(139,92,246,0.25)' : 'rgba(139,92,246,0.10)',
+                  border: hasWP ? '1px solid rgba(139,92,246,0.50)' : '1px solid rgba(139,92,246,0.25)',
+                  backdropFilter: hasWP ? 'blur(6px)' : 'none',
+                }
+              : {
+                  color: hasWP ? 'rgba(255,255,255,0.85)' : 'hsl(var(--muted-foreground))',
+                  background: hasWP ? 'rgba(255,255,255,0.08)' : 'transparent',
+                  border: hasWP ? '1px solid rgba(255,255,255,0.18)' : '1px solid rgba(139,92,246,0.12)',
+                  backdropFilter: hasWP ? 'blur(6px)' : 'none',
+                }
           }
           data-testid="subject-bookmark-button"
         >
@@ -305,8 +341,13 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
         <button
           onClick={() => setShowAllChapters(prev => !prev)}
-          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5"
-          style={{ color: 'hsl(var(--muted-foreground))', border: '1px solid rgba(139,92,246,0.12)' }}
+          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-semibold transition-all duration-200 active:scale-95"
+          style={{
+            color: hasWP ? 'rgba(255,255,255,0.85)' : 'hsl(var(--muted-foreground))',
+            background: hasWP ? 'rgba(255,255,255,0.08)' : 'transparent',
+            border: hasWP ? '1px solid rgba(255,255,255,0.18)' : '1px solid rgba(139,92,246,0.12)',
+            backdropFilter: hasWP ? 'blur(6px)' : 'none',
+          }}
         >
           <BookOpen size={12} />
           {showAllChapters ? 'Collapse' : 'Browse'}
@@ -320,7 +361,9 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
             background: hasDocument
               ? 'linear-gradient(135deg, #059669, #10b981)'
               : 'linear-gradient(135deg, #7c3aed, #8b5cf6)',
-            boxShadow: '0 2px 10px rgba(139,92,246,0.20)',
+            boxShadow: hasWP
+              ? '0 2px 12px rgba(139,92,246,0.40)'
+              : '0 2px 10px rgba(139,92,246,0.20)',
           }}
           data-testid="subject-ask-ai-button"
         >
@@ -332,8 +375,13 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           onClick={handleShare}
           disabled={sharing}
           aria-label={`Share ${sub.name}`}
-          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-medium transition-all duration-200 active:scale-95 hover:bg-white/5 disabled:opacity-50"
-          style={{ color: '#94a3b8', border: '1px solid rgba(148,163,184,0.22)' }}
+          className="flex items-center justify-center gap-1.5 h-11 sm:h-9 rounded-lg text-xs font-semibold transition-all duration-200 active:scale-95 disabled:opacity-50"
+          style={{
+            color: hasWP ? 'rgba(255,255,255,0.85)' : '#94a3b8',
+            background: hasWP ? 'rgba(255,255,255,0.08)' : 'transparent',
+            border: hasWP ? '1px solid rgba(255,255,255,0.18)' : '1px solid rgba(148,163,184,0.22)',
+            backdropFilter: hasWP ? 'blur(6px)' : 'none',
+          }}
           data-testid="subject-share"
         >
           {sharing ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
