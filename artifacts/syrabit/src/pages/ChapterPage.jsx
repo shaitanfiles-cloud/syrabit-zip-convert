@@ -310,8 +310,7 @@ export default function ChapterPage() {
         <div className="flex gap-8">
           <article ref={articleRef} className="flex-1 min-w-0">
             <div
-              className="md-content rounded-2xl p-5 sm:p-8"
-              style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}
+              className="chapter-textbook rounded-2xl p-5 sm:p-8"
             >
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
