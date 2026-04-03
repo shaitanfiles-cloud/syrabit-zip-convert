@@ -1,6 +1,7 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2 } from 'lucide-react';
+import { useShare } from '@/hooks/useShare';
 import { log } from '@/utils/logger';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
@@ -10,6 +11,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
   const [reaction, setReaction] = useState(null);
   const [showComment, setShowComment] = useState(false);
   const [comment, setComment] = useState('');
+  const { share } = useShare();
   const navigate = useNavigate();
   const isUser = msg.role === 'user';
 
@@ -210,6 +212,17 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       aria-label="Comment"
                     >
                       <MessageSquare size={15} />
+                    </button>
+                    <button
+                      onClick={() => {
+                        const title = (msg.content || '').slice(0, 80) + ((msg.content || '').length > 80 ? '…' : '');
+                        share(title || 'Syrabit Chat', window.location.pathname);
+                      }}
+                      className="w-11 h-11 rounded-lg flex items-center justify-center hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+                      title="Share"
+                      aria-label="Share"
+                    >
+                      <Share2 size={15} />
                     </button>
                   </div>
                   {showComment && (
