@@ -169,15 +169,15 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const handleCreateSubject = async (name, desc) => { if (!selStream) return toast.error('Select a stream first'); await axios.post(`${API}/admin/content/subjects`, { stream_id: selStream, name, description: desc, tags: '', status: 'published' }, authHeaders(adminToken)); await load(true); toast.success('Subject created'); };
 
   const handleDelete = async (type, id) => {
-    if (!confirm(`Delete this ${type}?`)) return;
+    if (!confirm(`Delete this ${type}? This will also delete all content inside it.`)) return;
     try {
       await axios.delete(`${API}/admin/content/${type}s/${id}`, authHeaders(adminToken));
-      if (type === 'board' && selBoard === id) { setSelBoard(null); setSelClass(null); setSelStream(null); setSelSubject(null); }
-      if (type === 'classe' && selClass === id) { setSelClass(null); setSelStream(null); setSelSubject(null); }
-      if (type === 'stream' && selStream === id) { setSelStream(null); setSelSubject(null); }
-      if (type === 'subject' && selSubject === id) setSelSubject(null);
+      if (type === 'board') { if (selBoard === id) { setSelBoard(null); setSelClass(null); setSelStream(null); setSelSubject(null); } }
+      if (type === 'classe') { if (selClass === id) { setSelClass(null); setSelStream(null); setSelSubject(null); } }
+      if (type === 'stream') { setSelStream(null); setSelSubject(null); }
+      if (type === 'subject') { if (selSubject === id) setSelSubject(null); }
       await load(true); toast.success(`${type} deleted`);
-    } catch { toast.error(`Failed to delete ${type}`); }
+    } catch (e) { toast.error(e.response?.data?.detail || `Failed to delete ${type}`); }
   };
 
   const handleCreateChapter = async () => {
