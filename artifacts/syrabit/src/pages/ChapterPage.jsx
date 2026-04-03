@@ -177,18 +177,19 @@ export default function ChapterPage() {
     });
   }, [data?.title, data?.meta_description, chapterSlug, basePath, share]);
 
-  const markdownComponents = useMemo(() => ({
-    h2: ({ children, ...props }) => {
-      const text = typeof children === 'string' ? children : String(children || '');
-      const id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      return <h2 id={id} className="scroll-mt-20" {...props}>{children}</h2>;
-    },
-    h3: ({ children, ...props }) => {
-      const text = typeof children === 'string' ? children : String(children || '');
-      const id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      return <h3 id={id} className="scroll-mt-20" {...props}>{children}</h3>;
-    },
-  }), []);
+  const markdownComponents = useMemo(() => {
+    const extractText = (node) => {
+      if (typeof node === 'string') return node;
+      if (Array.isArray(node)) return node.map(extractText).join('');
+      if (node?.props?.children) return extractText(node.props.children);
+      return '';
+    };
+    const toId = (children) => extractText(children).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    return {
+      h2: ({ children, ...props }) => <h2 id={toId(children)} className="scroll-mt-20" {...props}>{children}</h2>,
+      h3: ({ children, ...props }) => <h3 id={toId(children)} className="scroll-mt-20" {...props}>{children}</h3>,
+    };
+  }, []);
 
   if (loading) {
     return (
