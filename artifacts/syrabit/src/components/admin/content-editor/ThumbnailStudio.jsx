@@ -45,7 +45,12 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
       setThumbAnalysis(res.data.analysis || null);
       setSelectedThumbVariant(res.data.auto_selected ?? 0);
       if (res.data.original_url) await onReload();
-      toast.success('AI variants generated — pick your favourite!');
+      const regionsFound = res.data.text_regions_found || 0;
+      if (regionsFound > 0) {
+        toast.success(`${regionsFound} text region${regionsFound > 1 ? 's' : ''} detected and removed — pick your favourite!`);
+      } else {
+        toast.info('No text detected — replicas are identical to original');
+      }
     } catch (err) {
       toast.error(err?.response?.data?.detail || 'AI thumbnail generation failed');
     } finally {
@@ -99,7 +104,7 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
             )}
           </div>
           <div className="flex-1 space-y-2">
-            <p className="text-xs text-white/40">Upload a book cover (PNG, JPG, WebP — max 2 MB). The AI will extract its color DNA and generate 3 copyright-safe abstract variants.</p>
+            <p className="text-xs text-white/40">Upload a book cover (PNG, JPG, WebP — max 2 MB). The AI will detect all text on it and generate 3 clean replicas with text removed.</p>
             <input ref={thumbnailInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
               onChange={async (e) => {
                 const file = e.target.files?.[0];
@@ -130,8 +135,8 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
           <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.20)' }}>
             <Loader2 size={16} className="animate-spin flex-shrink-0" style={{ color: '#a78bfa' }} />
             <div>
-              <p className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>Groq Vision analyzing color palette…</p>
-              <p className="text-[10px] mt-0.5" style={{ color: 'rgba(167,139,250,0.60)' }}>Extracting dominant colors → generating 3 abstract variants</p>
+              <p className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>Groq Vision detecting text regions…</p>
+              <p className="text-[10px] mt-0.5" style={{ color: 'rgba(167,139,250,0.60)' }}>Locating text → removing it → generating 3 clean replicas</p>
             </div>
           </div>
         )}
@@ -140,7 +145,7 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>Copyright-Safe Variants</span>
+                <span className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>Text-Free Replicas</span>
                 {thumbAnalysis?.style && (
                   <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa' }}>
                     {thumbAnalysis.style} · {thumbAnalysis.mood}
@@ -183,7 +188,7 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
                   )}
                   <div className="absolute bottom-0 left-0 right-0 text-center py-1 text-[8px] font-medium"
                     style={{ background: 'rgba(0,0,0,0.65)', color: 'rgba(255,255,255,0.55)' }}>
-                    {['Gradient Wash', 'Geometric', 'Abstract'][i]}
+                    {['Smooth Fill', 'Gradient Fill', 'Median Fill'][i]}
                   </div>
                 </div>
               ))}
@@ -191,7 +196,7 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
             <button onClick={() => handleApplyVariant(selectedThumbVariant)}
               className="w-full py-2.5 rounded-xl text-sm font-semibold text-white"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', boxShadow: '0 2px 10px rgba(124,58,237,0.30)' }}>
-              Apply "{['Gradient Wash', 'Geometric', 'Abstract'][selectedThumbVariant]}" as Thumbnail
+              Apply "{['Smooth Fill', 'Gradient Fill', 'Median Fill'][selectedThumbVariant]}" as Thumbnail
             </button>
           </div>
         )}

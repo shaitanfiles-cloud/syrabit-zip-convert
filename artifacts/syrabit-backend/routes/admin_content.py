@@ -467,12 +467,12 @@ def _extract_dominant_colors(img_bytes: bytes, n: int = 5) -> list:
 
 
 async def _analyze_with_groq_vision(b64_img: str, mime: str = "image/jpeg") -> dict:
-    """Call Groq vision model to get color/style analysis of a cover image."""
+    """Call Groq vision model to get color/style analysis AND text bounding boxes."""
     if not _GROQ_KEY:
         return {}
     try:
         import httpx as _httpx
-        async with _httpx.AsyncClient(timeout=25) as _c:
+        async with _httpx.AsyncClient(timeout=30) as _c:
             resp = await _c.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {_GROQ_KEY}", "Content-Type": "application/json"},
@@ -483,17 +483,28 @@ async def _analyze_with_groq_vision(b64_img: str, mime: str = "image/jpeg") -> d
                         "content": [
                             {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64_img}"}},
                             {"type": "text", "text": (
-                                "Analyze this book cover. Return ONLY valid JSON (no extra text):\n"
+                                "Analyze this book/textbook cover image. I need TWO things:\n"
+                                "1) Color analysis of the image\n"
+                                "2) Bounding boxes of ALL text regions (title, subtitle, author, edition, publisher, etc.)\n\n"
+                                "Return ONLY valid JSON (no extra text):\n"
                                 "{\"dominant_colors\":[\"#hex1\",\"#hex2\",\"#hex3\"],"
                                 "\"secondary_colors\":[\"#hex4\",\"#hex5\"],"
                                 "\"style\":\"minimalist|bold|academic|colorful|dark|light\","
                                 "\"mood\":\"serious|vibrant|calm|educational|professional\","
                                 "\"bg_is_dark\":true,"
-                                "\"accent_color\":\"#hex\"}"
+                                "\"accent_color\":\"#hex\","
+                                "\"text_regions\":["
+                                "{\"x_pct\":10,\"y_pct\":5,\"w_pct\":80,\"h_pct\":12,\"label\":\"title\"},"
+                                "{\"x_pct\":20,\"y_pct\":85,\"w_pct\":60,\"h_pct\":8,\"label\":\"author\"}"
+                                "]}\n\n"
+                                "text_regions: each box as percentage of image dimensions (0-100). "
+                                "x_pct=left edge %, y_pct=top edge %, w_pct=width %, h_pct=height %. "
+                                "Include EVERY text element you can see. Be generous with box sizes — "
+                                "make each box slightly larger than the text to ensure full coverage."
                             )}
                         ]
                     }],
-                    "max_tokens": 250,
+                    "max_tokens": 600,
                     "temperature": 0.05,
                 },
             )
@@ -507,69 +518,178 @@ async def _analyze_with_groq_vision(b64_img: str, mime: str = "image/jpeg") -> d
     return {}
 
 
-def _generate_abstract_variant(colors: list, variant: int, size=(400, 600)) -> str:
-    """
-    Generate a copyright-safe abstract educational background using PIL.
-    Returns a PNG data URL (~120-200 KB).
-    """
-    from PIL import Image, ImageDraw, ImageFilter
-    import io as _io, math as _math
+def _sanitize_text_regions(raw_regions: list) -> list:
+    """Validate and normalize text_regions from Vision API. Skips invalid entries."""
+    clean = []
+    if not isinstance(raw_regions, list):
+        return clean
+    for r in raw_regions:
+        if not isinstance(r, dict):
+            continue
+        try:
+            x = float(str(r.get("x_pct", 0)).replace("%", ""))
+            y = float(str(r.get("y_pct", 0)).replace("%", ""))
+            w = float(str(r.get("w_pct", 0)).replace("%", ""))
+            h = float(str(r.get("h_pct", 0)).replace("%", ""))
+            x = max(0, min(100, x))
+            y = max(0, min(100, y))
+            w = max(1, min(100 - x, w))
+            h = max(1, min(100 - y, h))
+            if w < 1 or h < 1:
+                continue
+            clean.append({"x_pct": x, "y_pct": y, "w_pct": w, "h_pct": h, "label": str(r.get("label", ""))})
+        except (TypeError, ValueError):
+            continue
+    return clean
 
-    W, H = size
-    palette = [_hex_to_rgb(c) for c in (colors or ['#7c3aed', '#1e1b4b', '#f8fafc'])]
-    while len(palette) < 5:
-        palette.append(palette[-1])
 
-    img = Image.new('RGB', (W, H))
-    draw = ImageDraw.Draw(img, 'RGBA')
+def _inpaint_region(img, box, method=0):
+    """
+    Inpaint a rectangular region of the image by sampling surrounding pixels.
+    box = (x0, y0, x1, y1) in pixel coords.
+    method: 0=gaussian blur fill, 1=edge-color gradient, 2=median + blur
+    """
+    from PIL import Image, ImageFilter, ImageDraw
+    import random as _rand
+
+    W, H = img.size
+    x0 = max(0, int(box[0]))
+    y0 = max(0, int(box[1]))
+    x1 = min(W, int(box[2]))
+    y1 = min(H, int(box[3]))
+
+    if x1 <= x0 or y1 <= y0:
+        return img
+
+    rw = x1 - x0
+    rh = y1 - y0
+    margin = max(4, min(rw, rh) // 6)
+
+    border_pixels = []
+    for x in range(max(0, x0 - margin), min(W, x1 + margin)):
+        for dy in range(margin):
+            if 0 <= y0 - margin + dy < H:
+                border_pixels.append(img.getpixel((x, y0 - margin + dy)))
+            if 0 <= y1 + dy < H:
+                border_pixels.append(img.getpixel((x, y1 + dy)))
+    for y in range(max(0, y0 - margin), min(H, y1 + margin)):
+        for dx in range(margin):
+            if 0 <= x0 - margin + dx < W:
+                border_pixels.append(img.getpixel((x0 - margin + dx, y)))
+            if 0 <= x1 + dx < W:
+                border_pixels.append(img.getpixel((x1 + dx, y)))
+
+    if not border_pixels:
+        border_pixels = [(128, 128, 128)]
+
+    if method == 0:
+        patch = img.crop((max(0, x0 - margin * 2), max(0, y0 - margin * 2),
+                          min(W, x1 + margin * 2), min(H, y1 + margin * 2)))
+        blurred = patch.filter(ImageFilter.GaussianBlur(radius=max(rw, rh) // 2 + 4))
+        bx0 = max(0, x0 - margin * 2)
+        by0 = max(0, y0 - margin * 2)
+        crop_x0 = x0 - bx0
+        crop_y0 = y0 - by0
+        fill_patch = blurred.crop((crop_x0, crop_y0, crop_x0 + rw, crop_y0 + rh))
+        img.paste(fill_patch, (x0, y0))
+
+    elif method == 1:
+        top_colors = []
+        bottom_colors = []
+        left_colors = []
+        right_colors = []
+
+        for x in range(x0, x1):
+            if y0 > 0:
+                top_colors.append(img.getpixel((x, max(0, y0 - 1))))
+            if y1 < H:
+                bottom_colors.append(img.getpixel((x, min(H - 1, y1))))
+        for y in range(y0, y1):
+            if x0 > 0:
+                left_colors.append(img.getpixel((max(0, x0 - 1), y)))
+            if x1 < W:
+                right_colors.append(img.getpixel((min(W - 1, x1), y)))
+
+        def avg_color(pixels):
+            if not pixels:
+                return (128, 128, 128)
+            r = sum(p[0] for p in pixels) // len(pixels)
+            g = sum(p[1] for p in pixels) // len(pixels)
+            b = sum(p[2] for p in pixels) // len(pixels)
+            return (r, g, b)
+
+        tc = avg_color(top_colors)
+        bc = avg_color(bottom_colors)
+        lc = avg_color(left_colors)
+        rc = avg_color(right_colors)
+
+        patch = Image.new('RGB', (rw, rh))
+        for py in range(rh):
+            for px in range(rw):
+                ty = py / max(1, rh - 1)
+                tx = px / max(1, rw - 1)
+                vr = int(tc[0] * (1 - ty) + bc[0] * ty)
+                vg = int(tc[1] * (1 - ty) + bc[1] * ty)
+                vb = int(tc[2] * (1 - ty) + bc[2] * ty)
+                hr = int(lc[0] * (1 - tx) + rc[0] * tx)
+                hg = int(lc[1] * (1 - tx) + rc[1] * tx)
+                hb = int(lc[2] * (1 - tx) + rc[2] * tx)
+                fr = (vr + hr) // 2
+                fg = (vg + hg) // 2
+                fb = (vb + hb) // 2
+                patch.putpixel((px, py), (fr, fg, fb))
+        patch = patch.filter(ImageFilter.GaussianBlur(radius=2))
+        img.paste(patch, (x0, y0))
+
+    elif method == 2:
+        expanded = img.crop((max(0, x0 - margin * 3), max(0, y0 - margin * 3),
+                             min(W, x1 + margin * 3), min(H, y1 + margin * 3)))
+        median = expanded.filter(ImageFilter.MedianFilter(size=5))
+        blurred = median.filter(ImageFilter.GaussianBlur(radius=max(rw, rh) // 3 + 3))
+        bx0 = max(0, x0 - margin * 3)
+        by0 = max(0, y0 - margin * 3)
+        crop_x0 = x0 - bx0
+        crop_y0 = y0 - by0
+        fill_patch = blurred.crop((crop_x0, crop_y0, crop_x0 + rw, crop_y0 + rh))
+        img.paste(fill_patch, (x0, y0))
+
+    return img
+
+
+def _remove_text_variant(img_bytes: bytes, text_regions: list, variant: int) -> str:
+    """
+    Create a text-free replica of the source image using PIL inpainting.
+    variant 0 = gaussian blur fill
+    variant 1 = edge-color gradient fill
+    variant 2 = median + blur fill
+    Returns a PNG data URL.
+    """
+    from PIL import Image, ImageFilter
+    import io as _io
+
+    img = Image.open(_io.BytesIO(img_bytes)).convert('RGB')
+    W, H = img.size
+
+    padding_pct = [3, 4, 5][variant]
+
+    for region in text_regions:
+        x_pct = region.get("x_pct", 0)
+        y_pct = region.get("y_pct", 0)
+        w_pct = region.get("w_pct", 0)
+        h_pct = region.get("h_pct", 0)
+
+        px = max(0, int((x_pct - padding_pct) / 100 * W))
+        py = max(0, int((y_pct - padding_pct) / 100 * H))
+        pw = min(W, int((x_pct + w_pct + padding_pct) / 100 * W))
+        ph = min(H, int((y_pct + h_pct + padding_pct) / 100 * H))
+
+        img = _inpaint_region(img, (px, py, pw, ph), method=variant)
 
     if variant == 0:
-        # ── Gradient Wash + bokeh ──────────────────────────────────────────
-        c1, c2 = palette[0], palette[1]
-        for y in range(H):
-            t = y / H
-            r = int(c1[0] * (1 - t) + c2[0] * t)
-            g = int(c1[1] * (1 - t) + c2[1] * t)
-            b = int(c1[2] * (1 - t) + c2[2] * t)
-            draw.line([(0, y), (W, y)], fill=(r, g, b))
-        # bokeh circles
-        spots = [(80, 120, 110), (320, 480, 150), (200, 300, 80), (350, 100, 60)]
-        for (cx, cy, rad), col in zip(spots, [palette[2], palette[3], palette[4], palette[1]]):
-            draw.ellipse([cx - rad, cy - rad, cx + rad, cy + rad], fill=(*col, 55))
-        img = img.filter(ImageFilter.GaussianBlur(2))
-
-    elif variant == 1:
-        # ── Geometric Blocks ───────────────────────────────────────────────
-        img.paste(palette[1], [0, 0, W, H])
-        # upper band
-        draw.rectangle([0, 0, W, H // 3], fill=(*palette[0], 255))
-        # diagonal cut
-        draw.polygon([(0, H // 3), (W, H // 4), (W, H // 3), (0, H // 3 + 40)], fill=(*palette[2], 200))
-        # accent rectangles
-        rects = [(30, H // 2, 120, H // 2 + 90), (W - 140, 60, W - 30, 160), (150, H - 160, 280, H - 40)]
-        for rx0, ry0, rx1, ry1 in rects:
-            draw.rectangle([rx0, ry0, rx1, ry1], fill=(*palette[3], 100))
-        # thin lines
-        for i in range(0, W, 35):
-            draw.line([(i, 0), (i + 60, H)], fill=(*palette[4], 40), width=1)
-        img = img.filter(ImageFilter.GaussianBlur(1))
-
+        img = img.filter(ImageFilter.GaussianBlur(radius=0.5))
     elif variant == 2:
-        # ── Layered Abstract Circles ──────────────────────────────────────
-        img.paste(palette[0], [0, 0, W, H])
-        circles = [
-            (W * 0.75, H * 0.25, 220, palette[1], 130),
-            (W * 0.20, H * 0.65, 180, palette[2], 110),
-            (W * 0.55, H * 0.55, 150, palette[3], 90),
-            (W * 0.10, H * 0.15, 100, palette[4], 70),
-            (W * 0.85, H * 0.80, 130, palette[1], 80),
-        ]
-        for (cx, cy, r, col, alpha) in circles:
-            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(*col, alpha))
-        img = img.filter(ImageFilter.GaussianBlur(3))
-        # sharp geometric overlay
-        overlay_draw = ImageDraw.Draw(img)
-        overlay_draw.rectangle([0, H * 0.72, W, H], fill=(*palette[0], 180))
+        from PIL import ImageEnhance
+        img = ImageEnhance.Sharpness(img).enhance(1.1)
 
     buf = _io.BytesIO()
     img.save(buf, format='PNG', optimize=True)
@@ -623,12 +743,14 @@ async def generate_cms_thumbnails(
         colors = pil_colors[:5]
         analysis = {"dominant_colors": colors, "style": "educational", "mood": "academic"}
 
-    # ── Generate 3 abstract variants in parallel ────────────────────────────
+    text_regions = _sanitize_text_regions(analysis.get("text_regions", []))
+
+    # ── Generate 3 text-free replica variants in parallel ───────────────────
     loop = asyncio.get_event_loop()
     variants = await asyncio.gather(
-        loop.run_in_executor(None, _generate_abstract_variant, colors, 0),
-        loop.run_in_executor(None, _generate_abstract_variant, colors, 1),
-        loop.run_in_executor(None, _generate_abstract_variant, colors, 2),
+        loop.run_in_executor(None, _remove_text_variant, img_bytes_resized, text_regions, 0),
+        loop.run_in_executor(None, _remove_text_variant, img_bytes_resized, text_regions, 1),
+        loop.run_in_executor(None, _remove_text_variant, img_bytes_resized, text_regions, 2),
     )
 
     # ── Persist thumbnail_variants to cms_documents ─────────────────────────
@@ -704,9 +826,9 @@ async def generate_ai_thumbnails(
         img_bytes_resized = img_bytes
 
     b64_src = base64.b64encode(img_bytes_resized).decode()
-    original_url = f"data:{mime_type};base64,{b64_src}"
+    original_url = f"data:image/png;base64,{b64_src}"
 
-    # ── Step 1: Groq Vision analysis (best-effort) ────────────────────────
+    # ── Step 1: Groq Vision analysis — colors + text bounding boxes ──────
     analysis = await _analyze_with_groq_vision(b64_src, "image/png")
 
     # ── Step 2: PIL color extraction (always-on fallback) ─────────────────
@@ -719,12 +841,14 @@ async def generate_ai_thumbnails(
         colors = pil_colors[:5]
         analysis = {"dominant_colors": colors, "style": "educational", "mood": "academic"}
 
-    # ── Step 3: Generate 3 abstract variants ──────────────────────────────
+    text_regions = _sanitize_text_regions(analysis.get("text_regions", []))
+
+    # ── Step 3: Generate 3 text-free replica variants ─────────────────────
     loop = asyncio.get_event_loop()
     variants = await asyncio.gather(
-        loop.run_in_executor(None, _generate_abstract_variant, colors, 0),
-        loop.run_in_executor(None, _generate_abstract_variant, colors, 1),
-        loop.run_in_executor(None, _generate_abstract_variant, colors, 2),
+        loop.run_in_executor(None, _remove_text_variant, img_bytes_resized, text_regions, 0),
+        loop.run_in_executor(None, _remove_text_variant, img_bytes_resized, text_regions, 1),
+        loop.run_in_executor(None, _remove_text_variant, img_bytes_resized, text_regions, 2),
     )
 
     # ── Step 4: Persist to MongoDB ─────────────────────────────────────────
@@ -745,12 +869,15 @@ async def generate_ai_thumbnails(
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }},
     )
-    logger.info(f"AI thumbnails generated for subject {subject_id}: {len(colors)} colors extracted")
+    text_found = len(text_regions) > 0
+    logger.info(f"AI thumbnails generated for subject {subject_id}: {len(text_regions)} text regions detected, {len(colors)} colors")
     return {
         "original_url":  original_url,
         "variants":      list(variants),
         "analysis":      analysis,
         "auto_selected": 0,
+        "text_regions_found": len(text_regions),
+        "text_detection_status": "detected" if text_found else "none_found",
     }
 
 
@@ -820,11 +947,12 @@ async def generate_ai_thumbnails_bulk(
             b64_src = base64.b64encode(img_bytes_r).decode()
             analysis = await _analyze_with_groq_vision(b64_src, "image/png")
             all_colors = (analysis.get("dominant_colors", [])[:3] + pil_colors)[:5] or pil_colors
+            text_regions = _sanitize_text_regions(analysis.get("text_regions", []))
             loop = asyncio.get_event_loop()
             variants = await asyncio.gather(
-                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 0),
-                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 1),
-                loop.run_in_executor(None, _generate_abstract_variant, all_colors, 2),
+                loop.run_in_executor(None, _remove_text_variant, img_bytes_r, text_regions, 0),
+                loop.run_in_executor(None, _remove_text_variant, img_bytes_r, text_regions, 1),
+                loop.run_in_executor(None, _remove_text_variant, img_bytes_r, text_regions, 2),
             )
             thumbnails_data = {
                 "original_url": data_url,
