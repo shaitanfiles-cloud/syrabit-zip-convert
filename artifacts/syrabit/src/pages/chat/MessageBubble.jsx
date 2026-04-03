@@ -155,35 +155,38 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     <div
                       onClick={subjectUrl ? () => navigate(subjectUrl) : undefined}
                       className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
-                      style={{ background: 'var(--card, rgba(20,20,30,0.9))', border: '1px solid rgba(74,222,128,0.15)', maxWidth: 'fit-content' }}
+                      style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.14)', maxWidth: 'fit-content' }}
                       role={subjectUrl ? 'link' : undefined}
                       aria-label={subjectUrl ? `View ${subjectLabel}` : undefined}
                     >
                       <div className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5 mb-1">
-                          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#4ade80', opacity: 0.7 }}>Source</span>
-                          <span className="text-[10px]" style={{ color: 'hsl(var(--foreground) / 0.25)' }}>·</span>
-                          <span className="text-[10.5px] font-medium" style={{ color: '#86efac' }}>Syrabit Browser</span>
+                          <BookOpen size={11} style={{ color: '#a78bfa' }} />
+                          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#a78bfa', opacity: 0.8 }}>Source</span>
+                          <span className="text-[10px]" style={{ color: 'hsl(var(--foreground) / 0.2)' }}>·</span>
+                          <span className="text-[10.5px] font-medium" style={{ color: '#c4a882' }}>Syrabit Browser</span>
                         </div>
                         {lessonLabel && (
-                          <h4 className="font-bold leading-tight truncate" style={{ fontSize: '0.95rem', textTransform: 'uppercase', letterSpacing: '0.03em', color: '#4ade80' }}>
+                          <h4 className="font-semibold leading-tight truncate" style={{ fontSize: '0.85rem', letterSpacing: '0.01em', color: '#4ade80' }}>
                             {lessonLabel}
                           </h4>
                         )}
-                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1">
-                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>
+                        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1.5">
+                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
                             {subjectLabel}
                           </span>
                           {classLabel && (
                             <>
-                              <span className="text-[11px] text-muted-foreground/60">·</span>
-                              <span className="text-[11px] text-muted-foreground">{classLabel}</span>
+                              <span className="text-[11px] text-muted-foreground/40">·</span>
+                              <span className="text-[11px]" style={{ color: 'hsl(var(--foreground) / 0.5)' }}>Semester</span>
+                              <span className="text-[11px] text-muted-foreground/40">·</span>
+                              <span className="text-[11px]" style={{ color: 'hsl(var(--foreground) / 0.5)' }}>{classLabel}</span>
                             </>
                           )}
                           {courseLabel && (
                             <>
-                              <span className="text-[11px] text-muted-foreground/60">·</span>
-                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(74,222,128,0.1)', color: '#4ade80' }}>
+                              <span className="text-[11px] text-muted-foreground/40">·</span>
+                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
                                 {courseLabel}
                               </span>
                             </>
