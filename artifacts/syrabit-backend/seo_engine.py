@@ -117,104 +117,139 @@ PROMPT_VARIANTS = {
 
 Topic: {topic}
 Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
+Primary keyword: "{topic} notes {board} {class_name}"
+
+IMPORTANT SEO & WRITING RULES:
+- First paragraph must be 2-3 sentences MAX, keyword-focused, starting with "{topic}" directly
+- Use keyword variations naturally: "{topic} notes", "{topic} summary", "{topic} {subject} notes {class_name}", "{topic} important points"
+- Add human touches: "In simple terms…", "You can remember this as…", "Many students confuse X and Y — here's the difference.", "This is one of the most important topics for exams."
+- When mentioning other units/chapters, name them clearly (e.g., "Unit I: Introduction to..." or "Unit III: ...")
+- Include featured-snippet-ready sections with quick direct answers
 
 Write study notes using EXACTLY this structure — all sections required:
 
-## Summary
-[40-60 words: what {topic} is within the chapter "{chapter}", why it matters for the {board} syllabus, and its importance for the {board} exam. Start with "In the {board} {class_name} {subject} syllabus, under {chapter}..."]
+## What is {topic}? (Quick Answer)
+[2-3 sentences ONLY. Direct, keyword-rich definition suitable for Google featured snippet. Start with "{topic} is..." or "{topic} refers to...". End with its relevance to {board} {class_name} {subject}.]
 
-## Definition
-[Precise academic definition in 2-3 sentences using standard {board} terminology. Cite the textbook: "As defined in the NCERT/SCERT {subject} textbook prescribed for {board} {class_name}..."]
+## {topic} — Detailed Notes for {board} {class_name}
+[250-350 words. Cover core concepts, sub-topics, and connections to other topics in "{chapter}". Use natural student-friendly language with occasional informal lines like "Think of it this way..." or "Here's a tip that saves marks in exams." Include at least one Assam/Northeast India example if relevant. Reference how this topic builds on or leads to related syllabus topics by NAME.]
 
-## Explanation
-[Detailed explanation 250-350 words. Cover core concepts, sub-topics, and how {topic} connects to other topics in the chapter "{chapter}". Include at least one citation like "As per the {board} {class_name} curriculum for {subject}..." and reference how this topic builds on or leads to related syllabus topics]
+## Key Points for Revision
+[6-8 bullet points for last-minute revision. Each starts with an action verb. Add one bullet like "Don't confuse [X] with [Y] — examiners love testing this."]
 
 ## Solved Examples
 Example 1: [Complete step-by-step solution relevant to {board} exam pattern]
-Example 2: [Complete step-by-step solution]
-Example 3: [Complete step-by-step solution — use Assam/Northeast India context if naturally applicable]
+Example 2: [Complete step-by-step solution — use Assam context if applicable]
 
-## Exam-Style Questions
-[5 questions commonly asked in {board} {class_name} exams on {topic}, with model answers — include 1-mark, 2-mark, and 3-5 mark types matching the {board} paper pattern. Format: "Q (X marks): ..."]
-
-## Key Points
-[6-8 bullet points for last-minute revision before the {board} exam, organized by mark-value importance]
+## Exam-Style Questions with Answers
+[5 questions with model answers — include 1-mark, 2-mark, and 5-mark types. Format each as "Q (X marks): ..." Add a note like "This type of question appeared in [recent year] {board} exam."]
 
 ## Frequently Asked Questions
-Q1: What is {topic} in {subject} ({chapter})?
-A1: [Concise answer citing {board} syllabus]
-Q2: Why is {topic} important for {board} exams?
-A2: [Answer with exam frequency and mark allocation data]
-Q3: How does {topic} connect to other topics in {chapter}?
-A3: [Show syllabus connections]
+Q1: What is {topic}? (1-mark answer)
+A1: [Crisp 1-line answer]
+Q2: Define {topic} in {subject}.
+A2: [2-sentence definition]
+Q3: Why is {topic} important for {board} exams?
+A3: [Answer with exam relevance]
+Q4: What are the key features of {topic}?
+A4: [3-4 features as bullet points]
 
-Language: simple and clear for {class_name} students in Assam. Every section must be complete and exam-focused. Use authoritative framing throughout.""",
+Language: simple, clear, and exam-focused for {class_name} students in Assam. Sound like a helpful teacher, not a textbook.""",
 
         """You are a {subject} expert specialising in {board} {class_name} exam preparation.
 
 Topic: {topic}
 Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
+Primary keyword: "{topic} notes {board} {class_name}"
 
-Write comprehensive study notes. Begin with a real-world context that makes the topic relatable, then build towards the formal definition. Use EXACTLY this structure:
+SEO & WRITING RULES:
+- Opening must be concise (2-3 sentences), keyword-rich, starting with the topic name
+- Naturally include search terms: "{topic} notes", "{topic} summary", "{topic} {subject} notes", "{topic} important questions"
+- Add student-friendly lines: "Many students find this tricky — but it's actually straightforward.", "Pro tip:", "Common mistake:"
+- Name other units/chapters explicitly when cross-referencing
+
+Write comprehensive study notes using EXACTLY this structure:
+
+## {topic} — Overview
+[2-3 sentences ONLY. Start with "{topic}" directly. State what it is, which chapter it belongs to, and why it matters for {board} {class_name} exams. This is your featured snippet paragraph.]
 
 ## Why {topic} Matters
-[50-70 words: start with a real-world scenario or analogy — preferably from Assam/Northeast India context if naturally relevant — that connects {topic} to everyday life, then link to its importance in {board} {class_name} {subject}, chapter "{chapter}"]
+[50-70 words: real-world scenario from Assam/Northeast India context connecting {topic} to everyday life, then link to {board} importance. Add a line like "This is one of the most scoring topics in {subject}."]
 
 ## Core Concept
-[Formal definition in 2-3 sentences citing {board} curriculum. Then a simplified re-explanation in student-friendly language. Mention where {topic} sits within the chapter "{chapter}" and what prerequisite knowledge is needed]
+[Formal definition citing {board} curriculum. Then simplified: "In simple terms, {topic} means..." Mention prerequisite knowledge needed.]
 
 ## Detailed Breakdown
-[300-400 words. Break the topic into 3-4 sub-concepts. Use numbered sub-headings like "1. First aspect", "2. Second aspect". For each sub-concept, include one real-world application. Reference connections to other topics in the same chapter where relevant]
+[300-400 words. Break into 3-4 numbered sub-concepts. For each, include one real-world application. Add informal touches: "You can remember this as...", "A common exam mistake here is...". Cross-reference other units by name.]
 
 ## Key Points for Revision
-[6-8 crisp bullet points — exam-ready, each starting with an action verb. Organized by {board} mark-value importance]
+[6-8 crisp bullet points — exam-ready, action verbs. Include one "Don't confuse X with Y" point.]
 
 ## Worked Examples
 Example 1: [Problem + full solution matching {board} exam standard]
 Example 2: [Problem + full solution]
 
 ## Exam Corner
-[4 exam-style questions with model answers matching {board} paper pattern: 2× short answer (2 marks), 2× long answer (5 marks). Format: "Q (X marks): ..."]
+[4 questions with model answers: 2× short (2 marks), 2× long (5 marks). Add tips like "Examiners expect you to mention..." for each.]
 
 ## FAQ
-Q1: How is {topic} different from [closely related concept in {chapter}]?
-A1: [Precise comparison]
-Q2: What are common mistakes students make with {topic}?
-A2: [2-3 common errors and how to avoid them]
+Q1: What is {topic}? (Define in one line)
+A1: [Single crisp sentence]
+Q2: What are the main features of {topic}?
+A2: [3-4 features]
+Q3: How is {topic} different from [related concept in {chapter}]?
+A3: [Precise comparison]
+Q4: What are common mistakes students make with {topic}?
+A4: [2-3 common errors]
 
-Write for {class_name} students in Assam. Be specific — avoid vague generalities.""",
+Write for {class_name} students in Assam. Be specific, helpful, and slightly conversational.""",
 
         """You are a senior {board} examiner and {subject} faculty.
 
 Topic: {topic}
 Subject: {subject} | Chapter: {chapter} | Class: {class_name} | Board: {board}
+Primary keyword: "{topic} notes {board} {class_name}"
 
-Create study notes from an examiner's perspective. Use EXACTLY this structure:
+SEO & WRITING RULES:
+- First paragraph: 2-3 sentences, keyword-rich, starts with "{topic}"
+- Include variations: "{topic} notes PDF", "{topic} summary", "{topic} {subject} notes {class_name}"
+- Human signals: "This is arguably the most important concept in {chapter}.", "Here's what most toppers do...", "Don't skip this section."
+- Name all cross-referenced units/chapters explicitly
+
+Create study notes from an examiner's perspective using EXACTLY this structure:
+
+## {topic} — Quick Summary
+[2-3 sentences ONLY. Direct definition starting with "{topic}". State chapter, subject, board context. Featured-snippet optimized.]
 
 ## At a Glance
-[A compact table or structured summary: What it is | Chapter: {chapter} | Why it matters | {board} exam weight | Key formula/rule (if any) | Prerequisite topics]
+- **Topic**: {topic}
+- **Chapter**: {chapter}
+- **Subject**: {subject} ({board} {class_name})
+- **Exam Weight**: [estimated marks]
+- **Key Formula/Rule**: [if any]
+- **Related Topics**: [name 2-3 from same/nearby chapters]
 
 ## The Basics
-[Academic definition with textbook citation from the {board}-prescribed {subject} textbook, followed by 2-3 sentence plain-English explanation. Note where this topic falls in the chapter "{chapter}" syllabus sequence]
+[Academic definition with textbook citation. Then plain-English: "In simple terms..." Note prerequisite topics by name.]
 
 ## Deep Dive
-[250-350 words exploring the topic thoroughly. Use a cause-and-effect or chronological flow rather than bullet lists. Include cross-references to related topics within "{chapter}" and other chapters in {board} {class_name} {subject} syllabus]
+[250-350 words. Cause-and-effect or chronological flow. Include cross-references to other chapters BY NAME. Add: "Many students confuse this with... — here's how to tell them apart." and "A helpful way to remember this is..."]
 
 ## Common Exam Patterns
-[Describe how {board} examiners typically frame questions on {topic}: what types appear (MCQ, short answer, long answer) matching the {board} paper pattern, what traps to watch for, what earns full marks, and typical mark allocations]
+[How {board} examiners frame questions. What traps to watch for. What earns full marks. Add: "Pro tip: Always mention [X] in your answer — it's worth 1 extra mark."]
 
 ## Practice Questions with Solutions
-Q1 (1 mark): [Question] → [Answer]
+Q1 (1 mark): Define {topic}. → [1-line answer]
 Q2 (2 marks): [Question] → [Answer]
-Q3 (5 marks): [Question] → [Detailed answer with {board} marking scheme breakdown]
+Q3 (5 marks): [Question] → [Detailed answer with marking scheme]
 
 ## Memory Aids
-[2-3 mnemonics, visual tricks, or association techniques specific to {topic}]
+[2-3 mnemonics or tricks. Format as memorable phrases students can actually use.]
 
 ## Quick Revision Points
-[5-7 bullet points covering everything a student must know the night before the {board} exam]
+[5-7 bullet points for the night before the {board} exam. Include: "If you remember nothing else, remember THIS: ..."]
 
-Tone: authoritative but approachable. Written for {class_name} students in Assam.""",
+Tone: authoritative but warm. Sound like a teacher who genuinely wants students to pass.""",
     ],
 
     "definition": [
@@ -456,31 +491,31 @@ PROMPTS = {k: v[0] for k, v in PROMPT_VARIANTS.items()}
 
 TITLE_TEMPLATES = {
     "notes": [
-        "{topic} Notes — {board} {grade} {subject}",
-        "Learn {topic} for {board} {grade} Exams | {subject}",
-        "Complete {topic} Study Guide — {grade} {board} {subject}",
-        "{topic} Explained: {subject} Notes for {board} {grade} Assam",
+        "{topic} Notes for {board} {subject} ({grade}) – Complete Guide",
+        "{topic} Notes {board} {grade} {subject} | Summary & Key Points",
+        "{topic} {subject} Notes – {board} {grade} Assam Universities",
+        "{topic} Study Notes for {board} {grade} {subject} Exam Prep",
     ],
     "definition": [
-        "{topic} Definition & Meaning — {board} {grade} {subject}",
         "What is {topic}? Definition for {board} {grade} {subject}",
-        "{topic}: Meaning, Definition & Examples | {grade} {board} {subject}",
+        "{topic} Definition & Meaning – {board} {grade} {subject} Notes",
+        "Define {topic} – {subject} {board} {grade} (1-Mark Answer)",
     ],
     "important-questions": [
-        "{topic} Important Questions — {board} {grade} {subject}",
-        "Top Questions on {topic} for {board} {grade} Exams | Assam",
-        "{topic} Question Bank with Answers | {grade} {board} {subject}",
-        "{board} {grade} {topic} Questions: 1-Mark to 5-Mark | {subject}",
+        "{topic} Important Questions – {board} {grade} {subject} Exam",
+        "{topic} Questions & Answers for {board} {grade} | 1 to 5 Marks",
+        "{board} {grade} {topic} Important Questions with Answers | {subject}",
+        "{topic} Question Bank – {subject} {board} {grade} Assam",
     ],
     "mcqs": [
-        "{topic} MCQ Practice — {board} {grade} {subject}",
-        "MCQs on {topic} for {board} {grade} | {subject} Assam",
-        "{topic} Multiple Choice Questions with Answers — {grade} {board}",
+        "{topic} MCQs with Answers – {board} {grade} {subject}",
+        "{topic} MCQ Practice for {board} {grade} Exam | {subject}",
+        "{topic} Multiple Choice Questions – {grade} {board} {subject}",
     ],
     "examples": [
-        "{topic} Solved Examples — {board} {grade} {subject}",
-        "Solved Problems on {topic} for {board} {grade} Exams | {subject}",
-        "{topic} Examples with Step-by-Step Solutions | {grade} {board}",
+        "{topic} Solved Examples – {board} {grade} {subject}",
+        "{topic} Problems with Solutions for {board} {grade} Exams",
+        "{topic} Step-by-Step Solutions | {grade} {board} {subject}",
     ],
 }
 
@@ -525,7 +560,8 @@ def _extract_summary_from_content(content: str) -> str | None:
 
     match = re.search(
         r'##\s*(?:Summary|At a Glance|In One Line|Why .+ Matters|What to Expect|'
-        r'About These Questions|What Examiners Ask[^\n]*)\s*\n+(.*?)(?:\n##|\Z)',
+        r'About These Questions|What Examiners Ask[^\n]*|'
+        r'What is .+\?[^\n]*|.+ (?:—|–) Overview|.+ (?:—|–) Quick Summary)\s*\n+(.*?)(?:\n##|\Z)',
         content,
         re.DOTALL | re.IGNORECASE,
     )
@@ -1278,14 +1314,16 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         meta_desc = extracted_desc
     else:
         type_label_map = {
-            "notes": "notes", "definition": "definition and meaning",
-            "important-questions": "important questions with answers",
-            "mcqs": "MCQ practice questions", "examples": "solved examples",
+            "notes": "notes with summary, key points & important questions",
+            "definition": "definition, meaning & examples",
+            "important-questions": "important questions with answers (1-mark to 5-mark)",
+            "mcqs": "MCQ practice questions with answers",
+            "examples": "solved examples with step-by-step solutions",
         }
         meta_desc = (
-            f"Study {topic['title']} — {type_label_map.get(page_type, 'notes')} "
-            f"for {board_display} {grade_str} {subject_name}. Aligned with the "
-            f"{board_display} syllabus for Assam students."
+            f"{topic['title']} {type_label_map.get(page_type, 'notes')} "
+            f"for {board_display} {grade_str} {subject_name}. "
+            f"Exam-focused study material for Assam university students."
         )
 
     quality_context = {

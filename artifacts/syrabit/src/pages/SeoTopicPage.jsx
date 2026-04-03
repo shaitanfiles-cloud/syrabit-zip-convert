@@ -50,7 +50,7 @@ function extractTocItems(content) {
   return items;
 }
 
-function renderMarkdownWithIds(text) {
+function renderMarkdownWithIds(text, internalLinks = []) {
   if (!text) return '';
   const idCounts = {};
   const makeId = (t) => {
@@ -80,6 +80,24 @@ function renderMarkdownWithIds(text) {
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/\n\n/g, '</p><p class="seo-p">')
     .replace(/\n/g, '<br/>');
+
+  if (internalLinks.length > 0) {
+    try {
+      const linkedSet = new Set();
+      internalLinks.forEach(link => {
+        if (!link.title || !link.seo_path || linkedSet.has(link.title)) return;
+        const escaped = link.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`\\b(${escaped})\\b`, 'i');
+        html = html.replace(re, (match, _g1, offset) => {
+          const before = html.substring(Math.max(0, offset - 20), offset);
+          if (/<[^>]*$/.test(before)) return match;
+          linkedSet.add(link.title);
+          return `<a href="${link.seo_path}" class="seo-internal-link" title="${link.title} Notes">${match}</a>`;
+        });
+      });
+    } catch {}
+  }
+
   return sanitizeHtml(`<p class="seo-p">${html}</p>`);
 }
 
@@ -384,6 +402,10 @@ export default function SeoTopicPage() {
   const jsonLdSchema = useMemo(() => {
     if (!page) return null;
     const pageUrl = `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}/${topicSlug}${currentType !== 'notes' ? `/${currentType}` : ''}`;
+    const topic = page.topic_title || topicSlug;
+    const boardName = page.board_name || board;
+    const className = page.class_name || '';
+    const subjectName = page.subject_name || subjectSlug;
 
     const graphNodes = [
       {
@@ -399,28 +421,29 @@ export default function SeoTopicPage() {
         dateModified: page.updated_at || page.generated_at,
         image: 'https://syrabit.ai/opengraph.jpg',
         mainEntityOfPage: { '@type': 'WebPage', '@id': pageUrl },
-        educationalLevel: `${page.class_name || ''} ${page.board_name || ''}`.trim(),
-        about: { '@type': 'Thing', name: page.topic_title },
+        educationalLevel: `${className} ${boardName}`.trim(),
+        about: { '@type': 'Thing', name: topic },
         isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
         inLanguage: 'en-IN',
         learningResourceType: PAGE_TYPE_META[currentType]?.label || 'Study Material',
         wordCount: page.word_count || undefined,
+        keywords: `${topic} notes, ${topic} ${subjectName} notes, ${topic} ${boardName} ${className}, ${topic} summary, ${topic} important questions, ${subjectName} ${className} notes, ${boardName} exam notes`,
       },
       {
         '@type': 'BreadcrumbList',
         itemListElement: [
           { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
           { '@type': 'ListItem', position: 2, name: 'Browser', item: 'https://syrabit.ai/library' },
-          { '@type': 'ListItem', position: 3, name: page.subject_name || subjectSlug, item: `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}` },
-          { '@type': 'ListItem', position: 4, name: page.topic_title || topicSlug, item: pageUrl },
+          { '@type': 'ListItem', position: 3, name: subjectName, item: `https://syrabit.ai/${board}/${classSlug}/${subjectSlug}` },
+          { '@type': 'ListItem', position: 4, name: topic, item: pageUrl },
         ],
       },
       {
         '@type': 'LearningResource',
-        name: `${page.topic_title || topicSlug} — ${page.class_name || ''} ${page.board_name || ''}`.trim(),
+        name: `${topic} ${PAGE_TYPE_META[currentType]?.label || 'Notes'} for ${boardName} ${className} ${subjectName}`,
         description: page.meta_description || page.summary || '',
         provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
-        educationalLevel: `${page.class_name || ''} ${page.board_name || ''}`.trim(),
+        educationalLevel: `${className} ${boardName}`.trim(),
         url: pageUrl,
         inLanguage: 'en-IN',
         learningResourceType: PAGE_TYPE_META[currentType]?.label || 'Study Material',
@@ -428,6 +451,17 @@ export default function SeoTopicPage() {
         isAccessibleForFree: true,
       },
     ];
+
+    if (page.qa_pairs?.length > 0) {
+      graphNodes.push({
+        '@type': 'FAQPage',
+        mainEntity: page.qa_pairs.slice(0, 10).map(qa => ({
+          '@type': 'Question',
+          name: qa.question,
+          acceptedAnswer: { '@type': 'Answer', text: qa.answer },
+        })),
+      });
+    }
 
     return { '@context': 'https://schema.org', '@graph': graphNodes };
   }, [page, board, classSlug, subjectSlug, topicSlug, currentType]);
@@ -496,8 +530,11 @@ export default function SeoTopicPage() {
         type="article"
         section={page.subject_name}
         keywords={[
-          page.topic_title, `${page.topic_title} notes`, `${page.topic_title} ${boardShort}`,
-          page.subject_name, page.board_name, page.class_name, 'AssamBoard', boardShort,
+          page.topic_title, `${page.topic_title} notes`, `${page.topic_title} notes PDF`,
+          `${page.topic_title} ${page.subject_name} notes`, `${page.topic_title} summary`,
+          `${page.topic_title} important questions`, `${page.topic_title} ${boardShort} ${page.class_name}`,
+          `${page.subject_name} ${page.class_name} notes`, `${page.topic_title} ${boardShort}`,
+          page.subject_name, page.board_name, page.class_name, boardShort,
         ].filter(Boolean).join(', ')}
         tags={[page.topic_title, page.subject_name, page.board_name].filter(Boolean)}
         publishedTime={page.generated_at}
@@ -616,7 +653,7 @@ export default function SeoTopicPage() {
             >
               <div
                 className="article-content"
-                dangerouslySetInnerHTML={{ __html: renderMarkdownWithIds(page.content) }}
+                dangerouslySetInnerHTML={{ __html: renderMarkdownWithIds(page.content, related.related || []) }}
               />
             </article>
 
