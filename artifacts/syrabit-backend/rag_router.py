@@ -10,7 +10,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 RAG_RELEVANCE_GATE = 0.55
-HIGH_CONFIDENCE_THRESHOLD = 0.70
+HIGH_CONFIDENCE_THRESHOLD = 0.60
 
 _RAG_INTENTS = frozenset({"notes", "important_questions", "pyq"})
 

@@ -1157,6 +1157,7 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
                 content=data.content,
                 subject_id=data.subject_id,
                 category=_category,
+                topics=_topics,
             )
             logger.info(f"Auto-chunked new chapter '{data.title}': {len(chunks_created)} chunks")
         except Exception as chunk_error:

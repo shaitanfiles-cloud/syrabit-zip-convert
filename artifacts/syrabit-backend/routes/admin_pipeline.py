@@ -213,7 +213,7 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
 
     # Re-chunk for RAG search
     try:
-        await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"))
+        await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
     except Exception:
         pass
 
@@ -317,7 +317,7 @@ Generate detailed study notes for:
                     update_fields["needs_review"] = True
                 await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
                 try:
-                    await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"))
+                    await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
                 except Exception:
                     pass
                 results.append({"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": wc})

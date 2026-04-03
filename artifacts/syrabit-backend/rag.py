@@ -173,12 +173,46 @@ def _sentence_split_with_overlap(text: str, target: int = _CHUNK_TARGET, max_len
         start += advance
     return chunks
 
-async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None, chapter_title: str = None, category: str = "notes") -> list:
+def _split_by_topics(content: str, topics: list[str]) -> list[str]:
+    """Split content into topic-aligned chunks using topic titles as section markers."""
+    if not topics:
+        return []
+    import difflib
+    lines = content.split("\n")
+    heading_indices: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        stripped = re.sub(r'^#{1,4}\s*', '', line).strip().rstrip(".").lower()
+        stripped = re.sub(r'^\d+[\.\)]\s*', '', stripped).strip()
+        if not stripped or len(stripped) < 3:
+            continue
+        for topic in topics:
+            topic_clean = topic.strip().rstrip(".").lower()
+            ratio = difflib.SequenceMatcher(None, stripped, topic_clean).ratio()
+            if ratio >= 0.6 or topic_clean in stripped or stripped in topic_clean:
+                heading_indices.append((i, topic))
+                break
+    if not heading_indices:
+        return []
+    chunks: list[str] = []
+    intro_lines = lines[:heading_indices[0][0]]
+    intro_text = "\n".join(intro_lines).strip()
+    if intro_text and len(intro_text) >= 50:
+        chunks.append(intro_text)
+    for idx, (line_idx, topic_name) in enumerate(heading_indices):
+        end_idx = heading_indices[idx + 1][0] if idx + 1 < len(heading_indices) else len(lines)
+        section_text = "\n".join(lines[line_idx:end_idx]).strip()
+        if section_text:
+            chunks.append(section_text)
+    return chunks
+
+
+async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None, chapter_title: str = None, category: str = "notes", topics: list = None) -> list:
     """
     Semantically split chapter content into RAG-optimised chunks.
 
     Strategy:
-    - Split by markdown headings (###) to keep concepts together
+    - If topics are provided, split by topic headings (one chunk per topic)
+    - Otherwise, split by markdown headings (###) to keep concepts together
     - Merge short sections; split long ones by sentences
     - Target 300-600 chars per chunk for optimal retrieval
     - 2-sentence overlap between consecutive chunks
@@ -193,19 +227,39 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
     old_chunk_ids = [doc["_id"] async for doc in db.chunks.find({"chapter_id": chapter_id}, {"_id": 1})]
 
     content = content.strip()
-    sections = _split_into_sections(content)
-    sections = _merge_short_sections(sections)
 
-    raw_chunks: list[str] = []
-    for sec in sections:
-        text = sec["text"]
-        prefix = f"**{sec['heading']}**\n" if sec.get("heading") else ""
-        full = (prefix + text).strip()
-        if len(full) <= _CHUNK_MAX:
-            raw_chunks.append(full)
-        else:
-            sub_chunks = _sentence_split_with_overlap(full)
-            raw_chunks.extend(sub_chunks)
+    topic_names = []
+    if topics:
+        for t in topics:
+            if isinstance(t, dict):
+                topic_names.append(t.get("title", ""))
+            elif isinstance(t, str):
+                topic_names.append(t)
+
+    topic_chunks = _split_by_topics(content, topic_names) if topic_names else []
+
+    if topic_chunks:
+        raw_chunks: list[str] = []
+        for tc in topic_chunks:
+            if len(tc) <= _CHUNK_MAX:
+                raw_chunks.append(tc)
+            else:
+                sub = _sentence_split_with_overlap(tc)
+                raw_chunks.extend(sub)
+        logger.info(f"Topic-wise chunking: {len(topic_chunks)} topic sections → {len(raw_chunks)} chunks")
+    else:
+        sections = _split_into_sections(content)
+        sections = _merge_short_sections(sections)
+        raw_chunks: list[str] = []
+        for sec in sections:
+            text = sec["text"]
+            prefix = f"**{sec['heading']}**\n" if sec.get("heading") else ""
+            full = (prefix + text).strip()
+            if len(full) <= _CHUNK_MAX:
+                raw_chunks.append(full)
+            else:
+                sub_chunks = _sentence_split_with_overlap(full)
+                raw_chunks.extend(sub_chunks)
 
     chunks_created = []
     now_iso = datetime.now(timezone.utc).isoformat()
