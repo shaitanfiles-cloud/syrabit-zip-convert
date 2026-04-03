@@ -130,9 +130,9 @@ export function getLangLabel(code) {
 }
 
 export function getTTSLang() {
-  const stored = localStorage.getItem(TTS_LANG_KEY) || 'en-IN';
+  const stored = localStorage.getItem(TTS_LANG_KEY) || 'as-IN';
   if (_sarvamStatus?.languages?.length && !_sarvamStatus.languages.includes(stored)) {
-    return 'en-IN';
+    return 'as-IN';
   }
   return stored;
 }
