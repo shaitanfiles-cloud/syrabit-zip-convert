@@ -9,7 +9,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-RAG_RELEVANCE_GATE = 0.78
+RAG_RELEVANCE_GATE = 0.55
 
 _RAG_INTENTS = frozenset({"notes", "important_questions", "pyq"})
 
