@@ -291,7 +291,7 @@ async def _fetch_content_card(
     Card slugs are used by the grounding builder to deduplicate vector hits.
     source_meta contains card_name, lesson_name, subject_name for chat attribution.
     """
-    _ck = _content_card_cache_key(query, subject_id, subject_name, intent)
+    _ck = _content_card_cache_key(query, subject_id, subject_name, intent, chapter_title=chapter_title)
     if _ck in _content_card_cache:
         logger.info(f"Content card cache hit: query='{query[:40]}'")
         return _content_card_cache[_ck]
@@ -1481,7 +1481,7 @@ async def resolve_rag_context(
         _gather_tasks = [
             _fetch_content_card(
                 query, subject_id=subject_id, subject_name=subject_name,
-                intent=intent, chapter_title=_syllabus_chapter_title,
+                intent=_resolved_intent, chapter_title=_syllabus_chapter_title,
             ),
         ]
         if _want_enrichment:
@@ -1530,7 +1530,7 @@ async def resolve_rag_context(
                 f"skipping keyword rag_search | intent={_resolved_intent} | query: {query[:50]}"
             )
             _gather_tasks = [
-                _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
+                _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=_resolved_intent),
             ]
             if _want_enrichment:
                 _gather_tasks.append(
@@ -1546,7 +1546,7 @@ async def resolve_rag_context(
         else:
             _gather_tasks = [
                 rag_search(query, subject_id=subject_id, subject_name=subject_name),
-                _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=intent),
+                _fetch_content_card(query, subject_id=subject_id, subject_name=subject_name, intent=_resolved_intent),
             ]
             if _want_enrichment:
                 _gather_tasks.append(
