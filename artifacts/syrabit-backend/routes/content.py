@@ -364,6 +364,29 @@ async def resolve_subject_no_stream(board_slug: str, class_slug: str, subject_sl
     if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"
     return result
 
+@router.get("/content/subjects/{subject_id}/og-image.png")
+async def get_subject_og_image(subject_id: str, response: Response = None):
+    if not await is_mongo_available():
+        raise HTTPException(503, "Content database unavailable")
+    subj = await db.subjects.find_one(
+        {"id": subject_id},
+        {"_id": 0, "thumbnail_url": 1, "thumbnailUrl": 1}
+    )
+    if not subj:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    raw = subj.get("thumbnailUrl") or subj.get("thumbnail_url") or ""
+    if not raw:
+        raise HTTPException(status_code=404, detail="No thumbnail available")
+    if raw.startswith("data:"):
+        raw = raw.split(",", 1)[-1]
+    try:
+        img_bytes = base64.b64decode(raw)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Invalid thumbnail data")
+    if response:
+        response.headers["Cache-Control"] = "public, max-age=86400, stale-while-revalidate=604800"
+    return Response(content=img_bytes, media_type="image/png")
+
 @router.get("/content/subjects/{subject_id}")
 async def get_subject(subject_id: str, response: Response = None):
     ck = f"subject:{subject_id}"

@@ -22,7 +22,9 @@ export function useShare() {
     setSharing(true);
     try {
       if (navigator.share) {
-        await navigator.share({ title, url: shareUrl });
+        const shareData = { title, url: shareUrl };
+        if (options.text) shareData.text = options.text;
+        await navigator.share(shareData);
       } else {
         await navigator.clipboard.writeText(shareUrl);
         toast.success('Link copied to clipboard!');

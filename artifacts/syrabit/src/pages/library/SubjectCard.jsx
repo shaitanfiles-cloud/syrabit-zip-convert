@@ -44,8 +44,16 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
   const handleShare = useCallback((e) => {
     e.preventDefault();
-    share(sub.name, subjectLandingPath);
-  }, [sub.name, subjectLandingPath, share]);
+    const parts = [sub.name];
+    if (sub.description) parts.push(sub.description);
+    const meta = [sub.board_name || sub.boardName, sub.class_name || sub.className, sub.stream_name || sub.streamName].filter(Boolean).join(' · ');
+    if (meta) parts.push(meta);
+    const chCount = chapters.length || sub.chapter_count || sub.chapterCount || 0;
+    if (chCount > 0) parts.push(`${chCount} chapters`);
+    if (sub.tags?.length) parts.push(`Topics: ${sub.tags.join(', ')}`);
+    parts.push('Study on Syrabit.ai');
+    share(sub.name, subjectLandingPath, { text: parts.join('\n') });
+  }, [sub, chapters.length, subjectLandingPath, share]);
 
   const handlePrefetch = useCallback(() => {
     if (sub.boardSlug && sub.classSlug && sub.slug) {

@@ -495,6 +495,7 @@ export default function SubjectPage() {
   );
 
   const SITE_ORIGIN = import.meta.env.VITE_SITE_URL || window.location.origin;
+  const BACKEND_ORIGIN = import.meta.env.VITE_BACKEND_URL || '';
   const subjectUrl  = subject.board_slug && subject.class_slug && subject.stream_slug && subject.slug
     ? `${SITE_ORIGIN}/${subject.board_slug}/${subject.class_slug}/${subject.stream_slug}/${subject.slug}`
     : `${SITE_ORIGIN}/subject/${subjectId}`;
@@ -503,11 +504,14 @@ export default function SubjectPage() {
   const subjectTitle = (subject.name + ' Notes — ' + (classLabel || boardLabel) + ' ' + (subject.stream_name || '')).trim();
   const subjectDesc  = subject.description
     || ('Complete ' + subject.name + ' notes, chapters, and AI explanations for ' + (classLabel || boardLabel) + ' ' + (subject.stream_name || '') + ' students.');
+  const ogImage = (subject.thumbnailUrl || subject.thumbnail_url)
+    ? `${BACKEND_ORIGIN || SITE_ORIGIN}/api/content/subjects/${subjectId}/og-image.png`
+    : undefined;
 
 
   return (
     <AppLayout pageTitle={subject.name}>
-      <PageMeta title={subjectTitle} description={subjectDesc.trim()} url={subjectUrl} />
+      <PageMeta title={subjectTitle} description={subjectDesc.trim()} url={subjectUrl} image={ogImage} />
       <div className="p-4 sm:p-6 space-y-6" data-testid="subject-detail">
         {/* Back */}
         <Link to="/library" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
