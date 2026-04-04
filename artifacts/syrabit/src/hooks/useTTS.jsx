@@ -21,6 +21,10 @@ function stripMarkdown(text) {
     .replace(/\|.*\|/g, '')
     .replace(/<[^>]+>/g, '')
     .replace(/\n{2,}/g, '\n')
+    .replace(/[-—–]\s*(source|ref|via|from|credit)[:\s].*/gi, '')
+    .replace(/\(?(source|ref|via|from|credit)[:\s][^)]*\)?/gi, '')
+    .replace(/📚.*$/gm, '')
+    .replace(/\*?\s*[-—–]?\s*(varena|assam|ahsec|seba|board|chapter|subject|class\s*\d+|hs\s*\d+)[\s,].*$/gim, '')
     .trim();
 }
 
