@@ -58,7 +58,8 @@ async def _pipeline_generate_mcqs(
         f"Chapter content:\n{content[:4500]}"
     )
     try:
-        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
+        async with _pipeline_sem:
+            result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -96,7 +97,8 @@ async def _pipeline_generate_flashcards(
         f"Chapter content:\n{content[:4500]}"
     )
     try:
-        result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
+        async with _pipeline_sem:
+            result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -107,6 +109,244 @@ async def _pipeline_generate_flashcards(
         return data.get("flashcards", [])
     except Exception:
         return []
+
+
+async def _generate_chapter_all(chapter_id: str, generate: list[str]) -> dict:
+    chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
+    if not chapter:
+        return {"chapter_id": chapter_id, "status": "error", "reason": "not found"}
+    title = (chapter.get("title") or "").strip()
+    if not title:
+        return {"chapter_id": chapter_id, "status": "skipped", "reason": "no title"}
+
+    subject = await db.subjects.find_one({"id": chapter.get("subject_id", "")}, {"_id": 0}) or {}
+    subject_name = subject.get("name", "")
+    board_ctx, class_ctx, subject_desc = await _resolve_board_context(subject)
+    topics = chapter.get("topics") or []
+    content = (chapter.get("content") or "").strip()
+    content_sufficient = content and len(content) >= 100
+    result: dict = {"chapter_id": chapter_id, "title": title}
+    needs_mcqs = "mcqs" in generate
+    needs_flashcards = "flashcards" in generate
+    needs_notes = "notes" in generate
+    needs_sequential = needs_notes and not content_sufficient and (needs_mcqs or needs_flashcards)
+
+    if needs_notes:
+        topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else f"  {title}"
+        desc_block = ""
+        ch_desc = (chapter.get("description") or "").strip()
+        if ch_desc:
+            desc_block += f"**Chapter Description:** {ch_desc}\n"
+        if subject_desc:
+            desc_block += f"**Subject Description:** {subject_desc}\n"
+
+        seo_topic_docs = await db.seo_topics.find(
+            {"linked_chapter_id": chapter_id},
+            {"_id": 0, "topic": 1, "primary_keyword": 1}
+        ).to_list(30)
+        seo_keywords = list(dict.fromkeys(
+            (d.get("primary_keyword") or d.get("topic") or "").strip()
+            for d in seo_topic_docs
+            if (d.get("primary_keyword") or d.get("topic") or "").strip()
+        ))
+        seo_seed_block = ""
+        if seo_keywords:
+            seo_seed_block = (
+                "\n\n**SEO Keyword Seeds (naturally weave these phrases into headings and body):**\n"
+                + "\n".join(f"  - {kw}" for kw in seo_keywords[:15])
+            )
+
+        notes_prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students in Assam, India.
+
+Generate **exam-focused, topic-wise study notes** for the chapter below.
+
+**Chapter:** {title}
+**Subject:** {subject_name or "Degree Course"}
+{desc_block}
+
+**Syllabus Topics to cover (MANDATORY — every topic MUST get its own section):**
+{topic_block}{seo_seed_block}
+
+---
+
+**INSTRUCTIONS:**
+1. Open with a crisp **introduction** (3-4 sentences) — state the chapter's exam relevance and what students will learn.
+2. For EACH topic listed above, write:
+   - A ## Heading matching the topic name exactly
+   - 5-8 sentence thorough explanation using simple, precise academic language
+   - **Key Points** as 6-8 bullets: definitions in **bold**, significance, relationships
+   - A real-world example, Assam-specific context, or illustrative case study
+   - Where relevant, add a "Common Mistake" or "Exam Tip" note
+3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
+4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
+5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
+6. Target 600-1000 words of dense, high-value content.
+7. Write as though every word costs marks — no filler, no repetition."""
+
+        try:
+            async with _pipeline_sem:
+                notes_raw = await call_llm_api_content([{"role": "user", "content": notes_prompt}], max_tokens=3200)
+        except Exception as e:
+            notes_raw = None
+            result["notes"] = {"status": "error", "reason": str(e)}
+
+        if notes_raw and len(notes_raw.split()) >= 200:
+            notes_text = _normalize_headings(notes_raw).strip()
+            wc = len(notes_text.split())
+            await db.chapters.update_one(
+                {"id": chapter_id},
+                {"$set": {
+                    "content": notes_text,
+                    "content_type": "notes",
+                    "notes_generated": True,
+                    "notes_generated_at": datetime.now(timezone.utc).isoformat(),
+                }}
+            )
+            _invalidate_content_cache("chapters")
+            try:
+                await auto_chunk_content(chapter_id=chapter_id, content=notes_text, subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
+            except Exception:
+                pass
+            result["notes"] = {"status": "ok", "word_count": wc}
+            if needs_sequential:
+                content = notes_text
+                content_sufficient = True
+        elif notes_raw is not None:
+            result["notes"] = {"status": "error", "reason": "too short"}
+
+    parallel_tasks: dict = {}
+    src = content if content_sufficient else title
+
+    if needs_mcqs:
+        parallel_tasks["mcqs"] = _pipeline_generate_mcqs(src, subject_name, title, class_ctx, count=20)
+    if needs_flashcards:
+        parallel_tasks["flashcards"] = _pipeline_generate_flashcards(src, subject_name, title, class_ctx, count=15, topics=topics)
+
+    if parallel_tasks:
+        p_keys = list(parallel_tasks.keys())
+        p_outcomes = await asyncio.gather(*parallel_tasks.values(), return_exceptions=True)
+
+        for key, outcome in zip(p_keys, p_outcomes):
+            if isinstance(outcome, Exception):
+                result[key] = {"status": "error", "reason": str(outcome)}
+                continue
+
+            if key == "mcqs":
+                mcqs = outcome if isinstance(outcome, list) else []
+                if mcqs:
+                    await db.ai_pyq_collections.update_one(
+                        {"chapter_id": chapter_id},
+                        {"$set": {
+                            "chapter_id": chapter_id,
+                            "questions": mcqs,
+                            "total": len(mcqs),
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                        upsert=True,
+                    )
+                    result["mcqs"] = {"status": "ok", "count": len(mcqs)}
+                else:
+                    result["mcqs"] = {"status": "error", "reason": "no MCQs generated"}
+
+            elif key == "flashcards":
+                cards = outcome if isinstance(outcome, list) else []
+                if cards:
+                    await db.flashcard_collections.update_one(
+                        {"chapter_id": chapter_id},
+                        {"$set": {
+                            "chapter_id": chapter_id,
+                            "flashcards": cards,
+                            "total": len(cards),
+                            "generated_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                        upsert=True,
+                    )
+                    result["flashcards"] = {"status": "ok", "count": len(cards)}
+                else:
+                    result["flashcards"] = {"status": "error", "reason": "no flashcards generated"}
+
+    all_keys = [k for k in ("notes", "mcqs", "flashcards") if k in generate]
+    if not all_keys:
+        result["status"] = "skipped"
+        return result
+    has_ok = any(
+        isinstance(result.get(k), dict) and result[k].get("status") == "ok"
+        for k in all_keys
+    )
+    result["status"] = "ok" if has_ok else "error"
+    return result
+
+
+@router.post("/admin/content/chapters/{chapter_id}/generate-all")
+async def admin_generate_chapter_all(
+    chapter_id: str,
+    generate: str = Query(default="notes,mcqs,flashcards", description="Comma-separated: notes,mcqs,flashcards"),
+    admin: dict = Depends(get_admin_user),
+):
+    gen_list = [g.strip() for g in generate.split(",") if g.strip() in ("notes", "mcqs", "flashcards")]
+    if not gen_list:
+        raise HTTPException(status_code=400, detail="Specify at least one of: notes, mcqs, flashcards")
+    t0 = time.time()
+    result = await _generate_chapter_all(chapter_id, gen_list)
+    result["elapsed_seconds"] = round(time.time() - t0, 1)
+    return result
+
+
+@router.post("/admin/content/subject/{subject_id}/generate-all")
+async def admin_generate_subject_all(
+    subject_id: str,
+    generate: str = Query(default="notes,mcqs,flashcards", description="Comma-separated: notes,mcqs,flashcards"),
+    skip_existing_notes: bool = Query(default=True, description="Skip chapters that already have notes"),
+    admin: dict = Depends(get_admin_user),
+):
+    gen_list = [g.strip() for g in generate.split(",") if g.strip() in ("notes", "mcqs", "flashcards")]
+    if not gen_list:
+        raise HTTPException(status_code=400, detail="Specify at least one of: notes, mcqs, flashcards")
+
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id},
+        {"_id": 0, "id": 1, "title": 1, "content": 1, "notes_generated": 1}
+    ).to_list(200)
+    if not chapters:
+        raise HTTPException(status_code=404, detail="No chapters found for this subject")
+
+    chapter_ids = []
+    for ch in chapters:
+        if skip_existing_notes and "notes" in gen_list:
+            has_notes = ch.get("notes_generated") or len((ch.get("content") or "").split()) >= 300
+            if has_notes:
+                per_ch_gen = [g for g in gen_list if g != "notes"]
+                if not per_ch_gen:
+                    continue
+            else:
+                per_ch_gen = gen_list
+        else:
+            per_ch_gen = gen_list
+        chapter_ids.append((ch["id"], per_ch_gen))
+
+    t0 = time.time()
+    tasks = [_generate_chapter_all(cid, gl) for cid, gl in chapter_ids]
+    batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+    elapsed = round(time.time() - t0, 1)
+
+    results = []
+    for i, r in enumerate(batch_results):
+        if isinstance(r, Exception):
+            cid = chapter_ids[i][0] if i < len(chapter_ids) else "unknown"
+            results.append({"chapter_id": cid, "status": "error", "reason": str(r)})
+        else:
+            results.append(r)
+
+    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    return {
+        "subject_id": subject_id,
+        "total_chapters": len(chapters),
+        "processed": len(results),
+        "succeeded": ok_count,
+        "elapsed_seconds": elapsed,
+        "concurrency": _PIPELINE_CONCURRENCY,
+        "results": results,
+    }
 
 @router.post("/admin/content/chapters/{chapter_id}/generate-notes")
 async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(get_admin_user)):
@@ -286,67 +526,54 @@ async def admin_list_thin_chapters(
     return {"total": len(thin), "min_words": min_words, "chapters": thin}
 
 
-@router.post("/admin/content/regenerate-thin")
-async def admin_regenerate_thin_chapters(
-    min_words: int = Query(default=500, description="Regenerate chapters below this word count"),
-    limit: int = Query(default=10, description="Max chapters to regenerate per call"),
-    admin: dict = Depends(get_admin_user),
-):
-    pipeline = [
-        {"$match": {"content": {"$exists": True, "$ne": ""}}},
-        {"$project": {"id": 1, "title": 1, "subject_id": 1, "content": 1, "topics": 1, "_id": 0}},
-    ]
-    all_chapters = await db.chapters.aggregate(pipeline).to_list(500)
+_PIPELINE_CONCURRENCY = int(os.environ.get("PIPELINE_LLM_CONCURRENCY", 4))
+_pipeline_sem = asyncio.Semaphore(_PIPELINE_CONCURRENCY)
 
-    thin = [ch for ch in all_chapters if len((ch.get("content") or "").split()) < min_words]
-    thin.sort(key=lambda x: len((x.get("content") or "").split()))
-    thin = thin[:limit]
 
-    results = []
-    for chapter in thin:
-        chapter_id = chapter.get("id", "")
-        title = (chapter.get("title") or "").strip()
-        if not title:
-            results.append({"chapter_id": chapter_id, "status": "skipped", "reason": "no title"})
-            continue
+async def _resolve_board_context(subject: dict) -> tuple:
+    board_label = ""
+    class_name = subject.get("className", "")
+    subject_desc = (subject.get("description") or "").strip()
+    stream = None
+    if subject.get("stream_id"):
+        stream = await db.streams.find_one({"id": subject["stream_id"]}, {"_id": 0})
+    if stream and stream.get("class_id"):
+        cls = await db.classes.find_one({"id": stream["class_id"]}, {"_id": 0})
+        if cls:
+            if not class_name:
+                class_name = cls.get("name", "")
+            if cls.get("board_id"):
+                board_doc = await db.boards.find_one({"id": cls["board_id"]}, {"_id": 0})
+                if board_doc:
+                    board_label = board_doc.get("name", "")
+    return (board_label or "Degree", class_name or "FYUGP", subject_desc)
 
-        subject = await db.subjects.find_one({"id": chapter.get("subject_id", "")}, {"_id": 0}) or {}
-        subject_name = subject.get("name", "")
-        topics = chapter.get("topics") or []
-        topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else f"  {title}"
 
-        # Resolve board context
-        regen_board = ""
-        regen_class = subject.get("className", "")
-        regen_subject_desc = (subject.get("description") or "").strip()
-        regen_stream = None
-        if subject.get("stream_id"):
-            regen_stream = await db.streams.find_one({"id": subject["stream_id"]}, {"_id": 0})
-        if regen_stream and regen_stream.get("class_id"):
-            regen_cls = await db.classes.find_one({"id": regen_stream["class_id"]}, {"_id": 0})
-            if regen_cls:
-                if not regen_class:
-                    regen_class = regen_cls.get("name", "")
-                if regen_cls.get("board_id"):
-                    regen_board_doc = await db.boards.find_one({"id": regen_cls["board_id"]}, {"_id": 0})
-                    if regen_board_doc:
-                        regen_board = regen_board_doc.get("name", "")
-        regen_board_ctx = regen_board or "Degree"
-        regen_class_ctx = regen_class or "FYUGP"
+async def _regenerate_one_chapter(chapter: dict, subject: dict, min_words: int) -> dict:
+    chapter_id = chapter.get("id", "")
+    title = (chapter.get("title") or "").strip()
+    if not title:
+        return {"chapter_id": chapter_id, "status": "skipped", "reason": "no title"}
 
-        regen_desc_block = ""
-        ch_desc = (chapter.get("description") or "").strip()
-        if ch_desc:
-            regen_desc_block += f"**Chapter Description:** {ch_desc}\n"
-        if regen_subject_desc:
-            regen_desc_block += f"**Subject Description:** {regen_subject_desc}\n"
+    subject_name = subject.get("name", "")
+    topics = chapter.get("topics") or []
+    topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else f"  {title}"
 
-        prompt = f"""You are an expert academic content writer for {regen_board_ctx} {regen_class_ctx} students in Assam, India.
+    board_ctx, class_ctx, subject_desc = await _resolve_board_context(subject)
+
+    desc_block = ""
+    ch_desc = (chapter.get("description") or "").strip()
+    if ch_desc:
+        desc_block += f"**Chapter Description:** {ch_desc}\n"
+    if subject_desc:
+        desc_block += f"**Subject Description:** {subject_desc}\n"
+
+    prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students in Assam, India.
 
 Generate detailed study notes for:
 **Chapter:** {title}
 **Subject:** {subject_name or "Degree Course"}
-{regen_desc_block}
+{desc_block}
 
 **Topics to cover:**
 {topic_block}
@@ -362,34 +589,80 @@ Generate detailed study notes for:
 8. Use markdown formatting throughout. NO disclaimers, NO preamble.
 9. No filler or repetition — but cover each topic thoroughly with depth and completeness"""
 
-        try:
+    try:
+        async with _pipeline_sem:
             generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=5000)
-            if generated and len(generated.split()) >= 200:
-                generated = _normalize_headings(generated)
-                wc = len(generated.split())
-                update_fields = {
-                    "content": generated.strip(),
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
-                if wc >= min_words:
-                    update_fields["needs_review"] = False
-                else:
-                    update_fields["needs_review"] = True
-                await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
-                try:
-                    await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
-                except Exception:
-                    pass
-                results.append({"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": wc})
-            else:
-                results.append({"chapter_id": chapter_id, "title": title, "status": "error", "reason": "AI returned too-short content"})
-        except Exception as e:
-            results.append({"chapter_id": chapter_id, "title": title, "status": "error", "reason": str(e)})
+        if generated and len(generated.split()) >= 200:
+            generated = _normalize_headings(generated)
+            wc = len(generated.split())
+            update_fields = {
+                "content": generated.strip(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "needs_review": wc < min_words,
+            }
+            await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
+            try:
+                await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
+            except Exception:
+                pass
+            return {"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": wc}
+        else:
+            return {"chapter_id": chapter_id, "title": title, "status": "error", "reason": "AI returned too-short content"}
+    except Exception as e:
+        return {"chapter_id": chapter_id, "title": title, "status": "error", "reason": str(e)}
+
+
+@router.post("/admin/content/regenerate-thin")
+async def admin_regenerate_thin_chapters(
+    min_words: int = Query(default=500, description="Regenerate chapters below this word count"),
+    limit: int = Query(default=10, description="Max chapters to regenerate per call"),
+    admin: dict = Depends(get_admin_user),
+):
+    pipeline = [
+        {"$match": {"content": {"$exists": True, "$ne": ""}}},
+        {"$project": {"id": 1, "title": 1, "subject_id": 1, "content": 1, "topics": 1, "description": 1, "category": 1, "_id": 0}},
+    ]
+    all_chapters = await db.chapters.aggregate(pipeline).to_list(500)
+
+    thin = [ch for ch in all_chapters if len((ch.get("content") or "").split()) < min_words]
+    thin.sort(key=lambda x: len((x.get("content") or "").split()))
+    thin = thin[:limit]
+
+    subject_cache: dict = {}
+    async def get_subject(sid: str) -> dict:
+        if sid not in subject_cache:
+            subject_cache[sid] = await db.subjects.find_one({"id": sid}, {"_id": 0}) or {}
+        return subject_cache[sid]
+
+    tasks = []
+    skipped = []
+    for chapter in thin:
+        title = (chapter.get("title") or "").strip()
+        if not title:
+            skipped.append({"chapter_id": chapter.get("id", ""), "status": "skipped", "reason": "no title"})
+            continue
+        subject = await get_subject(chapter.get("subject_id", ""))
+        tasks.append(_regenerate_one_chapter(chapter, subject, min_words))
+
+    t0 = time.time()
+    batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+    elapsed = round(time.time() - t0, 1)
+
+    valid_chapters = [ch for ch in thin if (ch.get("title") or "").strip()]
+    results = list(skipped)
+    for i, r in enumerate(batch_results):
+        if isinstance(r, Exception):
+            cid = valid_chapters[i].get("id", "unknown") if i < len(valid_chapters) else "unknown"
+            results.append({"chapter_id": cid, "status": "error", "reason": str(r)})
+        else:
+            results.append(r)
 
     ok_count = sum(1 for r in results if r.get("status") == "ok")
     return {
         "total_thin": len(thin),
         "regenerated": ok_count,
+        "elapsed_seconds": elapsed,
+        "concurrency": _PIPELINE_CONCURRENCY,
         "results": results,
     }
 
