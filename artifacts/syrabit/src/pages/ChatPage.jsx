@@ -298,7 +298,12 @@ export default function ChatPage() {
           : m
       ));
       if (sarvamEnabled && fullContent) {
-        tts.speak(fullContent, aiMsgId);
+        let ttsText = fullContent;
+        const srcParts = [ragChapterName, ragSubjectName, ragBoardName || ragClassName].filter(Boolean);
+        if (srcParts.length) {
+          ttsText += '. Answer source: ' + srcParts.join(', ') + '.';
+        }
+        tts.speak(ttsText, aiMsgId);
       }
       setSyncState('idle');
     } catch (err) {
