@@ -1,6 +1,6 @@
 import { useState, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send, Volume2, Square, Loader2 } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send } from 'lucide-react';
 import { useShare } from '@/hooks/useShare';
 import { postChatFeedback } from '@/utils/api';
 import { log } from '@/utils/logger';
@@ -19,7 +19,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
   const isUser = msg.role === 'user';
 
   const isThisMsgActive = tts && tts.activeMsgId === msg.id;
-  const ttsState = isThisMsgActive ? tts.state : 'idle';
 
   const sendFeedback = async (type, value) => {
     try {
@@ -218,32 +217,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     >
                       {copied ? <Check size={16} style={{ color: '#34d399' }} /> : <Copy size={16} />}
                     </button>
-                    {sarvamEnabled && msg.content && tts && (
-                      <button
-                        onClick={() => {
-                          if (ttsState === 'playing' || ttsState === 'loading') {
-                            tts.stop();
-                          } else {
-                            tts.speak(msg.content, msg.id);
-                          }
-                        }}
-                        className={`w-11 h-11 rounded-lg flex items-center justify-center transition-colors ${
-                          ttsState === 'playing'
-                            ? 'bg-purple-500/15 text-purple-400'
-                            : 'hover:bg-primary/10 text-muted-foreground hover:text-primary'
-                        }`}
-                        title={ttsState === 'playing' ? 'Stop' : ttsState === 'loading' ? 'Loading...' : 'Read aloud'}
-                        aria-label={ttsState === 'playing' ? 'Stop reading' : ttsState === 'loading' ? 'Loading audio' : 'Read aloud'}
-                      >
-                        {ttsState === 'loading' ? (
-                          <Loader2 size={16} className="animate-spin" />
-                        ) : ttsState === 'playing' ? (
-                          <Square size={14} />
-                        ) : (
-                          <Volume2 size={16} />
-                        )}
-                      </button>
-                    )}
                     {isLast && onRegenerate && (
                       <button
                         onClick={onRegenerate}
