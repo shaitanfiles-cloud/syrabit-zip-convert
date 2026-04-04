@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import HeroSection from './landing/HeroSection';
 import FeaturesGrid from './landing/FeaturesGrid';
 import PricingSection from './landing/PricingSection';
+import PlatformSection from './landing/PlatformSection';
 import TestimonialsFooter from './landing/TestimonialsFooter';
 
 export default function LandingPage() {
@@ -35,6 +36,7 @@ export default function LandingPage() {
       <PublicNavbar />
       <HeroSection />
       <FeaturesGrid />
+      <PlatformSection />
       <PricingSection />
       <TestimonialsFooter year={year} />
     </div>
