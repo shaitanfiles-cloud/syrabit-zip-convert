@@ -310,7 +310,7 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
   }, [topicSummaries, loadingTopics]);
 
   if (chapters.length === 0) return (
-    <div className="text-center py-8" style={{ color: 'rgba(232,232,232,0.40)' }}>
+    <div className="text-center py-8" style={{ color: '#999' }}>
       <BookOpen size={32} className="mx-auto mb-2 opacity-30" />
       <p>No chapters available yet</p>
     </div>
@@ -323,16 +323,16 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
           ? `/${subject.board_slug}/${subject.class_slug}/${subject.slug}/${chapter.slug}`
           : null;
         return (
-          <AccordionItem key={chapter.id} value={chapter.id} className="glass-card rounded-xl border-0 px-4">
+          <AccordionItem key={chapter.id} value={chapter.id} className="chapter-textbook rounded-xl border-0 px-4">
             <AccordionTrigger className="hover:no-underline py-4" onClick={() => loadChapterData(chapter.id)}>
               <div className="flex items-center gap-3">
-                <span className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center text-xs font-semibold text-primary flex-shrink-0">
+                <span className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-semibold flex-shrink-0" style={{ background: 'rgba(124,58,237,0.08)', color: '#7c3aed' }}>
                   {chapter.chapter_number}
                 </span>
                 <div className="text-left min-w-0">
-                  <span className="text-sm font-medium text-foreground block">{chapter.title}</span>
+                  <span className="text-sm font-medium block" style={{ color: '#1a1a1a', fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>{chapter.title}</span>
                   {chapter.topics?.length > 0 && (
-                    <span className="text-[11px] text-muted-foreground">{chapter.topics.length} topics</span>
+                    <span className="text-[11px]" style={{ color: '#888' }}>{chapter.topics.length} topics</span>
                   )}
                 </div>
               </div>
@@ -350,14 +350,14 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
                 {chapter.description && <meta itemProp="description" content={chapter.description} />}
 
                 {chapter.description && (
-                  <p className="text-xs text-muted-foreground mb-3 px-1 leading-relaxed">{chapter.description}</p>
+                  <p className="text-xs mb-3 px-1 leading-relaxed" style={{ color: '#666' }}>{chapter.description}</p>
                 )}
 
                 {chapter.topics?.length > 0 && (
                   <div className="mb-3">
                     <div className="flex items-center gap-2 mb-2 px-1">
                       <List size={12} className="text-primary" />
-                      <span className="text-xs font-semibold text-foreground">
+                      <span className="text-xs font-semibold" style={{ color: '#1a1a1a' }}>
                         Syllabus Topics ({chapter.topics.length})
                       </span>
                     </div>
@@ -365,7 +365,8 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
                       {chapter.topics.map((t, i) => (
                         <span
                           key={i}
-                          className="text-[11px] px-2.5 py-1 rounded-lg bg-white/[0.04] text-gray-400 border border-white/[0.06]"
+                          className="text-[11px] px-2.5 py-1 rounded-lg"
+                          style={{ background: '#f3f4f6', color: '#555', border: '1px solid #e5e7eb' }}
                         >
                           {t}
                         </span>
@@ -377,29 +378,30 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
                 {chapterSeoPath && (
                   <Link
                     to={chapterSeoPath}
-                    className="block mb-3 px-4 py-3 rounded-xl bg-primary/5 border border-primary/10 hover:bg-primary/10 hover:border-primary/20 transition-all group/ch"
+                    className="block mb-3 px-4 py-3 rounded-xl transition-all group/ch"
+                    style={{ background: 'rgba(124,58,237,0.04)', border: '1px solid rgba(124,58,237,0.12)' }}
                     title={`${chapter.title} — ${subject.name} Notes & Study Material`}
                     itemProp="url"
                   >
                     <div className="flex items-center gap-2">
                       <FileText size={14} className="text-primary flex-shrink-0" />
-                      <span className="text-sm font-medium text-foreground group-hover/ch:text-primary transition-colors">
+                      <span className="text-sm font-medium group-hover/ch:text-primary transition-colors" style={{ color: '#1a1a1a' }}>
                         {chapter.title} — Full Notes
                       </span>
-                      <ChevronRight size={14} className="ml-auto text-muted-foreground group-hover/ch:text-primary flex-shrink-0 transition-colors" />
+                      <ChevronRight size={14} className="ml-auto group-hover/ch:text-primary flex-shrink-0 transition-colors" style={{ color: '#aaa' }} />
                     </div>
                   </Link>
                 )}
 
                 {chapter.content && (
                   <details className="group/details" open>
-                    <summary className="cursor-pointer flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground py-2 px-1">
+                    <summary className="cursor-pointer flex items-center gap-2 text-xs py-2 px-1" style={{ color: '#888' }}>
                       <BookText size={12} />
                       <span>Chapter Notes</span>
                       <ChevronDown size={12} className="ml-auto group-open/details:rotate-180 transition-transform" />
                     </summary>
                     <div className="px-1 py-2">
-                      <div className="md-content-light text-sm" itemProp="text">
+                      <div className="chapter-textbook text-sm" style={{ boxShadow: 'none' }} itemProp="text">
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{chapter.content}</ReactMarkdown>
                       </div>
                     </div>
@@ -408,7 +410,7 @@ function LegacyAccordion({ subject, subjectId, chapters }) {
 
                 {!chapter.content && !chapter.topics?.length && (
                   <div className="text-center py-4">
-                    <p className="text-sm text-muted-foreground">No content added yet</p>
+                    <p className="text-sm" style={{ color: '#999' }}>No content added yet</p>
                   </div>
                 )}
 
@@ -519,39 +521,39 @@ export default function SubjectPage() {
         </Link>
 
         {/* Header */}
-        <div className="glass-card rounded-2xl p-6">
+        <div className="chapter-textbook rounded-2xl p-6">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div className="flex items-center gap-4 min-w-0">
-              <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center text-3xl flex-shrink-0">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl flex-shrink-0" style={{ background: 'rgba(124,58,237,0.08)' }}>
                 {subject.icon || '📚'}
               </div>
               <div className="min-w-0">
-                <h1 className="text-xl font-semibold text-foreground truncate">{subject.name}</h1>
-                <p className="text-sm text-muted-foreground mt-0.5">{subject.description}</p>
+                <h1 className="text-xl font-semibold truncate" style={{ color: '#111', fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", border: 'none', margin: 0, padding: 0 }}>{subject.name}</h1>
+                <p className="text-sm mt-0.5" style={{ color: '#555' }}>{subject.description}</p>
                 <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-2">
                   {subject.board_name && (
-                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(124,58,237,0.08)', color: '#7c3aed' }}>
                       {subject.board_name}
                     </span>
                   )}
                   {subject.board_name && subject.class_name && (
-                    <span className="text-[11px] text-muted-foreground/40">·</span>
+                    <span className="text-[11px]" style={{ color: '#ccc' }}>·</span>
                   )}
                   {subject.class_name && (
-                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(59,130,246,0.08)', color: '#2563eb' }}>
                       {subject.class_name}
                     </span>
                   )}
                   {subject.class_name && subject.stream_name && (
-                    <span className="text-[11px] text-muted-foreground/40">·</span>
+                    <span className="text-[11px]" style={{ color: '#ccc' }}>·</span>
                   )}
                   {subject.stream_name && (
-                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(16,185,129,0.08)', color: '#059669' }}>
                       {subject.stream_name}
                     </span>
                   )}
-                  <span className="text-[11px] text-muted-foreground/40">·</span>
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-[11px]" style={{ color: '#ccc' }}>·</span>
+                  <span className="text-xs" style={{ color: '#888' }}>
                     <BookOpen size={12} className="inline mr-1" />{chapters.length} chapters
                   </span>
                 </div>
@@ -564,7 +566,7 @@ export default function SubjectPage() {
           {subject.tags?.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-4">
               {subject.tags.map(tag => (
-                <span key={tag} className="text-xs bg-primary/8 text-primary/80 px-2.5 py-1 rounded-full border border-primary/15">
+                <span key={tag} className="text-xs px-2.5 py-1 rounded-full" style={{ background: 'rgba(124,58,237,0.06)', color: '#7c3aed', border: '1px solid rgba(124,58,237,0.15)' }}>
                   {tag}
                 </span>
               ))}
