@@ -937,8 +937,8 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # async with slot["sem"] lets up to max_concurrent requests run in parallel.
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
-    _SLM_SLOT_TIMEOUT = 8.0    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 10.0   # max seconds to wait for FIRST token from a slot
+    _SLM_SLOT_TIMEOUT = 5.0    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 6.0    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
@@ -966,7 +966,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 logger.info(f"SLM pool: skipping {p_name}/{p_model} — input too large ({_input_chars} chars > {_max_chars} limit)")
                 _skipped_slots.add(id(slot))
                 continue
-            _effective_ttft = _SLM_TTFT_TIMEOUT + (5.0 if _input_chars > 8000 else 0.0)
+            _effective_ttft = _SLM_TTFT_TIMEOUT + (3.0 if _input_chars > 8000 else 0.0)
             try:
                 async with slot["sem"]:
                     token_q: asyncio.Queue = asyncio.Queue()

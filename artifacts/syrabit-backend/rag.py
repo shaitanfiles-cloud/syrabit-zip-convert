@@ -1978,18 +1978,13 @@ def build_rag_system_prompt(
     _has_syllabus_topic = bool(rag_context.get("syllabus_topic_name"))
     if quality == "high" and _has_syllabus_topic:
         base_prompt = _re.sub(
-            r'2\. OUT-OF-SCOPE GUARD:.*?(?=3\. FOCUS)',
+            r'2\. ANSWERING POLICY:.*?(?=3\. FOCUS)',
             '2. GROUNDING IS PRESENT: The grounding context below contains curriculum content '
             'that matches the student\'s question. You MUST answer from it. '
             'The student\'s wording may differ from the content (e.g. misspellings, alternate '
             'forms) — always treat the grounding as the correct match.\n',
             base_prompt,
             flags=_re.DOTALL,
-        )
-        base_prompt = _re.sub(
-            r"If grounding context is empty or missing AND the question is non-academic.*?\n",
-            "",
-            base_prompt,
         )
     chunks      = rag_context.get("chunks",   [])
     chapters    = rag_context.get("chapters", [])
