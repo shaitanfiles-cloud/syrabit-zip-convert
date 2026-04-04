@@ -286,7 +286,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                       className="truncate transition-colors flex-1 font-medium"
                       title={`${ch.title} — ${sub.name}`}
                       style={{
-                        color: hasWP ? '#93c5fd' : 'hsl(var(--foreground) / 0.75)',
+                        color: hasWP ? '#93c5fd' : '#60a5fa',
                         textShadow: hasWP ? '0 1px 3px rgba(0,0,0,0.5)' : 'none',
                       }}
                     >
