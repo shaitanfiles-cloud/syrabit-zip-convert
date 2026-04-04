@@ -1312,7 +1312,7 @@ async def health():
                 _llm_t0 = _time_mod.time()
                 _test_resp = await call_llm_api(
                     [{"role": "user", "content": "Reply with exactly: ok"}],
-                    model=None,
+                    model="sarvam-m",
                     max_tokens=4,
                 )
                 llm_latency = int((_time_mod.time() - _llm_t0) * 1000)
@@ -3334,7 +3334,7 @@ async def admin_cms_scraper_status(admin: dict = Depends(get_admin_user)):
         # Check LLM connectivity — quick probe (new plan generation fails if LLM is down)
         llm_ok = True
         try:
-            test_resp = await call_llm_api([{"role": "user", "content": "Say OK"}], max_tokens=5)
+            test_resp = await call_llm_api([{"role": "user", "content": "Say OK"}], model="sarvam-m", max_tokens=5)
             if not test_resp or len(test_resp.strip()) == 0:
                 llm_ok = False
         except Exception:

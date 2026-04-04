@@ -3,7 +3,6 @@ import os, re, json, asyncio, uuid, time, logging, httpx
 
 _MODEL_MAX_OUTPUT_TOKENS = {
     "llama-3.1-8b-instant": 8192,
-    "llama-3.3-70b-versatile": 32768,
     "gemini-2.5-flash": 65536,
     "gemini-2.0-flash": 8192,
 }
@@ -194,11 +193,13 @@ _MODEL_PROVIDER_MAP = {
     "qwen/qwen3-235b-a22b": "openrouter",
     "google/gemini-2.5-flash-preview": "openrouter",
     "meta-llama/llama-4-maverick": "openrouter",
+    "llama-3.3-70b-versatile": "openrouter",
 }
 
 _MODEL_ALIAS_MAP = {
     "openai/gpt-oss-20b": "accounts/fireworks/models/deepseek-v3p2",
     "openai/gpt-oss-120b": "qwen-3-235b-a22b-instruct-2507",
+    "llama-3.3-70b-versatile": "deepseek/deepseek-chat-v3-0324",
 }
 
 # ── SLM slot table ────────────────────────────────────────────────────────────
@@ -260,10 +261,12 @@ class _SmartKeyPool:
             f"{[(s['provider'], s['model'], s['max_con']) for s in self._slots]}"
         )
 
-    def pick(self):
+    def pick(self, exclude_ids: set = None):
         """Return best slot: not cooling down, prefer spare capacity, then fastest provider."""
         now = time.time()
         available = [s for s in self._slots if now >= s["cooldown_until"]]
+        if exclude_ids:
+            available = [s for s in available if id(s) not in exclude_ids]
         if not available:
             return None
         with_capacity = [s for s in available if s["sem"]._value > 0]
@@ -313,6 +316,23 @@ def _resolve_provider_for_model(model: str, provider_list=None):
     if plist:
         return plist[0]["provider"], plist[0]["key"]
     return LLM_PROVIDER, OPENAI_API_KEY
+
+
+def _safe_model_for_provider(model: str, provider: str, provider_list=None) -> str:
+    """Return a model name that the given provider actually supports.
+    If the requested model is already mapped to this provider, use it as-is.
+    For Sarvam, always use sarvam-m unless the model already starts with 'sarvam-'.
+    Otherwise fall back to the provider's configured default_model."""
+    if provider == "sarvam" and not model.startswith("sarvam-"):
+        return "sarvam-m"
+    mapped_provider = _MODEL_PROVIDER_MAP.get(model)
+    if mapped_provider == provider:
+        return model
+    plist = _LLM_PROVIDERS if provider_list is None else provider_list
+    matched = next((p for p in plist if p["provider"] == provider), None)
+    if matched:
+        return matched["default_model"]
+    return model
 
 async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens: int) -> str:
     """Non-streaming call to Sarvam LLM — reuses persistent sarvam_llm_client (zero TCP overhead).
@@ -463,7 +483,9 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     last_err = None
 
     provider, key = primary_provider, primary_key
-    try_model = use_model
+    try_model = _safe_model_for_provider(use_model, provider, providers)
+    if try_model != use_model:
+        logger.info(f"Model '{use_model}' not compatible with {provider} → using '{try_model}'")
     try:
         tried.add((provider, try_model, id(key) if key else 0))
         _t0 = _t.perf_counter()
@@ -768,13 +790,9 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     provider, key = _resolve_provider_for_model(use_model_resolved, _LLM_PROVIDERS_CHAT)
     if use_model_raw != use_model_resolved:
         logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
-    # If still not a known API model, fall back to provider default
-    if use_model_resolved not in _MODEL_PROVIDER_MAP:
-        matched = next((p for p in _LLM_PROVIDERS_CHAT if p["provider"] == provider), None)
-        use_model = matched["default_model"] if matched else LLM_MODEL
-        logger.info(f"Unknown model '{use_model_resolved}' → provider default '{use_model}' ({provider})")
-    else:
-        use_model = use_model_resolved
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _LLM_PROVIDERS_CHAT)
+    if use_model != use_model_resolved:
+        logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
 
     if not key and provider != "sarvam":
         yield f"data: {json.dumps({'error': 'LLM API key not configured'})}\n\n"
@@ -904,14 +922,32 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     _SLM_SLOT_TIMEOUT = 8.0    # max seconds between any two tokens mid-stream
     _SLM_TTFT_TIMEOUT = 10.0   # max seconds to wait for FIRST token from a slot
 
+    _SLM_PROVIDER_MAX_INPUT_CHARS = {
+        "cerebras": 24000,
+        "sarvam": 24000,
+        "fireworksai": 80000,
+        "gemini": 500000,
+        "openrouter": 200000,
+        "openai": 80000,
+        "bedrock": 40000,
+    }
+
     if use_model_raw == "openai/gpt-oss-20b":
+        _input_chars = sum(len(m.get("content", "")) for m in messages)
+        _skipped_slots: set = set()
         _tried = 0
         while _tried < len(_slm_pool.all_slots):
-            slot = _slm_pool.pick()
+            slot = _slm_pool.pick(_skipped_slots)
             if slot is None:
                 break
             _tried += 1
             p_name, p_key, p_model = slot["provider"], slot["key"], slot["model"]
+            _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
+            if _input_chars > _max_chars:
+                logger.info(f"SLM pool: skipping {p_name}/{p_model} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                _skipped_slots.add(id(slot))
+                continue
+            _effective_ttft = _SLM_TTFT_TIMEOUT + (5.0 if _input_chars > 8000 else 0.0)
             try:
                 async with slot["sem"]:
                     token_q: asyncio.Queue = asyncio.Queue()
@@ -921,20 +957,25 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     async def _producer(_pn=p_name, _pk=p_key, _pm=p_model):
                         nonlocal _producer_error
                         try:
+                            _chunk_count = 0
                             async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                                _chunk_count += 1
                                 await token_q.put(chunk)
+                            if _chunk_count == 0:
+                                logger.warning(f"SLM pool: {_pn}/{_pm} stream completed with 0 chunks (think-block stripping may have consumed all output)")
                         except Exception as exc:
                             _producer_error = exc
+                            logger.warning(f"SLM pool: {_pn}/{_pm} producer error: {type(exc).__name__}: {str(exc)[:200]}")
                         finally:
                             await token_q.put(None)
 
                     producer_task = asyncio.create_task(_producer())
                     try:
                         try:
-                            first_chunk = await asyncio.wait_for(token_q.get(), timeout=_SLM_TTFT_TIMEOUT)
+                            first_chunk = await asyncio.wait_for(token_q.get(), timeout=_effective_ttft)
                         except asyncio.TimeoutError:
                             _slm_pool.mark_err(slot)
-                            logger.warning(f"SLM pool: {p_name}/{p_model} TTFT timeout after {_SLM_TTFT_TIMEOUT}s → trying next")
+                            logger.warning(f"SLM pool: {p_name}/{p_model} TTFT timeout after {_effective_ttft}s (input_chars={_input_chars}) → trying next")
                             continue
 
                         if first_chunk is None:

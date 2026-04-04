@@ -1753,7 +1753,7 @@ async def resolve_rag_context(
 async def _ddg_text_search(query: str, num_results: int) -> list:
     """DuckDuckGo text search — primary browser-style web search."""
     def _run():
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         results = []
         with DDGS() as ddgs:
             for r in ddgs.text(query, max_results=num_results):
@@ -1776,7 +1776,7 @@ async def _ddg_text_search(query: str, num_results: int) -> list:
 async def _ddg_news_search(query: str, num_results: int) -> list:
     """DuckDuckGo news search — secondary fallback web source."""
     def _run():
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         results = []
         with DDGS() as ddgs:
             for r in ddgs.news(query, max_results=num_results):
