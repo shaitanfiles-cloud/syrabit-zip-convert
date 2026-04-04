@@ -217,6 +217,7 @@ _MODEL_ALIAS_MAP = {
 #
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "llama-3.3-70b-versatile",                           4, 0),
+    ("groq:2",      "llama-3.3-70b-versatile",                           4, 0),
     ("sarvam",      "sarvam-m",                                          4, 1),
     ("gemini",      "gemini-2.5-flash",                                  6, 2),
     ("gemini:2",    "gemini-2.5-flash",                                  6, 2),
