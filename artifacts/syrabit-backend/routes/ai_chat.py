@@ -38,6 +38,21 @@ from prompts import _classify_intent, classify_intent, _is_out_of_scope_response
 from subject_router import build_search_scope
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
 
+_CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
+
+def _tune_response_stream(chunk_text: str, intent: str, _buf: dict) -> str:
+    _buf["total"] += chunk_text
+    _buf["chars"] += len(chunk_text)
+
+    text = chunk_text
+    if _buf["chars"] < 100:
+        text = re.sub(r'^(Sure!|Of course!|Absolutely!|Great question!|Hello!)\s*', '', text, flags=re.IGNORECASE)
+        text = re.sub(r"^(Let me explain|Here's|I'd be happy to)\s*[.!,]?\s*", '', text, flags=re.IGNORECASE)
+
+    text = re.sub(r'\n{3,}', '\n\n', text)
+
+    return text
+
 def _safe_metadata(raw) -> dict:
     if isinstance(raw, dict):
         return raw
@@ -967,6 +982,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _first_token_logged = False
                 _output_buf = ""
                 _output_violation = False
+                _tune_buf = {"total": "", "chars": 0}
                 async for chunk in call_llm_api_stream(messages_payload, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens, intent=_stream_intent):
                     if '"content"' in chunk:
                         if not _first_token_logged:
@@ -975,8 +991,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         try:
                             data = json.loads(chunk[6:])
                             _piece = data.get("content", "")
-                            full_response.append(_piece)
-                            _output_buf += _piece
+                            _tuned = _tune_response_stream(_piece, _stream_intent, _tune_buf)
+                            full_response.append(_tuned)
+                            _output_buf += _tuned
+                            if _tuned != _piece:
+                                chunk = f"data: {json.dumps({'content': _tuned})}\n\n"
                             if len(_output_buf) > 200:
                                 _out_safe, _out_tag = validate_llm_output(_output_buf)
                                 if not _out_safe:

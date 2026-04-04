@@ -243,12 +243,27 @@ class _SmartKeyPool:
       last_used      float timestamp — for mark_ok tracking
       cooldown_until float timestamp — set after 429 / errors
       errors         int            — error count for exponential back-off
+      rpm_window     list[float]    — timestamps of requests in the current minute
+      rpm_limit      int            — max requests per minute for this provider
 
-    pick() prefers slots with spare capacity first, then among those picks
-    the fastest provider (lowest priority index).
+    pick() uses RPM-aware scoring: when a slot hits 70-80% of its RPM limit,
+    it gets deprioritized so traffic shifts to the next provider BEFORE hitting 429.
     """
-    _RL_COOLDOWN  = 30.0   # 429 rate-limit → skip slot for 30 s
-    _ERR_COOLDOWN = 10.0   # any other error → skip for 10 s
+    _RL_COOLDOWN  = 30.0
+    _ERR_COOLDOWN = 10.0
+    _RPM_SOFT_THRESHOLD = 0.70
+    _RPM_HARD_THRESHOLD = 0.85
+
+    _PROVIDER_RPM_LIMITS = {
+        "groq": 30,
+        "cerebras": 30,
+        "sarvam": 60,
+        "gemini": 30,
+        "openrouter": 60,
+        "fireworksai": 60,
+        "openai": 60,
+        "bedrock": 30,
+    }
 
     def __init__(self, candidates: list):
         pmap: dict = {}
@@ -267,42 +282,87 @@ class _SmartKeyPool:
                 if real_provider == "bedrock" and not (_AWS_ACCESS_KEY and _AWS_SECRET_KEY):
                     logger.info("SLM pool: skipping bedrock slot (AWS credentials not set)")
                     continue
+                rpm = self._PROVIDER_RPM_LIMITS.get(real_provider, 30)
                 self._slots.append({
                     "provider": real_provider, "key": key, "model": model_id,
                     "sem": asyncio.Semaphore(max_con), "max_con": max_con,
                     "last_used": 0.0, "cooldown_until": 0.0, "errors": 0,
                     "priority": tier,
+                    "rpm_window": [], "rpm_limit": rpm,
+                    "base_priority": tier,
                 })
         logger.info(
             f"SLM SmartKeyPool active slots: "
-            f"{[(s['provider'], s['model'], s['max_con']) for s in self._slots]}"
+            f"{[(s['provider'], s['model'], s['max_con'], s['rpm_limit']) for s in self._slots]}"
         )
 
+    def _rpm_count(self, slot):
+        now = time.time()
+        cutoff = now - 60.0
+        slot["rpm_window"] = [t for t in slot["rpm_window"] if t > cutoff]
+        return len(slot["rpm_window"])
+
+    def _rpm_ratio(self, slot):
+        count = self._rpm_count(slot)
+        return count / slot["rpm_limit"] if slot["rpm_limit"] > 0 else 0.0
+
+    def _record_request(self, slot):
+        slot["rpm_window"].append(time.time())
+
+    def _effective_priority(self, slot):
+        ratio = self._rpm_ratio(slot)
+        base = slot["base_priority"]
+        if ratio >= self._RPM_HARD_THRESHOLD:
+            return base + 100
+        if ratio >= self._RPM_SOFT_THRESHOLD:
+            return base + 10
+        return base
+
     def pick(self, exclude_ids: set = None):
-        """Return best slot: not cooling down, prefer spare capacity, then fastest provider."""
         now = time.time()
         available = [s for s in self._slots if now >= s["cooldown_until"]]
         if exclude_ids:
             available = [s for s in available if id(s) not in exclude_ids]
         if not available:
             return None
+
+        for s in available:
+            if self._rpm_ratio(s) >= self._RPM_HARD_THRESHOLD:
+                remaining = self._seconds_until_rpm_drop(s)
+                if remaining > 0:
+                    logger.info(
+                        f"SLM pool: {s['provider']}/{s['model']} at {self._rpm_ratio(s)*100:.0f}% RPM "
+                        f"({self._rpm_count(s)}/{s['rpm_limit']}) — deprioritizing for ~{remaining:.0f}s"
+                    )
+
         with_capacity = [s for s in available if s["sem"]._value > 0]
         pool = with_capacity if with_capacity else available
-        return min(pool, key=lambda s: (s["priority"], s["max_con"] - s["sem"]._value))
+        return min(pool, key=lambda s: (self._effective_priority(s), s["max_con"] - s["sem"]._value))
+
+    def _seconds_until_rpm_drop(self, slot):
+        if not slot["rpm_window"]:
+            return 0
+        cutoff = time.time() - 60.0
+        future_exits = [t - cutoff for t in slot["rpm_window"] if t > cutoff]
+        if not future_exits:
+            return 0
+        return min(future_exits)
 
     def mark_ok(self, slot):
         slot["last_used"] = time.time()
         slot["errors"] = 0
+        self._record_request(slot)
 
     def mark_429(self, slot):
         slot["cooldown_until"] = time.time() + self._RL_COOLDOWN
+        self._record_request(slot)
         logger.warning(
-            f"SLM pool: {slot['provider']}/{slot['model']} → 429 rate-limit, "
-            f"cooling {self._RL_COOLDOWN}s"
+            f"SLM pool: {slot['provider']}/{slot['model']} → 429 rate-limit "
+            f"(RPM {self._rpm_count(slot)}/{slot['rpm_limit']}), cooling {self._RL_COOLDOWN}s"
         )
 
     def mark_403(self, slot):
-        slot["cooldown_until"] = float("inf")  # permanently disabled for session
+        slot["cooldown_until"] = float("inf")
         logger.error(
             f"SLM pool: {slot['provider']}/{slot['model']} → 403 Forbidden (auth/permission error). "
             f"Slot permanently disabled. Check the API key for '{slot['provider']}'."
@@ -310,12 +370,24 @@ class _SmartKeyPool:
 
     def mark_err(self, slot):
         slot["errors"] += 1
-        cd = min(self._ERR_COOLDOWN * slot["errors"], 120.0)   # cap at 2 min
+        cd = min(self._ERR_COOLDOWN * slot["errors"], 120.0)
         slot["cooldown_until"] = time.time() + cd
         logger.warning(
             f"SLM pool: {slot['provider']}/{slot['model']} → error #{slot['errors']}, "
             f"cooling {cd:.0f}s"
         )
+
+    def rpm_status(self):
+        return [
+            {
+                "provider": s["provider"], "model": s["model"],
+                "rpm_used": self._rpm_count(s), "rpm_limit": s["rpm_limit"],
+                "rpm_pct": round(self._rpm_ratio(s) * 100, 1),
+                "effective_priority": self._effective_priority(s),
+                "cooldown": s["cooldown_until"] > time.time(),
+            }
+            for s in self._slots
+        ]
 
     @property
     def all_slots(self):
