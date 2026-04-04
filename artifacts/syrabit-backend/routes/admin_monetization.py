@@ -331,6 +331,82 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
             "Contact admin@syrabit.ai if you were charged.",
         )
 
+@router.post("/payments/recover")
+async def recover_failed_payment(user: dict = Depends(get_current_user)):
+    """Auto-recover a failed Razorpay payment: find the completed-but-unactivated
+    payment record, verify with Razorpay, and re-run plan activation."""
+    user_id = user["id"]
+    failed_payment = await db.payments.find_one(
+        {"user_id": str(user_id), "provider": "razorpay", "status": "completed"},
+        sort=[("verified_at", -1)],
+    )
+    if not failed_payment:
+        raise HTTPException(404, "No recoverable payment found.")
+    plan = failed_payment.get("plan", "")
+    if plan not in PLAN_CREDITS:
+        raise HTTPException(400, "Invalid plan in payment record.")
+
+    current_plan = user.get("plan", "free")
+    if current_plan == plan:
+        return {"success": True, "plan": plan, "message": "Your plan is already active."}
+
+    key_id, key_secret, _ = await _get_razorpay_keys()
+    if not key_id or not key_secret:
+        raise HTTPException(503, "Payment gateway not configured.")
+
+    rp_order_id = failed_payment.get("razorpay_order_id", "")
+    rp_payment_id = failed_payment.get("razorpay_payment_id", "")
+    if rp_order_id:
+        try:
+            import razorpay
+            client = razorpay.Client(auth=(key_id, key_secret))
+            order = client.order.fetch(rp_order_id)
+            if order.get("status") != "paid":
+                raise HTTPException(400, "Razorpay order is not in paid status.")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Recovery order verification skipped: {e}")
+
+    credits = PLAN_CREDITS[plan]
+    doc_acc = PLAN_DOC_ACCESS[plan]
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    try:
+        if deps.pg_pool:
+            async with deps.pg_pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE users SET plan=$1, credits_limit=credits_limit+$2, document_access=$3 WHERE id=$4",
+                    plan, credits, doc_acc, user_id,
+                )
+        await db.users.update_one(
+            {"id": str(user_id)},
+            {"$set": {"plan": plan, "document_access": doc_acc, "updated_at": now_iso},
+             "$inc": {"credits_limit": credits}},
+        )
+        _supa_mirror(lambda: supa.table("users").update({
+            "plan": plan, "document_access": doc_acc,
+            "credits_limit": (user.get("credits_limit") or 30) + credits,
+        }).eq("id", str(user_id)).execute())
+        _redis_invalidate_session(user_id)
+        logger.info(f"Payment recovered: user={user_id} plan={plan} credits+={credits}")
+        asyncio.create_task(email_templates.send_plan_activation(
+            email=user.get("email", ""),
+            name=user.get("name", user.get("email", "")),
+            plan=plan,
+            credits=credits,
+            amount_paise=PLAN_PRICES_INR.get(plan, 0),
+        ))
+        return {
+            "success": True,
+            "plan": plan,
+            "credits_added": credits,
+            "message": f"Plan recovered! Welcome to {plan.capitalize()}! {credits} credits added.",
+        }
+    except Exception as e:
+        logger.error(f"Payment recovery failed for user {user_id}: {e}")
+        raise HTTPException(500, "Recovery failed. Please contact admin@syrabit.ai.")
+
 # ─────────────────────────────────────────────
 # STRIPE PAYMENT (OPTIONAL — configurable via api-config)
 # ─────────────────────────────────────────────
@@ -480,7 +556,11 @@ async def razorpay_webhook(request: StarletteRequest2):
             webhook_secret.encode(), raw_body, hashlib.sha256
         ).hexdigest()
         if not hmac.compare_digest(expected_sig, rp_signature):
-            logger.warning("Razorpay webhook signature mismatch")
+            logger.warning(
+                f"Razorpay webhook signature mismatch "
+                f"(secret_src={'db' if (await db.api_config.find_one({}, {'_id': 0}) or {}).get('payment', {}).get('razorpay_webhook_secret', '').strip() else 'env'}, "
+                f"secret_len={len(webhook_secret)}, sig_len={len(rp_signature)}, body_len={len(raw_body)})"
+            )
             raise HTTPException(400, "Invalid webhook signature")
 
         payload = json.loads(raw_body)

@@ -193,7 +193,19 @@ export default function ProfilePage() {
           toast.success(`🎉 ${PLANS[paymentPlan]?.label} plan activated!`, { description: `${PLANS[paymentPlan]?.credits.toLocaleString()} AI credits added to your account.` });
           setShowPaymentModal(false);
           await refreshData();
-        } catch { toast.error('Payment received but verification failed. Please contact admin@syrabit.ai.'); }
+        } catch {
+          try {
+            const { recoverPayment } = await import('@/utils/api');
+            const res = await recoverPayment();
+            if (res.data?.success) {
+              toast.success(`🎉 ${PLANS[paymentPlan]?.label} plan activated!`, { description: 'Payment recovered successfully.' });
+              setShowPaymentModal(false);
+              await refreshData();
+              return;
+            }
+          } catch {}
+          toast.error('Payment received but verification failed. Please contact admin@syrabit.ai.');
+        }
         finally { setPaymentLoading(false); }
       });
     } catch { toast.error('Something went wrong. Please try again.'); setPaymentLoading(false); }

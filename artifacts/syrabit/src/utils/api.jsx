@@ -320,6 +320,9 @@ export const createPaymentOrder = (plan) =>
 export const verifyPayment = (data) =>
   axios.post(`${API_BASE}/payments/verify`, data, authConfig());
 
+export const recoverPayment = () =>
+  axios.post(`${API_BASE}/payments/recover`, {}, authConfig());
+
 export const createCreditTopUp = (credits) =>
   axios.post(`${API_BASE}/payments/credit-topup`, { credits, provider: 'razorpay' }, authConfig());
 
