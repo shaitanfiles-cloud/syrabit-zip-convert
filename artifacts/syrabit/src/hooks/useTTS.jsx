@@ -187,12 +187,15 @@ export function useTTS() {
     };
   }, []);
 
+  const playingRef = useRef(false);
+
   const speak = useCallback(async (rawText, msgId) => {
-    cleanup();
+    if (playingRef.current) return;
+    playingRef.current = true;
     abortRef.current = false;
 
     const text = stripMarkdown(rawText);
-    if (!text) return;
+    if (!text) { playingRef.current = false; return; }
 
     setState('loading');
     setActiveMsgId(msgId || null);
@@ -264,6 +267,7 @@ export function useTTS() {
         toast.error(err.message || 'Voice playback failed');
       }
     } finally {
+      playingRef.current = false;
       if (!abortRef.current) {
         setState('idle');
         setActiveMsgId(null);
@@ -272,9 +276,10 @@ export function useTTS() {
       currentUrlsRef.current = [];
       fetchControllerRef.current = null;
     }
-  }, [cleanup]);
+  }, []);
 
   const stop = useCallback(() => {
+    playingRef.current = false;
     cleanup();
   }, [cleanup]);
 
