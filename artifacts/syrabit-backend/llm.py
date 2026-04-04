@@ -207,8 +207,7 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("sarvam",      "sarvam-m",                                          4, 0),
-    ("cerebras",    "llama3.1-8b",                                       6, 1),
+    ("cerebras",    "llama3.1-8b",                                       6, 0),
     ("gemini",      "gemini-2.5-flash",                                  6, 2),
     ("gemini:2",    "gemini-2.5-flash",                                  6, 2),
     ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 3),
