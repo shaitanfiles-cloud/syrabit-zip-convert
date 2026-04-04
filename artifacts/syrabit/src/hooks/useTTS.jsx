@@ -170,7 +170,22 @@ export function useTTS() {
     setActiveMsgId(null);
   }, []);
 
-  useEffect(() => cleanup, [cleanup]);
+  useEffect(() => {
+    return () => {
+      abortRef.current = true;
+      if (fetchControllerRef.current) {
+        fetchControllerRef.current.abort();
+        fetchControllerRef.current = null;
+      }
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = '';
+        audioRef.current = null;
+      }
+      currentUrlsRef.current.forEach(url => URL.revokeObjectURL(url));
+      currentUrlsRef.current = [];
+    };
+  }, []);
 
   const speak = useCallback(async (rawText, msgId) => {
     cleanup();
@@ -184,45 +199,58 @@ export function useTTS() {
     const chunks = chunkText(text);
     const lang = getTTSLang();
 
+    const fetchChunkAudio = async (chunkText, signal) => {
+      const res = await fetch(`${API_BASE}/sarvam/tts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          text: chunkText,
+          target_language_code: lang,
+          speaker: 'karun',
+        }),
+        signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'TTS request failed');
+      }
+      const data = await res.json();
+      if (!data.audio_base64) throw new Error('No audio returned');
+      const binary = atob(data.audio_base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+      const blob = new Blob([bytes], { type: 'audio/wav' });
+      const url = URL.createObjectURL(blob);
+      currentUrlsRef.current.push(url);
+      return url;
+    };
+
     try {
+      let nextAudioPromise = null;
+
       for (let i = 0; i < chunks.length; i++) {
         if (abortRef.current) return;
 
         const controller = new AbortController();
         fetchControllerRef.current = controller;
 
-        const res = await fetch(`${API_BASE}/sarvam/tts`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({
-            text: chunks[i],
-            target_language_code: lang,
-            speaker: 'karun',
-          }),
-          signal: controller.signal,
-        });
-
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.detail || 'TTS request failed');
-        }
-
-        const data = await res.json();
-        if (!data.audio_base64) throw new Error('No audio returned');
+        const audioUrl = nextAudioPromise
+          ? await nextAudioPromise
+          : await fetchChunkAudio(chunks[i], controller.signal);
 
         if (abortRef.current) return;
 
-        const binary = atob(data.audio_base64);
-        const bytes = new Uint8Array(binary.length);
-        for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-        const blob = new Blob([bytes], { type: 'audio/wav' });
-        const url = URL.createObjectURL(blob);
-        currentUrlsRef.current.push(url);
+        if (i + 1 < chunks.length) {
+          const nextController = new AbortController();
+          nextAudioPromise = fetchChunkAudio(chunks[i + 1], nextController.signal);
+        } else {
+          nextAudioPromise = null;
+        }
 
         await new Promise((resolve, reject) => {
           if (abortRef.current) { resolve(); return; }
-          const audio = new Audio(url);
+          const audio = new Audio(audioUrl);
           audioRef.current = audio;
           setState('playing');
           audio.onended = resolve;
