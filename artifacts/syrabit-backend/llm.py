@@ -217,18 +217,17 @@ _MODEL_ALIAS_MAP = {
 #
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "llama-3.3-70b-versatile",                           4, 0),
-    ("sarvam",      "sarvam-m",                                          4, 1),
-    ("gemini",      "gemini-2.5-flash",                                  6, 2),
-    ("gemini:2",    "gemini-2.5-flash",                                  6, 2),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 3),
-    ("openai",      "gpt-4o-mini",                                       4, 4),
-    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 5),
+    ("gemini",      "gemini-2.5-flash",                                  6, 1),
+    ("gemini:2",    "gemini-2.5-flash",                                  6, 1),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 2),
+    ("openai",      "gpt-4o-mini",                                       4, 3),
+    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 4),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
-    ("cerebras",    "llama3.1-8b",                                       6, 0),
-    ("groq:2",      "llama-3.3-70b-versatile",                           4, 1),
-    ("sarvam",      "sarvam-m",                                          4, 2),
+    ("sarvam",      "sarvam-m",                                          4, 0),
+    ("cerebras",    "llama3.1-8b",                                       6, 1),
+    ("groq:2",      "llama-3.3-70b-versatile",                           4, 2),
     ("gemini",      "gemini-2.5-flash",                                  6, 3),
 ]
 
