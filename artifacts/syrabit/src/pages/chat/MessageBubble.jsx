@@ -8,7 +8,7 @@ import { toast } from 'sonner';
 import { ThinkingIndicator } from './ThinkingIndicator';
 import { MarkdownContent } from './MarkdownContent';
 
-export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast, messageIndex, conversationId, tts, sarvamEnabled }) {
+export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast, messageIndex, conversationId }) {
   const [copied, setCopied] = useState(false);
   const [reaction, setReaction] = useState(null);
   const [showComment, setShowComment] = useState(false);
@@ -18,7 +18,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
   const navigate = useNavigate();
   const isUser = msg.role === 'user';
 
-  const isThisMsgActive = tts && tts.activeMsgId === msg.id;
+
 
   const sendFeedback = async (type, value) => {
     try {

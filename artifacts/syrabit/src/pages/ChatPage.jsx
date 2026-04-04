@@ -18,8 +18,6 @@ import { MessageBubble } from './chat/MessageBubble';
 import { EmptyState } from './chat/EmptyState';
 import { InputBar } from './chat/InputBar';
 import { ModelSelector, MODELS } from './chat/ModelSelector';
-import { TTSLanguagePicker } from './chat/TTSLanguagePicker';
-import { useTTS, useSarvamStatus } from '@/hooks/useTTS';
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
@@ -42,8 +40,6 @@ export default function ChatPage() {
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
 
-  const tts = useTTS();
-  const { enabled: sarvamEnabled } = useSarvamStatus();
 
   const messagesEndRef    = useRef(null);
   const textareaRef       = useRef(null);
@@ -297,9 +293,6 @@ export default function ChatPage() {
           ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, rag_board_name: ragBoardName, rag_class_name: ragClassName, rag_stream_name: ragStreamName, rag_topic_name: ragTopicName, ctx_subject_name: subject?.name || null, ctx_subject_icon: ragSubjectIcon || subject?.icon || null, ctx_subject_gradient: ragSubjectGradient || subject?.gradient || null, sources: libSources }
           : m
       ));
-      if (sarvamEnabled && fullContent) {
-        tts.speak(fullContent, aiMsgId);
-      }
       setSyncState('idle');
     } catch (err) {
       if (err.name === 'AbortError') return;
@@ -356,7 +349,7 @@ export default function ChatPage() {
               <EmptyState subject={subject} scopedChapters={scopedChapters} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
             )}
               {messages.map((msg, i) => (
-                <MessageBubble key={msg.id || i} msg={msg} isLast={i === messages.length - 1} onCopy={() => setCopiedMsgId(msg.id)} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} tts={tts} sarvamEnabled={sarvamEnabled} />
+                <MessageBubble key={msg.id || i} msg={msg} isLast={i === messages.length - 1} onCopy={() => setCopiedMsgId(msg.id)} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} />
               ))}
             <div ref={messagesEndRef} />
           </div>
@@ -367,7 +360,6 @@ export default function ChatPage() {
           isOutOfCredits={isOutOfCredits} isLow={isLow} credits={credits}
           effectiveLimit={effectiveLimit} remaining={remaining} creditPercent={creditPercent}
           textareaRef={textareaRef} adjustTextarea={adjustTextarea} sendMsg={sendMsg} handleStop={handleStop}
-          ttsLanguagePicker={<TTSLanguagePicker />}
         />
       </div>
     </AppLayout>
