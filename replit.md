@@ -26,7 +26,7 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 - **Optional Authentication:** Chat, History, and Profile pages are accessible without login. Anonymous users get a `syrabit_anon_id` (128-bit random, stored in localStorage) for conversation persistence in Upstash Redis (7-day TTL, max 20 conversations). Conversations are sent via `x-anon-id` header. IP-based rate limiting applies to anon users.
 - **Security:** Uses ASGI-native `SecurityHeadersMiddleware` with env-toggleable headers (`SEC_HSTS`, `SEC_XCTO`, `SEC_XFRAME`, `SEC_REFERRER`, `SEC_PERM`, `SEC_CSP_REPORT_ONLY`). CSP report-only mode available. Includes prompt safety guardrails module (`guardrails/prompt_safety.py`) for injection/cheating/sensitive content blocking.
 - **Privacy:** DPDP Act consent tracked per-user (version + timestamp). `/api/privacy/consent` GET/POST for viewing/withdrawing consent. Consent checkbox on signup.
-- **Performance Optimizations:** Implements bounded content caching, efficient JWT decoding, thread pooling for Supabase calls, and MongoDB indexing.
+- **Performance Optimizations:** Implements bounded content caching, efficient JWT decoding, thread pooling (32 workers) for Supabase calls, MongoDB indexing, hierarchy cache (stream→class→board, 30min TTL), and AsyncOpenAI client pooling (SHA-256-keyed cache avoids per-request instantiation).
 - **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection, and SEO prompts generate FAQ blocks and specific citations.
 
 **Frontend Architecture:**
@@ -35,7 +35,7 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 - **Component Refactoring:** Large files are split into sub-components for maintainability.
 - **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` serves cached pre-rendered HTML for search engine bots on key pages.
 - **Bot Crawlability:** Backend serves `/robots.txt` (with rules for 16+ bot user-agents), `/sitemap.xml` (301→`/api/seo/sitemap.xml`), and `/sitemap-index.xml` (301→`/api/seo/sitemap-index.xml`) directly. `Allow: /api/seo/` ensures sitemap sub-files are crawlable despite `Disallow: /api/`. Vite `public/robots.txt` mirrors the backend version for consistency.
-- **Performance Optimizations:** Includes emergent badge suppression, PWA icon optimization, lazy-loading CMS sections, React Query for caching, CSS grid for content display, and prefetching for navigation.
+- **Performance Optimizations:** Includes emergent badge suppression, PWA icon optimization, lazy-loading CMS sections, React Query for caching, CSS grid for content display, prefetching for navigation, admin panel lazy-loaded sub-components (20 sections via React.lazy), CSS containment on chat bubbles, and `MarkdownContent`/`BottomNav` memoized with `memo()`.
 - **SEO Chapter Pages:** Chapter pages (`ChapterPage.jsx`) serve as the single SEO landing pages at `/{board}/{class}/{subject}/{chapter}`. Old 5-segment topic URLs redirect to the parent chapter. Share button includes SERP preview modal. Sitemap includes `sitemap-chapters.xml` for all chapter URLs.
 - **Content Display:** Library page features subject cards with chapter links to chapter pages. Lesson pages have a blog-style layout with reading progress and sticky TOC.
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.

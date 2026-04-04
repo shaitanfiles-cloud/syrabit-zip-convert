@@ -6,8 +6,8 @@ workers         = int(os.environ.get("GUNICORN_WORKERS", min(multiprocessing.cpu
 worker_class    = "uvicorn.workers.UvicornWorker"
 threads         = 4
 
-# Long timeouts so uploads / bulk-generation never cut off mid-request
-timeout         = 600
+# Long enough for bulk-generation; LLM calls have 120s internal timeout
+timeout         = 300
 graceful_timeout = 60
 keepalive       = 10
 

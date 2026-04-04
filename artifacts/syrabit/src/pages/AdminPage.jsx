@@ -3,7 +3,7 @@
  * Full spec rebuild: AdminShell with 15 sections, 6 navigation groups,
  * collapsible sidebar, system status badge, admin name/session display.
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   LayoutDashboard, GitBranch, BookOpen, Users,
@@ -16,27 +16,26 @@ import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
 
-// ── Section components ────────────────────────────────────────────────────────
-import AdminDashboard        from '@/components/admin/AdminDashboard';
-import AdminRoadmap          from '@/components/admin/AdminRoadmap';
-import AdminContentHub       from '@/components/admin/AdminContentHub';
-import AdminUsers            from '@/components/admin/AdminUsers';
-import AdminConversations    from '@/components/admin/AdminConversations';
-import AdminAnalytics        from '@/components/admin/AdminAnalytics';
-import AdminPlans            from '@/components/admin/AdminPlans';
-import AdminNotifications    from '@/components/admin/AdminNotifications';
-import AdminApiConfig        from '@/components/admin/AdminApiConfig';
-import AdminGoogleAuth       from '@/components/admin/AdminGoogleAuth';
-import AdminSettings         from '@/components/admin/AdminSettings';
-import AdminRateLimits       from '@/components/admin/AdminRateLimits';
-import AdminActivityLog      from '@/components/admin/AdminActivityLog';
-import AdminHealth           from '@/components/admin/AdminHealth';
-import AdminSeoManager       from '@/components/admin/AdminSeoManager';
-import AdminMonetization     from '@/components/admin/AdminMonetization';
-import AdminVertexPanel      from '@/components/admin/AdminVertexPanel';
-import AdminAutomation       from '@/components/admin/AdminAutomation';
-import AdminIntelligence     from '@/components/admin/AdminIntelligence';
-import AdminFeedback         from '@/components/admin/AdminFeedback';
+const AdminDashboard     = lazy(() => import('@/components/admin/AdminDashboard'));
+const AdminRoadmap       = lazy(() => import('@/components/admin/AdminRoadmap'));
+const AdminContentHub    = lazy(() => import('@/components/admin/AdminContentHub'));
+const AdminUsers         = lazy(() => import('@/components/admin/AdminUsers'));
+const AdminConversations = lazy(() => import('@/components/admin/AdminConversations'));
+const AdminAnalytics     = lazy(() => import('@/components/admin/AdminAnalytics'));
+const AdminPlans         = lazy(() => import('@/components/admin/AdminPlans'));
+const AdminNotifications = lazy(() => import('@/components/admin/AdminNotifications'));
+const AdminApiConfig     = lazy(() => import('@/components/admin/AdminApiConfig'));
+const AdminGoogleAuth    = lazy(() => import('@/components/admin/AdminGoogleAuth'));
+const AdminSettings      = lazy(() => import('@/components/admin/AdminSettings'));
+const AdminRateLimits    = lazy(() => import('@/components/admin/AdminRateLimits'));
+const AdminActivityLog   = lazy(() => import('@/components/admin/AdminActivityLog'));
+const AdminHealth        = lazy(() => import('@/components/admin/AdminHealth'));
+const AdminSeoManager    = lazy(() => import('@/components/admin/AdminSeoManager'));
+const AdminMonetization  = lazy(() => import('@/components/admin/AdminMonetization'));
+const AdminVertexPanel   = lazy(() => import('@/components/admin/AdminVertexPanel'));
+const AdminAutomation    = lazy(() => import('@/components/admin/AdminAutomation'));
+const AdminIntelligence  = lazy(() => import('@/components/admin/AdminIntelligence'));
+const AdminFeedback      = lazy(() => import('@/components/admin/AdminFeedback'));
 
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
@@ -345,20 +344,22 @@ export default function AdminPage() {
 
         {/* Section content */}
         <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
-          <ActiveComponent
-            adminToken={adminToken}
-            adminName={adminName}
-            onNavigate={(section, ctx = null) => {
-              if (section === 'blog') {
-                setNavContext({ initialTab: 'blog' });
-                setActiveSection('contenthub');
-              } else {
-                setNavContext(ctx);
-                setActiveSection(section);
-              }
-            }}
-            navContext={activeSection === 'users' || activeSection === 'contenthub' ? navContext : null}
-          />
+          <Suspense fallback={<div className="flex items-center justify-center h-40"><Loader2 className="w-6 h-6 animate-spin text-purple-400" /></div>}>
+            <ActiveComponent
+              adminToken={adminToken}
+              adminName={adminName}
+              onNavigate={(section, ctx = null) => {
+                if (section === 'blog') {
+                  setNavContext({ initialTab: 'blog' });
+                  setActiveSection('contenthub');
+                } else {
+                  setNavContext(ctx);
+                  setActiveSection(section);
+                }
+              }}
+              navContext={activeSection === 'users' || activeSection === 'contenthub' ? navContext : null}
+            />
+          </Suspense>
         </main>
       </div>
     </div>

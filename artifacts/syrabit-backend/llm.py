@@ -1,5 +1,6 @@
 """Syrabit.ai — LLM infrastructure: batching, smart key pool, streaming."""
-import os, re, json, asyncio, uuid, time, logging, httpx
+import os, re, json, asyncio, uuid, time, logging, httpx, hashlib
+import openai as _oai
 
 _MODEL_MAX_OUTPUT_TOKENS = {
     "llama-3.1-8b-instant": 8192,
@@ -23,6 +24,17 @@ from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_log
 from cache import _cache_key
 
 logger = logging.getLogger(__name__)
+
+_oai_client_cache: Dict[str, _oai.AsyncOpenAI] = {}
+
+def _get_oai_client(api_key: str, base_url: str) -> _oai.AsyncOpenAI:
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:16]
+    ck = f"{base_url}|{key_hash}"
+    client = _oai_client_cache.get(ck)
+    if client is None:
+        client = _oai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        _oai_client_cache[ck] = client
+    return client
 
 _LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 20)))
 _ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCURRENT", 6)))
@@ -475,10 +487,9 @@ def _handle_cf_connection_error(exc: Exception) -> None:
 
 async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
     """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
-    import openai as _oai
     direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
     base = get_provider_base_url("gemini") or direct_base
-    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    client = _get_oai_client(api_key, base)
     try:
         resp = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
@@ -487,7 +498,7 @@ async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int
     except _oai.APIConnectionError as e:
         if base != direct_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
-            client = _oai.AsyncOpenAI(api_key=api_key, base_url=direct_base)
+            client = _get_oai_client(api_key, direct_base)
             resp = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
             )
@@ -498,9 +509,8 @@ async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int
 
 async def _call_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str) -> str:
     """Non-streaming call via an OpenAI-compatible provider (OpenAI, xAI, Fireworks)."""
-    import openai as _oai
     base = get_provider_base_url(provider) or fallback_base
-    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    client = _get_oai_client(api_key, base)
     try:
         resp = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
@@ -509,7 +519,7 @@ async def _call_openai_compat(messages: list, api_key: str, model: str, max_toke
     except _oai.APIConnectionError as e:
         if base != fallback_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
-            client = _oai.AsyncOpenAI(api_key=api_key, base_url=fallback_base)
+            client = _get_oai_client(api_key, fallback_base)
             resp = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
             )
@@ -519,11 +529,7 @@ async def _call_openai_compat(messages: list, api_key: str, model: str, max_toke
     return re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
 
 async def _call_cerebras(messages: list, api_key: str, model: str, max_tokens: int) -> str:
-    import openai as _oai
-    client = _oai.AsyncOpenAI(
-        api_key=api_key,
-        base_url="https://api.cerebras.ai/v1",
-    )
+    client = _get_oai_client(api_key, "https://api.cerebras.ai/v1")
     resp = await client.chat.completions.create(
         model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
     )
@@ -729,10 +735,9 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
 
 async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: int):
     """Token-by-token streaming from Google Gemini via its OpenAI-compatible endpoint."""
-    import openai as _oai
     direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
     base = get_provider_base_url("gemini") or direct_base
-    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    client = _get_oai_client(api_key, base)
     try:
         stream = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
@@ -740,7 +745,7 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
     except _oai.APIConnectionError as e:
         if base != direct_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
-            client = _oai.AsyncOpenAI(api_key=api_key, base_url=direct_base)
+            client = _get_oai_client(api_key, direct_base)
             stream = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
             )
@@ -752,11 +757,7 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
             yield delta.content
 
 async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens: int):
-    import openai as _oai
-    client = _oai.AsyncOpenAI(
-        api_key=api_key,
-        base_url="https://api.cerebras.ai/v1",
-    )
+    client = _get_oai_client(api_key, "https://api.cerebras.ai/v1")
     stream = await client.chat.completions.create(
         model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
     )
@@ -767,10 +768,9 @@ async def _stream_cerebras(messages: list, api_key: str, model: str, max_tokens:
 
 async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int):
     """Token-by-token streaming from xAI Grok via its OpenAI-compatible endpoint."""
-    import openai as _oai
     direct_base = "https://api.x.ai/v1"
     base = get_provider_base_url("xai") or direct_base
-    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    client = _get_oai_client(api_key, base)
     try:
         stream = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
@@ -778,7 +778,7 @@ async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int)
     except _oai.APIConnectionError as e:
         if base != direct_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
-            client = _oai.AsyncOpenAI(api_key=api_key, base_url=direct_base)
+            client = _get_oai_client(api_key, direct_base)
             stream = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
             )
@@ -791,9 +791,8 @@ async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int)
 
 async def _stream_openai_compat(messages: list, api_key: str, model: str, max_tokens: int, provider: str, fallback_base: str):
     """Token-by-token streaming from any OpenAI-compatible provider."""
-    import openai as _oai
     base = get_provider_base_url(provider) or fallback_base
-    client = _oai.AsyncOpenAI(api_key=api_key, base_url=base)
+    client = _get_oai_client(api_key, base)
     try:
         stream = await client.chat.completions.create(
             model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
@@ -801,7 +800,7 @@ async def _stream_openai_compat(messages: list, api_key: str, model: str, max_to
     except _oai.APIConnectionError as e:
         if base != fallback_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
-            client = _oai.AsyncOpenAI(api_key=api_key, base_url=fallback_base)
+            client = _get_oai_client(api_key, fallback_base)
             stream = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
             )
