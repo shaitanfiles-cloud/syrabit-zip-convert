@@ -146,6 +146,10 @@ _llm_batcher = _LlmBatcher()
 _LLM_PROVIDERS = []
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GROQ_KEY:
+    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY,       "default_model": "llama-3.3-70b-versatile"})
+if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
+    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "llama-3.3-70b-versatile"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
@@ -162,6 +166,10 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
 _LLM_PROVIDERS_CHAT: list[dict] = []
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _GROQ_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.3-70b-versatile"})
+if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY_2, "default_model": "llama-3.3-70b-versatile"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
@@ -173,7 +181,7 @@ if _FIREWORKS_KEY:
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 for _p in _LLM_PROVIDERS:
-    if _p["provider"] not in ("fireworksai", "cerebras", "gemini", "sarvam", "openrouter"):
+    if _p["provider"] not in ("fireworksai", "cerebras", "gemini", "sarvam", "groq", "openrouter"):
         _LLM_PROVIDERS_CHAT.append(_p)
 
 _MODEL_PROVIDER_MAP = {
@@ -210,11 +218,14 @@ _MODEL_ALIAS_MAP = {
 _SLM_SLOT_CANDIDATES = [
     ("gemini",      "gemini-2.5-flash",                                  6, 0),
     ("gemini:2",    "gemini-2.5-flash",                                  6, 0),
-    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 1),
-    ("cerebras",    "llama3.1-8b",                                       6, 2),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 3),
-    ("openai",      "gpt-4o-mini",                                       4, 3),
-    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 4),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 1),
+    ("groq:2",      "llama-3.3-70b-versatile",                           4, 1),
+    ("sarvam",      "sarvam-m",                                          4, 1),
+    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 2),
+    ("cerebras",    "llama3.1-8b",                                       6, 3),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 4),
+    ("openai",      "gpt-4o-mini",                                       4, 4),
+    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 5),
 ]
 
 class _SmartKeyPool:
@@ -325,6 +336,8 @@ def _safe_model_for_provider(model: str, provider: str, provider_list=None) -> s
     Otherwise fall back to the provider's configured default_model."""
     if provider == "sarvam" and not model.startswith("sarvam-"):
         return "sarvam-m"
+    if provider == "groq" and not model.startswith("llama-"):
+        return "llama-3.3-70b-versatile"
     mapped_provider = _MODEL_PROVIDER_MAP.get(model)
     if mapped_provider == provider:
         return model
@@ -447,6 +460,8 @@ async def _call_single_provider(messages: list, provider: str, api_key: str, mod
         return await _call_gemini(messages, api_key, model, max_tokens)
     if provider == "cerebras":
         return await _call_cerebras(messages, api_key, model, max_tokens)
+    if provider == "groq":
+        return await _call_openai_compat(messages, api_key, model, max_tokens, "groq", "https://api.groq.com/openai/v1")
     if provider == "xai":
         return await _call_openai_compat(messages, api_key, model, max_tokens, "xai", "https://api.x.ai/v1")
     if provider == "openrouter":
@@ -896,6 +911,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             logger.info(f"LLM stream: provider=cerebras, model={p_model}")
             async for token in _stream_cerebras(messages, p_key, p_model, _mt):
                 yield token
+        elif p_name == "groq":
+            logger.info(f"LLM stream: provider=groq, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
+                yield token
         elif p_name == "xai":
             logger.info(f"LLM stream: provider=xai, model={p_model}")
             async for token in _stream_xai(messages, p_key, p_model, _mt):
@@ -925,6 +944,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
         "sarvam": 24000,
+        "groq": 100000,
         "fireworksai": 80000,
         "gemini": 500000,
         "openrouter": 200000,
