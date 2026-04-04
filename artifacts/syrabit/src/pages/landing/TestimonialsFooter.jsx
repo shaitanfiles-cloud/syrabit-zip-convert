@@ -1,12 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sparkles, Star, ChevronRight, Twitter, Github, Mail, Globe, ExternalLink } from 'lucide-react';
+import { Sparkles, Star, ChevronRight, Twitter, Github, Mail, Globe } from 'lucide-react';
 import { LogoMark, LogoFull } from '@/components/Logo';
 import { fadeUp, staggerContainer } from './shared';
 import Reveal from './Reveal';
 import GlowOrb from './GlowOrb';
-import { API_BASE } from '@/utils/api';
 
 const FALLBACK_TESTIMONIALS = [
   {
@@ -29,34 +28,6 @@ const FALLBACK_TESTIMONIALS = [
   },
 ];
 
-const AVATAR_GRADIENTS = [
-  'linear-gradient(135deg,#7c3aed,#8b5cf6)',
-  'linear-gradient(135deg,#2563eb,#06b6d4)',
-  'linear-gradient(135deg,#059669,#14b8a6)',
-  'linear-gradient(135deg,#dc2626,#f97316)',
-  'linear-gradient(135deg,#7c3aed,#ec4899)',
-];
-
-function getInitials(name) {
-  return name
-    .split(' ')
-    .map((w) => w[0])
-    .join('')
-    .toUpperCase()
-    .slice(0, 2);
-}
-
-function GoogleIcon({ size = 16 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
-      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
-      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18A10.96 10.96 0 0 0 1 12c0 1.77.42 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05" />
-      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
-    </svg>
-  );
-}
-
 function StarRating({ rating }) {
   const filled = Math.round(rating);
   return (
@@ -71,62 +42,7 @@ function StarRating({ rating }) {
   );
 }
 
-function AvatarWithFallback({ src, name, gradient, index }) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const initials = getInitials(name);
-
-  if (!src || imgFailed) {
-    return (
-      <div
-        className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
-        style={{ background: gradient || AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length], fontSize: 12, fontWeight: 700 }}
-      >
-        {initials}
-      </div>
-    );
-  }
-
-  return (
-    <img
-      src={src}
-      alt={name}
-      className="w-9 h-9 rounded-full flex-shrink-0 object-cover"
-      referrerPolicy="no-referrer"
-      onError={() => setImgFailed(true)}
-    />
-  );
-}
-
-function ReviewCard({ review, isFallback, index }) {
-  if (isFallback) {
-    return (
-      <motion.div
-        variants={fadeUp()}
-        whileHover={{ y: -5 }}
-        className="relative rounded-3xl p-6 flex flex-col gap-4 transition-shadow duration-300"
-        style={{
-          border: '1px solid rgba(255,255,255,0.08)',
-          background: 'linear-gradient(135deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.01) 100%)',
-        }}
-      >
-        <StarRating rating={review.rating} />
-        <p className="text-sm leading-relaxed flex-1" style={{ color: 'rgba(255,255,255,0.65)' }}>"{review.quote}"</p>
-        <div className="flex items-center gap-3 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
-            style={{ background: review.gradient, fontSize: 12, fontWeight: 700 }}
-          >
-            {review.initials}
-          </div>
-          <div>
-            <p className="text-white text-sm font-semibold">{review.name}</p>
-            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{review.classLabel}</p>
-          </div>
-        </div>
-      </motion.div>
-    );
-  }
-
+function ReviewCard({ review, index }) {
   return (
     <motion.div
       variants={fadeUp()}
@@ -137,70 +53,70 @@ function ReviewCard({ review, isFallback, index }) {
         background: 'linear-gradient(135deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.01) 100%)',
       }}
     >
-      <div className="flex items-center justify-between">
-        <StarRating rating={review.rating} />
-        <GoogleIcon size={18} />
-      </div>
-      <p className="text-sm leading-relaxed flex-1" style={{ color: 'rgba(255,255,255,0.65)' }}>
-        "{review.text}"
-      </p>
+      <StarRating rating={review.rating} />
+      <p className="text-sm leading-relaxed flex-1" style={{ color: 'rgba(255,255,255,0.65)' }}>"{review.quote}"</p>
       <div className="flex items-center gap-3 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        <AvatarWithFallback
-          src={review.profile_photo_url}
-          name={review.author_name}
-          index={index}
-        />
-        <div className="min-w-0 flex-1">
-          <p className="text-white text-sm font-semibold truncate">{review.author_name}</p>
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.50)' }}>
-            {review.relative_time_description}
-          </p>
+        <div
+          className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
+          style={{ background: review.gradient, fontSize: 12, fontWeight: 700 }}
+        >
+          {review.initials}
+        </div>
+        <div>
+          <p className="text-white text-sm font-semibold">{review.name}</p>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{review.classLabel}</p>
         </div>
       </div>
     </motion.div>
   );
 }
 
-export default function TestimonialsFooter({ year }) {
-  const [reviews, setReviews] = useState([]);
-  const [isGoogle, setIsGoogle] = useState(false);
-  const [placeId, setPlaceId] = useState('');
-  const [loading, setLoading] = useState(true);
+function TrustpilotWidget() {
+  const ref = useRef(null);
 
   useEffect(() => {
-    let cancelled = false;
-    async function fetchReviews() {
-      try {
-        const res = await fetch(`${API_BASE}/content/google-reviews`);
-        if (!res.ok) throw new Error('fetch failed');
-        const data = await res.json();
-        if (cancelled) return;
-        if (data.configured && data.reviews && data.reviews.length > 0) {
-          setReviews(data.reviews.slice(0, 5));
-          setIsGoogle(true);
-          setPlaceId(data.place_id || '');
-        } else {
-          setReviews(FALLBACK_TESTIMONIALS);
-          setIsGoogle(false);
-        }
-      } catch {
-        if (!cancelled) {
-          setReviews(FALLBACK_TESTIMONIALS);
-          setIsGoogle(false);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+    if (typeof window !== 'undefined' && window.Trustpilot && ref.current) {
+      window.Trustpilot.loadFromElement(ref.current, true);
     }
-    fetchReviews();
-    return () => { cancelled = true; };
   }, []);
 
-  const displayReviews = reviews.length > 0 ? reviews : FALLBACK_TESTIMONIALS;
-  const usingGoogle = isGoogle && reviews.length > 0;
-  const googleReviewUrl = placeId
-    ? `https://search.google.com/local/writereview?placeid=${placeId}`
-    : '';
+  return (
+    <div className="mt-10 flex justify-center">
+      <div
+        ref={ref}
+        className="trustpilot-widget"
+        data-locale="en-US"
+        data-template-id="56278e9abfbd13b10015e694"
+        data-businessunit-id="6831bda2e0dd12f40d94de6c"
+        data-style-height="52px"
+        data-style-width="100%"
+      >
+        <a href="https://www.trustpilot.com/review/syrabit.ai" target="_blank" rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 text-sm font-medium"
+          style={{ color: 'rgba(255,255,255,0.60)' }}
+        >
+          See our reviews on Trustpilot
+        </a>
+      </div>
+    </div>
+  );
+}
+
+export default function TestimonialsFooter({ year }) {
+  useEffect(() => {
+    if (document.getElementById('trustpilot-widget-script')) return;
+    const script = document.createElement('script');
+    script.id = 'trustpilot-widget-script';
+    script.src = 'https://widget.trustpilot.com/bootstrap/v5/tp.widget.bootstrap.min.js';
+    script.async = true;
+    script.onload = () => {
+      const els = document.querySelectorAll('.trustpilot-widget');
+      els.forEach((el) => {
+        if (window.Trustpilot) window.Trustpilot.loadFromElement(el, true);
+      });
+    };
+    document.head.appendChild(script);
+  }, []);
 
   return (
     <>
@@ -210,18 +126,8 @@ export default function TestimonialsFooter({ year }) {
             Students love Syrabit.ai
           </h2>
           <p style={{ color: 'rgba(255,255,255,0.60)' }}>
-            {usingGoogle
-              ? 'Verified reviews from Google'
-              : 'Real feedback from AssamBoard students across Assam'}
+            Real feedback from students across Assam
           </p>
-          {usingGoogle && (
-            <div className="flex items-center justify-center gap-2 mt-3">
-              <GoogleIcon size={20} />
-              <span className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
-                Google Reviews
-              </span>
-            </div>
-          )}
         </Reveal>
 
         <motion.div
@@ -229,42 +135,14 @@ export default function TestimonialsFooter({ year }) {
           whileInView="visible"
           viewport={{ once: true, margin: '-60px' }}
           variants={staggerContainer}
-          className={`grid gap-5 ${displayReviews.length <= 3 ? 'md:grid-cols-3' : displayReviews.length === 4 ? 'md:grid-cols-2 lg:grid-cols-4' : 'md:grid-cols-3 lg:grid-cols-3'}`}
+          className="grid gap-5 md:grid-cols-3"
         >
-          {(loading ? FALLBACK_TESTIMONIALS : displayReviews).map((r, i) => (
-            <ReviewCard
-              key={usingGoogle ? `g-${r.author_name}-${i}` : r.name}
-              review={r}
-              isFallback={!usingGoogle}
-              index={i}
-            />
+          {FALLBACK_TESTIMONIALS.map((r, i) => (
+            <ReviewCard key={r.name} review={r} index={i} />
           ))}
         </motion.div>
 
-        {usingGoogle && googleReviewUrl && (
-          <Reveal className="text-center mt-10">
-            <motion.a
-              href={googleReviewUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              whileHover={{ scale: 1.04, y: -2 }}
-              whileTap={{ scale: 0.97 }}
-              className="inline-flex items-center gap-2.5 font-semibold text-sm"
-              style={{
-                height: 48,
-                padding: '0 1.75rem',
-                borderRadius: '0.875rem',
-                color: 'rgba(255,255,255,0.80)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                background: 'rgba(255,255,255,0.04)',
-              }}
-            >
-              <GoogleIcon size={18} />
-              Review us on Google
-              <ExternalLink size={14} style={{ opacity: 0.5 }} />
-            </motion.a>
-          </Reveal>
-        )}
+        <TrustpilotWidget />
       </section>
 
       <section className="py-28 relative overflow-hidden">
