@@ -7,15 +7,16 @@ export const pageImports = {
 };
 
 export function prefetchCriticalRoutes() {
-  if (typeof requestIdleCallback === 'function') {
-    requestIdleCallback(() => {
-      pageImports.chat();
+  const doPrefetch = () => {
+    if (typeof requestIdleCallback === 'function') {
+      requestIdleCallback(() => {
+        pageImports.library();
+        requestIdleCallback(() => { pageImports.chat(); });
+      });
+    } else {
       pageImports.library();
-    });
-  } else {
-    setTimeout(() => {
-      pageImports.chat();
-      pageImports.library();
-    }, 1500);
-  }
+      setTimeout(() => { pageImports.chat(); }, 500);
+    }
+  };
+  setTimeout(doPrefetch, 4000);
 }

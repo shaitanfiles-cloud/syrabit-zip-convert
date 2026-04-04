@@ -218,10 +218,10 @@ export default function AdminPage() {
         {/* Logo block */}
         <div className="flex items-center h-14 px-3 border-b border-white/[0.06]">
           {collapsed ? (
-            <img src="/logo.png" alt="Syrabit.ai" width="32" height="32" className="w-8 h-8 rounded-lg object-cover flex-shrink-0" />
+            <img src="/logo.webp" alt="Syrabit.ai" width="32" height="32" className="w-8 h-8 rounded-lg object-cover flex-shrink-0" />
           ) : (
             <div className="flex items-center gap-2.5">
-              <img src="/logo.png" alt="Syrabit.ai" width="32" height="32" className="w-8 h-8 rounded-lg object-cover flex-shrink-0" />
+              <img src="/logo.webp" alt="Syrabit.ai" width="32" height="32" className="w-8 h-8 rounded-lg object-cover flex-shrink-0" />
               <div>
                 <p className="text-sm font-bold text-white shimmer-text" style={{ lineHeight: 1.2 }}>Syrabit.ai</p>
                 <p className="text-[9px] text-violet-400 tracking-[0.1em] flex items-center gap-1">
@@ -293,7 +293,7 @@ export default function AdminPage() {
           )}
           <Link to="/library">
             <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors">
-              <img src="/logo.png" alt="" width="14" height="14" className="w-3.5 h-3.5 rounded-sm object-cover flex-shrink-0" />
+              <img src="/logo.webp" alt="" width="14" height="14" className="w-3.5 h-3.5 rounded-sm object-cover flex-shrink-0" />
               {!collapsed && <span>Student View</span>}
             </button>
           </Link>
@@ -329,7 +329,7 @@ export default function AdminPage() {
         >
           <p className="text-sm font-semibold text-white">
             {activeLabel}
-            <span className="text-white/20 font-normal ml-2 inline-flex items-center gap-1.5">— <img src="/logo.png" alt="" width="16" height="16" className="w-4 h-4 rounded-sm inline-block" /> Syrabit.ai</span>
+            <span className="text-white/20 font-normal ml-2 inline-flex items-center gap-1.5">— <img src="/logo.webp" alt="" width="16" height="16" className="w-4 h-4 rounded-sm inline-block" /> Syrabit.ai</span>
           </p>
 
           {/* System status badge */}

@@ -446,7 +446,7 @@ export default function HistoryPage() {
                 border: '1px solid rgba(139,92,246,0.15)',
               }}
             >
-              <img src="/logo.png" alt="Syrabit.ai" width="20" height="20" className="w-5 h-5 rounded flex-shrink-0" />
+              <img src="/logo.webp" alt="Syrabit.ai" width="20" height="20" className="w-5 h-5 rounded flex-shrink-0" />
               <span className="text-muted-foreground flex flex-col leading-snug">
                 <span>Guest chats expire after 7 days.</span>
                 <span>

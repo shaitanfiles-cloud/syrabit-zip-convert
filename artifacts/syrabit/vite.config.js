@@ -518,12 +518,15 @@ export default defineConfig({
             id.includes('hast')
           ) return 'markdown';
           if (id.includes('lucide-react')) return 'icons';
+          if (id.includes('framer-motion') || id.includes('motion-dom') || id.includes('motion-utils')) return 'framer';
+          if (id.includes('react-syntax-highlighter') || id.includes('refractor') || id.includes('prismjs') || id.includes('highlight.js')) return 'syntax';
+          if (id.includes('react-dom')) return 'react-dom';
+          if (id.includes('react-helmet') || id.includes('react-hot-toast') || id.includes('sonner') || id.includes('cmdk') || id.includes('class-variance-authority') || id.includes('clsx') || id.includes('tailwind-merge')) return 'ui-utils';
           if (
-            id.includes('react-dom') || id.includes('/react/') || id.includes('/react-is/') ||
+            id.includes('/react/') || id.includes('/react-is/') ||
             id.includes('react-router') || id.includes('@remix-run') ||
             id.includes('@tanstack') ||
-            id.includes('@radix-ui') ||
-            id.includes('framer-motion') || id.includes('motion-dom') || id.includes('motion-utils')
+            id.includes('@radix-ui')
           ) return 'vendor';
         },
       },

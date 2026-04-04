@@ -1,13 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
 import { useAuth } from '@/context/AuthContext';
 import HeroSection from './landing/HeroSection';
-import FeaturesGrid from './landing/FeaturesGrid';
-import PricingSection from './landing/PricingSection';
-import PlatformSection from './landing/PlatformSection';
-import TestimonialsFooter from './landing/TestimonialsFooter';
+const FeaturesGrid = lazy(() => import('./landing/FeaturesGrid'));
+const PricingSection = lazy(() => import('./landing/PricingSection'));
+const PlatformSection = lazy(() => import('./landing/PlatformSection'));
+const TestimonialsFooter = lazy(() => import('./landing/TestimonialsFooter'));
 
 export default function LandingPage() {
   const navigate = useNavigate();
@@ -35,10 +35,12 @@ export default function LandingPage() {
       />
       <PublicNavbar />
       <HeroSection />
-      <FeaturesGrid />
-      <PlatformSection />
-      <PricingSection />
-      <TestimonialsFooter year={year} />
+      <Suspense fallback={null}>
+        <FeaturesGrid />
+        <PlatformSection />
+        <PricingSection />
+        <TestimonialsFooter year={year} />
+      </Suspense>
     </div>
   );
 }

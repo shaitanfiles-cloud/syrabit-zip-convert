@@ -21,7 +21,7 @@ export const LogoMark = ({ size = 'md', className = '', style = {} }) => {
   return (
     <span className={className} style={{ display: 'inline-flex', flexShrink: 0, ...style }}>
       <img
-        src="/logo.png"
+        src="/logo.webp"
         alt="Syrabit.ai logo"
         width={px}
         height={px}
@@ -55,7 +55,7 @@ export const LogoFull = ({
     <span className={`inline-flex items-center gap-2 ${className}`}>
       {!hideIcon && (
         <img
-          src="/logo.png"
+          src="/logo.webp"
           alt="Syrabit.ai logo"
           width={px}
           height={px}
@@ -73,4 +73,4 @@ export const LogoFull = ({
   );
 };
 
-export const LOGO_URL = '/logo.png';
+export const LOGO_URL = '/logo.webp';
