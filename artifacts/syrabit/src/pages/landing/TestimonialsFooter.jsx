@@ -189,7 +189,7 @@ export default function TestimonialsFooter({ year }) {
             <div className="space-y-1">
               <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>CONTACT</p>
               <div className="flex items-center gap-1.5 text-sm min-h-[44px]" style={{ color: 'rgba(255,255,255,0.60)' }}>
-                <Mail size={14} /><span>support@syrabit.ai</span>
+                <Mail size={14} /><span>admin@syrabit.ai</span>
               </div>
               <div className="flex items-center gap-1.5 text-sm min-h-[44px]" style={{ color: 'rgba(255,255,255,0.60)' }}>
                 <Globe size={14} /><span>syrabit.ai</span>

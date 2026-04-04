@@ -328,7 +328,7 @@ async def verify_payment(body: PaymentVerifyRequest, user: dict = Depends(get_cu
         raise HTTPException(
             500,
             "Payment verified but plan activation failed — changes rolled back. "
-            "Contact support@syrabit.ai if you were charged.",
+            "Contact admin@syrabit.ai if you were charged.",
         )
 
 # ─────────────────────────────────────────────
@@ -782,7 +782,7 @@ async def credit_topup_verify(body: CreditTopUpVerifyRequest, user: dict = Depen
         raise HTTPException(
             500,
             "Payment verified but credit application failed — changes rolled back. "
-            "Contact support@syrabit.ai if you were charged.",
+            "Contact admin@syrabit.ai if you were charged.",
         )
 
 

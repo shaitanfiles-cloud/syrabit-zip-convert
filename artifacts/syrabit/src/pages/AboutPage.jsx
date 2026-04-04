@@ -99,8 +99,8 @@ export default function AboutPage() {
               <h2 className="text-white font-semibold mb-2">Contact</h2>
               <p>
                 For questions, feedback, or partnerships, reach us at{' '}
-                <a href="mailto:support@syrabit.ai" className="text-violet-400 hover:underline">
-                  support@syrabit.ai
+                <a href="mailto:admin@syrabit.ai" className="text-violet-400 hover:underline">
+                  admin@syrabit.ai
                 </a>
               </p>
             </div>

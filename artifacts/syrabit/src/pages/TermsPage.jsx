@@ -17,7 +17,7 @@ export default function TermsPage() {
               { title: '6. Content', body: 'AI-generated content is for educational purposes only. While we strive for accuracy, answers should be verified against official AHSEC materials.' },
               { title: '7. Privacy', body: 'Your use of the service is governed by our Privacy Policy. We collect only necessary data to provide the service.' },
               { title: '8. Termination', body: 'We reserve the right to terminate accounts that violate these terms. You may delete your account at any time from your Profile page.' },
-              { title: '9. Contact', body: 'For questions about these terms, contact us at legal@syrabit.ai' },
+              { title: '9. Contact', body: 'For questions about these terms, contact us at admin@syrabit.ai' },
             ].map(({ title, body }) => (
               <div key={title}>
                 <h2 className="text-white font-semibold mb-2">{title}</h2>

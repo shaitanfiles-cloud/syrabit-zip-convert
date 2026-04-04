@@ -30,7 +30,7 @@ def _base(body_html: str) -> str:
   {body_html}
   <p style="color:#475569;font-size:11px;margin-top:32px;border-top:1px solid #1e293b;padding-top:16px;">
     You received this email because of account activity on Syrabit.ai.<br>
-    Questions? Reply to this email or write to support@syrabit.ai
+    Questions? Reply to this email or write to admin@syrabit.ai
   </p>
 </div>
 """
