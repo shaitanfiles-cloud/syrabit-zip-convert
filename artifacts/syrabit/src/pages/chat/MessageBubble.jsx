@@ -174,6 +174,22 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           </h4>
                         )}
                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1.5">
+                          {boardLabel && (
+                            <>
+                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                                {boardLabel}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground/40">·</span>
+                            </>
+                          )}
+                          {classLabel && (
+                            <>
+                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                                {classLabel}
+                              </span>
+                              <span className="text-[11px] text-muted-foreground/40">·</span>
+                            </>
+                          )}
                           {courseLabel && (
                             <>
                               <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>

@@ -528,7 +528,29 @@ export default function SubjectPage() {
               <div className="min-w-0">
                 <h1 className="text-xl font-semibold text-foreground truncate">{subject.name}</h1>
                 <p className="text-sm text-muted-foreground mt-0.5">{subject.description}</p>
-                <div className="flex items-center gap-3 mt-2">
+                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-2">
+                  {subject.board_name && (
+                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                      {subject.board_name}
+                    </span>
+                  )}
+                  {subject.board_name && subject.class_name && (
+                    <span className="text-[11px] text-muted-foreground/40">·</span>
+                  )}
+                  {subject.class_name && (
+                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                      {subject.class_name}
+                    </span>
+                  )}
+                  {subject.class_name && subject.stream_name && (
+                    <span className="text-[11px] text-muted-foreground/40">·</span>
+                  )}
+                  {subject.stream_name && (
+                    <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                      {subject.stream_name}
+                    </span>
+                  )}
+                  <span className="text-[11px] text-muted-foreground/40">·</span>
                   <span className="text-xs text-muted-foreground">
                     <BookOpen size={12} className="inline mr-1" />{chapters.length} chapters
                   </span>
