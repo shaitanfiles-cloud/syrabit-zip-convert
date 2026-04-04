@@ -216,16 +216,16 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("gemini",      "gemini-2.5-flash",                                  6, 0),
-    ("gemini:2",    "gemini-2.5-flash",                                  6, 0),
+    ("sarvam",      "sarvam-m",                                          4, 0),
     ("groq",        "llama-3.3-70b-versatile",                           4, 1),
     ("groq:2",      "llama-3.3-70b-versatile",                           4, 1),
-    ("sarvam",      "sarvam-m",                                          4, 1),
-    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 2),
-    ("cerebras",    "llama3.1-8b",                                       6, 3),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 4),
-    ("openai",      "gpt-4o-mini",                                       4, 4),
-    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 5),
+    ("gemini",      "gemini-2.5-flash",                                  6, 2),
+    ("gemini:2",    "gemini-2.5-flash",                                  6, 2),
+    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 3),
+    ("cerebras",    "llama3.1-8b",                                       6, 4),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 5),
+    ("openai",      "gpt-4o-mini",                                       4, 5),
+    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 6),
 ]
 
 class _SmartKeyPool:
