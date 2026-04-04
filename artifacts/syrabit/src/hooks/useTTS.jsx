@@ -198,7 +198,7 @@ export function useTTS() {
           body: JSON.stringify({
             text: chunks[i],
             target_language_code: lang,
-            speaker: 'abhilash',
+            speaker: 'manisha',
           }),
           signal: controller.signal,
         });
