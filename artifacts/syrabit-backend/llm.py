@@ -216,16 +216,23 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("sarvam",      "sarvam-m",                                          4, 0),
-    ("groq",        "llama-3.3-70b-versatile",                           4, 1),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 0),
+    ("sarvam",      "sarvam-m",                                          4, 1),
     ("gemini",      "gemini-2.5-flash",                                  6, 2),
     ("gemini:2",    "gemini-2.5-flash",                                  6, 2),
-    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           8, 3),
-    ("cerebras",    "llama3.1-8b",                                       6, 4),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 5),
-    ("openai",      "gpt-4o-mini",                                       4, 5),
-    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 6),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 3),
+    ("openai",      "gpt-4o-mini",                                       4, 4),
+    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 5),
 ]
+
+_CONTENT_SLOT_CANDIDATES = [
+    ("cerebras",    "llama3.1-8b",                                       6, 0),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 1),
+    ("sarvam",      "sarvam-m",                                          4, 2),
+    ("gemini",      "gemini-2.5-flash",                                  6, 3),
+]
+
+_CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
 
 class _SmartKeyPool:
     """Concurrent smart pool — maximises RPS across all providers.
@@ -315,6 +322,7 @@ class _SmartKeyPool:
         return self._slots
 
 _slm_pool = _SmartKeyPool(_SLM_SLOT_CANDIDATES)
+_content_pool = _SmartKeyPool(_CONTENT_SLOT_CANDIDATES)
 
 def _resolve_provider_for_model(model: str, provider_list=None):
     plist = _LLM_PROVIDERS if provider_list is None else provider_list
@@ -792,7 +800,7 @@ async def _stream_bedrock(messages: list, model: str, max_tokens: int):
         yield item
 
 
-async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048):
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = ""):
     """
     Real token-by-token streaming from the LLM provider.
     Uses native streaming APIs for instant first-token delivery.
@@ -952,11 +960,15 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     }
 
     if use_model_raw == "openai/gpt-oss-20b":
+        _is_content_intent = intent in _CONTENT_INTENTS
+        _active_pool = _content_pool if _is_content_intent else _slm_pool
+        if _is_content_intent:
+            logger.info(f"SLM routing: intent={intent} → content pool (Cerebras-first)")
         _input_chars = sum(len(m.get("content", "")) for m in messages)
         _skipped_slots: set = set()
         _tried = 0
-        while _tried < len(_slm_pool.all_slots):
-            slot = _slm_pool.pick(_skipped_slots)
+        while _tried < len(_active_pool.all_slots):
+            slot = _active_pool.pick(_skipped_slots)
             if slot is None:
                 break
             _tried += 1

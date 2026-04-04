@@ -1986,6 +1986,18 @@ def build_rag_system_prompt(
             base_prompt,
             flags=_re.DOTALL,
         )
+
+    _content_intents = {"notes", "important_questions", "pyq"}
+    _incoming_intent, _ = classify_intent(query) if query else ("notes", None)
+    if _incoming_intent in _content_intents:
+        base_prompt += (
+            "\n\nCONTENT GENERATION RULE (notes / important questions / PYQ):\n"
+            "You are generating structured academic content. You MUST answer ONLY from the "
+            "grounding context provided below. Do NOT add facts, examples, or explanations "
+            "from your own training data. If the grounding does not cover something, skip it "
+            "rather than inventing content. Every statement must be traceable to the grounding. "
+            "Accuracy and faithfulness to the source material is more important than completeness."
+        )
     chunks      = rag_context.get("chunks",   [])
     chapters    = rag_context.get("chapters", [])
     subjects    = rag_context.get("subjects", [])

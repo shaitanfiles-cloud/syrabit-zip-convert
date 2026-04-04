@@ -967,7 +967,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _first_token_logged = False
                 _output_buf = ""
                 _output_violation = False
-                async for chunk in call_llm_api_stream(messages_payload, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens):
+                async for chunk in call_llm_api_stream(messages_payload, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens, intent=_stream_intent):
                     if '"content"' in chunk:
                         if not _first_token_logged:
                             logger.info(f"[STREAM][TIMING] TTFT (first LLM token): {_time_mod.time() - _stream_t0:.3f}s")
