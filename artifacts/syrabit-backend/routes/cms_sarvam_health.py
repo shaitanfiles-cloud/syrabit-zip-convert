@@ -1707,11 +1707,12 @@ async def sarvam_transliterate(data: dict):
 # BOT RENDER MIDDLEWARE (production SSR for AI crawlers)
 # ─────────────────────────────────────────────
 _BOT_UA_RE = re.compile(
-    r"googlebot|bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|"
-    r"facebookexternalhit|twitterbot|linkedinbot|telegrambot|whatsapp|applebot|"
-    r"ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|gptbot|oai-searchbot|"
-    r"chatgpt-user|claudebot|anthropic-ai|perplexitybot|google-extended|"
-    r"facebookbot|meta-externalagent|cohere-ai|bytespider|ccbot|applebot-extended",
+    r"googlebot|google-extended|googleother|google-inspectiontool|"
+    r"bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|"
+    r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|"
+    r"applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|"
+    r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|"
+    r"meta-externalagent|cohere-ai|bytespider|ccbot",
     re.IGNORECASE,
 )
 

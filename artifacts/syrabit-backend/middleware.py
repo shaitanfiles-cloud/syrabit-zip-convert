@@ -77,14 +77,12 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_with_security_headers)
 
 _SEARCH_BOT_UA_RE = re.compile(
-    r"googlebot|bingbot|yandexbot|duckduckbot|baiduspider|slurp|"
-    r"applebot|applebot-extended|facebookexternalhit|facebookbot|"
-    r"twitterbot|linkedinbot|telegrambot|whatsapp|"
-    r"gptbot|oai-searchbot|chatgpt-user|"
-    r"claudebot|anthropic-ai|"
-    r"perplexitybot|"
-    r"google-extended|meta-externalagent|cohere-ai|bytespider|ccbot|"
-    r"ia_archiver|msnbot|petalbot",
+    r"googlebot|google-extended|googleother|google-inspectiontool|"
+    r"bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|"
+    r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|"
+    r"applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|"
+    r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|"
+    r"meta-externalagent|cohere-ai|bytespider|ccbot",
     re.IGNORECASE,
 )
 

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProd = process.env.NODE_ENV === 'production';
 
-const BOT_UA = /googlebot|bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|facebookexternalhit|twitterbot|linkedinbot|telegrambot|whatsapp|applebot|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|google-extended|facebookbot|meta-externalagent|cohere-ai|bytespider|ccbot|applebot-extended/i;
+const BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|meta-externalagent|cohere-ai|bytespider|ccbot/i;
 
 const SKIP_ROUTES = new Set([
   'library', 'chat', 'history', 'profile', 'pricing', 'signup', 'login',
