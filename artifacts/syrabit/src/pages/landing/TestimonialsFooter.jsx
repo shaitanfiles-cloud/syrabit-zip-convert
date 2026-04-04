@@ -1,30 +1,207 @@
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sparkles, Star, ChevronRight, Twitter, Github, Mail, Globe } from 'lucide-react';
+import { Sparkles, Star, ChevronRight, Twitter, Github, Mail, Globe, ExternalLink } from 'lucide-react';
 import { LogoMark, LogoFull } from '@/components/Logo';
 import { fadeUp, staggerContainer } from './shared';
 import Reveal from './Reveal';
 import GlowOrb from './GlowOrb';
+import { API_BASE } from '@/utils/api';
 
-const TESTIMONIALS = [
+const FALLBACK_TESTIMONIALS = [
   {
     name: 'Priya Das', classLabel: 'Class 12 · Science (PCM)', school: 'Cotton College, Guwahati',
     initials: 'PD', gradient: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
     quote: 'Syrabit.ai made complex Physics concepts crystal clear. I stopped spending hours on textbooks and started getting exam-ready answers in minutes. Scored 94 in my boards!',
+    rating: 5,
   },
   {
     name: 'Rahul Bora', classLabel: 'Class 11 · Science (PCB)', school: 'HS School, Jorhat',
     initials: 'RB', gradient: 'linear-gradient(135deg,#2563eb,#06b6d4)',
     quote: 'The AI explains every step so clearly — better than most teachers. I use it daily for Biology and Chemistry. The credit system is fair; free tier is more than enough to start.',
+    rating: 5,
   },
   {
     name: 'Ankita Gogoi', classLabel: 'Class 12 · Arts', school: "Handique Girls' College",
     initials: 'AG', gradient: 'linear-gradient(135deg,#059669,#14b8a6)',
     quote: 'As an Arts student I was skeptical, but the History PYQ insights are incredible. It knows exactly what topics AHSEC repeats. Wish I had this in Class 11 too!',
+    rating: 5,
   },
 ];
 
+const AVATAR_GRADIENTS = [
+  'linear-gradient(135deg,#7c3aed,#8b5cf6)',
+  'linear-gradient(135deg,#2563eb,#06b6d4)',
+  'linear-gradient(135deg,#059669,#14b8a6)',
+  'linear-gradient(135deg,#dc2626,#f97316)',
+  'linear-gradient(135deg,#7c3aed,#ec4899)',
+];
+
+function getInitials(name) {
+  return name
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+}
+
+function GoogleIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z" fill="#4285F4" />
+      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853" />
+      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18A10.96 10.96 0 0 0 1 12c0 1.77.42 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05" />
+      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335" />
+    </svg>
+  );
+}
+
+function StarRating({ rating }) {
+  const filled = Math.round(rating);
+  return (
+    <div className="flex items-center gap-0.5">
+      {[...Array(5)].map((_, i) => (
+        <Star
+          key={i}
+          className={`w-4 h-4 ${i < filled ? 'fill-amber-400 text-amber-400' : 'fill-gray-600 text-gray-600'}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+function AvatarWithFallback({ src, name, gradient, index }) {
+  const [imgFailed, setImgFailed] = useState(false);
+  const initials = getInitials(name);
+
+  if (!src || imgFailed) {
+    return (
+      <div
+        className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
+        style={{ background: gradient || AVATAR_GRADIENTS[index % AVATAR_GRADIENTS.length], fontSize: 12, fontWeight: 700 }}
+      >
+        {initials}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt={name}
+      className="w-9 h-9 rounded-full flex-shrink-0 object-cover"
+      referrerPolicy="no-referrer"
+      onError={() => setImgFailed(true)}
+    />
+  );
+}
+
+function ReviewCard({ review, isFallback, index }) {
+  if (isFallback) {
+    return (
+      <motion.div
+        variants={fadeUp()}
+        whileHover={{ y: -5 }}
+        className="relative rounded-3xl p-6 flex flex-col gap-4 transition-shadow duration-300"
+        style={{
+          border: '1px solid rgba(255,255,255,0.08)',
+          background: 'linear-gradient(135deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.01) 100%)',
+        }}
+      >
+        <StarRating rating={review.rating} />
+        <p className="text-sm leading-relaxed flex-1" style={{ color: 'rgba(255,255,255,0.65)' }}>"{review.quote}"</p>
+        <div className="flex items-center gap-3 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+          <div
+            className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
+            style={{ background: review.gradient, fontSize: 12, fontWeight: 700 }}
+          >
+            {review.initials}
+          </div>
+          <div>
+            <p className="text-white text-sm font-semibold">{review.name}</p>
+            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{review.classLabel}</p>
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div
+      variants={fadeUp()}
+      whileHover={{ y: -5 }}
+      className="relative rounded-3xl p-6 flex flex-col gap-4 transition-shadow duration-300"
+      style={{
+        border: '1px solid rgba(255,255,255,0.08)',
+        background: 'linear-gradient(135deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.01) 100%)',
+      }}
+    >
+      <div className="flex items-center justify-between">
+        <StarRating rating={review.rating} />
+        <GoogleIcon size={18} />
+      </div>
+      <p className="text-sm leading-relaxed flex-1" style={{ color: 'rgba(255,255,255,0.65)' }}>
+        "{review.text}"
+      </p>
+      <div className="flex items-center gap-3 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+        <AvatarWithFallback
+          src={review.profile_photo_url}
+          name={review.author_name}
+          index={index}
+        />
+        <div className="min-w-0 flex-1">
+          <p className="text-white text-sm font-semibold truncate">{review.author_name}</p>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.50)' }}>
+            {review.relative_time_description}
+          </p>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 export default function TestimonialsFooter({ year }) {
+  const [reviews, setReviews] = useState([]);
+  const [isGoogle, setIsGoogle] = useState(false);
+  const [placeId, setPlaceId] = useState('');
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchReviews() {
+      try {
+        const res = await fetch(`${API_BASE}/content/google-reviews`);
+        if (!res.ok) throw new Error('fetch failed');
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.configured && data.reviews && data.reviews.length > 0) {
+          setReviews(data.reviews.slice(0, 5));
+          setIsGoogle(true);
+          setPlaceId(data.place_id || '');
+        } else {
+          setReviews(FALLBACK_TESTIMONIALS);
+          setIsGoogle(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setReviews(FALLBACK_TESTIMONIALS);
+          setIsGoogle(false);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    fetchReviews();
+    return () => { cancelled = true; };
+  }, []);
+
+  const displayReviews = reviews.length > 0 ? reviews : FALLBACK_TESTIMONIALS;
+  const usingGoogle = isGoogle && reviews.length > 0;
+  const googleReviewUrl = placeId
+    ? `https://search.google.com/local/writereview?placeid=${placeId}`
+    : '';
+
   return (
     <>
       <section className="py-28 max-w-5xl mx-auto px-5">
@@ -32,7 +209,19 @@ export default function TestimonialsFooter({ year }) {
           <h2 className="text-white mb-3" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
             Students love Syrabit.ai
           </h2>
-          <p style={{ color: 'rgba(255,255,255,0.60)' }}>Real feedback from AssamBoard students across Assam</p>
+          <p style={{ color: 'rgba(255,255,255,0.60)' }}>
+            {usingGoogle
+              ? 'Verified reviews from Google'
+              : 'Real feedback from AssamBoard students across Assam'}
+          </p>
+          {usingGoogle && (
+            <div className="flex items-center justify-center gap-2 mt-3">
+              <GoogleIcon size={20} />
+              <span className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                Google Reviews
+              </span>
+            </div>
+          )}
         </Reveal>
 
         <motion.div
@@ -40,40 +229,42 @@ export default function TestimonialsFooter({ year }) {
           whileInView="visible"
           viewport={{ once: true, margin: '-60px' }}
           variants={staggerContainer}
-          className="grid md:grid-cols-3 gap-5"
+          className={`grid gap-5 ${displayReviews.length <= 3 ? 'md:grid-cols-3' : displayReviews.length === 4 ? 'md:grid-cols-2 lg:grid-cols-4' : 'md:grid-cols-3 lg:grid-cols-3'}`}
         >
-          {TESTIMONIALS.map((t) => (
-            <motion.div
-              key={t.name}
-              variants={fadeUp()}
-              whileHover={{ y: -5 }}
-              className="relative rounded-3xl p-6 flex flex-col gap-4 transition-shadow duration-300"
-              style={{
-                border: '1px solid rgba(255,255,255,0.08)',
-                background: 'linear-gradient(135deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.01) 100%)',
-              }}
-            >
-              <div className="flex items-center gap-0.5">
-                {[...Array(5)].map((_, i) => (
-                  <Star key={i} className="w-4 h-4 fill-amber-400 text-amber-400" />
-                ))}
-              </div>
-              <p className="text-sm leading-relaxed flex-1" style={{ color: 'rgba(255,255,255,0.65)' }}>"{t.quote}"</p>
-              <div className="flex items-center gap-3 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-                <div
-                  className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
-                  style={{ background: t.gradient, fontSize: 12, fontWeight: 700 }}
-                >
-                  {t.initials}
-                </div>
-                <div>
-                  <p className="text-white text-sm font-semibold">{t.name}</p>
-                  <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{t.classLabel}</p>
-                </div>
-              </div>
-            </motion.div>
+          {(loading ? FALLBACK_TESTIMONIALS : displayReviews).map((r, i) => (
+            <ReviewCard
+              key={usingGoogle ? `g-${r.author_name}-${i}` : r.name}
+              review={r}
+              isFallback={!usingGoogle}
+              index={i}
+            />
           ))}
         </motion.div>
+
+        {usingGoogle && googleReviewUrl && (
+          <Reveal className="text-center mt-10">
+            <motion.a
+              href={googleReviewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              whileHover={{ scale: 1.04, y: -2 }}
+              whileTap={{ scale: 0.97 }}
+              className="inline-flex items-center gap-2.5 font-semibold text-sm"
+              style={{
+                height: 48,
+                padding: '0 1.75rem',
+                borderRadius: '0.875rem',
+                color: 'rgba(255,255,255,0.80)',
+                border: '1px solid rgba(255,255,255,0.12)',
+                background: 'rgba(255,255,255,0.04)',
+              }}
+            >
+              <GoogleIcon size={18} />
+              Review us on Google
+              <ExternalLink size={14} style={{ opacity: 0.5 }} />
+            </motion.a>
+          </Reveal>
+        )}
       </section>
 
       <section className="py-28 relative overflow-hidden">

@@ -12,6 +12,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
 import { Loader2 } from "lucide-react";
 import { apiClient } from "@/utils/api";
+import GoogleReviewPopup from "@/pages/landing/GoogleReviewPopup";
 
 // ── React Query client ────────────────────────────────────────────────────────
 const queryClient = new QueryClient({
@@ -191,6 +192,7 @@ function App() {
             <BrowserRouter>
               <PageTracker />
               <Toaster richColors position="top-center" closeButton />
+              <GoogleReviewPopup />
               <Suspense fallback={<DeferredFallback />}>
                 <Routes>
                   {/* ── Public routes ── */}

@@ -36,6 +36,10 @@ else:
 GOOGLE_CLIENT_ID     = os.environ.get('GOOGLE_CLIENT_ID', '').strip()
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET', '').strip()
 
+# ── Google Places (Reviews) ──────────────────────────────────────────────────
+GOOGLE_PLACES_API_KEY = os.environ.get('GOOGLE_PLACES_API_KEY', '').strip()
+GOOGLE_PLACE_ID       = os.environ.get('GOOGLE_PLACE_ID', '').strip()
+
 # ── Email Configuration ───────────────────────────────────────────────────────
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
 EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@syrabit.ai').strip()
