@@ -123,6 +123,22 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
     subject_name = subject.get("name", "")
     paper_type   = subject.get("paper_type", "")
     class_name   = subject.get("className", "")
+    subject_desc = (subject.get("description") or "").strip()
+
+    # Resolve board context from stream → class → board hierarchy
+    board_label = ""
+    stream = None
+    if subject.get("stream_id"):
+        stream = await db.streams.find_one({"id": subject["stream_id"]}, {"_id": 0})
+    if stream and stream.get("class_id"):
+        cls = await db.classes.find_one({"id": stream["class_id"]}, {"_id": 0})
+        if cls:
+            if not class_name:
+                class_name = cls.get("name", "")
+            if cls.get("board_id"):
+                board_doc = await db.boards.find_one({"id": cls["board_id"]}, {"_id": 0})
+                if board_doc:
+                    board_label = board_doc.get("name", "")
 
     title       = chapter.get("title", "").strip()
     description = (chapter.get("description") or "").strip()
@@ -161,13 +177,27 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
             + "\n".join(f"  - {kw}" for kw in seo_keywords[:15])
         )
 
-    prompt = f"""You are an expert academic content writer for AHSEC/SEBA/Degree (NEP/FYUGP) students in Assam, India.
+    board_ctx = board_label or "Degree"
+    class_ctx = class_name or "FYUGP"
+    subject_ctx = subject_name or "Degree Course"
+    paper_ctx = (paper_type or "").upper()
+
+    # Build a description block from chapter + subject descriptions
+    desc_block = ""
+    if description:
+        desc_block += f"**Chapter Description:** {description}\n"
+    if subject_desc:
+        desc_block += f"**Subject Description:** {subject_desc}\n"
+    if not desc_block:
+        desc_block = "**Description:** No additional description provided.\n"
+
+    prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students in Assam, India.
 
 Generate **exam-focused, topic-wise study notes** for the chapter below.
 
 **Chapter:** {title}
-**Subject:** {subject_name or "Degree Course"} ({(paper_type or "").upper()} — {class_name or "FYUGP"})
-**Description:** {description or "No additional description provided."}
+**Subject:** {subject_ctx} ({paper_ctx} — {class_ctx})
+{desc_block}
 
 **Syllabus Topics to cover (MANDATORY — every topic MUST get its own section):**
 {topic_block}{seo_seed_block}
@@ -285,11 +315,38 @@ async def admin_regenerate_thin_chapters(
         topics = chapter.get("topics") or []
         topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics)) if topics else f"  {title}"
 
-        prompt = f"""You are an expert academic content writer for AHSEC/SEBA/Degree (NEP/FYUGP) students in Assam, India.
+        # Resolve board context
+        regen_board = ""
+        regen_class = subject.get("className", "")
+        regen_subject_desc = (subject.get("description") or "").strip()
+        regen_stream = None
+        if subject.get("stream_id"):
+            regen_stream = await db.streams.find_one({"id": subject["stream_id"]}, {"_id": 0})
+        if regen_stream and regen_stream.get("class_id"):
+            regen_cls = await db.classes.find_one({"id": regen_stream["class_id"]}, {"_id": 0})
+            if regen_cls:
+                if not regen_class:
+                    regen_class = regen_cls.get("name", "")
+                if regen_cls.get("board_id"):
+                    regen_board_doc = await db.boards.find_one({"id": regen_cls["board_id"]}, {"_id": 0})
+                    if regen_board_doc:
+                        regen_board = regen_board_doc.get("name", "")
+        regen_board_ctx = regen_board or "Degree"
+        regen_class_ctx = regen_class or "FYUGP"
+
+        regen_desc_block = ""
+        ch_desc = (chapter.get("description") or "").strip()
+        if ch_desc:
+            regen_desc_block += f"**Chapter Description:** {ch_desc}\n"
+        if regen_subject_desc:
+            regen_desc_block += f"**Subject Description:** {regen_subject_desc}\n"
+
+        prompt = f"""You are an expert academic content writer for {regen_board_ctx} {regen_class_ctx} students in Assam, India.
 
 Generate detailed study notes for:
 **Chapter:** {title}
 **Subject:** {subject_name or "Degree Course"}
+{regen_desc_block}
 
 **Topics to cover:**
 {topic_block}
