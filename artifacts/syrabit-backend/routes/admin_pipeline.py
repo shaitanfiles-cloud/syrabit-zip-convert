@@ -175,23 +175,24 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
 ---
 
 **INSTRUCTIONS:**
-1. Open with a crisp **introduction** (2-3 sentences) — state the chapter's exam relevance.
+1. Open with a crisp **introduction** (3-4 sentences) — state the chapter's exam relevance and what students will learn.
 2. For EACH topic listed above, write:
    - A ## Heading matching the topic name exactly
-   - 3-5 sentence explanation using simple, precise academic language
-   - **Key Points** as 4-6 bullets: definitions in **bold**, significance, and facts examiners look for
-   - Where applicable, include a brief real-world example or Assam-specific context
+   - 5-8 sentence thorough explanation using simple, precise academic language — cover the concept fully with definitions, mechanisms, causes, effects, and significance
+   - **Key Points** as 6-8 bullets: definitions in **bold**, significance, relationships to other topics, and facts examiners look for
+   - A real-world example, Assam-specific context, or illustrative case study to ground the concept
+   - Where relevant, add a "Common Mistake" or "Exam Tip" note
 3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
-4. End with a **Summary** section listing the 5-7 most exam-critical takeaways.
+4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
 5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
-6. Quality over length — target 400-700 words of dense, high-value content.
-7. Write as though every word costs marks — no filler, no repetition.
+6. Target 600-1000 words of dense, high-value content. Cover each topic thoroughly — depth matters.
+7. Write as though every word costs marks — no filler, no repetition, but do not sacrifice completeness for brevity.
 """
 
     try:
         generated = await call_llm_api_content(
             [{"role": "user", "content": prompt}],
-            max_tokens=2048
+            max_tokens=3200
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI generation failed: {e}")
@@ -294,16 +295,18 @@ Generate detailed study notes for:
 {topic_block}
 
 **INSTRUCTIONS:**
-1. Write 800-1200 words of detailed, exam-focused notes
+1. Write 1000-1500 words of detailed, exam-focused notes
 2. Use ## headings for each topic (match topic names exactly), ### for subtopics
-3. Include key definitions in **bold**, 4-6 bullet points per topic for key facts examiners look for
-4. Where applicable, include Assam-specific context or real-world examples
-5. End with a **Summary** section listing 5-7 most exam-critical takeaways
-6. Use markdown formatting throughout. NO disclaimers, NO preamble.
-7. Quality over length — no filler, no repetition"""
+3. For each topic, write 5-8 sentence thorough explanations covering definitions, mechanisms, causes, effects, and significance
+4. Include key definitions in **bold**, 6-8 bullet points per topic for key facts examiners look for
+5. Include Assam-specific context, real-world examples, or illustrative case studies for each topic
+6. Add "Common Mistake" or "Exam Tip" notes where relevant
+7. End with a **Summary** section listing 7-10 most exam-critical takeaways
+8. Use markdown formatting throughout. NO disclaimers, NO preamble.
+9. No filler or repetition — but cover each topic thoroughly with depth and completeness"""
 
         try:
-            generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=4000)
+            generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=5000)
             if generated and len(generated.split()) >= 200:
                 generated = _normalize_headings(generated)
                 wc = len(generated.split())
