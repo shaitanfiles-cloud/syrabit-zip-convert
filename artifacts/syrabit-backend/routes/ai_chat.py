@@ -1147,8 +1147,23 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         _existing = redis_get_anon_conversation(anon_id, conv_id)
                         _prev_msgs = (_existing.get("messages") or []) if _existing else []
                         _prev_msgs.append({"role": "user", "content": user_msg_saved, "timestamp": _now})
-                        _prev_msgs.append({"role": "assistant", "content": answer, "timestamp": _now,
-                                           "rag_source": rag_source_saved, "rag_chunks": rag_chunks_count})
+                        _asst_msg = {"role": "assistant", "content": answer, "timestamp": _now,
+                                     "rag_source": rag_source_saved, "rag_chunks": rag_chunks_count}
+                        if rag_sources:
+                            _asst_msg["sources"] = rag_sources
+                        if rag_subject_id:
+                            _asst_msg["rag_subject_id"] = rag_subject_id
+                        if rag_subject_name:
+                            _asst_msg["rag_subject_name"] = rag_subject_name
+                        if rag_chapter_name:
+                            _asst_msg["rag_chapter_name"] = rag_chapter_name
+                        if _src_board_s:
+                            _asst_msg["rag_board_name"] = _src_board_s
+                        if _src_class_s:
+                            _asst_msg["rag_class_name"] = _src_class_s
+                        if _src_stream_s:
+                            _asst_msg["rag_stream_name"] = _src_stream_s
+                        _prev_msgs.append(_asst_msg)
                         _anon_doc = _existing or {}
                         _anon_doc.update({
                             "id": conv_id, "anon_id": anon_id,
