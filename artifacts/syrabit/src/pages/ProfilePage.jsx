@@ -42,6 +42,7 @@ export default function ProfilePage() {
   const [showTopUpModal, setShowTopUpModal] = useState(false);
   const [topUpCredits, setTopUpCredits]     = useState(null);
   const [topUpLoading, setTopUpLoading]     = useState(false);
+  const [paymentRefreshKey, setPaymentRefreshKey] = useState(0);
   const editInputRef = useRef(null);
 
   useEffect(() => {
@@ -156,6 +157,7 @@ export default function ProfilePage() {
       apiClient().get('/user/stats').then(r => setStats(r.data)),
     ]);
     if (refreshUser) refreshUser();
+    setPaymentRefreshKey(k => k + 1);
   };
 
   const prefillData = () => ({
@@ -305,7 +307,7 @@ export default function ProfilePage() {
           plan={plan} planInfo={planInfo} profile={profile}
           setPaymentPlan={setPaymentPlan} setShowPaymentModal={setShowPaymentModal}
         />
-        <PaymentHistory />
+        <PaymentHistory refreshKey={paymentRefreshKey} />
         <DangerZone
           profile={profile} deletionPending={deletionPending}
           setShowDeleteConfirm={setShowDeleteConfirm}

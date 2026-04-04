@@ -20,7 +20,7 @@ function formatDate(isoStr) {
   }
 }
 
-export default function PaymentHistory() {
+export default function PaymentHistory({ refreshKey = 0 }) {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(true);
@@ -40,7 +40,7 @@ export default function PaymentHistory() {
     }
   };
 
-  useEffect(() => { fetchPayments(); }, []);
+  useEffect(() => { fetchPayments(); }, [refreshKey]);
 
   const handleRefundRequest = async (paymentId) => {
     setRefundingId(paymentId);
