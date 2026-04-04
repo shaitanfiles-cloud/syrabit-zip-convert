@@ -137,7 +137,9 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const boardLabel = msg.rag_board_name || null;
               const classLabel = msg.rag_class_name || null;
               const chapterLabel = msg.rag_chapter_name || null;
-              const subjectUrl = msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null;
+              const subjectUrl = (msg.rag_board_slug && msg.rag_class_slug && msg.rag_subject_slug)
+                ? `/${msg.rag_board_slug}/${msg.rag_class_slug}/${msg.rag_subject_slug}`
+                : (msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null);
               const isDocument = msg.rag_source === 'document';
               const isLibrary = msg.rag_source === 'library';
               const isWeb = msg.rag_source === 'web';

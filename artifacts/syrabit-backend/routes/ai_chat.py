@@ -96,9 +96,10 @@ async def _resolve_subject_context(subject_id: str) -> dict:
             {"$unwind": {"path": "$_board", "preserveNullAndEmptyArrays": False}},
             {"$project": {
                 "_id": 0,
-                "board_id": "$_board.id", "board_name": "$_board.name",
-                "class_id": "$_class.id", "class_name": "$_class.name",
-                "stream_id": "$_stream.id", "stream_name": "$_stream.name",
+                "board_id": "$_board.id", "board_name": "$_board.name", "board_slug": "$_board.slug",
+                "class_id": "$_class.id", "class_name": "$_class.name", "class_slug": "$_class.slug",
+                "stream_id": "$_stream.id", "stream_name": "$_stream.name", "stream_slug": "$_stream.slug",
+                "subject_name": "$name", "subject_slug": "$slug",
             }},
         ]
         result = await db.subjects.aggregate(pipeline).to_list(1)
@@ -377,6 +378,9 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     _src_board = _src_ctx.get("board_name") or ctx_board_name or ""
     _src_class = _src_ctx.get("class_name") or ctx_class_name or ""
     _src_stream = _src_ctx.get("stream_name") or ctx_stream_name or ""
+    _src_board_slug_nr = _src_ctx.get("board_slug") or ""
+    _src_class_slug_nr = _src_ctx.get("class_slug") or ""
+    _src_subject_slug_nr = _src_ctx.get("subject_slug") or ""
     new_messages = [
         {"role": "user", "content": msg.message, "timestamp": now},
         {"role": "assistant", "content": answer, "timestamp": now,
@@ -387,7 +391,10 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
          "rag_subject_name": _rag_subject_names[0] if _rag_subject_names else msg.subject_name,
          "rag_board_name": _src_board,
          "rag_class_name": _src_class,
-         "rag_stream_name": _src_stream},
+         "rag_stream_name": _src_stream,
+         "rag_board_slug": _src_board_slug_nr,
+         "rag_class_slug": _src_class_slug_nr,
+         "rag_subject_slug": _src_subject_slug_nr},
     ]
     new_used = 0
     if user_id:
@@ -478,6 +485,14 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         "rag_source": rag_ctx.get("source", "none"),
         "rag_chunks_used": len(rag_ctx.get("chunks", [])),
         "sources": lib_sources,
+        "rag_subject_id": _rag_subject_ids[0] if _rag_subject_ids else None,
+        "rag_subject_name": _rag_subject_names[0] if _rag_subject_names else msg.subject_name,
+        "rag_board_name": _src_board,
+        "rag_class_name": _src_class,
+        "rag_stream_name": _src_stream,
+        "rag_board_slug": _src_board_slug_nr,
+        "rag_class_slug": _src_class_slug_nr,
+        "rag_subject_slug": _src_subject_slug_nr,
     }
 
 async def _refund_credit(uid: str, credits_used: int) -> None:
@@ -519,6 +534,9 @@ async def _persist_chat_turn(
     rag_board_name: str | None = None,
     rag_class_name: str | None = None,
     rag_stream_name: str | None = None,
+    rag_board_slug: str | None = None,
+    rag_class_slug: str | None = None,
+    rag_subject_slug: str | None = None,
     followup_context: dict | None = None,
 ):
     """Background: save conversation messages. Optionally deduct 1 credit. Non-blocking."""
@@ -540,6 +558,12 @@ async def _persist_chat_turn(
             assistant_msg["rag_class_name"] = rag_class_name
         if rag_stream_name:
             assistant_msg["rag_stream_name"] = rag_stream_name
+        if rag_board_slug:
+            assistant_msg["rag_board_slug"] = rag_board_slug
+        if rag_class_slug:
+            assistant_msg["rag_class_slug"] = rag_class_slug
+        if rag_subject_slug:
+            assistant_msg["rag_subject_slug"] = rag_subject_slug
         new_msgs = [
             {"role": "user", "content": user_msg, "timestamp": now},
             assistant_msg,
@@ -955,13 +979,16 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _src_board_s = _src_ctx_s.get("board_name") or ctx_board_name or ""
     _src_class_s = _src_ctx_s.get("class_name") or ctx_class_name or ""
     _src_stream_s = _src_ctx_s.get("stream_name") or ctx_stream_name or ""
+    _src_board_slug = _src_ctx_s.get("board_slug") or ""
+    _src_class_slug = _src_ctx_s.get("class_slug") or ""
+    _src_subject_slug = _src_ctx_s.get("subject_slug") or ""
 
     async def event_stream():
         nonlocal full_response
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
             # Send RAG metadata with full quality info + subject link data + web search flag
-            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': _src_board_s, 'ctx_class_name': _src_class_s, 'ctx_stream_name': _src_stream_s}
+            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': _src_board_s, 'ctx_class_name': _src_class_s, 'ctx_stream_name': _src_stream_s, 'ctx_board_slug': _src_board_slug, 'ctx_class_slug': _src_class_slug, 'ctx_subject_slug': _src_subject_slug}
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')
@@ -1128,6 +1155,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         rag_board_name=_src_board_s,
                         rag_class_name=_src_class_s,
                         rag_stream_name=_src_stream_s,
+                        rag_board_slug=_src_board_slug,
+                        rag_class_slug=_src_class_slug,
+                        rag_subject_slug=_src_subject_slug,
                         followup_context=_stream_followup_ctx,
                     ))
                     asyncio.create_task(_log_chat_message(
@@ -1163,6 +1193,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             _asst_msg["rag_class_name"] = _src_class_s
                         if _src_stream_s:
                             _asst_msg["rag_stream_name"] = _src_stream_s
+                        if _src_board_slug:
+                            _asst_msg["rag_board_slug"] = _src_board_slug
+                        if _src_class_slug:
+                            _asst_msg["rag_class_slug"] = _src_class_slug
+                        if _src_subject_slug:
+                            _asst_msg["rag_subject_slug"] = _src_subject_slug
                         _prev_msgs.append(_asst_msg)
                         _anon_doc = _existing or {}
                         _anon_doc.update({
