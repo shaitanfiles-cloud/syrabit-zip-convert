@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, memo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { BookOpen, MessageSquare, Clock, User } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -12,7 +12,7 @@ const NAV_ITEMS = [
   { to: '/profile', icon: User,          label: 'Profile',  preloadKey: 'profile' },
 ];
 
-export function BottomNav() {
+export const BottomNav = memo(function BottomNav() {
   const location = useLocation();
   const { user } = useAuth();
 
@@ -79,4 +79,4 @@ export function BottomNav() {
       </div>
     </nav>
   );
-}
+});

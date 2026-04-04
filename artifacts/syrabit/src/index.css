@@ -614,6 +614,7 @@
     max-width: 88%;
     align-self: flex-start;
     border-radius: 1rem 1rem 1rem 0.25rem;
+    contain: content;
     box-shadow: 0 0 8px var(--glow-primary);
   }
   .msg-user {
@@ -624,6 +625,7 @@
     background: linear-gradient(135deg, hsl(var(--primary)), #8468cc);
     color: hsl(240 18% 92%);
     box-shadow: 0 4px 16px var(--glow-primary);
+    contain: content;
   }
 
   /* ── SUBJECT GRADIENT STRIPS ── */

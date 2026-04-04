@@ -25,6 +25,7 @@ __all__ = [
     "_user_cache", "_vector_rag_cache", "_vector_rag_cache_key",
     "redis_save_anon_conversation", "redis_get_anon_conversation",
     "redis_list_anon_conversations", "redis_delete_anon_conversation",
+    "get_hierarchy_cache", "set_hierarchy_cache",
 ]
 
 _ai_response_cache = cachetools.TTLCache(maxsize=512, ttl=3600)
@@ -171,6 +172,14 @@ def _redis_get_session(user_id: str) -> Optional[dict]:
 def _redis_invalidate_session(user_id: str):
     _redis_del("session", user_id)
     _invalidate_user_cache(str(user_id))
+
+_hierarchy_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=1800)
+
+def get_hierarchy_cache(stream_id: str):
+    return _hierarchy_cache.get(stream_id)
+
+def set_hierarchy_cache(stream_id: str, data: dict):
+    _hierarchy_cache[stream_id] = data
 
 _content_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
 CONTENT_CACHE_SECONDS = 600

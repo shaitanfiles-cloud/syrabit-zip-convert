@@ -404,18 +404,30 @@ async def get_subject(subject_id: str, nocache: Optional[str] = None, response: 
     sid = subj.get("stream_id")
     if sid:
         try:
-            stream = await db.streams.find_one({"id": sid}, {"_id": 0, "name": 1, "slug": 1, "class_id": 1})
-            if stream:
-                subj["stream_name"] = stream.get("name", "")
-                subj["stream_slug"] = stream.get("slug", "")
-                cls = await db.classes.find_one({"id": stream["class_id"]}, {"_id": 0, "name": 1, "slug": 1, "board_id": 1})
-                if cls:
-                    subj["class_name"] = cls.get("name", "")
-                    subj["class_slug"] = cls.get("slug", "")
-                    board = await db.boards.find_one({"id": cls["board_id"]}, {"_id": 0, "name": 1, "slug": 1})
-                    if board:
-                        subj["board_name"] = board.get("name", "")
-                        subj["board_slug"] = board.get("slug", "")
+            cached_h = get_hierarchy_cache(sid)
+            if cached_h:
+                subj.update(cached_h)
+            else:
+                h = {}
+                stream = await db.streams.find_one({"id": sid}, {"_id": 0, "name": 1, "slug": 1, "class_id": 1})
+                if stream:
+                    h["stream_name"] = stream.get("name", "")
+                    h["stream_slug"] = stream.get("slug", "")
+                    cls_id = stream.get("class_id")
+                    if cls_id:
+                        cls = await db.classes.find_one({"id": cls_id}, {"_id": 0, "name": 1, "slug": 1, "board_id": 1})
+                        if cls:
+                            h["class_name"] = cls.get("name", "")
+                            h["class_slug"] = cls.get("slug", "")
+                            board_id = cls.get("board_id")
+                            if board_id:
+                                board = await db.boards.find_one({"id": board_id}, {"_id": 0, "name": 1, "slug": 1})
+                                if board:
+                                    h["board_name"] = board.get("name", "")
+                                    h["board_slug"] = board.get("slug", "")
+                if h:
+                    set_hierarchy_cache(sid, h)
+                    subj.update(h)
         except Exception as _e:
             logger.warning(f"subject context enrich failed: {_e}")
     _set_content_cache(ck, subj)

@@ -28,7 +28,7 @@ __all__ = [
     "supa_upsert_conversation",
 ]
 
-_THREAD_POOL = _cf.ThreadPoolExecutor(max_workers=10)
+_THREAD_POOL = _cf.ThreadPoolExecutor(max_workers=32)
 
 async def _supa(fn):
     """Await a sync supabase-py operation non-blockingly."""

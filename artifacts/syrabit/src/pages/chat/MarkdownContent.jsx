@@ -1,9 +1,9 @@
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-export function MarkdownContent({ content, streaming, sources }) {
+export const MarkdownContent = memo(function MarkdownContent({ content, streaming, sources }) {
   const navigate = useNavigate();
 
   const handleInternalClick = useCallback((href) => {
@@ -72,4 +72,4 @@ export function MarkdownContent({ content, streaming, sources }) {
       )}
     </div>
   );
-}
+});
