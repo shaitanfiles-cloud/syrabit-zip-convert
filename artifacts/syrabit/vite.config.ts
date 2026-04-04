@@ -69,5 +69,6 @@ export default defineConfig({
     : {},
   define: {
     "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV || "development"),
+    "__TRUSTPILOT_BU_ID__": JSON.stringify(process.env.TRUSTPILOT_BUSINESS_UNIT_ID || ""),
   },
 });

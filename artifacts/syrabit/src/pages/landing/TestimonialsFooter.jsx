@@ -1,77 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sparkles, Star, ChevronRight, Twitter, Github, Mail, Globe } from 'lucide-react';
+import { Sparkles, ChevronRight, Twitter, Github, Mail, Globe } from 'lucide-react';
 import { LogoMark, LogoFull } from '@/components/Logo';
 import { fadeUp, staggerContainer } from './shared';
 import Reveal from './Reveal';
 import GlowOrb from './GlowOrb';
 
-const FALLBACK_TESTIMONIALS = [
-  {
-    name: 'Priya Das', classLabel: 'Class 12 · Science (PCM)', school: 'Cotton College, Guwahati',
-    initials: 'PD', gradient: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
-    quote: 'Syrabit.ai made complex Physics concepts crystal clear. I stopped spending hours on textbooks and started getting exam-ready answers in minutes. Scored 94 in my boards!',
-    rating: 5,
-  },
-  {
-    name: 'Rahul Bora', classLabel: 'Class 11 · Science (PCB)', school: 'HS School, Jorhat',
-    initials: 'RB', gradient: 'linear-gradient(135deg,#2563eb,#06b6d4)',
-    quote: 'The AI explains every step so clearly — better than most teachers. I use it daily for Biology and Chemistry. The credit system is fair; free tier is more than enough to start.',
-    rating: 5,
-  },
-  {
-    name: 'Ankita Gogoi', classLabel: 'Class 12 · Arts', school: "Handique Girls' College",
-    initials: 'AG', gradient: 'linear-gradient(135deg,#059669,#14b8a6)',
-    quote: 'As an Arts student I was skeptical, but the History PYQ insights are incredible. It knows exactly what topics AHSEC repeats. Wish I had this in Class 11 too!',
-    rating: 5,
-  },
-];
+const TRUSTPILOT_BU_ID = __TRUSTPILOT_BU_ID__;
 
-function StarRating({ rating }) {
-  const filled = Math.round(rating);
-  return (
-    <div className="flex items-center gap-0.5">
-      {[...Array(5)].map((_, i) => (
-        <Star
-          key={i}
-          className={`w-4 h-4 ${i < filled ? 'fill-amber-400 text-amber-400' : 'fill-gray-600 text-gray-600'}`}
-        />
-      ))}
-    </div>
-  );
-}
-
-function ReviewCard({ review, index }) {
-  return (
-    <motion.div
-      variants={fadeUp()}
-      whileHover={{ y: -5 }}
-      className="relative rounded-3xl p-6 flex flex-col gap-4 transition-shadow duration-300"
-      style={{
-        border: '1px solid rgba(255,255,255,0.08)',
-        background: 'linear-gradient(135deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.01) 100%)',
-      }}
-    >
-      <StarRating rating={review.rating} />
-      <p className="text-sm leading-relaxed flex-1" style={{ color: 'rgba(255,255,255,0.65)' }}>"{review.quote}"</p>
-      <div className="flex items-center gap-3 pt-1 border-t" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
-        <div
-          className="w-9 h-9 rounded-full flex items-center justify-center text-white flex-shrink-0"
-          style={{ background: review.gradient, fontSize: 12, fontWeight: 700 }}
-        >
-          {review.initials}
-        </div>
-        <div>
-          <p className="text-white text-sm font-semibold">{review.name}</p>
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{review.classLabel}</p>
-        </div>
-      </div>
-    </motion.div>
-  );
-}
-
-function TrustpilotWidget() {
+function TrustpilotCarousel() {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -81,21 +19,59 @@ function TrustpilotWidget() {
   }, []);
 
   return (
-    <div className="mt-10 flex justify-center">
+    <div
+      ref={ref}
+      className="trustpilot-widget"
+      data-locale="en-US"
+      data-template-id="53aa8912dec7e10d38f59f36"
+      data-businessunit-id={TRUSTPILOT_BU_ID}
+      data-style-height="140px"
+      data-style-width="100%"
+      data-theme="dark"
+      data-stars="4,5"
+      data-review-languages="en"
+    >
+      <a
+        href="https://www.trustpilot.com/review/syrabit.ai"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="inline-flex items-center gap-2 text-sm font-medium"
+        style={{ color: 'rgba(255,255,255,0.60)' }}
+      >
+        See our reviews on Trustpilot
+      </a>
+    </div>
+  );
+}
+
+function TrustpilotMini() {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && window.Trustpilot && ref.current) {
+      window.Trustpilot.loadFromElement(ref.current, true);
+    }
+  }, []);
+
+  return (
+    <div className="mt-8 flex justify-center">
       <div
         ref={ref}
         className="trustpilot-widget"
         data-locale="en-US"
         data-template-id="56278e9abfbd13b10015e694"
-        data-businessunit-id="6831bda2e0dd12f40d94de6c"
+        data-businessunit-id={TRUSTPILOT_BU_ID}
         data-style-height="52px"
         data-style-width="100%"
       >
-        <a href="https://www.trustpilot.com/review/syrabit.ai" target="_blank" rel="noopener noreferrer"
+        <a
+          href="https://www.trustpilot.com/review/syrabit.ai"
+          target="_blank"
+          rel="noopener noreferrer"
           className="inline-flex items-center gap-2 text-sm font-medium"
           style={{ color: 'rgba(255,255,255,0.60)' }}
         >
-          See our reviews on Trustpilot
+          Rated on Trustpilot
         </a>
       </div>
     </div>
@@ -135,14 +111,13 @@ export default function TestimonialsFooter({ year }) {
           whileInView="visible"
           viewport={{ once: true, margin: '-60px' }}
           variants={staggerContainer}
-          className="grid gap-5 md:grid-cols-3"
         >
-          {FALLBACK_TESTIMONIALS.map((r, i) => (
-            <ReviewCard key={r.name} review={r} index={i} />
-          ))}
+          <motion.div variants={fadeUp()}>
+            <TrustpilotCarousel />
+          </motion.div>
         </motion.div>
 
-        <TrustpilotWidget />
+        <TrustpilotMini />
       </section>
 
       <section className="py-28 relative overflow-hidden">
