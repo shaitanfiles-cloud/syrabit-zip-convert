@@ -247,8 +247,8 @@ class _SmartKeyPool:
     pick() prefers slots with spare capacity first, then among those picks
     the fastest provider (lowest priority index).
     """
-    _RL_COOLDOWN  = 60.0   # 429 rate-limit → skip slot for 60 s
-    _ERR_COOLDOWN = 15.0   # any other error → skip for 15 s
+    _RL_COOLDOWN  = 30.0   # 429 rate-limit → skip slot for 30 s
+    _ERR_COOLDOWN = 10.0   # any other error → skip for 10 s
 
     def __init__(self, candidates: list):
         pmap: dict = {}
@@ -823,8 +823,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     in_think = False
     buf = ""
 
-    # Batch small tokens before serialising — reduces JSON ops from ~150 → ~8 per response
-    _SSE_BATCH = 4    # flush very frequently — minimal latency per token
+    _SSE_BATCH = 2    # flush every 2 chars — near-instant token delivery
 
     async def _emit_tokens(token_source):
         nonlocal in_think, buf
@@ -945,8 +944,8 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # async with slot["sem"] lets up to max_concurrent requests run in parallel.
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
-    _SLM_SLOT_TIMEOUT = 5.0    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 6.0    # max seconds to wait for FIRST token from a slot
+    _SLM_SLOT_TIMEOUT = 3.0    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 4.0    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
@@ -978,7 +977,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 logger.info(f"SLM pool: skipping {p_name}/{p_model} — input too large ({_input_chars} chars > {_max_chars} limit)")
                 _skipped_slots.add(id(slot))
                 continue
-            _effective_ttft = _SLM_TTFT_TIMEOUT + (3.0 if _input_chars > 8000 else 0.0)
+            _effective_ttft = _SLM_TTFT_TIMEOUT + (2.0 if _input_chars > 8000 else 0.0)
             try:
                 async with slot["sem"]:
                     token_q: asyncio.Queue = asyncio.Queue()
