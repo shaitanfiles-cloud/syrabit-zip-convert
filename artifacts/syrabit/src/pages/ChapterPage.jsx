@@ -288,8 +288,7 @@ export default function ChapterPage() {
       }
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        el.classList.add('highlight-pulse');
-        setTimeout(() => el.classList.remove('highlight-pulse'), 3000);
+        el.classList.add('highlight-active');
         setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('highlight'); return next; }, { replace: true });
       }
     }, 400);
