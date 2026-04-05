@@ -272,7 +272,6 @@ export default function ChapterPage() {
     const decoded = decodeURIComponent(highlightId);
     const timer = setTimeout(() => {
       let el = null;
-      let isFallback = false;
       el = document.getElementById(decoded);
       if (!el) {
         const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
@@ -281,15 +280,16 @@ export default function ChapterPage() {
         }
       }
       if (!el) {
-        el = document.getElementById('chapter-content-top');
-        isFallback = true;
+        const contentTop = document.getElementById('chapter-content-top');
+        if (contentTop) {
+          const firstChild = contentTop.querySelector('h1, h2, h3, p, strong');
+          el = firstChild || contentTop;
+        }
       }
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        if (!isFallback) {
-          el.classList.add('highlight-pulse');
-          setTimeout(() => el.classList.remove('highlight-pulse'), 3000);
-        }
+        el.classList.add('highlight-pulse');
+        setTimeout(() => el.classList.remove('highlight-pulse'), 3000);
         setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('highlight'); return next; }, { replace: true });
       }
     }, 400);
