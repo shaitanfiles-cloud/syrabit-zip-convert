@@ -3046,8 +3046,6 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
         {"_id": 0, "topic_title": 1, "topic_slug": 1, "meta_description": 1,
          "chapter_title": 1, "quality_score": 1},
     ).to_list(500)
-    if not pages:
-        raise HTTPException(status_code=404, detail="No published topics for this subject")
 
     board_doc = await _db.boards.find_one({"slug": board}, {"_id": 0, "id": 1})
     subject_query = {"slug": subject_slug}
@@ -3062,6 +3060,8 @@ async def get_subject_landing_html(board: str, class_slug: str, subject_slug: st
             {"slug": subject_slug},
             {"_id": 0, "name": 1, "description": 1, "id": 1, "thumbnailUrl": 1, "thumbnail_url": 1},
         )
+    if not subject_doc and not pages:
+        raise HTTPException(status_code=404, detail="Subject not found")
     subject_name = subject_doc["name"] if subject_doc else subject_slug.replace("-", " ").title()
     subject_desc_raw = subject_doc.get("description", "") if subject_doc else ""
     subject_id = subject_doc.get("id", "") if subject_doc else ""

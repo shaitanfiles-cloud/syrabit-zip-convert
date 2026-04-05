@@ -2044,15 +2044,17 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             async with httpx.AsyncClient(timeout=10.0) as client:
                 html_resp = await client.get(api_url)
             if html_resp.status_code != 200:
+                logger.warning(f"BotRenderMiddleware falling back to SPA shell: {api_url} returned {html_resp.status_code} for path={path}")
                 return await self._safe_call_next(request, call_next)
             ct = html_resp.headers.get("content-type", "")
             if "text/html" not in ct and "text/xml" not in ct:
+                logger.warning(f"BotRenderMiddleware falling back to SPA shell: unexpected content-type '{ct}' from {api_url} for path={path}")
                 return await self._safe_call_next(request, call_next)
             html_content = html_resp.text
             _bot_html_cache[cache_key] = html_content
             return _bot_html_response(html_content)
         except Exception as _bot_err:
-            logger.debug(f"BotRenderMiddleware fallthrough: {_bot_err}")
+            logger.warning(f"BotRenderMiddleware falling back to SPA shell: {_bot_err} for path={path}")
             return await self._safe_call_next(request, call_next)
 
 
