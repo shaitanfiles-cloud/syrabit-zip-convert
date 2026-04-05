@@ -79,18 +79,24 @@ function StickyToc({ headings, activeId }) {
         On this page
       </p>
       <ul className="space-y-0.5">
-        {headings.map(h => (
+        {(headings.filter(h => h.level === 2).length >= 3
+          ? headings.filter(h => h.level === 2)
+          : headings.filter(h => {
+              if (h.level === 2) return true;
+              if (h.level !== 3) return false;
+              const t = h.text.toLowerCase().replace(/[:\s\-]+$/g, '').trim();
+              return !(/^(key points|example|exam tip|key points for revision|summary)(\s|$)/i.test(t));
+            })
+        ).map(h => (
           <li key={h.id}>
             <a
               href={`#${h.id}`}
               className={`block py-1 text-[12px] leading-snug transition-colors rounded ${
-                h.level === 3 ? 'pl-4' : 'pl-0'
-              } ${
                 activeId === h.id
                   ? 'text-violet-400 font-medium'
                   : 'text-white/40 hover:text-white/70'
               }`}
-              style={{ borderLeft: h.level === 2 ? (activeId === h.id ? '2px solid #9575e0' : '2px solid transparent') : 'none' }}
+              style={{ borderLeft: activeId === h.id ? '2px solid #9575e0' : '2px solid transparent' }}
               onClick={e => {
                 e.preventDefault();
                 document.getElementById(h.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -230,17 +236,17 @@ export default function ChapterPage() {
     if (!data?.content) return [];
     const lines = data.content.split('\n');
     const result = [];
+    const idCounts = {};
     for (const line of lines) {
       const m2 = line.match(/^## (.+)/);
       const m3 = line.match(/^### (.+)/);
-      if (m2) {
-        const text = m2[1].replace(/\*\*/g, '').trim();
-        const id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        result.push({ level: 2, text, id });
-      } else if (m3) {
-        const text = m3[1].replace(/\*\*/g, '').trim();
-        const id = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-        result.push({ level: 3, text, id });
+      if (m2 || m3) {
+        const level = m2 ? 2 : 3;
+        const text = (m2 || m3)[1].replace(/\*\*/g, '').trim();
+        const baseId = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        idCounts[baseId] = (idCounts[baseId] || 0) + 1;
+        const id = idCounts[baseId] > 1 ? `${baseId}-${idCounts[baseId]}` : baseId;
+        result.push({ level, text, id });
       }
     }
     return result;
@@ -380,12 +386,18 @@ export default function ChapterPage() {
       if (node?.props?.children) return extractText(node.props.children);
       return '';
     };
-    const toId = (children) => extractText(children).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+    const counters = {};
+    const toId = (children) => {
+      const raw = extractText(children).toLowerCase();
+      const baseId = raw.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      counters[baseId] = (counters[baseId] || 0) + 1;
+      return counters[baseId] > 1 ? `${baseId}-${counters[baseId]}` : baseId;
+    };
     return {
       h2: ({ children, ...props }) => <h2 id={toId(children)} className="scroll-mt-20" {...props}>{children}</h2>,
       h3: ({ children, ...props }) => <h3 id={toId(children)} className="scroll-mt-20" {...props}>{children}</h3>,
     };
-  }, []);
+  }, [data?.content]);
 
   if (loading) {
     return (
@@ -476,7 +488,7 @@ export default function ChapterPage() {
                   <span>{data.word_count.toLocaleString()} words</span>
                 )}
                 {headings.length > 0 && (
-                  <span className="flex items-center gap-1"><Hash size={12} />{headings.filter(h => h.level === 2).length} sections</span>
+                  <span className="flex items-center gap-1"><Hash size={12} />{Math.max(headings.filter(h => h.level === 2).length, headings.filter(h => h.level === 3 && !(/^(key points|example|exam tip|key points for revision|summary)(\s|$)/i.test(h.text.toLowerCase().replace(/[:\s\-]+$/g, '').trim()))).length)} topics</span>
                 )}
               </div>
             </div>

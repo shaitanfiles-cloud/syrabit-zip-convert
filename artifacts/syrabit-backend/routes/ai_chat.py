@@ -275,7 +275,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         logger.info(f"[PIPELINE][S1] Intent resolved: {_detected_intent} (Stage 1 primary)")
 
     _is_casual_sync = _detected_intent in ("casual", "general")
-    _skip_rag_sync = _detected_intent in ("casual", "general", "syllabus", "chapter_meta")
+    _skip_rag_sync = _detected_intent in ("casual", "general", "syllabus")
 
     _rag_query = msg.message
     if _topic_metadata and _topic_metadata.get("search_keywords") and not _skip_rag_sync:
@@ -751,7 +751,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    _PRE_LLM_BUDGET = 2.0
+    _PRE_LLM_BUDGET = 3.5
 
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
@@ -829,7 +829,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         logger.info(f"[PIPELINE][S1][STREAM] Intent resolved: {_stream_intent} (Stage 1 primary)")
 
     _is_casual = _stream_intent in ("casual", "general")
-    _skip_rag_stream = _stream_intent in ("casual", "general", "syllabus", "chapter_meta")
+    _skip_rag_stream = _stream_intent in ("casual", "general", "syllabus")
 
     subj_ctx = _subj_ctx_result
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id

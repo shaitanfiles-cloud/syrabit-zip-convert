@@ -14,7 +14,7 @@ HIGH_CONFIDENCE_THRESHOLD = 0.60
 
 _RAG_INTENTS = frozenset({"notes", "important_questions", "pyq"})
 
-_SKIP_RAG_INTENTS = frozenset({"casual", "syllabus", "chapter_meta"})
+_SKIP_RAG_INTENTS = frozenset({"casual", "syllabus"})
 
 
 def should_trigger_rag(intent: str, embedding_score: float = 0.0) -> bool:
