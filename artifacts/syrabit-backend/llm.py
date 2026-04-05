@@ -1029,10 +1029,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     }
 
     if use_model_raw == "openai/gpt-oss-20b":
-        _is_content_intent = intent in _CONTENT_INTENTS
-        _active_pool = _content_pool if _is_content_intent else _slm_pool
-        if _is_content_intent:
-            logger.info(f"SLM routing: intent={intent} → content pool (Cerebras-first)")
+        _active_pool = _slm_pool
         _input_chars = sum(len(m.get("content", "")) for m in messages)
         _skipped_slots: set = set()
         _tried = 0
