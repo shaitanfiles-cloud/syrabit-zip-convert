@@ -180,12 +180,12 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
 3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
 4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
 5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
-6. Target 600-1000 words of dense, high-value content.
+6. Target 1500-2000 words of dense, high-value content. More topics = more words — cover every topic thoroughly.
 7. Write as though every word costs marks — no filler, no repetition."""
 
         try:
             async with _pipeline_sem:
-                notes_raw = await call_llm_api_content([{"role": "user", "content": notes_prompt}], max_tokens=3200)
+                notes_raw = await call_llm_api_content([{"role": "user", "content": notes_prompt}], max_tokens=6000)
         except Exception as e:
             notes_raw = None
             result["notes"] = {"status": "error", "reason": str(e)}
@@ -455,14 +455,14 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
 3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
 4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
 5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
-6. Target 600-1000 words of dense, high-value content. Cover each topic thoroughly — depth matters.
+6. Target 1500-2000 words of dense, high-value content. More topics = more words — cover every topic thoroughly with depth.
 7. Write as though every word costs marks — no filler, no repetition, but do not sacrifice completeness for brevity.
 """
 
     try:
         generated = await call_llm_api_content(
             [{"role": "user", "content": prompt}],
-            max_tokens=3200
+            max_tokens=6000
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI generation failed: {e}")
@@ -579,7 +579,7 @@ Generate detailed study notes for:
 {topic_block}
 
 **INSTRUCTIONS:**
-1. Write 1000-1500 words of detailed, exam-focused notes
+1. Write 1500-2000 words of detailed, exam-focused notes. More topics = more words — cover every topic thoroughly.
 2. Use ## headings for each topic (match topic names exactly), ### for subtopics
 3. For each topic, write 5-8 sentence thorough explanations covering definitions, mechanisms, causes, effects, and significance
 4. Include key definitions in **bold**, 6-8 bullet points per topic for key facts examiners look for
@@ -591,7 +591,7 @@ Generate detailed study notes for:
 
     try:
         async with _pipeline_sem:
-            generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=5000)
+            generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=6000)
         if generated and len(generated.split()) >= 200:
             generated = _normalize_headings(generated)
             wc = len(generated.split())
