@@ -3,7 +3,7 @@
   "name": "Syrabit.ai — AHSEC AI Exam Prep",
   "short_name": "Syrabit.ai",
   "description": "AI-powered exam preparation for AHSEC & Degree students. Classes 11-12, B.Com, B.A, B.Sc.",
-  "start_url": "/library",
+  "start_url": "/library?utm_source=pwa&utm_medium=homescreen",
   "scope": "/",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
@@ -12,6 +12,9 @@
   "theme_color": "#7c3aed",
   "lang": "en-IN",
   "categories": ["education", "productivity"],
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
   "icons": [
     { "src": "/icons/icon-72x72.png",   "sizes": "72x72",   "type": "image/png", "purpose": "any" },
     { "src": "/icons/icon-96x96.png",   "sizes": "96x96",   "type": "image/png", "purpose": "any" },
@@ -22,20 +25,33 @@
     { "src": "/icons/icon-384x384.png", "sizes": "384x384", "type": "image/png", "purpose": "any" },
     { "src": "/icons/icon-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
   ],
+  "screenshots": [
+    {
+      "src": "/icons/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Syrabit.ai Home Screen"
+    }
+  ],
   "shortcuts": [
     {
       "name": "Open Library",
       "short_name": "Library",
-      "url": "/library",
+      "url": "/library?utm_source=pwa_shortcut",
       "icons": [{ "src": "/icons/icon-96x96.png", "sizes": "96x96" }]
     },
     {
       "name": "Start Chat",
       "short_name": "Chat",
-      "url": "/chat",
+      "url": "/chat?utm_source=pwa_shortcut",
       "icons": [{ "src": "/icons/icon-96x96.png", "sizes": "96x96" }]
     }
   ],
   "prefer_related_applications": false,
-  "related_applications": []
+  "related_applications": [],
+  "handle_links": "preferred",
+  "edge_side_panel": {
+    "preferred_width": 400
+  }
 }

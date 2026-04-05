@@ -248,6 +248,11 @@ async def track_event(
     """
     user_id = user.get("id") if user else None
     
+    if event_type == "pwa_install":
+        action = (metadata or {}).get("action", "unknown")
+        await track_pwa_install(action=action, metadata=metadata, user_id=user_id)
+        return {"status": "tracked"}
+
     await track_library_event(
         event_type=event_type,
         subject_id=subject_id,
@@ -258,6 +263,11 @@ async def track_event(
     )
     
     return {"status": "tracked"}
+
+
+@router.get("/admin/pwa/stats")
+async def admin_pwa_stats(admin: dict = Depends(get_admin_user)):
+    return await get_pwa_stats()
 
 # ─────────────────────────────────────────────
 # ADMIN CONTENT MANAGEMENT — Boards / Classes / Streams

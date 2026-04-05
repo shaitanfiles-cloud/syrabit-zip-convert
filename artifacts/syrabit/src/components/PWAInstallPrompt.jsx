@@ -1,8 +1,33 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Download, X } from 'lucide-react';
+import { Analytics } from '@/utils/analytics';
+import { API_BASE } from '@/utils/api';
 
 const DISMISS_KEY = 'syrabit_pwa_dismiss';
 const DISMISS_DAYS = 7;
+
+function trackPwaEvent(action, meta = {}) {
+  try {
+    const body = {
+      event_type: 'pwa_install',
+      metadata: {
+        action,
+        platform: navigator.userAgentData?.platform || navigator.platform || 'unknown',
+        standalone: window.matchMedia('(display-mode: standalone)').matches,
+        ...meta,
+      },
+    };
+    navigator.sendBeacon?.(
+      `${API_BASE}/analytics/track`,
+      new Blob([JSON.stringify(body)], { type: 'application/json' })
+    ) || fetch(`${API_BASE}/analytics/track`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {}
+}
 
 export default function PWAInstallPrompt() {
   const [deferredPrompt, setDeferredPrompt] = useState(null);
@@ -19,11 +44,26 @@ export default function PWAInstallPrompt() {
     const handler = (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
-      setTimeout(() => setVisible(true), 2500);
+      setTimeout(() => {
+        setVisible(true);
+        Analytics.pwaPromptShown();
+        trackPwaEvent('prompt_shown');
+      }, 2500);
     };
 
     window.addEventListener('beforeinstallprompt', handler);
-    return () => window.removeEventListener('beforeinstallprompt', handler);
+
+    const installedHandler = () => {
+      Analytics.pwaInstalled();
+      trackPwaEvent('installed');
+      setVisible(false);
+    };
+    window.addEventListener('appinstalled', installedHandler);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handler);
+      window.removeEventListener('appinstalled', installedHandler);
+    };
   }, []);
 
   const handleInstall = useCallback(async () => {
@@ -33,6 +73,8 @@ export default function PWAInstallPrompt() {
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
       setVisible(false);
+    } else {
+      trackPwaEvent('rejected');
     }
     setInstalling(false);
     setDeferredPrompt(null);
@@ -41,6 +83,8 @@ export default function PWAInstallPrompt() {
   const handleDismiss = useCallback(() => {
     setVisible(false);
     localStorage.setItem(DISMISS_KEY, String(Date.now()));
+    Analytics.pwaPromptDismissed();
+    trackPwaEvent('dismissed');
   }, []);
 
   if (!visible) return null;

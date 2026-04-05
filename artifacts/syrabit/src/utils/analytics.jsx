@@ -173,6 +173,22 @@ export const Analytics = {
   },
 
   // ── Admin ──────────────────────────────────────────────────────────────────
+  // ── PWA ────────────────────────────────────────────────────────────────
+  pwaPromptShown: () => {
+    track('pwa_prompt_shown');
+    trackGA4('pwa_prompt_shown');
+  },
+
+  pwaInstalled: () => {
+    track('pwa_installed');
+    trackGA4('pwa_installed');
+  },
+
+  pwaPromptDismissed: () => {
+    track('pwa_prompt_dismissed');
+    trackGA4('pwa_prompt_dismissed');
+  },
+
   adminLogin: (email) => {
     track('admin_logged_in', { email_domain: email.split('@')[1] });
   },

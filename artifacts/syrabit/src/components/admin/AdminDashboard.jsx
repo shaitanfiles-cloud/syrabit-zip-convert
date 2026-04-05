@@ -6,7 +6,7 @@ import {
   ArrowRight, PenTool, Settings, Eye, TrendingUp, RefreshCw,
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
-  Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck,
+  Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
 } from 'lucide-react';
 import axios from 'axios';
 import { adminGetDashboard, seoPipelineStatus, API_BASE } from '@/utils/api';
@@ -228,6 +228,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [tokenSpend, setTokenSpend] = useState(null);
   const [funnel, setFunnel] = useState(null);
   const [coverage, setCoverage] = useState(null);
+  const [pwaStats, setPwaStats] = useState(null);
   const [failedSections, setFailedSections] = useState([]);
 
   const headers = { withCredentials: true };
@@ -243,7 +244,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       const [
         dashRes, metricsRes,
         ragAccRes, fallbackRes, vectorRes, latencyRes,
-        queriesRes, tokenRes, funnelRes, coverageRes,
+        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes,
       ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
         axios.get(`${API_BASE}/admin/dashboard/metrics`, adminHdr(adminToken)),
@@ -255,6 +256,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         axios.get(`${API_BASE}/admin/billing/tokens`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/monetization/funnel`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/content/coverage`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/pwa/stats`, adminHdr(adminToken)),
       ]);
       const failed = [];
       if (dashRes.status === 'fulfilled') setData(dashRes.value.data); else { failed.push('overview'); setData(null); }
@@ -267,6 +269,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       if (tokenRes.status === 'fulfilled') setTokenSpend(tokenRes.value.data); else { failed.push('tokens'); setTokenSpend(null); }
       if (funnelRes.status === 'fulfilled') setFunnel(funnelRes.value.data); else { failed.push('funnel'); setFunnel(null); }
       if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data); else { failed.push('coverage'); setCoverage(null); }
+      if (pwaRes.status === 'fulfilled') setPwaStats(pwaRes.value.data); else { failed.push('pwa'); setPwaStats(null); }
       setFailedSections(failed);
       setLastRefresh(new Date());
     } catch (e) {
@@ -878,6 +881,78 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {pwaStats && (
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Smartphone size={14} className="text-violet-400" />
+            <h3 className="text-slate-300 font-semibold text-sm">PWA App Downloads</h3>
+            {pwaStats.installs_today > 0 && (
+              <span style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)', color: '#10b981', borderRadius: 20, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}>
+                +{pwaStats.installs_today} today
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+            <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+              <p className="text-xl font-bold text-violet-400">{pwaStats.total_installs}</p>
+              <p className="text-xs text-slate-500 mt-0.5">Total Installs</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+              <p className="text-xl font-bold text-emerald-400">{pwaStats.installs_7d}</p>
+              <p className="text-xs text-slate-500 mt-0.5">Last 7 Days</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+              <p className="text-xl font-bold text-cyan-400">{pwaStats.prompts_shown}</p>
+              <p className="text-xs text-slate-500 mt-0.5">Prompts Shown</p>
+            </div>
+            <div className="bg-slate-800/50 rounded-xl p-3 text-center">
+              <p className="text-xl font-bold" style={{ color: pwaStats.conversion_rate >= 30 ? '#10b981' : pwaStats.conversion_rate >= 15 ? '#f59e0b' : '#ef4444' }}>
+                {pwaStats.conversion_rate}%
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">Install Rate</p>
+            </div>
+          </div>
+
+          {pwaStats.daily_installs?.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Daily Installs (14 days)
+                </span>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 rounded-sm" style={{ background: '#8b5cf6' }} />
+                    <span className="text-[10px] text-slate-500">Installs</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <div className="w-2 h-2 rounded-sm" style={{ background: 'rgba(139,92,246,0.25)' }} />
+                    <span className="text-[10px] text-slate-500">Prompts</span>
+                  </div>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={100}>
+                <BarChart data={pwaStats.daily_installs} barSize={10}>
+                  <XAxis dataKey="date" tick={{ fontSize: 8, fill: '#64748b' }} tickFormatter={d => d.slice(5)} />
+                  <YAxis tick={{ fontSize: 8, fill: '#64748b' }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{ background: '#1e293b', border: 'none', fontSize: 11, borderRadius: 8 }}
+                    labelStyle={{ color: '#94a3b8' }}
+                  />
+                  <Bar dataKey="prompts" fill="rgba(139,92,246,0.25)" name="Prompts" radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="installs" fill="#8b5cf6" name="Installs" radius={[2, 2, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-slate-800 text-xs text-slate-500">
+            <span>Dismissed: <span className="text-slate-400 font-medium">{pwaStats.dismissed ?? 0}</span></span>
+            <span>Rejected: <span className="text-slate-400 font-medium">{pwaStats.rejected ?? 0}</span></span>
           </div>
         </div>
       )}

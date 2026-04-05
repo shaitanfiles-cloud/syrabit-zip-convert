@@ -16,10 +16,77 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "get_library_analytics", "get_recent_user_events", "get_visitor_stats",
     "track_library_event", "track_page_view",
+    "track_pwa_install", "get_pwa_stats",
 ]
 
 from deps import is_mongo_available
 from db_ops import supa_list_users, supa_get_all_conversations
+
+
+async def track_pwa_install(action: str, metadata: dict = None, user_id: str = None):
+    try:
+        event = {
+            "id": str(uuid.uuid4()),
+            "event_type": "pwa_install",
+            "action": action,
+            "user_id": user_id,
+            "metadata": metadata or {},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.pwa_installs.insert_one(event)
+        logger.info(f"PWA event: {action}")
+    except Exception as e:
+        logger.error(f"PWA tracking failed: {e}")
+
+
+async def get_pwa_stats() -> dict:
+    if not await is_mongo_available():
+        return {"total_installs": 0, "installs_today": 0, "installs_7d": 0, "prompts_shown": 0, "daily_installs": [], "conversion_rate": 0}
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+        total_installs = await db.pwa_installs.count_documents({"action": {"$in": ["installed", "accepted"]}})
+        installs_today = await db.pwa_installs.count_documents({
+            "action": {"$in": ["installed", "accepted"]},
+            "timestamp": {"$regex": f"^{today}"},
+        })
+        installs_7d = await db.pwa_installs.count_documents({
+            "action": {"$in": ["installed", "accepted"]},
+            "timestamp": {"$gte": week_ago},
+        })
+        prompts_shown = await db.pwa_installs.count_documents({"action": "prompt_shown"})
+        dismissed = await db.pwa_installs.count_documents({"action": "dismissed"})
+        rejected = await db.pwa_installs.count_documents({"action": "rejected"})
+
+        conversion_rate = round((total_installs / max(prompts_shown, 1)) * 100, 1)
+
+        daily_installs = []
+        for i in range(14):
+            day = (datetime.now(timezone.utc) - timedelta(days=13 - i)).strftime("%Y-%m-%d")
+            count = await db.pwa_installs.count_documents({
+                "action": {"$in": ["installed", "accepted"]},
+                "timestamp": {"$regex": f"^{day}"},
+            })
+            prompts_day = await db.pwa_installs.count_documents({
+                "action": "prompt_shown",
+                "timestamp": {"$regex": f"^{day}"},
+            })
+            daily_installs.append({"date": day, "installs": count, "prompts": prompts_day})
+
+        return {
+            "total_installs": total_installs,
+            "installs_today": installs_today,
+            "installs_7d": installs_7d,
+            "prompts_shown": prompts_shown,
+            "dismissed": dismissed,
+            "rejected": rejected,
+            "conversion_rate": conversion_rate,
+            "daily_installs": daily_installs,
+        }
+    except Exception as e:
+        logger.error(f"PWA stats error: {e}")
+        return {"total_installs": 0, "installs_today": 0, "installs_7d": 0, "prompts_shown": 0, "daily_installs": [], "conversion_rate": 0}
 
 async def track_library_event(
     event_type: str,
