@@ -475,6 +475,7 @@ from routes.admin_notifications import router as admin_notifications_router
 from routes.admin_monetization import router as admin_monetization_router
 from routes.cms_sarvam_health import router as cms_sarvam_health_router
 from routes.admin_advanced import router as admin_advanced_router
+from routes.admin_benchmark import router as admin_benchmark_router
 
 api.include_router(auth_router)
 api.include_router(content_router)
@@ -492,6 +493,7 @@ api.include_router(admin_notifications_router)
 api.include_router(admin_monetization_router)
 api.include_router(cms_sarvam_health_router)
 api.include_router(admin_advanced_router)
+api.include_router(admin_benchmark_router)
 
 from llm import call_llm_api, call_llm_api_content
 from auth_deps import get_admin_user
