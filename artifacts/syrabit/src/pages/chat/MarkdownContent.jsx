@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+const remarkPlugins = [remarkGfm];
+
 export const MarkdownContent = memo(function MarkdownContent({ content, streaming, sources }) {
   const navigate = useNavigate();
 
@@ -26,6 +28,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content, streamin
 
   const processed = useMemo(() => {
     if (!content) return content;
+    if (streaming) return content;
     const normalize = (s) => (s || '').trim().toLowerCase().replace(/[\s\-_]+/g, ' ').replace(/[^a-z0-9 ]/g, '');
     const toSlug = (s) => normalize(s).replace(/\s+/g, '-');
     const urlMap = new Map();
@@ -57,11 +60,11 @@ export const MarkdownContent = memo(function MarkdownContent({ content, streamin
       const url = findUrl(title);
       return url ? `[${title}](${url})` : `**${title}**`;
     });
-  }, [content, sources]);
+  }, [content, sources, streaming]);
 
   return (
     <div className="md-content-light" style={{ fontSize: '0.9375rem' }}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
         {processed}
       </ReactMarkdown>
       {streaming && (

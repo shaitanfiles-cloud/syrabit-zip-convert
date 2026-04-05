@@ -10,7 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
-import PWAInstallPrompt from "@/components/PWAInstallPrompt";
+const PWAInstallPrompt = lazy(() => import("@/components/PWAInstallPrompt"));
 import { Loader2 } from "lucide-react";
 import { apiClient } from "@/utils/api";
 
@@ -109,7 +109,7 @@ function LegacyTopicRedirect() {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
-  useEffect(() => { initGA4(); prefetchCriticalRoutes(); }, []);
+  useEffect(() => { initGA4(); prefetchCriticalRoutes(); }, []); // eslint-disable-line
 
   useEffect(() => {
     const prefetchBundle = () => {
@@ -251,8 +251,8 @@ function App() {
                 </Routes>
               </Suspense>
             </BrowserRouter>
-            <PWAInstallPrompt />
           </AuthProvider>
+          <Suspense fallback={null}><PWAInstallPrompt /></Suspense>
         </QueryClientProvider>
       </ThemeProvider>
     </ErrorBoundary>

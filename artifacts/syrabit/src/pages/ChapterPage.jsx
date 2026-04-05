@@ -324,6 +324,8 @@ export default function ChapterPage() {
       let el = null;
       const contentTop = document.getElementById('chapter-content-top');
 
+      if (!contentTop && !decoded) return;
+
       if (chunkSnippet && contentTop) {
         const snippetNorm = chunkSnippet.toLowerCase().replace(/\s+/g, ' ').trim();
         const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, td, ul, ol');
@@ -395,9 +397,32 @@ export default function ChapterPage() {
       }
 
       if (el) {
-        document.querySelectorAll('.highlight-active').forEach(e => e.classList.remove('highlight-active'));
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        el.classList.add('highlight-active');
+        document.querySelectorAll('.highlight-active, .highlight-section-start, .highlight-section-end, .highlight-single').forEach(e => {
+          e.classList.remove('highlight-active', 'highlight-section-start', 'highlight-section-end', 'highlight-single');
+        });
+
+        const isHeading = /^H[1-4]$/.test(el.tagName);
+        if (isHeading) {
+          const level = parseInt(el.tagName[1], 10);
+          const highlighted = [el];
+          let sibling = el.nextElementSibling;
+          while (sibling) {
+            if (/^H[1-4]$/.test(sibling.tagName) && parseInt(sibling.tagName[1], 10) <= level) break;
+            highlighted.push(sibling);
+            sibling = sibling.nextElementSibling;
+          }
+          highlighted.forEach((node, i) => {
+            node.classList.add('highlight-active');
+            if (i === 0) node.classList.add('highlight-section-start');
+            if (i === highlighted.length - 1) node.classList.add('highlight-section-end');
+          });
+        } else {
+          const parent = el.closest('ul, ol, table');
+          const target = parent || el;
+          target.classList.add('highlight-active', 'highlight-single');
+        }
+
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
         setSearchParams((prev) => {
           const next = new URLSearchParams(prev);
           next.delete('topic');
@@ -406,7 +431,7 @@ export default function ChapterPage() {
           return next;
         }, { replace: true });
       }
-    }, 400);
+    }, 300);
     return () => clearTimeout(timer);
   }, [loading, data, searchParams]);
 

@@ -1541,14 +1541,32 @@
 }
 
 @keyframes highlightFadeIn {
-  from { background-color: rgba(74, 222, 128, 0.3); }
-  to { background-color: rgba(74, 222, 128, 0.10); }
+  0% { background-color: rgba(74, 222, 128, 0.35); box-shadow: inset 4px 0 0 0 #22c55e, 0 0 12px rgba(74, 222, 128, 0.15); }
+  100% { background-color: rgba(74, 222, 128, 0.10); box-shadow: inset 3px 0 0 0 #4ade80; }
 }
 .highlight-active {
   background-color: rgba(74, 222, 128, 0.10);
   box-shadow: inset 3px 0 0 0 #4ade80;
-  border-radius: 6px;
-  padding-left: 8px;
-  margin-left: -8px;
-  animation: highlightFadeIn 0.8s ease-out;
+  padding: 4px 10px;
+  margin-left: -10px;
+  animation: highlightFadeIn 1s ease-out;
+  transition: background-color 0.3s ease;
+  scroll-margin-top: 80px;
+}
+.highlight-active.highlight-section-start {
+  border-radius: 8px 8px 0 0;
+  padding-top: 10px;
+}
+.highlight-active.highlight-section-end {
+  border-radius: 0 0 8px 8px;
+  padding-bottom: 10px;
+}
+.highlight-active.highlight-single {
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+h2.highlight-active,
+h3.highlight-active,
+h4.highlight-active {
+  color: #4ade80;
 }

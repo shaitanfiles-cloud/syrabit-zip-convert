@@ -177,10 +177,20 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           navigate(subjectUrl);
                         }
                       } : undefined}
-                      className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
-                      style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.14)', maxWidth: 'fit-content' }}
-                      role={subjectUrl ? 'link' : undefined}
-                      aria-label={subjectUrl ? `View ${subjectLabel}` : undefined}
+                      className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer active:scale-[0.98]' : ''}`}
+                      style={{
+                        background: 'rgba(139,92,246,0.06)',
+                        border: '1px solid rgba(139,92,246,0.14)',
+                        maxWidth: 'fit-content',
+                        transition: 'background 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
+                        ...(subjectUrl ? { cursor: 'pointer' } : {}),
+                      }}
+                      onMouseEnter={subjectUrl ? (e) => { e.currentTarget.style.background = 'rgba(139,92,246,0.12)'; e.currentTarget.style.borderColor = 'rgba(139,92,246,0.3)'; } : undefined}
+                      onMouseLeave={subjectUrl ? (e) => { e.currentTarget.style.background = 'rgba(139,92,246,0.06)'; e.currentTarget.style.borderColor = 'rgba(139,92,246,0.14)'; } : undefined}
+                      role={subjectUrl ? 'button' : undefined}
+                      tabIndex={subjectUrl ? 0 : undefined}
+                      onKeyDown={subjectUrl ? (e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); } : undefined}
+                      aria-label={subjectUrl ? `Open ${lessonLabel || subjectLabel} in Syrabit Browser` : undefined}
                     >
                       <div className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5 mb-1">

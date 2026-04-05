@@ -54,6 +54,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
+    const isStreaming = messages.length > 0 && messages[messages.length - 1]?.streaming;
     scrollTimeoutRef.current = setTimeout(() => {
       if (pendingSendScroll.current && lastUserMsgRef.current) {
         pendingSendScroll.current = false;
@@ -64,10 +65,10 @@ export default function ChatPage() {
       if (container) {
         const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
         if (atBottom) {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+          messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth', block: 'end' });
         }
       }
-    }, 40);
+    }, isStreaming ? 80 : 40);
     return () => { if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current); };
   }, [messages]);
 
@@ -250,15 +251,21 @@ export default function ChatPage() {
       let libSources = [];
       let hasError = false;
 
-      // RAF-based batching: accumulate chunks between animation frames
-      // so React re-renders at most 60×/sec instead of on every token
       let pendingChunk = '';
       let rafId = null;
       const flushPending = () => {
         if (!pendingChunk) return;
         fullContent += pendingChunk; pendingChunk = ''; rafId = null;
         const snapshot = fullContent;
-        setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: snapshot } : m));
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.id === aiMsgId) {
+            const updated = [...prev];
+            updated[updated.length - 1] = { ...last, content: snapshot };
+            return updated;
+          }
+          return prev.map((m) => m.id === aiMsgId ? { ...m, content: snapshot } : m);
+        });
       };
       let sseBuffer = '';
       while (true) {

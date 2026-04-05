@@ -10,13 +10,13 @@ export function prefetchCriticalRoutes() {
   const doPrefetch = () => {
     if (typeof requestIdleCallback === 'function') {
       requestIdleCallback(() => {
-        pageImports.library();
-        requestIdleCallback(() => { pageImports.chat(); });
+        pageImports.chat();
+        requestIdleCallback(() => { pageImports.library(); });
       });
     } else {
-      pageImports.library();
-      setTimeout(() => { pageImports.chat(); }, 300);
+      pageImports.chat();
+      setTimeout(() => { pageImports.library(); }, 200);
     }
   };
-  setTimeout(doPrefetch, 1500);
+  setTimeout(doPrefetch, 800);
 }
