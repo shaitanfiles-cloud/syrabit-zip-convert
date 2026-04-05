@@ -294,11 +294,12 @@ Respond in plain text only. Keep it short and human."""
 _INTENT_FORMAT_RULES: dict[str, str] = {
     "syllabus": (
         "FORMAT RULES (syllabus):\n"
-        "- Present as a numbered bullet-point topic list grouped by unit/chapter.\n"
-        "- Include marks distribution per unit if available.\n"
-        "- If the student asks for a specific semester, show ONLY that semester's topics.\n"
-        "- Always present the COMPLETE list — never truncate.\n"
-        "- Use the format: Unit N: Title (marks) → bullet list of topics.\n"
+        "- Show ONLY the chapter/unit names with a 1-line description each.\n"
+        "- Format: **Chapter N: Title** — one-sentence description of what the chapter covers.\n"
+        "- Do NOT list individual topics, sub-topics, marks breakdowns, or detailed content under each chapter.\n"
+        "- If the student asks for a specific semester, show ONLY that semester's chapters.\n"
+        "- Always present the COMPLETE list of chapters — never truncate.\n"
+        "- Keep it clean and scannable — chapter names and descriptions only.\n"
     ),
     "chapter_meta": (
         "FORMAT RULES (chapter_meta):\n"
@@ -409,17 +410,16 @@ STRICT RULES:
 _INTENT_EXTRACTION_RULES: dict[str, str] = {
     "syllabus": (
         "CONTENT EXTRACTION RULES:\n"
-        "- Look for the CURRICULUM CONSTRAINTS (Tier -1) block — it contains the chapter list and topics.\n"
-        "- Also scan any `[Content: ... | type=notes]` blocks for unit/marks breakdowns.\n"
-        "- If a Table of Contents (TOC) is present in any content block, reproduce ALL sections listed in it — do NOT skip any numbered section.\n"
-        "- Ensure section numbering matches the TOC exactly (e.g. if TOC lists 3.1 through 3.8, include ALL of them).\n"
+        "- Look for the CURRICULUM CONSTRAINTS (Tier -1) block — it contains the chapter list.\n"
+        "- Extract ONLY chapter/unit names and their descriptions.\n"
+        "- Do NOT extract individual topics, sub-topics, or marks breakdowns within each chapter.\n"
         "- Ignore question-type blocks.\n"
         "SEMESTER HANDLING:\n"
-        "- If the student asks for a specific semester (e.g. '4th semester syllabus'), filter and present ONLY the units/chapters/topics for that semester.\n"
+        "- If the student asks for a specific semester (e.g. '4th semester syllabus'), filter and present ONLY the chapters for that semester.\n"
         "- If the syllabus data has explicit semester markers, use them to filter.\n"
-        "- If the syllabus data does NOT have explicit semester markers, organize the full syllabus clearly by unit and note that semester-specific breakdowns are not available in the data.\n"
-        "- Always present the COMPLETE list of topics for the requested scope — never truncate or abbreviate.\n"
-        "RESPONSE FORMAT: Numbered list of units → topics with marks distribution. Keep it compact — no lengthy descriptions per topic, just the topic name and marks."
+        "- If the syllabus data does NOT have explicit semester markers, organize the full syllabus clearly by chapter and note that semester-specific breakdowns are not available in the data.\n"
+        "- Always present the COMPLETE list of chapters for the requested scope — never truncate.\n"
+        "RESPONSE FORMAT: Numbered list of chapters with a 1-line description each. No sub-topics, no marks per topic — just chapter names and descriptions."
     ),
     "pyq": (
         "CONTENT EXTRACTION RULES:\n"
