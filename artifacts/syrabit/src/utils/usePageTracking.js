@@ -2,7 +2,6 @@ import { useEffect, useRef } from 'react';
 import { useLocation, matchPath } from 'react-router-dom';
 import axios from 'axios';
 import { Analytics } from './analytics';
-import ReactGA from 'react-ga4';
 import { API_BASE } from './api';
 
 const KNOWN_PATTERNS = [
@@ -168,7 +167,7 @@ export function usePageTracking() {
 
     // GA4 page_view — only when initialized
     if (import.meta.env.VITE_GA4_ID) {
-      ReactGA.send({ hitType: 'pageview', page: path, title: document.title });
+      if (window.gtag) window.gtag('event', 'page_view', { page_path: path, page_title: document.title });
     }
   }, [location.pathname]);
 }

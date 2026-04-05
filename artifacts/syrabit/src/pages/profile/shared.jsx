@@ -1,5 +1,4 @@
 import { Star } from 'lucide-react';
-import ReactGA from 'react-ga4';
 
 export function StarRating({ value = 4, max = 5 }) {
   return (
@@ -66,5 +65,5 @@ export function loadRazorpay() {
 }
 
 export const ga4Track = (name, params = {}) => {
-  if (import.meta.env.VITE_GA4_ID) ReactGA.event(name, params);
+  if (import.meta.env.VITE_GA4_ID && window.gtag) window.gtag('event', name, params);
 };

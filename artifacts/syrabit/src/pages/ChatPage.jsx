@@ -73,6 +73,7 @@ export default function ChatPage() {
   }, [messages]);
 
   useEffect(() => {
+    if (!user) return;
     apiClient().get('/user/credits')
       .then((res) => {
         const c = res.data;
@@ -205,6 +206,8 @@ export default function ChatPage() {
       const response = await fetch(`${API_BASE}/ai/chat/stream`, {
         method: 'POST', headers: fetchHeaders,
         credentials: 'include', body: JSON.stringify(payload), signal: controller.signal,
+        keepalive: false,
+        priority: 'high',
       });
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));

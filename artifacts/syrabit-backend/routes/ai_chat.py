@@ -37,6 +37,7 @@ from analytics_helpers import *
 from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
 from subject_router import build_search_scope
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
+from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, run_pipeline_stream
 
 _CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
 
@@ -240,7 +241,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         except Exception as _fu_err:
             logger.warning(f"Follow-up detection failed: {_fu_err}")
 
-    from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query
+    pass  # pipeline imports moved to module level
 
     _hard_bypass = _detected_intent in ("syllabus", "chapter_meta")
 
@@ -398,7 +399,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
 
     if answer is None:
         try:
-            from pipeline import run_pipeline, should_use_pipeline
+            from pipeline import run_pipeline
             _pipeline_answer = None
             if should_use_pipeline(_detected_intent, msg.message):
                 try:
@@ -735,7 +736,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         except Exception as _fu_err_s:
             logger.warning(f"[STREAM] Follow-up detection failed: {_fu_err_s}")
 
-    from pipeline import should_use_pipeline as _s_should_pipeline, stage1_resolve_topic as _s_stage1, apply_stage1_to_intent as _s_apply_s1, build_enhanced_query as _s_enhance_q
+    _s_should_pipeline, _s_stage1, _s_apply_s1, _s_enhance_q = should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query
 
     _s_hard_bypass = _stream_intent in ("syllabus", "chapter_meta")
 
@@ -892,7 +893,13 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
                 return []
 
-        _web_task = asyncio.create_task(_safe_web_search_stream())
+        _skip_web = len(msg.message) < 40 or _is_card_context
+        if _skip_web:
+            _web_done_future = asyncio.get_event_loop().create_future()
+            _web_done_future.set_result([])
+            _web_task = asyncio.ensure_future(_web_done_future)
+        else:
+            _web_task = asyncio.create_task(_safe_web_search_stream())
 
         _essential = {_rag_task, _history_task}
         _essential_budget = max(1.0, _deadline - _time_mod.time())
@@ -1113,10 +1120,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
             if cached_answer:
                 logger.info(f"[STREAM][TIMING] TTFT (cache hit): {_time_mod.time() - _stream_t0:.3f}s")
-                _CHUNK_SIZE = 50
+                _CHUNK_SIZE = 120
                 for _ci in range(0, len(cached_answer), _CHUNK_SIZE):
                     yield f"data: {json.dumps({'content': cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
-                    await asyncio.sleep(0.008)
+                    if _ci % (_CHUNK_SIZE * 5) == 0:
+                        await asyncio.sleep(0)
                 full_response.append(cached_answer)
             else:
                 _bp_count = 0
@@ -1127,7 +1135,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
                 _pipeline_stream = None
                 try:
-                    from pipeline import run_pipeline_stream, should_use_pipeline
                     if should_use_pipeline(_stream_intent, user_msg_saved):
                         _pipeline_ctx = {
                             "board_name": ctx_board_name,
@@ -1218,7 +1225,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         break
                     yield chunk
                     _bp_count += 1
-                    if _bp_count % 20 == 0:
+                    if _bp_count % 40 == 0:
                         await asyncio.sleep(0)
                 if _output_violation:
                     full_response.clear()
