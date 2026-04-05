@@ -1990,11 +1990,10 @@ def build_rag_system_prompt(
     _has_syllabus_topic = bool(rag_context.get("syllabus_topic_name"))
     if quality == "high" and _has_syllabus_topic:
         base_prompt = _re.sub(
-            r'2\. ANSWERING POLICY:.*?(?=3\. FOCUS)',
-            '2. GROUNDING IS PRESENT: The grounding context below contains curriculum content '
+            r'2\. ANSWERING:.*?(?=3\. FOCUS)',
+            '2. ANSWERING: The grounding context below contains curriculum content '
             'that matches the student\'s question. You MUST answer from it. '
-            'The student\'s wording may differ from the content (e.g. misspellings, alternate '
-            'forms) — always treat the grounding as the correct match.\n',
+            'The student\'s wording may differ from the content — always treat the grounding as the correct match.\n',
             base_prompt,
             flags=_re.DOTALL,
         )
@@ -2003,12 +2002,8 @@ def build_rag_system_prompt(
     _incoming_intent, _ = classify_intent(query) if query else ("notes", None)
     if _incoming_intent in _content_intents:
         base_prompt += (
-            "\n\nCONTENT GENERATION RULE (notes / important questions / PYQ):\n"
-            "You are generating structured academic content. You MUST answer ONLY from the "
-            "grounding context provided below. Do NOT add facts, examples, or explanations "
-            "from your own training data. If the grounding does not cover something, skip it "
-            "rather than inventing content. Every statement must be traceable to the grounding. "
-            "Accuracy and faithfulness to the source material is more important than completeness."
+            "\n\nCONTENT RULE: Answer from the grounding context below. "
+            "Do NOT invent content. Accuracy over completeness."
         )
     chunks      = rag_context.get("chunks",   [])
     chapters    = rag_context.get("chapters", [])
@@ -2041,9 +2036,7 @@ def build_rag_system_prompt(
         _source_parts.append(f"{_src_board} (board name)")
         _source_line = " · ".join(_source_parts)
         base_prompt += (
-            f"\n\nSOURCE CITATION RULE: Do NOT mention source, subject name, unit name, "
-            f"course name, or board name anywhere in your answer body. Answer the question directly first. "
-            f"Then, at the very end of your response, on its own line, add:\n"
+            f"\n\nSOURCE: At the very end of your response, add on its own line:\n"
             f"SOURCE : {_source_line}"
         )
 
@@ -2053,34 +2046,14 @@ def build_rag_system_prompt(
     if syllabus and syllabus.get("content"):
         syllabus_content = syllabus.get("content", "")
         syllabus_topics = ", ".join(syllabus.get("topics", [])[:10])
-        geo_phrases = syllabus.get("geo_phrases", [])
         grounding = (
             "\n\n---\n"
-            f"**CURRICULUM CONSTRAINTS (Tier -1 — {_curriculum_label}):**\n"
-            f"You are helping a student from the {_curriculum_label}. "
-            "The following represents what this student is expected to know:\n\n"
+            f"**CURRICULUM ({_curriculum_label}):**\n"
             f"{syllabus_content}\n\n"
         )
         if syllabus_topics:
             grounding += f"**Key topics:** {syllabus_topics}\n\n"
-        grounding += (
-            "---\n"
-            f"*INSTRUCTION: Use the {_curriculum_label} syllabus above as reference context for the student's enrolled programme. "
-            "However, if the student asks about a topic covered in the grounding context below (even from a different board/stream), "
-            "answer it from the grounding — our library serves all Assam boards. "
-            "Prioritize accuracy over breadth. "
-            f"When referencing the curriculum by name, always call it '{_curriculum_label}'. "
-            "When relevant, cite specific board exam stats, PYQ frequency data, and authoritative syllabus references.*\n"
-        )
-        if geo_phrases:
-            grounding += (
-                "\n**NOTE:** After delivering your factual answer, you may append a brief "
-                "closing phrase from the list below — only if it fits naturally and does NOT "
-                "alter or qualify any factual statement in your answer:\n"
-            )
-            for gp in geo_phrases[:5]:
-                grounding += f"- {gp}\n"
-            grounding += "\n"
+        grounding += "---\n"
 
     # ── Tier -0.5: Exact chapter list from DB (for syllabus intent) ────────────
     _syl_chapters_list = rag_context.get("_syllabus_chapters", [])
@@ -2099,6 +2072,29 @@ def build_rag_system_prompt(
             if _ch_desc:
                 grounding += f" — {_ch_desc}"
             grounding += "\n"
+        grounding += "\n---\n"
+
+    _chapter_topics_list = rag_context.get("_chapter_topics", [])
+    if _chapter_topics_list and _intent in _content_intents:
+        _subject_name_for_topics = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
+        grounding += (
+            "\n\n---\n"
+            f"**CHAPTER & TOPIC STRUCTURE ({_subject_name_for_topics}):**\n"
+            "Use the following chapter and topic structure to organize your answer. "
+            "When making notes, cover topics from the relevant chapter systematically.\n\n"
+        )
+        for _ct in _chapter_topics_list:
+            _ct_title = _ct.get("title", "")
+            _ct_desc = _ct.get("description", "")
+            _ct_topics = _ct.get("topics", [])
+            if not _ct_title:
+                continue
+            grounding += f"**{_ct_title}**"
+            if _ct_desc:
+                grounding += f" — {_ct_desc[:150]}"
+            grounding += "\n"
+            if _ct_topics:
+                grounding += f"  Topics: {', '.join(_ct_topics[:15])}\n"
         grounding += "\n---\n"
 
     # ── Tier 0: Uploaded subject document ────────────────────────────────────
@@ -2151,11 +2147,8 @@ def build_rag_system_prompt(
             )
             grounding += (
                 "\n\n---\n"
-                "**GROUNDING CONTEXT (Syrabit Library — PRIMARY AUTHORITY):**\n"
-                "The following content is from the student's verified curriculum database."
-                f"{_topic_note} "
-                "This is your PRIMARY source of truth — use it as the foundation (80-90%) of your answer. "
-                "Only supplement with your own knowledge to explain, add examples, or fill minor gaps.\n\n"
+                "**GROUNDING CONTEXT (Curriculum Database):**\n"
+                f"Verified curriculum content.{_topic_note}\n\n"
             )
 
             if content_card and _budget_used < _GROUNDING_BUDGET:

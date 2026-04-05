@@ -880,6 +880,17 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         ))
         _history_task = asyncio.create_task(_fetch_history())
 
+        if _stream_intent in _CONTENT_INTENTS_SET and msg.subject_id:
+            try:
+                _notes_chapters = await db.chapters.find(
+                    {"subject_id": msg.subject_id},
+                    {"_id": 0, "title": 1, "description": 1, "topics": 1, "order_index": 1}
+                ).sort("order_index", 1).to_list(50)
+            except Exception:
+                _notes_chapters = []
+        else:
+            _notes_chapters = []
+
         async def _safe_web_search_stream():
             try:
                 return await web_search_with_fallback(
@@ -958,6 +969,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.info(f"[STREAM] No embeddings match (outside syllabus) → RAG skipped | web={len(web_results)} (web+LLM mode)")
         else:
             logger.info(f"[STREAM] RAG quality={_rag_quality} | web={len(web_results)} (RAG=base, web=polish)")
+
+        if _notes_chapters:
+            rag_ctx["_chapter_topics"] = _notes_chapters
+            logger.info(f"[STREAM] Injected {len(_notes_chapters)} chapter topic lists for notes context")
 
     _t_phase2_done = _time_mod.time()
     logger.info(f"[STREAM][TIMING] Phase 2 (RAG+web+history): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
