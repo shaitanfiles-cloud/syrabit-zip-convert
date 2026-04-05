@@ -237,9 +237,9 @@ _SLM_SLOT_CANDIDATES = [
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
-    ("cerebras",    "llama3.1-8b",                                       6, 0),
+    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    6, 0),
     ("sarvam",      "sarvam-m",                                          4, 1),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 2),
+    ("openrouter",  "google/gemma-3-27b-it",                             4, 2),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
