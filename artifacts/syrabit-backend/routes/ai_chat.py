@@ -217,11 +217,18 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         except Exception as _fu_err:
             logger.warning(f"Follow-up detection failed: {_fu_err}")
 
-    _is_casual_sync = _detected_intent == "casual"
-    _skip_rag_sync = _detected_intent in ("casual", "syllabus", "chapter_meta")
+    from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query
+
+    _hard_bypass = _detected_intent in ("syllabus", "chapter_meta")
+
+    async def _ns_fetch_stage1():
+        if not should_use_pipeline(_detected_intent, msg.message):
+            return None
+        result = await stage1_resolve_topic(msg.message)
+        return result if result else {}
 
     async def _ns_fetch_search_scope():
-        if _skip_rag_sync:
+        if _hard_bypass:
             return "", None
         return await build_search_scope(
             msg.message,
@@ -231,9 +238,24 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             embedder=_get_syllabus_embedder(),
         )
 
-    syllabus, (_ns_scoped_query, _ns_route) = await asyncio.gather(
-        _ns_fetch_syllabus(), _ns_fetch_search_scope(),
+    syllabus, (_ns_scoped_query, _ns_route), _topic_metadata = await asyncio.gather(
+        _ns_fetch_syllabus(), _ns_fetch_search_scope(), _ns_fetch_stage1(),
     )
+
+    if _topic_metadata and _topic_metadata.get("intent"):
+        _detected_intent, _detected_db_category = apply_stage1_to_intent(
+            _topic_metadata, _detected_intent, _detected_db_category
+        )
+        logger.info(f"[PIPELINE][S1] Intent resolved: {_detected_intent} (Stage 1 primary)")
+
+    _is_casual_sync = _detected_intent == "casual"
+    _skip_rag_sync = _detected_intent in ("casual", "syllabus", "chapter_meta")
+
+    _rag_query = msg.message
+    if _topic_metadata and _topic_metadata.get("search_keywords") and not _skip_rag_sync:
+        _rag_query = build_enhanced_query(msg.message, _topic_metadata)
+        if _rag_query != msg.message:
+            logger.info(f"[PIPELINE][S1] Enhanced RAG query: '{_rag_query[:80]}'")
 
     async def _safe_web_search(**kw):
         try:
@@ -262,7 +284,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     else:
         rag_ctx, web_results, history_messages = await asyncio.gather(
             resolve_rag_context(
-                msg.message,
+                _rag_query,
                 subject_id=msg.subject_id,
                 subject_name=msg.subject_name,
                 document_text=document_text,
@@ -270,7 +292,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
                 db_category=_detected_db_category,
             ),
             _safe_web_search(
-                query=msg.message, num_results=5,
+                query=_rag_query, num_results=5,
                 board_name=ctx_board_name,
                 class_name=ctx_class_name,
                 subject_name=msg.subject_name or "",
@@ -353,7 +375,41 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
 
     if answer is None:
         try:
-            answer = await call_llm_api_chat(messages, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens)
+            from pipeline import run_pipeline, should_use_pipeline
+            _pipeline_answer = None
+            if should_use_pipeline(_detected_intent, msg.message):
+                try:
+                    _pipeline_ctx = {
+                        "board_name": ctx_board_name,
+                        "class_name": ctx_class_name,
+                        "stream_name": ctx_stream_name,
+                        "subject_name": msg.subject_name,
+                        "chapter_name": msg.chapter_name,
+                    }
+                    _pipeline_ui = {
+                        "name": (user.get("name", "") if user else ""),
+                        "board_name": ctx_board_name or (user.get("board_name", "") if user else ""),
+                        "class_name": ctx_class_name or (user.get("class_name", "") if user else ""),
+                        "plan": (user.get("plan", "free") if user else "free"),
+                    }
+                    _pipeline_answer = await run_pipeline(
+                        query=msg.message,
+                        rag_ctx=rag_ctx,
+                        context=_pipeline_ctx,
+                        user_info=_pipeline_ui,
+                        max_tokens=max_tokens,
+                        regex_intent=_detected_intent,
+                        topic_metadata=_topic_metadata,
+                    )
+                except Exception as _pipe_err:
+                    logger.warning(f"[PIPELINE] Non-stream pipeline failed, falling back: {_pipe_err}")
+                    _pipeline_answer = None
+
+            if _pipeline_answer:
+                answer = _pipeline_answer
+                logger.info(f"[PIPELINE] Used multi-LLM pipeline for non-stream response ({len(answer)} chars)")
+            else:
+                answer = await call_llm_api_chat(messages, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens)
             _redis_set("ai_cache", cache_key, answer, _cache_ttl)
             if not redis_client:
                 _ai_response_cache[cache_key] = answer
@@ -656,10 +712,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         except Exception as _fu_err_s:
             logger.warning(f"[STREAM] Follow-up detection failed: {_fu_err_s}")
 
-    _is_casual = _stream_intent == "casual"
-    _skip_rag_stream = _stream_intent in ("casual", "syllabus", "chapter_meta")
+    from pipeline import should_use_pipeline as _s_should_pipeline, stage1_resolve_topic as _s_stage1, apply_stage1_to_intent as _s_apply_s1, build_enhanced_query as _s_enhance_q
 
-    # ── Phase 0+1 fully parallel: context, semester, doc, search scope all at once ──
+    _s_hard_bypass = _stream_intent in ("syllabus", "chapter_meta")
+
+    # ── Phase 0+1 fully parallel: context, semester, doc, search scope, Stage 1 all at once ──
     _t_phase0 = _time_mod.time()
 
     _is_card_context = bool(msg.card_context and msg.card_context.strip())
@@ -674,7 +731,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         return (subj or {}).get("document_text")
 
     async def _fetch_search_scope_early():
-        if _skip_rag_stream and _stream_intent == "casual":
+        if _s_hard_bypass:
             return "", None
         if msg.card_context and msg.subject_id and msg.subject_name:
             return msg.subject_name, None
@@ -686,12 +743,28 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             embedder=_get_syllabus_embedder(),
         )
 
-    _subj_ctx_result, _sem_class_result, document_text, (_sr_scoped_query, _sr_route) = await asyncio.gather(
+    async def _fetch_stage1_stream():
+        if not _s_should_pipeline(_stream_intent, msg.message):
+            return None
+        result = await _s_stage1(msg.message)
+        return result if result else {}
+
+    _subj_ctx_result, _sem_class_result, document_text, (_sr_scoped_query, _sr_route), _s_topic_meta = await asyncio.gather(
         _resolve_subject_context(msg.subject_id),
         _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
         _fetch_doc(),
         _fetch_search_scope_early(),
+        _fetch_stage1_stream(),
     )
+
+    if _s_topic_meta and _s_topic_meta.get("intent"):
+        _stream_intent, _stream_db_category = _s_apply_s1(
+            _s_topic_meta, _stream_intent, _stream_db_category
+        )
+        logger.info(f"[PIPELINE][S1][STREAM] Intent resolved: {_stream_intent} (Stage 1 primary)")
+
+    _is_casual = _stream_intent == "casual"
+    _skip_rag_stream = _stream_intent in ("casual", "syllabus", "chapter_meta")
 
     subj_ctx = _subj_ctx_result
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
@@ -752,6 +825,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             return redis_get_anon_conversation(anon_id, msg.conversation_id)
         return None
 
+    _s_rag_query = msg.message
+    if _s_topic_meta and _s_topic_meta.get("search_keywords") and not _skip_rag_stream:
+        _s_rag_query = _s_enhance_q(msg.message, _s_topic_meta)
+        if _s_rag_query != msg.message:
+            logger.info(f"[PIPELINE][S1][STREAM] Enhanced RAG query: '{_s_rag_query[:80]}'")
+
     if _skip_rag_stream:
         web_results = []
         raw_conv = await _fetch_history()
@@ -759,7 +838,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                    "vector_hits": [], "source": "none", "quality": "none"}
     else:
         _rag_task = asyncio.create_task(resolve_rag_context(
-            msg.message, subject_id=msg.subject_id,
+            _s_rag_query, subject_id=msg.subject_id,
             subject_name=msg.subject_name, document_text=document_text,
             intent=_stream_intent,
             db_category=_stream_db_category,
@@ -769,7 +848,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         async def _safe_web_search_stream():
             try:
                 return await web_search_with_fallback(
-                    msg.message, num_results=5,
+                    _s_rag_query, num_results=5,
                     board_name=ctx_board_name,
                     class_name=ctx_class_name,
                     subject_name=msg.subject_name or "",
@@ -1010,7 +1089,75 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _output_buf = ""
                 _output_violation = False
                 _tune_buf = {"total": "", "chars": 0}
-                async for chunk in call_llm_api_stream(messages_payload, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens, intent=_stream_intent):
+
+                _pipeline_stream = None
+                try:
+                    from pipeline import run_pipeline_stream, should_use_pipeline
+                    if should_use_pipeline(_stream_intent, user_msg_saved):
+                        _pipeline_ctx = {
+                            "board_name": ctx_board_name,
+                            "class_name": ctx_class_name,
+                            "stream_name": ctx_stream_name,
+                            "subject_name": msg.subject_name,
+                            "chapter_name": msg.chapter_name,
+                        }
+                        _pipeline_ui = {
+                            "name": (user.get("name", "") if user else ""),
+                            "board_name": ctx_board_name or (user.get("board_name", "") if user else ""),
+                            "class_name": ctx_class_name or (user.get("class_name", "") if user else ""),
+                            "plan": (user.get("plan", "free") if user else "free"),
+                        }
+                        _pipeline_stream = await run_pipeline_stream(
+                            query=user_msg_saved,
+                            rag_ctx=rag_ctx,
+                            context=_pipeline_ctx,
+                            user_info=_pipeline_ui,
+                            max_tokens=max_tokens,
+                            regex_intent=_stream_intent,
+                            intent=_stream_intent,
+                            topic_metadata=_s_topic_meta,
+                        )
+                        if _pipeline_stream:
+                            logger.info("[PIPELINE] Using multi-LLM pipeline for stream response")
+                except Exception as _pipe_stream_err:
+                    logger.warning(f"[PIPELINE] Stream pipeline setup failed, falling back: {_pipe_stream_err}")
+                    _pipeline_stream = None
+
+                _slm_fallback_stream = lambda: call_llm_api_stream(messages_payload, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens, intent=_stream_intent)
+
+                def _is_sse_error(sse_chunk: str) -> bool:
+                    if '"error"' in sse_chunk and sse_chunk.startswith("data: "):
+                        try:
+                            d = json.loads(sse_chunk[6:])
+                            return bool(d.get("error"))
+                        except Exception:
+                            pass
+                    return False
+
+                async def _resilient_pipeline_stream():
+                    _emitted_any = False
+                    _failed = False
+                    try:
+                        async for c in _pipeline_stream:
+                            if _is_sse_error(c):
+                                logger.warning(f"[PIPELINE] Stage 3 stream emitted error — falling back to single-LLM")
+                                _failed = True
+                                break
+                            _emitted_any = True
+                            yield c
+                    except Exception as _mid_err:
+                        logger.warning(f"[PIPELINE] Stage 3 stream raised — falling back to single-LLM: {_mid_err}")
+                        _failed = True
+
+                    if _failed and not _emitted_any:
+                        async for c in _slm_fallback_stream():
+                            yield c
+                    elif _failed and _emitted_any:
+                        yield f"data: {json.dumps({'content': ' ...[response interrupted, please retry]'})}\n\n"
+
+                _active_stream = _resilient_pipeline_stream() if _pipeline_stream else _slm_fallback_stream()
+
+                async for chunk in _active_stream:
                     if '"content"' in chunk:
                         if not _first_token_logged:
                             logger.info(f"[STREAM][TIMING] TTFT (first LLM token): {_time_mod.time() - _stream_t0:.3f}s")

@@ -203,6 +203,8 @@ _MODEL_PROVIDER_MAP = {
     "accounts/fireworks/models/gpt-oss-120b": "fireworksai",
     "llama3.1-8b": "cerebras",
     "qwen-3-235b-a22b-instruct-2507": "cerebras",
+    "gemini-2.5-flash": "gemini",
+    "gemini-2.0-flash": "gemini",
     "deepseek/deepseek-chat-v3-0324": "openrouter",
     "deepseek/deepseek-r1": "openrouter",
     "qwen/qwen3-235b-a22b": "openrouter",

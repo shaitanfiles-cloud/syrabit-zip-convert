@@ -2489,6 +2489,7 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
 async def admin_intelligence_overview(admin: dict = Depends(get_admin_user)):
     from llm import get_llm_provider_stats
     from rag import get_vector_search_stats, get_pipeline_stats
+    from pipeline import get_pipeline_stats as get_multi_llm_pipeline_stats
 
     llm_stats = get_llm_provider_stats(3600)
     vector_stats = get_vector_search_stats(3600)
@@ -2526,10 +2527,13 @@ async def admin_intelligence_overview(admin: dict = Depends(get_admin_user)):
         if tc["chunk_count"] < 3:
             low_chunk.append(tc["id"])
 
+    multi_llm_stats = get_multi_llm_pipeline_stats(3600)
+
     return {
         "llm_health": llm_stats,
         "vector_search": vector_stats,
         "pipeline": pipeline_stats,
+        "multi_llm_pipeline": multi_llm_stats,
         "content": {
             "total_chapters": total_chapters,
             "with_content": chapters_with_content,
