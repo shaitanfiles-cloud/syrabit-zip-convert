@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import {
   BookOpen, ArrowLeft, ChevronRight, Home, Share2,
@@ -193,6 +193,7 @@ function ImportantQuestions({ chapterTitle, pyqData }) {
 
 export default function ChapterPage() {
   const { board, classSlug, subjectSlug, chapterSlug } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -263,6 +264,37 @@ export default function ChapterPage() {
     }, 200);
     return () => { clearTimeout(timer); observer.disconnect(); };
   }, [headings, data]);
+
+  useEffect(() => {
+    if (loading || !data) return;
+    const highlightId = searchParams.get('highlight') || window.location.hash.slice(1);
+    if (!highlightId) return;
+    const decoded = decodeURIComponent(highlightId);
+    const timer = setTimeout(() => {
+      let el = null;
+      let isFallback = false;
+      el = document.getElementById(decoded);
+      if (!el) {
+        const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
+        for (const h of allH) {
+          if (h.id.includes(decoded) || decoded.includes(h.id)) { el = h; break; }
+        }
+      }
+      if (!el) {
+        el = document.getElementById('chapter-content-top');
+        isFallback = true;
+      }
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (!isFallback) {
+          el.classList.add('highlight-pulse');
+          setTimeout(() => el.classList.remove('highlight-pulse'), 3000);
+        }
+        setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('highlight'); return next; }, { replace: true });
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [loading, data, searchParams]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}`;
   const canonical = `https://syrabit.ai${basePath}/${chapterSlug}`;
@@ -408,7 +440,8 @@ export default function ChapterPage() {
         <div className="flex gap-8">
           <article ref={articleRef} className="flex-1 min-w-0">
             <div
-              className="chapter-textbook rounded-2xl p-5 sm:p-8"
+              id="chapter-content-top"
+              className="chapter-textbook rounded-2xl p-5 sm:p-8 scroll-mt-20"
             >
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}

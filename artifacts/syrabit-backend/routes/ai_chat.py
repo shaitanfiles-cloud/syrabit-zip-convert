@@ -1123,6 +1123,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     rag_subject_gradient = (_rag_subjs[0].get("gradient") if _rag_has_real_subject else None) or None
     _rag_chaps       = rag_ctx.get("chunk_chapters") or rag_ctx.get("chapters", [])
     rag_chapter_name = (_rag_chaps[0].get("title", "") if _rag_chaps else None) or msg.chapter_name or None
+    rag_chapter_slug = (_rag_chaps[0].get("slug", "") if _rag_chaps else None) or None
     full_response = []
 
     _router_subject = getattr(_sr_route, "subject_name", None) or getattr(_sr_route, "subject", None) if _sr_route else None
@@ -1167,7 +1168,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
             # Send RAG metadata with full quality info + subject link data + web search flag
-            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': _src_board_s, 'ctx_class_name': _src_class_s, 'ctx_stream_name': _src_stream_s, 'ctx_board_slug': _src_board_slug, 'ctx_class_slug': _src_class_slug, 'ctx_subject_slug': _src_subject_slug}
+            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'rag_chapter_slug': rag_chapter_slug or '', 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': _src_board_s, 'ctx_class_name': _src_class_s, 'ctx_stream_name': _src_stream_s, 'ctx_board_slug': _src_board_slug, 'ctx_class_slug': _src_class_slug, 'ctx_subject_slug': _src_subject_slug}
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')

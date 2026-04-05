@@ -142,9 +142,11 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const boardLabel = msg.rag_board_name || null;
               const classLabel = msg.rag_class_name || null;
               const chapterLabel = msg.rag_chapter_name || null;
-              const subjectUrl = (msg.rag_board_slug && msg.rag_class_slug && msg.rag_subject_slug)
-                ? `/${msg.rag_board_slug}/${msg.rag_class_slug}/${msg.rag_subject_slug}`
-                : (msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null);
+              const chapterSlug = msg.rag_chapter_slug || null;
+              const basePath = (msg.rag_board_slug && msg.rag_class_slug && msg.rag_subject_slug)
+                ? `/${msg.rag_board_slug}/${msg.rag_class_slug}/${msg.rag_subject_slug}` : null;
+              const chapterUrl = (basePath && chapterSlug) ? `${basePath}/${chapterSlug}` : null;
+              const subjectUrl = chapterUrl || basePath || (msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null);
               const isDocument = msg.rag_source === 'document';
               const isLibrary = msg.rag_source === 'library';
               const isWeb = msg.rag_source === 'web';
@@ -162,7 +164,14 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                 <>
                   {(isLibrary || (!isDocument && !isWeb)) && subjectLabel && (
                     <div
-                      onClick={subjectUrl ? () => navigate(subjectUrl) : undefined}
+                      onClick={subjectUrl ? () => {
+                        if (chapterUrl && chapterLabel) {
+                          const topicHash = chapterLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+                          navigate(`${chapterUrl}?highlight=${encodeURIComponent(topicHash)}#${topicHash}`);
+                        } else {
+                          navigate(subjectUrl);
+                        }
+                      } : undefined}
                       className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
                       style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.14)', maxWidth: 'fit-content' }}
                       role={subjectUrl ? 'link' : undefined}

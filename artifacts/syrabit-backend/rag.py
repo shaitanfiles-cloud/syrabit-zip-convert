@@ -390,7 +390,7 @@ async def _fetch_content_card(
             ch_filter["title"] = {"$regex": re.escape(chapter_title), "$options": "i"}
         ch_filter["$text"] = {"$search": search_str}
         _ch_proj = {
-            "_id": 0, "title": 1, "content": 1, "subject_id": 1,
+            "_id": 0, "title": 1, "slug": 1, "content": 1, "subject_id": 1,
             "score": {"$meta": "textScore"},
         }
         ch_task = db.chapters.find(
@@ -865,7 +865,7 @@ async def _vector_rag_search_inner(
 
         _page_proj = {"_id": 0, "topic_slug": 1, "topic_title": 1,
              "chapter_title": 1, "page_type": 1, "embedding": 1, "subject_slug": 1}
-        _ch_proj = {"_id": 0, "id": 1, "title": 1, "subject_id": 1, "embedding": 1}
+        _ch_proj = {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "embedding": 1}
         _cms_proj = {"_id": 0, "seo_slug": 1, "title": 1, "category": 1, "embedding": 1, "linked_subject_id": 1, "subject_id": 1}
 
         ch_filter: dict = {"embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
@@ -1083,8 +1083,8 @@ async def rag_search(
 
             subjects_found, chapters_kw, chapters_all = await asyncio.gather(
                 db.subjects.find(subj_kw_filter, {"_id": 0, "id": 1, "name": 1, "icon": 1, "gradient": 1}).limit(1).to_list(1),
-                db.chapters.find(ch_kw_filter, {"_id": 0, "title": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(8).to_list(8),
-                db.chapters.find(ch_all_filter, {"_id": 0, "title": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(25).to_list(25),
+                db.chapters.find(ch_kw_filter, {"_id": 0, "title": 1, "slug": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(8).to_list(8),
+                db.chapters.find(ch_all_filter, {"_id": 0, "title": 1, "slug": 1, "description": 1, "content": 1, "order_index": 1}).sort("order_index", 1).limit(25).to_list(25),
             )
             chapters_found = chapters_kw if chapters_kw else chapters_all
         else:
@@ -1099,7 +1099,7 @@ async def rag_search(
                 ]}
 
             _subj_proj = {"_id": 0, "id": 1, "name": 1, "description": 1, "tags": 1, "icon": 1, "gradient": 1}
-            _ch_proj   = {"_id": 0, "id": 1, "subject_id": 1, "title": 1, "description": 1, "order_index": 1}
+            _ch_proj   = {"_id": 0, "id": 1, "subject_id": 1, "title": 1, "slug": 1, "description": 1, "order_index": 1}
 
             try:
                 _chunk_text_filter_ns: dict = {"$text": {"$search": _text_search_str}}
@@ -1121,7 +1121,7 @@ async def rag_search(
             chunk_parent_chapters: list = []
             if chunk_chapter_ids:
                 chunk_parent_chapters = await db.chapters.find(
-                    {"id": {"$in": chunk_chapter_ids}}, {"_id": 0, "id": 1, "subject_id": 1, "title": 1}
+                    {"id": {"$in": chunk_chapter_ids}}, {"_id": 0, "id": 1, "subject_id": 1, "title": 1, "slug": 1}
                 ).to_list(10)
 
             # Collect all subject IDs reached via chapters and chunks

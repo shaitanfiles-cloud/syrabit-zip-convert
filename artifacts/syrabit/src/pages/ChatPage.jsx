@@ -228,6 +228,7 @@ export default function ChatPage() {
       let ragSubjectIcon = null;
       let ragSubjectGradient = null;
       let ragChapterName = null;
+      let ragChapterSlug = null;
       let ragBoardName = null;
       let ragClassName = null;
       let ragTopicName = null;
@@ -266,6 +267,7 @@ export default function ChatPage() {
             if (parsed.rag_subject_icon) ragSubjectIcon = parsed.rag_subject_icon;
             if (parsed.rag_subject_gradient) ragSubjectGradient = parsed.rag_subject_gradient;
             if (parsed.rag_chapter_name) ragChapterName = parsed.rag_chapter_name;
+            if (parsed.rag_chapter_slug) ragChapterSlug = parsed.rag_chapter_slug;
             if (parsed.ctx_board_name) ragBoardName = parsed.ctx_board_name;
             if (parsed.ctx_class_name) ragClassName = parsed.ctx_class_name;
             if (parsed.ctx_stream_name) ragStreamName = parsed.ctx_stream_name;
@@ -312,7 +314,7 @@ export default function ChatPage() {
       } else { setConversationId(newConvId); }
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
-          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, rag_board_name: ragBoardName, rag_class_name: ragClassName, rag_stream_name: ragStreamName, rag_board_slug: ragBoardSlug, rag_class_slug: ragClassSlug, rag_subject_slug: ragSubjectSlug, rag_topic_name: ragTopicName, ctx_subject_name: subject?.name || null, ctx_subject_icon: ragSubjectIcon || subject?.icon || null, ctx_subject_gradient: ragSubjectGradient || subject?.gradient || null, sources: libSources }
+          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, rag_chapter_slug: ragChapterSlug, rag_board_name: ragBoardName, rag_class_name: ragClassName, rag_stream_name: ragStreamName, rag_board_slug: ragBoardSlug, rag_class_slug: ragClassSlug, rag_subject_slug: ragSubjectSlug, rag_topic_name: ragTopicName, ctx_subject_name: subject?.name || null, ctx_subject_icon: ragSubjectIcon || subject?.icon || null, ctx_subject_gradient: ragSubjectGradient || subject?.gradient || null, sources: libSources }
           : m
       ));
       setSyncState('idle');
