@@ -17,7 +17,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
     _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
-    _SARVAM_LLM_KEY, _CEREBRAS_KEY, _EMERGENT_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _CEREBRAS_KEY, _EMERGENT_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
     CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
 )
 from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
@@ -158,6 +158,8 @@ _llm_batcher = _LlmBatcher()
 _LLM_PROVIDERS = []
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _SARVAM_LLM_KEY_2 and _SARVAM_LLM_KEY_2 != _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_2, "default_model": "sarvam-m"})
 if _GROQ_KEY:
     _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY,       "default_model": "llama-3.3-70b-versatile"})
 if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
@@ -228,12 +230,13 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("groq",        "llama-3.3-70b-versatile",                           4, 0),
-    ("gemini",      "gemini-2.5-flash",                                  6, 1),
-    ("gemini:2",    "gemini-2.5-flash",                                  6, 1),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 2),
-    ("openai",      "gpt-4o-mini",                                       4, 3),
-    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 4),
+    ("sarvam:2",    "sarvam-m",                                          4, 0),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 1),
+    ("gemini",      "gemini-2.5-flash",                                  6, 2),
+    ("gemini:2",    "gemini-2.5-flash",                                  6, 2),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 3),
+    ("openai",      "gpt-4o-mini",                                       4, 4),
+    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 5),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
