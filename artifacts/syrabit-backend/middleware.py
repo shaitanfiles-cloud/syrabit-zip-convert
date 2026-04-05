@@ -1,5 +1,5 @@
 """Syrabit.ai — ASGI middleware classes."""
-import os, re, time as _time_mod, logging
+import os, re, time as _time_mod, logging, uuid, contextvars
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -10,6 +10,8 @@ from cache import _redis_get_session
 from metrics import _metrics
 
 logger = logging.getLogger(__name__)
+
+request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
 
 def _env_bool(key: str, default: bool = True) -> bool:
     val = os.environ.get(key, "").strip().lower()
@@ -110,6 +112,11 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api/"):
             return await call_next(request)
 
+        rid = uuid.uuid4().hex[:12]
+        request_id_var.set(rid)
+        request.state.request_id = rid
+        request.state.start_time = _time_mod.time()
+
         ua = request.headers.get("user-agent", "")
         is_legit_bot = bool(ua and _SEARCH_BOT_UA_RE.search(ua) and not _ABUSIVE_SCRAPER_UA_RE.search(ua))
 
@@ -119,6 +126,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             try:
                 response = await call_next(request)
                 _metrics.record_request(path, response.status_code)
+                response.headers["X-Request-Id"] = rid
                 return response
             finally:
                 _metrics.dec_active()
@@ -153,13 +161,17 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             return JSONResponse(
                 status_code=429,
                 content={"detail": "Too many requests — please slow down."},
-                headers={"Retry-After": "60", "X-RateLimit-Limit": str(effective_limit)}
+                headers={"Retry-After": "60", "X-RateLimit-Limit": str(effective_limit), "X-Request-Id": rid}
             )
 
         _metrics.inc_active()
         try:
             response = await call_next(request)
             _metrics.record_request(path, response.status_code, user_id)
+            response.headers["X-Request-Id"] = rid
+            elapsed = _time_mod.time() - request.state.start_time
+            if elapsed > 1.0:
+                logger.info(f"[SLOW] {path} took {elapsed*1000:.0f}ms | rid={rid} uid={user_id or 'anon'}")
             return response
         finally:
             _metrics.dec_active()

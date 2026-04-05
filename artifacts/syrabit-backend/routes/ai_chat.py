@@ -221,6 +221,20 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
 
     _detected_intent, _detected_db_category = classify_intent(msg.message)
 
+    from pipeline import get_instant_response
+    _instant = get_instant_response(msg.message) if _detected_intent == "casual" else None
+    if _instant:
+        logger.info(f"[NON-STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant)} chars (0 LLM calls)")
+        return {
+            "answer": _instant,
+            "conversation_id": msg.conversation_id,
+            "credits_remaining": credits_info["remaining"] if not is_anon else None,
+            "credits_used": 0 if not is_anon else None,
+            "rag_source": "none",
+            "rag_chunks_used": 0,
+            "sources": [],
+        }
+
     conv_id = msg.conversation_id
     user_id = user["id"] if user else None
 
@@ -379,6 +393,9 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         if _ns_rag_task not in done:
             logger.warning(f"[NON-STREAM] RAG timed out after {_NS_BUDGET}s")
         _ns_rag_quality = rag_ctx.get("quality", "none")
+        if _ns_rag_quality == "high" and web_results:
+            logger.info(f"[NON-STREAM] RAG quality=high → discarding {len(web_results)} web results (RAG is sufficient)")
+            web_results = []
         if _ns_rag_quality == "none":
             rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                        "vector_hits": [], "source": "none", "quality": "none"}
@@ -594,8 +611,22 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             conversation_id=conv_id,
         ))
 
+    _ns_total_ms = (_time_mod.time() - _chat_t0) * 1000
     try:
-        _record_chat_latency((_time_mod.time() - _chat_t0) * 1000)
+        from middleware import request_id_var
+        _ns_rid = request_id_var.get("")
+    except Exception:
+        _ns_rid = ""
+    logger.info(
+        f"[NON-STREAM][TIMING][SUMMARY] "
+        f"rid={_ns_rid} | "
+        f"total={_ns_total_ms:.0f}ms | "
+        f"intent={_detected_intent} | "
+        f"rag_quality={rag_ctx.get('quality', 'none')} | "
+        f"words={len(answer.split()) if answer else 0}"
+    )
+    try:
+        _record_chat_latency(_ns_total_ms)
     except Exception:
         pass
 
@@ -783,6 +814,20 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _auth_elapsed = _t_auth_done - _stream_t0
 
     _stream_intent, _stream_db_category = classify_intent(msg.message)
+
+    from pipeline import get_instant_response
+    _instant_s = get_instant_response(msg.message) if _stream_intent == "casual" else None
+    if _instant_s:
+        logger.info(f"[STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant_s)} chars (0 LLM calls)")
+        async def _instant_stream():
+            yield f"data: {json.dumps({'conversation_id': msg.conversation_id or '', 'rag_source': 'none', 'rag_quality': 'none', 'rag_chunks': 0})}\n\n"
+            yield f"data: {json.dumps({'content': _instant_s})}\n\n"
+            yield f"data: {json.dumps({'event': 'syrabit_done', 'conversation_id': msg.conversation_id or ''})}\n\n"
+            yield "data: [DONE]\n\n"
+        if not is_anon and credits_info:
+            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
+        return StreamingResponse(_instant_stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     _stream_followup_info = None
     if msg.conversation_id and user_id:
@@ -1042,6 +1087,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.info("[STREAM] Web search dropped (exceeded time budget) — proceeding with RAG only")
 
         _rag_quality = rag_ctx.get("quality", "none")
+        if _rag_quality == "high" and web_results:
+            logger.info(f"[STREAM] RAG quality=high → discarding {len(web_results)} web results (RAG is sufficient)")
+            web_results = []
         if _rag_quality == "none":
             rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                        "vector_hits": [], "source": "none", "quality": "none"}
@@ -1398,8 +1446,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
             _t_stream_end = _time_mod.time()
             _total_stream_time = _t_stream_end - _stream_t0
+            _rid = getattr(request.state, "request_id", "") if request else ""
             logger.info(
                 f"[STREAM][TIMING][SUMMARY] "
+                f"rid={_rid} | "
                 f"auth={_auth_elapsed:.3f}s | "
                 f"phase0+1={_t_phase1_done - _t_phase0:.3f}s | "
                 f"phase2(RAG+web)={_t_phase2_done - _t_phase2:.3f}s | "
@@ -1408,6 +1458,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 f"cached={'yes' if cached_answer else 'no'} | "
                 f"model={msg.model or 'openai/gpt-oss-20b'} | "
                 f"intent={_stream_intent} | "
+                f"rag_quality={_rag_quality} | "
+                f"web_used={web_search_used} | "
                 f"words={len(answer.split()) if answer else 0}"
             )
 

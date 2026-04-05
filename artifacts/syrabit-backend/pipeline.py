@@ -162,8 +162,33 @@ def _pick_stage2_providers() -> list:
 
 _OBVIOUS_CASUAL_PATTERNS = {"hi", "hello", "hey", "thanks", "thank you", "bye", "ok", "okay", "good", "nice", "hii", "hiii", "namaste", "dhanyabad"}
 
+_INSTANT_CASUAL_RESPONSES = {
+    "hi": "Hi there! 👋 I'm Syra, your study assistant. How can I help you today?",
+    "hii": "Hi there! 👋 I'm Syra, your study assistant. How can I help you today?",
+    "hiii": "Hi there! 👋 I'm Syra. What would you like to study today?",
+    "hello": "Hello! 👋 I'm Syra. Ask me anything about your syllabus — or just chat!",
+    "hey": "Hey! 👋 Ready to study? Ask me anything about your subjects!",
+    "namaste": "Namaste! 🙏 I'm Syra, your study companion. How can I help you today?",
+    "thanks": "You're welcome! 😊 Let me know if you need anything else.",
+    "thank you": "You're welcome! 😊 Happy to help — feel free to ask more anytime.",
+    "dhanyabad": "Dhanyabad! 🙏 I'm always here to help you study.",
+    "bye": "Bye! 👋 Good luck with your studies. Come back anytime!",
+    "ok": "Great! Let me know if you have any questions. 📚",
+    "okay": "Sure! I'm here whenever you need help. 📚",
+    "good": "Glad to hear that! Anything else you'd like to learn about?",
+    "nice": "Thank you! Is there anything you'd like to study?",
+}
+
+def get_instant_response(query: str) -> str | None:
+    normalized = query.strip().lower().rstrip("!. ")
+    return _INSTANT_CASUAL_RESPONSES.get(normalized)
+
+_STAGE1_SKIP_INTENTS = {"casual", "general", "syllabus", "chapter_meta"}
+
 def should_use_pipeline(intent: str, query: str) -> bool:
     if intent in _HARD_BYPASS_INTENTS:
+        return False
+    if intent in _STAGE1_SKIP_INTENTS:
         return False
     stripped = query.strip()
     if len(stripped) < 8:
@@ -198,7 +223,25 @@ def build_enhanced_query(original_query: str, topic_metadata: dict) -> str:
     return original_query
 
 
+import hashlib
+_stage1_cache: dict[str, tuple[float, dict]] = {}
+_STAGE1_CACHE_TTL = 300
+_STAGE1_CACHE_MAX = 500
+
+def _stage1_cache_key(query: str) -> str:
+    return hashlib.md5(query.strip().lower().encode()).hexdigest()
+
 async def stage1_resolve_topic(query: str, context: dict = None) -> Optional[dict]:
+    ck = _stage1_cache_key(query)
+    cached = _stage1_cache.get(ck)
+    if cached:
+        ts, result = cached
+        if time.time() - ts < _STAGE1_CACHE_TTL:
+            logger.info(f"[PIPELINE][S1] Cache HIT for '{query[:40]}' (age={time.time()-ts:.0f}s)")
+            return result
+        else:
+            del _stage1_cache[ck]
+
     from llm import _call_llm_raw
     t0 = time.perf_counter()
     providers = _pick_stage1_providers()
@@ -239,6 +282,10 @@ async def stage1_resolve_topic(query: str, context: dict = None) -> Optional[dic
             f"intent={result.get('intent','?')}, keywords={result.get('search_keywords',[])} "
             f"| provider={provider_name}/{model_name}"
         )
+        if len(_stage1_cache) >= _STAGE1_CACHE_MAX:
+            oldest_key = min(_stage1_cache, key=lambda k: _stage1_cache[k][0])
+            del _stage1_cache[oldest_key]
+        _stage1_cache[ck] = (time.time(), result)
         return result
     except asyncio.TimeoutError:
         dur = (time.perf_counter() - t0) * 1000

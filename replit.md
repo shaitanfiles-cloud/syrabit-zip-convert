@@ -30,7 +30,8 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **Optional Authentication:** Chat, History, and Profile pages are accessible to anonymous users via a `syrabit_anon_id` for conversation persistence in Upstash Redis.
 - **Security:** Uses ASGI-native `SecurityHeadersMiddleware` with environment-toggleable headers and prompt safety guardrails to prevent injection/cheating/sensitive content.
 - **Privacy:** Tracks DPDP Act consent per-user.
-- **Performance Optimizations:** Includes bounded content caching, efficient JWT decoding, thread pooling for Supabase calls, MongoDB indexing, hierarchy caching, and AsyncOpenAI client pooling.
+- **Performance Optimizations:** Includes bounded content caching, efficient JWT decoding, thread pooling for Supabase calls, MongoDB indexing, hierarchy caching, and AsyncOpenAI client pooling. Instant fast-path responses for casual greetings (hi/hello/thanks/bye) bypass all LLM/RAG processing. Stage 1 topic resolver skipped for high-confidence regex intents (casual, general, syllabus, chapter_meta) with 5-minute result caching. Web search results discarded when RAG quality is "high".
+- **Observability:** Request-level tracing via `contextvars` request IDs (12-char hex) injected by middleware, threaded through all JSON log records. Per-request latency breakdown logs (`[TIMING][SUMMARY]`) in both streaming and non-streaming chat endpoints. `X-Request-Id` response header on all API responses. Slow request logging (>1s). Chat latency histogram (p50/p95/p99 + bucket distribution) exposed on `/health` endpoint.
 - **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection, and SEO prompts generate FAQ blocks and specific citations.
 
 **Frontend Architecture:**

@@ -267,6 +267,7 @@ class HealthOut(BaseModel):
     workers: int
     uptime_seconds: int
     dependencies: dict
+    chat_latency: Optional[dict] = None
 
 
 class ReadyOut(BaseModel):

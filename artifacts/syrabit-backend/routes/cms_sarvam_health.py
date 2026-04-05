@@ -1324,6 +1324,23 @@ async def health():
     critical_ok = kv_ok and pg_ok
     overall = "ok" if critical_ok else "degraded"
 
+    from rag import _chat_latencies
+    _lat_hist = {"<500ms": 0, "500-1000ms": 0, "1-3s": 0, "3-5s": 0, ">5s": 0}
+    _recent_lats = _chat_latencies[-200:] if _chat_latencies else []
+    for _l in _recent_lats:
+        ms = _l.get("latency_ms", 0)
+        if ms < 500: _lat_hist["<500ms"] += 1
+        elif ms < 1000: _lat_hist["500-1000ms"] += 1
+        elif ms < 3000: _lat_hist["1-3s"] += 1
+        elif ms < 5000: _lat_hist["3-5s"] += 1
+        else: _lat_hist[">5s"] += 1
+    _p50 = _p95 = _p99 = 0
+    if _recent_lats:
+        _sorted_lats = sorted(l.get("latency_ms", 0) for l in _recent_lats)
+        _p50 = round(_sorted_lats[len(_sorted_lats) // 2], 0)
+        _p95 = round(_sorted_lats[int(len(_sorted_lats) * 0.95)], 0)
+        _p99 = round(_sorted_lats[int(len(_sorted_lats) * 0.99)], 0)
+
     return {
         "status": overall,
         "version": "2.0.0",
@@ -1345,7 +1362,14 @@ async def health():
             "supabase": {"status": "ok" if supa else "not_configured"},
             "razorpay": {"status": rp_status},
             "bot_render": get_bot_render_metrics(),
-        }
+        },
+        "chat_latency": {
+            "samples": len(_recent_lats),
+            "p50_ms": _p50,
+            "p95_ms": _p95,
+            "p99_ms": _p99,
+            "histogram": _lat_hist,
+        },
     }
 
 @router.get("/metrics")

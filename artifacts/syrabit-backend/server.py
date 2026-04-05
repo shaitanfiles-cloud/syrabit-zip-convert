@@ -30,7 +30,14 @@ class _JSONFormatter(logging.Formatter):
         }
         if record.exc_info and record.exc_info[0]:
             log_entry["exception"] = self.formatException(record.exc_info)
-        if hasattr(record, "request_id"):
+        try:
+            from middleware import request_id_var
+            rid = request_id_var.get("")
+            if rid:
+                log_entry["request_id"] = rid
+        except Exception:
+            pass
+        if hasattr(record, "request_id") and record.request_id:
             log_entry["request_id"] = record.request_id
         return json.dumps(log_entry, default=str)
 
