@@ -967,6 +967,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         if _s_rag_query != msg.message:
             logger.info(f"[PIPELINE][S1][STREAM] Enhanced RAG query: '{_s_rag_query[:80]}'")
 
+    _rag_quality = "none"
     if _skip_rag_stream:
         web_results = []
         raw_conv = await _fetch_history()
@@ -998,6 +999,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     logger.info(f"[STREAM] Syllabus intent: fetched {len(_syl_chapters)} chapters for subject {_resolved_syl_sid}")
             except Exception as _ch_err:
                 logger.warning(f"[STREAM] Syllabus chapter fetch failed: {_ch_err}")
+        _rag_quality = rag_ctx.get("quality", "none")
     else:
         _rag_task = asyncio.create_task(resolve_rag_context(
             _s_rag_query, subject_id=msg.subject_id,
