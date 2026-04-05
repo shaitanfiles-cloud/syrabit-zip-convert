@@ -309,6 +309,10 @@ async def lifespan(app):
             await db.ai_pyq_collections.create_index("chapter_id")
             await db.ai_pyq_collections.create_index("subject_id")
 
+            await db.topics.create_index([("chapter_id", 1), ("status", 1)])
+            await db.seo_pages.create_index([("status", 1), ("topic_id", 1), ("page_type", 1)])
+            await db.flashcard_collections.create_index("subject_id")
+
             await db.exam_schedule.create_index([("exam_date", 1), ("active", 1)])
 
             await db.syllabi.create_index([("board_id", 1), ("class_id", 1)])

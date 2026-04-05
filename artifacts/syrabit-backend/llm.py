@@ -1043,7 +1043,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
     _SLM_SLOT_TIMEOUT = 2.5    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 3.0    # max seconds to wait for FIRST token from a slot
+    _SLM_TTFT_TIMEOUT = 2.0    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
@@ -1143,10 +1143,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             except Exception as e:
                 err_str = str(e)
                 is_429 = "429" in err_str or "413" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower() or "throttl" in err_str.lower() or "too large" in err_str.lower()
+                is_402 = "402" in err_str or "payment" in err_str.lower() or "credits" in err_str.lower() or "afford" in err_str.lower() or "insufficient" in err_str.lower()
                 is_403 = "403" in err_str or "forbidden" in err_str.lower() or "permission" in err_str.lower() or "unauthorized" in err_str.lower()
                 if is_429:
                     _slm_pool.mark_429(slot)
-                elif is_403:
+                elif is_402 or is_403:
                     _slm_pool.mark_403(slot)
                 else:
                     _slm_pool.mark_err(slot)

@@ -827,7 +827,7 @@ async def classify_subject(
     # Tier 0 — Syllabus DB vector search (highest accuracy, uses live embeddings)
     if embedder is not None:
         try:
-            match = await asyncio.wait_for(embedder.classify(query), timeout=3.0)
+            match = await asyncio.wait_for(embedder.classify(query), timeout=1.5)
             if match:
                 route = SubjectRoute(
                     board=match.board,

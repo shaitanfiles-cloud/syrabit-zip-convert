@@ -277,7 +277,7 @@ class SyllabusEmbedder:
             try:
                 q_vec = await asyncio.wait_for(
                     embed_text(query, task_type="RETRIEVAL_QUERY"),
-                    timeout=3.0,
+                    timeout=1.5,
                 )
                 if not q_vec:
                     return None

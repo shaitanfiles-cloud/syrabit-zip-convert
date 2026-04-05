@@ -43,7 +43,7 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         cached = _get_content_cache("library-bundle")
         if cached:
             if response:
-                response.headers["Cache-Control"] = "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400"
+                response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600, stale-while-revalidate=86400"
                 response.headers["CDN-Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
             return cached
     try:
@@ -53,9 +53,9 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
             try:
                 boards_data, classes_data, streams_data, subjects_data, chapters_data, pyq_data, fc_data = await asyncio.wait_for(
                     asyncio.gather(
-                        db.boards.find({}, {"_id": 0}).to_list(100),
-                        db.classes.find({}, {"_id": 0}).to_list(100),
-                        db.streams.find({}, {"_id": 0}).to_list(100),
+                        db.boards.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1}).to_list(100),
+                        db.classes.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1}).to_list(100),
+                        db.streams.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "class_id": 1}).to_list(100),
                         db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
                         db.chapters.find(
                             {},
@@ -64,10 +64,10 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
                         db.topic_pyq_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
                         db.flashcard_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
                     ),
-                    timeout=15.0,
+                    timeout=8.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning("library-bundle MongoDB query timed out after 15s")
+                logger.warning("library-bundle MongoDB query timed out after 8s")
                 return {"boards": [], "classes": [], "streams": [], "subjects": []}
 
         chapters_by_subject: dict = {}
@@ -89,7 +89,7 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
                     {"chapter_id": {"$in": all_chapter_ids}, "status": "published"},
                     {"_id": 0, "id": 1, "title": 1, "slug": 1, "chapter_id": 1, "order": 1},
                 ).sort("order", 1).to_list(10000),
-                timeout=10.0,
+                timeout=5.0,
             )
             if seo_topics_data:
                 seo_topic_ids = [t["id"] for t in seo_topics_data]
@@ -98,7 +98,7 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
                         {"$match": {"topic_id": {"$in": seo_topic_ids}, "status": "published"}},
                         {"$group": {"_id": {"topic_id": "$topic_id", "page_type": "$page_type"}}},
                     ]).to_list(50000),
-                    timeout=10.0,
+                    timeout=5.0,
                 )
         except asyncio.TimeoutError:
             logger.warning("library-bundle SEO query timed out — continuing without SEO data")
@@ -174,7 +174,7 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
         bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data, "chapters": chapters_data}
         _set_content_cache("library-bundle", bundle)
         if response:
-            response.headers["Cache-Control"] = "public, max-age=300, s-maxage=3600, stale-while-revalidate=86400"
+            response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600, stale-while-revalidate=86400"
             response.headers["CDN-Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
         return bundle
     except Exception:
