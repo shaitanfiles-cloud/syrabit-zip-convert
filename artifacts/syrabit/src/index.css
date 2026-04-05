@@ -159,9 +159,17 @@
   }
 
   /* ── Comfortable global transitions ── */
-  a, button, [role="button"], input, select, textarea {
-    transition-duration: 120ms;
-    transition-timing-function: ease-out;
+  @media (min-width: 769px) {
+    a, button, [role="button"], input, select, textarea {
+      transition-duration: 120ms;
+      transition-timing-function: ease-out;
+    }
+  }
+  @media (max-width: 768px) {
+    a, button, [role="button"], input, select, textarea {
+      transition-duration: 80ms;
+      transition-timing-function: ease-out;
+    }
   }
 
   /* ── Brand selection color ── */
@@ -1435,4 +1443,54 @@
 .seo-article .seo-internal-link:hover {
   color: #5b21b6;
   text-decoration-color: #5b21b6;
+}
+
+@media (max-width: 768px) {
+  .futuristic-bg::before {
+    animation: none !important;
+    opacity: 0.18;
+  }
+  .grid-overlay::after {
+    display: none;
+  }
+  .orbit-ring,
+  .orbit-ring-sq {
+    animation: none !important;
+  }
+  .pulse-glow {
+    animation: none !important;
+  }
+  .shimmer-text {
+    animation: none !important;
+    -webkit-text-fill-color: hsl(var(--primary));
+  }
+  .bottom-nav-active-dot {
+    animation: none !important;
+  }
+  .animate-border {
+    animation: none !important;
+  }
+  .glass-card,
+  .glass-card-premium {
+    backdrop-filter: blur(8px) saturate(1.2);
+    -webkit-backdrop-filter: blur(8px) saturate(1.2);
+  }
+  .source-card {
+    backdrop-filter: none;
+  }
+  .card-3d {
+    transform-style: flat;
+    perspective: none;
+  }
+  .card-3d:hover {
+    transform: none;
+  }
+  [data-testid="app-sidebar"] {
+    backdrop-filter: blur(10px) !important;
+    -webkit-backdrop-filter: blur(10px) !important;
+  }
+  [data-testid="app-bottom-nav"] {
+    backdrop-filter: blur(10px) saturate(1.2) !important;
+    -webkit-backdrop-filter: blur(10px) saturate(1.2) !important;
+  }
 }

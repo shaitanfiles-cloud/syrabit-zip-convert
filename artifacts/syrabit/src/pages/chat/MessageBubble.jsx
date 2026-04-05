@@ -1,4 +1,4 @@
-import { useState, useMemo, memo } from 'react';
+import { useState, useMemo, memo, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send } from 'lucide-react';
 import { useShare } from '@/hooks/useShare';
@@ -6,7 +6,8 @@ import { postChatFeedback } from '@/utils/api';
 import { log } from '@/utils/logger';
 import { toast } from 'sonner';
 import { ThinkingIndicator } from './ThinkingIndicator';
-import { MarkdownContent } from './MarkdownContent';
+
+const MarkdownContent = lazy(() => import('./MarkdownContent').then(m => ({ default: m.MarkdownContent })));
 
 export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegenerate, isLast, messageIndex, conversationId }) {
   const [copied, setCopied] = useState(false);
@@ -124,11 +125,15 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
             {msg.streaming && !msg.content && <ThinkingIndicator />}
 
             {msg.streaming && msg.content && (
-              <MarkdownContent content={cleanContent} streaming={true} sources={msg.sources} />
+              <Suspense fallback={<div className="md-content-light" style={{ fontSize: '0.9375rem' }}>{cleanContent}</div>}>
+                <MarkdownContent content={cleanContent} streaming={true} sources={msg.sources} />
+              </Suspense>
             )}
 
             {!msg.streaming && msg.content && (
-              <MarkdownContent content={cleanContent} streaming={false} sources={msg.sources} />
+              <Suspense fallback={<div className="md-content-light" style={{ fontSize: '0.9375rem' }}>{cleanContent}</div>}>
+                <MarkdownContent content={cleanContent} streaming={false} sources={msg.sources} />
+              </Suspense>
             )}
 
             {!msg.streaming && msg.content && (() => {

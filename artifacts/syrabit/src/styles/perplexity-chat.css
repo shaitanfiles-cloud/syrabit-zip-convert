@@ -78,6 +78,12 @@
   overflow-y: auto;
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
+  contain: layout style;
+}
+
+[data-testid="chat-message-bubble"]:not(:last-child) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
 }
 
 /* ==============================================
