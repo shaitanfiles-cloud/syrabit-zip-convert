@@ -977,6 +977,9 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         """Yield raw tokens from a provider. Raises on failure."""
         _mt = _clamp_max_tokens(p_model, max_tokens)
         if p_name == "sarvam":
+            _input_est = sum(len(m.get("content", "")) for m in messages) // 4
+            _sarvam_cap = max(256, 7192 - _input_est - SARVAM_THINK_BUFFER - 100)
+            _mt = min(_mt, _sarvam_cap)
             async for token in _stream_sarvam(messages, p_key, p_model, _mt):
                 yield token
         elif p_name == "gemini":
@@ -1023,7 +1026,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
-        "sarvam": 24000,
+        "sarvam": 12000,
         "groq": 100000,
         "fireworksai": 80000,
         "gemini": 500000,
