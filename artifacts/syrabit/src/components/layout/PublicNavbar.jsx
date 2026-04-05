@@ -35,6 +35,7 @@ export const PublicNavbar = () => {
     { label: 'Curriculum',   href: '/curriculum',   internal: true  },
     { label: 'Exam Routine', href: '/exam-routine', internal: true  },
     { label: 'Pricing',      href: '/pricing',      internal: true  },
+    { label: 'About',        href: '/about',        internal: true  },
   ];
 
   const handlePrefetch = useCallback((path) => {

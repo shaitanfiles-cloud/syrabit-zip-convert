@@ -211,20 +211,15 @@ export default function TestimonialsFooter({ year }) {
 
             <div className="space-y-1">
               <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>PRODUCT</p>
-              {['Features', 'Pricing', 'Subjects', 'Chat'].map((item) => (
-                <a
-                  key={item}
-                  href={item === 'Features' ? '/#features' : item === 'Pricing' ? '/pricing' : '#'}
-                  className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center"
-                  style={{ color: 'rgba(255,255,255,0.60)' }}
-                >
-                  {item}
-                </a>
-              ))}
+              <Link to="/home#features" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Features</Link>
+              <Link to="/pricing" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Pricing</Link>
+              <Link to="/library" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Subjects</Link>
+              <Link to="/chat" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Chat</Link>
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>LEGAL</p>
+              <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>COMPANY</p>
+              <Link to="/about" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>About Us</Link>
               <Link to="/privacy" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Privacy Policy</Link>
               <Link to="/terms" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Terms of Service</Link>
               <Link to="/status" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>System Status</Link>
