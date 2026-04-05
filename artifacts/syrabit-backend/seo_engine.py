@@ -133,7 +133,7 @@ Write study notes using EXACTLY this structure — all sections required:
 [2-3 sentences ONLY. Direct, keyword-rich definition suitable for Google featured snippet. Start with "{topic} is..." or "{topic} refers to...". End with its relevance to {board} {class_name} {subject}.]
 
 ## {topic} — Detailed Notes for {board} {class_name}
-[350-500 words. Cover ALL core concepts, sub-topics, and key ideas that {topic} contains according to the {board} syllabus for "{chapter}". Go deep into each concept — explain why it matters, how it works, and how it connects to other topics in this chapter. Use natural student-friendly language. Include Assam/Northeast India examples where relevant. Reference related syllabus topics by NAME.]
+[1500-2500 words. Cover ALL core concepts, sub-topics, and key ideas that {topic} contains according to the {board} syllabus for "{chapter}". Go deep into each concept — explain why it matters, how it works, and how it connects to other topics in this chapter. Break into multiple ### sub-headings for each major concept. Use natural student-friendly language. Include Assam/Northeast India examples where relevant. Reference related syllabus topics by NAME. Be thorough and comprehensive — this is a long-form study resource.]
 
 ## Key Points for Revision
 [8-10 bullet points covering the most important facts, definitions, and concepts from {topic}. Each should be a complete, exam-ready statement. Add one bullet like "Don't confuse [X] with [Y] — examiners love testing this."]
@@ -185,11 +185,12 @@ Write comprehensive study notes using EXACTLY this structure:
 [Formal definition citing {board} curriculum. Then simplified: "In simple terms, {topic} means..." Mention what prerequisite knowledge is needed from earlier topics.]
 
 ## Detailed Breakdown
-[400-500 words. Break {topic} into 3-5 sub-concepts based on what the topic actually covers in the syllabus. Use numbered ### sub-headings. For each sub-concept:
-- Explain the concept thoroughly (what, why, how)
-- Give one real-world application or Assam-relevant example
-- Add an informal touch: "You can remember this as...", "A common exam mistake here is..."
-Cross-reference other units by name where relevant.]
+[1500-2500 words. Break {topic} into 5-8 sub-concepts based on what the topic actually covers in the syllabus. Use numbered ### sub-headings. For each sub-concept:
+- Explain the concept thoroughly (what, why, how) with 5-8 sentences minimum
+- Give real-world applications or Assam-relevant examples
+- Add informal touches: "You can remember this as...", "A common exam mistake here is..."
+- Include diagrams described in text, comparisons, and detailed analysis
+Cross-reference other units by name where relevant. Be comprehensive — this is a long-form study resource.]
 
 ## Key Points for Revision
 [8-10 crisp bullet points — exam-ready, complete statements. Include one "Don't confuse X with Y" point.]
@@ -243,12 +244,14 @@ Create study notes from an examiner's perspective using EXACTLY this structure:
 [Academic definition with textbook citation. Then plain-English: "In simple terms..." Note prerequisite topics by name.]
 
 ## In-Depth Analysis
-[350-500 words. Cover every important concept within {topic} thoroughly. Use cause-and-effect or thematic flow — NOT bullet lists. Include:
-- Deep explanations of each sub-concept within {topic}
+[1500-2500 words. Cover every important concept within {topic} thoroughly. Use cause-and-effect or thematic flow — NOT bullet lists. Break into ### sub-headings. Include:
+- Deep explanations of each sub-concept within {topic} (5-8 sentences per concept)
 - Cross-references to other chapters BY NAME
 - Real-world applications or case studies relevant to Assam/India
+- Detailed comparisons, classifications, and analytical breakdowns
 - "Many students confuse this with... — here's how to tell them apart."
-- "A helpful way to remember this is..."]
+- "A helpful way to remember this is..."
+Be comprehensive and thorough — this is a long-form study resource.]
 
 ## Common Exam Patterns
 [How {board} examiners frame questions on {topic}. What aspects they test most. What traps to watch for. What earns full marks. Add: "Pro tip: Always mention [X] in your answer — it's worth 1 extra mark."]
@@ -675,9 +678,11 @@ def _compute_quality_score(content: str, page_type: str, context: dict | None = 
         anchored = True
 
     score = 0
-    if word_count >= 800: score += 18
-    elif word_count >= 600: score += 12
-    elif word_count >= 400: score += 6
+    if word_count >= 3000: score += 18
+    elif word_count >= 2000: score += 15
+    elif word_count >= 1500: score += 12
+    elif word_count >= 800: score += 8
+    elif word_count >= 400: score += 4
     if heading_count >= 8: score += 12
     elif heading_count >= 6: score += 9
     elif heading_count >= 4: score += 5
@@ -914,17 +919,19 @@ async def extract_topics_from_chapters(
                         "role": "system",
                         "content": (
                             "You are an expert SEO strategist for educational content in Assam, India. "
-                            "Given a chapter title and its content, extract HIGH-INTENT landing page topics "
+                            "Given a chapter title and its content, extract GRANULAR TOPIC-LEVEL study pages "
                             "that students actively search for on Google. "
-                            "Focus on 3 levels: subject-level concepts, lesson-level summaries, and topic-level specifics. "
-                            "Each topic must be a clear, searchable phrase (2-8 words) that would make "
-                            "a strong standalone SEO page title. "
-                            "Do NOT include the chapter title itself. "
+                            "Each topic should be a SPECIFIC concept, definition, theory, law, or process "
+                            "within the chapter — NOT the chapter title itself and NOT a broad summary. "
+                            "Each topic must be a clear, searchable phrase (2-8 words) that can sustain "
+                            "3000-5000 words of deep, focused educational content on that ONE topic alone. "
+                            "Think of how a textbook breaks a chapter into sub-headings — each sub-heading is a topic. "
                             "Prioritise topics that: (a) students search before exams, "
-                            "(b) have clear learning intent, (c) can sustain 500+ words of quality content. "
+                            "(b) have clear learning intent, (c) are distinct and non-overlapping, "
+                            "(d) each covers a single well-defined concept. "
                             "Return ONLY a valid JSON array of strings, e.g.: "
                             '["Definition of Supply", "Law of Demand Explained", "Types of Market Structure"]. '
-                            "Aim for 5-10 distinct topics. Quality over quantity — no thin or overlapping topics."
+                            "Aim for 5-12 distinct topics. Quality over quantity — no thin or overlapping topics."
                         ),
                     },
                     {
@@ -1133,9 +1140,11 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         f"\n\n--- SYLLABUS CONTEXT ---\n"
         f"Board: {board_display} | Class/Level: {prompt_class_label}\n"
         f"Subject: {subject_name} | Chapter: {chapter_title}\n"
+        f"TOPIC (focus of this page): {topic['title']}\n"
         f"Position: {syllabus_position or 'Unknown'}\n"
-        f"Other topics in this chapter: {sibling_list}\n"
-        f"Stream/Course Type: {stream_name or 'General'}\n\n"
+        f"Sibling topics in this chapter: {sibling_list}\n"
+        f"Stream/Course Type: {stream_name or 'General'}\n"
+        f"IMPORTANT: Write ONLY about \"{topic['title']}\" — do NOT cover the entire chapter.\n\n"
         f"--- BOARD EXAM PATTERN ---\n"
         f"{board_exam_context}\n\n"
         f"--- REGIONAL CONTEXT ---\n"
@@ -1169,22 +1178,24 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
     _QUALITY_SYSTEM = (
         f"You are an expert {board_display} teacher specialising in {subject_name} "
         f"for {prompt_class_label} students in Assam, India. "
-        f"Chapter: \"{chapter_title}\" | Topic position: {syllabus_position or 'N/A'}. "
+        f"Chapter: \"{chapter_title}\" | Topic: \"{topic['title']}\" | Position: {syllabus_position or 'N/A'}. "
         f"Create educational content that is comprehensive, exam-focused, syllabus-aligned, "
-        f"and easy to understand. This is a LESSON-LEVEL page covering the ENTIRE chapter/unit — "
-        f"not a subtopic. Cover ALL key concepts from this chapter comprehensively. "
-        f"Reference the chapter context and connect to neighboring topics "
-        f"in the syllabus where relevant. Use {board_display} exam marking patterns.\n\n"
+        f"and easy to understand. This page covers ONE SPECIFIC TOPIC: \"{topic['title']}\" "
+        f"— write ONLY about this topic in depth. Do NOT cover the entire chapter. "
+        f"Stay focused on what \"{topic['title']}\" actually means within chapter \"{chapter_title}\". "
+        f"Reference the chapter context and connect to sibling topics "
+        f"({sibling_list}) where relevant for context, but keep the focus on this topic. "
+        f"Use {board_display} exam marking patterns.\n\n"
         f"MANDATORY QUALITY RULES — your content MUST include ALL of these:\n"
-        f"1. At least 800 words of detailed, original content with deep explanations\n"
-        f"2. At least 8 Markdown headings (## or ###) for clear structure\n"
+        f"1. At least 3000-5000 words of detailed, original content with deep explanations focused on \"{topic['title']}\"\n"
+        f"2. At least 12 Markdown headings (## or ###) for clear structure\n"
         f"3. A '## FAQ' or '## Frequently Asked Questions' section with 3-5 Q&As\n"
         f"4. A '## Exam-Style Questions' section with 2-mark, 5-mark, and long-answer board exam pattern questions\n"
         f"5. At least 2 concrete examples (labeled 'Example 1:', 'Example 2:' etc.)\n"
         f"6. A '## Key Points' or '## Revision Notes' section summarizing essentials\n"
         f"7. Include 'Exam tip:', 'Revision tip:', or 'Important note:' callouts\n"
         f"8. Mention the board name ({board_display}), subject ({subject_name}), "
-        f"and chapter ({chapter_title}) naturally in the text\n"
+        f"topic ({topic['title']}), and chapter ({chapter_title}) naturally in the text\n"
         f"9. Use diverse vocabulary — avoid repeating the same phrases\n"
         f"10. MANDATORY: Reference curriculum/syllabus sources — use phrases like "
         f"'As per the {board_display} syllabus', 'prescribed in the SCERT/NCERT curriculum', "
@@ -1200,12 +1211,12 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         {"role": "user", "content": prompt},
     ]
 
-    min_words = {"notes": 700, "definition": 500, "important-questions": 550, "mcqs": 500, "examples": 500}
-    required_min = min_words.get(page_type, 500)
+    min_words = {"notes": 1500, "definition": 800, "important-questions": 1000, "mcqs": 800, "examples": 800}
+    required_min = min_words.get(page_type, 800)
 
     async def _generate_and_score(msgs, attempt=1):
         try:
-            raw = await asyncio.wait_for(_call_llm(msgs, max_tokens=3072), timeout=120)
+            raw = await asyncio.wait_for(_call_llm(msgs, max_tokens=7168), timeout=240)
         except asyncio.TimeoutError:
             logger.error(f"LLM timeout generating {page_type} for {topic['title']} (attempt {attempt})")
             return None, 0
@@ -1241,8 +1252,8 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
                 boost += "- Add an 'Important Concepts & Applications' or 'Case Studies' section with real-world applications of the topic (NOT generic math-style solved examples unless the topic involves calculations)\n"
             if diag.get("heading_count", 0) < 8:
                 boost += "- Add more ## and ### headings (need at least 8 for comprehensive lesson coverage)\n"
-            if diag.get("word_count", 0) < 800:
-                boost += "- Expand content to at least 800 words with deeper explanations\n"
+            if diag.get("word_count", 0) < 3000:
+                boost += f"- Expand content to at least 3000-5000 words with deeper, more comprehensive explanations (currently {diag.get('word_count', 0)} words)\n"
             if not diag.get("anchored"):
                 boost += f"- Mention {board_display}, {subject_name}, and {chapter_title} in the text\n"
             if not diag.get("has_key_points"):
@@ -1259,21 +1270,23 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
                 f"The previous attempt scored {current_score}/100 (target: {_QUALITY_PUBLISH_THRESHOLD}+).\n"
                 f"Focus on DEPTH and WORD COUNT:\n"
                 f"- Expand every section with deeper explanations, more detail, and real-world examples\n"
-                f"- Target at least 800 words of dense, high-value content\n"
-                f"- Add more sub-headings (###) for better structure\n"
-                f"- Ensure every section has at least 3-4 sentences of explanation\n"
+                f"- Target at least 3000-5000 words of dense, high-value content — be thorough and comprehensive\n"
+                f"- Add more sub-headings (###) for better structure — aim for 12+ headings\n"
+                f"- Ensure every section has at least 5-8 sentences of thorough explanation\n"
                 f"- Add Assam-specific context or {board_display} exam patterns where relevant\n"
+                f"- Add more exam-style questions with detailed model answers\n"
                 f"\nRewrite the COMPLETE content with deeper, more detailed explanations. Return ONLY the improved content."
             )
         else:
             boost = (
                 f"Previous attempts scored below {_QUALITY_PUBLISH_THRESHOLD}. Simplify and ensure these minimum requirements:\n"
-                f"- At least 500 words\n"
-                f"- At least 5 headings (## or ###)\n"
+                f"- At least 2000 words of thorough content\n"
+                f"- At least 8 headings (## or ###)\n"
                 f"- A FAQ section with 3 Q&As\n"
                 f"- A Key Points section\n"
+                f"- Exam-Style Questions with model answers\n"
                 f"- Mention {board_display}, {subject_name}, and {chapter_title}\n"
-                f"\nWrite clean, simple content covering the topic thoroughly. Return ONLY the content."
+                f"\nWrite clean, comprehensive content covering the topic thoroughly. Return ONLY the content."
             )
         return boost
 
@@ -1294,7 +1307,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         else:
             retry_msgs = [
                 {"role": "system", "content": _QUALITY_SYSTEM},
-                {"role": "user", "content": prompt + "\n\nIMPORTANT: Ensure comprehensive coverage with at least 500 words. Include FAQ, Key Points, and examples."},
+                {"role": "user", "content": prompt + "\n\nIMPORTANT: Ensure comprehensive, topic-focused coverage with at least 3000 words. Include FAQ, Key Points, Exam-Style Questions, and examples. Stay focused on this ONE topic only."},
             ]
 
         new_content, new_score = await _generate_and_score(retry_msgs, attempt=retry_num + 1)
@@ -4076,8 +4089,11 @@ async def _run_subject_bg(job_id: str, subject_id: str, force: bool, page_types:
                     msgs = [
                         {"role": "system", "content": (
                             "You are an educational curriculum analyst. "
-                            "Extract 4-10 specific study topics a student would search for from this chapter. "
-                            "Each topic: 2-7 words, NOT the chapter title itself. "
+                            "Extract 5-12 GRANULAR topic-level study pages from this chapter. "
+                            "Each topic should be a SPECIFIC concept, definition, theory, law, or process — "
+                            "NOT the chapter title and NOT a broad summary. "
+                            "Think of textbook sub-headings: each one is a distinct topic. "
+                            "Each topic: 2-8 words, must be distinct and non-overlapping. "
                             'Return ONLY a valid JSON array of strings, e.g. ["Topic One", "Topic Two"].'
                         )},
                         {"role": "user", "content": f"Chapter: {title}\n\nContent:\n{content[:4000]}"},
