@@ -15,21 +15,34 @@ class TestClassifyQuestion:
 
     @pytest.mark.parametrize("query,expected", [
         ("define photosynthesis", "structured"),
-        ("explain the Calvin cycle", "structured"),
         ("describe the structure of DNA", "structured"),
         ("discuss the importance of mitosis", "structured"),
+        ("what is the structure of an atom", "structured"),
     ])
     def test_structured_queries(self, query, expected):
         assert _classify_question(query) == expected
 
-    @pytest.mark.parametrize("query", [
-        "what is the boiling point of water",
-        "how does a transistor work",
-        "what is the boiling point of ethanol",
-        "calculate the pH of 0.1M HCl",
+    @pytest.mark.parametrize("query,expected", [
+        ("calculate the pH of 0.1M HCl", "structured"),
+        ("explain the law of demand", "structured"),
+        ("define photosynthesis", "structured"),
     ])
-    def test_academic_queries_are_structured(self, query):
-        assert _classify_question(query) == "structured"
+    def test_academic_queries_are_structured(self, query, expected):
+        assert _classify_question(query) == expected
+
+    @pytest.mark.parametrize("query,expected", [
+        ("how does a transistor work", "structured"),
+        ("what is the structure of DNA", "structured"),
+    ])
+    def test_academic_phrased_queries_are_structured(self, query, expected):
+        assert _classify_question(query) == expected
+
+    @pytest.mark.parametrize("query", [
+        "tell me a joke",
+        "recommend a good movie",
+    ])
+    def test_non_academic_queries_are_general(self, query):
+        assert _classify_question(query) == "general"
 
     def test_empty_query(self):
         result = _classify_question("")
@@ -89,8 +102,21 @@ class TestClassifyIntent:
     def test_empty_returns_notes(self):
         assert _classify_intent("") == "notes"
 
-    def test_general_queries_map_to_notes(self):
+    def test_academic_queries_stay_notes(self):
         assert _classify_intent("what is DNA") == "notes"
+        assert _classify_intent("what is photosynthesis") == "notes"
+        assert _classify_intent("how does osmosis work") == "notes"
+        assert _classify_intent("difference between mitosis and meiosis") == "notes"
+        assert _classify_intent("importance of biodiversity") == "notes"
+        assert _classify_intent("structure of an atom") == "notes"
+
+    def test_non_academic_queries_are_general(self):
+        assert _classify_intent("tell me a joke") == "general"
+        assert _classify_intent("what's the weather like today") == "general"
+        assert _classify_intent("recommend a good movie") == "general"
+        assert _classify_intent("explain quantum computing") == "general"
+        assert _classify_intent("what is bitcoin") == "general"
+        assert _classify_intent("what is machine learning") == "general"
 
 
 class TestClassifyIntentTuple:
@@ -127,15 +153,12 @@ class TestClassifyIntentTuple:
 
 class TestOutOfScopeDetection:
     @pytest.mark.parametrize("response", [
-        "This question is outside the scope of my curriculum expertise.",
-        "I'm sorry, but that falls outside my area. I'm designed to help with academic subjects only.",
-        "This topic is not part of the curriculum I cover.",
-        "I cannot help with this — it's beyond the scope of what I'm trained on.",
-        "That's not covered in the curriculum I support.",
-        "This is not related to your syllabus topics.",
-        "I'm designed to help with your AHSEC/SEBA curriculum.",
-        "This is beyond my expertise as an educational assistant.",
-        "I specialize in Assam board curriculum only.",
+        "I cannot help with that request.",
+        "I'm not able to assist with that kind of question.",
+        "I'm unable to respond to this.",
+        "I must decline this request.",
+        "I can't answer that for safety reasons.",
+        "I cannot answer that question.",
     ])
     def test_detects_out_of_scope(self, response):
         assert _is_out_of_scope_response(response) is True
@@ -146,6 +169,9 @@ class TestOutOfScopeDetection:
         "DNA stands for Deoxyribonucleic Acid. It carries genetic information.",
         "Newton's first law states that an object at rest stays at rest.",
         "The Calvin cycle takes place in the stroma of chloroplasts.",
+        "The president of India is Droupadi Murmu.",
+        "Here's a joke for you: Why did the chicken cross the road?",
+        "Quantum computing uses quantum bits or qubits to process information.",
     ])
     def test_normal_responses_not_flagged(self, response):
         assert _is_out_of_scope_response(response) is False

@@ -68,7 +68,7 @@ Given a student's question, extract structured topic metadata. Return ONLY valid
   "subject": "the academic subject (e.g. Physics, Chemistry, History, Economics)",
   "chapter": "the chapter or unit name if identifiable, or empty string",
   "topic": "the specific topic being asked about, or empty string",
-  "intent": "one of: notes, important_questions, pyq, syllabus, chapter_meta, casual",
+  "intent": "one of: notes, important_questions, pyq, syllabus, chapter_meta, casual, general",
   "search_keywords": ["list", "of", "3-5", "keywords", "for", "RAG", "search"],
   "confidence": "high or low"
 }
@@ -76,6 +76,7 @@ Given a student's question, extract structured topic metadata. Return ONLY valid
 Rules:
 - For misspelled or vague queries, infer the most likely academic topic.
 - If the query is clearly casual (greeting, small talk), set intent to "casual".
+- If the query is a general knowledge question not related to academics (e.g., "who is the president of India?", "tell me a joke", "what's the weather like?", "explain quantum computing"), set intent to "general".
 - search_keywords should include alternate spellings, synonyms, and key terms for retrieval.
 - Be concise. Return ONLY the JSON object, no explanation."""
 
@@ -175,7 +176,7 @@ def should_use_pipeline(intent: str, query: str) -> bool:
 def apply_stage1_to_intent(topic_metadata: dict, regex_intent: str, regex_db_category: Optional[str]) -> tuple:
     from prompts import INTENT_TO_DB_CATEGORY
     s1_intent = (topic_metadata.get("intent") or "").strip().lower()
-    valid_intents = {"notes", "important_questions", "pyq", "syllabus", "chapter_meta", "casual"}
+    valid_intents = {"notes", "important_questions", "pyq", "syllabus", "chapter_meta", "casual", "general"}
     if s1_intent in valid_intents:
         new_intent = s1_intent
     else:

@@ -1978,6 +1978,7 @@ def build_rag_system_prompt(
     query: str = "",
     syllabus: dict = None,
     web_results: list = None,
+    resolved_intent: str = "",
 ) -> str:
     """
     Selects the adaptive prompt mode (casual / concise / structured) based on
@@ -1992,7 +1993,7 @@ def build_rag_system_prompt(
     """
     from prompts import build_system_prompt, _classify_question, classify_intent, _format_board_label as _fbl, get_intent_extraction_rules
     import re as _re
-    base_prompt = build_system_prompt(context, user_info=user_info, query=query)
+    base_prompt = build_system_prompt(context, user_info=user_info, query=query, resolved_intent=resolved_intent)
     source      = rag_context.get("source",  "none")
     quality     = rag_context.get("quality", "none")
 
@@ -2008,7 +2009,7 @@ def build_rag_system_prompt(
         )
 
     _content_intents = {"notes", "important_questions", "pyq"}
-    _incoming_intent, _ = classify_intent(query) if query else ("notes", None)
+    _incoming_intent = resolved_intent if resolved_intent else (classify_intent(query)[0] if query else "notes")
     if _incoming_intent in _content_intents:
         base_prompt += (
             "\n\nCONTENT RULE: Answer from the grounding context below. "
@@ -2027,8 +2028,8 @@ def build_rag_system_prompt(
     _board_label = _fbl(_board_raw) if _board_raw else "AssamBoard"
     _curriculum_label = f"{_board_label} Curriculum"
 
-    _intent, _db_cat = classify_intent(query) if query else ("notes", None)
-    _is_casual = _intent == "casual"
+    _intent = resolved_intent if resolved_intent else (classify_intent(query)[0] if query else "notes")
+    _is_casual = _intent in ("casual", "general")
 
     if not _is_casual:
         _src_chapter = (chapters[0].get("title", "") if chapters else "") or context.get("chapter_name", "")
@@ -2052,7 +2053,7 @@ def build_rag_system_prompt(
     grounding = ""
 
     # ── Tier -1: Syllabus constraints (curriculum boundaries) ───────────────────
-    if syllabus and syllabus.get("content"):
+    if syllabus and syllabus.get("content") and not _is_casual:
         syllabus_content = syllabus.get("content", "")
         syllabus_topics = ", ".join(syllabus.get("topics", [])[:10])
         grounding = (

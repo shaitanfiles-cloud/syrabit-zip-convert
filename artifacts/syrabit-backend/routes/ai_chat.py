@@ -272,8 +272,8 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         )
         logger.info(f"[PIPELINE][S1] Intent resolved: {_detected_intent} (Stage 1 primary)")
 
-    _is_casual_sync = _detected_intent == "casual"
-    _skip_rag_sync = _detected_intent in ("casual", "syllabus", "chapter_meta")
+    _is_casual_sync = _detected_intent in ("casual", "general")
+    _skip_rag_sync = _detected_intent in ("casual", "general", "syllabus", "chapter_meta")
 
     _rag_query = msg.message
     if _topic_metadata and _topic_metadata.get("search_keywords") and not _skip_rag_sync:
@@ -382,6 +382,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         query=msg.message,
         syllabus=syllabus,
         web_results=web_results or None,
+        resolved_intent=_detected_intent,
     )
     if not conv_id and user_id:
         conv_id = str(uuid.uuid4())
@@ -411,7 +412,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     messages = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 
     # ── Cache check (Non-streaming) — Redis first, in-memory fallback ───────
-    is_casual = _detected_intent == "casual"
+    is_casual = _detected_intent in ("casual", "general")
     cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
     _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
     answer = None
@@ -813,8 +814,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         )
         logger.info(f"[PIPELINE][S1][STREAM] Intent resolved: {_stream_intent} (Stage 1 primary)")
 
-    _is_casual = _stream_intent == "casual"
-    _skip_rag_stream = _stream_intent in ("casual", "syllabus", "chapter_meta")
+    _is_casual = _stream_intent in ("casual", "general")
+    _skip_rag_stream = _stream_intent in ("casual", "general", "syllabus", "chapter_meta")
 
     subj_ctx = _subj_ctx_result
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
@@ -1039,6 +1040,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         query=msg.message,
         syllabus=syllabus,
         web_results=web_results or None,
+        resolved_intent=_stream_intent,
     )
 
     conv_id = msg.conversation_id
@@ -1138,7 +1140,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     rag_sources = _sources_from_rag_ctx(rag_ctx)
 
     # ── Cache check (moved BEFORE SSE generator for faster cached responses) ──
-    _cache_is_casual = _stream_intent == "casual"
+    _cache_is_casual = _stream_intent in ("casual", "general")
     _cache_key_val = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
     _cache_ttl_val = REDIS_CASUAL_CACHE_TTL if _cache_is_casual else REDIS_AI_CACHE_TTL
     _cached_answer = _redis_get_ai_cache(_cache_key_val)
