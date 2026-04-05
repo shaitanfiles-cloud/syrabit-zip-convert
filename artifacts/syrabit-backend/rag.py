@@ -2082,6 +2082,25 @@ def build_rag_system_prompt(
                 grounding += f"- {gp}\n"
             grounding += "\n"
 
+    # ── Tier -0.5: Exact chapter list from DB (for syllabus intent) ────────────
+    _syl_chapters_list = rag_context.get("_syllabus_chapters", [])
+    if _syl_chapters_list:
+        _subject_name_for_syl = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
+        grounding += (
+            "\n\n---\n"
+            f"**SUBJECT CHAPTERS ({_subject_name_for_syl}):**\n"
+            "The following is the EXACT chapter list from the database. "
+            "Display these chapters EXACTLY as shown — do NOT rename, split, merge, or reformat them.\n\n"
+        )
+        for _idx, _ch in enumerate(_syl_chapters_list, 1):
+            _ch_title = _ch.get("title", f"Chapter {_idx}")
+            _ch_desc = _ch.get("description", "")
+            grounding += f"**{_ch_title}**"
+            if _ch_desc:
+                grounding += f" — {_ch_desc}"
+            grounding += "\n"
+        grounding += "\n---\n"
+
     # ── Tier 0: Uploaded subject document ────────────────────────────────────
     if source == "document" and document_text:
         grounding += (

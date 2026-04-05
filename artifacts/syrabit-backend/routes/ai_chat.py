@@ -859,6 +859,17 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         raw_conv = await _fetch_history()
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
+        if _stream_intent == "syllabus" and msg.subject_id:
+            try:
+                _syl_chapters = await db.chapters.find(
+                    {"subject_id": msg.subject_id},
+                    {"_id": 0, "title": 1, "description": 1, "topics": 1, "order_index": 1}
+                ).sort("order_index", 1).to_list(100)
+                if _syl_chapters:
+                    rag_ctx["_syllabus_chapters"] = _syl_chapters
+                    logger.info(f"[STREAM] Syllabus intent: fetched {len(_syl_chapters)} chapters for subject {msg.subject_id}")
+            except Exception as _ch_err:
+                logger.warning(f"[STREAM] Syllabus chapter fetch failed: {_ch_err}")
     else:
         _rag_task = asyncio.create_task(resolve_rag_context(
             _s_rag_query, subject_id=msg.subject_id,
