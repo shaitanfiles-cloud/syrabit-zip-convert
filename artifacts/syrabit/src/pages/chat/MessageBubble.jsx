@@ -165,9 +165,9 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                   {(isLibrary || (!isDocument && !isWeb)) && subjectLabel && (
                     <div
                       onClick={subjectUrl ? () => {
-                        if (chapterUrl && chapterLabel) {
-                          const topicHash = chapterLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-                          navigate(`${chapterUrl}?highlight=${encodeURIComponent(topicHash)}#${topicHash}`);
+                        if (chapterUrl) {
+                          const topicText = msg.rag_topic_name || chapterLabel || '';
+                          navigate(`${chapterUrl}?topic=${encodeURIComponent(topicText)}`);
                         } else {
                           navigate(subjectUrl);
                         }

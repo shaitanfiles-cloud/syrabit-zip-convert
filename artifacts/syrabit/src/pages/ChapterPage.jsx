@@ -267,29 +267,51 @@ export default function ChapterPage() {
 
   useEffect(() => {
     if (loading || !data) return;
-    const highlightId = searchParams.get('highlight') || window.location.hash.slice(1);
-    if (!highlightId) return;
-    const decoded = decodeURIComponent(highlightId);
+    const topicText = searchParams.get('topic') || searchParams.get('highlight') || window.location.hash.slice(1);
+    if (!topicText) return;
+    const decoded = decodeURIComponent(topicText).toLowerCase();
     const timer = setTimeout(() => {
       let el = null;
-      el = document.getElementById(decoded);
+      const slugified = decoded.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+      el = document.getElementById(slugified);
       if (!el) {
         const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
         for (const h of allH) {
-          if (h.id.includes(decoded) || decoded.includes(h.id)) { el = h; break; }
+          if (h.id.includes(slugified) || slugified.includes(h.id)) { el = h; break; }
         }
       }
       if (!el) {
         const contentTop = document.getElementById('chapter-content-top');
         if (contentTop) {
-          const firstChild = contentTop.querySelector('h1, h2, h3, p, strong');
-          el = firstChild || contentTop;
+          const keywords = decoded.split(/\s+/).filter(w => w.length > 2);
+          if (keywords.length > 0) {
+            const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, strong, td');
+            let bestEl = null;
+            let bestScore = 0;
+            for (const block of allBlocks) {
+              const text = block.textContent.toLowerCase();
+              const score = keywords.reduce((s, kw) => s + (text.includes(kw) ? 1 : 0), 0);
+              if (score > bestScore) { bestScore = score; bestEl = block; }
+            }
+            if (bestEl && bestScore >= Math.min(2, keywords.length)) {
+              el = bestEl;
+            }
+          }
+          if (!el) {
+            const firstChild = contentTop.querySelector('h1, h2, h3, p');
+            el = firstChild || contentTop;
+          }
         }
       }
       if (el) {
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.add('highlight-active');
-        setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('highlight'); return next; }, { replace: true });
+        setSearchParams((prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete('topic');
+          next.delete('highlight');
+          return next;
+        }, { replace: true });
       }
     }, 400);
     return () => clearTimeout(timer);
