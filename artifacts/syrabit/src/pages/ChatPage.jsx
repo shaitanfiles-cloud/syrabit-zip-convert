@@ -42,10 +42,12 @@ export default function ChatPage() {
 
 
   const messagesEndRef    = useRef(null);
+  const lastUserMsgRef    = useRef(null);
   const textareaRef       = useRef(null);
   const abortControllerRef = useRef(null);
   const modelMenuRef      = useRef(null);
   const scrollTimeoutRef  = useRef(null);
+  const pendingSendScroll = useRef(false);
 
   useEffect(() => {
     return () => { if (abortControllerRef.current) abortControllerRef.current.abort(); };
@@ -54,6 +56,11 @@ export default function ChatPage() {
   useEffect(() => {
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     scrollTimeoutRef.current = setTimeout(() => {
+      if (pendingSendScroll.current && lastUserMsgRef.current) {
+        pendingSendScroll.current = false;
+        lastUserMsgRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
       const container = messagesEndRef.current?.closest('.overflow-y-auto');
       if (container) {
         const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
@@ -179,9 +186,7 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, userMsg, aiMsg]);
     setInput('');
     setIsLoading(true);
-    requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    });
+    pendingSendScroll.current = true;
     setSyncState('syncing');
     if (abortControllerRef.current) abortControllerRef.current.abort();
     const controller = new AbortController();
@@ -363,9 +368,15 @@ export default function ChatPage() {
             {messages.length === 0 && (
               <EmptyState subject={subject} scopedChapters={scopedChapters} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
             )}
-              {messages.map((msg, i) => (
-                <MessageBubble key={msg.id || i} msg={msg} isLast={i === messages.length - 1} onCopy={() => setCopiedMsgId(msg.id)} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} />
-              ))}
+              {(() => {
+                let lastUIdx = -1;
+                for (let j = messages.length - 1; j >= 0; j--) { if (messages[j].role === 'user') { lastUIdx = j; break; } }
+                return messages.map((msg, i) => (
+                  <div key={msg.id || i} ref={i === lastUIdx ? lastUserMsgRef : undefined}>
+                    <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={() => setCopiedMsgId(msg.id)} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} />
+                  </div>
+                ));
+              })()}
             <div ref={messagesEndRef} />
           </div>
         </div>
