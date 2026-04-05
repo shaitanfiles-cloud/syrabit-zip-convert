@@ -89,6 +89,8 @@ async def _resolve_subject_context(subject_id: str) -> dict:
     try:
         subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
         if not subj:
+            subj = await db.subjects.find_one({"slug": subject_id}, {"_id": 0})
+        if not subj:
             _subject_ctx_cache[subject_id] = {}
             return {}
         ctx = {
@@ -644,6 +646,8 @@ async def _persist_chat_turn(
     rag_board_slug: str | None = None,
     rag_class_slug: str | None = None,
     rag_subject_slug: str | None = None,
+    rag_chapter_name: str | None = None,
+    rag_chapter_slug: str | None = None,
     followup_context: dict | None = None,
 ):
     """Background: save conversation messages. Optionally deduct 1 credit. Non-blocking."""
@@ -671,6 +675,10 @@ async def _persist_chat_turn(
             assistant_msg["rag_class_slug"] = rag_class_slug
         if rag_subject_slug:
             assistant_msg["rag_subject_slug"] = rag_subject_slug
+        if rag_chapter_name:
+            assistant_msg["rag_chapter_name"] = rag_chapter_name
+        if rag_chapter_slug:
+            assistant_msg["rag_chapter_slug"] = rag_chapter_slug
         new_msgs = [
             {"role": "user", "content": user_msg, "timestamp": now},
             assistant_msg,
@@ -1137,6 +1145,18 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     if _router_subject_id and not rag_subject_id:
         rag_subject_id = _router_subject_id
 
+    if rag_chapter_name and not rag_chapter_slug:
+        try:
+            _slug_sid = rag_subject_id or msg.subject_id or None
+            _slug_filter: dict = {"title": {"$regex": f"^{re.escape(rag_chapter_name)}$", "$options": "i"}}
+            if _slug_sid:
+                _slug_filter["subject_id"] = _slug_sid
+            _slug_ch = await db.chapters.find_one(_slug_filter, {"_id": 0, "slug": 1})
+            if _slug_ch and _slug_ch.get("slug"):
+                rag_chapter_slug = _slug_ch["slug"]
+        except Exception:
+            pass
+
     # Derive sources from the same RAG context sent to the LLM (no mismatch)
     rag_sources = _sources_from_rag_ctx(rag_ctx)
 
@@ -1409,6 +1429,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         rag_board_slug=_src_board_slug,
                         rag_class_slug=_src_class_slug,
                         rag_subject_slug=_src_subject_slug,
+                        rag_chapter_name=rag_chapter_name,
+                        rag_chapter_slug=rag_chapter_slug,
                         followup_context=_stream_followup_ctx,
                     ))
                     asyncio.create_task(_log_chat_message(
@@ -1438,6 +1460,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             _asst_msg["rag_subject_name"] = rag_subject_name
                         if rag_chapter_name:
                             _asst_msg["rag_chapter_name"] = rag_chapter_name
+                        if rag_chapter_slug:
+                            _asst_msg["rag_chapter_slug"] = rag_chapter_slug
                         if _src_board_s:
                             _asst_msg["rag_board_name"] = _src_board_s
                         if _src_class_s:
