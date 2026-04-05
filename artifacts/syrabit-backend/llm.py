@@ -178,8 +178,6 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
-if _FIREWORKS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/gpt-oss-120b"})
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _OPENROUTER_KEY:
@@ -190,6 +188,8 @@ if _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
+if _FIREWORKS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/gpt-oss-120b"})
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -224,14 +224,13 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 0),
-    ("sarvam:2",    "sarvam-m",                                          4, 1),
-    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           4, 2),
-    ("openrouter",  "qwen/qwen-2.5-72b-instruct",                       4, 3),
-    ("openrouter",  "google/gemma-3-27b-it",                             4, 4),
-    ("groq",        "llama-3.3-70b-versatile",                           4, 5),
-    ("gemini",      "gemini-2.5-flash",                                  6, 6),
-    ("cerebras",    "llama3.1-8b",                                       4, 7),
+    ("sarvam:2",    "sarvam-m",                                          4, 0),
+    ("openrouter",  "qwen/qwen-2.5-72b-instruct",                       4, 1),
+    ("openrouter",  "google/gemma-3-27b-it",                             4, 2),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 3),
+    ("gemini",      "gemini-2.5-flash",                                  6, 4),
+    ("cerebras",    "llama3.1-8b",                                       4, 5),
+    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 6),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
