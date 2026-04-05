@@ -40,6 +40,54 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _polish_notes_with_sarvam(raw_notes: str, title: str, subject_name: str) -> str:
+    polish_prompt = f"""You are a senior academic editor. Polish and improve the following study notes.
+
+**Chapter:** {title}
+**Subject:** {subject_name}
+
+**Raw Notes:**
+{raw_notes}
+
+---
+
+**YOUR TASK — improve the notes by:**
+1. Fix any grammar, spelling, or formatting errors
+2. Improve clarity and flow of explanations
+3. Ensure all key definitions are in **bold**
+4. Tighten bullet points — remove redundancy, add missing facts
+5. Make exam tips sharper and more actionable
+6. Ensure markdown formatting is clean (##, ###, **, -, etc.)
+7. Keep the same structure and headings — do NOT add or remove topics
+8. Preserve all content — only improve quality, do not shorten
+
+Return ONLY the polished notes in markdown. NO preamble, NO commentary."""
+
+    input_tokens_est = len(polish_prompt.split()) * 2
+    sarvam_ctx = 7192
+    polish_max = min(4000, sarvam_ctx - input_tokens_est - 100)
+    if polish_max < 1000:
+        logger.warning(f"[POLISH] Input too large for Sarvam ({input_tokens_est} est tokens), skipping polish")
+        return raw_notes
+
+    try:
+        async with _pipeline_sem:
+            polished = await call_llm_api_content(
+                [{"role": "user", "content": polish_prompt}],
+                max_tokens=polish_max,
+                model="sarvam-m"
+            )
+        if polished and len(polished.split()) >= len(raw_notes.split()) * 0.7:
+            logger.info(f"[POLISH] Sarvam polished notes for '{title}': {len(raw_notes.split())}→{len(polished.split())} words")
+            return polished.strip()
+        else:
+            logger.warning(f"[POLISH] Sarvam output too short for '{title}', keeping raw notes")
+            return raw_notes
+    except Exception as e:
+        logger.warning(f"[POLISH] Sarvam polish failed for '{title}': {e} — keeping raw notes")
+        return raw_notes
+
+
 async def _pipeline_generate_mcqs(
     content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 20,
 ) -> list:
@@ -192,6 +240,8 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
 
         if notes_raw and len(notes_raw.split()) >= 200:
             notes_text = _normalize_headings(notes_raw).strip()
+            notes_text = await _polish_notes_with_sarvam(notes_text, title, subject_name or "")
+            notes_text = _normalize_headings(notes_text).strip()
             wc = len(notes_text.split())
             await db.chapters.update_one(
                 {"id": chapter_id},
@@ -470,11 +520,14 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
     if not generated or len(generated.strip()) < 50:
         raise HTTPException(status_code=502, detail="AI returned empty or too-short content")
 
-    # Save generated notes
+    notes_text = _normalize_headings(generated).strip()
+    notes_text = await _polish_notes_with_sarvam(notes_text, title, subject_name or "")
+    notes_text = _normalize_headings(notes_text).strip()
+
     await db.chapters.update_one(
         {"id": chapter_id},
         {"$set": {
-            "content":      generated.strip(),
+            "content":      notes_text,
             "content_type": "notes",
             "notes_generated": True,
             "notes_generated_at": datetime.now(timezone.utc).isoformat(),
@@ -482,17 +535,16 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
     )
     _invalidate_content_cache("chapters")
 
-    # Re-chunk for RAG search
     try:
-        await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
+        await auto_chunk_content(chapter_id=chapter_id, content=notes_text, subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
     except Exception:
         pass
 
     return {
         "chapter_id": chapter_id,
         "title": title,
-        "content": generated.strip(),
-        "word_count": len(generated.split()),
+        "content": notes_text,
+        "word_count": len(notes_text.split()),
         "message": "Notes generated successfully",
     }
 
@@ -593,16 +645,18 @@ Generate detailed study notes for:
         async with _pipeline_sem:
             generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=6000)
         if generated and len(generated.split()) >= 200:
-            generated = _normalize_headings(generated)
+            generated = _normalize_headings(generated).strip()
+            generated = await _polish_notes_with_sarvam(generated, title, subject_name or "")
+            generated = _normalize_headings(generated).strip()
             wc = len(generated.split())
             update_fields = {
-                "content": generated.strip(),
+                "content": generated,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
                 "needs_review": wc < min_words,
             }
             await db.chapters.update_one({"id": chapter_id}, {"$set": update_fields})
             try:
-                await auto_chunk_content(chapter_id=chapter_id, content=generated.strip(), subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
+                await auto_chunk_content(chapter_id=chapter_id, content=generated, subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
             except Exception:
                 pass
             return {"chapter_id": chapter_id, "title": title, "status": "ok", "word_count": wc}

@@ -628,18 +628,16 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     return await _llm_batcher.call(messages, model, max_tokens)
 
 _LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
+    _LLM_PROVIDERS_CONTENT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "google/gemma-3-27b-it"})
 if _FIREWORKS_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
-if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 
 logger.info(
     f"Admin content providers (reversed priority): "
