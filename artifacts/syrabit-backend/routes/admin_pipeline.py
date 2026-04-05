@@ -40,6 +40,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _extract_content_topics(content: str) -> list[str]:
+    topics = []
+    skip = {"summary", "introduction", "conclusion", "key points", "exam tips", "common mistakes"}
+    for line in content.split("\n"):
+        m = re.match(r'^#{2,3}\s+(.+)', line.strip())
+        if m:
+            heading = m.group(1).strip().rstrip(".")
+            if len(heading) > 3 and heading.lower() not in skip:
+                topics.append(heading)
+    return list(dict.fromkeys(topics))
+
+
 async def _polish_notes_with_sarvam(raw_notes: str, title: str, subject_name: str) -> str:
     polish_prompt = f"""You are a senior academic editor. Polish and improve the following study notes.
 
@@ -243,6 +255,13 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
             notes_text = await _polish_notes_with_sarvam(notes_text, title, subject_name or "")
             notes_text = _normalize_headings(notes_text).strip()
             wc = len(notes_text.split())
+
+            new_topics = _extract_content_topics(notes_text)
+            if new_topics:
+                existing = [str(t).strip() if isinstance(t, str) else (t.get("title", "") if isinstance(t, dict) else str(t)) for t in (topics or [])]
+                merged = list(dict.fromkeys(existing + new_topics))
+                topics = merged
+
             await db.chapters.update_one(
                 {"id": chapter_id},
                 {"$set": {
@@ -250,14 +269,32 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
                     "content_type": "notes",
                     "notes_generated": True,
                     "notes_generated_at": datetime.now(timezone.utc).isoformat(),
+                    "topics": topics,
                 }}
             )
             _invalidate_content_cache("chapters")
+
+            try:
+                for kw in new_topics[:25]:
+                    await db.seo_topics.update_one(
+                        {"linked_chapter_id": chapter_id, "topic": kw},
+                        {"$set": {
+                            "linked_chapter_id": chapter_id,
+                            "topic": kw,
+                            "primary_keyword": kw,
+                            "source": "ai_notes",
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        }},
+                        upsert=True,
+                    )
+            except Exception:
+                pass
+
             try:
                 await auto_chunk_content(chapter_id=chapter_id, content=notes_text, subject_id=chapter.get("subject_id"), category=chapter.get("category", "notes"), topics=topics)
             except Exception:
                 pass
-            result["notes"] = {"status": "ok", "word_count": wc}
+            result["notes"] = {"status": "ok", "word_count": wc, "topics_extracted": len(new_topics)}
             if needs_sequential:
                 content = notes_text
                 content_sufficient = True
@@ -1405,6 +1442,61 @@ async def admin_delete_chapter(chapter_id: str, admin: dict = Depends(get_admin_
     _invalidate_content_cache("chapters")
     _invalidate_content_cache("subjects")
     return {"message": "Chapter deleted"}
+
+@router.post("/admin/reseed-embeddings")
+async def admin_reseed_embeddings(
+    force: bool = Query(False),
+    admin: dict = Depends(get_admin_user),
+):
+    import server as _srv
+    embedder = _srv._syllabus_embedder
+    if embedder is None:
+        from syllabus_embedder import SyllabusEmbedder
+        embedder = SyllabusEmbedder(db)
+    result = await embedder.reseed_all(force=force)
+    return result
+
+
+@router.post("/admin/extract-keywords")
+async def admin_extract_keywords(admin: dict = Depends(get_admin_user)):
+    import re as _re
+    stats = {"chapters": 0, "keywords_extracted": 0}
+    async for chapter in db.chapters.find({}):
+        ch_id = chapter.get("id")
+        content = (chapter.get("content") or "").strip()
+        if not ch_id or not content:
+            continue
+        headings = []
+        bold_terms = []
+        for line in content.split("\n"):
+            h_match = _re.match(r'^#{2,3}\s+(.+)', line.strip())
+            if h_match:
+                heading = h_match.group(1).strip().rstrip(".")
+                if len(heading) > 3 and heading.lower() not in ("summary", "introduction", "conclusion", "key points"):
+                    headings.append(heading)
+            for m in _re.finditer(r'\*\*([^*]{3,50})\*\*', line):
+                term = m.group(1).strip().rstrip(".:,")
+                if len(term) > 3:
+                    bold_terms.append(term)
+        keywords = list(dict.fromkeys(headings + bold_terms[:20]))
+        if not keywords:
+            continue
+        for kw in keywords[:25]:
+            await db.seo_topics.update_one(
+                {"linked_chapter_id": ch_id, "topic": kw},
+                {"$set": {
+                    "linked_chapter_id": ch_id,
+                    "topic": kw,
+                    "primary_keyword": kw,
+                    "source": "content_extraction",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }},
+                upsert=True,
+            )
+            stats["keywords_extracted"] += 1
+        stats["chapters"] += 1
+    return stats
+
 
 @router.post("/admin/seed")
 async def admin_reseed(admin: dict = Depends(get_admin_user)):

@@ -121,6 +121,33 @@ def _extract_content_keywords(content: str, max_keywords: int = 20) -> list[str]
     return terms[:max_keywords]
 
 
+def _extract_topic_snippet(content: str, topic: str, max_chars: int = 600) -> str:
+    import re, difflib
+    if not content or not topic:
+        return ""
+    topic_lower = topic.strip().lower()
+    lines = content.split("\n")
+    best_idx = -1
+    best_ratio = 0.0
+    for i, line in enumerate(lines):
+        stripped = re.sub(r'^#{1,4}\s*', '', line).strip().rstrip(".").lower()
+        stripped = re.sub(r'^\d+[\.\)]\s*', '', stripped).strip()
+        if not stripped or len(stripped) < 3:
+            continue
+        ratio = difflib.SequenceMatcher(None, stripped, topic_lower).ratio()
+        if ratio > best_ratio and ratio >= 0.55:
+            best_ratio = ratio
+            best_idx = i
+        if topic_lower in stripped or stripped in topic_lower:
+            best_idx = i
+            break
+    if best_idx < 0:
+        return ""
+    snippet_lines = lines[best_idx:best_idx + 15]
+    snippet = "\n".join(snippet_lines).strip()
+    return snippet[:max_chars]
+
+
 def _build_topic_embed_text(
     board_name: str,
     class_name: str,
@@ -128,10 +155,19 @@ def _build_topic_embed_text(
     subject_name: str,
     chapter_title: str,
     topic: str,
+    content: str = "",
 ) -> str:
     context_parts = [p for p in [board_name, class_name, stream_name, subject_name] if p]
     context = " ".join(context_parts)
-    return f"{context} — {chapter_title} — {topic}"[:EMBED_TEXT_MAX_CHARS]
+    sections = [f"{context} — {chapter_title} — {topic}"]
+    snippet = _extract_topic_snippet(content, topic, max_chars=800)
+    if snippet:
+        keywords = _extract_content_keywords(snippet, max_keywords=10)
+        if keywords:
+            sections.append("Key terms: " + ", ".join(keywords))
+        clean_snippet = " ".join(snippet.split()[:80])
+        sections.append(clean_snippet)
+    return ". ".join(sections)[:EMBED_TEXT_MAX_CHARS]
 
 
 class SyllabusEmbedder:
@@ -221,7 +257,7 @@ class SyllabusEmbedder:
         inserted += await self._seed_topic_embeddings(
             chapter_id, subject_id, board_name, class_name, stream_name,
             subject_name, title, 0, topics or [], _embed_fn,
-            _current_embed_model, set(),
+            _current_embed_model, set(), content=content,
         )
 
         self._cache = []
@@ -563,6 +599,7 @@ class SyllabusEmbedder:
                 ch_id, subj_id, board_name, class_name, stream_name,
                 subject_name, chapter_title, chapter.get("chapter_number", 0),
                 topics, embed_text, _current_embed_model, existing_ids,
+                content=(chapter.get("content") or ""),
             )
 
             if inserted % 20 == 0:
@@ -641,6 +678,7 @@ class SyllabusEmbedder:
                     ch_id, subj_id, board_name, class_name, stream_name,
                     subject_name, chapter_title, chapter.get("chapter_number", 0),
                     topics, embed_text, _current_embed_model, existing_ids,
+                    content=content,
                 )
 
                 if inserted % 10 == 0:
@@ -696,6 +734,116 @@ class SyllabusEmbedder:
         logger.info(f"SyllabusEmbedder: seeding complete — {inserted} new embeddings (chapters + topics)")
         return inserted
 
+    async def reseed_all(self, force: bool = False) -> dict:
+        try:
+            from vertex_services import embed_text as _embed_fn
+            from vertex_services import _EMBED_MODEL as _current_embed_model
+        except ImportError as exc:
+            return {"status": "error", "reason": f"import error: {exc}"}
+
+        if self._col is None:
+            return {"status": "error", "reason": "collection not ready"}
+
+        async with self._seed_lock:
+            db = self._db
+            mongo_subjects: dict = {}
+            async for s in db.subjects.find({}, {
+                "id": 1, "title": 1, "name": 1,
+                "boardName": 1, "className": 1, "streamName": 1,
+            }):
+                sid = s.get("id") or str(s.get("_id", ""))
+                mongo_subjects[sid] = s
+
+            stats = {"chapters_processed": 0, "topics_processed": 0, "embed_failures": 0, "skipped": 0}
+
+            if force:
+                await self._col.delete_many({})
+                logger.info("reseed_all: force=True, cleared all embeddings")
+
+            existing_ids: set = set()
+            if not force:
+                async for doc in self._col.find({}, {"chapter_id": 1, "level": 1, "topic": 1, "embedding": 1}):
+                    cid = doc.get("chapter_id", "")
+                    level = doc.get("level", "chapter")
+                    topic_name = doc.get("topic", "")
+                    has_vec = doc.get("embedding") is not None and len(doc.get("embedding", [])) > 0
+                    if has_vec:
+                        existing_ids.add(f"{cid}::{level}::{topic_name}")
+
+            async for chapter in db.chapters.find({}):
+                ch_id = chapter.get("id") or str(chapter.get("_id", ""))
+                subj_id = chapter.get("subject_id", "")
+                subj = mongo_subjects.get(subj_id, {})
+
+                board_name = subj.get("boardName", "")
+                class_name = subj.get("className", "")
+                stream_name = subj.get("streamName", "")
+                subject_name = subj.get("title") or subj.get("name", "")
+                chapter_title = chapter.get("title", "")
+                description = (chapter.get("description") or "").strip()
+                topics: list = chapter.get("topics") or []
+                content = (chapter.get("content") or "").strip()
+
+                cache_key = f"{ch_id}::chapter::"
+                if cache_key not in existing_ids:
+                    embed_text_input = _build_rich_embed_text(
+                        board_name, class_name, stream_name, subject_name,
+                        chapter_title, description, topics, content,
+                    )
+                    try:
+                        vec = await asyncio.wait_for(
+                            _embed_fn(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
+                            timeout=8.0,
+                        )
+                    except Exception as exc:
+                        logger.warning(f"reseed embed failed for {chapter_title[:40]}: {exc}")
+                        vec = None
+                        stats["embed_failures"] += 1
+
+                    doc_obj = {
+                        "chapter_id": ch_id,
+                        "subject_id": subj_id,
+                        "board": board_name,
+                        "class_name": class_name,
+                        "stream": stream_name,
+                        "subject_name": subject_name,
+                        "chapter_title": chapter_title,
+                        "chapter_number": chapter.get("chapter_number", 0),
+                        "embed_text": embed_text_input,
+                        "embedding": vec,
+                        "embedding_model": _current_embed_model,
+                        "level": "chapter",
+                        "description": description,
+                        "topics": topics,
+                        "status": "active",
+                        "source": "reseed",
+                        "created_at": __import__("datetime").datetime.utcnow().isoformat(),
+                    }
+                    await self._col.update_one(
+                        {"chapter_id": ch_id, "level": "chapter"},
+                        {"$set": doc_obj},
+                        upsert=True,
+                    )
+                    stats["chapters_processed"] += 1
+                else:
+                    stats["skipped"] += 1
+
+                topic_count = await self._seed_topic_embeddings(
+                    ch_id, subj_id, board_name, class_name, stream_name,
+                    subject_name, chapter_title, chapter.get("chapter_number", 0),
+                    topics, _embed_fn, _current_embed_model, existing_ids,
+                    content=content,
+                )
+                stats["topics_processed"] += topic_count
+
+                await asyncio.sleep(0.1)
+
+            self._cache = []
+            self._cache_loaded_at = 0.0
+            stats["status"] = "ok"
+            logger.info(f"reseed_all complete: {stats}")
+            return stats
+
     async def _seed_topic_embeddings(
         self,
         chapter_id: str,
@@ -710,6 +858,7 @@ class SyllabusEmbedder:
         embed_text_fn,
         embed_model: str,
         existing_ids: set,
+        content: str = "",
     ) -> int:
         if not topics:
             return 0
@@ -726,7 +875,7 @@ class SyllabusEmbedder:
 
             topic_embed_text = _build_topic_embed_text(
                 board_name, class_name, stream_name,
-                subject_name, chapter_title, topic_str,
+                subject_name, chapter_title, topic_str, content,
             )
 
             try:
