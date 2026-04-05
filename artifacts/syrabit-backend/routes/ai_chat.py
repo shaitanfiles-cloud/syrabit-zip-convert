@@ -864,7 +864,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             try:
                 _syl_chapters = await db.chapters.find(
                     {"subject_id": msg.subject_id},
-                    {"_id": 0, "title": 1, "description": 1, "topics": 1, "order_index": 1}
+                    {"_id": 0, "title": 1, "description": 1, "order_index": 1}
                 ).sort("order_index", 1).to_list(100)
                 if _syl_chapters:
                     rag_ctx["_syllabus_chapters"] = _syl_chapters
@@ -884,7 +884,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             try:
                 _notes_chapters = await db.chapters.find(
                     {"subject_id": msg.subject_id},
-                    {"_id": 0, "title": 1, "description": 1, "topics": 1, "order_index": 1}
+                    {"_id": 0, "title": 1, "description": 1, "order_index": 1}
                 ).sort("order_index", 1).to_list(50)
             except Exception:
                 _notes_chapters = []

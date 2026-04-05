@@ -2088,22 +2088,19 @@ def build_rag_system_prompt(
         _subject_name_for_topics = (subjects[0].get("name", "") if subjects else "") or context.get("subject_name", "")
         grounding += (
             "\n\n---\n"
-            f"**CHAPTER & TOPIC STRUCTURE ({_subject_name_for_topics}):**\n"
-            "Use the following chapter and topic structure to organize your answer. "
-            "When making notes, cover topics from the relevant chapter systematically.\n\n"
+            f"**LESSON STRUCTURE ({_subject_name_for_topics}):**\n"
+            "Use the following lesson (chapter) structure to organize your answer. "
+            "Each entry is a lesson — answer within the scope of the relevant lesson.\n\n"
         )
         for _ct in _chapter_topics_list:
             _ct_title = _ct.get("title", "")
             _ct_desc = _ct.get("description", "")
-            _ct_topics = _ct.get("topics", [])
             if not _ct_title:
                 continue
             grounding += f"**{_ct_title}**"
             if _ct_desc:
                 grounding += f" — {_ct_desc[:150]}"
             grounding += "\n"
-            if _ct_topics:
-                grounding += f"  Topics: {', '.join(_ct_topics[:15])}\n"
         grounding += "\n---\n"
 
     # ── Tier 0: Uploaded subject document ────────────────────────────────────
