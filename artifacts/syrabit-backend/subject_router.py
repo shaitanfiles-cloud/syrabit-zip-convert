@@ -33,6 +33,8 @@ class SubjectRoute:
     chapter_hint: str = ""   # Most likely chapter name (may be empty)
     confidence: str = "high" # high | medium | low
     scope_query: str = ""    # ready-made search-scoped string (board + class + subject + query)
+    subject_id: str = ""     # MongoDB _id of resolved subject (from embedder)
+    subject_name: str = ""   # Canonical subject name (from embedder)
 
     def build_scope(self, user_query: str) -> "SubjectRoute":
         parts = [self.board, self.class_name, self.stream, self.subject, user_query]
@@ -834,6 +836,8 @@ async def classify_subject(
                     subject=match.subject_name,
                     chapter_hint=match.chapter_title,
                     confidence="high",
+                    subject_id=match.subject_id or "",
+                    subject_name=match.subject_name or "",
                 )
                 logger.debug(
                     f"SubjectRouter Tier0 DB: {route.subject} / {route.chapter_hint} "

@@ -252,7 +252,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         return result if result else {}
 
     async def _ns_fetch_search_scope():
-        if _hard_bypass:
+        if _hard_bypass and msg.subject_id:
             return "", None
         return await build_search_scope(
             msg.message,
@@ -305,6 +305,32 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
         history_messages = await _ns_fetch_history()
+        _ns_resolved_syl_sid = msg.subject_id or (getattr(_ns_route, "subject_id", "") if _ns_route else "")
+        if _detected_intent == "syllabus" and _ns_resolved_syl_sid:
+            try:
+                _ns_syl_chapters = await db.chapters.find(
+                    {"subject_id": _ns_resolved_syl_sid},
+                    {"_id": 0, "title": 1, "description": 1, "order_index": 1}
+                ).sort("order_index", 1).to_list(100)
+                if _ns_syl_chapters:
+                    rag_ctx["_syllabus_chapters"] = _ns_syl_chapters
+                    rag_ctx["source"] = "rag"
+                    rag_ctx["quality"] = "high"
+                    _ns_syl_subj_name = msg.subject_name or getattr(_ns_route, "subject_name", "") or getattr(_ns_route, "subject", "") or ""
+                    rag_ctx["subjects"] = [{"id": _ns_resolved_syl_sid, "name": _ns_syl_subj_name}]
+                    _ns_syl_subj_doc = await db.subjects.find_one({"id": _ns_resolved_syl_sid}, {"_id": 0, "name": 1, "icon": 1, "gradient": 1, "board_name": 1, "class_name": 1, "stream_name": 1})
+                    if _ns_syl_subj_doc:
+                        rag_ctx["subjects"] = [{"id": _ns_resolved_syl_sid, "name": _ns_syl_subj_doc.get("name", _ns_syl_subj_name), "icon": _ns_syl_subj_doc.get("icon", ""), "gradient": _ns_syl_subj_doc.get("gradient", "")}]
+                        rag_ctx["content_card_meta"] = {
+                            "card_name": "Syllabus",
+                            "lesson_name": _ns_syl_subj_doc.get("name", _ns_syl_subj_name),
+                            "subject_name": _ns_syl_subj_doc.get("name", _ns_syl_subj_name),
+                            "board_name": _ns_syl_subj_doc.get("board_name", ""),
+                            "class_name": _ns_syl_subj_doc.get("class_name", ""),
+                        }
+                    logger.info(f"[NON-STREAM] Syllabus intent: fetched {len(_ns_syl_chapters)} chapters for subject {_ns_resolved_syl_sid}")
+            except Exception as _ns_ch_err:
+                logger.warning(f"[NON-STREAM] Syllabus chapter fetch failed: {_ns_ch_err}")
     else:
         rag_ctx, web_results, history_messages = await asyncio.gather(
             resolve_rag_context(
@@ -755,7 +781,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         return (subj or {}).get("document_text")
 
     async def _fetch_search_scope_early():
-        if _s_hard_bypass:
+        if _s_hard_bypass and msg.subject_id:
             return "", None
         if msg.card_context and msg.subject_id and msg.subject_name:
             return msg.subject_name, None
@@ -860,15 +886,30 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         raw_conv = await _fetch_history()
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
-        if _stream_intent == "syllabus" and msg.subject_id:
+        _resolved_syl_sid = msg.subject_id or (getattr(_sr_route, "subject_id", "") if _sr_route else "")
+        if _stream_intent == "syllabus" and _resolved_syl_sid:
             try:
                 _syl_chapters = await db.chapters.find(
-                    {"subject_id": msg.subject_id},
+                    {"subject_id": _resolved_syl_sid},
                     {"_id": 0, "title": 1, "description": 1, "order_index": 1}
                 ).sort("order_index", 1).to_list(100)
                 if _syl_chapters:
                     rag_ctx["_syllabus_chapters"] = _syl_chapters
-                    logger.info(f"[STREAM] Syllabus intent: fetched {len(_syl_chapters)} chapters for subject {msg.subject_id}")
+                    rag_ctx["source"] = "rag"
+                    rag_ctx["quality"] = "high"
+                    _syl_subj_name = msg.subject_name or getattr(_sr_route, "subject_name", "") or getattr(_sr_route, "subject", "") or ""
+                    rag_ctx["subjects"] = [{"id": _resolved_syl_sid, "name": _syl_subj_name}]
+                    _syl_subj_doc = await db.subjects.find_one({"id": _resolved_syl_sid}, {"_id": 0, "name": 1, "icon": 1, "gradient": 1, "board_name": 1, "class_name": 1, "stream_name": 1})
+                    if _syl_subj_doc:
+                        rag_ctx["subjects"] = [{"id": _resolved_syl_sid, "name": _syl_subj_doc.get("name", _syl_subj_name), "icon": _syl_subj_doc.get("icon", ""), "gradient": _syl_subj_doc.get("gradient", "")}]
+                        rag_ctx["content_card_meta"] = {
+                            "card_name": "Syllabus",
+                            "lesson_name": _syl_subj_doc.get("name", _syl_subj_name),
+                            "subject_name": _syl_subj_doc.get("name", _syl_subj_name),
+                            "board_name": _syl_subj_doc.get("board_name", ""),
+                            "class_name": _syl_subj_doc.get("class_name", ""),
+                        }
+                    logger.info(f"[STREAM] Syllabus intent: fetched {len(_syl_chapters)} chapters for subject {_resolved_syl_sid}")
             except Exception as _ch_err:
                 logger.warning(f"[STREAM] Syllabus chapter fetch failed: {_ch_err}")
     else:
@@ -1276,6 +1317,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             if content_card_meta:
                 done_payload["content_card_name"] = content_card_meta.get("card_name", "")
                 done_payload["content_card_lesson"] = content_card_meta.get("lesson_name", "")
+                done_payload["content_card_subject"] = content_card_meta.get("subject_name", "")
+                done_payload["content_card_board"] = content_card_meta.get("board_name", "")
+                done_payload["content_card_class"] = content_card_meta.get("class_name", "")
             yield f"data: {json.dumps(done_payload)}\n\n"
             yield "data: [DONE]\n\n"
 
