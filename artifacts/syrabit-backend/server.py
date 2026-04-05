@@ -695,6 +695,11 @@ Disallow: /api/
 """
     return Response(content=txt.strip(), media_type="text/plain")
 
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    from starlette.responses import RedirectResponse
+    return RedirectResponse(url="/chat", status_code=302)
+
 @app.get("/llms.txt", response_class=Response)
 async def serve_llms_txt_root():
     from routes.admin_advanced import _build_llms_txt
