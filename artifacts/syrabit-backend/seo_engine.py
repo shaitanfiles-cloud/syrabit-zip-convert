@@ -1884,9 +1884,21 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
     return resp
 
 
+try:
+    import mistune as _mistune_seo
+    _seo_md_renderer = _mistune_seo.create_markdown(
+        plugins=["table", "strikethrough", "footnotes", "task_lists"],
+        escape=True,
+    )
+except Exception:
+    _seo_md_renderer = None
+
+
 def _md_to_html(text: str) -> str:
     if not text:
         return ""
+    if _seo_md_renderer:
+        return _seo_md_renderer(text) or ""
     h = html_mod.escape(text)
     h = re.sub(r'^#### (.+)$', r'<h4>\1</h4>', h, flags=re.MULTILINE)
     h = re.sub(r'^### (.+)$', r'<h3>\1</h3>', h, flags=re.MULTILINE)
@@ -1897,6 +1909,32 @@ def _md_to_html(text: str) -> str:
     h = re.sub(r'^- (.+)$', r'<li>\1</li>', h, flags=re.MULTILINE)
     h = re.sub(r'\n\n', '</p><p>', h)
     return f"<p>{h}</p>"
+
+
+def _format_content_html(raw_md: str) -> str:
+    """Convert raw markdown to well-structured, textbook-style HTML.
+    Handles proper list wrapping, tables, code blocks, and semantic structure."""
+    if not raw_md:
+        return ""
+
+    md = raw_md.replace('\r\n', '\n').replace('\r', '\n')
+
+    html = _md_to_html(md)
+    if not html:
+        return ""
+
+    html = re.sub(
+        r'(<table)',
+        r'<div class="table-responsive"><table',
+        html,
+    )
+    html = re.sub(
+        r'(</table>)',
+        r'</table></div>',
+        html,
+    )
+
+    return html
 
 
 _PAGE_TYPE_LABELS = {
@@ -1990,7 +2028,7 @@ def _render_seo_html(
     cls = html_mod.escape(page.get("class_name", ""))
     chapter = html_mod.escape(page.get("chapter_title", ""))
     page_type = page.get("page_type", "notes")
-    content_html = _md_to_html(page.get("content", ""))
+    content_html = page.get("content_html") or _format_content_html(page.get("content", ""))
     generated = page.get("generated_at", "")
     updated = page.get("updated_at", generated)
     kw = page.get("primary_keyword", f"{topic} {board} {cls}")
@@ -2252,10 +2290,16 @@ def _render_seo_html(
 <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
 {_prev_link}{_next_link}<script type="application/ld+json">{ld_json}</script>
 <style>
-body{{font-family:system-ui,sans-serif;max-width:860px;margin:0 auto;padding:1rem 1.25rem;color:#1a1a1a;line-height:1.7}}
-h1{{font-size:1.75rem;margin-bottom:.5rem}}h2{{font-size:1.3rem;margin-top:2rem}}
-img{{max-width:100%;height:auto}}
-table{{width:100%;border-collapse:collapse;margin:1rem 0}}th,td{{border:1px solid #e5e7eb;padding:.5rem;text-align:left}}
+body{{font-family:system-ui,sans-serif;max-width:860px;margin:0 auto;padding:1rem 1.25rem;color:#1a1a1a;line-height:1.8;word-spacing:0.02em}}
+h1{{font-size:1.75rem;margin-bottom:.5rem;text-wrap:balance}}h2{{font-size:1.3rem;margin-top:2rem;text-wrap:balance}}h3{{font-size:1.1rem;margin-top:1.5rem}}
+p{{text-align:justify;margin:0 0 1.1rem}}
+img{{max-width:100%;height:auto;border-radius:8px}}
+ul{{padding-left:1.5rem;margin:.6rem 0 1.2rem}}ol{{padding-left:1.5rem;margin:.6rem 0 1.2rem}}li{{margin:.35rem 0;line-height:1.75}}
+blockquote{{border-left:3px solid #7c3aed;padding:.6rem 0 .6rem 1rem;margin:1.2rem 0;color:#4b5563;font-style:italic;background:#f9fafb;border-radius:0 8px 8px 0}}
+.table-responsive{{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:1.2rem 0;border-radius:8px;border:1px solid #e5e7eb}}
+.table-responsive table{{margin:0;border:none}}
+table{{width:100%;border-collapse:collapse;margin:1rem 0}}th{{background:#f3f4f6;font-weight:600;white-space:nowrap}}th,td{{border:1px solid #e5e7eb;padding:.55rem .8rem;text-align:left;vertical-align:top}}
+tr:nth-child(even) td{{background:#fafbfc}}
 .pt-nav{{display:flex;flex-wrap:wrap;gap:.5rem;margin:1rem 0 1.5rem}}
 .pt-link{{padding:.35rem .8rem;border-radius:6px;border:1px solid #d1d5db;color:#374151;text-decoration:none;font-size:.9rem}}
 .pt-link:hover{{background:#f3f4f6}}.pt-active{{padding:.35rem .8rem;border-radius:6px;background:#7c3aed;color:#fff;font-size:.9rem;font-weight:600}}
@@ -2270,7 +2314,7 @@ nav[aria-label="Breadcrumb"] a{{color:#7c3aed;text-decoration:none}}
 .content-info h2{{margin-top:0;font-size:1rem;color:#334155}}.content-info dl{{margin:0}}.content-info dt{{font-weight:600;color:#475569;margin-top:.5rem;font-size:.9rem}}.content-info dd{{margin:0 0 .25rem 0;color:#64748b;font-size:.85rem}}
 footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-top:1px solid #e5e7eb}}
 .geo-footer{{font-size:.8rem;color:#9ca3af;margin-top:.5rem}}
-@media(max-width:640px){{body{{padding:.75rem}}h1{{font-size:1.35rem}}h2{{font-size:1.1rem}}.pn-nav{{flex-direction:column;gap:.75rem}}.pn-prev,.pn-next{{max-width:100%}}.pt-nav{{gap:.3rem}}.pt-link,.pt-active{{font-size:.8rem;padding:.25rem .6rem}}}}
+@media(max-width:640px){{body{{padding:.75rem;line-height:1.7}}h1{{font-size:1.35rem}}h2{{font-size:1.1rem}}h3{{font-size:1rem}}p{{text-align:left}}.pn-nav{{flex-direction:column;gap:.75rem}}.pn-prev,.pn-next{{max-width:100%}}.pt-nav{{gap:.3rem}}.pt-link,.pt-active{{font-size:.8rem;padding:.25rem .6rem}}th,td{{padding:.4rem .6rem;font-size:.84rem}}blockquote{{padding:.5rem 0 .5rem .8rem}}}}
 </style>
 </head>
 <body>

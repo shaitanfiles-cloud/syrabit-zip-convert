@@ -33,7 +33,7 @@ from rag import *
 from utils import *
 from analytics_helpers import *
 from seed import ensure_seeded
-from seo_engine import _normalize_headings
+from seo_engine import _normalize_headings, _format_content_html
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ async def _pipeline_generate_mcqs(
     if not content or len(content.strip()) < 100:
         return []
     prompt = (
-        f"You are an expert examiner for AHSEC/SEBA/Degree students in Assam, India.\n"
+        f"You are an expert examiner for AHSEC/SEBA/Degree students.\n"
         f"Generate exactly {count} MCQ questions for:\n"
         f"Subject: {subject_name} ({class_name})\nChapter: {chapter_title}\n\n"
         f"Each MCQ must have exactly 4 options (A, B, C, D), one correct answer, and a brief explanation.\n"
@@ -133,7 +133,7 @@ async def _pipeline_generate_flashcards(
         topic_list = ", ".join(str(t) for t in topics[:15])
         topic_instruction = f"\nFlashcards MUST collectively cover ALL of these syllabus topics: {topic_list}\nEnsure at least one flashcard per topic.\n"
     prompt = (
-        f"You are an expert memory coach for AHSEC/SEBA/Degree students in Assam, India.\n"
+        f"You are an expert memory coach for AHSEC/SEBA/Degree students.\n"
         f"Generate exactly {count} HIGH-IMPACT memory-trick flashcards for:\n"
         f"Subject: {subject_name} ({class_name})\nChapter: {chapter_title}\n"
         f"{topic_instruction}\n"
@@ -204,7 +204,7 @@ async def _generate_chapter_all(chapter_id: str, generate: list[str]) -> dict:
                 + "\n".join(f"  - {kw}" for kw in seo_keywords[:15])
             )
 
-        notes_prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students in Assam, India.
+        notes_prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students.
 
 Generate **exam-focused, topic-wise study notes** for the chapter below.
 
@@ -223,7 +223,7 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
    - A ## Heading matching the topic name exactly
    - 5-8 sentence thorough explanation using simple, precise academic language
    - **Key Points** as 6-8 bullets: definitions in **bold**, significance, relationships
-   - A real-world example, Assam-specific context, or illustrative case study
+   - A relevant real-world example or illustrative case study
    - Where relevant, add a "Common Mistake" or "Exam Tip" note
 3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
 4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
@@ -481,7 +481,7 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
     if not desc_block:
         desc_block = "**Description:** No additional description provided.\n"
 
-    prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students in Assam, India.
+    prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students.
 
 Generate **exam-focused, topic-wise study notes** for the chapter below.
 
@@ -500,7 +500,7 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
    - A ## Heading matching the topic name exactly
    - 5-8 sentence thorough explanation using simple, precise academic language — cover the concept fully with definitions, mechanisms, causes, effects, and significance
    - **Key Points** as 6-8 bullets: definitions in **bold**, significance, relationships to other topics, and facts examiners look for
-   - A real-world example, Assam-specific context, or illustrative case study to ground the concept
+   - A relevant real-world example or illustrative case study to ground the concept
    - Where relevant, add a "Common Mistake" or "Exam Tip" note
 3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
 4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
@@ -546,6 +546,77 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
         "content": notes_text,
         "word_count": len(notes_text.split()),
         "message": "Notes generated successfully",
+    }
+
+
+@router.post("/admin/content/subject/{subject_id}/format-notes")
+async def admin_format_subject_notes(subject_id: str, admin: dict = Depends(get_admin_user)):
+    """Re-format all chapter content for a subject: convert raw markdown to
+    well-structured, mobile-responsive, textbook-style HTML. No AI generation —
+    only structural formatting of existing content."""
+    subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+    if not subject:
+        raise HTTPException(status_code=404, detail="Subject not found")
+
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id}, {"_id": 0}
+    ).to_list(200)
+
+    if not chapters:
+        raise HTTPException(status_code=404, detail="No chapters found for this subject")
+
+    formatted = 0
+    skipped = 0
+    for ch in chapters:
+        raw_content = (ch.get("content") or "").strip()
+        if not raw_content or len(raw_content) < 30:
+            skipped += 1
+            continue
+
+        normalized = _normalize_headings(raw_content).strip()
+
+        content_html = _format_content_html(normalized)
+
+        word_count = len(re.sub(r'<[^>]+>', '', content_html).split())
+
+        await db.chapters.update_one(
+            {"id": ch["id"]},
+            {"$set": {
+                "content": normalized,
+                "content_html": content_html,
+                "word_count": word_count,
+                "formatted_at": datetime.now(timezone.utc).isoformat(),
+            }}
+        )
+        formatted += 1
+
+    _invalidate_content_cache("chapters")
+
+    seo_pages = await db.seo_pages.find(
+        {"subject_slug": subject.get("slug", ""), "status": "published"},
+        {"_id": 0, "id": 1, "content": 1, "topic_id": 1},
+    ).to_list(5000)
+
+    seo_formatted = 0
+    for page in seo_pages:
+        raw = (page.get("content") or "").strip()
+        if not raw or len(raw) < 30:
+            continue
+        html = _format_content_html(raw)
+        await db.seo_pages.update_one(
+            {"id": page["id"]},
+            {"$set": {
+                "content_html": html,
+                "formatted_at": datetime.now(timezone.utc).isoformat(),
+            }}
+        )
+        seo_formatted += 1
+
+    return {
+        "message": f"Formatted {formatted} chapters, {seo_formatted} SEO pages ({skipped} skipped — no content)",
+        "chapters_formatted": formatted,
+        "seo_pages_formatted": seo_formatted,
+        "chapters_skipped": skipped,
     }
 
 
@@ -620,7 +691,7 @@ async def _regenerate_one_chapter(chapter: dict, subject: dict, min_words: int) 
     if subject_desc:
         desc_block += f"**Subject Description:** {subject_desc}\n"
 
-    prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students in Assam, India.
+    prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students.
 
 Generate detailed study notes for:
 **Chapter:** {title}
@@ -635,7 +706,7 @@ Generate detailed study notes for:
 2. Use ## headings for each topic (match topic names exactly), ### for subtopics
 3. For each topic, write 5-8 sentence thorough explanations covering definitions, mechanisms, causes, effects, and significance
 4. Include key definitions in **bold**, 6-8 bullet points per topic for key facts examiners look for
-5. Include Assam-specific context, real-world examples, or illustrative case studies for each topic
+5. Include relevant real-world examples or illustrative case studies for each topic
 6. Add "Common Mistake" or "Exam Tip" notes where relevant
 7. End with a **Summary** section listing 7-10 most exam-critical takeaways
 8. Use markdown formatting throughout. NO disclaimers, NO preamble.

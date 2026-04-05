@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Layers, ChevronRight, Trash2, Loader2, Edit2, Sparkles } from 'lucide-react';
+import { Search, Layers, ChevronRight, Trash2, Loader2, Edit2, AlignLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { isDegreeBoard } from '@/utils/courseTypes';
@@ -255,16 +255,16 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     finally { setSavingSubject(false); }
   };
 
-  const handleBulkGenerateNotes = async () => {
+  const handleBulkFormatNotes = async () => {
     if (!selSubject || chapters.length === 0) return;
-    const noNotes = chapters.filter(ch => !(ch.content && ch.content.trim().length > 50));
-    if (noNotes.length === 0) { toast.info('All chapters already have notes'); return; }
+    const withContent = chapters.filter(ch => ch.content && ch.content.trim().length > 30);
+    if (withContent.length === 0) { toast.info('No chapters with content to format'); return; }
     const confirmed = await new Promise((resolve) => {
       setConfirmDialog({
         open: true,
-        title: 'Bulk generate notes?',
-        message: `Generate AI notes for ${noNotes.length} chapter(s) without content? This may take a while.`,
-        confirmLabel: 'Generate',
+        title: 'Format all notes?',
+        message: `Re-format ${withContent.length} chapter(s) for mobile-responsive textbook layout. No content will be generated — only structural formatting and alignment.`,
+        confirmLabel: 'Format',
         destructive: false,
         onConfirm: () => { setConfirmDialog(d => ({ ...d, open: false })); resolve(true); },
         onCancel: () => { setConfirmDialog(d => ({ ...d, open: false })); resolve(false); },
@@ -272,16 +272,17 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     });
     if (!confirmed) return;
     setBulkGenerating(true);
-    let success = 0, failed = 0;
-    for (const ch of noNotes) {
-      const ok = await handleGenerateNotes(ch.id, ch.title, { silent: true });
-      if (ok) success++; else failed++;
+    try {
+      const res = await axios.post(`${API}/admin/content/subject/${selSubject}/format-notes`, {}, authHeaders(adminToken));
+      const data = res.data;
+      toast.success(data.message || `Formatted ${data.chapters_formatted} chapters`);
+      refreshChapters(selSubject);
+      loadChapterCards(selSubject);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || 'Failed to format notes');
+    } finally {
+      setBulkGenerating(false);
     }
-    setBulkGenerating(false);
-    if (success > 0) toast.success(`Bulk generation: ${success} succeeded${failed ? `, ${failed} failed` : ''}`);
-    else toast.error(`Bulk generation failed for all ${failed} chapters`);
-    refreshChapters(selSubject);
-    loadChapterCards(selSubject);
   };
 
   const breadcrumb = [];
@@ -423,13 +424,13 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     )}
                     {chapters.length > 0 && (
                       <button
-                        onClick={handleBulkGenerateNotes}
+                        onClick={handleBulkFormatNotes}
                         disabled={bulkGenerating || generatingNotes.size > 0}
                         className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all"
                         style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.25),rgba(79,70,229,0.25))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.30)' }}
                       >
-                        {bulkGenerating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                        {bulkGenerating ? 'Generating...' : 'Bulk AI Notes'}
+                        {bulkGenerating ? <Loader2 size={12} className="animate-spin" /> : <AlignLeft size={12} />}
+                        {bulkGenerating ? 'Formatting...' : 'Format Notes'}
                       </button>
                     )}
                   </div>
