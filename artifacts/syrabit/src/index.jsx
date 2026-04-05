@@ -19,7 +19,7 @@ root.render(
   </React.StrictMode>
 );
 
-if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .register("/sw.js")
@@ -39,7 +39,7 @@ if ("serviceWorker" in navigator && process.env.NODE_ENV === "production") {
       })
       .catch((err) => log.warn("[SW] Registration failed", { error: err.message }));
   });
-} else if ("serviceWorker" in navigator && process.env.NODE_ENV !== "production") {
+} else if ("serviceWorker" in navigator && !import.meta.env.PROD) {
   navigator.serviceWorker.getRegistrations().then((regs) => {
     regs.forEach((r) => r.unregister());
   });

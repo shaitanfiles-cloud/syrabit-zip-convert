@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
+import PWAInstallPrompt from "@/components/PWAInstallPrompt";
 import { Loader2 } from "lucide-react";
 import { apiClient } from "@/utils/api";
 
@@ -249,6 +250,7 @@ function App() {
                 </Routes>
               </Suspense>
             </BrowserRouter>
+            <PWAInstallPrompt />
           </AuthProvider>
         </QueryClientProvider>
       </ThemeProvider>
