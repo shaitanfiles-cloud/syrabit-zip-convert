@@ -30,3 +30,9 @@ id = "7vs7sg1YGxVdtpUst_MQs"
 uri = "file://.local/tasks/syrabit-build-cost-justification.md"
 type = "text"
 title = "Syrabit.ai Build Cost Justification (Compact)"
+
+[[outputs]]
+id = "RBsYnUeGp9BZC8R9PwfXF"
+uri = "file://.local/syrabit_audit.md"
+type = "text"
+title = "Syrabit.ai — Full Product & Performance Audit"
