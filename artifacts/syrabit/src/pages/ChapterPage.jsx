@@ -267,55 +267,85 @@ export default function ChapterPage() {
 
   useEffect(() => {
     if (loading || !data) return;
-    const topicText = searchParams.get('topic') || searchParams.get('highlight') || window.location.hash.slice(1);
-    if (!topicText) return;
-    const decoded = decodeURIComponent(topicText).toLowerCase();
+    const topicRaw = searchParams.get('topic') || searchParams.get('highlight') || window.location.hash.slice(1);
+    const chunkSnippet = searchParams.get('chunk') || '';
+    if (!topicRaw && !chunkSnippet) return;
+    let decoded = '';
+    try { decoded = (topicRaw ? decodeURIComponent(topicRaw) : '').toLowerCase(); } catch { decoded = (topicRaw || '').toLowerCase(); }
     const timer = setTimeout(() => {
       let el = null;
-      const slugified = decoded.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      el = document.getElementById(slugified);
-      if (!el) {
-        const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
-        for (const h of allH) {
-          if (h.id.includes(slugified) || slugified.includes(h.id)) { el = h; break; }
+      const contentTop = document.getElementById('chapter-content-top');
+
+      if (chunkSnippet && contentTop) {
+        const snippetNorm = chunkSnippet.toLowerCase().replace(/\s+/g, ' ').trim();
+        const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, td, ul, ol');
+        for (const block of allBlocks) {
+          const blockNorm = block.textContent.toLowerCase().replace(/\s+/g, ' ');
+          if (blockNorm.includes(snippetNorm.slice(0, 80))) { el = block; break; }
+        }
+        if (!el) {
+          const words = snippetNorm.split(' ').filter(w => w.length > 3);
+          if (words.length > 0) {
+            let bestEl = null;
+            let bestScore = 0;
+            for (const block of allBlocks) {
+              const blockText = block.textContent.toLowerCase();
+              let score = 0;
+              for (const w of words.slice(0, 12)) {
+                if (blockText.includes(w)) score++;
+              }
+              if (score > bestScore) { bestScore = score; bestEl = block; }
+            }
+            if (bestEl && bestScore >= 3) { el = bestEl; }
+          }
         }
       }
-      if (!el) {
-        const contentTop = document.getElementById('chapter-content-top');
-        if (contentTop) {
-          const keywords = decoded.split(/\s+/).filter(w => w.length > 2);
-          if (keywords.length > 0) {
-            const bolds = contentTop.querySelectorAll('strong, b');
-            let bestBold = null;
-            let bestBoldScore = 0;
-            for (const b of bolds) {
-              const bText = b.textContent.toLowerCase();
-              const bScore = keywords.reduce((s, kw) => s + (bText.includes(kw) ? 1 : 0), 0);
-              if (bScore > bestBoldScore) { bestBoldScore = bScore; bestBold = b; }
-            }
-            if (bestBold && bestBoldScore >= Math.min(2, keywords.length)) {
-              el = bestBold.closest('p, li, h2, h3, h4, td') || bestBold;
-            }
-            if (!el) {
-              const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, td');
-              let bestEl = null;
-              let bestScore = 0;
-              for (const block of allBlocks) {
-                const text = block.textContent.toLowerCase();
-                const score = keywords.reduce((s, kw) => s + (text.includes(kw) ? 1 : 0), 0);
-                if (score > bestScore) { bestScore = score; bestEl = block; }
-              }
-              if (bestEl && bestScore >= Math.min(2, keywords.length)) {
-                el = bestEl;
-              }
-            }
+
+      if (!el && decoded) {
+        const slugified = decoded.replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+        el = document.getElementById(slugified);
+        if (!el) {
+          const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
+          for (const h of allH) {
+            if (h.id.includes(slugified) || slugified.includes(h.id)) { el = h; break; }
+          }
+        }
+      }
+
+      if (!el && decoded && contentTop) {
+        const keywords = decoded.split(/\s+/).filter(w => w.length > 2);
+        if (keywords.length > 0) {
+          const bolds = contentTop.querySelectorAll('strong, b');
+          let bestBold = null;
+          let bestBoldScore = 0;
+          for (const b of bolds) {
+            const bText = b.textContent.toLowerCase();
+            const bScore = keywords.reduce((s, kw) => s + (bText.includes(kw) ? 1 : 0), 0);
+            if (bScore > bestBoldScore) { bestBoldScore = bScore; bestBold = b; }
+          }
+          if (bestBold && bestBoldScore >= Math.min(2, keywords.length)) {
+            el = bestBold.closest('p, li, h2, h3, h4, td') || bestBold;
           }
           if (!el) {
-            const firstChild = contentTop.querySelector('h1, h2, h3, p');
-            el = firstChild || contentTop;
+            const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, td');
+            let bestEl = null;
+            let bestScore = 0;
+            for (const block of allBlocks) {
+              const text = block.textContent.toLowerCase();
+              const score = keywords.reduce((s, kw) => s + (text.includes(kw) ? 1 : 0), 0);
+              if (score > bestScore) { bestScore = score; bestEl = block; }
+            }
+            if (bestEl && bestScore >= Math.min(2, keywords.length)) {
+              el = bestEl;
+            }
           }
         }
+        if (!el) {
+          const firstChild = contentTop.querySelector('h1, h2, h3, p');
+          el = firstChild || contentTop;
+        }
       }
+
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.add('highlight-active');
@@ -323,6 +353,7 @@ export default function ChapterPage() {
           const next = new URLSearchParams(prev);
           next.delete('topic');
           next.delete('highlight');
+          next.delete('chunk');
           return next;
         }, { replace: true });
       }

@@ -167,7 +167,12 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                       onClick={subjectUrl ? () => {
                         if (chapterUrl) {
                           const topicText = msg.rag_topic_name || chapterLabel || '';
-                          navigate(`${chapterUrl}?topic=${encodeURIComponent(topicText)}`);
+                          const params = new URLSearchParams();
+                          params.set('topic', topicText);
+                          if (msg.rag_chunk_snippet) {
+                            params.set('chunk', msg.rag_chunk_snippet);
+                          }
+                          navigate(`${chapterUrl}?${params.toString()}`);
                         } else {
                           navigate(subjectUrl);
                         }
