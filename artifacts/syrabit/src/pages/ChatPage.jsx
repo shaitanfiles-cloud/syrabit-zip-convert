@@ -250,11 +250,14 @@ export default function ChatPage() {
         const snapshot = fullContent;
         setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: snapshot } : m));
       };
+      let sseBuffer = '';
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
-        const text = decoder.decode(value, { stream: true });
-        for (const line of text.split('\n')) {
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() || '';
+        for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           const raw = line.slice(6);
           if (raw === '[DONE]') break;

@@ -347,6 +347,7 @@ export default function ChapterPage() {
       }
 
       if (el) {
+        document.querySelectorAll('.highlight-active').forEach(e => e.classList.remove('highlight-active'));
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.add('highlight-active');
         setSearchParams((prev) => {

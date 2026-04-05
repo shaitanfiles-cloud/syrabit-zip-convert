@@ -453,17 +453,17 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
         if (d.get("primary_keyword") or d.get("topic") or "").strip()
     ))
 
-    # Build the educational prompt
     topic_block = ""
     if topics:
-        topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topics))
+        topic_names = [t.get("name", str(t)) if isinstance(t, dict) else str(t) for t in topics]
+        topic_block = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(topic_names))
     else:
         topic_block = f"  {description}"
 
     seo_seed_block = ""
     if seo_keywords:
         seo_seed_block = (
-            "\n\n**SEO Keyword Seeds (naturally weave these phrases into headings and body):**\n"
+            "\n\n**SEO Keyword Seeds (weave naturally into headings and body):**\n"
             + "\n".join(f"  - {kw}" for kw in seo_keywords[:15])
         )
 
@@ -471,58 +471,81 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
     class_ctx = class_name or "FYUGP"
     subject_ctx = subject_name or "Degree Course"
     paper_ctx = (paper_type or "").upper()
+    num_topics = len(topics) if topics else 1
+    word_target_min = max(2500, num_topics * 250)
+    word_target_max = max(4000, num_topics * 400)
 
-    # Build a description block from chapter + subject descriptions
     desc_block = ""
     if description:
         desc_block += f"**Chapter Description:** {description}\n"
     if subject_desc:
         desc_block += f"**Subject Description:** {subject_desc}\n"
     if not desc_block:
-        desc_block = "**Description:** No additional description provided.\n"
+        desc_block = "**Description:** (No additional description provided.)\n"
 
-    prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students.
+    prompt = f"""You are an expert academic content writer creating comprehensive study material for {board_ctx} {class_ctx} students in Assam, India.
 
-Generate **exam-focused, topic-wise study notes** for the chapter below.
+Write **complete, exam-ready study notes** for the chapter below. These notes will be the PRIMARY study resource for students — they must be thorough enough that a student can score full marks using ONLY these notes.
 
 **Chapter:** {title}
 **Subject:** {subject_ctx} ({paper_ctx} — {class_ctx})
 {desc_block}
 
-**Syllabus Topics to cover (MANDATORY — every topic MUST get its own section):**
+**Syllabus Topics (MANDATORY — every single topic MUST have its own ## section):**
 {topic_block}{seo_seed_block}
 
 ---
 
-**INSTRUCTIONS:**
-1. Open with a crisp **introduction** (3-4 sentences) — state the chapter's exam relevance and what students will learn.
-2. For EACH topic listed above, write:
-   - A ## Heading matching the topic name exactly
-   - 5-8 sentence thorough explanation using simple, precise academic language — cover the concept fully with definitions, mechanisms, causes, effects, and significance
-   - **Key Points** as 6-8 bullets: definitions in **bold**, significance, relationships to other topics, and facts examiners look for
-   - A relevant real-world example or illustrative case study to ground the concept
-   - Where relevant, add a "Common Mistake" or "Exam Tip" note
-3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
-4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
-5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
-6. Target 1500-2000 words of dense, high-value content. More topics = more words — cover every topic thoroughly with depth.
-7. Write as though every word costs marks — no filler, no repetition, but do not sacrifice completeness for brevity.
+## OUTPUT FORMAT — follow exactly:
+
+### 1. Introduction (4-6 sentences)
+Start with `## Introduction` heading. State what the chapter covers, why it matters for the exam, and what students will master.
+
+### 2. Topic Sections — ONE `## Section` per syllabus topic above
+For EACH topic, write under a `## <Topic Name>` heading (use the EXACT topic name from the list):
+
+a) **Opening definition** (1-2 sentences): Define the concept in bold. Example: "**Ecosystem** is a self-sustaining unit of nature..."
+
+b) **Detailed explanation** (10-15 sentences): Cover the concept comprehensively — definitions, types/classification, characteristics, causes, effects, mechanisms, historical context, significance, and relationships to other topics. Use sub-headings (`###`) to organize if the topic has multiple dimensions. Write in clear academic language a first-year student can understand.
+
+c) **Key Points for Revision** as a `### Key Points` sub-heading with 8-12 bullet points:
+   - Every bullet starts with a **bold keyword or phrase**
+   - Include definitions, dates, names, formulas, distinctions
+   - Focus on facts examiners frequently test
+
+d) A `### Example` sub-heading (3-5 sentences): A concrete real-world example, preferably from India/Assam/Northeast context where relevant.
+
+e) A `### Exam Tip` sub-heading (1-2 sentences): Common mistakes students make OR how this topic typically appears in exams (short answer, long answer, MCQ).
+
+IMPORTANT: Key Points, Example, and Exam Tip MUST be ### (H3) sub-headings under the topic's ## heading — NOT ## headings themselves.
+
+### 3. Summary
+End with `## Summary` — list 10-15 most exam-critical takeaways as numbered points.
+
+---
+
+## CRITICAL RULES:
+- Target **{word_target_min}-{word_target_max} words**. Each topic section should be 200-350 words minimum.
+- Use markdown: `##` for topics, `###` for sub-sections, `**bold**` for key terms, `-` for bullets.
+- NO disclaimers, NO preamble, NO "Here are the notes" intro. Start directly with `## Introduction`.
+- Every **bold term** in the text must be a genuinely important academic concept worth remembering.
+- Write with exam-scoring density — every sentence should teach something testable.
+- If a topic involves people, dates, places, or events — name them specifically. No vague references.
+- Relate topics to each other where natural (cross-references strengthen understanding).
 """
 
     try:
         generated = await call_llm_api_content(
             [{"role": "user", "content": prompt}],
-            max_tokens=6000
+            max_tokens=8000
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI generation failed: {e}")
 
-    if not generated or len(generated.strip()) < 50:
+    if not generated or len(generated.strip()) < 100:
         raise HTTPException(status_code=502, detail="AI returned empty or too-short content")
 
     notes_text = _normalize_headings(generated).strip()
-    notes_text = await _polish_notes_with_sarvam(notes_text, title, subject_name or "")
-    notes_text = _normalize_headings(notes_text).strip()
 
     await db.chapters.update_one(
         {"id": chapter_id},
@@ -546,6 +569,56 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
         "content": notes_text,
         "word_count": len(notes_text.split()),
         "message": "Notes generated successfully",
+    }
+
+
+@router.post("/admin/content/bulk-regenerate-notes")
+async def admin_bulk_regenerate_all_notes(admin: dict = Depends(get_admin_user)):
+    """Regenerate notes for ALL chapters across ALL subjects. Sequential with progress."""
+    all_subjects = await db.subjects.find(
+        {"status": {"$ne": "archived"}},
+        {"_id": 0, "id": 1, "name": 1}
+    ).to_list(200)
+
+    all_chapters = []
+    for s in all_subjects:
+        chs = await db.chapters.find(
+            {"subject_id": s["id"]},
+            {"_id": 0, "id": 1, "title": 1, "topics": 1, "description": 1, "subject_id": 1}
+        ).to_list(50)
+        for ch in chs:
+            if ch.get("topics") or ch.get("description"):
+                all_chapters.append(ch)
+
+    results = []
+    ok = 0
+    fail = 0
+    total = len(all_chapters)
+    logger.info(f"[BULK-REGEN] Starting bulk regeneration for {total} chapters")
+
+    for idx, ch in enumerate(all_chapters):
+        ch_id = ch["id"]
+        ch_title = ch.get("title", "")
+        logger.info(f"[BULK-REGEN] [{idx+1}/{total}] Generating: {ch_title}")
+        try:
+            result = await admin_generate_chapter_notes(ch_id, admin)
+            wc = result.get("word_count", 0)
+            results.append({"chapter_id": ch_id, "title": ch_title, "word_count": wc, "status": "ok"})
+            ok += 1
+            logger.info(f"[BULK-REGEN] [{idx+1}/{total}] Done: {ch_title} ({wc} words)")
+        except Exception as e:
+            results.append({"chapter_id": ch_id, "title": ch_title, "status": "error", "error": str(e)[:200]})
+            fail += 1
+            logger.error(f"[BULK-REGEN] [{idx+1}/{total}] Failed: {ch_title} — {e}")
+        if idx < total - 1:
+            await asyncio.sleep(2)
+
+    _invalidate_content_cache("chapters")
+    return {
+        "total": total,
+        "succeeded": ok,
+        "failed": fail,
+        "results": results,
     }
 
 
