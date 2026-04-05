@@ -310,11 +310,14 @@ _INTENT_FORMAT_RULES: dict[str, str] = {
     ),
     "notes": (
         "FORMAT RULES (notes):\n"
-        "- Show structured study notes for the current lesson/topic.\n"
-        "- Use headings, bolded definitions, bullet points, formula blocks.\n"
-        "- After presenting notes for the current lesson, list remaining chapters:\n"
-        "  'I've covered Lesson 1. Remaining chapters: [list]. Reply with a chapter name to continue.'\n"
-        "- Adapt depth to question weight (2-mark: 3-5 lines, 5-mark: paragraph + bullets, 10-mark: full structured).\n"
+        "- Use ## headings to break the answer into clear sections.\n"
+        "- **Bold** every key term, definition, or concept name on first mention.\n"
+        "- Use bullet points or numbered lists for properties, features, steps, and enumerations.\n"
+        "- Include at least one concrete example or analogy to aid understanding.\n"
+        "- For conceptual questions: aim for 200-400 words with 2-3 sections.\n"
+        "- For 'explain in detail' or 'write notes': aim for 400-600 words with 3-5 sections.\n"
+        "- Adapt depth to question weight (2-mark: 3-5 lines, 5-mark: paragraph + bullets, 10-mark: full structured with headings).\n"
+        "- End with a brief exam tip or follow-up suggestion when relevant.\n"
     ),
     "important_questions": (
         "FORMAT RULES (important_questions):\n"
@@ -384,16 +387,17 @@ STRICT RULES:
    - Do NOT start your answer with curriculum labels like "{board_curriculum}" or subject names.
    - The SOURCE line at the end (added by the system) handles attribution — you do not need to.
 6. ANSWER LENGTH — match depth to the question:
-   - Simple questions ("what is X?", "define Y"): 3-5 sentences with a clear definition.
-   - Conceptual questions ("explain", "describe", "how does X work?"): 150-300 words with
-     key points, a brief example, and an offer to go deeper.
-   - Broad topics or multi-part questions: 200-400 words covering each part clearly.
-   - Only give very long answers (500+ words) when the student explicitly asks for it
-     (e.g. "explain in detail", "give a complete answer", "10-mark answer", "write notes").
+   - Simple questions ("what is X?", "define Y"): 5-8 sentences with a clear definition
+     and a brief example.
+   - Conceptual questions ("explain", "describe", "how does X work?"): 200-400 words with
+     ## headings, key points, a concrete example, and an offer to go deeper.
+   - Broad topics or multi-part questions: 300-500 words with ## headings covering each part.
+   - "explain in detail", "give a complete answer", "10-mark answer", "write notes":
+     500-700 words with ## headings, subpoints, examples, and an exam tip.
    - Match answer length to question weight when marks are mentioned:
-     - 1-2 mark: 2-4 lines
-     - 5-mark: 1 paragraph + key bullet points
-     - 10-mark: full structured answer with headings
+     - 1-2 mark: 3-5 lines
+     - 5-mark: 1 paragraph + key bullet points (~150 words)
+     - 10-mark: full structured answer with ## headings (~400 words)
    - Never dump the entire chapter or syllabus in one response.
    - Always include at least one example or analogy for conceptual topics — this helps students
      understand and remember. A dry definition without illustration is not helpful.

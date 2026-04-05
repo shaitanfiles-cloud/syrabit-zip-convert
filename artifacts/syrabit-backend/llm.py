@@ -180,12 +180,12 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
 _LLM_PROVIDERS_CHAT: list[dict] = []
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
-if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "qwen/qwen-2.5-72b-instruct"})
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.3-70b-versatile"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _OPENROUTER_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "google/gemma-3-27b-it"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _FIREWORKS_KEY:
@@ -227,12 +227,11 @@ _MODEL_ALIAS_MAP = {
 #
 _SLM_SLOT_CANDIDATES = [
     ("sarvam:2",    "sarvam-m",                                          4, 0),
-    ("openrouter",  "qwen/qwen-2.5-72b-instruct",                       4, 1),
-    ("openrouter",  "google/gemma-3-27b-it",                             4, 2),
-    ("groq",        "llama-3.3-70b-versatile",                           4, 3),
-    ("gemini",      "gemini-2.5-flash",                                  6, 4),
-    ("cerebras",    "llama3.1-8b",                                       4, 5),
-    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 6),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 1),
+    ("gemini",      "gemini-2.5-flash",                                  6, 2),
+    ("openrouter",  "google/gemma-3-27b-it",                             4, 3),
+    ("cerebras",    "llama3.1-8b",                                       4, 4),
+    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 5),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
@@ -897,38 +896,45 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
     async def _emit_tokens(token_source):
         nonlocal in_think, buf
+        import re as _re
         _CLOSE_KEEP = len('</think>') - 1   # 7
-        think_done  = False  # once True: no more think-blocks possible → fast path
-        batch       = ""     # accumulator for batched SSE content
+        think_done  = False
+        batch       = ""
+        _visible_text = ""
+        _think_buf  = []
 
         async for token in token_source:
-            # ── Fast path: think block already finished, just batch & yield ──
             if think_done:
-                batch += token
-                if len(batch) >= _SSE_BATCH:
-                    yield f"data: {json.dumps({'content': batch})}\n\n"
-                    batch = ""
+                cleaned = _re.sub(r'<think>[\s\S]*?</think>', '', token)
+                if cleaned:
+                    batch += cleaned
+                    if len(batch) >= _SSE_BATCH:
+                        _visible_text += batch
+                        yield f"data: {json.dumps({'content': batch})}\n\n"
+                        batch = ""
                 continue
 
-            # ── Slow path: still scanning for <think>...</think> ─────────────
             buf += token
             while buf:
                 if in_think:
                     close_idx = buf.find('</think>')
                     if close_idx != -1:
+                        _think_buf.append(buf[:close_idx])
                         buf = buf[close_idx + 8:]
                         in_think   = False
-                        think_done = True   # no more think blocks after this
-                        # flush any content that immediately follows </think>
+                        think_done = True
                         if buf:
                             batch += buf
                             buf = ""
                             if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
                         break
                     else:
-                        buf = buf[-_CLOSE_KEEP:] if len(buf) > _CLOSE_KEEP else buf
+                        if len(buf) > _CLOSE_KEEP:
+                            _think_buf.append(buf[:-_CLOSE_KEEP])
+                            buf = buf[-_CLOSE_KEEP:]
                         break
                 else:
                     open_idx = buf.find('<think>')
@@ -937,6 +943,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                         if before:
                             batch += before
                             if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
                         buf      = buf[open_idx + 7:]
@@ -949,6 +956,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                             if before:
                                 batch += before
                                 if len(batch) >= _SSE_BATCH:
+                                    _visible_text += batch
                                     yield f"data: {json.dumps({'content': batch})}\n\n"
                                     batch = ""
                             buf = candidate
@@ -957,21 +965,34 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                             batch += buf
                             buf    = ""
                             if len(batch) >= _SSE_BATCH:
+                                _visible_text += batch
                                 yield f"data: {json.dumps({'content': batch})}\n\n"
                                 batch = ""
                     else:
                         batch += buf
                         buf    = ""
                         if len(batch) >= _SSE_BATCH:
+                            _visible_text += batch
                             yield f"data: {json.dumps({'content': batch})}\n\n"
                             batch = ""
                         break
 
-        # Flush any remaining content
         if batch and not in_think:
+            _visible_text += batch
             yield f"data: {json.dumps({'content': batch})}\n\n"
         if buf and not in_think:
+            _visible_text += buf
             yield f"data: {json.dumps({'content': buf})}\n\n"
+
+        if not _visible_text.strip() and (in_think or think_done):
+            fallback_text = "".join(_think_buf)
+            if in_think and buf:
+                fallback_text += buf
+            fallback_text = _re.sub(r'</?think\s*/?>', '', fallback_text).strip()
+            fallback_text = _re.sub(r'</?\w*$', '', fallback_text).strip()
+            if fallback_text and len(fallback_text) > 5:
+                logger.info(f"Think-block fallback: emitting {len(fallback_text)} chars of think content as response")
+                yield f"data: {json.dumps({'content': fallback_text})}\n\n"
 
     async def _stream_from_provider(p_name: str, p_key: str, p_model: str):
         """Yield raw tokens from a provider. Raises on failure."""

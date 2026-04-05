@@ -512,40 +512,8 @@ async def run_pipeline(
         logger.info(f"[PIPELINE] Bypassed (intent={regex_intent}, query_len={len(query)})")
         return None
 
-    has_rag_content = bool(
-        rag_ctx.get("chunks")
-        or rag_ctx.get("vector_hits")
-        or rag_ctx.get("document_text")
-        or rag_ctx.get("chapters")
-    )
-    if not has_rag_content:
-        logger.info("[PIPELINE] No RAG content available — skipping pipeline")
-        return None
-
-    if topic_metadata is None:
-        topic_metadata = await stage1_resolve_topic(query, context)
-
-    if not topic_metadata or not topic_metadata.get("intent"):
-        logger.warning("[PIPELINE] Stage 1 failed — falling back to single-LLM")
-        return None
-
-    if topic_metadata.get("intent") == "casual":
-        logger.info("[PIPELINE] Stage 1 classified as casual — bypassing pipeline")
-        return None
-
-    factual_draft = await stage2_synthesize(query, rag_ctx, topic_metadata)
-    if not factual_draft:
-        logger.warning("[PIPELINE] Stage 2 failed — falling back to single-LLM")
-        return None
-
-    polished = await stage3_polish(query, factual_draft, context, user_info, max_tokens)
-    if not polished:
-        logger.warning("[PIPELINE] Stage 3 failed — falling back to single-LLM")
-        return None
-
-    total_dur = (time.perf_counter() - pipeline_t0) * 1000
-    logger.info(f"[PIPELINE][SUMMARY] Total pipeline: {total_dur:.0f}ms | S1→S2→S3 complete")
-    return polished
+    logger.info("[PIPELINE] Stage 2+3 disabled — using single-LLM with Stage 1 metadata only")
+    return None
 
 
 async def run_pipeline_stream(
@@ -564,33 +532,5 @@ async def run_pipeline_stream(
         logger.info(f"[PIPELINE] Bypassed for streaming (intent={regex_intent}, query_len={len(query)})")
         return None
 
-    has_rag_content = bool(
-        rag_ctx.get("chunks")
-        or rag_ctx.get("vector_hits")
-        or rag_ctx.get("document_text")
-        or rag_ctx.get("chapters")
-    )
-    if not has_rag_content:
-        logger.info("[PIPELINE] No RAG content available — skipping pipeline (stream)")
-        return None
-
-    if topic_metadata is None:
-        topic_metadata = await stage1_resolve_topic(query, context)
-
-    if not topic_metadata or not topic_metadata.get("intent"):
-        logger.warning("[PIPELINE] Stage 1 failed — falling back to single-LLM (stream)")
-        return None
-
-    if topic_metadata.get("intent") == "casual":
-        logger.info("[PIPELINE] Stage 1 classified as casual — bypassing pipeline (stream)")
-        return None
-
-    factual_draft = await stage2_synthesize(query, rag_ctx, topic_metadata)
-    if not factual_draft:
-        logger.warning("[PIPELINE] Stage 2 failed — falling back to single-LLM (stream)")
-        return None
-
-    s1s2_dur = (time.perf_counter() - pipeline_t0) * 1000
-    logger.info(f"[PIPELINE][STREAM] S1+S2 done in {s1s2_dur:.0f}ms, starting S3 stream...")
-
-    return stage3_polish_stream(query, factual_draft, context, user_info, max_tokens, intent)
+    logger.info("[PIPELINE] Stage 2+3 disabled — using single-LLM with Stage 1 metadata only (stream)")
+    return None
