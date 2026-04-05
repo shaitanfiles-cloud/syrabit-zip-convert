@@ -133,13 +133,13 @@ Write study notes using EXACTLY this structure — all sections required:
 [2-3 sentences ONLY. Direct, keyword-rich definition suitable for Google featured snippet. Start with "{topic} is..." or "{topic} refers to...". End with its relevance to {board} {class_name} {subject}.]
 
 ## {topic} — Detailed Notes for {board} {class_name}
-[1500-2500 words. Cover ALL core concepts, sub-topics, and key ideas that {topic} contains according to the {board} syllabus for "{chapter}". Go deep into each concept — explain why it matters, how it works, and how it connects to other topics in this chapter. Break into multiple ### sub-headings for each major concept. Use natural student-friendly language. Include Assam/Northeast India examples where relevant. Reference related syllabus topics by NAME. Be thorough and comprehensive — this is a long-form study resource.]
+[1500-2500 words. Cover ALL core concepts, sub-topics, and key ideas that {topic} contains according to the {board} syllabus for "{chapter}". Go deep into each concept — explain why it matters, how it works, and how it connects to other topics in this chapter. Break into multiple ### sub-headings for each major concept. Use natural student-friendly language. Include relevant real-world examples. Reference related syllabus topics by NAME. Be thorough and comprehensive — this is a long-form study resource.]
 
 ## Key Points for Revision
 [8-10 bullet points covering the most important facts, definitions, and concepts from {topic}. Each should be a complete, exam-ready statement. Add one bullet like "Don't confuse [X] with [Y] — examiners love testing this."]
 
 ## Important Concepts & Applications
-[For each major concept in {topic}, explain it with a real-world application or case study. Use Assam/India examples where they naturally fit. Format as 3-4 sub-sections with ### headings. This should demonstrate understanding, not math-style problem solving.]
+[For each major concept in {topic}, explain it with a real-world application or case study. Use relevant real-world examples. Format as 3-4 sub-sections with ### headings. This should demonstrate understanding, not math-style problem solving.]
 
 ## Exam-Style Questions with Answers
 [6 questions with complete model answers covering {topic}:
@@ -158,7 +158,7 @@ A3: [Answer with exam relevance and mark weightage]
 Q4: How does {topic} connect to other topics in {chapter}?
 A4: [Show connections by naming related topics]
 
-Language: simple, clear, and exam-focused for {class_name} students in Assam. Sound like a helpful teacher, not a textbook. Every section must contain substantive academic content specific to {topic}.""",
+Language: simple, clear, and exam-focused for {class_name} students. Sound like a helpful teacher, not a textbook. Every section must contain substantive academic content specific to {topic}.""",
 
         """You are a {subject} expert specialising in {board} {class_name} exam preparation.
 
@@ -179,7 +179,7 @@ Write comprehensive study notes using EXACTLY this structure:
 [2-3 sentences ONLY. Start with "{topic}" directly. State what it covers, which chapter it belongs to, and why it matters for {board} {class_name} exams. Featured snippet paragraph.]
 
 ## Why {topic} Matters
-[50-70 words: connect {topic} to real-world relevance using Assam/Northeast India context if applicable, then link to {board} importance. Add: "This is one of the most scoring topics in {subject}."]
+[50-70 words: connect {topic} to real-world relevance, then link to {board} importance. Add: "This is one of the most scoring topics in {subject}."]
 
 ## Core Concept
 [Formal definition citing {board} curriculum. Then simplified: "In simple terms, {topic} means..." Mention what prerequisite knowledge is needed from earlier topics.]
@@ -187,7 +187,7 @@ Write comprehensive study notes using EXACTLY this structure:
 ## Detailed Breakdown
 [1500-2500 words. Break {topic} into 5-8 sub-concepts based on what the topic actually covers in the syllabus. Use numbered ### sub-headings. For each sub-concept:
 - Explain the concept thoroughly (what, why, how) with 5-8 sentences minimum
-- Give real-world applications or Assam-relevant examples
+- Give real-world applications or relevant examples
 - Add informal touches: "You can remember this as...", "A common exam mistake here is..."
 - Include diagrams described in text, comparisons, and detailed analysis
 Cross-reference other units by name where relevant. Be comprehensive — this is a long-form study resource.]
@@ -212,7 +212,7 @@ A3: [Precise comparison]
 Q4: What are common mistakes students make with {topic}?
 A4: [2-3 common errors and how to avoid them]
 
-Write for {class_name} students in Assam. Every section must contain genuine academic content specific to what {topic} actually covers — no filler, no generic examples.""",
+Write for {class_name} students. Every section must contain genuine academic content specific to what {topic} actually covers — no filler, no generic examples.""",
 
         """You are a senior {board} examiner and {subject} faculty.
 
@@ -247,7 +247,7 @@ Create study notes from an examiner's perspective using EXACTLY this structure:
 [1500-2500 words. Cover every important concept within {topic} thoroughly. Use cause-and-effect or thematic flow — NOT bullet lists. Break into ### sub-headings. Include:
 - Deep explanations of each sub-concept within {topic} (5-8 sentences per concept)
 - Cross-references to other chapters BY NAME
-- Real-world applications or case studies relevant to Assam/India
+- Real-world applications or case studies
 - Detailed comparisons, classifications, and analytical breakdowns
 - "Many students confuse this with... — here's how to tell them apart."
 - "A helpful way to remember this is..."
@@ -292,7 +292,7 @@ Write a definition article using EXACTLY this structure:
 [4-6 key characteristics or properties as a bullet list]
 
 ## Real-World Examples
-[3-4 relatable examples — include at least one from Assam/Northeast India context if naturally applicable to {topic}]
+[3-4 relatable real-world examples applicable to {topic}]
 
 ## Related Concepts
 [3-4 related topics from the same chapter "{chapter}" or nearby chapters in {board} {class_name} {subject} syllabus, with brief explanation of each connection]
@@ -300,7 +300,7 @@ Write a definition article using EXACTLY this structure:
 ## Exam Questions on This Definition
 [3 commonly asked questions in {board} exams with concise model answers matching {board} mark allocation pattern]
 
-Keep language simple for {class_name} students in Assam.""",
+Keep language simple for {class_name} students.""",
 
         """You are a {subject} lexicographer writing for {board} {class_name} students.
 
@@ -316,7 +316,7 @@ Create a thorough definition guide. Use EXACTLY this structure:
 [Academic definition as it would appear in the {board}-prescribed {subject} textbook for {class_name}. 2-3 sentences]
 
 ## What It Really Means
-[Explain like you're talking to a friend — use an analogy or everyday example from Assam/India context to make it click. 60-100 words. Mention its role within chapter "{chapter}"]
+[Explain like you're talking to a friend — use an analogy or everyday example to make it click. 60-100 words. Mention its role within chapter "{chapter}"]
 
 ## Key Features
 [5-6 distinguishing characteristics, each as "Feature: Explanation" pairs]
@@ -325,7 +325,7 @@ Create a thorough definition guide. Use EXACTLY this structure:
 [Show how {topic} relates to 3-4 other concepts in chapter "{chapter}" and the broader {board} {class_name} {subject} syllabus. Use a brief sentence per connection]
 
 ## See It in Action
-[2-3 concrete examples or scenarios where {topic} applies — at least one from Assam/Northeast India context if relevant]
+[2-3 concrete examples or scenarios where {topic} applies]
 
 ## Exam-Ready Answers
 [Model answers for 3 likely {board} exam questions:
@@ -333,7 +333,7 @@ Create a thorough definition guide. Use EXACTLY this structure:
 - 2-mark: Explain {topic} with an example. → [answer]
 - 5-mark: Discuss {topic} in detail with reference to {chapter}. → [answer]]
 
-Language: clear and exam-focused for {class_name} students in Assam.""",
+Language: clear and exam-focused for {class_name} students.""",
     ],
 
     "important-questions": [
@@ -354,7 +354,7 @@ Create a question bank using EXACTLY this structure:
 [5 questions with 2-3 sentence answers — test understanding. Include questions that connect {topic} to other concepts in "{chapter}"]
 
 ## 3-Mark Questions
-[4 questions with structured answers — test application. At least one should reference real-world context relevant to Assam students]
+[4 questions with structured answers — test application with real-world context]
 
 ## 5-Mark Questions (Long Answer)
 [3 questions with detailed, exam-ready answers — test analysis. Include marking scheme breakdown showing how {board} examiners allocate marks]
@@ -434,7 +434,7 @@ Create 15 MCQs that test different cognitive levels for {topic} from chapter "{c
 [5 MCQs testing definitions, facts, and direct textbook knowledge from the {board}-prescribed {subject} textbook. Each: question, 4 options (A-D), correct answer, 1-sentence explanation]
 
 ## Understanding & Application (Q6-Q10)
-[5 MCQs requiring students to apply {topic} concepts or interpret scenarios. Include at least 1 assertion-reason question. Use Assam/India examples where naturally relevant]
+[5 MCQs requiring students to apply {topic} concepts or interpret scenarios. Include at least 1 assertion-reason question. Use relevant real-world examples]
 
 ## Analysis & Evaluation (Q11-Q15)
 [5 MCQs involving multi-step reasoning, comparison, or error identification. Include 1 "which of the following is INCORRECT" type. Test connections to related topics in "{chapter}"]
@@ -461,7 +461,7 @@ Create a solved examples guide using EXACTLY this structure:
 ## Basic Examples
 Example 1: [Problem statement relevant to {board} syllabus] → [Complete step-by-step solution]
 Example 2: [Problem statement] → [Complete step-by-step solution]
-Example 3: [Problem using Assam/India context if naturally applicable] → [Complete step-by-step solution]
+Example 3: [Problem using relevant real-world context] → [Complete step-by-step solution]
 
 ## Intermediate Examples
 Example 4: [Problem connecting {topic} to related concepts in "{chapter}"] → [Complete step-by-step solution]
@@ -490,7 +490,7 @@ Create a solved examples collection for {topic} from chapter "{chapter}". Use EX
 [3 examples. For each: state the problem, identify the approach from the {board} textbook, then solve step by step. Highlight the formula or rule used]
 
 ## Board-Exam Standard Examples
-[3 examples at {board} exam difficulty. For each: problem statement, "Approach" paragraph explaining strategy, then detailed solution with all intermediate steps shown. Use Assam/India context where naturally relevant]
+[3 examples at {board} exam difficulty. For each: problem statement, "Approach" paragraph explaining strategy, then detailed solution with all intermediate steps shown]
 
 ## Challenge Problems
 [2 examples slightly above exam level — to build confidence. Full solutions provided. Connect to other concepts in chapter "{chapter}"]
@@ -512,7 +512,7 @@ TITLE_TEMPLATES = {
     "notes": [
         "{topic} Notes for {board} {subject} ({grade}) – Complete Guide",
         "{topic} Notes {board} {grade} {subject} | Summary & Key Points",
-        "{topic} {subject} Notes – {board} {grade} Assam Universities",
+        "{topic} {subject} Notes – {board} {grade}",
         "{topic} Study Notes for {board} {grade} {subject} Exam Prep",
     ],
     "definition": [
@@ -524,7 +524,7 @@ TITLE_TEMPLATES = {
         "{topic} Important Questions – {board} {grade} {subject} Exam",
         "{topic} Questions & Answers for {board} {grade} | 1 to 5 Marks",
         "{board} {grade} {topic} Important Questions with Answers | {subject}",
-        "{topic} Question Bank – {subject} {board} {grade} Assam",
+        "{topic} Question Bank – {subject} {board} {grade}",
     ],
     "mcqs": [
         "{topic} MCQs with Answers – {board} {grade} {subject}",
@@ -918,7 +918,7 @@ async def extract_topics_from_chapters(
                     {
                         "role": "system",
                         "content": (
-                            "You are an expert SEO strategist for educational content in Assam, India. "
+                            "You are an expert SEO strategist for educational content. "
                             "Given a chapter title and its content, extract GRANULAR TOPIC-LEVEL study pages "
                             "that students actively search for on Google. "
                             "Each topic should be a SPECIFIC concept, definition, theory, law, or process "
@@ -1073,24 +1073,20 @@ def _smart_board_display(bn: str) -> str:
 
 _BOARD_EXAM_CONTEXT = {
     "AHSEC": (
-        "AHSEC (Assam Higher Secondary Education Council) conducts the HS Final Exam for Class 11-12 in Assam. "
-        "The exam follows NCERT/SCERT Assam syllabus. Question paper pattern: Section A (1-mark MCQs/very short), "
+        "AHSEC conducts the HS Final Exam for Class 11-12. "
+        "The exam follows NCERT/SCERT syllabus. Question paper pattern: Section A (1-mark MCQs/very short), "
         "Section B (2-mark short answers), Section C (3-mark answers), Section D (5-mark long answers/essays). "
-        "Total marks typically 100 (70 theory + 30 internal). Medium of instruction: English/Assamese/Bengali/Bodo/Hindi. "
-        "Students come from towns like Guwahati, Jorhat, Dibrugarh, Tezpur, Silchar, and rural Assam."
+        "Total marks typically 100 (70 theory + 30 internal)."
     ),
     "SEBA": (
-        "SEBA (Board of Secondary Education, Assam) conducts the HSLC exam for Class 10 in Assam. "
-        "Syllabus follows SCERT Assam / NCERT guidelines. Paper pattern: very short (1 mark), short (2-3 marks), "
-        "long answer (4-5 marks), and sometimes project/practical components. Total marks typically 100 per subject. "
-        "Medium: Assamese/English/Bengali/Bodo/Hindi. Many students are first-generation exam takers from rural Assam."
+        "SEBA conducts the HSLC exam for Class 10. "
+        "Syllabus follows SCERT / NCERT guidelines. Paper pattern: very short (1 mark), short (2-3 marks), "
+        "long answer (4-5 marks), and sometimes project/practical components. Total marks typically 100 per subject."
     ),
     "DEGREE": (
-        "NEP FYUGP (Four Year Undergraduate Programme) under National Education Policy 2020, implemented in Assam universities "
-        "(Gauhati University, Dibrugarh University, Cotton University, Tezpur University, Bodoland University, etc.). "
+        "NEP FYUGP (Four Year Undergraduate Programme) under National Education Policy 2020. "
         "Semester-based assessment with internal (30%) + end-semester (70%). Course types: Major, Minor, MDC (Multi-Disciplinary), "
-        "VAC (Value Added), SEC (Skill Enhancement), AEC (Ability Enhancement). "
-        "Students study for degree from colleges across Assam under RUSA and UGC frameworks."
+        "VAC (Value Added), SEC (Skill Enhancement), AEC (Ability Enhancement)."
     ),
 }
 
@@ -1147,15 +1143,6 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         f"IMPORTANT: Write ONLY about \"{topic['title']}\" — do NOT cover the entire chapter.\n\n"
         f"--- BOARD EXAM PATTERN ---\n"
         f"{board_exam_context}\n\n"
-        f"--- REGIONAL CONTEXT ---\n"
-        f"Students are from Assam, Northeast India. When giving examples, prefer contexts "
-        f"relevant to Assam (tea gardens, Brahmaputra river, Kaziranga, Bihu festival, silk/muga, "
-        f"flood management, biodiversity, local industries) where naturally applicable to the topic. "
-        f"Do not force regional examples if they don't fit the subject matter.\n"
-        f"Top colleges whose students use this platform: Cotton University (Guwahati), "
-        f"Darrang College (Tezpur), Bhattadev University (Pathsala), B. Borooah College (Guwahati), "
-        f"Gauhati Commerce College, J.B. University (Jorhat), Handique Girls' College (Guwahati), "
-        f"Gurucharan College (Silchar). Mention these naturally when discussing study strategies or exam prep.\n"
         f"--- END CONTEXT ---\n"
     )
 
@@ -1177,7 +1164,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
 
     _QUALITY_SYSTEM = (
         f"You are an expert {board_display} teacher specialising in {subject_name} "
-        f"for {prompt_class_label} students in Assam, India. "
+        f"for {prompt_class_label} students. "
         f"Chapter: \"{chapter_title}\" | Topic: \"{topic['title']}\" | Position: {syllabus_position or 'N/A'}. "
         f"Create educational content that is comprehensive, exam-focused, syllabus-aligned, "
         f"and easy to understand. This page covers ONE SPECIFIC TOPIC: \"{topic['title']}\" "
@@ -1202,8 +1189,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         f"'as outlined in the {subject_name} textbook', 'per the university syllabus'\n"
         f"11. MANDATORY: Include exam marking references — '2-mark question', '5-mark answer', "
         f"'long answer (10 marks)', 'short answer type' to match board exam patterns\n"
-        f"12. Include Assam-specific context where relevant — local examples, regional institutions, "
-        f"Assamese context that connects the academic content to students' lived experience\n"
+        f"12. Include relevant real-world examples and practical applications that connect the academic content to students' experience\n"
     )
 
     messages = [
@@ -1273,7 +1259,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
                 f"- Target at least 3000-5000 words of dense, high-value content — be thorough and comprehensive\n"
                 f"- Add more sub-headings (###) for better structure — aim for 12+ headings\n"
                 f"- Ensure every section has at least 5-8 sentences of thorough explanation\n"
-                f"- Add Assam-specific context or {board_display} exam patterns where relevant\n"
+                f"- Add {board_display} exam patterns where relevant\n"
                 f"- Add more exam-style questions with detailed model answers\n"
                 f"\nRewrite the COMPLETE content with deeper, more detailed explanations. Return ONLY the improved content."
             )
@@ -1352,7 +1338,7 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         meta_desc = (
             f"{topic['title']} {type_label_map.get(page_type, 'notes')} "
             f"for {board_display} {grade_str} {subject_name}. "
-            f"Exam-focused study material for Assam university students."
+            f"Exam-focused study material with detailed explanations."
         )
 
     quality_context = {
@@ -2314,7 +2300,7 @@ footer{{color:#6b7280;font-size:.85rem;margin-top:2rem;padding-top:1rem;border-t
 <dt>Subject</dt><dd>{subject} — {board} {cls}</dd>
 <dt>Chapter</dt><dd>{chapter}</dd>
 <dt>Topic</dt><dd>{topic}</dd>
-<dt>Editorial Process</dt><dd>Content is prepared by subject-matter contributors, cross-referenced with the official {html_mod.escape(board)} syllabus, and editorially reviewed for factual accuracy, exam relevance, and completeness. Each page follows a structured academic format: formal definitions, detailed explanations, solved examples with Assam-specific context, exam tips, and practice questions with model answers.</dd>
+<dt>Editorial Process</dt><dd>Content is prepared by subject-matter contributors, cross-referenced with the official {html_mod.escape(board)} syllabus, and editorially reviewed for factual accuracy, exam relevance, and completeness. Each page follows a structured academic format: formal definitions, detailed explanations, solved examples, exam tips, and practice questions with model answers.</dd>
 <dt>Last Updated</dt><dd>{html_mod.escape(updated[:10] if updated else '')}</dd>
 <dt>Publisher</dt><dd>Syrabit.ai — Academic content platform for Assam students</dd>
 </dl>
