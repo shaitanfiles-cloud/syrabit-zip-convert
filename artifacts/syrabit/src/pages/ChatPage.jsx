@@ -231,25 +231,14 @@ export default function ChatPage() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullContent = '';
-      let newConvId = conversationId;
-      let ragSource = 'none';
-      let ragChunks = 0;
-      let ragSubjectId = null;
-      let ragSubjectName = null;
-      let ragSubjectIcon = null;
-      let ragSubjectGradient = null;
-      let ragChapterName = null;
-      let ragChapterSlug = null;
-      let ragBoardName = null;
-      let ragClassName = null;
-      let ragTopicName = null;
-      let ragChunkSnippet = null;
-      let ragStreamName = null;
-      let ragBoardSlug = null;
-      let ragClassSlug = null;
-      let ragSubjectSlug = null;
-      let libSources = [];
-      let hasError = false;
+      const meta = {
+        convId: conversationId, ragSource: 'none', ragChunks: 0,
+        ragSubjectId: null, ragSubjectName: null, ragSubjectIcon: null,
+        ragSubjectGradient: null, ragChapterName: null, ragChapterSlug: null,
+        ragBoardName: null, ragClassName: null, ragTopicName: null,
+        ragChunkSnippet: null, ragStreamName: null, ragBoardSlug: null,
+        ragClassSlug: null, ragSubjectSlug: null, libSources: [], hasError: false,
+      };
 
       let pendingChunk = '';
       let rafId = null;
@@ -280,48 +269,48 @@ export default function ChatPage() {
           if (raw === '[DONE]') break;
           try {
             const parsed = JSON.parse(raw);
-            if (parsed.conversation_id) newConvId = parsed.conversation_id;
-            if (parsed.rag_source) ragSource = parsed.rag_source;
-            if (parsed.rag_chunks !== undefined) ragChunks = parsed.rag_chunks;
-            if (parsed.rag_subject_id) ragSubjectId = parsed.rag_subject_id;
-            if (parsed.rag_subject_name) ragSubjectName = parsed.rag_subject_name;
-            if (parsed.rag_subject_icon) ragSubjectIcon = parsed.rag_subject_icon;
-            if (parsed.rag_subject_gradient) ragSubjectGradient = parsed.rag_subject_gradient;
-            if (parsed.rag_chapter_name) ragChapterName = parsed.rag_chapter_name;
-            if (parsed.rag_chapter_slug) ragChapterSlug = parsed.rag_chapter_slug;
-            if (parsed.ctx_board_name) ragBoardName = parsed.ctx_board_name;
-            if (parsed.ctx_class_name) ragClassName = parsed.ctx_class_name;
-            if (parsed.ctx_stream_name) ragStreamName = parsed.ctx_stream_name;
-            if (parsed.ctx_board_slug) ragBoardSlug = parsed.ctx_board_slug;
-            if (parsed.ctx_class_slug) ragClassSlug = parsed.ctx_class_slug;
-            if (parsed.ctx_subject_slug) ragSubjectSlug = parsed.ctx_subject_slug;
-            if (parsed.rag_topic_name) ragTopicName = parsed.rag_topic_name;
-            if (parsed.rag_chunk_snippet) ragChunkSnippet = parsed.rag_chunk_snippet;
-            if (parsed.content_card_name && !ragTopicName) ragTopicName = parsed.content_card_name;
-            if (parsed.content_card_board && !ragBoardName) ragBoardName = parsed.content_card_board;
-            if (parsed.content_card_class && !ragClassName) ragClassName = parsed.content_card_class;
-            if (parsed.content_card_subject && !ragSubjectName) ragSubjectName = parsed.content_card_subject;
+            if (parsed.conversation_id) meta.convId = parsed.conversation_id;
+            if (parsed.rag_source) meta.ragSource = parsed.rag_source;
+            if (parsed.rag_chunks !== undefined) meta.ragChunks = parsed.rag_chunks;
+            if (parsed.rag_subject_id) meta.ragSubjectId = parsed.rag_subject_id;
+            if (parsed.rag_subject_name) meta.ragSubjectName = parsed.rag_subject_name;
+            if (parsed.rag_subject_icon) meta.ragSubjectIcon = parsed.rag_subject_icon;
+            if (parsed.rag_subject_gradient) meta.ragSubjectGradient = parsed.rag_subject_gradient;
+            if (parsed.rag_chapter_name) meta.ragChapterName = parsed.rag_chapter_name;
+            if (parsed.rag_chapter_slug) meta.ragChapterSlug = parsed.rag_chapter_slug;
+            if (parsed.ctx_board_name) meta.ragBoardName = parsed.ctx_board_name;
+            if (parsed.ctx_class_name) meta.ragClassName = parsed.ctx_class_name;
+            if (parsed.ctx_stream_name) meta.ragStreamName = parsed.ctx_stream_name;
+            if (parsed.ctx_board_slug) meta.ragBoardSlug = parsed.ctx_board_slug;
+            if (parsed.ctx_class_slug) meta.ragClassSlug = parsed.ctx_class_slug;
+            if (parsed.ctx_subject_slug) meta.ragSubjectSlug = parsed.ctx_subject_slug;
+            if (parsed.rag_topic_name) meta.ragTopicName = parsed.rag_topic_name;
+            if (parsed.rag_chunk_snippet) meta.ragChunkSnippet = parsed.rag_chunk_snippet;
+            if (parsed.content_card_name && !meta.ragTopicName) meta.ragTopicName = parsed.content_card_name;
+            if (parsed.content_card_board && !meta.ragBoardName) meta.ragBoardName = parsed.content_card_board;
+            if (parsed.content_card_class && !meta.ragClassName) meta.ragClassName = parsed.content_card_class;
+            if (parsed.content_card_subject && !meta.ragSubjectName) meta.ragSubjectName = parsed.content_card_subject;
             if (parsed.error) {
-              hasError = true;
+              meta.hasError = true;
               toast.error(parsed.error || 'AI service error — please try again.');
               setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Sorry, something went wrong. Please try again.', streaming: false } : m));
               continue;
             }
-            if (hasError) continue;
+            if (meta.hasError) continue;
             if (parsed.content) {
               pendingChunk += parsed.content;
               if (!fullContent && !rafId) flushPending();
               else if (!rafId) rafId = requestAnimationFrame(flushPending);
             }
             if (parsed.event === 'syrabit_done') {
-              if (parsed.sources) libSources = parsed.sources;
+              if (parsed.sources) meta.libSources = parsed.sources;
               if (parsed.credits_used_total != null) {
                 setCredits((c) => ({ ...c, used: parsed.credits_used_total }));
               }
               const remaining = parsed.remaining_credits ?? 0;
               try {
                 const { Analytics } = await import('@/utils/analytics');
-                Analytics.chatMessage(ragSource, remaining, model);
+                Analytics.chatMessage(meta.ragSource, remaining, model);
                 if (remaining <= 0) Analytics.chatCreditsExhausted();
               } catch {}
             }
@@ -330,13 +319,13 @@ export default function ChatPage() {
       }
       if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
       if (pendingChunk) { fullContent += pendingChunk; pendingChunk = ''; }
-      if (newConvId && newConvId !== conversationId) {
-        setConversationId(newConvId);
-        setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('id', newConvId); return next; }, { replace: true });
-      } else { setConversationId(newConvId); }
+      if (meta.convId && meta.convId !== conversationId) {
+        setConversationId(meta.convId);
+        setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set('id', meta.convId); return next; }, { replace: true });
+      } else { setConversationId(meta.convId); }
       setMessages((prev) => prev.map((m) =>
         m.id === aiMsgId
-          ? { ...m, content: fullContent, streaming: false, rag_source: ragSource, rag_chunks: ragChunks, rag_subject_id: ragSubjectId, rag_subject_name: ragSubjectName, rag_chapter_name: ragChapterName, rag_chapter_slug: ragChapterSlug, rag_board_name: ragBoardName, rag_class_name: ragClassName, rag_stream_name: ragStreamName, rag_board_slug: ragBoardSlug, rag_class_slug: ragClassSlug, rag_subject_slug: ragSubjectSlug, rag_topic_name: ragTopicName, rag_chunk_snippet: ragChunkSnippet, ctx_subject_name: subject?.name || null, ctx_subject_icon: ragSubjectIcon || subject?.icon || null, ctx_subject_gradient: ragSubjectGradient || subject?.gradient || null, sources: libSources }
+          ? { ...m, content: fullContent, streaming: false, rag_source: meta.ragSource, rag_chunks: meta.ragChunks, rag_subject_id: meta.ragSubjectId, rag_subject_name: meta.ragSubjectName, rag_chapter_name: meta.ragChapterName, rag_chapter_slug: meta.ragChapterSlug, rag_board_name: meta.ragBoardName, rag_class_name: meta.ragClassName, rag_stream_name: meta.ragStreamName, rag_board_slug: meta.ragBoardSlug, rag_class_slug: meta.ragClassSlug, rag_subject_slug: meta.ragSubjectSlug, rag_topic_name: meta.ragTopicName, rag_chunk_snippet: meta.ragChunkSnippet, ctx_subject_name: subject?.name || null, ctx_subject_icon: meta.ragSubjectIcon || subject?.icon || null, ctx_subject_gradient: meta.ragSubjectGradient || subject?.gradient || null, sources: meta.libSources }
           : m
       ));
       setSyncState('idle');

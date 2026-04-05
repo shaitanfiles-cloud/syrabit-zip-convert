@@ -508,17 +508,21 @@ class SyllabusEmbedder:
             },
         )
         entries = await cursor.to_list(length=None)
+        was_empty = not self._cache
         self._cache = entries
         self._cache_loaded_at = time.time()
         ch_count = sum(1 for e in entries if e.get("level", "chapter") != "topic")
         tp_count = sum(1 for e in entries if e.get("level") == "topic")
-        logger.info(f"SyllabusEmbedder cache loaded: {ch_count} chapter + {tp_count} topic embeddings")
+        if was_empty:
+            logger.info(f"SyllabusEmbedder cache loaded: {ch_count} chapter + {tp_count} topic embeddings")
+        else:
+            logger.debug(f"SyllabusEmbedder cache refreshed: {ch_count} chapter + {tp_count} topic embeddings")
         return entries
 
     async def _background_refresh(self):
         try:
             await self._reload_cache()
-            logger.info("SyllabusEmbedder proactive cache refresh completed")
+            logger.debug("SyllabusEmbedder proactive cache refresh completed")
         except Exception as e:
             logger.warning(f"SyllabusEmbedder background refresh failed: {e}")
         finally:

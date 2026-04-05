@@ -148,7 +148,7 @@ function App() {
       document.removeEventListener('touchstart', onHoverLibrary, { capture: true });
     };
 
-    const fallback = setTimeout(trigger, 3000);
+    const fallback = setTimeout(trigger, 5000);
     return () => { clearTimeout(fallback); detach(); };
   }, []);
 

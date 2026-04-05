@@ -1047,7 +1047,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
-        "sarvam": 12000,
+        "sarvam": 8000,
         "groq": 100000,
         "fireworksai": 80000,
         "gemini": 500000,
@@ -1072,7 +1072,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 logger.info(f"SLM pool: skipping {p_name}/{p_model} — input too large ({_input_chars} chars > {_max_chars} limit)")
                 _skipped_slots.add(id(slot))
                 continue
-            _effective_ttft = min(4.0, _SLM_TTFT_TIMEOUT + (1.5 if _input_chars > 8000 else 0.0))
+            _effective_ttft = min(3.0, _SLM_TTFT_TIMEOUT + (1.0 if _input_chars > 8000 else 0.0))
             try:
                 async with slot["sem"]:
                     token_q: asyncio.Queue = asyncio.Queue()
