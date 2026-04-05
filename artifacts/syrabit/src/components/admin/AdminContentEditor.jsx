@@ -11,6 +11,7 @@ import ChapterEditForm from './content-editor/ChapterEditForm';
 import HierarchyTree from './content-editor/HierarchyTree';
 import ChapterList from './content-editor/ChapterList';
 import ThumbnailStudio from './content-editor/ThumbnailStudio';
+import ConfirmDialog from './content-editor/ConfirmDialog';
 
 export default function AdminContentEditor({ adminToken, onNavigate, hubContext, onHubContext }) {
   const [boards, setBoards] = useState([]);
@@ -45,6 +46,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [subjectEditForm, setSubjectEditForm] = useState({ name: '', description: '' });
   const [savingSubject, setSavingSubject] = useState(false);
   const [bulkGenerating, setBulkGenerating] = useState(false);
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', onConfirm: null });
 
   const subjectData = subjects.find(s => s.id === selSubject);
   const boardData = boards.find(b => b.id === selBoard);
@@ -168,16 +170,24 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const handleCreateStream = async (name, desc) => { if (!selClass) return toast.error('Select a class first'); await axios.post(`${API}/admin/content/streams`, { class_id: selClass, name, description: desc }, authHeaders(adminToken)); await load(true); toast.success('Stream created'); };
   const handleCreateSubject = async (name, desc) => { if (!selStream) return toast.error('Select a stream first'); await axios.post(`${API}/admin/content/subjects`, { stream_id: selStream, name, description: desc, tags: '', status: 'published' }, authHeaders(adminToken)); await load(true); toast.success('Subject created'); };
 
-  const handleDelete = async (type, id) => {
-    if (!confirm(`Delete this ${type}? This will also delete all content inside it.`)) return;
-    try {
-      await axios.delete(`${API}/admin/content/${type}s/${id}`, authHeaders(adminToken));
-      if (type === 'board') { if (selBoard === id) { setSelBoard(null); setSelClass(null); setSelStream(null); setSelSubject(null); } }
-      if (type === 'classe') { if (selClass === id) { setSelClass(null); setSelStream(null); setSelSubject(null); } }
-      if (type === 'stream') { setSelStream(null); setSelSubject(null); }
-      if (type === 'subject') { if (selSubject === id) setSelSubject(null); }
-      await load(true); toast.success(`${type} deleted`);
-    } catch (e) { toast.error(e.response?.data?.detail || `Failed to delete ${type}`); }
+  const handleDelete = (type, id) => {
+    const label = type === 'classe' ? 'class' : type;
+    setConfirmDialog({
+      open: true,
+      title: `Delete ${label}?`,
+      message: `This will permanently delete this ${label} and all content inside it. This action cannot be undone.`,
+      onConfirm: async () => {
+        setConfirmDialog(d => ({ ...d, open: false }));
+        try {
+          await axios.delete(`${API}/admin/content/${type}s/${id}`, authHeaders(adminToken));
+          if (type === 'board') { if (selBoard === id) { setSelBoard(null); setSelClass(null); setSelStream(null); setSelSubject(null); } }
+          if (type === 'classe') { if (selClass === id) { setSelClass(null); setSelStream(null); setSelSubject(null); } }
+          if (type === 'stream') { setSelStream(null); setSelSubject(null); }
+          if (type === 'subject') { if (selSubject === id) setSelSubject(null); }
+          await load(true); toast.success(`${label} deleted`);
+        } catch (e) { toast.error(e.response?.data?.detail || `Failed to delete ${label}`); }
+      },
+    });
   };
 
   const handleCreateChapter = async () => {
@@ -204,7 +214,17 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     finally { setSaving(false); }
   };
 
-  const handleDeleteChapter = async (id) => { if (!confirm('Delete this chapter?')) return; try { await axios.delete(`${API}/admin/content/chapters/${id}`, authHeaders(adminToken)); setChapters(p => p.filter(c => c.id !== id)); toast.success('Chapter deleted'); } catch { toast.error('Failed to delete'); } };
+  const handleDeleteChapter = (id) => {
+    setConfirmDialog({
+      open: true,
+      title: 'Delete chapter?',
+      message: 'This will permanently delete this chapter and all its content, embeddings, and associated data.',
+      onConfirm: async () => {
+        setConfirmDialog(d => ({ ...d, open: false }));
+        try { await axios.delete(`${API}/admin/content/chapters/${id}`, authHeaders(adminToken)); setChapters(p => p.filter(c => c.id !== id)); toast.success('Chapter deleted'); } catch { toast.error('Failed to delete'); }
+      },
+    });
+  };
 
   const handleGenerateNotes = async (chapterId, chapterTitle, { silent = false } = {}) => {
     setGeneratingNotes(prev => new Set([...prev, chapterId]));
@@ -239,7 +259,18 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     if (!selSubject || chapters.length === 0) return;
     const noNotes = chapters.filter(ch => !(ch.content && ch.content.trim().length > 50));
     if (noNotes.length === 0) { toast.info('All chapters already have notes'); return; }
-    if (!confirm(`Generate AI notes for ${noNotes.length} chapter(s) without content?`)) return;
+    const confirmed = await new Promise((resolve) => {
+      setConfirmDialog({
+        open: true,
+        title: 'Bulk generate notes?',
+        message: `Generate AI notes for ${noNotes.length} chapter(s) without content? This may take a while.`,
+        confirmLabel: 'Generate',
+        destructive: false,
+        onConfirm: () => { setConfirmDialog(d => ({ ...d, open: false })); resolve(true); },
+        onCancel: () => { setConfirmDialog(d => ({ ...d, open: false })); resolve(false); },
+      });
+    });
+    if (!confirmed) return;
     setBulkGenerating(true);
     let success = 0, failed = 0;
     for (const ch of noNotes) {
@@ -420,6 +451,15 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       </>
 
       {viewerItem && <ContentViewerPopup item={viewerItem} onClose={() => setViewerItem(null)} />}
+      <ConfirmDialog
+        open={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        confirmLabel={confirmDialog.confirmLabel || 'Delete'}
+        destructive={confirmDialog.destructive !== false}
+        onConfirm={confirmDialog.onConfirm || (() => setConfirmDialog(d => ({ ...d, open: false })))}
+        onCancel={confirmDialog.onCancel || (() => setConfirmDialog(d => ({ ...d, open: false })))}
+      />
     </div>
   );
 }

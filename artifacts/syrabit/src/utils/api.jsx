@@ -56,9 +56,11 @@ axios.interceptors.response.use(
     }
 
     if (error.response?.status === 401) {
+      const reqUrl = config?.url || '';
+      const isAdminContentCall = reqUrl.includes('/admin/content/') || reqUrl.includes('/admin/studio/');
       const isAdminRoute = window.location.pathname.startsWith('/admin') &&
         !window.location.pathname.startsWith('/admin/login');
-      if (isAdminRoute) {
+      if (isAdminRoute && !isAdminContentCall) {
         toast.error('Session expired. Please log in again.');
         window.location.href = '/admin/login';
       }
