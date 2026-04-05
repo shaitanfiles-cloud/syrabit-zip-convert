@@ -178,25 +178,18 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
+if _FIREWORKS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/gpt-oss-120b"})
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _OPENROUTER_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "qwen/qwen-2.5-72b-instruct"})
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.3-70b-versatile"})
-if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY_2, "default_model": "llama-3.3-70b-versatile"})
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
-if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
-if _FIREWORKS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
-if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
-for _p in _LLM_PROVIDERS:
-    if _p["provider"] not in ("fireworksai", "cerebras", "gemini", "sarvam", "groq", "openrouter"):
-        _LLM_PROVIDERS_CHAT.append(_p)
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -214,6 +207,7 @@ _MODEL_PROVIDER_MAP = {
     "deepseek/deepseek-r1": "openrouter",
     "qwen/qwen3-235b-a22b": "openrouter",
     "google/gemini-2.5-flash-preview": "openrouter",
+    "google/gemma-3-27b-it": "openrouter",
     "meta-llama/llama-4-maverick": "openrouter",
     "llama-3.3-70b-versatile": "openrouter",
 }
@@ -230,10 +224,14 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("sarvam:2",    "sarvam-m",                                          4, 0),
-    ("openrouter",  "qwen/qwen-2.5-72b-instruct",                       4, 1),
-    ("groq",        "llama-3.3-70b-versatile",                           4, 2),
-    ("gemini",      "gemini-2.5-flash",                                  6, 3),
+    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 0),
+    ("sarvam:2",    "sarvam-m",                                          4, 1),
+    ("fireworksai", "accounts/fireworks/models/deepseek-v3p2",           4, 2),
+    ("openrouter",  "qwen/qwen-2.5-72b-instruct",                       4, 3),
+    ("openrouter",  "google/gemma-3-27b-it",                             4, 4),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 5),
+    ("gemini",      "gemini-2.5-flash",                                  6, 6),
+    ("cerebras",    "llama3.1-8b",                                       4, 7),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
@@ -283,6 +281,7 @@ class _SmartKeyPool:
                 pmap[pname] = []
             pmap[pname].append(p["key"])
         self._slots = []
+        shared_rpm: dict = {}
         for pname, model_id, max_con, tier in candidates:
             real_provider = pname.split(":")[0]
             key_idx = int(pname.split(":")[1]) - 1 if ":" in pname else 0
@@ -293,12 +292,15 @@ class _SmartKeyPool:
                     logger.info("SLM pool: skipping bedrock slot (AWS credentials not set)")
                     continue
                 rpm = self._PROVIDER_RPM_LIMITS.get(real_provider, 30)
+                rpm_key = f"{real_provider}:{key_idx}"
+                if rpm_key not in shared_rpm:
+                    shared_rpm[rpm_key] = []
                 self._slots.append({
                     "provider": real_provider, "key": key, "model": model_id,
                     "sem": asyncio.Semaphore(max_con), "max_con": max_con,
                     "last_used": 0.0, "cooldown_until": 0.0, "errors": 0,
                     "priority": tier,
-                    "rpm_window": [], "rpm_limit": rpm,
+                    "rpm_window": shared_rpm[rpm_key], "rpm_limit": rpm,
                     "base_priority": tier,
                 })
         logger.info(
@@ -983,6 +985,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         elif p_name == "cerebras":
             logger.info(f"LLM stream: provider=cerebras, model={p_model}")
             async for token in _stream_cerebras(messages, p_key, p_model, _mt):
+                yield token
+        elif p_name == "fireworksai":
+            logger.info(f"LLM stream: provider=fireworksai, model={p_model}")
+            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "fireworksai", "https://api.fireworks.ai/inference/v1"):
                 yield token
         elif p_name == "groq":
             logger.info(f"LLM stream: provider=groq, model={p_model}")
