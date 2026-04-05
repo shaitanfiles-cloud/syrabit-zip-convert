@@ -54,8 +54,14 @@ export default function ChatPage() {
   useEffect(() => {
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
     scrollTimeoutRef.current = setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, 0);
+      const container = messagesEndRef.current?.closest('.overflow-y-auto');
+      if (container) {
+        const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 150;
+        if (atBottom) {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+        }
+      }
+    }, 80);
     return () => { if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current); };
   }, [messages]);
 
@@ -173,6 +179,9 @@ export default function ChatPage() {
     setMessages((prev) => [...prev, userMsg, aiMsg]);
     setInput('');
     setIsLoading(true);
+    requestAnimationFrame(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    });
     setSyncState('syncing');
     if (abortControllerRef.current) abortControllerRef.current.abort();
     const controller = new AbortController();
