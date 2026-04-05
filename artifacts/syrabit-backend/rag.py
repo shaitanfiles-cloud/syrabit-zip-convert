@@ -495,6 +495,7 @@ async def _fetch_content_card(
         _top_card_name: str = ""
         _top_lesson_name: str = ""
         _top_subject_name: str = ""
+        _top_card_slug: str = ""
         _intent_for_extract = (intent or "").lower()
         for p in ordered_pages[:3]:
             content = p.get("content", "")
@@ -505,6 +506,7 @@ async def _fetch_content_card(
             topic_title = p.get("topic_title") or p.get("chapter_title") or ""
             if not _top_card_name and topic_title:
                 _top_card_name = topic_title
+                _top_card_slug = p.get("slug") or ""
                 _top_lesson_name = p.get("chapter_title") or ""
                 _top_subject_name = p.get("subject_name") or subject_name or ""
             page_type = p.get("page_type", "")
@@ -552,6 +554,7 @@ async def _fetch_content_card(
             "card_name": _top_card_name,
             "lesson_name": _top_lesson_name,
             "subject_name": _top_subject_name,
+            "card_slug": _top_card_slug,
         }
         result = ("\n\n---\n\n".join(cards), card_slugs, source_meta)
         _content_card_cache[_ck] = result
@@ -1553,6 +1556,7 @@ async def resolve_rag_context(
     _syllabus_sim = 0.0
     _syllabus_chapter_title = ""
     _syllabus_topic_name = ""
+    _syl_match = None
     try:
         import server as _srv
         _embedder = getattr(_srv, "_syllabus_embedder", None)
@@ -1599,7 +1603,10 @@ async def resolve_rag_context(
         _results = await asyncio.gather(*_gather_tasks)
         _card_result = _results[0]
         _enrichment_result = _results[1] if _want_enrichment else ""
-        cached_rag = {"chunks": [], "chapters": [], "subjects": [], "source": "rag", "quality": "high"}
+        _syl_subject_entry = []
+        if _syl_match and _syl_match.subject_id:
+            _syl_subject_entry = [{"id": _syl_match.subject_id, "name": _syl_match.subject_name}]
+        cached_rag = {"chunks": [], "chapters": [], "subjects": _syl_subject_entry, "source": "rag", "quality": "high"}
 
     else:
         vector_hits = await vector_rag_search(query, subject_id=subject_id, top_k=5, db_category=_db_category)
@@ -1647,7 +1654,10 @@ async def resolve_rag_context(
             _results = await asyncio.gather(*_gather_tasks)
             _card_result = _results[0]
             _enrichment_result = _results[1] if _want_enrichment else ""
-            cached_rag = {"chunks": [], "chapters": [], "subjects": [], "source": "rag", "quality": "high"}
+            _syl_subject_entry2 = []
+            if _syl_match and _syl_match.subject_id:
+                _syl_subject_entry2 = [{"id": _syl_match.subject_id, "name": _syl_match.subject_name}]
+            cached_rag = {"chunks": [], "chapters": [], "subjects": _syl_subject_entry2, "source": "rag", "quality": "high"}
         else:
             _gather_tasks = [
                 rag_search(query, subject_id=subject_id, subject_name=subject_name),
@@ -1885,6 +1895,8 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
 
     _cc_meta = rag_ctx.get("content_card_meta")
     if _cc_meta and (_cc_meta.get("card_name") or _cc_meta.get("lesson_name")):
+        _cc_slug = _cc_meta.get("card_slug", "")
+        _cc_url = f"/learn/{_cc_slug}" if _cc_slug and not _cc_slug.startswith("chapter/") else ""
         sources.append({
             "type":         "content_card",
             "card_name":    _cc_meta.get("card_name", ""),
@@ -1892,9 +1904,9 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
             "subject_name": _cc_meta.get("subject_name", ""),
             "board_name":   _cc_meta.get("board_name", ""),
             "class_name":   _cc_meta.get("class_name", ""),
-            "slug":         "",
+            "slug":         _cc_slug,
             "title":        _cc_meta.get("card_name", "") or _cc_meta.get("lesson_name", ""),
-            "url":          "",
+            "url":          _cc_url,
         })
 
     def _build_url(slug: str, provided_url: str, subject_id: str = "") -> str:

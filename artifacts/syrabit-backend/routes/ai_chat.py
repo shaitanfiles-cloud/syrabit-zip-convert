@@ -86,24 +86,47 @@ async def _resolve_subject_context(subject_id: str) -> dict:
     if cached is not None:
         return cached
     try:
-        pipeline = [
-            {"$match": {"id": subject_id}},
-            {"$lookup": {"from": "streams", "localField": "stream_id", "foreignField": "id", "as": "_stream"}},
-            {"$unwind": {"path": "$_stream", "preserveNullAndEmptyArrays": False}},
-            {"$lookup": {"from": "classes", "localField": "_stream.class_id", "foreignField": "id", "as": "_class"}},
-            {"$unwind": {"path": "$_class", "preserveNullAndEmptyArrays": False}},
-            {"$lookup": {"from": "boards", "localField": "_class.board_id", "foreignField": "id", "as": "_board"}},
-            {"$unwind": {"path": "$_board", "preserveNullAndEmptyArrays": False}},
-            {"$project": {
-                "_id": 0,
-                "board_id": "$_board.id", "board_name": "$_board.name", "board_slug": "$_board.slug",
-                "class_id": "$_class.id", "class_name": "$_class.name", "class_slug": "$_class.slug",
-                "stream_id": "$_stream.id", "stream_name": "$_stream.name", "stream_slug": "$_stream.slug",
-                "subject_name": "$name", "subject_slug": "$slug",
-            }},
-        ]
-        result = await db.subjects.aggregate(pipeline).to_list(1)
-        ctx = result[0] if result else {}
+        subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+        if not subj:
+            _subject_ctx_cache[subject_id] = {}
+            return {}
+        ctx = {
+            "board_id":      subj.get("board_id") or subj.get("boardId") or "",
+            "board_name":    subj.get("boardName") or "",
+            "board_slug":    subj.get("board_slug") or "",
+            "class_id":      subj.get("class_id") or "",
+            "class_name":    subj.get("className") or "",
+            "class_slug":    subj.get("class_slug") or "",
+            "stream_id":     subj.get("stream_id") or "",
+            "stream_name":   subj.get("streamName") or "",
+            "stream_slug":   subj.get("stream_slug") or "",
+            "subject_name":  subj.get("name") or "",
+            "subject_slug":  subj.get("slug") or "",
+        }
+        if ctx["board_slug"] and ctx["class_slug"]:
+            _subject_ctx_cache[subject_id] = ctx
+            return ctx
+        _sid = subj.get("stream_id")
+        if _sid:
+            stream = await db.streams.find_one({"id": _sid}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "class_id": 1})
+            if stream:
+                ctx["stream_id"] = stream.get("id", "")
+                ctx["stream_name"] = ctx["stream_name"] or stream.get("name", "")
+                ctx["stream_slug"] = ctx["stream_slug"] or stream.get("slug", "")
+                _cid = stream.get("class_id")
+                if _cid:
+                    cls = await db.classes.find_one({"id": _cid}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1})
+                    if cls:
+                        ctx["class_id"] = cls.get("id", "")
+                        ctx["class_name"] = ctx["class_name"] or cls.get("name", "")
+                        ctx["class_slug"] = ctx["class_slug"] or cls.get("slug", "")
+                        _bid = cls.get("board_id")
+                        if _bid:
+                            board = await db.boards.find_one({"id": _bid}, {"_id": 0, "id": 1, "name": 1, "slug": 1})
+                            if board:
+                                ctx["board_id"] = board.get("id", "")
+                                ctx["board_name"] = ctx["board_name"] or board.get("name", "")
+                                ctx["board_slug"] = ctx["board_slug"] or board.get("slug", "")
         _subject_ctx_cache[subject_id] = ctx
         return ctx
     except Exception as e:
@@ -686,7 +709,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    _PRE_LLM_BUDGET = 1.5
+    _PRE_LLM_BUDGET = 2.5
 
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
@@ -861,7 +884,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _web_task = asyncio.create_task(_safe_web_search_stream())
 
         _essential = {_rag_task, _history_task}
-        _essential_budget = max(0.1, _deadline - _time_mod.time())
+        _essential_budget = max(1.0, _deadline - _time_mod.time())
         done, _ = await asyncio.wait(_essential, timeout=_essential_budget, return_when=asyncio.ALL_COMPLETED)
 
         _empty_rag = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
@@ -1026,15 +1049,16 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     rag_chapter_name = (_rag_chaps[0].get("title", "") if _rag_chaps else None) or msg.chapter_name or None
     full_response = []
 
-    # Pull router classification for metadata (prefer router chapter over RAG chapter)
-    _router_subject = getattr(_sr_route, "subject", None) if _sr_route else None
-    _router_chapter = getattr(_sr_route, "chapter_hint", None) if _sr_route else None
+    _router_subject = getattr(_sr_route, "subject_name", None) or getattr(_sr_route, "subject", None) if _sr_route else None
+    _router_chapter = getattr(_sr_route, "chapter_title", None) or getattr(_sr_route, "chapter_hint", None) if _sr_route else None
     _router_board   = getattr(_sr_route, "board", None) if _sr_route else None
-    # Use router chapter as rag_chapter_name when RAG was not the source
+    _router_subject_id = getattr(_sr_route, "subject_id", None) if _sr_route else None
     if _router_chapter and not rag_chapter_name:
         rag_chapter_name = _router_chapter
     if _router_subject and not rag_subject_name:
         rag_subject_name = _router_subject
+    if _router_subject_id and not rag_subject_id:
+        rag_subject_id = _router_subject_id
 
     # Derive sources from the same RAG context sent to the LLM (no mismatch)
     rag_sources = _sources_from_rag_ctx(rag_ctx)
