@@ -12,6 +12,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
 import { apiClient } from '@/utils/api';
 import { useShare, SerpPreviewModal } from '@/hooks/useShare';
+import Analytics from '@/utils/analytics';
 
 function ChapterJsonLd({ data, url, basePath }) {
   useEffect(() => {
@@ -103,6 +104,7 @@ function StickyToc({ headings, activeId }) {
               style={{ borderLeft: activeId === h.id ? '2px solid #9575e0' : '2px solid transparent' }}
               onClick={e => {
                 e.preventDefault();
+                Analytics.tocClick(h.text, document.title);
                 document.getElementById(h.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
               }}
             >
@@ -224,6 +226,42 @@ export default function ChapterPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [board, classSlug, subjectSlug, chapterSlug]);
+
+  useEffect(() => {
+    if (!data) return;
+    Analytics.chapterView(
+      data.chapter_id,
+      data.topic_title || data.chapter_title || chapterSlug,
+      data.subject_name || subjectSlug,
+      board,
+      data.word_count || 0
+    );
+  }, [data?.chapter_id]);
+
+  const scrollMilestonesRef = useRef(new Set());
+  useEffect(() => {
+    scrollMilestonesRef.current = new Set();
+  }, [data?.chapter_id]);
+  useEffect(() => {
+    if (!data || !articleRef.current) return;
+    const el = articleRef.current;
+    const handler = () => {
+      const rect = el.getBoundingClientRect();
+      const scrolled = -rect.top;
+      const total = rect.height - window.innerHeight;
+      if (total <= 0) return;
+      const pct = Math.min(100, Math.round((scrolled / total) * 100));
+      const milestones = [25, 50, 75, 100];
+      for (const m of milestones) {
+        if (pct >= m && !scrollMilestonesRef.current.has(m)) {
+          scrollMilestonesRef.current.add(m);
+          Analytics.scrollDepth(m, data.topic_title || data.chapter_title || chapterSlug);
+        }
+      }
+    };
+    window.addEventListener('scroll', handler, { passive: true });
+    return () => window.removeEventListener('scroll', handler);
+  }, [data?.chapter_id]);
 
   useEffect(() => {
     setPyqData(null);
@@ -377,6 +415,7 @@ export default function ChapterPage() {
   const readMins = data?.word_count ? Math.max(1, Math.ceil(data.word_count / 200)) : null;
 
   const handleShare = useCallback(() => {
+    Analytics.chapterShare(data?.title || chapterSlug, `${basePath}/${chapterSlug}`);
     share(data?.title || chapterSlug, `${basePath}/${chapterSlug}`, {
       showSerpPreview: true,
       description: data?.meta_description || '',
@@ -420,6 +459,7 @@ export default function ChapterPage() {
 
   if (error || !data) {
     const handleRetry = () => {
+      Analytics.chapterRetry(chapterSlug);
       setError(null);
       setLoading(true);
       apiClient()
@@ -518,6 +558,7 @@ export default function ChapterPage() {
           <div className="flex items-center gap-2 mt-4">
             <Link
               to={`/chat?subject=${subjectSlug}`}
+              onClick={() => Analytics.chapterAskAi(subjectSlug, data?.topic_title || data?.chapter_title || chapterSlug)}
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)', boxShadow: '0 2px 10px rgba(139,92,246,0.20)' }}
             >
@@ -563,6 +604,7 @@ export default function ChapterPage() {
               <p className="text-xs text-gray-400 mb-3">Get {boardName}-aligned answers instantly from Syra.</p>
               <Link
                 to={`/chat?subject=${subjectSlug}`}
+                onClick={() => Analytics.chapterAskAi(subjectSlug, data?.topic_title || data?.chapter_title || chapterSlug)}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:opacity-90"
                 style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}
               >

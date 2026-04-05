@@ -237,7 +237,23 @@ export default function LibraryPage() {
 
   const handleRefetchSubjects = useCallback(async () => { await refetchBundle(); toast.success('Browser refreshed'); }, [refetchBundle]);
 
-  const handleSearchChange = useCallback((e) => setSearchQuery(e.target.value), []);
+  const searchTimerRef = useRef(null);
+  const handleSearchChange = useCallback((e) => {
+    const val = e.target.value;
+    setSearchQuery(val);
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (val.trim().length >= 2) {
+      searchTimerRef.current = setTimeout(() => {
+        const q = val.trim().toLowerCase();
+        const count = enrichedSubjects.filter(s =>
+          (s.name || '').toLowerCase().includes(q) ||
+          (s.description || '').toLowerCase().includes(q) ||
+          (s.topics || []).some(t => (t.name || '').toLowerCase().includes(q))
+        ).length;
+        Analytics.searchUsed(val.trim(), count);
+      }, 1000);
+    }
+  }, [enrichedSubjects]);
   const handleFilterChange = useCallback((filterId) => setActiveFilter(filterId), []);
   const handleSearchClear = useCallback(() => setSearchQuery(''), []);
 

@@ -8,6 +8,7 @@ import { Link } from 'react-router-dom';
 import { Calendar, Clock, Filter, ChevronRight, AlertCircle, BookOpen } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
+import PageMeta from '@/components/seo/PageMeta';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function cn(...classes) { return classes.filter(Boolean).join(' '); }
@@ -203,6 +204,12 @@ export default function ExamRoutinePage() {
   return (
     <AppLayout>
       <PageTitle title="Exam Routine 2026 — Syrabit.ai" />
+      <PageMeta
+        title="AHSEC HS Exam Routine 2026"
+        description="Complete AHSEC Higher Secondary (Class 12) Final Exam timetable 2026 for Science, Arts, and Commerce streams. Date-wise schedule with countdown timer and subject details."
+        url="https://syrabit.ai/exam-routine"
+        keywords="AHSEC exam routine 2026, HS final exam timetable, Assam Board class 12 exam schedule, AHSEC date sheet 2026"
+      />
 
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
 

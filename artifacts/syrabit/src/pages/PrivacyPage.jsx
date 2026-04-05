@@ -1,4 +1,5 @@
 import { PublicLayout } from '@/components/layout/PublicLayout';
+import PageMeta from '@/components/seo/PageMeta';
 
 const LAST_UPDATED = 'April 2026';
 const CONTACT_EMAIL = 'privacy@syrabit.ai';
@@ -111,6 +112,12 @@ const sections = [
 export default function PrivacyPage() {
   return (
     <PublicLayout>
+      <PageMeta
+        title="Privacy Policy"
+        description="Privacy Policy for Syrabit.ai — how we collect, use, and protect your personal data under the Digital Personal Data Protection Act, 2023 (DPDP Act). Your rights as a student in Assam."
+        url="https://syrabit.ai/privacy"
+        keywords="Syrabit privacy policy, DPDP Act 2023, data protection, Assam Board, student data privacy"
+      />
       <div className="min-h-screen bg-[#06060e] pt-8 pb-24 px-4">
         <div className="max-w-3xl mx-auto">
           <h1 className="text-3xl font-semibold text-white mb-1">Privacy Policy</h1>

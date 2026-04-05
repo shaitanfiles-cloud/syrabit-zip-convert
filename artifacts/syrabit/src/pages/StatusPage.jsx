@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { PublicLayout } from '@/components/layout/PublicLayout';
+import PageMeta from '@/components/seo/PageMeta';
 import { API_BASE } from '@/utils/api';
 import axios from 'axios';
 import { CheckCircle2, XCircle, AlertTriangle, RefreshCw, Activity } from 'lucide-react';
@@ -84,6 +85,11 @@ export default function StatusPage() {
 
   return (
     <PublicLayout>
+      <PageMeta
+        title="System Status"
+        description="Real-time health status of Syrabit.ai services — API, database, AI models, and frontend delivery. Check uptime and service availability."
+        url="https://syrabit.ai/status"
+      />
       <div className="min-h-screen bg-[#06060e] pt-8 pb-24 px-4">
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-8">

@@ -135,6 +135,41 @@ export const Analytics = {
     trackGA4('credits_exhausted');
   },
 
+  chapterView: (chapterId, chapterTitle, subjectName, board, wordCount) => {
+    track('chapter_viewed', { chapter_id: chapterId, chapter: chapterTitle, subject: subjectName, board, word_count: wordCount });
+    trackGA4('view_item', { item_id: chapterId, item_name: chapterTitle, item_category: subjectName, item_variant: board, content_type: 'chapter' });
+  },
+
+  chapterShare: (chapterTitle, url) => {
+    track('chapter_shared', { chapter: chapterTitle, url });
+    trackGA4('share', { method: 'native', content_type: 'chapter', item_id: chapterTitle });
+  },
+
+  chapterRetry: (chapterSlug) => {
+    track('chapter_retry', { chapter: chapterSlug });
+    trackGA4('chapter_retry', { chapter: chapterSlug });
+  },
+
+  chapterAskAi: (subjectSlug, chapterTitle) => {
+    track('chapter_ask_ai_clicked', { subject: subjectSlug, chapter: chapterTitle });
+    trackGA4('select_content', { content_type: 'ask_ai', item_id: subjectSlug, item_name: chapterTitle });
+  },
+
+  tocClick: (heading, chapterTitle) => {
+    track('toc_click', { heading, chapter: chapterTitle });
+    trackGA4('select_content', { content_type: 'toc', item_id: heading, item_name: chapterTitle });
+  },
+
+  scrollDepth: (depth, chapterTitle) => {
+    track('scroll_depth', { depth, chapter: chapterTitle });
+    trackGA4('scroll_depth', { percent: depth, chapter: chapterTitle });
+  },
+
+  searchUsed: (query, resultCount) => {
+    track('search_used', { query, result_count: resultCount });
+    trackGA4('search', { search_term: query });
+  },
+
   // ── Library ────────────────────────────────────────────────────────────────
   subjectBookmarked: (subjectName, saved) => {
     track('subject_bookmarked', { subject: subjectName, action: saved ? 'save' : 'unsave' });
