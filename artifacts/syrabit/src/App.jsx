@@ -194,7 +194,8 @@ function App() {
               <Suspense fallback={<DeferredFallback />}>
                 <Routes>
                   {/* ── Public routes ── */}
-                  <Route path="/"         element={<LandingPage />} />
+                  <Route path="/"         element={<Navigate to="/chat" replace />} />
+                  <Route path="/home"     element={<LandingPage />} />
                   <Route path="/pricing"  element={<PricingPage />} />
                   <Route path="/terms"    element={<TermsPage />} />
                   <Route path="/privacy"       element={<PrivacyPage />} />
