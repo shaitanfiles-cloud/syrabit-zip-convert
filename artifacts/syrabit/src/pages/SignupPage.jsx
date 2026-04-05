@@ -209,6 +209,7 @@ export default function SignupPage() {
                   <User size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="name"
+                    name="name"
                     autoComplete="name"
                     placeholder="Your name"
                     value={name}
@@ -229,6 +230,7 @@ export default function SignupPage() {
                   <Mail size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="email"
+                    name="email"
                     type="email"
                     autoComplete="email"
                     placeholder="your@email.com"
@@ -251,6 +253,7 @@ export default function SignupPage() {
                   <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="password"
+                    name="password"
                     type={showPass ? 'text' : 'password'}
                     autoComplete="new-password"
                     placeholder="••••••••"
@@ -295,6 +298,7 @@ export default function SignupPage() {
                   <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="confirm"
+                    name="confirm-password"
                     type={showConfirm ? 'text' : 'password'}
                     autoComplete="new-password"
                     placeholder="••••••••"

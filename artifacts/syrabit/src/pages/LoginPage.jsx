@@ -57,11 +57,13 @@ export default function LoginPage() {
     try {
       const user = await login(email, password);
       toast.success('Welcome back!');
-      if (!user.onboarding_done) {
-        navigate('/onboarding');
-      } else {
-        navigate('/library');
-      }
+      setTimeout(() => {
+        if (!user.onboarding_done) {
+          navigate('/onboarding');
+        } else {
+          navigate('/library');
+        }
+      }, 100);
     } catch (err) {
       setError(err.response?.data?.detail || 'Login failed. Please check your credentials.');
     } finally {
@@ -207,6 +209,7 @@ export default function LoginPage() {
                   <Mail size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="email"
+                    name="email"
                     type="email"
                     autoComplete="email"
                     placeholder="your@email.com"
@@ -229,6 +232,7 @@ export default function LoginPage() {
                   <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
                   <Input
                     id="password"
+                    name="password"
                     type={showPass ? 'text' : 'password'}
                     autoComplete="current-password"
                     placeholder="••••••••"

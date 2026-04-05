@@ -67,6 +67,7 @@ export default function ResetPasswordPage() {
                     <Mail size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
                     <Input
                       type="email"
+                      name="email"
                       autoComplete="email"
                       placeholder="your@email.com"
                       value={email}
@@ -108,6 +109,7 @@ export default function ResetPasswordPage() {
                     <Lock size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
                     <Input
                       type={showPass ? 'text' : 'password'}
+                      name="new-password"
                       autoComplete="new-password"
                       placeholder="••••••••"
                       value={newPassword}
