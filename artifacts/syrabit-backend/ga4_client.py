@@ -11,6 +11,18 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+_ga4_http: Optional["httpx.AsyncClient"] = None
+
+def _get_ga4_client():
+    global _ga4_http
+    if _ga4_http is None:
+        import httpx
+        _ga4_http = httpx.AsyncClient(
+            timeout=15,
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=2),
+        )
+    return _ga4_http
+
 _db_token_cache: dict = {"token": None, "loaded": False}
 
 async def _load_db_refresh_token() -> str:
@@ -62,8 +74,7 @@ async def _get_access_token() -> Optional[str]:
     if not c["refresh_token"]:
         return None
     try:
-        import httpx
-        r = await httpx.AsyncClient().post(
+        r = await _get_ga4_client().post(
             "https://oauth2.googleapis.com/token",
             data={
                 "client_id":     c["client_id"],
@@ -90,7 +101,6 @@ async def run_report(dimensions: list, metrics: list,
     if not token:
         return None
     try:
-        import httpx
         body = {
             "dimensions": [{"name": d} for d in dimensions],
             "metrics": [{"name": m} for m in metrics],
@@ -100,7 +110,7 @@ async def run_report(dimensions: list, metrics: list,
         if order_bys:
             body["orderBys"] = order_bys
         url = f"https://analyticsdata.googleapis.com/v1beta/properties/{_cfg()['property_id']}:runReport"
-        r = await httpx.AsyncClient().post(url, json=body,
+        r = await _get_ga4_client().post(url, json=body,
             headers={"Authorization": f"Bearer {token}"}, timeout=15)
         r.raise_for_status()
         return r.json()
@@ -241,8 +251,7 @@ async def exchange_code_for_tokens(code: str, redirect_uri: str) -> Optional[dic
     """Exchange OAuth code for access + refresh tokens."""
     c = _cfg()
     try:
-        import httpx
-        r = await httpx.AsyncClient().post(
+        r = await _get_ga4_client().post(
             "https://oauth2.googleapis.com/token",
             data={
                 "client_id":     c["client_id"],

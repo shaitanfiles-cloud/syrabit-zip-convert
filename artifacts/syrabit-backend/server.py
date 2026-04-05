@@ -400,6 +400,12 @@ async def lifespan(app):
         await sarvam_client_direct.aclose()
     if sarvam_llm_client_direct:
         await sarvam_llm_client_direct.aclose()
+    try:
+        from ga4_client import _ga4_http
+        if _ga4_http:
+            await _ga4_http.aclose()
+    except Exception:
+        pass
     mongo_client.close()
     if _lock_fd:
         try:

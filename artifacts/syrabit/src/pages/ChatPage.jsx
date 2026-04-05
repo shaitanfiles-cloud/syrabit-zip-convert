@@ -68,7 +68,7 @@ export default function ChatPage() {
           messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
         }
       }
-    }, 80);
+    }, 40);
     return () => { if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current); };
   }, [messages]);
 

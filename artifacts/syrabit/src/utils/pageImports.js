@@ -15,8 +15,8 @@ export function prefetchCriticalRoutes() {
       });
     } else {
       pageImports.library();
-      setTimeout(() => { pageImports.chat(); }, 500);
+      setTimeout(() => { pageImports.chat(); }, 300);
     }
   };
-  setTimeout(doPrefetch, 4000);
+  setTimeout(doPrefetch, 1500);
 }

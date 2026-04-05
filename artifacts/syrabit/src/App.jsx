@@ -92,7 +92,7 @@ const PageFallbackContent = () => (
   </div>
 );
 
-function DeferredFallback({ delay = 300 }) {
+function DeferredFallback({ delay = 150 }) {
   const [show, setShow] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => setShow(true), delay);
@@ -147,7 +147,7 @@ function App() {
       document.removeEventListener('touchstart', onHoverLibrary, { capture: true });
     };
 
-    const fallback = setTimeout(trigger, 5000);
+    const fallback = setTimeout(trigger, 3000);
     return () => { clearTimeout(fallback); detach(); };
   }, []);
 
