@@ -233,17 +233,12 @@ _SLM_SLOT_CANDIDATES = [
     ("sarvam:2",    "sarvam-m",                                          4, 0),
     ("groq",        "llama-3.3-70b-versatile",                           4, 1),
     ("gemini",      "gemini-2.5-flash",                                  6, 2),
-    ("gemini:2",    "gemini-2.5-flash",                                  6, 2),
-    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 3),
-    ("openai",      "gpt-4o-mini",                                       4, 4),
-    ("bedrock",     "amazon.nova-micro-v1:0",                            2, 5),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
-    ("sarvam",      "sarvam-m",                                          4, 0),
-    ("cerebras",    "llama3.1-8b",                                       6, 1),
-    ("groq:2",      "llama-3.3-70b-versatile",                           4, 2),
-    ("gemini",      "gemini-2.5-flash",                                  6, 3),
+    ("cerebras",    "llama3.1-8b",                                       6, 0),
+    ("sarvam",      "sarvam-m",                                          4, 1),
+    ("openrouter",  "deepseek/deepseek-chat-v3-0324",                    4, 2),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
