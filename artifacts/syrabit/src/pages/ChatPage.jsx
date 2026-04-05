@@ -12,7 +12,6 @@ import { getConversation, getAnonConversation, getSubject, getChapters, API_BASE
 import { AppLayout } from '@/components/layout/AppLayout';
 import { toast } from 'sonner';
 
-import '@/styles/perplexity-chat.css';
 
 import { MessageBubble } from './chat/MessageBubble';
 import { EmptyState } from './chat/EmptyState';

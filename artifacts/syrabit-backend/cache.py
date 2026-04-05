@@ -32,7 +32,7 @@ _ai_response_cache = cachetools.TTLCache(maxsize=512, ttl=3600)
 
 # ── User Object Cache ─────────────────────────────────────────────────────────
 # Keyed by user_id, 120-second TTL — eliminates DB round-trip on every auth'd request
-_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=300)
+_user_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2000, ttl=600)
 
 def _invalidate_user_cache(uid: str):
     _user_cache.pop(uid, None)
@@ -40,7 +40,7 @@ def _invalidate_user_cache(uid: str):
 
 # ── Conversation Object Cache ──────────────────────────────────────────────────
 # Keyed by "conv_id:uid", 60-second TTL — avoids PG on every chat turn
-_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4000, ttl=300)
+_conv_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=4000, ttl=600)
 
 def _conv_cache_key(conv_id: str, uid: str) -> str:
     return f"{conv_id}:{uid}"

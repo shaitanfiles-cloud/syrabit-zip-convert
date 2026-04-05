@@ -1713,7 +1713,7 @@ async def resolve_rag_context(
                 _ch_doc = await db.chapters.find_one(
                     {"title": {"$regex": re.escape(_syllabus_chapter_title), "$options": "i"},
                      **({"subject_id": subject_id} if subject_id else {})},
-                    {"_id": 0, "content": 1, "title": 1, "topics": 1},
+                    {"_id": 0, "content": 1, "title": 1, "topics": 1, "subject_id": 1},
                 )
                 _ch_content = (_ch_doc or {}).get("content", "") if _ch_doc else ""
                 if _ch_content and len(_ch_content) > 50:
@@ -1726,6 +1726,15 @@ async def resolve_rag_context(
                     _has_card = True
                     rag_ctx["quality"] = "high"
                     rag_ctx["source"] = "rag"
+                    _fb_title = (_ch_doc or {}).get("title", _syllabus_chapter_title)
+                    rag_ctx["content_card_meta"] = {
+                        "card_name": _fb_title,
+                        "lesson_name": _fb_title,
+                        "subject_name": subject_name or "",
+                        "board_name": "",
+                        "class_name": "",
+                        "card_slug": "",
+                    }
                     logger.info(
                         f"RAG resolve: chapter content fallback ({len(_ch_content)} chars) "
                         f"for syllabus match '{_syllabus_chapter_title}' | query: {query[:50]}"

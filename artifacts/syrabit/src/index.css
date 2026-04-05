@@ -811,8 +811,12 @@
   color: #1e3a8a !important;
 }
 
+[data-testid="chat-message-bubble"]:not(:last-child) {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
 /* ── Source Card ─────────────────────────────────────────────────────────────── */
-/* Mini source pill — breadcrumb: AssamBoard Curriculum · Subject · Lesson */
 .source-mini-pill {
   display: inline-flex;
   align-items: center;
