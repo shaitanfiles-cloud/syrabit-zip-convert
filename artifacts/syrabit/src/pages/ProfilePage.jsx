@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { PageTitle } from '@/components/PageTitle';
 import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp } from '@/utils/api';
 import { toast } from 'sonner';
+import { Analytics } from '@/utils/analytics';
 import { PLANS, loadRazorpay, ga4Track } from './profile/shared';
 import ProfileHeader from './profile/ProfileHeader';
 import AcademicDetails from './profile/AcademicDetails';
@@ -165,15 +166,16 @@ export default function ProfilePage() {
   });
 
   const openRzp = (orderData, setLoadingFn, onSuccess) => {
+    const planName = orderData._plan || 'unknown';
     const options = {
       key: orderData.key_id, amount: orderData.amount, currency: orderData.currency,
       name: 'Syrabit.ai', description: orderData._desc, order_id: orderData.order_id,
       prefill: prefillData(), theme: { color: '#7c3aed' },
-      modal: { ondismiss: () => setLoadingFn(false) },
+      modal: { ondismiss: () => { Analytics.paymentModalClosed(planName); setLoadingFn(false); } },
       handler: onSuccess,
     };
     const rzp = new window.Razorpay(options);
-    rzp.on('payment.failed', (r) => { toast.error(`Payment failed: ${r.error?.description || 'Unknown error'}`); setLoadingFn(false); });
+    rzp.on('payment.failed', (r) => { Analytics.purchaseFailed(planName, r.error?.description || 'Unknown error', options.order_id); toast.error(`Payment failed: ${r.error?.description || 'Unknown error'}`); setLoadingFn(false); });
     rzp.open();
   };
 
@@ -188,6 +190,7 @@ export default function ProfilePage() {
       catch (err) { toast.error(err?.response?.data?.detail || 'Payment gateway not configured. Contact admin@syrabit.ai.'); setPaymentLoading(false); return; }
       ga4Track('begin_checkout', { currency: 'INR', value: orderData.amount / 100, items: [{ item_id: paymentPlan, item_name: `${paymentPlan}_plan`, item_category: 'subscription' }] });
       orderData._desc = `${orderData.plan_label} Plan — ${PLANS[paymentPlan]?.credits.toLocaleString()} AI credits`;
+      orderData._plan = paymentPlan;
       openRzp(orderData, setPaymentLoading, async (response) => {
         try {
           await verifyPayment({ razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature, plan: paymentPlan });
@@ -224,6 +227,7 @@ export default function ProfilePage() {
       catch (err) { toast.error(err?.response?.data?.detail || 'Failed to create top-up order.'); setTopUpLoading(false); return; }
       ga4Track('begin_checkout', { currency: 'INR', value: orderData.amount / 100, items: [{ item_id: 'credit_topup', item_name: `topup_${topUpCredits}`, item_category: 'credits', quantity: topUpCredits }] });
       orderData._desc = `Credit Top-up — ${topUpCredits} credits`;
+      orderData._plan = `topup_${topUpCredits}`;
       openRzp(orderData, setTopUpLoading, async (response) => {
         try {
           await verifyCreditTopUp({ razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature, credits: topUpCredits });

@@ -204,7 +204,7 @@ async def _init_pg_pool():
         logging.getLogger(__name__).warning("[WARN] Replit PostgreSQL not configured — asyncpg disabled")
         return
     try:
-        pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=2, max_size=20)
+        pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=3, max_size=40)
         async with pg_pool.acquire() as conn:
             await conn.execute(_PG_INIT_SQL)
             try:

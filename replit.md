@@ -2,7 +2,7 @@
 
 ## Overview
 
-Syrabit.ai is an AI-powered educational platform for AHSEC Class 11/12 and Degree students in Assam, India. It offers comprehensive learning resources across two boards and 55 subjects with chapter-level RAG chunks. The platform leverages AI for content generation, syllabus management, SEO optimization, and provides a robust admin panel. Its purpose is to personalize learning and enhance content delivery, making high-quality, localized educational content accessible.
+Syrabit.ai is an AI-powered educational platform designed for AHSEC Class 11/12 and Degree students in Assam, India. It provides comprehensive, localized learning resources across two educational boards and 55 subjects, utilizing chapter-level RAG chunks. The platform's core purpose is to personalize education and improve content delivery through AI-driven content generation, syllabus management, and SEO optimization, all managed via a robust admin panel. The project aims to make high-quality educational content accessible and engaging.
 
 ## User Preferences
 
@@ -10,56 +10,51 @@ I prefer iterative development with clear communication on major changes. I valu
 
 ## System Architecture
 
-The project is a pnpm workspace monorepo consisting of a React + Vite frontend and a FastAPI Python backend.
+The project is structured as a pnpm workspace monorepo, comprising a React + Vite frontend and a FastAPI Python backend.
 
 **Backend Architecture:**
 - **Modular Design:** The backend uses an app factory, shared modules, and route modules for clear separation of concerns.
-- **On-Demand Embeddings:** Chapter embeddings are generated automatically on chapter create/update via `_embed_chapter_bg()` background task. The chapter `topics` field serves as embedding content. Embedding cleanup happens on chapter/subject delete.
-- **Observability Layer:** Tracks LLM provider metrics, vector search similarity, and pipeline runs, consolidated in an Admin Intelligence endpoint.
-- **Content Feedback Loop:** Includes auto-detection of thin chapters, an auto-heal endpoint with version history, and quality gates for content generation.
-- **Content Pipeline Batching:** Notes, MCQs, and flashcards generation runs in parallel via `asyncio.gather` with a pipeline semaphore (default 4 concurrent LLM calls). Endpoints: `POST /admin/content/chapters/{id}/generate-all` (single chapter, all assets in parallel), `POST /admin/content/subject/{id}/generate-all` (all chapters in a subject), `POST /admin/content/regenerate-thin` (parallel thin chapter regeneration), `POST /admin/content/bulk-regenerate-notes` (regenerates ALL chapters across ALL subjects sequentially with 2s sleep between chapters).
-- **Content Generation Prompt:** Overhauled to produce 2500-4000+ word exam-ready study notes. Each syllabus topic gets its own `## TopicName` heading with: opening definition, detailed explanation (10-15 sentences), `### Key Points` (8-12 bullets), `### Example` (India/Assam context), and `### Exam Tip`. max_tokens=8000, Sarvam polish step removed (caused truncation). Average output: 3,646 words/chapter (145,866 total across 40 chapters). Topic-wise RAG chunking produces 37-123 chunks per chapter.
-- **Vertex AI / Gemini Integration:** Nine AI services are integrated for tasks like text embeddings, translation, vision analysis, content enhancement, quality scoring, and SEO meta generation.
-- **SEO & Content Quality:** Implements prompt variants for content generation, title diversification, content-derived meta descriptions, and a quality scoring system to prevent thin content.
-- **PYQ HTML Replica:** Processes PYQ PDFs using Gemini Vision OCR to create SEO-optimized HTML replicas, stored in MongoDB and RAG-indexed.
-- **Syllabus Embedder:** Generates chapter and topic-level embeddings, enriched with context, content snippets, and keywords for precise matching and classification. Topic embed text includes fuzzy-matched content sections and extracted key terms (not just topic name). Admin endpoints: `POST /admin/reseed-embeddings` (force re-embed all chapters+topics), `POST /admin/extract-keywords` (parse h2/h3 headings + bold terms from content → `seo_topics` collection). AI notes generation auto-extracts h2/h3 topics from generated content, merges into chapter's `topics` field, and stores as `seo_topics`. Stats: 43 chapters, 353 topic embeddings, 991 SEO keywords, 0 null vectors.
-- **RAG Pipeline:** Features a 4-way parallel search (keyword chunks, chapter keywords, subject keywords, vector cosine similarity) with grounding citations. It runs RAG search, web search, and conversation history fetch in parallel, with graceful degradation. Both streaming and sync chat handlers use a 3.5s timeout budget (asyncio.wait) to prevent hangs from slow downstream services. Performance optimizations include caching, parallelized lookups, reduced vector search candidates, shared query embedding cache (eliminates duplicate embed calls between syllabus classify and vector search), high-confidence fast-path (skips keyword search when vector similarity >= 0.70, populates subject context from syllabus match for source card rendering), intent-aware context filtering (boosts/skips sections by intent type), and a grounding budget system (6000 char limit, 8000 for syllabus) that prioritizes content cards over vector hits over chunks. Subject context resolution uses denormalized fields from subject documents (boardName, className, board_slug, class_slug, etc.) with fallback to stream→class→board lookups.
-- **Subject Linking for Syllabus:** When syllabus queries arrive without a subject_id (user not in subject context), the semantic router (`SubjectRoute` with `subject_id` from embedder) resolves the subject. Both stream and non-stream handlers use `_sr_route.subject_id` as fallback, fetch chapters, populate `content_card_meta`, and emit source attribution data. Grounding uses lesson-level structure (chapter title + description, no topic sub-lists).
-- **Multi-LLM Pipeline (`pipeline.py`):** Stage 1 (Topic Resolver) runs in parallel with Phase 0+1 — fast model (Cerebras llama3.1-8b) extracts structured topic metadata (subject, chapter, topic, intent, search keywords) as JSON. Stages 2+3 (RAG Synthesizer + Response Polisher) are currently disabled due to provider credit exhaustion adding 8s timeouts without value; single-LLM approach is used instead. The pipeline architecture remains for future re-enablement when provider credits are replenished. Think-block stripping in `_emit_tokens` buffers `<think>` content and falls back to emitting it if no visible output is produced (prevents 0-word cascade failures).
-- **Monetization:** Supports free, starter, and pro plans with daily-resetting credit-based usage. Integrates Razorpay (INR) and Stripe (USD) for payments.
-- **Optional Authentication:** Chat, History, and Profile pages are accessible without login. Anonymous users get a `syrabit_anon_id` (128-bit random, stored in localStorage) for conversation persistence in Upstash Redis (7-day TTL, max 20 conversations). Conversations are sent via `x-anon-id` header. IP-based rate limiting applies to anon users.
-- **Security:** Uses ASGI-native `SecurityHeadersMiddleware` with env-toggleable headers (`SEC_HSTS`, `SEC_XCTO`, `SEC_XFRAME`, `SEC_REFERRER`, `SEC_PERM`, `SEC_CSP_REPORT_ONLY`). CSP report-only mode available. Includes prompt safety guardrails module (`guardrails/prompt_safety.py`) for injection/cheating/sensitive content blocking.
-- **Privacy:** DPDP Act consent tracked per-user (version + timestamp). `/api/privacy/consent` GET/POST for viewing/withdrawing consent. Consent checkbox on signup.
-- **Performance Optimizations:** Implements bounded content caching, efficient JWT decoding, thread pooling (32 workers) for Supabase calls, MongoDB indexing, hierarchy cache (stream→class→board, 30min TTL), and AsyncOpenAI client pooling (SHA-256-keyed cache avoids per-request instantiation).
+- **On-Demand Embeddings:** Chapter embeddings are generated automatically upon chapter creation or update, with cleanup on deletion. Topic fields serve as embedding content.
+- **Observability:** Tracks LLM provider metrics, vector search similarity, and pipeline runs, consolidated in an Admin Intelligence endpoint.
+- **Content Feedback Loop:** Features auto-detection of thin chapters, an auto-heal endpoint with version history, and quality gates for content generation.
+- **Content Pipeline Batching:** Notes, MCQs, and flashcard generation run in parallel using `asyncio.gather` with a pipeline semaphore for concurrent LLM calls. Endpoints support generation for single chapters, entire subjects, and bulk regeneration of thin chapters or all notes.
+- **Content Generation Prompt:** Generates 2500-4000+ word exam-ready study notes with specific formatting (definition, explanation, key points, example, exam tip). It aims for detailed, contextually rich output.
+- **AI Integration:** Integrates with Vertex AI / Gemini for various tasks including text embeddings, translation, vision analysis, content enhancement, quality scoring, and SEO meta generation.
+- **SEO & Content Quality:** Implements prompt variants, title diversification, content-derived meta descriptions, and a quality scoring system to prevent thin content.
+- **PYQ HTML Replica:** Processes PYQ PDFs via Gemini Vision OCR to create SEO-optimized HTML replicas, stored in MongoDB and RAG-indexed.
+- **Syllabus Embedder:** Generates chapter and topic-level embeddings, enriched with context and keywords for precise matching. AI notes generation automatically extracts topics from content and stores them as `seo_topics`.
+- **RAG Pipeline:** Employs a 4-way parallel search (keyword chunks, chapter keywords, subject keywords, vector cosine similarity) with grounding citations. It runs RAG, web search, and conversation history fetches in parallel with graceful degradation. Optimizations include caching, parallel lookups, reduced vector search candidates, shared query embedding cache, and a high-confidence fast-path. It features intent-aware context filtering and a grounding budget system.
+- **Subject Linking for Syllabus:** A semantic router resolves the subject when syllabus queries lack a `subject_id`, ensuring relevant content delivery and source attribution.
+- **Multi-LLM Pipeline:** Designed with a multi-stage architecture (Topic Resolver, RAG Synthesizer, Response Polisher) using various LLMs, though some stages are temporarily disabled due to credit constraints.
+- **Monetization:** Supports free, starter, and pro plans with credit-based usage and integrates Razorpay (INR) and Stripe (USD) for payments.
+- **Optional Authentication:** Chat, History, and Profile pages are accessible to anonymous users via a `syrabit_anon_id` for conversation persistence in Upstash Redis.
+- **Security:** Uses ASGI-native `SecurityHeadersMiddleware` with environment-toggleable headers and prompt safety guardrails to prevent injection/cheating/sensitive content.
+- **Privacy:** Tracks DPDP Act consent per-user.
+- **Performance Optimizations:** Includes bounded content caching, efficient JWT decoding, thread pooling for Supabase calls, MongoDB indexing, hierarchy caching, and AsyncOpenAI client pooling.
 - **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection, and SEO prompts generate FAQ blocks and specific citations.
 
 **Frontend Architecture:**
-- **UI/UX:** React + Vite, React Router, and Tailwind CSS, with a mobile-first responsive design.
-- **Admin Panel:** A comprehensive interface with Content Editor (default tab), CMS/Docs, Blog Publisher, SEO Manager, QA Review, and an Intelligence panel displaying system health and metrics. Content Editor includes a Topics input for AI embeddings. Content panel supports: inline subject edit/rename, bulk AI notes generation for all chapters without content, cascade deletes (board→class→stream→subject→chapters+assets), and chapter asset cards (PYQs, flashcards, blogs, SEO topics, coverage scores).
+- **UI/UX:** Built with React, Vite, React Router, and Tailwind CSS, featuring a mobile-first responsive design.
+- **Admin Panel:** A comprehensive interface for content editing, CMS, blog publishing, SEO management, QA review, and system intelligence. Includes tools for inline editing, bulk AI generation, and cascade deletes.
 - **Component Refactoring:** Large files are split into sub-components for maintainability.
-- **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` serves cached pre-rendered HTML for search engine bots on key pages.
-- **Bot Crawlability:** Backend serves `/robots.txt` (with rules for 16+ bot user-agents), `/sitemap.xml` (301→`/api/seo/sitemap.xml`), and `/sitemap-index.xml` (301→`/api/seo/sitemap-index.xml`) directly. `Allow: /api/seo/` ensures sitemap sub-files are crawlable despite `Disallow: /api/`. Vite `public/robots.txt` mirrors the backend version for consistency.
-- **Performance Optimizations:** Includes emergent badge suppression, PWA icon optimization, lazy-loading CMS sections, React Query for caching, CSS grid for content display, prefetching for navigation, admin panel lazy-loaded sub-components (20 sections via React.lazy), CSS containment on chat bubbles, and `MarkdownContent`/`BottomNav` memoized with `memo()`.
-- **PWA:** Fully optimized with multi-cache service worker (static v4.0, runtime, API with stale-while-revalidate, font cache), all icons precached, cache trimming (80 runtime / 50 API entries), offline fallback. Install tracking via `appinstalled` event → MongoDB `pwa_installs` collection. Admin dashboard has "PWA App Downloads" section with total/7d installs, prompt→install conversion rate, and 14-day daily chart. Manifest enhanced with `launch_handler`, `screenshots`, UTM-tagged `start_url`, `handle_links`.
-- **SEO Chapter Pages:** Chapter pages (`ChapterPage.jsx`) serve as the single SEO landing pages at `/{board}/{class}/{subject}/{chapter}`. Old 5-segment topic URLs redirect to the parent chapter. Share button includes SERP preview modal. Sitemap includes `sitemap-chapters.xml` for all chapter URLs. Heading IDs are deduplicated with counters (e.g., `example`, `example-2`). TOC shows only topic-level headings (h2, or h3 when < 3 h2s), filtering out repetitive sub-sections (Key Points, Example, Exam Tip).
-- **Analytics:** Dual-destination tracking (GA4 + PostHog). Events: page views, sign_up, login, chat_message_sent, credits_exhausted, chapter_viewed (view_item), chapter_shared (share), chapter_retry, chapter_ask_ai_clicked, toc_click, scroll_depth (25/50/75/100% milestones), search_used (debounced 1s), subject_opened, subject_bookmarked, begin_checkout, purchase, pwa_installed. GA4 env var: `VITE_GA_MEASUREMENT_ID`. Session heartbeat (30s pings) + session-end beacon. Visitor/session IDs in localStorage/sessionStorage.
-- **SEO Coverage:** All pages have `PageMeta` (title, description, OG, Twitter, canonical, geo targeting). JSON-LD structured data: Article + LearningResource + BreadcrumbList on chapter pages, Article + Course + FAQPage on subject pages, BreadcrumbList on subject pages, ItemList on library. Programmatic SEO engine generates thousands of pages (notes, MCQs, definitions, important-questions, examples). Segmented sitemaps (sitemap-index → pages, subjects, chapters, notes, mcqs, pyqs, definitions, examples, learn). Bot-render middleware with 1h TTL cache.
-- **Content Display:** Library page features subject cards with chapter links to chapter pages. Lesson pages have a blog-style layout with reading progress and sticky TOC.
+- **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` serves cached pre-rendered HTML to search engine bots for key pages.
+- **Bot Crawlability:** The backend serves `robots.txt`, `sitemap.xml`, and `sitemap-index.xml` directly to ensure proper indexing.
+- **Performance Optimizations:** Includes emergent badge suppression, PWA icon optimization, lazy-loading CMS sections, React Query for caching, CSS grid for content display, prefetching for navigation, and memoization of key components.
+- **PWA:** Fully optimized with a multi-cache service worker, precached icons, cache trimming, and offline fallback. Tracks installations via MongoDB.
+- **SEO Chapter Pages:** Chapter pages serve as single SEO landing pages with a clean URL structure. Includes SERP preview modals and deduplicated heading IDs.
+- **Analytics:** Dual-destination tracking (GA4 + PostHog) for various user events, including page views, sign-ups, chat messages, and PWA installs.
+- **SEO Coverage:** All pages include `PageMeta` for title, description, OG, Twitter, canonical, and geo targeting. Uses JSON-LD structured data and a programmatic SEO engine to generate thousands of pages with segmented sitemaps.
+- **Content Display:** Library page features subject cards. Lesson pages have a blog-style layout with reading progress and sticky TOC.
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.
-- **Profile Course Type Selector:** DEGREE students can select course types and subjects via an expandable selector.
+- **Profile Course Type Selector:** DEGREE students can select course types and subjects.
 - **Chat Interface:** Uses a standardized 0.1 temperature for LLMs and increased RAG chunk size for academic concepts.
-
-**Monorepo Structure:**
-- `artifacts/`: Deployable applications.
-- `lib/`: Shared libraries (API spec, React Query hooks, Zod schemas, Drizzle ORM schema).
-- `scripts/`: Utility scripts.
 
 ## External Dependencies
 
 - **Databases:** PostgreSQL (for users/auth) and MongoDB (for content/RAG).
-- **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers, Google OAuth (Sign In with Google via GIS library, server-side ID token verification via `google-auth`).
+- **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers, Google OAuth (Sign In with Google).
 - **Caching:** Redis (distributed cache) and in-memory caching.
-- **LLM Providers (SLM pool):** Chat pool order: Sarvam (sarvam-m) → Groq (llama-3.3-70b-versatile) → Gemini (gemini-2.5-flash) → OpenRouter (gemma-3-27b-it) → Cerebras (llama3.1-8b) → Fireworks (gpt-oss-120b). Content pool: Cerebras (qwen-3-235b) → Sarvam → OpenRouter. Also uses Gemini Vision, gemini-embedding-001.
+- **LLM Providers (SLM pool):** Sarvam, Groq, Gemini, OpenRouter, Cerebras, Fireworks. Also Gemini Vision and gemini-embedding-001.
 - **Cloudflare AI Gateway:** Routes LLM traffic, provides caching, analytics, and graceful degradation.
 - **Voyage AI Rerank:** `rerank-2` model for re-scoring vector search results.
 - **Payment Gateways:** Razorpay (INR) and Stripe (USD).
@@ -71,19 +66,3 @@ The project is a pnpm workspace monorepo consisting of a React + Vite frontend a
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm.
 - **Containerization:** Docker.
-
-## Cloudflare Deployment Configuration
-
-When deploying the frontend on Cloudflare Pages with the backend on Replit, set these environment variables on the backend:
-
-- `COOKIE_DOMAIN` — e.g., `.syrabit.ai` (leading dot for subdomain sharing). Leave unset in dev.
-- `PRODUCTION_ORIGINS` — e.g., `https://syrabit.ai,https://www.syrabit.ai`. Appended to CORS origins automatically.
-- `VITE_BACKEND_URL` — Set on the frontend build to point to the Replit backend URL.
-- `GOOGLE_CLIENT_ID` — Google OAuth Client ID (backend, required for Google sign-in).
-- `GOOGLE_CLIENT_SECRET` — Google OAuth Client Secret (backend, optional — only needed if using authorization code flow).
-
-All frontend files use a single centralized `API_BASE` from `utils/api.jsx`. No local API base definitions.
-
-## Google OAuth
-
-Google Sign-In is integrated on both Login and Signup pages. The frontend dynamically fetches the Google Client ID from `GET /api/auth/google/client-id`. If `GOOGLE_CLIENT_ID` is not set, the Google button is hidden. The backend endpoint `POST /api/auth/google` verifies the ID token server-side using `google.oauth2.id_token.verify_oauth2_token`, then finds or creates the user. Users who sign up via Google get `auth_provider: "google"` and `google_id` fields set on their user record. Existing email/password users who sign in with Google get their Google ID linked automatically. Google-only users (empty `password_hash`) can set a password via the "Forgot password" flow.

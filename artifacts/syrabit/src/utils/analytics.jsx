@@ -82,6 +82,28 @@ const reset = () => {
   try { if (window.posthog) window.posthog.reset(); } catch {}
 };
 
+const _getAttribution = () => {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const curSource = params.get('utm_source') || params.get('ref') || '';
+    const curMedium = params.get('utm_medium') || '';
+    const curCampaign = params.get('utm_campaign') || '';
+    if (curSource && !sessionStorage.getItem('syrabit_utm_source')) {
+      sessionStorage.setItem('syrabit_utm_source', curSource);
+      sessionStorage.setItem('syrabit_utm_medium', curMedium);
+      sessionStorage.setItem('syrabit_utm_campaign', curCampaign);
+    }
+    if (!sessionStorage.getItem('syrabit_landing_page')) {
+      sessionStorage.setItem('syrabit_landing_page', window.location.pathname);
+    }
+    const source = sessionStorage.getItem('syrabit_utm_source') || '';
+    const medium = sessionStorage.getItem('syrabit_utm_medium') || '';
+    const campaign = sessionStorage.getItem('syrabit_utm_campaign') || '';
+    const landing = sessionStorage.getItem('syrabit_landing_page') || '';
+    return [source, medium, campaign, landing].filter(Boolean).join(' | ') || 'direct';
+  } catch { return 'direct'; }
+};
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 export const Analytics = {
@@ -98,7 +120,7 @@ export const Analytics = {
 
   // ── Auth ───────────────────────────────────────────────────────────────────
   signup: (email, plan = 'free') => {
-    track('user_signed_up', { email_domain: email.split('@')[1], plan });
+    track('user_signed_up', { email_domain: email.split('@')[1], plan, attribution_source: _getAttribution() });
     identify(email, { plan, signed_up_at: new Date().toISOString() });
     trackGA4('sign_up', { method: 'email', plan });
   },
@@ -193,18 +215,28 @@ export const Analytics = {
 
   // ── Payment ────────────────────────────────────────────────────────────────
   upgradeInitiated: (plan, priceInr) => {
-    track('upgrade_initiated', { plan, price_inr: priceInr });
+    track('upgrade_initiated', { plan, price_inr: priceInr, attribution_source: _getAttribution() });
     trackGA4('begin_checkout', { currency: 'INR', value: priceInr / 100, items: [{ item_name: plan, price: priceInr / 100 }] });
   },
 
   purchaseComplete: (plan, priceInr, orderId) => {
-    track('purchase_completed', { plan, price_inr: priceInr, order_id: orderId });
+    track('purchase_completed', { plan, price_inr: priceInr, order_id: orderId, attribution_source: _getAttribution() });
     trackGA4('purchase', {
       transaction_id: orderId,
       currency: 'INR',
       value: priceInr / 100,
       items: [{ item_name: plan, price: priceInr / 100 }],
     });
+  },
+
+  purchaseFailed: (plan, reason, orderId) => {
+    track('purchase_failed', { plan, reason, order_id: orderId, attribution_source: _getAttribution() });
+    trackGA4('purchase_failed', { plan, reason, order_id: orderId });
+  },
+
+  paymentModalClosed: (plan) => {
+    track('payment_modal_closed', { plan, attribution_source: _getAttribution() });
+    trackGA4('payment_modal_closed', { plan });
   },
 
   // ── Admin ──────────────────────────────────────────────────────────────────

@@ -487,10 +487,17 @@ class SyllabusEmbedder:
 
     async def _get_cache(self) -> list[dict]:
         now = time.time()
-        if self._cache and (now - self._cache_loaded_at) < CACHE_TTL_SECONDS:
+        cache_age = now - self._cache_loaded_at
+        if self._cache and cache_age < CACHE_TTL_SECONDS:
+            if cache_age > CACHE_TTL_SECONDS * 0.8 and not getattr(self, '_bg_refresh_running', False):
+                self._bg_refresh_running = True
+                asyncio.ensure_future(self._background_refresh())
             return self._cache
         if self._col is None:
             return []
+        return await self._reload_cache()
+
+    async def _reload_cache(self) -> list[dict]:
         cursor = self._col.find(
             {"embedding": {"$exists": True}},
             {
@@ -502,11 +509,20 @@ class SyllabusEmbedder:
         )
         entries = await cursor.to_list(length=None)
         self._cache = entries
-        self._cache_loaded_at = now
+        self._cache_loaded_at = time.time()
         ch_count = sum(1 for e in entries if e.get("level", "chapter") != "topic")
         tp_count = sum(1 for e in entries if e.get("level") == "topic")
         logger.info(f"SyllabusEmbedder cache loaded: {ch_count} chapter + {tp_count} topic embeddings")
         return entries
+
+    async def _background_refresh(self):
+        try:
+            await self._reload_cache()
+            logger.info("SyllabusEmbedder proactive cache refresh completed")
+        except Exception as e:
+            logger.warning(f"SyllabusEmbedder background refresh failed: {e}")
+        finally:
+            self._bg_refresh_running = False
 
     async def _seed_chapters(self) -> int:
         try:

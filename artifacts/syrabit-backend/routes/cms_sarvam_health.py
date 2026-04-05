@@ -1344,6 +1344,7 @@ async def health():
             },
             "supabase": {"status": "ok" if supa else "not_configured"},
             "razorpay": {"status": rp_status},
+            "bot_render": get_bot_render_metrics(),
         }
     }
 
@@ -1774,6 +1775,12 @@ def _bot_html_response(html: str):
     )
 
 
+_bot_render_fallback_count = 0
+_bot_render_success_count = 0
+
+def get_bot_render_metrics():
+    return {"fallback_count": _bot_render_fallback_count, "success_count": _bot_render_success_count}
+
 class BotRenderMiddleware(BaseHTTPMiddleware):
     """Intercept requests from bot user-agents and return pre-rendered HTML.
 
@@ -1799,6 +1806,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
     async def dispatch(self, request: StarletteRequest, call_next):
+        global _bot_render_fallback_count, _bot_render_success_count
         ua = request.headers.get("user-agent", "")
         if not _BOT_UA_RE.search(ua):
             return await self._safe_call_next(request, call_next)
@@ -1857,7 +1865,10 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 if resp.status_code == 200:
                     html_content = resp.text
                     _bot_html_cache[cache_key] = html_content
+                    _bot_render_success_count += 1
                     return _bot_html_response(html_content)
+                _bot_render_fallback_count += 1
+                logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: /about returned {resp.status_code}")
                 return await self._safe_call_next(request, call_next)
 
             if cache_key == "_chat_":
@@ -1927,6 +1938,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     doc_resp = await client.get(f"http://localhost:{_seo_port}/api/content/cms-documents/{learn_slug}")
                 if doc_resp.status_code != 200:
+                    _bot_render_fallback_count += 1
+                    logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: /learn/{learn_slug} returned {doc_resp.status_code}")
                     return await self._safe_call_next(request, call_next)
                 doc = doc_resp.json()
                 doc_title = _html_mod.escape(doc.get("title", learn_slug))
@@ -1988,6 +2001,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     subj_resp = await client.get(f"http://localhost:{_seo_port}/api/content/subjects/{subj_id}")
                 if subj_resp.status_code != 200:
+                    _bot_render_fallback_count += 1
+                    logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: /subject/{subj_id} returned {subj_resp.status_code}")
                     return await self._safe_call_next(request, call_next)
                 subj = subj_resp.json()
                 subj_name = _html_mod.escape(subj.get("name", "Subject"))
@@ -2044,17 +2059,21 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             async with httpx.AsyncClient(timeout=10.0) as client:
                 html_resp = await client.get(api_url)
             if html_resp.status_code != 200:
-                logger.warning(f"BotRenderMiddleware falling back to SPA shell: {api_url} returned {html_resp.status_code} for path={path}")
+                _bot_render_fallback_count += 1
+                logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: {api_url} returned {html_resp.status_code} for path={path}")
                 return await self._safe_call_next(request, call_next)
             ct = html_resp.headers.get("content-type", "")
             if "text/html" not in ct and "text/xml" not in ct:
-                logger.warning(f"BotRenderMiddleware falling back to SPA shell: unexpected content-type '{ct}' from {api_url} for path={path}")
+                _bot_render_fallback_count += 1
+                logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: unexpected content-type '{ct}' from {api_url} for path={path}")
                 return await self._safe_call_next(request, call_next)
             html_content = html_resp.text
             _bot_html_cache[cache_key] = html_content
+            _bot_render_success_count += 1
             return _bot_html_response(html_content)
         except Exception as _bot_err:
-            logger.warning(f"BotRenderMiddleware falling back to SPA shell: {_bot_err} for path={path}")
+            _bot_render_fallback_count += 1
+            logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: {_bot_err} for path={path}")
             return await self._safe_call_next(request, call_next)
 
 

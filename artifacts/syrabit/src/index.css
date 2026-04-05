@@ -472,6 +472,7 @@
     z-index: -2;
     opacity: 0.28;
     animation: meshFloat 45s ease-in-out infinite;
+    will-change: transform;
   }
 
   /* ── SUBTLE GRID OVERLAY ── */
