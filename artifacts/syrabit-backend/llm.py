@@ -231,8 +231,9 @@ _MODEL_ALIAS_MAP = {
 #
 _SLM_SLOT_CANDIDATES = [
     ("sarvam:2",    "sarvam-m",                                          4, 0),
-    ("groq",        "llama-3.3-70b-versatile",                           4, 1),
-    ("gemini",      "gemini-2.5-flash",                                  6, 2),
+    ("openrouter",  "qwen/qwen-2.5-72b-instruct",                       4, 1),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 2),
+    ("gemini",      "gemini-2.5-flash",                                  6, 3),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
@@ -260,8 +261,8 @@ class _SmartKeyPool:
     """
     _RL_COOLDOWN  = 30.0
     _ERR_COOLDOWN = 10.0
-    _RPM_SOFT_THRESHOLD = 0.70
-    _RPM_HARD_THRESHOLD = 0.85
+    _RPM_SOFT_THRESHOLD = 0.80
+    _RPM_HARD_THRESHOLD = 0.90
 
     _PROVIDER_RPM_LIMITS = {
         "groq": 30,
