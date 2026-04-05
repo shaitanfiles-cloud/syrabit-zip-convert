@@ -295,12 +295,14 @@ _INTENT_FORMAT_RULES: dict[str, str] = {
     "syllabus": (
         "FORMAT RULES (syllabus):\n"
         "- Show chapters EXACTLY as they appear in the SUBJECT CHAPTERS block — do NOT rename, split, merge, or reorder them.\n"
-        "- Format each chapter as: **[exact chapter title]** — [description from the data].\n"
+        "- Format EACH chapter as a numbered markdown list item with a BLANK LINE between items:\n"
+        "  1. **Chapter Title** — Description.\n"
+        "\n"
+        "  2. **Chapter Title** — Description.\n"
         "- Do NOT invent chapter numbers if the data doesn't have them.\n"
         "- Do NOT list individual topics, sub-topics, marks breakdowns, or detailed content under each chapter.\n"
         "- If the student asks for a specific semester, show ONLY that semester's chapters.\n"
         "- Always present the COMPLETE list of chapters — never truncate.\n"
-        "- Keep it clean and scannable — chapter names and descriptions only.\n"
     ),
     "chapter_meta": (
         "FORMAT RULES (chapter_meta):\n"
