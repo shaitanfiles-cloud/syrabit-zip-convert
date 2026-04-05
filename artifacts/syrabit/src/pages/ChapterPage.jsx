@@ -285,16 +285,29 @@ export default function ChapterPage() {
         if (contentTop) {
           const keywords = decoded.split(/\s+/).filter(w => w.length > 2);
           if (keywords.length > 0) {
-            const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, strong, td');
-            let bestEl = null;
-            let bestScore = 0;
-            for (const block of allBlocks) {
-              const text = block.textContent.toLowerCase();
-              const score = keywords.reduce((s, kw) => s + (text.includes(kw) ? 1 : 0), 0);
-              if (score > bestScore) { bestScore = score; bestEl = block; }
+            const bolds = contentTop.querySelectorAll('strong, b');
+            let bestBold = null;
+            let bestBoldScore = 0;
+            for (const b of bolds) {
+              const bText = b.textContent.toLowerCase();
+              const bScore = keywords.reduce((s, kw) => s + (bText.includes(kw) ? 1 : 0), 0);
+              if (bScore > bestBoldScore) { bestBoldScore = bScore; bestBold = b; }
             }
-            if (bestEl && bestScore >= Math.min(2, keywords.length)) {
-              el = bestEl;
+            if (bestBold && bestBoldScore >= Math.min(2, keywords.length)) {
+              el = bestBold.closest('p, li, h2, h3, h4, td') || bestBold;
+            }
+            if (!el) {
+              const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, td');
+              let bestEl = null;
+              let bestScore = 0;
+              for (const block of allBlocks) {
+                const text = block.textContent.toLowerCase();
+                const score = keywords.reduce((s, kw) => s + (text.includes(kw) ? 1 : 0), 0);
+                if (score > bestScore) { bestScore = score; bestEl = block; }
+              }
+              if (bestEl && bestScore >= Math.min(2, keywords.length)) {
+                el = bestEl;
+              }
             }
           }
           if (!el) {

@@ -549,6 +549,34 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
     }
 
 
+@router.post("/admin/content/normalize-headings")
+async def admin_normalize_all_headings(admin: dict = Depends(get_admin_user)):
+    """Normalize headings in all chapters with content: convert **bold** lines to ## headings."""
+    total = 0
+    updated = 0
+    batch_size = 200
+    skip = 0
+    while True:
+        chapters = await db.chapters.find(
+            {"content": {"$exists": True, "$ne": ""}},
+            {"_id": 0, "id": 1, "content": 1}
+        ).skip(skip).limit(batch_size).to_list(batch_size)
+        if not chapters:
+            break
+        total += len(chapters)
+        for ch in chapters:
+            original = ch.get("content", "")
+            normalized = _normalize_headings(original)
+            if normalized != original:
+                await db.chapters.update_one(
+                    {"id": ch["id"]},
+                    {"$set": {"content": normalized}}
+                )
+                updated += 1
+        skip += batch_size
+    return {"total_chapters": total, "updated": updated}
+
+
 @router.post("/admin/content/subject/{subject_id}/format-notes")
 async def admin_format_subject_notes(subject_id: str, admin: dict = Depends(get_admin_user)):
     """Re-format all chapter content for a subject: convert raw markdown to

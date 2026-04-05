@@ -555,13 +555,38 @@ def _strip_markdown_symbols(text: str) -> str:
 
 def _normalize_headings(content: str) -> str:
     """Normalize malformed markdown headings from LLM output.
-    Fixes: **## H**, ## **H**, ### ## H, ---\\n## H, and missing spaces."""
+    Fixes: **## H**, ## **H**, ### ## H, ---\\n## H, and missing spaces.
+    Also converts standalone bold lines (like **Topic Name**) to ## headings."""
     content = re.sub(r'\*{1,3}(#{1,6})\s*(.+?)\*{1,3}', r'\1 \2', content, flags=re.MULTILINE)
     content = re.sub(r'^(#{1,6})\s*\*{1,3}(.+?)\*{1,3}\s*$', r'\1 \2', content, flags=re.MULTILINE)
     content = re.sub(r'^#{1,6}\s+#{1,6}\s+', '## ', content, flags=re.MULTILINE)
     content = re.sub(r'^(#{1,6})([^\s#])', r'\1 \2', content, flags=re.MULTILINE)
     content = re.sub(r'^---+\s*\n(#{1,6}\s)', r'\1', content, flags=re.MULTILINE)
-    return content
+    _skip = {'summary', 'introduction', 'key points', 'key facts', 'common mistake',
+             'exam tip', 'important questions', 'conclusion', 'note', 'example'}
+    lines = content.split('\n')
+    result = []
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        m = re.match(r'^\*{2,4}(.+?)\*{2,4}$', stripped)
+        if m and not stripped.startswith('#'):
+            heading_text = m.group(1).strip().strip('*').strip()
+            normalised_check = re.sub(r'[:\-.\s]+$', '', heading_text).lower()
+            is_short_acronym = len(heading_text) <= 3 and heading_text.replace(' ', '').isalnum()
+            if ((len(heading_text) >= 4 or is_short_acronym)
+                    and len(heading_text) <= 120
+                    and normalised_check not in _skip
+                    and not heading_text.startswith('-')
+                    and not heading_text.startswith('*')):
+                prev_blank = (i == 0 or not lines[i - 1].strip())
+                next_is_text = (i + 1 < len(lines) and lines[i + 1].strip()
+                                and not lines[i + 1].strip().startswith('#')
+                                and not lines[i + 1].strip().startswith('**'))
+                if prev_blank or next_is_text:
+                    result.append(f'## {heading_text}')
+                    continue
+        result.append(line)
+    return '\n'.join(result)
 
 
 def _clamp_meta_description(text: str, min_len: int = 140, max_len: int = 160) -> str:
