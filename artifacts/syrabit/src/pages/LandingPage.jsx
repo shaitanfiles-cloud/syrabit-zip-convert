@@ -15,12 +15,8 @@ export default function LandingPage() {
 
   useEffect(() => {
     if (user) {
-      navigate('/library', { replace: true });
+      navigate('/chat', { replace: true });
     }
-    const timer = setTimeout(() => {
-      navigate('/library', { replace: true });
-    }, 3000);
-    return () => clearTimeout(timer);
   }, [user, navigate]);
 
   const year = new Date().getFullYear();
