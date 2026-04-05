@@ -25,7 +25,7 @@ function SchemaOrg({ doc }) {
   const pageUrl = `https://syrabit.ai/learn/${doc.seo_slug}`;
   const published = doc.created_at || doc.generated_at || new Date().toISOString();
   const modified = doc.updated_at || published;
-  const eduLevel = doc.class_name || doc.board_name || doc.geo_tags || 'Assamboard';
+  const eduLevel = doc.class_name || doc.board_name || doc.geo_tags || 'Assam Board';
   const description = doc.meta_description || doc.description || '';
 
   const graphNodes = [
@@ -546,7 +546,7 @@ export default function LearnPage() {
           <div className="mt-8 rounded-2xl border border-white/10 p-6 flex flex-col sm:flex-row items-center gap-4" style={{ background: 'rgba(139,92,246,0.06)' }}>
             <div className="flex-1 text-center sm:text-left">
               <p className="text-white font-semibold mb-1">Want AI-powered answers on this topic?</p>
-              <p className="text-white/45 text-sm">Ask Syrabit — your Assamboard exam tutor — any question about this content.</p>
+              <p className="text-white/45 text-sm">Ask Syrabit — your Assam Board exam tutor — any question about this content.</p>
             </div>
             <Link
               to="/chat"

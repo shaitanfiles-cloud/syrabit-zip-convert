@@ -334,24 +334,50 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             except Exception as _ns_ch_err:
                 logger.warning(f"[NON-STREAM] Syllabus chapter fetch failed: {_ns_ch_err}")
     else:
-        rag_ctx, web_results, history_messages = await asyncio.gather(
-            resolve_rag_context(
-                _rag_query,
-                subject_id=msg.subject_id,
-                subject_name=msg.subject_name,
-                document_text=document_text,
-                intent=_detected_intent,
-                db_category=_detected_db_category,
-            ),
-            _safe_web_search(
-                query=_rag_query, num_results=5,
-                board_name=ctx_board_name,
-                class_name=ctx_class_name,
-                subject_name=msg.subject_name or "",
-                scoped_query=_ns_scoped_query,
-            ),
-            _ns_fetch_history(),
+        _ns_rag_task = asyncio.create_task(resolve_rag_context(
+            _rag_query,
+            subject_id=msg.subject_id,
+            subject_name=msg.subject_name,
+            document_text=document_text,
+            intent=_detected_intent,
+            db_category=_detected_db_category,
+        ))
+        _ns_web_task = asyncio.create_task(_safe_web_search(
+            query=_rag_query, num_results=5,
+            board_name=ctx_board_name,
+            class_name=ctx_class_name,
+            subject_name=msg.subject_name or "",
+            scoped_query=_ns_scoped_query,
+        ))
+        _ns_hist_task = asyncio.create_task(_ns_fetch_history())
+        _NS_BUDGET = 3.5
+        done, pending = await asyncio.wait(
+            [_ns_rag_task, _ns_web_task, _ns_hist_task],
+            timeout=_NS_BUDGET,
         )
+        for t in pending:
+            t.cancel()
+        _empty_rag = {
+            "chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+            "vector_hits": [], "source": "none", "quality": "none",
+        }
+        try:
+            rag_ctx = _ns_rag_task.result() if _ns_rag_task in done else _empty_rag
+        except Exception as _rag_err:
+            logger.warning(f"[NON-STREAM] RAG task failed: {_rag_err}")
+            rag_ctx = _empty_rag
+        try:
+            web_results = _ns_web_task.result() if _ns_web_task in done else []
+        except Exception as _web_err:
+            logger.warning(f"[NON-STREAM] Web search task failed: {_web_err}")
+            web_results = []
+        try:
+            history_messages = _ns_hist_task.result() if _ns_hist_task in done else []
+        except Exception as _hist_err:
+            logger.warning(f"[NON-STREAM] History task failed: {_hist_err}")
+            history_messages = []
+        if _ns_rag_task not in done:
+            logger.warning(f"[NON-STREAM] RAG timed out after {_NS_BUDGET}s")
         _ns_rag_quality = rag_ctx.get("quality", "none")
         if _ns_rag_quality == "none":
             rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import {
-  BookOpen, ArrowLeft, ChevronRight, Home, Share2,
+  BookOpen, ArrowLeft, ChevronRight, Home, Share2, RefreshCw,
   Clock, Hash, Sparkles, Loader2, FileText, HelpCircle, ChevronDown,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -71,23 +71,27 @@ function ChapterJsonLd({ data, url, basePath }) {
   return null;
 }
 
+const _NON_TOPIC_RE = /^(key points|example|exam tip|key points for revision|summary)(\s|$)/i;
+function filterTopicHeadings(headings) {
+  if (headings.filter(h => h.level === 2).length >= 3) return headings.filter(h => h.level === 2);
+  return headings.filter(h => {
+    if (h.level === 2) return true;
+    if (h.level !== 3) return false;
+    const t = h.text.toLowerCase().replace(/[:\s\-]+$/g, '').trim();
+    return !_NON_TOPIC_RE.test(t);
+  });
+}
+
 function StickyToc({ headings, activeId }) {
-  if (headings.length < 2) return null;
+  const filtered = filterTopicHeadings(headings);
+  if (filtered.length < 2) return null;
   return (
     <nav className="sticky top-20 w-56 shrink-0 hidden xl:block self-start" aria-label="Table of contents">
       <p className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: 'rgba(255,255,255,0.30)' }}>
         On this page
       </p>
       <ul className="space-y-0.5">
-        {(headings.filter(h => h.level === 2).length >= 3
-          ? headings.filter(h => h.level === 2)
-          : headings.filter(h => {
-              if (h.level === 2) return true;
-              if (h.level !== 3) return false;
-              const t = h.text.toLowerCase().replace(/[:\s\-]+$/g, '').trim();
-              return !(/^(key points|example|exam tip|key points for revision|summary)(\s|$)/i.test(t));
-            })
-        ).map(h => (
+        {filtered.map(h => (
           <li key={h.id}>
             <a
               href={`#${h.id}`}
@@ -415,6 +419,15 @@ export default function ChapterPage() {
   }
 
   if (error || !data) {
+    const handleRetry = () => {
+      setError(null);
+      setLoading(true);
+      apiClient()
+        .get(`/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`)
+        .then(r => setData(r.data))
+        .catch(e => setError(e.response?.status === 404 ? 'Chapter not found' : 'Failed to load chapter'))
+        .finally(() => setLoading(false));
+    };
     return (
       <div className="min-h-screen bg-[#0a0a1a] text-white flex items-center justify-center">
         <div className="text-center max-w-md px-6">
@@ -423,9 +436,17 @@ export default function ChapterPage() {
           </div>
           <h1 className="text-2xl font-bold mb-3">{error || 'Chapter not found'}</h1>
           <p className="text-gray-400 mb-6">This chapter may not be available yet or the URL may be incorrect.</p>
-          <Link to={basePath} className="inline-flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl text-white font-medium transition-colors">
-            <ArrowLeft size={16} /> Back to Subject
-          </Link>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={handleRetry}
+              className="inline-flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl text-white font-medium transition-colors"
+            >
+              <RefreshCw size={16} /> Try Again
+            </button>
+            <Link to={basePath} className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-gray-300 font-medium transition-colors hover:bg-white/5" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
+              <ArrowLeft size={16} /> Back to Subject
+            </Link>
+          </div>
         </div>
       </div>
     );
@@ -488,7 +509,7 @@ export default function ChapterPage() {
                   <span>{data.word_count.toLocaleString()} words</span>
                 )}
                 {headings.length > 0 && (
-                  <span className="flex items-center gap-1"><Hash size={12} />{Math.max(headings.filter(h => h.level === 2).length, headings.filter(h => h.level === 3 && !(/^(key points|example|exam tip|key points for revision|summary)(\s|$)/i.test(h.text.toLowerCase().replace(/[:\s\-]+$/g, '').trim()))).length)} topics</span>
+                  <span className="flex items-center gap-1"><Hash size={12} />{filterTopicHeadings(headings).length} topics</span>
                 )}
               </div>
             </div>
@@ -521,6 +542,11 @@ export default function ChapterPage() {
               id="chapter-content-top"
               className="chapter-textbook rounded-2xl p-5 sm:p-8 scroll-mt-20"
             >
+              {data.meta_description && /^\s*(\*|\-|#{2,})/.test(data.content || '') && (
+                <p className="text-base leading-relaxed text-gray-300 mb-6 pb-4 border-b border-white/5">
+                  {data.meta_description}
+                </p>
+              )}
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw]}
@@ -556,7 +582,7 @@ export default function ChapterPage() {
             <Link to="/pricing" className="hover:text-purple-400 transition-colors">Plans & Pricing</Link>
           </div>
           <p className="text-center text-xs text-gray-600 mt-3">
-            Syrabit.ai — AI-powered exam prep for AssamBoard students (AHSEC · DEGREE · SEBA)
+            Syrabit.ai — AI-powered exam prep for Assam Board students (AHSEC · DEGREE · SEBA)
           </p>
         </nav>
       </div>

@@ -10,14 +10,15 @@ MONGO_URL    = (os.environ.get('MONGO_URL') or os.environ.get('MONGODB_URI') or 
 DB_NAME      = os.environ.get('DB_NAME', 'test_database')
 _jwt_secret_env = os.environ.get('JWT_SECRET', '').strip()
 if not _jwt_secret_env:
+    import hashlib as _jwt_hl
     import warnings as _w
+    _fallback_seed = (MONGO_URL + DB_NAME + os.environ.get('REPL_ID', '')).encode()
+    JWT_SECRET = _jwt_hl.sha256(b'syrabit-jwt-fallback:' + _fallback_seed).hexdigest()
     _w.warn(
-        "JWT_SECRET is not set — generating a random secret. "
-        "Sessions will NOT survive restarts and will break in multi-worker mode. "
-        "Set JWT_SECRET in your environment.",
+        "JWT_SECRET is not set — using deterministic fallback derived from MONGO_URL+DB_NAME. "
+        "Sessions survive restarts but Set JWT_SECRET in production for best security.",
         stacklevel=1,
     )
-    JWT_SECRET = os.urandom(48).hex()
 else:
     JWT_SECRET = _jwt_secret_env
 JWT_ALGORITHM    = 'HS256'

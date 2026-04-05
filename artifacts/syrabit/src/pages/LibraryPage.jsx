@@ -4,6 +4,7 @@ import {
   Search, Bookmark,
   BookOpen, RefreshCw, Sun, Moon,
 } from 'lucide-react';
+
 import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
 
@@ -67,7 +68,7 @@ export default function LibraryPage() {
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
 
-  const { data: bundle, isLoading: bundleLoading, isFetching, refetch: refetchBundle } = useLibraryBundle();
+  const { data: bundle, isLoading: bundleLoading, isError: bundleError, isFetching, refetch: refetchBundle } = useLibraryBundle();
   const subjects    = bundle?.subjects  || [];
   const boards      = bundle?.boards    || [];
   const classes     = bundle?.classes   || [];
@@ -78,8 +79,15 @@ export default function LibraryPage() {
 
   useEffect(() => {
     const handleContentUploaded = () => { refetchBundle(); };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') refetchBundle();
+    };
     window.addEventListener('content-uploaded', handleContentUploaded);
-    return () => window.removeEventListener('content-uploaded', handleContentUploaded);
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.removeEventListener('content-uploaded', handleContentUploaded);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [refetchBundle]);
 
   const streamMap = useMemo(() => new Map(streams.map(s => [s.id, s])), [streams]);
@@ -242,11 +250,34 @@ export default function LibraryPage() {
       <AppLayout pageTitle="Library" hideNavbar>
         <PageMeta
           title={seoTitle}
-          description="Explore Assamboard Class 11-12 and Degree subjects. AI-powered notes, MCQs, definitions, and exam preparation for Assam students."
+          description="Explore Assam Board Class 11-12 and Degree subjects. AI-powered notes, MCQs, definitions, and exam preparation for Assam students."
           url="https://syrabit.ai/library"
           keywords={seoKeywords}
         />
         <LibrarySkeleton />
+      </AppLayout>
+    );
+  }
+
+  if (bundleError && !bundle) {
+    return (
+      <AppLayout pageTitle="Library" hideNavbar>
+        <PageMeta title={seoTitle} url="https://syrabit.ai/library" />
+        <div className="flex flex-col items-center justify-center min-h-[60vh] px-4 text-center">
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5" style={{ background: 'rgba(239,68,68,0.1)' }}>
+            <BookOpen size={28} className="text-red-400" />
+          </div>
+          <h2 className="text-lg font-semibold text-foreground mb-2">Failed to load library</h2>
+          <p className="text-muted-foreground text-sm mb-6 max-w-xs">
+            We couldn't reach the server. Please check your connection and try again.
+          </p>
+          <button
+            onClick={() => refetchBundle()}
+            className="h-11 px-5 rounded-xl text-sm font-medium text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center gap-2 active:scale-95"
+          >
+            <RefreshCw size={14} /> Try Again
+          </button>
+        </div>
       </AppLayout>
     );
   }
@@ -277,10 +308,10 @@ export default function LibraryPage() {
                   className="text-foreground shimmer-text"
                   style={{ fontSize: 'clamp(0.95rem, 3.2vw, 1.5rem)', fontWeight: 700, lineHeight: 1.25 }}
                 >
-                  Educational Browser<br />For Assamboard Students
+                  Educational Browser<br />For Assam Board Students
                 </h1>
                 <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                  Browse {subjects.length} subjects · {allChapters.length} lessons{totalSeoTopics > 0 ? ` · ${totalSeoTopics} study topics` : ''}
+                  Browse {subjects.length} subjects · {allChapters.length} chapters
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">

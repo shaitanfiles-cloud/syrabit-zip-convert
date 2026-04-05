@@ -104,8 +104,18 @@ export default function ChatPage() {
         fetch(`${API_BASE}/health`).then(() => setSyncState('idle')).catch(() => setSyncState('offline'));
       }
     };
+    const goOffline = () => setSyncState('offline');
+    const goOnline = () => {
+      fetch(`${API_BASE}/health`).then(() => setSyncState('idle')).catch(() => setSyncState('offline'));
+    };
     document.addEventListener('visibilitychange', check);
-    return () => document.removeEventListener('visibilitychange', check);
+    window.addEventListener('offline', goOffline);
+    window.addEventListener('online', goOnline);
+    return () => {
+      document.removeEventListener('visibilitychange', check);
+      window.removeEventListener('offline', goOffline);
+      window.removeEventListener('online', goOnline);
+    };
   }, []);
 
   useEffect(() => {

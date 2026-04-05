@@ -274,9 +274,26 @@ export default function ProfilePage() {
       <AppLayout pageTitle="Profile">
         <PageTitle title="Profile | Syrabit.ai" />
         <div className="max-w-lg mx-auto px-4 py-6 space-y-4 animate-pulse">
-          <div className="h-48 rounded-3xl" style={{ background: 'rgba(124,58,237,0.10)' }} />
+          <div className="rounded-3xl p-6" style={{ background: 'rgba(124,58,237,0.10)' }}>
+            <div className="flex items-center gap-4 mb-4">
+              <div className="w-14 h-14 rounded-full" style={{ background: 'rgba(255,255,255,0.08)' }} />
+              <div className="flex-1 space-y-2">
+                <div className="h-5 w-32 rounded" style={{ background: 'rgba(255,255,255,0.08)' }} />
+                <div className="h-3 w-48 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} />
+              </div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="h-14 rounded-xl" style={{ background: 'rgba(255,255,255,0.06)' }} />
+              ))}
+            </div>
+          </div>
           {[...Array(4)].map((_, i) => (
-            <div key={i} className="h-20 rounded-2xl" style={{ background: 'rgba(255,255,255,0.04)' }} />
+            <div key={i} className="rounded-2xl p-5" style={{ background: 'rgba(255,255,255,0.04)' }}>
+              <div className="h-4 w-24 rounded mb-3" style={{ background: 'rgba(255,255,255,0.08)' }} />
+              <div className="h-3 w-full rounded mb-2" style={{ background: 'rgba(255,255,255,0.05)' }} />
+              <div className="h-3 w-3/4 rounded" style={{ background: 'rgba(255,255,255,0.05)' }} />
+            </div>
           ))}
         </div>
       </AppLayout>
