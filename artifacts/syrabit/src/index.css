@@ -718,6 +718,24 @@
   .chapter-textbook a { color: #1d4ed8; text-decoration: underline; text-underline-offset: 2px; }
   .chapter-textbook a:hover { color: #1e3a8a; }
 
+  .dark .chapter-textbook { background: #1a1a2e; color: #e2e8f0; box-shadow: 0 1px 6px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.04); }
+  .dark .chapter-textbook h1 { color: #f1f5f9; border-bottom-color: rgba(255,255,255,0.1); }
+  .dark .chapter-textbook h2 { color: #e2e8f0; border-bottom-color: rgba(255,255,255,0.06); }
+  .dark .chapter-textbook h3 { color: #cbd5e1; }
+  .dark .chapter-textbook h4, .dark .chapter-textbook h5, .dark .chapter-textbook h6 { color: #94a3b8; }
+  .dark .chapter-textbook p { color: #cbd5e1; }
+  .dark .chapter-textbook strong { color: #f1f5f9; }
+  .dark .chapter-textbook em { color: #94a3b8; }
+  .dark .chapter-textbook ul, .dark .chapter-textbook ol { color: #cbd5e1; }
+  .dark .chapter-textbook blockquote { border-left-color: #475569; color: #94a3b8; background: rgba(255,255,255,0.03); }
+  .dark .chapter-textbook code { background: rgba(255,255,255,0.08); color: #a78bfa; }
+  .dark .chapter-textbook th { background: rgba(255,255,255,0.05); color: #e2e8f0; border-color: rgba(255,255,255,0.08); }
+  .dark .chapter-textbook td { border-color: rgba(255,255,255,0.06); color: #cbd5e1; }
+  .dark .chapter-textbook tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .dark .chapter-textbook hr { border-top-color: rgba(255,255,255,0.08); }
+  .dark .chapter-textbook a { color: #818cf8; }
+  .dark .chapter-textbook a:hover { color: #a78bfa; }
+
   /* Light-theme markdown (SubjectPage uses light mode) */
   .md-content-light { color: hsl(var(--foreground)); line-height: 1.75; }
   .md-content-light h1 { font-size: 1.5rem; font-weight: 700; margin: 1.2rem 0 0.5rem; border-bottom: 1px solid hsl(var(--border)); padding-bottom: 0.35rem; }

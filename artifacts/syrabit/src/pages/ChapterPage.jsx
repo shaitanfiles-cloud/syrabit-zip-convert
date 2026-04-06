@@ -512,13 +512,13 @@ export default function ChapterPage() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#0a0a1a] text-white">
+      <div className="min-h-screen bg-background text-foreground">
         <div className="max-w-4xl mx-auto px-4 py-8">
-          <Skeleton className="h-4 w-48 mb-6 bg-white/5" />
-          <Skeleton className="h-10 w-full mb-4 bg-white/5" />
-          <Skeleton className="h-4 w-64 mb-8 bg-white/5" />
+          <Skeleton className="h-4 w-48 mb-6" />
+          <Skeleton className="h-10 w-full mb-4" />
+          <Skeleton className="h-4 w-64 mb-8" />
           {[...Array(8)].map((_, i) => (
-            <Skeleton key={i} className="h-5 w-full mb-3 bg-white/5" style={{ width: `${60 + (i % 3) * 15}%` }} />
+            <Skeleton key={i} className="h-5 w-full mb-3" style={{ width: `${60 + (i % 3) * 15}%` }} />
           ))}
         </div>
       </div>
@@ -684,14 +684,14 @@ export default function ChapterPage() {
           <StickyToc headings={headings} activeId={activeId} />
         </div>
 
-        <nav className="mt-10 pt-6 border-t border-white/5" aria-label="Site navigation">
-          <div className="flex flex-wrap gap-4 justify-center text-xs text-gray-500">
-            <Link to="/" className="hover:text-purple-400 transition-colors">Home</Link>
-            <Link to="/library" className="hover:text-purple-400 transition-colors">Browser</Link>
-            <Link to={basePath} className="hover:text-purple-400 transition-colors">{subjectName}</Link>
-            <Link to="/pricing" className="hover:text-purple-400 transition-colors">Plans & Pricing</Link>
+        <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">
+          <div className="flex flex-wrap gap-4 justify-center text-xs text-muted-foreground">
+            <Link to="/" className="hover:text-primary transition-colors">Home</Link>
+            <Link to="/library" className="hover:text-primary transition-colors">Browser</Link>
+            <Link to={basePath} className="hover:text-primary transition-colors">{subjectName}</Link>
+            <Link to="/pricing" className="hover:text-primary transition-colors">Plans & Pricing</Link>
           </div>
-          <p className="text-center text-xs text-gray-600 mt-3">
+          <p className="text-center text-xs text-muted-foreground/60 mt-3">
             Syrabit.ai — AI-powered exam prep for Assam Board students (AHSEC · DEGREE · SEBA)
           </p>
         </nav>
