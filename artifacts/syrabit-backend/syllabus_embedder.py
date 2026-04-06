@@ -50,7 +50,7 @@ def _safe_float_env(name: str, default: float) -> float:
         return default
 
 
-SIMILARITY_THRESHOLD = _safe_float_env("SYLLABUS_CLASSIFY_THRESHOLD", 0.65)
+SIMILARITY_THRESHOLD = _safe_float_env("SYLLABUS_CLASSIFY_THRESHOLD", 0.58)
 SUBJECT_MATCH_BONUS = _safe_float_env("SYLLABUS_SUBJECT_MATCH_BONUS", 0.05)
 SUBJECT_MISMATCH_PENALTY = _safe_float_env("SYLLABUS_SUBJECT_MISMATCH_PENALTY", 0.08)
 

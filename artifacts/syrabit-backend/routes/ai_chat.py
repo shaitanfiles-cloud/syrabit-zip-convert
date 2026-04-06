@@ -288,6 +288,11 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         )
         logger.info(f"[PIPELINE][S1] Intent resolved: {_detected_intent} (Stage 1 primary)")
 
+    if _detected_intent == "general" and _ns_route is not None:
+        _detected_intent = "notes"
+        _detected_db_category = "notes"
+        logger.info(f"[NON-STREAM] Intent upgrade: general → notes (syllabus embedder matched: {getattr(_ns_route, 'subject', '')} / {getattr(_ns_route, 'chapter_hint', '')})")
+
     _is_casual_sync = _detected_intent in ("casual", "general")
     _skip_rag_sync = _detected_intent in ("casual", "general", "syllabus")
 
@@ -898,6 +903,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _s_topic_meta, _stream_intent, _stream_db_category
         )
         logger.info(f"[PIPELINE][S1][STREAM] Intent resolved: {_stream_intent} (Stage 1 primary)")
+
+    if _stream_intent == "general" and _sr_route is not None:
+        _stream_intent = "notes"
+        _stream_db_category = "notes"
+        logger.info(f"[STREAM] Intent upgrade: general → notes (syllabus embedder matched: {getattr(_sr_route, 'subject', '')} / {getattr(_sr_route, 'chapter_hint', '')})")
 
     _is_casual = _stream_intent in ("casual", "general")
     _skip_rag_stream = _stream_intent in ("casual", "general", "syllabus")

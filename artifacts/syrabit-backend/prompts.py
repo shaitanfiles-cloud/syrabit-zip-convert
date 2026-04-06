@@ -110,6 +110,22 @@ _ACADEMIC_SUBJECT_TERMS_RE = re.compile(
     r'|mughal|british\s+raj|independence|partition|medieval|ancient'
     r'|river|plateau|peninsula|monsoon|climate|latitude|longitude'
     r'|photon|spectrum|frequency|amplitude|hertz'
+    r'|ledger|journal|trial\s+balance|balance\s+sheet|depreciation'
+    r'|bookkeeping|debit|credit|voucher|reconciliation|subsidiary'
+    r'|income\s+statement|profit\s+and\s+loss|cash\s+flow|ratio\s+analysis'
+    r'|record\s+management|record\s+retention|filing|indexing|classification'
+    r'|entrepreneurship|partnership|sole\s+proprietorship|cooperative'
+    r'|marketing\s+mix|consumer\s+behaviour|market\s+segmentation'
+    r'|insurance|contract|indemnity|guarantee|bailment|pledge|agency'
+    r'|tort|negligence|liability|jurisprudence|arbitration'
+    r'|communication|correspondence|memorandum|business\s+letter'
+    r'|audit|auditing|internal\s+control|corporate\s+governance'
+    r'|taxation|gst|income\s+tax|direct\s+tax|indirect\s+tax'
+    r'|shares|debentures|dividend|stock\s+exchange|securities'
+    r'|cost\s+accounting|marginal\s+costing|standard\s+costing'
+    r'|human\s+resource|recruitment|motivation|leadership|delegation'
+    r'|planning|organising|directing|controlling|coordination'
+    r'|financial\s+statement|working\s+capital|capital\s+structure'
     r')\b',
     re.I
 )
