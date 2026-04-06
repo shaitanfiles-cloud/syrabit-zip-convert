@@ -1,5 +1,5 @@
 import { Globe, TrendingUp, Eye, Users, DollarSign, Zap, Target,
-  Activity, Clock, Smartphone, Monitor, Tablet, AlertTriangle } from 'lucide-react';
+  Activity, Clock, Smartphone, Monitor, Tablet, AlertTriangle, Server, Bot } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Legend, PieChart, Pie, Cell,
@@ -10,6 +10,7 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
   const hasDailySignup = data?.daily_signups?.some(d => d.count > 0);
   const hasPlanUsage   = data?.plan_usage && Object.keys(data.plan_usage).length > 0;
   const hasDailyVis    = vs.daily_visitors?.some(d => d.visitors > 0 || d.page_views > 0);
+  const hasSsDailyVis  = vs.server_side?.daily_visitors?.some(d => d.visitors > 0 || d.page_views > 0);
 
   return (
     <>
@@ -21,10 +22,12 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         </div>
       )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Stat icon={Globe}      label="Total Visitors"   value={vs.total_visitors?.toLocaleString()} color="#06b6d4" />
-        <Stat icon={TrendingUp} label="Visitors Today"   value={vs.visitors_today}   color="#f97316" />
-        <Stat icon={Eye}        label="Page Views Today" value={vs.page_views_today} color="#ec4899" />
-        <Stat icon={Users}      label="Active Users"     value={data?.active_users}  color="#10b981" />
+        <Stat icon={Server}     label="All Traffic (server)"   value={(vs.server_side?.total_unique ?? 0).toLocaleString()} color="#10b981"
+          sub="Cloudflare-equivalent" />
+        <Stat icon={Eye}        label="Engaged (JS-tracked)"   value={(vs.total_visitors ?? 0).toLocaleString()} color="#8b5cf6" />
+        <Stat icon={Bot}        label="Bot/Crawler Hits"       value={(vs.bot_traffic?.total_hits ?? 0).toLocaleString()} color="#f59e0b"
+          sub={`${vs.bot_traffic?.unique_total ?? 0} unique bots`} />
+        <Stat icon={Users}      label="Active Users"           value={data?.active_users}  color="#06b6d4" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -168,19 +171,41 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         </div>
       )}
 
-      <Card title="Daily Visitors & Page Views — Last 7 Days"
-        empty={!hasDailyVis} emptyMsg="No visitor data yet">
-        <ResponsiveContainer width="100%" height={220}>
-          <AreaChart data={vs.daily_visitors || []} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={fmt} />
-            <YAxis tick={{ fill: '#64748b', fontSize: 11 }} />
-            <Tooltip {...TT} />
-            <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
-            <Area type="monotone" dataKey="visitors"   name="Unique Visitors" stroke="#06b6d4" fill="rgba(6,182,212,0.12)"  strokeWidth={2} />
-            <Area type="monotone" dataKey="page_views" name="Page Views"      stroke="#8b5cf6" fill="rgba(139,92,246,0.10)" strokeWidth={2} />
-          </AreaChart>
-        </ResponsiveContainer>
+      <Card title="Daily Traffic — Last 7 Days (All Sources)"
+        empty={!hasDailyVis && !hasSsDailyVis} emptyMsg="No visitor data yet">
+        {(() => {
+          const ssDaily = vs.server_side?.daily_visitors || [];
+          const jsDaily = vs.daily_visitors || [];
+          const merged = ssDaily.map((ss) => {
+            const js = jsDaily.find(j => j.date === ss.date) || {};
+            return {
+              date: ss.date,
+              ss_visitors: ss.visitors,
+              ss_hits: ss.page_views,
+              js_visitors: js.visitors || 0,
+              js_page_views: js.page_views || 0,
+              bot_hits: ss.bot_hits || 0,
+            };
+          });
+          const chartData = merged.length > 0 ? merged : jsDaily.map(j => ({
+            date: j.date, ss_visitors: 0, ss_hits: 0,
+            js_visitors: j.visitors, js_page_views: j.page_views, bot_hits: 0,
+          }));
+          return (
+            <ResponsiveContainer width="100%" height={250}>
+              <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={fmt} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 11 }} />
+                <Tooltip {...TT} />
+                <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                <Area type="monotone" dataKey="ss_visitors"   name="All Traffic (server)" stroke="#10b981" fill="rgba(16,185,129,0.12)" strokeWidth={2} />
+                <Area type="monotone" dataKey="js_visitors"   name="Engaged (JS)"        stroke="#8b5cf6" fill="rgba(139,92,246,0.10)" strokeWidth={2} />
+                <Area type="monotone" dataKey="bot_hits"      name="Bot Hits"             stroke="#f59e0b" fill="rgba(245,158,11,0.08)" strokeWidth={1.5} strokeDasharray="4 2" />
+              </AreaChart>
+            </ResponsiveContainer>
+          );
+        })()}
       </Card>
 
       <Card title="Daily Signups — Last 7 Days" empty={!hasDailySignup} emptyMsg="No signups in the last 7 days">

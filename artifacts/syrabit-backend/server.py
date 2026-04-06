@@ -277,6 +277,13 @@ async def lifespan(app):
             await db.sessions.create_index([("last_ping", -1)])
             await db.sessions.create_index([("start_time", -1)])
 
+            await db.server_hits.create_index([("date", 1), ("is_bot", 1)])
+            await db.server_hits.create_index([("ip_hash", 1), ("date", 1)])
+            await db.server_hits.create_index([("is_bot", 1), ("ip_hash", 1)])
+            await db.server_hits.create_index([("is_bot", 1), ("ip_hash_stable", 1)])
+            await db.server_hits.create_index([("is_bot", 1), ("bot_name", 1)])
+            await db.server_hits.create_index([("timestamp", -1)])
+
             await db.users.create_index("email", unique=True, sparse=True)
             await db.users.create_index("id", unique=True)
             await db.conversations.create_index([("user_id", 1), ("updated_at", -1)])
@@ -735,10 +742,11 @@ async def serve_root_sitemap_index():
     from starlette.responses import RedirectResponse
     return RedirectResponse(url="/api/seo/sitemap-index.xml", status_code=301)
 
-from middleware import SecurityHeadersMiddleware, GlobalRateLimitMiddleware
+from middleware import SecurityHeadersMiddleware, GlobalRateLimitMiddleware, ServerSideTrackingMiddleware
 from routes.cms_sarvam_health import CmsNoIndexMiddleware, BotRenderMiddleware
 app.add_middleware(CmsNoIndexMiddleware)
 app.add_middleware(BotRenderMiddleware)
+app.add_middleware(ServerSideTrackingMiddleware)
 app.add_middleware(GlobalRateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(

@@ -433,8 +433,57 @@ async def get_visitor_stats() -> dict:
                 if avg_dur is not None:
                     avg_session_duration = round(avg_dur)
 
+        # ── Server-side traffic (middleware-tracked, Cloudflare-equivalent) ──
+        ss_total_hits = 0
+        ss_total_unique = 0
+        ss_hits_today = 0
+        ss_unique_today = 0
+        ss_bot_hits_total = 0
+        ss_bot_hits_today = 0
+        ss_bot_unique_today = 0
+        ss_bot_unique_total = 0
+        ss_daily_visitors = []
+        ss_top_bots = []
+        try:
+            human_filter_ss = {"is_bot": {"$ne": True}}
+            ss_total_hits = await db.server_hits.count_documents(human_filter_ss)
+            ss_unique_stable = await db.server_hits.distinct("ip_hash_stable", human_filter_ss)
+            ss_total_unique = len(ss_unique_stable)
+            ss_hits_today = await db.server_hits.count_documents({**human_filter_ss, "date": today})
+            ss_unique_today_list = await db.server_hits.distinct("ip_hash", {**human_filter_ss, "date": today})
+            ss_unique_today = len(ss_unique_today_list)
+
+            ss_bot_hits_total = await db.server_hits.count_documents({"is_bot": True})
+            ss_bot_hits_today = await db.server_hits.count_documents({"is_bot": True, "date": today})
+            ss_bot_unique_today_list = await db.server_hits.distinct("ip_hash", {"is_bot": True, "date": today})
+            ss_bot_unique_today = len(ss_bot_unique_today_list)
+            ss_bot_unique_all = await db.server_hits.distinct("ip_hash_stable", {"is_bot": True})
+            ss_bot_unique_total = len(ss_bot_unique_all)
+
+            for i in range(7):
+                day = (datetime.now(timezone.utc) - timedelta(days=6 - i)).strftime("%Y-%m-%d")
+                day_unique = await db.server_hits.distinct("ip_hash", {**human_filter_ss, "date": day})
+                day_hits = await db.server_hits.count_documents({**human_filter_ss, "date": day})
+                day_bot_hits = await db.server_hits.count_documents({"is_bot": True, "date": day})
+                ss_daily_visitors.append({
+                    "date": day,
+                    "visitors": len(day_unique),
+                    "page_views": day_hits,
+                    "bot_hits": day_bot_hits,
+                })
+
+            bot_pipeline = [
+                {"$match": {"is_bot": True, "bot_name": {"$ne": ""}}},
+                {"$group": {"_id": "$bot_name", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 10},
+            ]
+            bot_rows = await db.server_hits.aggregate(bot_pipeline).to_list(10)
+            ss_top_bots = [{"bot": r["_id"], "hits": r["count"]} for r in bot_rows]
+        except Exception as e:
+            logger.debug(f"server-side stats failed: {e}")
+
         # ── Multi-source visitor recovery ────────────────────────────────────
-        # 1. Registered users from PG (all-time confirmed real visitors)
         registered_visitors = 0
         daily_signups: list = []
         users_since: str = ""
@@ -454,7 +503,6 @@ async def get_visitor_stats() -> dict:
                         by_day[d] = by_day.get(d, 0) + 1
                     daily_signups = [{"date": d, "signups": n} for d, n in sorted(by_day.items())]
 
-                    # Unique chatters from conversations
                     chatter_ids = await conn.fetch(
                         "SELECT DISTINCT user_id FROM conversations WHERE user_id IS NOT NULL AND user_id != ''"
                     )
@@ -462,12 +510,10 @@ async def get_visitor_stats() -> dict:
         except Exception as ex:
             logger.warning(f"visitor_stats pg enrichment: {ex}")
 
-        # Best total estimate: at least the registered count (confirmed); MongoDB tracking is additive
-        # Registered users = definitive floor of real visitors (they navigated + signed up)
-        best_total_visitors = max(registered_visitors, total_visitors_count)
+        best_total_visitors = max(registered_visitors, total_visitors_count, ss_total_unique)
 
         return {
-            "total_visitors": total_visitors_count,           # MongoDB cookie-tracked
+            "total_visitors": total_visitors_count,
             "visitors_today": visitors_today_count,
             "page_views_today": page_views_today,
             "total_page_views": total_page_views,
@@ -480,13 +526,26 @@ async def get_visitor_stats() -> dict:
             "bounce_rate": bounce_rate,
             "not_found_today": not_found_today,
             "not_found_total": not_found_total,
-            # Multi-source enrichment
-            "registered_visitors": registered_visitors,       # All-time signed-up users
-            "chatters": chatters,                             # Users who actually chatted
-            "daily_signups": daily_signups,                   # Registration timeline
-            "users_since": users_since,                       # Earliest user date
-            "tracking_since": "2026-03-29",                   # When MongoDB tracking started
-            "best_total_visitors": best_total_visitors,       # Best recoverable estimate
+            "registered_visitors": registered_visitors,
+            "chatters": chatters,
+            "daily_signups": daily_signups,
+            "users_since": users_since,
+            "tracking_since": "2026-03-29",
+            "best_total_visitors": best_total_visitors,
+            "server_side": {
+                "total_hits": ss_total_hits,
+                "total_unique": ss_total_unique,
+                "hits_today": ss_hits_today,
+                "unique_today": ss_unique_today,
+                "daily_visitors": ss_daily_visitors,
+            },
+            "bot_traffic": {
+                "total_hits": ss_bot_hits_total,
+                "hits_today": ss_bot_hits_today,
+                "unique_today": ss_bot_unique_today,
+                "unique_total": ss_bot_unique_total,
+                "top_bots": ss_top_bots,
+            },
         }
     except Exception as e:
         logger.error(f"get_visitor_stats error: {e}")

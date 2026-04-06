@@ -432,74 +432,119 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </div>
       )}
 
-      {/* ── VISITOR RECOVERY SECTION ───────────────────────────────────────── */}
+      {/* ── TRAFFIC SOURCES (Three-tier breakdown) ─────────────────────────── */}
       <div style={{ background: 'rgba(6,182,212,0.04)', border: '1px solid rgba(6,182,212,0.15)', borderRadius: 14, padding: '14px 18px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
           <Globe size={14} style={{ color: '#22d3ee' }} />
-          <span style={{ fontSize: 12, fontWeight: 700, color: '#22d3ee' }}>All-time Visitor Recovery</span>
-          {vs.users_since && (
-            <span style={{ fontSize: 11, color: 'rgba(232,232,232,0.4)', marginLeft: 4 }}>
-              since {vs.users_since}
-            </span>
-          )}
+          <span style={{ fontSize: 12, fontWeight: 700, color: '#22d3ee' }}>Traffic Sources</span>
           <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(232,232,232,0.3)', fontStyle: 'italic' }}>
-            Session tracking started {vs.tracking_since || '2026-03-29'} · pre-tracking data from user registrations
+            Server-side = Cloudflare-equivalent · JS-tracked = engaged users · Bot = crawlers
           </span>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" style={{ marginBottom: vs.daily_signups?.length ? 14 : 0 }}>
-          <StatCard
-            label="Total Visitors"
-            value={vs.registered_visitors ?? vs.total_visitors ?? 0}
-            icon={Users}
-            color="#22d3ee"
-            subLabel="All-time (best estimate)"
-            subValue=""
-          />
-          <StatCard
-            label="AI Chatters"
-            value={vs.chatters ?? 0}
-            icon={MessageSquare}
-            color="#8b5cf6"
-            subLabel="Used AI chat"
-            subValue=""
-          />
-          <StatCard
-            label="Session-tracked"
-            value={vs.total_visitors ?? 0}
-            icon={Eye}
-            color="#06b6d4"
-            subLabel={`Since ${vs.tracking_since || '2026-03-29'}`}
-            subValue=""
-          />
-          <StatCard label="Visitors Today"  value={vs.visitors_today ?? 0}   icon={TrendingUp} color="#f97316" pulse
-            subLabel="Page views" subValue={vs.page_views_today ?? 0} />
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3" style={{ marginBottom: 14 }}>
+          {/* Tier 1: All Traffic (server-side) */}
+          <div style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.18)', borderRadius: 12, padding: '12px 14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <Server size={12} style={{ color: '#10b981' }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.05em' }}>All Traffic</span>
+              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.3)', marginLeft: 'auto' }}>server-side</span>
+            </div>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <div>
+                <p className="text-white font-bold text-xl">{(vs.server_side?.total_unique ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>Unique visitors</p>
+              </div>
+              <div>
+                <p className="text-white font-bold text-xl">{(vs.server_side?.unique_today ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>Today</p>
+              </div>
+              <div>
+                <p className="text-slate-400 font-bold text-xl">{(vs.server_side?.total_hits ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>Total hits</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Tier 2: Engaged Visitors (JS-tracked) */}
+          <div style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.18)', borderRadius: 12, padding: '12px 14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <Eye size={12} style={{ color: '#8b5cf6' }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Engaged Visitors</span>
+              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.3)', marginLeft: 'auto' }}>JS-tracked</span>
+            </div>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <div>
+                <p className="text-white font-bold text-xl">{(vs.total_visitors ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>All-time</p>
+              </div>
+              <div>
+                <p className="text-white font-bold text-xl">{(vs.visitors_today ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>Today</p>
+              </div>
+              <div>
+                <p className="text-slate-400 font-bold text-xl">{(vs.total_page_views ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>Page views</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Tier 3: Bot/Crawler Traffic */}
+          <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.18)', borderRadius: 12, padding: '12px 14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+              <Bot size={12} style={{ color: '#f59e0b' }} />
+              <span style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Bot/Crawler Traffic</span>
+              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.3)', marginLeft: 'auto' }}>separate</span>
+            </div>
+            <div style={{ display: 'flex', gap: 16 }}>
+              <div>
+                <p className="text-white font-bold text-xl">{(vs.bot_traffic?.unique_total ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>Unique bots</p>
+              </div>
+              <div>
+                <p className="text-white font-bold text-xl">{(vs.bot_traffic?.hits_today ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>Hits today</p>
+              </div>
+              <div>
+                <p className="text-slate-400 font-bold text-xl">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</p>
+                <p style={{ fontSize: 10, color: '#64748b' }}>Total hits</p>
+              </div>
+            </div>
+          </div>
         </div>
 
-        {/* Daily signups sparkline as traffic proxy */}
-        {vs.daily_signups?.length > 0 && (
-          <div>
+        {/* Drop-off funnel indicator */}
+        {vs.server_side?.total_unique > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.04)' }}>
+            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.4)', fontWeight: 600 }}>TRACKING FUNNEL:</span>
+            <span style={{ fontSize: 11, color: '#10b981', fontWeight: 700 }}>{(vs.server_side?.total_unique ?? 0).toLocaleString()}</span>
+            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.25)' }}>server</span>
+            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.15)' }}>&rarr;</span>
+            <span style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 700 }}>{(vs.total_visitors ?? 0).toLocaleString()}</span>
+            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.25)' }}>JS-tracked</span>
+            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.15)' }}>&rarr;</span>
+            <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</span>
+            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.25)' }}>bot hits (separate)</span>
+            {vs.total_visitors > 0 && vs.server_side?.total_unique > 0 && (
+              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(232,232,232,0.35)' }}>
+                JS capture rate: {Math.round((vs.total_visitors / vs.server_side.total_unique) * 100)}%
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Top bots breakdown */}
+        {vs.bot_traffic?.top_bots?.length > 0 && (
+          <div style={{ marginTop: 12 }}>
             <div style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Daily User Signups (traffic proxy since {vs.users_since})
+              Top Crawlers
             </div>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 40 }}>
-              {(() => {
-                const max = Math.max(...(vs.daily_signups || []).map(d => d.signups), 1);
-                return (vs.daily_signups || []).map((d, i) => {
-                  const h = Math.max(3, Math.round((d.signups / max) * 36));
-                  const isToday = d.date === new Date().toISOString().slice(0,10);
-                  return (
-                    <div key={i} title={`${d.date}: ${d.signups} signups`}
-                      style={{ flex: 1, minWidth: 4, maxWidth: 20, height: h, borderRadius: 2,
-                        background: isToday ? '#f97316' : d.signups > 10 ? '#22d3ee' : 'rgba(6,182,212,0.35)',
-                        cursor: 'default' }} />
-                  );
-                });
-              })()}
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
-              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.25)' }}>{vs.daily_signups?.[0]?.date}</span>
-              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.25)' }}>{vs.daily_signups?.[vs.daily_signups.length-1]?.date}</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {vs.bot_traffic.top_bots.slice(0, 8).map((b, i) => (
+                <span key={i} style={{ fontSize: 10, color: '#f59e0b', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 6, padding: '2px 8px' }}>
+                  {b.bot}: {b.hits}
+                </span>
+              ))}
             </div>
           </div>
         )}

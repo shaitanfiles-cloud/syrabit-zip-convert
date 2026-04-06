@@ -1,5 +1,6 @@
 """Syrabit.ai — ASGI middleware classes."""
-import os, re, time as _time_mod, logging, uuid, contextvars
+import os, re, time as _time_mod, logging, uuid, contextvars, hashlib
+from datetime import datetime, timezone
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -175,4 +176,78 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             _metrics.dec_active()
+
+
+_STATIC_ASSET_RE = re.compile(
+    r"\.(js|css|png|jpg|jpeg|gif|svg|ico|woff2?|ttf|eot|map|webp|avif|mp4|webm)$",
+    re.IGNORECASE,
+)
+
+_SKIP_TRACKING_PREFIXES = (
+    "/api/", "/static/", "/assets/", "/icons/", "/fonts/",
+    "/health", "/docs", "/openapi.json", "/robots.txt", "/sitemap",
+    "/__mockup", "/favicon",
+)
+
+_SERVER_BOT_RE = re.compile(
+    _SEARCH_BOT_UA_RE.pattern + r"|" + _ABUSIVE_SCRAPER_UA_RE.pattern,
+    re.IGNORECASE,
+)
+
+_IP_HASH_SALT = os.environ.get("IP_HASH_SALT", "syrabit-ss-tracking-2026")
+
+
+def _hash_ip_daily(ip: str, date: str) -> str:
+    raw = f"{_IP_HASH_SALT}:{ip}:{date}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _hash_ip_stable(ip: str) -> str:
+    raw = f"{_IP_HASH_SALT}:{ip}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: StarletteRequest, call_next):
+        path = request.url.path
+
+        if (
+            any(path.startswith(p) for p in _SKIP_TRACKING_PREFIXES)
+            or _STATIC_ASSET_RE.search(path)
+        ):
+            return await call_next(request)
+
+        ua = request.headers.get("user-agent", "")
+        is_bot = bool(ua and _SERVER_BOT_RE.search(ua))
+        cf_connecting_ip = request.headers.get("cf-connecting-ip", "")
+        x_forwarded = request.headers.get("x-forwarded-for", "")
+        client_ip = cf_connecting_ip or (x_forwarded.split(",")[0].strip() if x_forwarded else "") or (request.client.host if request.client else "unknown")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        now_iso = datetime.now(timezone.utc).isoformat()
+        ip_hash_daily = _hash_ip_daily(client_ip, today)
+        ip_hash_stable = _hash_ip_stable(client_ip)
+        cf_country = request.headers.get("cf-ipcountry", "")
+
+        response = await call_next(request)
+
+        try:
+            from deps import db
+            from deps import is_mongo_available
+            if await is_mongo_available():
+                await db.server_hits.insert_one({
+                    "path": path,
+                    "ip_hash": ip_hash_daily,
+                    "ip_hash_stable": ip_hash_stable,
+                    "user_agent": ua[:500],
+                    "is_bot": is_bot,
+                    "bot_name": _SERVER_BOT_RE.search(ua).group(0) if is_bot and ua else "",
+                    "date": today,
+                    "timestamp": now_iso,
+                    "status_code": response.status_code,
+                    "country": cf_country,
+                })
+        except Exception as e:
+            logger.debug(f"server-side tracking failed: {e}")
+
+        return response
 
