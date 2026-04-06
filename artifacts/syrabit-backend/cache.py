@@ -204,6 +204,8 @@ def _invalidate_content_cache(prefix: str):
     keys_to_del = [k for k in list(_content_cache.keys()) if k == prefix or k.startswith(f"{prefix}:") or k == "library-bundle"]
     for k in keys_to_del:
         _content_cache.pop(k, None)
+    _content_card_cache.clear()
+    _vector_rag_cache.clear()
     if redis_client:
         try:
             for rk in redis_client.scan_iter(f"{REDIS_CONTENT_PREFIX}{prefix}*"):
