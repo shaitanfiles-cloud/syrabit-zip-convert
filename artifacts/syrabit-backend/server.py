@@ -721,6 +721,11 @@ Disallow: /api/
 """
     return Response(content=txt.strip(), media_type="text/plain")
 
+@app.get("/ads.txt", response_class=Response)
+async def serve_ads_txt():
+    txt = "google.com, pub-8958003374183515, DIRECT, f08c47fec0942fa0"
+    return Response(content=txt, media_type="text/plain")
+
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     from starlette.responses import RedirectResponse
