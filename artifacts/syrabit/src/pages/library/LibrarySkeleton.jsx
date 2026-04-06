@@ -1,9 +1,9 @@
 export default function LibrarySkeleton() {
-  const pulse = { background: 'rgba(255,255,255,0.06)' };
-  const pulseDim = { background: 'rgba(255,255,255,0.04)' };
+  const pulse = { background: 'hsl(var(--muted))' };
+  const pulseDim = { background: 'hsl(var(--muted) / 0.7)' };
   return (
     <div className="flex flex-col h-full w-full overflow-hidden animate-pulse">
-      <div className="shrink-0 w-full" style={{ borderBottom: '1px solid rgba(139,92,246,0.08)' }}>
+      <div className="shrink-0 w-full" style={{ borderBottom: '1px solid hsl(var(--border) / 0.2)' }}>
         <div className="w-full max-w-6xl mx-auto px-4 md:px-6 pt-5 pb-3 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div className="space-y-2">
@@ -31,7 +31,7 @@ export default function LibrarySkeleton() {
               <div
                 key={i}
                 className="rounded-2xl border"
-                style={{ background: 'rgba(255,255,255,0.03)', borderColor: 'rgba(139,92,246,0.07)' }}
+                style={{ background: 'hsl(var(--card))', borderColor: 'hsl(var(--border) / 0.2)' }}
               >
                 <div className="h-9 rounded-t-2xl" style={pulseDim} />
                 <div className="p-3 space-y-2.5">

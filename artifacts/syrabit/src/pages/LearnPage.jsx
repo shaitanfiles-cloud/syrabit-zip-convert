@@ -83,10 +83,10 @@ function TocSidebar({ toc, activeId }) {
   if (!toc.length) return null;
   return (
     <nav className="sticky top-6 w-56 flex-shrink-0 hidden xl:block">
-      <div className="rounded-2xl border border-white/10 overflow-hidden" style={{ background: 'rgba(255,255,255,0.03)' }}>
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10">
-          <List size={13} className="text-violet-400" />
-          <span className="text-xs font-semibold text-white/60 uppercase tracking-wider">On this page</span>
+      <div className="rounded-2xl border border-border/20 overflow-hidden" style={{ background: 'hsl(var(--card))' }}>
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20">
+          <List size={13} className="text-primary" />
+          <span className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider">On this page</span>
         </div>
         <ul className="py-2 max-h-[70vh] overflow-y-auto">
           {toc.map(h => (
@@ -98,7 +98,7 @@ function TocSidebar({ toc, activeId }) {
                 } ${
                   activeId === h.anchor
                     ? 'text-violet-400 border-r-2 border-violet-500'
-                    : 'text-white/40 hover:text-white/70'
+                    : 'text-muted-foreground/50 hover:text-foreground/70'
                 }`}
               >
                 {h.text}
@@ -214,8 +214,8 @@ export default function LearnPage() {
       <AppLayout>
         <div className="min-h-screen flex flex-col items-center justify-center gap-4">
           <AlertCircle size={40} className="text-amber-400" />
-          <h1 className="text-xl font-bold text-white">Page Not Found</h1>
-          <p className="text-white/50 text-sm">This study resource doesn't exist or hasn't been published yet.</p>
+          <h1 className="text-xl font-bold text-foreground">Page Not Found</h1>
+          <p className="text-muted-foreground text-sm">This study resource doesn't exist or hasn't been published yet.</p>
           <Link to="/library" className="mt-2 h-9 px-4 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-medium flex items-center gap-2">
             <ArrowLeft size={14} /> Back to Browser
           </Link>
@@ -229,8 +229,8 @@ export default function LearnPage() {
       <AppLayout>
         <div className="min-h-screen flex flex-col items-center justify-center gap-4">
           <AlertCircle size={40} className="text-red-400" />
-          <p className="text-white/50 text-sm">Failed to load content. Please try again.</p>
-          <button onClick={() => window.location.reload()} className="h-9 px-4 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm">
+          <p className="text-muted-foreground text-sm">Failed to load content. Please try again.</p>
+          <button onClick={() => window.location.reload()} className="h-9 px-4 rounded-xl bg-accent hover:bg-accent/80 text-foreground text-sm">
             Retry
           </button>
         </div>
@@ -263,12 +263,12 @@ export default function LearnPage() {
         <div className="max-w-6xl mx-auto px-3 sm:px-4 md:px-6 pt-6">
 
           {/* Breadcrumb */}
-          <nav className="flex items-center gap-1 text-xs text-white/35 mb-6" aria-label="Breadcrumb">
-            <Link to="/" className="hover:text-white/70 transition-colors">Home</Link>
+          <nav className="flex items-center gap-1 text-xs text-muted-foreground/50 mb-6" aria-label="Breadcrumb">
+            <Link to="/" className="hover:text-foreground/70 transition-colors">Home</Link>
             <ChevronRight size={11} className="flex-shrink-0" />
-            <Link to="/library" className="hover:text-white/70 transition-colors">Browser</Link>
+            <Link to="/library" className="hover:text-foreground/70 transition-colors">Browser</Link>
             <ChevronRight size={11} className="flex-shrink-0" />
-            <span className="text-white/55 truncate max-w-xs">{doc?.title}</span>
+            <span className="text-foreground/60 truncate max-w-xs">{doc?.title}</span>
           </nav>
 
           {/* Hero header */}
@@ -278,8 +278,8 @@ export default function LearnPage() {
               <div className="flex items-center gap-2 mb-4 px-3 py-2 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.06] w-fit">
                 <GraduationCap size={14} className="text-emerald-400" />
                 <span className="text-xs font-semibold text-emerald-300">Official Syllabus</span>
-                <span className="text-white/25 text-xs">·</span>
-                <span className="text-xs text-white/40">AI-assisted learning available</span>
+                <span className="text-muted-foreground/30 text-xs">·</span>
+                <span className="text-xs text-muted-foreground/50">AI-assisted learning available</span>
               </div>
             )}
             {tags.length > 0 && (
@@ -298,31 +298,31 @@ export default function LearnPage() {
                 ))}
               </div>
             )}
-            <h1 className="text-2xl md:text-3xl font-bold text-white leading-tight mb-3">{doc?.title}</h1>
+            <h1 className="text-2xl md:text-3xl font-bold text-foreground leading-tight mb-3">{doc?.title}</h1>
             {(doc?.meta_description || doc?.description) && (
-              <p className="text-white/55 text-base leading-relaxed max-w-3xl">
+              <p className="text-muted-foreground text-base leading-relaxed max-w-3xl">
                 {doc.meta_description || doc.description}
               </p>
             )}
             <div className="flex items-center gap-4 mt-4 flex-wrap">
-              <div className="flex items-center gap-1.5 text-xs text-white/35">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground/50">
                 <Clock size={12} />
                 <span>{readTime} min read</span>
               </div>
               {doc?.word_count > 0 && (
-                <div className="flex items-center gap-1.5 text-xs text-white/35">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground/50">
                   <BarChart3 size={12} />
                   <span>{doc.word_count.toLocaleString()} words</span>
                 </div>
               )}
-              <div className="flex items-center gap-1.5 text-xs text-white/35">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground/50">
                 <CheckCircle size={12} className="text-emerald-400" />
                 <span>Published · Syrabit.ai</span>
               </div>
               <button
                 onClick={() => handleShare(doc?.title || 'Study on Syrabit.ai', `/learn/${slug}`)}
                 disabled={sharing}
-                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white/40 hover:text-white/70 border border-white/10 hover:border-white/20 transition-colors disabled:opacity-50"
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-muted-foreground/50 hover:text-foreground/70 border border-border/20 hover:border-border/40 transition-colors disabled:opacity-50"
               >
                 {sharing ? <Loader2 size={11} className="animate-spin" /> : <Share2 size={11} />} Share
               </button>
@@ -338,7 +338,7 @@ export default function LearnPage() {
               >
                 <BookOpen size={12} className="text-violet-400 shrink-0" />
                 <span className="text-[11px] font-semibold text-violet-300/70 uppercase tracking-wider">Subject</span>
-                <span className="text-white/20 text-xs">·</span>
+                <span className="text-muted-foreground/30 text-xs">·</span>
                 {doc.subject_id ? (
                   <Link
                     to={`/subject/${doc.subject_id}`}
@@ -397,14 +397,14 @@ export default function LearnPage() {
               <div className="px-5 py-3.5 border-b border-amber-500/10 flex items-center gap-2"
                 style={{ background: 'rgba(245,158,11,0.05)' }}>
                 <HelpCircle size={15} className="text-amber-400" />
-                <span className="text-sm font-bold text-white">Important Questions</span>
-                <span className="ml-1 text-xs text-white/35">— mark-wise for exam</span>
+                <span className="text-sm font-bold text-foreground">Important Questions</span>
+                <span className="ml-1 text-xs text-muted-foreground/50">— mark-wise for exam</span>
                 <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold"
                   style={{ background: 'rgba(245,158,11,0.15)', color: '#fbbf24', border: '1px solid rgba(245,158,11,0.25)' }}>
                   {pyqs.length} questions
                 </span>
               </div>
-              <div style={{ background: 'rgba(255,255,255,0.012)' }}>
+              <div style={{ background: 'hsl(var(--card))' }}>
                 {/* Mark-wise grouped display when mark_wise data is available */}
                 {Object.keys(markWise).length > 0
                   ? (() => {
@@ -420,7 +420,7 @@ export default function LearnPage() {
                               style={{ background: 'rgba(245,158,11,0.04)', borderBottom: '1px solid rgba(245,158,11,0.07)' }}>
                               <span className="text-[10px] font-bold uppercase tracking-widest"
                                 style={{ color: '#fbbf24' }}>{markLabels[mk] || `${mk} Marks`}</span>
-                              <span className="text-[9px] text-white/25">{qs.length} questions</span>
+                              <span className="text-[9px] text-muted-foreground/40">{qs.length} questions</span>
                             </div>
                             {qs.map((q, i) => {
                               const qText = typeof q === 'string' ? q : (q.question || '');
@@ -434,9 +434,9 @@ export default function LearnPage() {
                                       {i + 1}
                                     </span>
                                     <div className="min-w-0 flex-1">
-                                      <p className="text-sm font-medium text-white/85 leading-relaxed">{qText}</p>
+                                      <p className="text-sm font-medium text-foreground/85 leading-relaxed">{qText}</p>
                                       {qAns && (
-                                        <div className="mt-2 rounded-lg px-3 py-2 text-xs text-white/50 leading-relaxed"
+                                        <div className="mt-2 rounded-lg px-3 py-2 text-xs text-muted-foreground leading-relaxed"
                                           style={{ background: 'rgba(245,158,11,0.05)', border: '1px solid rgba(245,158,11,0.09)' }}>
                                           {qAns}
                                         </div>
@@ -461,9 +461,9 @@ export default function LearnPage() {
                             {i + 1}
                           </span>
                           <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium text-white/85 leading-relaxed mb-2">{q.question}</p>
+                            <p className="text-sm font-medium text-foreground/85 leading-relaxed mb-2">{q.question}</p>
                             {q.answer && (
-                              <div className="rounded-lg px-3 py-2.5 text-sm text-white/55 leading-relaxed"
+                              <div className="rounded-lg px-3 py-2.5 text-sm text-muted-foreground leading-relaxed"
                                 style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.10)' }}>
                                 {q.answer}
                               </div>
@@ -502,15 +502,15 @@ export default function LearnPage() {
               <div className="px-5 py-3.5 border-b border-emerald-500/10 flex items-center gap-2"
                 style={{ background: 'rgba(16,185,129,0.05)' }}>
                 <FlipHorizontal size={15} className="text-emerald-400" />
-                <span className="text-sm font-bold text-white">Memory Tricks & Flashcards</span>
-                <span className="ml-1 text-xs text-white/35">— tap to flip</span>
+                <span className="text-sm font-bold text-foreground">Memory Tricks & Flashcards</span>
+                <span className="ml-1 text-xs text-muted-foreground/50">— tap to flip</span>
                 <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold"
                   style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>
                   {flashcards.length} cards
                 </span>
               </div>
               <div className="p-4 grid grid-cols-1 sm:grid-cols-2 gap-3"
-                style={{ background: 'rgba(255,255,255,0.012)' }}>
+                style={{ background: 'hsl(var(--card))' }}>
                 {flashcards.map((fc, i) => {
                   const flipped = flippedCards.has(i);
                   return (
@@ -521,18 +521,18 @@ export default function LearnPage() {
                       style={{
                         background: flipped
                           ? 'rgba(16,185,129,0.10)'
-                          : 'rgba(255,255,255,0.04)',
+                          : 'hsl(var(--muted) / 0.3)',
                         border: flipped
                           ? '1px solid rgba(16,185,129,0.25)'
-                          : '1px solid rgba(255,255,255,0.07)',
+                          : '1px solid hsl(var(--border) / 0.3)',
                       }}
                     >
                       <div className="text-[10px] font-semibold uppercase tracking-wider mb-1.5"
-                        style={{ color: flipped ? '#6ee7b7' : 'rgba(255,255,255,0.25)' }}>
+                        style={{ color: flipped ? '#059669' : 'hsl(var(--muted-foreground) / 0.4)' }}>
                         {flipped ? 'Answer' : 'Question'}
                       </div>
                       <p className="text-sm leading-relaxed"
-                        style={{ color: flipped ? '#d1fae5' : 'rgba(255,255,255,0.80)' }}>
+                        style={{ color: flipped ? '#065f46' : 'hsl(var(--foreground) / 0.8)' }}>
                         {flipped ? (fc.back || fc.answer || '—') : (fc.front || fc.question)}
                       </p>
                     </button>
@@ -543,10 +543,10 @@ export default function LearnPage() {
           )}
 
           {/* Footer CTA */}
-          <div className="mt-8 rounded-2xl border border-white/10 p-6 flex flex-col sm:flex-row items-center gap-4" style={{ background: 'rgba(139,92,246,0.06)' }}>
+          <div className="mt-8 rounded-2xl border border-border/20 p-6 flex flex-col sm:flex-row items-center gap-4" style={{ background: 'rgba(139,92,246,0.06)' }}>
             <div className="flex-1 text-center sm:text-left">
-              <p className="text-white font-semibold mb-1">Want AI-powered answers on this topic?</p>
-              <p className="text-white/45 text-sm">Ask Syrabit — your Assam Board exam tutor — any question about this content.</p>
+              <p className="text-foreground font-semibold mb-1">Want AI-powered answers on this topic?</p>
+              <p className="text-muted-foreground text-sm">Ask Syrabit — your Assam Board exam tutor — any question about this content.</p>
             </div>
             <Link
               to="/chat"

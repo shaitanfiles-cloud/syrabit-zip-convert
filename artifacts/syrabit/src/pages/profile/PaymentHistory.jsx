@@ -98,7 +98,7 @@ export default function PaymentHistory({ refreshKey = 0 }) {
 
                 return (
                   <div key={p.id || p.date} className="rounded-xl p-3 transition-colors"
-                    style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                    style={{ background: 'hsl(var(--muted) / 0.15)', border: '1px solid hsl(var(--border) / 0.25)' }}>
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">

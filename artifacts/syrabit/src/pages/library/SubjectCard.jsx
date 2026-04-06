@@ -75,8 +75,8 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           ? '1px solid rgba(139,92,246,0.40)'
           : '1px solid rgba(139,92,246,0.10)',
         boxShadow: isSaved
-          ? '0 0 32px rgba(139,92,246,0.15), 0 8px 32px rgba(0,0,0,0.25)'
-          : '0 4px 24px rgba(0,0,0,0.18)',
+          ? '0 0 32px rgba(139,92,246,0.15), 0 8px 32px rgba(0,0,0,0.08)'
+          : '0 2px 12px rgba(0,0,0,0.06)',
         animationDelay: `${index * 50}ms`,
       }}
       data-testid="library-subject-card"
@@ -118,7 +118,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
         <div className="flex items-center gap-2">
           {hasDocument && (
             <span className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold"
-              style={{ background: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.20)' }}>
+              style={{ background: 'rgba(16,185,129,0.10)', color: '#059669', border: '1px solid rgba(16,185,129,0.20)' }}>
               <Lock size={7} /> Doc
             </span>
           )}
@@ -244,7 +244,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                   {sub.pyq_count > 0 && (
                     <span
                       className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
-                      style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8', border: '1px solid rgba(99,102,241,0.20)' }}
+                      style={{ background: 'rgba(99,102,241,0.10)', color: '#4f46e5', border: '1px solid rgba(99,102,241,0.20)' }}
                     >
                       {sub.pyq_count} PYQs
                     </span>
@@ -252,7 +252,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                   {sub.flash_count > 0 && (
                     <span
                       className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
-                      style={{ background: 'rgba(139,92,246,0.12)', color: '#c084fc', border: '1px solid rgba(139,92,246,0.20)' }}
+                      style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))', border: '1px solid rgba(139,92,246,0.20)' }}
                     >
                       {sub.flash_count} Flash
                     </span>
@@ -286,7 +286,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                       className="truncate transition-colors flex-1 font-medium"
                       title={`${ch.title} — ${sub.name}`}
                       style={{
-                        color: hasWP ? '#93c5fd' : '#60a5fa',
+                        color: hasWP ? '#93c5fd' : 'hsl(var(--primary))',
                         textShadow: hasWP ? '0 1px 3px rgba(0,0,0,0.5)' : 'none',
                       }}
                     >
@@ -320,7 +320,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
 
       <div
         className="grid grid-cols-2 gap-1.5 px-3 py-2.5 relative z-[2]"
-        style={{ borderTop: `1px solid ${hasWP ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.04)'}` }}
+        style={{ borderTop: `1px solid ${hasWP ? 'rgba(255,255,255,0.08)' : 'hsl(var(--border) / 0.3)'}` }}
       >
         <button
           onClick={() => { onToggleSave(sub.id); try { Analytics.subjectBookmarked(sub.name, !isSaved); } catch {} }}

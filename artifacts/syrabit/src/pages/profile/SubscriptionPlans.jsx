@@ -48,8 +48,8 @@ export default function SubscriptionPlans({
                     isActive
                       ? { border: '1px solid rgba(139,92,246,0.50)', background: 'rgba(124,58,237,0.08)', boxShadow: '0 0 20px rgba(139,92,246,0.12)' }
                       : isLower
-                      ? { border: '1px solid rgba(255,255,255,0.04)', background: 'rgba(255,255,255,0.01)', opacity: 0.6 }
-                      : { border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }
+                      ? { border: '1px solid hsl(var(--border) / 0.2)', background: 'hsl(var(--muted) / 0.3)', opacity: 0.6 }
+                      : { border: '1px solid hsl(var(--border) / 0.3)', background: 'hsl(var(--muted) / 0.15)' }
                   }
                 >
                   <div
@@ -61,7 +61,7 @@ export default function SubscriptionPlans({
                         ? { background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.30)' }
                         : planKey === 'starter'
                         ? { background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.30)' }
-                        : { background: 'rgba(255,255,255,0.05)', color: 'hsl(var(--muted-foreground))', border: '1px solid rgba(255,255,255,0.08)' }
+                        : { background: 'hsl(var(--muted) / 0.5)', color: 'hsl(var(--muted-foreground))', border: '1px solid hsl(var(--border) / 0.3)' }
                     }
                   >
                     {isActive ? 'ACTIVE' : info.badge}
@@ -102,7 +102,7 @@ export default function SubscriptionPlans({
                     </div>
                   ) : isLower ? (
                     <div className="mt-3 w-full h-8 rounded-lg flex items-center justify-center text-[10px] font-medium text-muted-foreground/50"
-                      style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      style={{ background: 'hsl(var(--muted) / 0.3)', border: '1px solid hsl(var(--border) / 0.2)' }}>
                       Included in your plan
                     </div>
                   ) : (

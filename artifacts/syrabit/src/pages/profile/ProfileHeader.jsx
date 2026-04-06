@@ -10,7 +10,7 @@ export default function ProfileHeader({
     <div
       className="relative rounded-3xl overflow-hidden p-6"
       style={{
-        background: 'linear-gradient(135deg, rgba(124,58,237,0.25) 0%, rgba(139,92,246,0.15) 50%, rgba(6,6,14,0.5) 100%)',
+        background: 'linear-gradient(135deg, rgba(124,58,237,0.20) 0%, rgba(139,92,246,0.12) 50%, rgba(124,58,237,0.08) 100%)',
         border: '1px solid rgba(139,92,246,0.25)',
         boxShadow: '0 8px 40px rgba(124,58,237,0.15)',
       }}
@@ -76,10 +76,10 @@ export default function ProfileHeader({
         </div>
 
         <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-bold text-white truncate" style={{ textShadow: '0 0 20px rgba(167,139,250,0.4)' }}>
+          <h1 className="text-xl font-bold text-foreground truncate">
             {profile?.name || 'User'}
           </h1>
-          <p className="text-white/50 text-sm mt-0.5 truncate">{profile?.email}</p>
+          <p className="text-muted-foreground text-sm mt-0.5 truncate">{profile?.email}</p>
 
           <div className="flex items-center gap-2 mt-2">
             <span
@@ -89,14 +89,14 @@ export default function ProfileHeader({
               {planInfo.label}
             </span>
             {profile?.board_name && (
-              <span className="text-xs text-white/40">{profile.board_name}</span>
+              <span className="text-xs text-muted-foreground/60">{profile.board_name}</span>
             )}
           </div>
         </div>
 
         <button
           onClick={handleCopyId}
-          className="text-white/30 hover:text-white/60 transition-colors p-1"
+          className="text-muted-foreground/40 hover:text-foreground/60 transition-colors p-1"
           title="Copy User ID"
         >
           {copiedId ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
@@ -112,11 +112,11 @@ export default function ProfileHeader({
           <div
             key={label}
             className="flex-1 flex flex-col items-center p-2 rounded-xl min-w-0"
-            style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)' }}
+            style={{ background: 'hsl(var(--muted) / 0.5)', border: '1px solid hsl(var(--border) / 0.3)' }}
           >
-            <Icon size={14} className="text-white/50 mb-1" />
-            <span className="text-white text-sm font-semibold truncate max-w-full min-w-0">{value}</span>
-            <span className="text-white/40 text-[10px]">{label}</span>
+            <Icon size={14} className="text-muted-foreground mb-1" />
+            <span className="text-foreground text-sm font-semibold truncate max-w-full min-w-0">{value}</span>
+            <span className="text-muted-foreground text-[10px]">{label}</span>
           </div>
         ))}
       </div>

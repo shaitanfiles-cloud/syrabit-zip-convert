@@ -121,7 +121,7 @@ function StickyToc({ headings, activeId }) {
   if (h2h3.length < 2) return null;
   return (
     <nav className="sticky top-20 w-56 shrink-0 hidden xl:block self-start" aria-label="Table of contents">
-      <p className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: 'rgba(255,255,255,0.30)' }}>
+      <p className="text-[11px] font-semibold uppercase tracking-wider mb-3 text-muted-foreground/50">
         On this page
       </p>
       <ul className="space-y-0.5">
@@ -133,8 +133,8 @@ function StickyToc({ headings, activeId }) {
                 h.level === 3 ? 'pl-4' : 'pl-0'
               } ${
                 activeId === h.anchor
-                  ? 'text-violet-400 font-medium toc-active'
-                  : 'text-white/40 hover:text-white/70'
+                  ? 'text-primary font-medium toc-active'
+                  : 'text-muted-foreground/50 hover:text-foreground/70'
               }`}
               style={{ borderLeft: h.level === 2 ? (activeId === h.anchor ? '2px solid #9575e0' : '2px solid transparent') : 'none' }}
               onClick={e => {

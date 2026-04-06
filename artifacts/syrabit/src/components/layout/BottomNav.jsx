@@ -34,11 +34,11 @@ export const BottomNav = memo(function BottomNav() {
       role="navigation"
       aria-label="Mobile navigation"
       style={{
-        background: 'rgba(5,4,14,0.90)',
+        background: 'var(--popover-glass)',
         backdropFilter: 'blur(28px) saturate(1.6)',
         WebkitBackdropFilter: 'blur(28px) saturate(1.6)',
-        borderTop: '1px solid rgba(139,92,246,0.12)',
-        boxShadow: '0 -4px 24px rgba(0,0,0,0.25)',
+        borderTop: '1px solid hsl(var(--border) / 0.3)',
+        boxShadow: '0 -4px 24px rgba(0,0,0,0.08)',
         paddingBottom: 'env(safe-area-inset-bottom, 0px)',
       }}
       data-testid="app-bottom-nav"
@@ -55,10 +55,10 @@ export const BottomNav = memo(function BottomNav() {
               onFocus={() => handlePreload(preloadKey, to)}
               className="flex flex-col items-center justify-center gap-1 px-3 py-2 rounded-xl text-xs font-medium transition-all duration-200 min-w-[44px] min-h-[44px] relative"
               style={active ? {
-                color: '#a78bfa',
-                background: 'rgba(124,58,237,0.14)',
+                color: 'hsl(var(--primary))',
+                background: 'hsl(var(--primary) / 0.1)',
               } : {
-                color: 'rgba(255,255,255,0.45)',
+                color: 'hsl(var(--muted-foreground))',
               }}
               aria-label={label}
               aria-current={active ? 'page' : undefined}
@@ -67,9 +67,9 @@ export const BottomNav = memo(function BottomNav() {
               <Icon
                 size={20}
                 aria-hidden="true"
-                style={active ? { filter: 'drop-shadow(0 0 6px rgba(167,139,250,0.7))' } : {}}
+                style={active ? { filter: 'drop-shadow(0 0 4px hsl(var(--primary) / 0.5))' } : {}}
               />
-              <span style={active ? { color: '#a78bfa' } : {}}>{label}</span>
+              <span>{label}</span>
               {active && (
                 <span className="bottom-nav-active-dot" aria-hidden="true" />
               )}

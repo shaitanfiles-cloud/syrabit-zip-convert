@@ -88,7 +88,7 @@ function StickyToc({ headings, activeId }) {
   if (filtered.length < 2) return null;
   return (
     <nav className="sticky top-20 w-56 shrink-0 hidden xl:block self-start" aria-label="Table of contents">
-      <p className="text-[11px] font-semibold uppercase tracking-wider mb-3" style={{ color: 'rgba(255,255,255,0.30)' }}>
+      <p className="text-[11px] font-semibold uppercase tracking-wider mb-3 text-muted-foreground/50">
         On this page
       </p>
       <ul className="space-y-0.5">
@@ -98,8 +98,8 @@ function StickyToc({ headings, activeId }) {
               href={`#${h.id}`}
               className={`block py-1 text-[12px] leading-snug transition-colors rounded ${
                 activeId === h.id
-                  ? 'text-violet-400 font-medium'
-                  : 'text-white/40 hover:text-white/70'
+                  ? 'text-primary font-medium'
+                  : 'text-muted-foreground/50 hover:text-foreground/70'
               }`}
               style={{ borderLeft: activeId === h.id ? '2px solid #9575e0' : '2px solid transparent' }}
               onClick={e => {
@@ -508,7 +508,7 @@ export default function ChapterPage() {
             >
               <RefreshCw size={16} /> Try Again
             </button>
-            <Link to={basePath} className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-gray-300 font-medium transition-colors hover:bg-white/5" style={{ border: '1px solid rgba(255,255,255,0.1)' }}>
+            <Link to={basePath} className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-muted-foreground font-medium transition-colors hover:bg-accent/30" style={{ border: '1px solid hsl(var(--border) / 0.3)' }}>
               <ArrowLeft size={16} /> Back to Subject
             </Link>
           </div>
@@ -592,8 +592,8 @@ export default function ChapterPage() {
             <button
               onClick={handleShare}
               disabled={sharing}
-              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-gray-300 transition-all hover:text-white hover:bg-white/5 active:scale-95 disabled:opacity-50"
-              style={{ border: '1px solid rgba(255,255,255,0.1)' }}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground hover:bg-accent/30 active:scale-95 disabled:opacity-50"
+              style={{ border: '1px solid hsl(var(--border) / 0.3)' }}
             >
               {sharing ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />} Share
             </button>

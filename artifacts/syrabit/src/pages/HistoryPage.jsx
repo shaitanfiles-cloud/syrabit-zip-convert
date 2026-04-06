@@ -70,11 +70,11 @@ function SkeletonRow({ i }) {
   const previewW = `${40 + (i % 4) * 10}%`;
   return (
     <div className="px-4 py-3.5 flex items-start gap-3 animate-pulse">
-      <div className="w-9 h-9 rounded-xl flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }} />
+      <div className="w-9 h-9 rounded-xl flex-shrink-0" style={{ background: 'hsl(var(--muted))' }} />
       <div className="flex-1 space-y-2 min-w-0">
-        <div className="h-3.5 rounded" style={{ background: 'rgba(255,255,255,0.08)', width: titleW }} />
-        <div className="h-2.5 rounded" style={{ background: 'rgba(255,255,255,0.05)', width: previewW }} />
-        <div className="h-2 rounded w-20" style={{ background: 'rgba(255,255,255,0.04)' }} />
+        <div className="h-3.5 rounded" style={{ background: 'hsl(var(--muted))', width: titleW }} />
+        <div className="h-2.5 rounded" style={{ background: 'hsl(var(--muted) / 0.7)', width: previewW }} />
+        <div className="h-2 rounded w-20" style={{ background: 'hsl(var(--muted) / 0.5)' }} />
       </div>
     </div>
   );
@@ -198,7 +198,7 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename,
                   backdropFilter: 'blur(20px)',
                   WebkitBackdropFilter: 'blur(20px)',
                   border: '1px solid rgba(139,92,246,0.18)',
-                  boxShadow: '0 8px 32px rgba(0,0,0,0.35), 0 0 0 1px rgba(139,92,246,0.08)',
+                  boxShadow: '0 8px 32px rgba(0,0,0,0.12), 0 0 0 1px rgba(139,92,246,0.08)',
                 }}
                 role="menu"
               >
