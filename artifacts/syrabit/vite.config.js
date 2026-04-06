@@ -482,6 +482,7 @@ export default defineConfig({
       '/health': { target: 'http://localhost:8000', changeOrigin: true },
       '/docs': { target: 'http://localhost:8000', changeOrigin: true },
       '/openapi.json': { target: 'http://localhost:8000', changeOrigin: true },
+      '/ads.txt': { target: 'http://localhost:8000', changeOrigin: true },
     },
   },
 
