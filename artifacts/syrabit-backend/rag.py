@@ -1072,12 +1072,12 @@ async def rag_search(
                 {"subject_id": subject_id}, {"_id": 0, "id": 1}
             ).to_list(200)
             chapter_ids = [c["id"] for c in sub_chapters]
-            pyq_branch: dict = {"$and": [{"subject_id": subject_id}, {"content_type": "pyq"}, {"$or": regex_parts}]}
+            pyq_branch: dict = {"$and": [{"subject_id": subject_id}, {"content_type": {"$in": ["pyq", "question_paper"]}}, {"$or": regex_parts}]}
 
             try:
                 _chunk_text_filter: dict = {"$text": {"$search": _text_search_str}}
                 if chapter_ids:
-                    _chunk_text_filter["$or"] = [{"chapter_id": {"$in": chapter_ids}}, {"subject_id": subject_id, "content_type": "pyq"}]
+                    _chunk_text_filter["$or"] = [{"chapter_id": {"$in": chapter_ids}}, {"subject_id": subject_id, "content_type": {"$in": ["pyq", "question_paper"]}}]
                 else:
                     _chunk_text_filter["subject_id"] = subject_id
                 _chunk_proj_text = {"_id": 0, "score": {"$meta": "textScore"}, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1, "topic_name": 1, "chapter_title": 1}
@@ -2030,6 +2030,13 @@ def build_rag_system_prompt(
             "\n\nCONTENT RULE: Answer from the grounding context below. "
             "Do NOT invent content. Accuracy over completeness."
         )
+    if _incoming_intent == "pyq":
+        base_prompt += (
+            "\n\nPYQ RULE: The student is asking for a question paper or previous year questions. "
+            "If the grounding context contains actual question paper content (numbered questions, marks), "
+            "present the EXACT questions as they appear — do NOT paraphrase or summarize them. "
+            "Format them clearly with question numbers and marks. Show the full paper content."
+        )
     chunks      = rag_context.get("chunks",   [])
     chapters    = rag_context.get("chapters", [])
     subjects    = rag_context.get("subjects", [])
@@ -2155,7 +2162,7 @@ def build_rag_system_prompt(
     if source == "rag" and (chunks or subjects or chapters or content_card or vector_hits):
 
         if quality == "high":
-            _GROUNDING_BUDGET = 8000 if _intent == "syllabus" else 6000
+            _GROUNDING_BUDGET = 8000 if _intent in ("syllabus", "pyq") else 6000
             _budget_used = 0
 
             _syl_topic = rag_context.get("syllabus_topic_name", "")
@@ -2209,7 +2216,7 @@ def build_rag_system_prompt(
                     grounding += _vh_block
                     _budget_used += len(_vh_block)
 
-            _chunk_base_limit = 3000 if _intent == "syllabus" else 2000
+            _chunk_base_limit = 3000 if _intent in ("syllabus", "pyq") else 2000
             if chunks and _budget_used < _GROUNDING_BUDGET:
                 for i, c in enumerate(chunks[:3], 1):
                     _remaining = _GROUNDING_BUDGET - _budget_used

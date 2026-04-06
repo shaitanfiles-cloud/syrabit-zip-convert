@@ -173,14 +173,14 @@ _INTENT_PATTERNS: list[tuple[str, list[str], "re.Pattern | None"]] = [
         "previous year question", "last year paper", "pyq 2024", "pyq 2023",
         "pyq 2022", "pyq 2021", "pyq 2020", "pyq paper",
         "previous year paper", "past year question", "old question paper",
-        "year question paper", "previous exam paper",
+        "year question paper", "previous exam paper", "question paper",
         "solve question", "solved pyq", "answer of pyq",
         "solve pyq", "solution of pyq", "solved previous year",
         "answer previous year question", "solve question from",
         "5 mark questions", "2 mark questions", "10 mark questions list",
         "1 mark questions", "3 mark questions", "mark wise questions",
         "marks wise", "markwise", "mark-wise",
-    ], re.compile(r'\bpyq\b|\bprevious\s+year\s+question|\bsolv\w+\s+(?:pyq|question|previous\s+year)|\d+\s*marks?\s+question|\bmark.?wise\b', re.I)),
+    ], re.compile(r'\bpyq\b|\bprevious\s+year\s+question|\bsolv\w+\s+(?:pyq|question|previous\s+year)|\d+\s*marks?\s+question|\bmark.?wise\b|\bquestion\s*paper\b', re.I)),
 
     ("important_questions", [
         "important questions for exam", "most asked questions",
