@@ -42,6 +42,10 @@ RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
 EMAIL_FROM     = os.environ.get('EMAIL_FROM', 'noreply@syrabit.ai').strip()
 FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rstrip('/')
 
+# ── Cloudflare Analytics API ─────────────────────────────────────────────────
+CF_ANALYTICS_API_TOKEN = os.environ.get('CF_ANALYTICS_API_TOKEN', '').strip()
+CF_ZONE_ID = os.environ.get('CF_ZONE_ID', '').strip()
+
 # ── Cloudflare AI Gateway ────────────────────────────────────────────────────
 import time as _time
 

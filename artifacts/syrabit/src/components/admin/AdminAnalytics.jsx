@@ -4,7 +4,8 @@ import { Loader2, RefreshCw } from 'lucide-react';
 import axios from 'axios';
 import { adminGetAnalytics, adminGetRevenue, adminGetPredictor,
   adminGetGA4Status, adminGetGA4AuthUrl, adminTestGA4, API_BASE,
-  pageConversions, adminGetDailyAnalytics, adminGetLiveVisitors } from '@/utils/api';
+  pageConversions, adminGetDailyAnalytics, adminGetLiveVisitors,
+  adminSyncHistorical } from '@/utils/api';
 import { toast } from 'sonner';
 import OverviewTab from './analytics/OverviewTab';
 import DailyStatsTab from './analytics/DailyStatsTab';
@@ -35,6 +36,7 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
   const [dailyDays, setDailyDays] = useState(30);
   const [widgetErrors, setWidgetErrors] = useState({});
   const [liveVisitors, setLiveVisitors] = useState(null);
+  const [syncing, setSyncing] = useState(false);
   const h = { withCredentials: true };
 
   const load = useCallback(async (silent = false) => {
@@ -99,6 +101,19 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
     } catch { toast.error('Failed to load daily analytics'); }
     finally { setDailyLoading(false); }
   }, [adminToken, dailyDays]);
+
+  const handleSyncHistorical = useCallback(async (days = 90) => {
+    setSyncing(true);
+    try {
+      const r = await adminSyncHistorical(adminToken, days);
+      const s = r.data;
+      toast.success(`Synced ${s.total_synced} days (CF: ${s.synced_days?.cloudflare ?? 0}, GA4: ${s.synced_days?.ga4 ?? 0})`);
+      load(true);
+    } catch (e) {
+      toast.error('Historical sync failed');
+    }
+    setSyncing(false);
+  }, [adminToken, load]);
 
   const loadLiveVisitors = useCallback(async () => {
     try {
@@ -200,7 +215,9 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
 
       {tab === 'overview' && (
         <OverviewTab data={data} vs={vs} widgetErrors={widgetErrors} load={load}
-          liveVisitors={liveVisitors} mrr={mrr} predicted={predicted} growth={growth} arpu={arpu} ltv={ltv} />
+          liveVisitors={liveVisitors} mrr={mrr} predicted={predicted} growth={growth} arpu={arpu} ltv={ltv}
+          syncing={syncing} onSyncHistorical={handleSyncHistorical}
+          cfConnected={data?.cf_connected} ga4Connected={data?.ga4_connected} />
       )}
 
       {tab === 'daily' && (

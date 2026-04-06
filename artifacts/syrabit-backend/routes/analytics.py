@@ -34,36 +34,80 @@ from rag import *
 from utils import *
 from analytics_helpers import *
 import ga4_client
+import cloudflare_client
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _merge_daily_sources(*daily_lists):
+    by_date: dict = {}
+    for src_list in daily_lists:
+        if not src_list:
+            continue
+        for entry in src_list:
+            d = entry.get("date", "")
+            if not d:
+                continue
+            if d not in by_date:
+                by_date[d] = {"date": d, "visitors": 0, "page_views": 0, "sources": {}}
+            visitors = entry.get("visitors", 0)
+            page_views = entry.get("page_views", 0)
+            source = entry.get("source", "unknown")
+            existing = by_date[d]["sources"].get(source)
+            if existing:
+                by_date[d]["sources"][source] = {
+                    "visitors": max(existing["visitors"], visitors),
+                    "page_views": max(existing["page_views"], page_views),
+                }
+            else:
+                by_date[d]["sources"][source] = {
+                    "visitors": visitors,
+                    "page_views": page_views,
+                }
+    for d, row in by_date.items():
+        sources = row["sources"]
+        for src in _SOURCE_PRIORITY:
+            if src in sources and sources[src]["visitors"] > 0:
+                row["visitors"] = sources[src]["visitors"]
+                row["best_visitor_source"] = src
+                break
+        for src in _SOURCE_PRIORITY:
+            if src in sources and sources[src]["page_views"] > 0:
+                row["page_views"] = sources[src]["page_views"]
+                row["best_pv_source"] = src
+                break
+    return sorted(by_date.values(), key=lambda x: x["date"])
+
+
+_SOURCE_PRIORITY = ["cloudflare", "ga4", "server", "js-tracked"]
+
+def _best_metric(*values_with_sources):
+    for priority_src in _SOURCE_PRIORITY:
+        for val, src in values_with_sources:
+            if src == priority_src and val and val > 0:
+                return val, src
+    return 0, "none"
+
+
 @router.get("/admin/analytics")
 async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user)):
-    """
-    Enhanced admin analytics dashboard with library interaction tracking
-    
-    Query params:
-    - days: Number of days to look back (default: 30)
-    """
     users = await supa_list_users()
-    
-    # Daily signups
+
     daily_signups = []
     for i in range(7):
         day = (datetime.now(timezone.utc) - timedelta(days=6-i)).strftime("%Y-%m-%d")
         count = sum(1 for u in users if u.get("created_at", "")[:10] == day)
         daily_signups.append({"date": day, "count": count})
-    
-    # Plan usage
+
     plan_usage = {}
     for u in users:
         p = u.get("plan", "free")
         plan_usage[p] = plan_usage.get(p, 0) + u.get("credits_used", 0)
-    
-    # Library analytics + GA4 + MongoDB visitor stats (all in parallel)
-    ga4_vs, ga4_pages, ga4_refs, library_stats, mongo_vs = await asyncio.gather(
+
+    cf_vs, ga4_vs, ga4_pages, ga4_refs, library_stats, mongo_vs = await asyncio.gather(
+        cloudflare_client.get_visitor_stats_cf(days=7),
         ga4_client.get_visitor_stats_ga4(days=7),
         ga4_client.get_top_pages_ga4(limit=20),
         ga4_client.get_top_referrers_ga4(limit=15),
@@ -72,26 +116,101 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
         return_exceptions=True,
     )
 
-    # Prefer GA4 data; fall back to MongoDB
-    visitor_stats = ga4_vs if isinstance(ga4_vs, dict) else (mongo_vs if isinstance(mongo_vs, dict) else {})
+    cf_data = cf_vs if isinstance(cf_vs, dict) else None
+    ga4_data = ga4_vs if isinstance(ga4_vs, dict) else None
+    mongo_data = mongo_vs if isinstance(mongo_vs, dict) else {}
 
-    # Top visited pages — GA4 preferred
+    cf_7d_visitors = sum(d.get("visitors", 0) for d in (cf_data.get("daily_visitors", []) if cf_data else []))
+    ga4_7d_visitors = sum(d.get("visitors", 0) for d in (ga4_data.get("daily_visitors", []) if ga4_data else []))
+    ss_7d_visitors = sum(d.get("visitors", 0) for d in (mongo_data.get("server_side", {}).get("daily_visitors", [])))
+    js_7d_visitors = sum(d.get("visitors", 0) for d in (mongo_data.get("daily_visitors", [])))
+
+    best_total, best_total_src = _best_metric(
+        (cf_7d_visitors, "cloudflare"),
+        (ga4_7d_visitors, "ga4"),
+        (ss_7d_visitors, "server"),
+        (js_7d_visitors, "js-tracked"),
+    )
+    best_today, best_today_src = _best_metric(
+        (cf_data.get("visitors_today", 0) if cf_data else 0, "cloudflare"),
+        (ga4_data.get("visitors_today", 0) if ga4_data else 0, "ga4"),
+        (mongo_data.get("server_side", {}).get("unique_today", 0), "server"),
+        (mongo_data.get("visitors_today", 0), "js-tracked"),
+    )
+    best_pv_today, best_pv_src = _best_metric(
+        (cf_data.get("page_views_today", 0) if cf_data else 0, "cloudflare"),
+        (ga4_data.get("page_views_today", 0) if ga4_data else 0, "ga4"),
+        (mongo_data.get("server_side", {}).get("hits_today", 0), "server"),
+        (mongo_data.get("page_views_today", 0), "js-tracked"),
+    )
+
+    cf_daily = None
+    if cf_data:
+        cf_daily = [dict(d, source="cloudflare") for d in cf_data.get("daily_visitors", [])]
+    ga4_daily = None
+    if ga4_data:
+        ga4_daily = [dict(d, source="ga4") for d in ga4_data.get("daily_visitors", [])]
+    ss_daily = mongo_data.get("server_side", {}).get("daily_visitors")
+    if ss_daily:
+        ss_daily = [dict(d, source="server") for d in ss_daily]
+    js_daily = mongo_data.get("daily_visitors")
+    if js_daily:
+        js_daily = [dict(d, source="js-tracked") for d in js_daily]
+
+    backfill_daily = await _load_backfill_daily(days=7)
+
+    merged_daily = _merge_daily_sources(cf_daily, ga4_daily, ss_daily, js_daily, backfill_daily)
+
+    visitor_stats = dict(mongo_data)
+    visitor_stats["best_estimate"] = {
+        "total_visitors": best_total,
+        "total_visitors_source": best_total_src,
+        "visitors_today": best_today,
+        "visitors_today_source": best_today_src,
+        "page_views_today": best_pv_today,
+        "page_views_today_source": best_pv_src,
+    }
+    visitor_stats["merged_daily"] = merged_daily
+    if cf_data:
+        visitor_stats["cloudflare"] = {
+            "total_visitors": cf_data.get("total_visitors", 0),
+            "visitors_today": cf_data.get("visitors_today", 0),
+            "page_views_today": cf_data.get("page_views_today", 0),
+            "total_page_views": cf_data.get("total_page_views", 0),
+            "total_requests": cf_data.get("total_requests", 0),
+            "daily_visitors": cf_data.get("daily_visitors", []),
+        }
+    if ga4_data:
+        visitor_stats["ga4"] = {
+            "total_visitors": ga4_data.get("total_visitors", 0),
+            "visitors_today": ga4_data.get("visitors_today", 0),
+            "page_views_today": ga4_data.get("page_views_today", 0),
+            "daily_visitors": ga4_data.get("daily_visitors", []),
+        }
+
     top_pages = []
     if isinstance(ga4_pages, list):
         top_pages = ga4_pages
     else:
+        cf_pages = None
         try:
-            pipeline = [
-                {"$group": {"_id": "$path", "views": {"$sum": 1}, "unique": {"$addToSet": "$visitor_id"}}},
-                {"$project": {"path": "$_id", "views": 1, "unique_visitors": {"$size": "$unique"}, "_id": 0}},
-                {"$sort": {"views": -1}},
-                {"$limit": 15},
-            ]
-            top_pages = await db.page_views.aggregate(pipeline).to_list(15)
+            cf_pages = await cloudflare_client.get_top_pages_cf()
         except Exception:
             pass
+        if cf_pages:
+            top_pages = cf_pages
+        else:
+            try:
+                pipeline = [
+                    {"$group": {"_id": "$path", "views": {"$sum": 1}, "unique": {"$addToSet": "$visitor_id"}}},
+                    {"$project": {"path": "$_id", "views": 1, "unique_visitors": {"$size": "$unique"}, "_id": 0}},
+                    {"$sort": {"views": -1}},
+                    {"$limit": 15},
+                ]
+                top_pages = await db.page_views.aggregate(pipeline).to_list(15)
+            except Exception:
+                pass
 
-    # Referrers — GA4 preferred
     top_referrers = []
     if isinstance(ga4_refs, list):
         top_referrers = ga4_refs
@@ -125,7 +244,122 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
         "top_pages": top_pages,
         "top_referrers": top_referrers,
         "ga4_connected": isinstance(ga4_vs, dict),
+        "cf_connected": isinstance(cf_vs, dict),
     }
+
+
+class SyncHistoricalReq(BaseModel):
+    days: int = 90
+
+@router.post("/admin/analytics/sync-historical")
+async def sync_historical_data(
+    req: SyncHistoricalReq = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    days = req.days
+    synced = {"cloudflare": 0, "ga4": 0}
+
+    cf_daily, ga4_daily = await asyncio.gather(
+        cloudflare_client.get_historical_daily(days=days),
+        _fetch_ga4_historical(days=days),
+        return_exceptions=True,
+    )
+
+    if isinstance(cf_daily, list) and cf_daily:
+        for entry in cf_daily:
+            try:
+                await db.analytics_daily_totals.update_one(
+                    {"date": entry["date"], "source": "cloudflare"},
+                    {"$set": {
+                        "date": entry["date"],
+                        "source": "cloudflare",
+                        "visitors": entry.get("visitors", 0),
+                        "page_views": entry.get("page_views", 0),
+                        "requests": entry.get("requests", 0),
+                        "synced_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+                synced["cloudflare"] += 1
+            except Exception as e:
+                logger.debug(f"CF sync upsert error: {e}")
+
+    if isinstance(ga4_daily, list) and ga4_daily:
+        for entry in ga4_daily:
+            try:
+                await db.analytics_daily_totals.update_one(
+                    {"date": entry["date"], "source": "ga4"},
+                    {"$set": {
+                        "date": entry["date"],
+                        "source": "ga4",
+                        "visitors": entry.get("visitors", 0),
+                        "page_views": entry.get("page_views", 0),
+                        "synced_at": datetime.now(timezone.utc).isoformat(),
+                    }},
+                    upsert=True,
+                )
+                synced["ga4"] += 1
+            except Exception as e:
+                logger.debug(f"GA4 sync upsert error: {e}")
+
+    return {
+        "status": "ok",
+        "synced_days": synced,
+        "total_synced": synced["cloudflare"] + synced["ga4"],
+    }
+
+
+async def _load_backfill_daily(days: int = 7) -> list:
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return []
+        now = datetime.now(timezone.utc)
+        start_date = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+        rows = await db.analytics_daily_totals.find(
+            {"date": {"$gte": start_date}},
+            {"_id": 0, "date": 1, "source": 1, "visitors": 1, "page_views": 1},
+        ).to_list(days * 4)
+        results = []
+        for r in rows:
+            src = r.get("source", "backfill")
+            results.append({
+                "date": r.get("date", ""),
+                "visitors": r.get("visitors", 0),
+                "page_views": r.get("page_views", 0),
+                "source": src,
+            })
+        return results
+    except Exception as e:
+        logger.debug(f"backfill load failed: {e}")
+        return []
+
+
+async def _fetch_ga4_historical(days: int = 90) -> list:
+    try:
+        resp = await ga4_client.run_report(
+            dimensions=["date"],
+            metrics=["activeUsers", "screenPageViews"],
+            date_ranges=[{"startDate": f"{days}daysAgo", "endDate": "today"}],
+            order_bys=[{"dimension": {"dimensionName": "date"}}],
+            limit=days + 1,
+        )
+        if not resp or not resp.get("rows"):
+            return []
+        results = []
+        for row in resp["rows"]:
+            raw_date = row["dimensionValues"][0]["value"]
+            formatted = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:]}"
+            results.append({
+                "date": formatted,
+                "visitors": int(row["metricValues"][0]["value"]),
+                "page_views": int(row["metricValues"][1]["value"]),
+                "source": "ga4",
+            })
+        return results
+    except Exception as e:
+        logger.warning(f"GA4 historical fetch failed: {e}")
+        return []
 
 
 @router.post("/analytics/page-view")

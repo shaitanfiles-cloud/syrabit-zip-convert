@@ -1,14 +1,43 @@
 import { Globe, TrendingUp, Eye, Users, DollarSign, Zap, Target,
-  Activity, Clock, Smartphone, Monitor, Tablet, AlertTriangle, Server, Bot } from 'lucide-react';
+  Activity, Clock, Smartphone, Monitor, Tablet, AlertTriangle, Server, Bot,
+  Cloud, BarChart3, Download, Loader2, CheckCircle } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Legend, PieChart, Pie, Cell,
 } from 'recharts';
 import { Card, Stat, TT, fmt, fmtInr } from './shared';
 
-export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors, mrr, predicted, growth, arpu, ltv }) {
+const SOURCE_COLORS = {
+  cloudflare: '#f6821f',
+  ga4: '#4285f4',
+  server: '#10b981',
+  'js-tracked': '#8b5cf6',
+};
+
+const SOURCE_LABELS = {
+  cloudflare: 'Cloudflare',
+  ga4: 'GA4',
+  server: 'Server-side',
+  'js-tracked': 'JS-tracked',
+};
+
+function SourceBadge({ source }) {
+  if (!source || source === 'none') return null;
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wide"
+      style={{ background: `${SOURCE_COLORS[source] || '#64748b'}22`, color: SOURCE_COLORS[source] || '#64748b' }}>
+      {SOURCE_LABELS[source] || source}
+    </span>
+  );
+}
+
+export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors, mrr, predicted, growth, arpu, ltv,
+  syncing, onSyncHistorical, cfConnected, ga4Connected }) {
   const hasDailySignup = data?.daily_signups?.some(d => d.count > 0);
   const hasPlanUsage   = data?.plan_usage && Object.keys(data.plan_usage).length > 0;
+  const best = vs.best_estimate || {};
+  const mergedDaily = vs.merged_daily || [];
+  const hasMergedDaily = mergedDaily.some(d => d.visitors > 0 || d.page_views > 0);
   const hasDailyVis    = vs.daily_visitors?.some(d => d.visitors > 0 || d.page_views > 0);
   const hasSsDailyVis  = vs.server_side?.daily_visitors?.some(d => d.visitors > 0 || d.page_views > 0);
 
@@ -21,13 +50,77 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
           <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">Retry</button>
         </div>
       )}
+
+      <div className="flex items-center gap-2 flex-wrap p-3 bg-slate-900/50 border border-slate-800 rounded-xl">
+        <span className="text-slate-500 text-xs font-medium">Data Sources:</span>
+        <div className="flex items-center gap-1.5">
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium ${cfConnected ? 'bg-orange-500/15 text-orange-400' : 'bg-slate-800 text-slate-600'}`}>
+            <Cloud size={10} /> Cloudflare {cfConnected ? <CheckCircle size={9} /> : '(not connected)'}
+          </span>
+          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium ${ga4Connected ? 'bg-blue-500/15 text-blue-400' : 'bg-slate-800 text-slate-600'}`}>
+            <BarChart3 size={10} /> GA4 {ga4Connected ? <CheckCircle size={9} /> : '(not connected)'}
+          </span>
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-500/15 text-emerald-400">
+            <Server size={10} /> Server <CheckCircle size={9} />
+          </span>
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400">
+            <Eye size={10} /> JS-tracked <CheckCircle size={9} />
+          </span>
+        </div>
+        <button onClick={() => onSyncHistorical(90)} disabled={syncing}
+          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white bg-slate-800 border border-slate-700 transition-all disabled:opacity-50">
+          {syncing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+          {syncing ? 'Syncing...' : 'Sync Historical Data'}
+        </button>
+      </div>
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Stat icon={Server}     label="All Traffic (server)"   value={(vs.server_side?.total_unique ?? 0).toLocaleString()} color="#10b981"
-          sub="Cloudflare-equivalent" />
-        <Stat icon={Eye}        label="Engaged (JS-tracked)"   value={(vs.total_visitors ?? 0).toLocaleString()} color="#8b5cf6" />
-        <Stat icon={Bot}        label="Bot/Crawler Hits"       value={(vs.bot_traffic?.total_hits ?? 0).toLocaleString()} color="#f59e0b"
+        <div className="flex items-center gap-3 p-3 bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-xl">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(124,58,237,0.15)' }}>
+            <TrendingUp size={15} style={{ color: '#7c3aed' }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-bold text-xl leading-none">{(best.total_visitors ?? 0).toLocaleString()}</p>
+            <p className="text-slate-500 text-xs mt-0.5">Best Estimate (7d)</p>
+            <SourceBadge source={best.total_visitors_source} />
+          </div>
+        </div>
+        <div className="flex items-center gap-3 p-3 bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-xl">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(6,182,212,0.15)' }}>
+            <Users size={15} style={{ color: '#06b6d4' }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-bold text-xl leading-none">{(best.visitors_today ?? 0).toLocaleString()}</p>
+            <p className="text-slate-500 text-xs mt-0.5">Best Estimate (Today)</p>
+            <SourceBadge source={best.visitors_today_source} />
+          </div>
+        </div>
+        <div className="flex items-center gap-3 p-3 bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 rounded-xl">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(236,72,153,0.15)' }}>
+            <Eye size={15} style={{ color: '#ec4899' }} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-white font-bold text-xl leading-none">{(best.page_views_today ?? 0).toLocaleString()}</p>
+            <p className="text-slate-500 text-xs mt-0.5">Page Views Today</p>
+            <SourceBadge source={best.page_views_today_source} />
+          </div>
+        </div>
+        <Stat icon={Users} label="Active Users" value={data?.active_users} color="#06b6d4" />
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        {vs.cloudflare && (
+          <Stat icon={Cloud} label="Cloudflare Visitors" value={(vs.cloudflare.total_visitors ?? 0).toLocaleString()} color="#f6821f"
+            sub={`${(vs.cloudflare.total_requests ?? 0).toLocaleString()} requests`} />
+        )}
+        {vs.ga4 && (
+          <Stat icon={BarChart3} label="GA4 Visitors" value={(vs.ga4.total_visitors ?? 0).toLocaleString()} color="#4285f4" />
+        )}
+        <Stat icon={Server} label="Server-side Unique" value={(vs.server_side?.total_unique ?? 0).toLocaleString()} color="#10b981"
+          sub={`${(vs.server_side?.total_hits ?? 0).toLocaleString()} hits`} />
+        <Stat icon={Eye} label="JS-tracked" value={(vs.total_visitors ?? 0).toLocaleString()} color="#8b5cf6" />
+        <Stat icon={Bot} label="Bot/Crawler Hits" value={(vs.bot_traffic?.total_hits ?? 0).toLocaleString()} color="#f59e0b"
           sub={`${vs.bot_traffic?.unique_total ?? 0} unique bots`} />
-        <Stat icon={Users}      label="Active Users"           value={data?.active_users}  color="#06b6d4" />
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -171,25 +264,49 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         </div>
       )}
 
-      <Card title="Daily Traffic — Last 7 Days (All Sources)"
-        empty={!hasDailyVis && !hasSsDailyVis} emptyMsg="No visitor data yet">
+      <Card title="Daily Visitors — Last 7 Days (All Sources)"
+        empty={!hasMergedDaily && !hasDailyVis && !hasSsDailyVis} emptyMsg="No visitor data yet">
         {(() => {
+          if (hasMergedDaily) {
+            const chartData = mergedDaily.map(d => {
+              const row = { date: d.date, best_visitors: d.visitors };
+              const sources = d.sources || {};
+              if (sources.cloudflare) row.cf_visitors = sources.cloudflare.visitors;
+              if (sources.ga4) row.ga4_visitors = sources.ga4.visitors;
+              if (sources.server) row.ss_visitors = sources.server.visitors;
+              if (sources['js-tracked']) row.js_visitors = sources['js-tracked'].visitors;
+              return row;
+            });
+            const hasCf = chartData.some(d => d.cf_visitors > 0);
+            const hasGa4 = chartData.some(d => d.ga4_visitors > 0);
+            const hasSs = chartData.some(d => d.ss_visitors > 0);
+            const hasJs = chartData.some(d => d.js_visitors > 0);
+            return (
+              <ResponsiveContainer width="100%" height={280}>
+                <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={fmt} />
+                  <YAxis tick={{ fill: '#64748b', fontSize: 11 }} />
+                  <Tooltip {...TT} />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                  {hasCf && <Area type="monotone" dataKey="cf_visitors" name="Cloudflare" stroke="#f6821f" fill="rgba(246,130,31,0.10)" strokeWidth={2} />}
+                  {hasGa4 && <Area type="monotone" dataKey="ga4_visitors" name="GA4" stroke="#4285f4" fill="rgba(66,133,244,0.10)" strokeWidth={2} />}
+                  {hasSs && <Area type="monotone" dataKey="ss_visitors" name="Server-side" stroke="#10b981" fill="rgba(16,185,129,0.10)" strokeWidth={2} />}
+                  {hasJs && <Area type="monotone" dataKey="js_visitors" name="JS-tracked" stroke="#8b5cf6" fill="rgba(139,92,246,0.08)" strokeWidth={1.5} />}
+                </AreaChart>
+              </ResponsiveContainer>
+            );
+          }
           const ssDaily = vs.server_side?.daily_visitors || [];
           const jsDaily = vs.daily_visitors || [];
           const merged = ssDaily.map((ss) => {
             const js = jsDaily.find(j => j.date === ss.date) || {};
             return {
-              date: ss.date,
-              ss_visitors: ss.visitors,
-              ss_hits: ss.page_views,
-              js_visitors: js.visitors || 0,
-              js_page_views: js.page_views || 0,
-              bot_hits: ss.bot_hits || 0,
+              date: ss.date, ss_visitors: ss.visitors, js_visitors: js.visitors || 0,
             };
           });
           const chartData = merged.length > 0 ? merged : jsDaily.map(j => ({
-            date: j.date, ss_visitors: 0, ss_hits: 0,
-            js_visitors: j.visitors, js_page_views: j.page_views, bot_hits: 0,
+            date: j.date, ss_visitors: 0, js_visitors: j.visitors,
           }));
           return (
             <ResponsiveContainer width="100%" height={250}>
@@ -199,9 +316,66 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
                 <YAxis tick={{ fill: '#64748b', fontSize: 11 }} />
                 <Tooltip {...TT} />
                 <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
-                <Area type="monotone" dataKey="ss_visitors"   name="All Traffic (server)" stroke="#10b981" fill="rgba(16,185,129,0.12)" strokeWidth={2} />
-                <Area type="monotone" dataKey="js_visitors"   name="Engaged (JS)"        stroke="#8b5cf6" fill="rgba(139,92,246,0.10)" strokeWidth={2} />
-                <Area type="monotone" dataKey="bot_hits"      name="Bot Hits"             stroke="#f59e0b" fill="rgba(245,158,11,0.08)" strokeWidth={1.5} strokeDasharray="4 2" />
+                <Area type="monotone" dataKey="ss_visitors" name="Server-side" stroke="#10b981" fill="rgba(16,185,129,0.12)" strokeWidth={2} />
+                <Area type="monotone" dataKey="js_visitors" name="JS-tracked" stroke="#8b5cf6" fill="rgba(139,92,246,0.10)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          );
+        })()}
+      </Card>
+
+      <Card title="Daily Page Views — Last 7 Days (All Sources)"
+        empty={!hasMergedDaily && !hasDailyVis && !hasSsDailyVis} emptyMsg="No page view data yet">
+        {(() => {
+          if (hasMergedDaily) {
+            const chartData = mergedDaily.map(d => {
+              const row = { date: d.date, best_pv: d.page_views };
+              const sources = d.sources || {};
+              if (sources.cloudflare) row.cf_pv = sources.cloudflare.page_views;
+              if (sources.ga4) row.ga4_pv = sources.ga4.page_views;
+              if (sources.server) row.ss_pv = sources.server.page_views;
+              if (sources['js-tracked']) row.js_pv = sources['js-tracked'].page_views;
+              return row;
+            });
+            const hasCf = chartData.some(d => d.cf_pv > 0);
+            const hasGa4 = chartData.some(d => d.ga4_pv > 0);
+            const hasSs = chartData.some(d => d.ss_pv > 0);
+            const hasJs = chartData.some(d => d.js_pv > 0);
+            return (
+              <ResponsiveContainer width="100%" height={220}>
+                <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                  <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={fmt} />
+                  <YAxis tick={{ fill: '#64748b', fontSize: 11 }} />
+                  <Tooltip {...TT} />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                  {hasCf && <Area type="monotone" dataKey="cf_pv" name="Cloudflare PV" stroke="#f6821f" fill="rgba(246,130,31,0.10)" strokeWidth={2} />}
+                  {hasGa4 && <Area type="monotone" dataKey="ga4_pv" name="GA4 PV" stroke="#4285f4" fill="rgba(66,133,244,0.10)" strokeWidth={2} />}
+                  {hasSs && <Area type="monotone" dataKey="ss_pv" name="Server PV" stroke="#10b981" fill="rgba(16,185,129,0.10)" strokeWidth={2} />}
+                  {hasJs && <Area type="monotone" dataKey="js_pv" name="JS-tracked PV" stroke="#8b5cf6" fill="rgba(139,92,246,0.08)" strokeWidth={1.5} />}
+                </AreaChart>
+              </ResponsiveContainer>
+            );
+          }
+          const ssDaily = vs.server_side?.daily_visitors || [];
+          const jsDaily = vs.daily_visitors || [];
+          const merged = ssDaily.map((ss) => {
+            const js = jsDaily.find(j => j.date === ss.date) || {};
+            return { date: ss.date, ss_pv: ss.page_views, js_pv: js.page_views || 0 };
+          });
+          const chartData = merged.length > 0 ? merged : jsDaily.map(j => ({
+            date: j.date, ss_pv: 0, js_pv: j.page_views,
+          }));
+          return (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+                <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={fmt} />
+                <YAxis tick={{ fill: '#64748b', fontSize: 11 }} />
+                <Tooltip {...TT} />
+                <Legend wrapperStyle={{ fontSize: 11, color: '#94a3b8' }} />
+                <Area type="monotone" dataKey="ss_pv" name="Server PV" stroke="#10b981" fill="rgba(16,185,129,0.12)" strokeWidth={2} />
+                <Area type="monotone" dataKey="js_pv" name="JS-tracked PV" stroke="#8b5cf6" fill="rgba(139,92,246,0.10)" strokeWidth={2} />
               </AreaChart>
             </ResponsiveContainer>
           );

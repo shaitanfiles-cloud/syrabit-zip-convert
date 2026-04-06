@@ -336,6 +336,8 @@ async def lifespan(app):
             await db.flashcard_collections.create_index("chapter_id")
             await db.flashcard_collections.create_index("subject_id")
 
+            await db.analytics_daily_totals.create_index([("date", 1), ("source", 1)], unique=True)
+
             try:
                 await db.topics.create_index("chapter_id")
                 await db.topics.create_index("status")
