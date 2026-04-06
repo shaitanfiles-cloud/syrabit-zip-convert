@@ -889,13 +889,27 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.warning(f"[STREAM] Follow-up detection failed: {_fu_err_s}")
         return None
 
-    _subj_ctx_result, _sem_class_result, document_text, (_sr_scoped_query, _sr_route), _s_topic_meta, _stream_followup_info = await asyncio.gather(
+    async def _prefetch_history():
+        try:
+            if not msg.conversation_id:
+                return None
+            if user_id:
+                return await supa_get_conversation(msg.conversation_id, user_id)
+            if anon_id:
+                from cache import redis_get_anon_conversation
+                return redis_get_anon_conversation(anon_id, msg.conversation_id)
+        except Exception as _hist_err:
+            logger.warning(f"[STREAM] History prefetch failed (non-fatal): {_hist_err}")
+        return None
+
+    _subj_ctx_result, _sem_class_result, document_text, (_sr_scoped_query, _sr_route), _s_topic_meta, _stream_followup_info, _prefetched_conv = await asyncio.gather(
         _resolve_subject_context(msg.subject_id),
         _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
         _fetch_doc(),
         _fetch_search_scope_early(),
         _fetch_stage1_stream(),
         _fetch_followup_info(),
+        _prefetch_history(),
     )
 
     _is_followup_s = False
@@ -979,16 +993,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_phase2 = _time_mod.time()
     _deadline = _stream_t0 + _PRE_LLM_BUDGET
 
-    async def _fetch_history():
-        if not msg.conversation_id:
-            return None
-        if user_id:
-            return await supa_get_conversation(msg.conversation_id, user_id)
-        if anon_id:
-            from cache import redis_get_anon_conversation
-            return redis_get_anon_conversation(anon_id, msg.conversation_id)
-        return None
-
     _s_rag_query = msg.message
     if _s_topic_meta and _s_topic_meta.get("search_keywords") and not _skip_rag_stream:
         _s_rag_query = _s_enhance_q(msg.message, _s_topic_meta)
@@ -998,7 +1002,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _rag_quality = "none"
     if _skip_rag_stream:
         web_results = []
-        raw_conv = await _fetch_history()
+        raw_conv = _prefetched_conv
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
         _resolved_syl_sid = msg.subject_id or (getattr(_sr_route, "subject_id", "") if _sr_route else "")
@@ -1035,7 +1039,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             intent=_stream_intent,
             db_category=_stream_db_category,
         ))
-        _history_task = asyncio.create_task(_fetch_history())
+        _history_ready = _prefetched_conv
 
         if _stream_intent in _CONTENT_INTENTS_SET and msg.subject_id:
             try:
@@ -1069,7 +1073,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         else:
             _web_task = asyncio.create_task(_safe_web_search_stream())
 
-        _essential = {_rag_task, _history_task}
+        _essential = {_rag_task}
         _essential_budget = max(1.0, _deadline - _time_mod.time())
         done, _ = await asyncio.wait(_essential, timeout=_essential_budget, return_when=asyncio.ALL_COMPLETED)
 
@@ -1084,23 +1088,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 pass
             logger.warning("[STREAM] RAG timed out — proceeding without RAG context")
 
-        if _history_task not in done:
-            _history_task.cancel()
-            try:
-                await _history_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            logger.warning("[STREAM] History fetch timed out")
-
         try:
             rag_ctx = _rag_task.result() if _rag_task.done() and not _rag_task.cancelled() else _empty_rag
         except Exception as _rag_exc:
             logger.warning(f"[STREAM] RAG task raised: {_rag_exc}")
             rag_ctx = _empty_rag
-        try:
-            raw_conv = _history_task.result() if _history_task.done() and not _history_task.cancelled() else None
-        except Exception:
-            raw_conv = None
+        raw_conv = _history_ready
 
         if _web_task.done() and not _web_task.cancelled():
             try:

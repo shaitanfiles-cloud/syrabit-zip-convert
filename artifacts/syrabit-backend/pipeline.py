@@ -225,8 +225,8 @@ def build_enhanced_query(original_query: str, topic_metadata: dict) -> str:
 
 import hashlib
 _stage1_cache: dict[str, tuple[float, dict]] = {}
-_STAGE1_CACHE_TTL = 300
-_STAGE1_CACHE_MAX = 500
+_STAGE1_CACHE_TTL = 600
+_STAGE1_CACHE_MAX = 768
 
 def _stage1_cache_key(query: str) -> str:
     return hashlib.md5(query.strip().lower().encode()).hexdigest()

@@ -257,8 +257,8 @@ class _SmartKeyPool:
     pick() uses RPM-aware scoring: when a slot hits 70-80% of its RPM limit,
     it gets deprioritized so traffic shifts to the next provider BEFORE hitting 429.
     """
-    _RL_COOLDOWN  = 30.0
-    _ERR_COOLDOWN = 10.0
+    _RL_COOLDOWN  = 20.0
+    _ERR_COOLDOWN = 7.0
     _RPM_SOFT_THRESHOLD = 0.80
     _RPM_HARD_THRESHOLD = 0.90
 
@@ -1042,12 +1042,12 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # async with slot["sem"] lets up to max_concurrent requests run in parallel.
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
-    _SLM_SLOT_TIMEOUT = 2.5    # max seconds between any two tokens mid-stream
+    _SLM_SLOT_TIMEOUT = 2.0    # max seconds between any two tokens mid-stream
     _SLM_TTFT_TIMEOUT = 2.0    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
-        "sarvam": 8000,
+        "sarvam": 12000,
         "groq": 100000,
         "fireworksai": 80000,
         "gemini": 500000,
@@ -1072,7 +1072,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 logger.info(f"SLM pool: skipping {p_name}/{p_model} — input too large ({_input_chars} chars > {_max_chars} limit)")
                 _skipped_slots.add(id(slot))
                 continue
-            _effective_ttft = min(3.0, _SLM_TTFT_TIMEOUT + (1.0 if _input_chars > 8000 else 0.0))
+            _effective_ttft = min(2.5, _SLM_TTFT_TIMEOUT + (0.5 if _input_chars > 8000 else 0.0))
             try:
                 async with slot["sem"]:
                     token_q: asyncio.Queue = asyncio.Queue()
@@ -1112,20 +1112,27 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
                         yield first_chunk
 
+                        _tokens_yielded = 1
                         while True:
                             try:
                                 chunk = await asyncio.wait_for(token_q.get(), timeout=_SLM_SLOT_TIMEOUT)
                             except asyncio.TimeoutError:
                                 _slm_pool.mark_err(slot)
-                                logger.warning(f"SLM pool: {p_name}/{p_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s")
+                                logger.warning(f"SLM pool: {p_name}/{p_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens already yielded — cannot failover)")
+                                _stream_ok = True
                                 break
                             if chunk is None:
                                 break
                             yield chunk
+                            _tokens_yielded += 1
 
-                        if _producer_error:
+                        if _producer_error and _tokens_yielded <= 1:
                             _slm_pool.mark_err(slot)
                             logger.warning(f"SLM pool: {p_name}/{p_model} error during stream: {type(_producer_error).__name__}: {str(_producer_error)[:80]}")
+                        elif _producer_error:
+                            _slm_pool.mark_err(slot)
+                            logger.warning(f"SLM pool: {p_name}/{p_model} error during stream after {_tokens_yielded} tokens: {type(_producer_error).__name__}: {str(_producer_error)[:80]}")
+                            _stream_ok = True
                         else:
                             _stream_ok = True
                             _slm_pool.mark_ok(slot)
