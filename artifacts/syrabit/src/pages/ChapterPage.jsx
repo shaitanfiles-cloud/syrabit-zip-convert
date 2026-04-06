@@ -314,13 +314,14 @@ export default function ChapterPage() {
   }, [headings, data]);
 
   const highlightDoneRef = useRef(false);
+  const topicParam = searchParams.get('topic') || searchParams.get('highlight') || '';
+  const chunkParam = searchParams.get('chunk') || '';
   useEffect(() => { highlightDoneRef.current = false; }, [chapterSlug]);
   useEffect(() => {
     if (loading || !data) return;
     if (highlightDoneRef.current) return;
-    const url = new URL(window.location.href);
-    const topicRaw = url.searchParams.get('topic') || url.searchParams.get('highlight') || url.hash.slice(1);
-    const chunkSnippet = url.searchParams.get('chunk') || '';
+    const topicRaw = topicParam || window.location.hash.slice(1);
+    const chunkSnippet = chunkParam;
     if (!topicRaw && !chunkSnippet) return;
     let decoded = '';
     try { decoded = (topicRaw ? decodeURIComponent(topicRaw) : '').toLowerCase(); } catch { decoded = (topicRaw || '').toLowerCase(); }
@@ -428,10 +429,6 @@ export default function ChapterPage() {
             }
           }
         }
-        if (!el) {
-          const firstChild = contentTop.querySelector('h1, h2, h3, p');
-          el = firstChild || contentTop;
-        }
       }
       return el;
     };
@@ -472,23 +469,29 @@ export default function ChapterPage() {
     };
 
     let attempt = 0;
-    const maxAttempts = 4;
-    const delays = [300, 800, 1500, 3000];
+    const maxAttempts = 5;
+    const delays = [200, 500, 1000, 2000, 3500];
     let cancelled = false;
     const timers = [];
     const tryScroll = () => {
-      if (cancelled) return;
+      if (cancelled || highlightDoneRef.current) return;
       const el = findTarget();
       if (el) {
         applyHighlight(el);
       } else if (attempt < maxAttempts - 1) {
         attempt++;
         timers.push(setTimeout(tryScroll, delays[attempt]));
+      } else {
+        const contentTop = document.getElementById('chapter-content-top');
+        if (contentTop) {
+          const fallback = contentTop.querySelector('h1, h2, h3, p');
+          if (fallback) applyHighlight(fallback);
+        }
       }
     };
     timers.push(setTimeout(tryScroll, delays[0]));
     return () => { cancelled = true; timers.forEach(t => clearTimeout(t)); };
-  }, [loading, data]);
+  }, [loading, data, topicParam, chunkParam]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}`;
   const canonical = `https://syrabit.ai${basePath}/${chapterSlug}`;
