@@ -1601,8 +1601,8 @@
 
 /* ── Highlight (light mode first) ── */
 @keyframes highlightFadeIn {
-  0% { background-color: rgba(124, 58, 237, 0.22) !important; box-shadow: inset 4px 0 0 0 #7c3aed, 0 0 12px rgba(124, 58, 237, 0.12) !important; }
-  100% { background-color: rgba(124, 58, 237, 0.10) !important; box-shadow: inset 3px 0 0 0 #7c3aed !important; }
+  0% { background-color: rgba(74, 222, 128, 0.22) !important; box-shadow: inset 4px 0 0 0 #22c55e, 0 0 12px rgba(74, 222, 128, 0.12) !important; }
+  100% { background-color: rgba(74, 222, 128, 0.10) !important; box-shadow: inset 3px 0 0 0 #22c55e !important; }
 }
 @keyframes highlightFadeInDark {
   0% { background-color: rgba(74, 222, 128, 0.35) !important; box-shadow: inset 4px 0 0 0 #22c55e, 0 0 12px rgba(74, 222, 128, 0.15) !important; }
@@ -1610,8 +1610,8 @@
 }
 .chapter-textbook .highlight-active,
 .highlight-active {
-  background-color: rgba(124, 58, 237, 0.10) !important;
-  box-shadow: inset 3px 0 0 0 #7c3aed !important;
+  background-color: rgba(74, 222, 128, 0.10) !important;
+  box-shadow: inset 3px 0 0 0 #22c55e !important;
   padding: 4px 10px;
   margin-left: -10px;
   animation: highlightFadeIn 1s ease-out;
@@ -1642,7 +1642,7 @@
 h2.highlight-active,
 h3.highlight-active,
 h4.highlight-active {
-  color: #6d28d9 !important;
+  color: #16a34a !important;
 }
 .dark .chapter-textbook h2.highlight-active,
 .dark .chapter-textbook h3.highlight-active,
