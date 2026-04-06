@@ -523,11 +523,17 @@ export default function ChapterPage() {
 
   const handleShare = useCallback(() => {
     Analytics.chapterShare(data?.title || chapterSlug, `${basePath}/${chapterSlug}`);
-    share(data?.title || chapterSlug, `${basePath}/${chapterSlug}`, {
+    const chapTitle = data?.topic_title || data?.chapter_title || chapterSlug;
+    const subjName = data?.subject_name || subjectSlug;
+    const brdName = data?.board_name || board;
+    const clsName = data?.class_name || classSlug;
+    const shareTitle = `${chapTitle} — ${subjName} | ${brdName} ${clsName} Notes`;
+    const shareDesc = data?.meta_description || `${chapTitle} notes for ${subjName}. Complete study material for ${brdName} ${clsName} students.`;
+    share(shareTitle, `${basePath}/${chapterSlug}`, {
       showSerpPreview: true,
-      description: data?.meta_description || '',
+      description: shareDesc,
     });
-  }, [data?.title, data?.meta_description, chapterSlug, basePath, share]);
+  }, [data?.title, data?.meta_description, data?.topic_title, data?.chapter_title, data?.subject_name, data?.board_name, data?.class_name, chapterSlug, basePath, subjectSlug, board, classSlug, share]);
 
   const markdownComponents = useMemo(() => {
     const extractText = (node) => {

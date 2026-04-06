@@ -790,6 +790,90 @@ if FRONTEND_BUILD.is_dir():
     _SUBJECT_PATH_RE = _spa_re.compile(
         r"^(?P<board>[^/]+)/(?P<class>[^/]+)(?:/(?P<stream>[^/]+))?/(?P<subject>[^/]+)/?$"
     )
+    _CHAPTER_PATH_RE = _spa_re.compile(
+        r"^(?P<board>[^/]+)/(?P<class>[^/]+)/(?P<subject>[^/]+)/(?P<chapter>[^/]+)/?$"
+    )
+
+    def _build_og_html(title: str, desc: str, page_url: str, og_image: str) -> str:
+        from html import escape
+        return (
+            '<!DOCTYPE html><html lang="en"><head>'
+            '<meta charset="utf-8">'
+            f'<title>{escape(title)} | Syrabit.ai</title>'
+            f'<meta name="description" content="{escape(desc)}">'
+            f'<meta property="og:site_name" content="Syrabit.ai">'
+            f'<meta property="og:title" content="{escape(title)}">'
+            f'<meta property="og:description" content="{escape(desc)}">'
+            f'<meta property="og:type" content="article">'
+            f'<meta property="og:url" content="{escape(page_url)}">'
+            f'<meta property="og:image" content="{escape(og_image)}">'
+            '<meta property="og:image:width" content="1200">'
+            '<meta property="og:image:height" content="630">'
+            '<meta name="twitter:card" content="summary_large_image">'
+            f'<meta name="twitter:title" content="{escape(title)}">'
+            f'<meta name="twitter:description" content="{escape(desc)}">'
+            f'<meta name="twitter:image" content="{escape(og_image)}">'
+            f'<link rel="canonical" href="{escape(page_url)}">'
+            f'<meta http-equiv="refresh" content="0;url={escape(page_url)}">'
+            '</head><body></body></html>'
+        )
+
+    async def _og_html_for_chapter(path: str) -> Optional[str]:
+        m = _CHAPTER_PATH_RE.match(path)
+        if not m:
+            return None
+        try:
+            from deps import db
+            if not db:
+                return None
+            board_slug = m.group("board")
+            class_slug = m.group("class")
+            subject_slug = m.group("subject")
+            chapter_slug = m.group("chapter")
+
+            board = await db.boards.find_one({"slug": board_slug}, {"_id": 0, "id": 1, "name": 1})
+            if not board:
+                return None
+            cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0, "id": 1, "name": 1})
+            if not cls:
+                return None
+            streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0, "id": 1}).to_list(100)
+            stream_ids = [s["id"] for s in streams]
+            subj = await db.subjects.find_one(
+                {"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"},
+                {"_id": 0, "id": 1, "name": 1},
+            )
+            if not subj:
+                return None
+            chapter = await db.chapters.find_one(
+                {"slug": chapter_slug, "subject_id": subj["id"]},
+                {"_id": 0, "title": 1, "description": 1},
+            )
+            if not chapter:
+                import re as _re_inner
+                all_chapters = await db.chapters.find({"subject_id": subj["id"]}, {"_id": 0, "title": 1, "description": 1}).to_list(200)
+                for c in all_chapters:
+                    auto_slug = _re_inner.sub(r'[^a-z0-9]+', '-', c.get("title", "").lower()).strip('-')
+                    if auto_slug == chapter_slug:
+                        chapter = c
+                        break
+            if not chapter:
+                return None
+
+            ch_title = chapter.get("title", chapter_slug)
+            subj_name = subj.get("name", "")
+            board_name = board.get("name", "")
+            class_name = cls.get("name", "")
+
+            title = f"{ch_title} — {subj_name} | {board_name} {class_name} Notes"
+            desc = chapter.get("description") or f"{ch_title} notes for {subj_name}. Complete study material for {board_name} {class_name} students."
+            page_url = f"https://syrabit.ai/{path}"
+            og_image = "https://syrabit.ai/opengraph.jpg"
+
+            return _build_og_html(title, desc, page_url, og_image)
+        except Exception as _og_err:
+            logger.warning(f"OG chapter tag injection error: {_og_err}")
+            return None
 
     async def _og_html_for_subject(path: str) -> Optional[str]:
         m = _SUBJECT_PATH_RE.match(path)
@@ -829,28 +913,7 @@ if FRONTEND_BUILD.is_dir():
             else:
                 og_image = "https://syrabit.ai/opengraph.jpg"
 
-            from html import escape
-            return (
-                '<!DOCTYPE html><html lang="en"><head>'
-                '<meta charset="utf-8">'
-                f'<title>{escape(title)} | Syrabit.ai</title>'
-                f'<meta name="description" content="{escape(desc)}">'
-                f'<meta property="og:site_name" content="Syrabit.ai">'
-                f'<meta property="og:title" content="{escape(title)}">'
-                f'<meta property="og:description" content="{escape(desc)}">'
-                f'<meta property="og:type" content="article">'
-                f'<meta property="og:url" content="{escape(page_url)}">'
-                f'<meta property="og:image" content="{escape(og_image)}">'
-                '<meta property="og:image:width" content="1200">'
-                '<meta property="og:image:height" content="630">'
-                '<meta name="twitter:card" content="summary_large_image">'
-                f'<meta name="twitter:title" content="{escape(title)}">'
-                f'<meta name="twitter:description" content="{escape(desc)}">'
-                f'<meta name="twitter:image" content="{escape(og_image)}">'
-                f'<link rel="canonical" href="{escape(page_url)}">'
-                f'<meta http-equiv="refresh" content="0;url={escape(page_url)}">'
-                '</head><body></body></html>'
-            )
+            return _build_og_html(title, desc, page_url, og_image)
         except Exception as _og_err:
             logger.warning(f"OG tag injection error: {_og_err}")
             return None
@@ -862,7 +925,7 @@ if FRONTEND_BUILD.is_dir():
 
         ua = (request.headers.get("user-agent") or "").lower()
         if _OG_BOT_RE.search(ua) and full_path and "/" in full_path:
-            og_html = await _og_html_for_subject(full_path)
+            og_html = await _og_html_for_chapter(full_path) or await _og_html_for_subject(full_path)
             if og_html:
                 return Response(content=og_html, media_type="text/html")
 
