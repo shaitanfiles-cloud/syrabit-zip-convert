@@ -489,30 +489,27 @@ async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin
     """Track which content pages correlate with user signups and upgrades."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
-    # Top viewed pages
+    # Top viewed pages (from page_views collection — JS-tracked)
     view_pipeline = [
-        {"$match": {"type": "page_view", "created_at": {"$gte": cutoff}}},
+        {"$match": {"date": {"$gte": cutoff[:10]}, "is_bot": {"$ne": True}}},
         {"$group": {"_id": "$path", "views": {"$sum": 1}, "unique_visitors": {"$addToSet": "$visitor_id"}}},
         {"$project": {"path": "$_id", "views": 1, "unique_visitors": {"$size": "$unique_visitors"}}},
         {"$sort": {"views": -1}},
         {"$limit": 20},
     ]
     try:
-        pages = await db.analytics.aggregate(view_pipeline).to_list(20)
+        pages = await db.page_views.aggregate(view_pipeline).to_list(20)
     except Exception:
         pages = []
 
-    # New signups per day with last page
-    signup_pipeline = [
-        {"$match": {"type": "signup", "created_at": {"$gte": cutoff}}},
-        {"$group": {"_id": "$referrer_path", "signups": {"$sum": 1}}},
-        {"$sort": {"signups": -1}},
-        {"$limit": 15},
-    ]
+    # Signups by source — use Supabase users created in period
+    signup_sources = []
     try:
-        signup_sources = await db.analytics.aggregate(signup_pipeline).to_list(15)
+        users = await supa_list_users()
+        recent_users = [u for u in users if (u.get("created_at") or "") >= cutoff]
+        signup_sources = [{"_id": "direct", "signups": len(recent_users)}]
     except Exception:
-        signup_sources = []
+        pass
 
     enriched = []
     signup_map = {s["_id"]: s["signups"] for s in signup_sources}
@@ -528,20 +525,23 @@ async def admin_page_conversions(days: int = 30, admin: dict = Depends(get_admin
 
     enriched.sort(key=lambda x: x["signups_attributed"], reverse=True)
 
-    # Daily signups trend
-    daily_pipeline = [
-        {"$match": {"type": "signup", "created_at": {"$gte": cutoff}}},
-        {"$group": {"_id": {"$substr": ["$created_at", 0, 10]}, "signups": {"$sum": 1}}},
-        {"$sort": {"_id": 1}},
-    ]
+    # Daily signups trend (from Supabase users — reuse 'users' from above)
+    daily_signups_map = {}
     try:
-        daily = await db.analytics.aggregate(daily_pipeline).to_list(days)
+        _all_u = users if 'users' in locals() and users else await supa_list_users()
+        for u in _all_u:
+            d = (u.get("created_at") or "")[:10]
+            if d >= cutoff[:10]:
+                daily_signups_map[d] = daily_signups_map.get(d, 0) + 1
     except Exception:
-        daily = []
+        pass
 
     return {
         "top_converting_pages": enriched,
-        "daily_signups": [{"date": d["_id"], "signups": d["signups"]} for d in daily],
+        "daily_signups": sorted(
+            [{"date": d, "signups": c} for d, c in daily_signups_map.items()],
+            key=lambda x: x["date"],
+        ),
         "period_days": days,
     }
 
@@ -1050,31 +1050,8 @@ async def admin_vector_stats(admin: dict = Depends(get_admin_user)):
 # PHASE G: RAG HEALTH & REVENUE INTELLIGENCE ENDPOINTS
 # ─────────────────────────────────────────────
 
-# ── In-memory telemetry ring buffers (process-lifetime) ──────────────────────
-_rag_telemetry: list = []          # {"ts", "quality", "latency_ms", "query"}
-_RAG_TELEM_MAX = 20_000
-_chat_latencies: list = []         # {"ts", "latency_ms"}
-_LATENCY_MAX = 10_000
-
-def _record_rag_event(quality: str, latency_ms: float, query: str = ""):
-    """Called from the RAG pipeline to log each retrieval attempt."""
-    _rag_telemetry.append({
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "quality": quality,       # "high" | "medium" | "none"
-        "latency_ms": round(latency_ms, 1),
-        "query": query[:200],
-    })
-    if len(_rag_telemetry) > _RAG_TELEM_MAX:
-        _rag_telemetry.pop(0)
-
-def _record_chat_latency(latency_ms: float):
-    """Called after each chat request completes to track P95."""
-    _chat_latencies.append({
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "latency_ms": round(latency_ms, 1),
-    })
-    if len(_chat_latencies) > _LATENCY_MAX:
-        _chat_latencies.pop(0)
+# ── Telemetry ring buffers — imported from rag.py (single source of truth) ────
+from rag import _rag_telemetry, _chat_latencies
 
 
 @router.get("/admin/rag/accuracy")

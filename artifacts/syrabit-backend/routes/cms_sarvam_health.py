@@ -2619,21 +2619,34 @@ async def admin_analytics_funnel(admin: dict = Depends(get_admin_user)):
 
 @router.get("/admin/analytics/content-heatmap")
 async def admin_analytics_content_heatmap(admin: dict = Depends(get_admin_user)):
-    pipeline = [
-        {"$group": {"_id": "$subject_name", "views": {"$sum": 1}}},
+    subject_pipeline = [
+        {"$match": {"event_type": {"$in": ["subject_view", "chapter_view"]}}},
+        {"$group": {"_id": "$subject_id", "views": {"$sum": 1}}},
         {"$sort": {"views": -1}},
         {"$limit": 30},
     ]
     try:
-        results = await db.analytics.aggregate(pipeline).to_list(30)
+        results = await db.analytics.aggregate(subject_pipeline).to_list(30)
     except Exception:
         results = []
+
+    subject_names = {}
+    if results:
+        try:
+            sids = [r["_id"] for r in results if r["_id"]]
+            subjects = await db.subjects.find(
+                {"id": {"$in": sids}},
+                {"_id": 0, "id": 1, "name": 1}
+            ).to_list(None)
+            subject_names = {s["id"]: s["name"] for s in subjects}
+        except Exception:
+            pass
 
     top_searches = []
     try:
         search_pipeline = [
-            {"$match": {"type": "search"}},
-            {"$group": {"_id": "$query", "count": {"$sum": 1}}},
+            {"$match": {"event_type": "search", "search_query": {"$ne": None, "$ne": ""}}},
+            {"$group": {"_id": "$search_query", "count": {"$sum": 1}}},
             {"$sort": {"count": -1}},
             {"$limit": 20},
         ]
@@ -2642,7 +2655,10 @@ async def admin_analytics_content_heatmap(admin: dict = Depends(get_admin_user))
         pass
 
     return {
-        "top_subjects": [{"name": r["_id"] or "Unknown", "views": r["views"]} for r in results if r["_id"]],
+        "top_subjects": [
+            {"name": subject_names.get(r["_id"], r["_id"] or "Unknown"), "views": r["views"]}
+            for r in results if r["_id"]
+        ],
         "top_searches": [{"query": r["_id"] or "Unknown", "count": r["count"]} for r in top_searches if r["_id"]],
     }
 
@@ -2692,8 +2708,9 @@ async def admin_analytics_predictor(admin: dict = Depends(get_admin_user)):
     growth_rate = ((recent - prior) / max(prior, 1)) if prior > 0 else 0
     predicted_mrr = round(recent_rev * (1 + growth_rate * 0.5), 2)
 
-    users_this_month = await db.users.count_documents({"created_at": {"$gte": thirty_ago}})
-    users_last_month = await db.users.count_documents({"created_at": {"$gte": sixty_ago, "$lt": thirty_ago}})
+    all_users = await supa_list_users()
+    users_this_month = sum(1 for u in all_users if (u.get("created_at") or "") >= thirty_ago)
+    users_last_month = sum(1 for u in all_users if sixty_ago <= (u.get("created_at") or "") < thirty_ago)
 
     return {
         "current_mrr_inr": recent_rev,
@@ -2895,18 +2912,56 @@ async def admin_analytics_daily(
     except Exception:
         pass
 
-    # ── 3. Messages (conversations collection) ──────────────────────────────
+    # ── 3. Messages (from Supabase/PG conversations) ──────────────────────
     try:
         cutoff_dt = (now - timedelta(days=days)).isoformat()
-        pipeline_msgs = [
-            {"$match": {"created_at": {"$gte": cutoff_dt}}},
-            {"$group": {"_id": {"$substr": ["$created_at", 0, 10]}, "count": {"$sum": "$message_count"}}},
-        ]
-        msg_rows = await db.conversations.aggregate(pipeline_msgs).to_list(days + 5)
-        for row in msg_rows:
-            d = row["_id"]
-            if d in daily:
-                daily[d]["messages"] = row["count"] or 0
+        seen_conv_ids = set()
+
+        if deps.pg_pool:
+            try:
+                async with deps.pg_pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT id, created_at, messages FROM conversations WHERE created_at >= $1",
+                        cutoff_dt,
+                    )
+                    for r in _pg_rows(rows):
+                        seen_conv_ids.add(r["id"])
+                        ca = str(r.get("created_at", ""))[:10]
+                        if ca in daily:
+                            msgs = r.get("messages") or []
+                            if isinstance(msgs, str):
+                                try: msgs = json.loads(msgs)
+                                except Exception: msgs = []
+                            daily[ca]["messages"] += len(msgs) if isinstance(msgs, list) else 0
+            except Exception:
+                pass
+
+        if supa:
+            try:
+                offset_s = 0
+                while True:
+                    r = await _supa(lambda o=offset_s: supa.table("conversations")
+                        .select("id, created_at, messages")
+                        .gte("created_at", cutoff_dt)
+                        .range(o, o + 199).execute())
+                    batch = r.data or []
+                    if not batch:
+                        break
+                    for row in batch:
+                        if row.get("id") in seen_conv_ids:
+                            continue
+                        ca = (row.get("created_at") or "")[:10]
+                        if ca in daily:
+                            msgs = row.get("messages")
+                            if isinstance(msgs, str):
+                                try: msgs = json.loads(msgs)
+                                except Exception: msgs = []
+                            daily[ca]["messages"] += len(msgs) if isinstance(msgs, list) else 0
+                    offset_s += 200
+                    if len(batch) < 200:
+                        break
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -2914,8 +2969,8 @@ async def admin_analytics_daily(
     try:
         cutoff_dt = (now - timedelta(days=days)).isoformat()
         pipeline_ai = [
-            {"$match": {"type": "ask_ai_click", "created_at": {"$gte": cutoff_dt}}},
-            {"$group": {"_id": {"$substr": ["$created_at", 0, 10]}, "count": {"$sum": 1}}},
+            {"$match": {"event_type": "ask_ai_click", "timestamp": {"$gte": cutoff_dt}}},
+            {"$group": {"_id": {"$substr": ["$timestamp", 0, 10]}, "count": {"$sum": 1}}},
         ]
         ai_rows = await db.analytics.aggregate(pipeline_ai).to_list(days + 5)
         for row in ai_rows:
