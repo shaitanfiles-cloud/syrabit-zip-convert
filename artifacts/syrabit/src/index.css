@@ -1544,18 +1544,67 @@
   }
 }
 
-@keyframes highlightFadeIn {
-  0% { background-color: rgba(74, 222, 128, 0.35); box-shadow: inset 4px 0 0 0 #22c55e, 0 0 12px rgba(74, 222, 128, 0.15); }
-  100% { background-color: rgba(74, 222, 128, 0.10); box-shadow: inset 3px 0 0 0 #4ade80; }
+/* ── Source Card (light mode first) ── */
+.source-card-container {
+  background: rgba(124, 58, 237, 0.06);
+  border: 1px solid rgba(124, 58, 237, 0.15);
+  max-width: fit-content;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
 }
+.source-card-container:hover {
+  background: rgba(124, 58, 237, 0.12);
+  border-color: rgba(124, 58, 237, 0.3);
+}
+.source-card-icon { color: #7c3aed; }
+.source-card-label { color: #7c3aed; opacity: 0.85; }
+.source-card-browser { color: #92400e; }
+.source-card-title { color: #15803d; }
+.source-card-badge {
+  background: rgba(124, 58, 237, 0.08);
+  color: #6d28d9;
+}
+
+.dark .source-card-container {
+  background: rgba(139, 92, 246, 0.06);
+  border-color: rgba(139, 92, 246, 0.14);
+}
+.dark .source-card-container:hover {
+  background: rgba(139, 92, 246, 0.12);
+  border-color: rgba(139, 92, 246, 0.3);
+}
+.dark .source-card-icon { color: #a78bfa; }
+.dark .source-card-label { color: #a78bfa; }
+.dark .source-card-browser { color: #c4a882; }
+.dark .source-card-title { color: #4ade80; }
+.dark .source-card-badge {
+  background: rgba(139, 92, 246, 0.1);
+  color: #c4b5fd;
+}
+
+/* ── Highlight (light mode first) ── */
+@keyframes highlightFadeIn {
+  0% { background-color: rgba(124, 58, 237, 0.22) !important; box-shadow: inset 4px 0 0 0 #7c3aed, 0 0 12px rgba(124, 58, 237, 0.12) !important; }
+  100% { background-color: rgba(124, 58, 237, 0.10) !important; box-shadow: inset 3px 0 0 0 #7c3aed !important; }
+}
+@keyframes highlightFadeInDark {
+  0% { background-color: rgba(74, 222, 128, 0.35) !important; box-shadow: inset 4px 0 0 0 #22c55e, 0 0 12px rgba(74, 222, 128, 0.15) !important; }
+  100% { background-color: rgba(74, 222, 128, 0.10) !important; box-shadow: inset 3px 0 0 0 #4ade80 !important; }
+}
+.chapter-textbook .highlight-active,
 .highlight-active {
-  background-color: rgba(74, 222, 128, 0.10);
-  box-shadow: inset 3px 0 0 0 #4ade80;
+  background-color: rgba(124, 58, 237, 0.10) !important;
+  box-shadow: inset 3px 0 0 0 #7c3aed !important;
   padding: 4px 10px;
   margin-left: -10px;
   animation: highlightFadeIn 1s ease-out;
   transition: background-color 0.3s ease;
   scroll-margin-top: 80px;
+}
+.dark .chapter-textbook .highlight-active,
+.dark .highlight-active {
+  background-color: rgba(74, 222, 128, 0.10) !important;
+  box-shadow: inset 3px 0 0 0 #4ade80 !important;
+  animation-name: highlightFadeInDark;
 }
 .highlight-active.highlight-section-start {
   border-radius: 8px 8px 0 0;
@@ -1569,8 +1618,19 @@
   border-radius: 8px;
   padding: 8px 10px;
 }
+.chapter-textbook h2.highlight-active,
+.chapter-textbook h3.highlight-active,
+.chapter-textbook h4.highlight-active,
 h2.highlight-active,
 h3.highlight-active,
 h4.highlight-active {
-  color: #4ade80;
+  color: #6d28d9 !important;
+}
+.dark .chapter-textbook h2.highlight-active,
+.dark .chapter-textbook h3.highlight-active,
+.dark .chapter-textbook h4.highlight-active,
+.dark h2.highlight-active,
+.dark h3.highlight-active,
+.dark h4.highlight-active {
+  color: #4ade80 !important;
 }

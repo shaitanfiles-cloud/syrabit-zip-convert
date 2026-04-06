@@ -177,16 +177,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           navigate(subjectUrl);
                         }
                       } : undefined}
-                      className={`mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer active:scale-[0.98]' : ''}`}
-                      style={{
-                        background: 'rgba(139,92,246,0.06)',
-                        border: '1px solid rgba(139,92,246,0.14)',
-                        maxWidth: 'fit-content',
-                        transition: 'background 0.15s ease, border-color 0.15s ease, transform 0.1s ease',
-                        ...(subjectUrl ? { cursor: 'pointer' } : {}),
-                      }}
-                      onMouseEnter={subjectUrl ? (e) => { e.currentTarget.style.background = 'rgba(139,92,246,0.12)'; e.currentTarget.style.borderColor = 'rgba(139,92,246,0.3)'; } : undefined}
-                      onMouseLeave={subjectUrl ? (e) => { e.currentTarget.style.background = 'rgba(139,92,246,0.06)'; e.currentTarget.style.borderColor = 'rgba(139,92,246,0.14)'; } : undefined}
+                      className={`source-card-container mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer active:scale-[0.98]' : ''}`}
                       role={subjectUrl ? 'button' : undefined}
                       tabIndex={subjectUrl ? 0 : undefined}
                       onKeyDown={subjectUrl ? (e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); } : undefined}
@@ -194,20 +185,20 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                     >
                       <div className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5 mb-1">
-                          <BookOpen size={11} style={{ color: '#a78bfa' }} />
-                          <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#a78bfa', opacity: 0.8 }}>Source</span>
-                          <span className="text-[10px]" style={{ color: 'hsl(var(--foreground) / 0.2)' }}>·</span>
-                          <span className="text-[10.5px] font-medium" style={{ color: '#c4a882' }}>Syrabit Browser</span>
+                          <BookOpen size={11} className="source-card-icon" />
+                          <span className="source-card-label text-[10px] font-semibold uppercase tracking-wider">Source</span>
+                          <span className="text-[10px] text-muted-foreground/30">·</span>
+                          <span className="source-card-browser text-[10.5px] font-medium">Syrabit Browser</span>
                         </div>
                         {lessonLabel && (
-                          <h4 className="font-semibold leading-tight truncate" style={{ fontSize: '0.85rem', letterSpacing: '0.01em', color: '#4ade80' }}>
+                          <h4 className="source-card-title font-semibold leading-tight truncate" style={{ fontSize: '0.85rem', letterSpacing: '0.01em' }}>
                             {lessonLabel}
                           </h4>
                         )}
                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1.5">
                           {boardLabel && (
                             <>
-                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                              <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">
                                 {boardLabel}
                               </span>
                               <span className="text-[11px] text-muted-foreground/40">·</span>
@@ -215,7 +206,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           )}
                           {classLabel && (
                             <>
-                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                              <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">
                                 {classLabel}
                               </span>
                               <span className="text-[11px] text-muted-foreground/40">·</span>
@@ -223,13 +214,13 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           )}
                           {courseLabel && (
                             <>
-                              <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                              <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">
                                 {courseLabel}
                               </span>
                               <span className="text-[11px] text-muted-foreground/40">·</span>
                             </>
                           )}
-                          <span className="text-[11px] font-medium px-1.5 py-0.5 rounded" style={{ background: 'rgba(139,92,246,0.1)', color: '#c4b5fd' }}>
+                          <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">
                             {subjectLabel}
                           </span>
                         </div>

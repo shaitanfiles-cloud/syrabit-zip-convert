@@ -537,13 +537,13 @@ export default function ChapterPage() {
         .finally(() => setLoading(false));
     };
     return (
-      <div className="min-h-screen bg-[#0a0a1a] text-white flex items-center justify-center">
+      <div className="min-h-screen bg-background text-foreground flex items-center justify-center">
         <div className="text-center max-w-md px-6">
-          <div className="w-16 h-16 rounded-2xl bg-white/5 flex items-center justify-center mx-auto mb-5">
-            <BookOpen size={28} className="text-gray-500" />
+          <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-5">
+            <BookOpen size={28} className="text-muted-foreground" />
           </div>
           <h1 className="text-2xl font-bold mb-3">{error || 'Chapter not found'}</h1>
-          <p className="text-gray-400 mb-6">This chapter may not be available yet or the URL may be incorrect.</p>
+          <p className="text-muted-foreground mb-6">This chapter may not be available yet or the URL may be incorrect.</p>
           <div className="flex items-center justify-center gap-3">
             <button
               onClick={handleRetry}
@@ -570,7 +570,7 @@ export default function ChapterPage() {
   const seoDesc = data.meta_description || `${chapterTitle} notes for ${subjectName}. Complete study material for ${boardName} ${className} students.`;
 
   return (
-    <div className="min-h-screen bg-[#0a0a1a] text-white">
+    <div className="min-h-screen bg-background text-foreground">
       <PageMeta
         title={seoTitle}
         description={seoDesc}
@@ -579,37 +579,37 @@ export default function ChapterPage() {
       />
       <ChapterJsonLd data={data} url={canonical} basePath={basePath} />
 
-      <header className="border-b border-white/5" style={{ background: 'rgba(10,10,26,0.95)', backdropFilter: 'blur(12px)' }}>
+      <header className="border-b border-border/40 bg-card/80 backdrop-blur-md">
         <div className="max-w-4xl mx-auto px-4 py-5">
-          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-gray-400 mb-4 flex-wrap">
-            <Link to="/" className="hover:text-purple-400 transition-colors flex items-center gap-1">
+          <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-muted-foreground mb-4 flex-wrap">
+            <Link to="/" className="hover:text-primary transition-colors flex items-center gap-1">
               <Home size={13} /> Home
             </Link>
-            <ChevronRight size={11} className="text-gray-600" />
-            <Link to="/library" className="hover:text-purple-400 transition-colors">Browser</Link>
-            <ChevronRight size={11} className="text-gray-600" />
-            <Link to={basePath} className="hover:text-purple-400 transition-colors">{subjectName}</Link>
-            <ChevronRight size={11} className="text-gray-600" />
-            <span className="text-white/80 font-medium truncate max-w-[200px]">{chapterTitle}</span>
+            <ChevronRight size={11} className="text-muted-foreground/50" />
+            <Link to="/library" className="hover:text-primary transition-colors">Browser</Link>
+            <ChevronRight size={11} className="text-muted-foreground/50" />
+            <Link to={basePath} className="hover:text-primary transition-colors">{subjectName}</Link>
+            <ChevronRight size={11} className="text-muted-foreground/50" />
+            <span className="text-foreground/80 font-medium truncate max-w-[200px]">{chapterTitle}</span>
           </nav>
 
           <div className="flex items-start gap-3 sm:gap-4">
-            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center shrink-0" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.15), rgba(139,92,246,0.08))', border: '1px solid rgba(139,92,246,0.2)' }}>
-              <FileText size={22} className="text-purple-400" />
+            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center shrink-0 bg-primary/10 border border-primary/20">
+              <FileText size={22} className="text-primary" />
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5 mb-2 flex-wrap">
-                <Badge variant="outline" className="text-[11px] text-purple-400 border-purple-500/25 bg-purple-500/5">{boardName}</Badge>
-                <Badge variant="outline" className="text-[11px] text-blue-400 border-blue-500/25 bg-blue-500/5">{className}</Badge>
-                {streamName && <Badge variant="outline" className="text-[11px] text-emerald-400 border-emerald-500/25 bg-emerald-500/5">{streamName}</Badge>}
+                <Badge variant="outline" className="text-[11px] text-purple-600 dark:text-purple-400 border-purple-500/25 bg-purple-500/5">{boardName}</Badge>
+                <Badge variant="outline" className="text-[11px] text-blue-600 dark:text-blue-400 border-blue-500/25 bg-blue-500/5">{className}</Badge>
+                {streamName && <Badge variant="outline" className="text-[11px] text-emerald-600 dark:text-emerald-400 border-emerald-500/25 bg-emerald-500/5">{streamName}</Badge>}
               </div>
-              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-white leading-tight">
+              <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-foreground leading-tight">
                 {chapterTitle}
               </h1>
               {data.meta_description && (
-                <p className="text-gray-400 mt-1.5 text-sm leading-relaxed max-w-2xl line-clamp-2">{data.meta_description}</p>
+                <p className="text-muted-foreground mt-1.5 text-sm leading-relaxed max-w-2xl line-clamp-2">{data.meta_description}</p>
               )}
-              <div className="flex items-center gap-3 mt-2.5 text-xs sm:text-sm text-gray-500">
+              <div className="flex items-center gap-3 mt-2.5 text-xs sm:text-sm text-muted-foreground">
                 {readMins && (
                   <span className="flex items-center gap-1"><Clock size={12} />{readMins} min read</span>
                 )}
@@ -652,7 +652,7 @@ export default function ChapterPage() {
               className="chapter-textbook rounded-2xl p-5 sm:p-8 scroll-mt-20"
             >
               {data.meta_description && /^\s*(\*|\-|#{2,})/.test(data.content || '') && (
-                <p className="text-base leading-relaxed text-gray-300 mb-6 pb-4 border-b border-white/5">
+                <p className="text-base leading-relaxed text-muted-foreground mb-6 pb-4 border-b border-border/30">
                   {data.meta_description}
                 </p>
               )}
@@ -667,9 +667,9 @@ export default function ChapterPage() {
 
             <ImportantQuestions chapterTitle={chapterTitle} pyqData={pyqData} />
 
-            <div className="mt-8 p-5 rounded-2xl" style={{ background: 'rgba(124,58,237,0.06)', border: '1px solid rgba(124,58,237,0.15)' }}>
-              <p className="text-sm font-semibold text-purple-300 mb-1">Have a question about {chapterTitle}?</p>
-              <p className="text-xs text-gray-400 mb-3">Get {boardName}-aligned answers instantly from Syra.</p>
+            <div className="mt-8 p-5 rounded-2xl bg-primary/5 border border-primary/15">
+              <p className="text-sm font-semibold text-primary mb-1">Have a question about {chapterTitle}?</p>
+              <p className="text-xs text-muted-foreground mb-3">Get {boardName}-aligned answers instantly from Syra.</p>
               <Link
                 to={`/chat?subject=${subjectSlug}`}
                 onClick={() => Analytics.chapterAskAi(subjectSlug, data?.topic_title || data?.chapter_title || chapterSlug)}
