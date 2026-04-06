@@ -313,10 +313,14 @@ export default function ChapterPage() {
     return () => { clearTimeout(timer); observer.disconnect(); };
   }, [headings, data]);
 
+  const highlightDoneRef = useRef(false);
+  useEffect(() => { highlightDoneRef.current = false; }, [chapterSlug]);
   useEffect(() => {
     if (loading || !data) return;
-    const topicRaw = searchParams.get('topic') || searchParams.get('highlight') || window.location.hash.slice(1);
-    const chunkSnippet = searchParams.get('chunk') || '';
+    if (highlightDoneRef.current) return;
+    const url = new URL(window.location.href);
+    const topicRaw = url.searchParams.get('topic') || url.searchParams.get('highlight') || url.hash.slice(1);
+    const chunkSnippet = url.searchParams.get('chunk') || '';
     if (!topicRaw && !chunkSnippet) return;
     let decoded = '';
     try { decoded = (topicRaw ? decodeURIComponent(topicRaw) : '').toLowerCase(); } catch { decoded = (topicRaw || '').toLowerCase(); }
@@ -340,9 +344,11 @@ export default function ChapterPage() {
 
       if (chunkSnippet && contentTop) {
         const snippetNorm = stripMd(chunkSnippet).toLowerCase().replace(/\s+/g, ' ').trim();
-        const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, td, ul, ol');
-        const snippetPrefix = snippetNorm.slice(0, 100);
-        if (snippetPrefix.length >= 20) {
+        const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, td, ul, ol, blockquote');
+        for (const prefixLen of [80, 50, 30]) {
+          if (el) break;
+          const snippetPrefix = snippetNorm.slice(0, prefixLen);
+          if (snippetPrefix.length < 15) continue;
           for (const block of allBlocks) {
             const blockNorm = block.textContent.toLowerCase().replace(/\s+/g, ' ');
             if (blockNorm.includes(snippetPrefix)) { el = block; break; }
@@ -361,7 +367,8 @@ export default function ChapterPage() {
               }
               if (score > bestScore) { bestScore = score; bestEl = block; }
             }
-            if (bestEl && bestScore >= Math.min(3, Math.ceil(words.length * 0.3))) { el = bestEl; }
+            const threshold = Math.max(1, Math.min(3, Math.ceil(words.length * 0.25)));
+            if (bestEl && bestScore >= threshold) { el = bestEl; }
           }
         }
       }
@@ -377,20 +384,24 @@ export default function ChapterPage() {
         }
         if (!el) {
           const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
-          const decodedWords = decoded.split(/\s+/).filter(w => w.length > 2);
-          let bestH = null;
-          let bestHScore = 0;
-          for (const h of allH) {
-            const hText = h.textContent.toLowerCase();
-            const score = decodedWords.reduce((s, kw) => s + (hText.includes(kw) ? 1 : 0), 0);
-            if (score > bestHScore) { bestHScore = score; bestH = h; }
+          const stopWords = new Set(['the','a','an','is','are','was','were','be','been','being','have','has','had','do','does','did','will','would','shall','should','may','might','can','could','must','about','above','after','again','all','also','and','any','because','before','between','but','each','for','from','how','its','just','more','most','not','now','only','other','our','out','some','such','than','that','them','then','there','these','they','this','those','too','very','what','when','where','which','while','who','whom','why','with','you','your','me','my','of','on','or','so','to','up','if','in','it','no','by','at']);
+          const decodedWords = decoded.split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
+          if (decodedWords.length > 0) {
+            let bestH = null;
+            let bestHScore = 0;
+            for (const h of allH) {
+              const hText = h.textContent.toLowerCase();
+              const score = decodedWords.reduce((s, kw) => s + (hText.includes(kw) ? 1 : 0), 0);
+              if (score > bestHScore) { bestHScore = score; bestH = h; }
+            }
+            if (bestH && bestHScore >= 1) { el = bestH; }
           }
-          if (bestH && bestHScore >= Math.min(2, decodedWords.length)) { el = bestH; }
         }
       }
 
       if (!el && decoded && contentTop) {
-        const keywords = decoded.split(/\s+/).filter(w => w.length > 2);
+        const stopWords = new Set(['the','a','an','is','are','was','were','about','and','for','from','how','not','what','when','where','which','who','why','with','you','your','me','my','of','on','or','so','to','up','if','in','it','no','by','at','this','that','can','will','do','does','did','be','have','has','had','its','just','also','but','than','them','then','there','too','very']);
+        const keywords = decoded.split(/\s+/).filter(w => w.length > 2 && !stopWords.has(w));
         if (keywords.length > 0) {
           const bolds = contentTop.querySelectorAll('strong, b');
           let bestBold = null;
@@ -400,7 +411,7 @@ export default function ChapterPage() {
             const bScore = keywords.reduce((s, kw) => s + (bText.includes(kw) ? 1 : 0), 0);
             if (bScore > bestBoldScore) { bestBoldScore = bScore; bestBold = b; }
           }
-          if (bestBold && bestBoldScore >= Math.min(2, keywords.length)) {
+          if (bestBold && bestBoldScore >= 1) {
             el = bestBold.closest('p, li, h2, h3, h4, td') || bestBold;
           }
           if (!el) {
@@ -412,7 +423,7 @@ export default function ChapterPage() {
               const score = keywords.reduce((s, kw) => s + (text.includes(kw) ? 1 : 0), 0);
               if (score > bestScore) { bestScore = score; bestEl = block; }
             }
-            if (bestEl && bestScore >= Math.min(2, keywords.length)) {
+            if (bestEl && bestScore >= 1) {
               el = bestEl;
             }
           }
@@ -450,18 +461,19 @@ export default function ChapterPage() {
         target.classList.add('highlight-active', 'highlight-single');
       }
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete('topic');
-        next.delete('highlight');
-        next.delete('chunk');
-        return next;
-      }, { replace: true });
+      highlightDoneRef.current = true;
+      try {
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('topic');
+        cleanUrl.searchParams.delete('highlight');
+        cleanUrl.searchParams.delete('chunk');
+        window.history.replaceState(null, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+      } catch {}
     };
 
     let attempt = 0;
-    const maxAttempts = 3;
-    const delays = [500, 1000, 2000];
+    const maxAttempts = 4;
+    const delays = [300, 800, 1500, 3000];
     let cancelled = false;
     const timers = [];
     const tryScroll = () => {
@@ -476,7 +488,7 @@ export default function ChapterPage() {
     };
     timers.push(setTimeout(tryScroll, delays[0]));
     return () => { cancelled = true; timers.forEach(t => clearTimeout(t)); };
-  }, [loading, data, searchParams]);
+  }, [loading, data]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}`;
   const canonical = `https://syrabit.ai${basePath}/${chapterSlug}`;
