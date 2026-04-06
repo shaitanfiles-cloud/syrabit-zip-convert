@@ -316,13 +316,15 @@ export default function ChapterPage() {
   const highlightDoneRef = useRef(false);
   const topicParam = searchParams.get('topic') || searchParams.get('highlight') || '';
   const chunkParam = searchParams.get('chunk') || '';
+  const rchunkParam = searchParams.get('rchunk') || '';
   useEffect(() => { highlightDoneRef.current = false; }, [chapterSlug]);
   useEffect(() => {
     if (loading || !data) return;
     if (highlightDoneRef.current) return;
     const topicRaw = topicParam || window.location.hash.slice(1);
     const chunkSnippet = chunkParam;
-    if (!topicRaw && !chunkSnippet) return;
+    const rchunkSnippet = rchunkParam;
+    if (!topicRaw && !chunkSnippet && !rchunkSnippet) return;
     let decoded = '';
     try { decoded = (topicRaw ? decodeURIComponent(topicRaw) : '').toLowerCase(); } catch { decoded = (topicRaw || '').toLowerCase(); }
 
@@ -356,21 +358,42 @@ export default function ChapterPage() {
           }
         }
         if (!el) {
-          const words = snippetNorm.split(' ').filter(w => w.length > 3);
-          if (words.length > 0) {
+          const stopW = new Set(['the','a','an','is','are','was','were','be','been','being','have','has','had','do','does','did','will','would','shall','should','may','might','can','could','must','about','also','and','any','but','for','from','how','its','just','more','most','not','now','only','other','our','out','some','such','than','that','them','then','there','these','they','this','those','too','very','what','when','where','which','while','who','why','with','you','your','into','like','over','after','before','between','each','here','both','through','same','well','because','example','many','much','need','make','take','know','good','help','used','using','called','known','based','given','important','include','provide','process','system','type','form','part','first','second','third','way','new','one','two','three']);
+          const words = snippetNorm.split(' ').filter(w => w.length > 3 && !stopW.has(w));
+          const topWords = words.slice(0, 12);
+          if (topWords.length > 0) {
             let bestEl = null;
             let bestScore = 0;
             for (const block of allBlocks) {
               const blockText = block.textContent.toLowerCase();
               let score = 0;
-              for (const w of words.slice(0, 15)) {
+              for (const w of topWords) {
                 if (blockText.includes(w)) score++;
               }
               if (score > bestScore) { bestScore = score; bestEl = block; }
             }
-            const threshold = Math.max(1, Math.min(3, Math.ceil(words.length * 0.25)));
-            if (bestEl && bestScore >= threshold) { el = bestEl; }
+            if (bestEl && bestScore >= 2) { el = bestEl; }
           }
+        }
+      }
+
+      if (!el && rchunkSnippet && contentTop) {
+        const rNorm = stripMd(rchunkSnippet).toLowerCase().replace(/\s+/g, ' ').trim();
+        const allBlocks2 = contentTop.querySelectorAll('p, li, h2, h3, h4, td, ul, ol, blockquote');
+        const stopW2 = new Set(['the','a','an','is','are','was','were','be','been','being','have','has','had','do','does','did','will','would','shall','should','may','might','can','could','must','about','also','and','any','but','for','from','how','its','just','more','most','not','now','only','other','our','out','some','such','than','that','them','then','there','these','they','this','those','too','very','what','when','where','which','while','who','why','with','you','your','into','like','over','after','before','between','each','here','both','through','same','well','because','example','many','much','need','make','take','know','good','help','used','using','called','known','based','given','important','include','provide','process','system','type','form','part','first','second','third','way','new','one','two','three']);
+        const rWords = rNorm.split(' ').filter(w => w.length > 3 && !stopW2.has(w)).slice(0, 12);
+        if (rWords.length > 0) {
+          let bestEl2 = null;
+          let bestScore2 = 0;
+          for (const block of allBlocks2) {
+            const blockText = block.textContent.toLowerCase();
+            let score = 0;
+            for (const w of rWords) {
+              if (blockText.includes(w)) score++;
+            }
+            if (score > bestScore2) { bestScore2 = score; bestEl2 = block; }
+          }
+          if (bestEl2 && bestScore2 >= 2) { el = bestEl2; }
         }
       }
 
@@ -464,6 +487,7 @@ export default function ChapterPage() {
         cleanUrl.searchParams.delete('topic');
         cleanUrl.searchParams.delete('highlight');
         cleanUrl.searchParams.delete('chunk');
+        cleanUrl.searchParams.delete('rchunk');
         window.history.replaceState(window.history.state, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
       } catch {}
     };
@@ -491,7 +515,7 @@ export default function ChapterPage() {
     };
     timers.push(setTimeout(tryScroll, delays[0]));
     return () => { cancelled = true; timers.forEach(t => clearTimeout(t)); };
-  }, [loading, data, topicParam, chunkParam]);
+  }, [loading, data, topicParam, chunkParam, rchunkParam]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}`;
   const canonical = `https://syrabit.ai${basePath}/${chapterSlug}`;

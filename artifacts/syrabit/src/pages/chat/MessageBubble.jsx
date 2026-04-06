@@ -169,12 +169,16 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                           const topicText = msg.rag_topic_name || chapterLabel || '';
                           const params = new URLSearchParams();
                           params.set('topic', topicText);
+                          const ragSnippet = (msg.rag_chunk_snippet || '').slice(0, 300);
+                          if (ragSnippet) {
+                            params.set('chunk', ragSnippet);
+                          }
                           const rawContent = (msg.content || '').replace(/[#*_`>\[\]()]/g, '').replace(/\s+/g, ' ').trim();
                           const sentences = rawContent.split(/(?<=[.!?])\s+/).filter(s => s.length > 20);
                           const coreSnippet = sentences.length > 1 ? sentences.slice(1, 4).join(' ') : rawContent;
                           const responseSnippet = coreSnippet.slice(0, 300);
                           if (responseSnippet) {
-                            params.set('chunk', responseSnippet);
+                            params.set('rchunk', responseSnippet);
                           }
                           navigate(`${chapterUrl}?${params.toString()}`);
                         } else {
