@@ -282,7 +282,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         _ns_fetch_syllabus(), _ns_fetch_search_scope(), _ns_fetch_stage1(),
     )
 
-    if _topic_metadata and _topic_metadata.get("intent"):
+    if not _followup_info and _topic_metadata and _topic_metadata.get("intent"):
         _detected_intent, _detected_db_category = apply_stage1_to_intent(
             _topic_metadata, _detected_intent, _detected_db_category
         )
@@ -898,7 +898,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _fetch_followup_info(),
     )
 
+    _is_followup_s = False
     if _stream_followup_info:
+        _is_followup_s = True
         _stream_intent = _stream_followup_info["prev_intent"]
         _stream_db_category = {"notes": "notes", "important_questions": "important_questions", "pyq": "question_paper"}.get(_stream_intent)
         msg.message = merge_followup_into_query(
@@ -908,7 +910,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         )
         logger.info(f"[STREAM] Follow-up detected: intent={_stream_intent}, rewritten query='{msg.message[:60]}'")
 
-    if _s_topic_meta and _s_topic_meta.get("intent"):
+    if not _is_followup_s and _s_topic_meta and _s_topic_meta.get("intent"):
         _stream_intent, _stream_db_category = _s_apply_s1(
             _s_topic_meta, _stream_intent, _stream_db_category
         )
