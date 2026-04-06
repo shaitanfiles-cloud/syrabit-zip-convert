@@ -1239,8 +1239,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _rag_raw_chunks = rag_ctx.get("chunks", [])
     rag_chunk_snippet = ""
+    _chunk_topic_name = ""
     if _rag_raw_chunks:
         _first = _rag_raw_chunks[0]
+        _chunk_topic_name = (_first.get("topic_name") or "").strip()
         _snippet = (_first.get("content") or "").strip()
         _snippet = re.sub(r'#{1,6}\s+', '', _snippet)
         _snippet = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', _snippet)
@@ -1269,6 +1271,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _syl_level      = getattr(_sr_route, "level", "chapter") if _sr_route else "chapter"
     if _syl_topic_name and _syl_level == "topic":
         rag_topic_name = _syl_topic_name
+    elif _chunk_topic_name:
+        rag_topic_name = _chunk_topic_name
     elif rag_chapter_name and msg.message and msg.message.strip():
         rag_topic_name = msg.message.strip()
     else:

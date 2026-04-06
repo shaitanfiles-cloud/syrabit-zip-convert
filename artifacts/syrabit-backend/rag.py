@@ -206,6 +206,15 @@ def _split_by_topics(content: str, topics: list[str]) -> list[str]:
     return chunks
 
 
+def _extract_heading_from_chunk(text: str) -> str:
+    m = _HEADING_RE.search(text)
+    if m:
+        return m.group(2).strip()
+    first_line = text.split("\n", 1)[0].strip()
+    cleaned = re.sub(r'^\*{1,3}', '', first_line).rstrip("*").strip()
+    return cleaned if len(cleaned) < 120 else ""
+
+
 async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = None, syllabus_id: str = None, geo_tags: list = None, chapter_title: str = None, category: str = "notes", topics: list = None) -> list:
     """
     Semantically split chapter content into RAG-optimised chunks.
@@ -238,32 +247,35 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
 
     topic_chunks = _split_by_topics(content, topic_names) if topic_names else []
 
+    raw_chunks_with_topic: list[tuple[str, str]] = []
     if topic_chunks:
-        raw_chunks: list[str] = []
         for tc in topic_chunks:
+            tn = _extract_heading_from_chunk(tc)
             if len(tc) <= _CHUNK_MAX:
-                raw_chunks.append(tc)
+                raw_chunks_with_topic.append((tc, tn))
             else:
                 sub = _sentence_split_with_overlap(tc)
-                raw_chunks.extend(sub)
-        logger.info(f"Topic-wise chunking: {len(topic_chunks)} topic sections → {len(raw_chunks)} chunks")
+                for s in sub:
+                    raw_chunks_with_topic.append((s, tn))
+        logger.info(f"Topic-wise chunking: {len(topic_chunks)} topic sections → {len(raw_chunks_with_topic)} chunks")
     else:
         sections = _split_into_sections(content)
         sections = _merge_short_sections(sections)
-        raw_chunks: list[str] = []
         for sec in sections:
             text = sec["text"]
-            prefix = f"**{sec['heading']}**\n" if sec.get("heading") else ""
+            heading = sec.get("heading", "")
+            prefix = f"**{heading}**\n" if heading else ""
             full = (prefix + text).strip()
             if len(full) <= _CHUNK_MAX:
-                raw_chunks.append(full)
+                raw_chunks_with_topic.append((full, heading))
             else:
                 sub_chunks = _sentence_split_with_overlap(full)
-                raw_chunks.extend(sub_chunks)
+                for s in sub_chunks:
+                    raw_chunks_with_topic.append((s, heading))
 
     chunks_created = []
     now_iso = datetime.now(timezone.utc).isoformat()
-    for idx, chunk_text in enumerate(raw_chunks):
+    for idx, (chunk_text, chunk_topic) in enumerate(raw_chunks_with_topic):
         chunk_text = chunk_text.strip()
         if len(chunk_text) < _CHUNK_MIN:
             continue
@@ -275,6 +287,7 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
             "chapter_id": chapter_id,
             "subject_id": subject_id,
             "chapter_title": chapter_title or "",
+            "topic_name": chunk_topic or "",
             "content": chunk_text,
             "content_type": _chunk_category,
             "category": _chunk_category,
@@ -322,6 +335,8 @@ async def rechunk_chapter(chapter_id: str) -> dict:
         content=content,
         subject_id=chapter.get("subject_id"),
         category=chapter.get("category", "notes"),
+        chapter_title=chapter.get("title", ""),
+        topics=chapter.get("topics"),
     )
     
     return {
@@ -1065,7 +1080,7 @@ async def rag_search(
                     _chunk_text_filter["$or"] = [{"chapter_id": {"$in": chapter_ids}}, {"subject_id": subject_id, "content_type": "pyq"}]
                 else:
                     _chunk_text_filter["subject_id"] = subject_id
-                _chunk_proj_text = {"_id": 0, "score": {"$meta": "textScore"}, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1}
+                _chunk_proj_text = {"_id": 0, "score": {"$meta": "textScore"}, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1, "topic_name": 1, "chapter_title": 1}
                 chunks = await db.chunks.find(_chunk_text_filter, _chunk_proj_text).sort([("score", {"$meta": "textScore"})]).limit(12).to_list(12)
             except Exception:
                 if chapter_ids:
@@ -1075,7 +1090,7 @@ async def rag_search(
                     ]}
                 else:
                     chunk_filter = {"$or": [{"$or": regex_parts}, pyq_branch]}
-                chunks = await db.chunks.find(chunk_filter, {"_id": 0}).sort("priority", 1).limit(12).to_list(12)
+                chunks = await db.chunks.find(chunk_filter, {"_id": 0, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1, "topic_name": 1, "chapter_title": 1}).sort("priority", 1).limit(12).to_list(12)
 
             subj_kw_filter = {"id": subject_id}
             ch_kw_filter = {"$and": [{"subject_id": subject_id}, ch_title_filter]}
@@ -1103,7 +1118,7 @@ async def rag_search(
 
             try:
                 _chunk_text_filter_ns: dict = {"$text": {"$search": _text_search_str}}
-                _chunk_proj_ns = {"_id": 0, "score": {"$meta": "textScore"}, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1}
+                _chunk_proj_ns = {"_id": 0, "score": {"$meta": "textScore"}, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1, "topic_name": 1, "chapter_title": 1}
                 chunks, subjects_by_name, chapters_by_title = await asyncio.gather(
                     db.chunks.find(_chunk_text_filter_ns, _chunk_proj_ns).sort([("score", {"$meta": "textScore"})]).limit(15).to_list(15),
                     db.subjects.find(subj_kw_filter, _subj_proj).limit(55).to_list(55),
@@ -1111,7 +1126,7 @@ async def rag_search(
                 )
             except Exception:
                 chunks, subjects_by_name, chapters_by_title = await asyncio.gather(
-                    db.chunks.find({"$or": regex_parts}, {"_id": 0}).sort("priority", 1).limit(15).to_list(15),
+                    db.chunks.find({"$or": regex_parts}, {"_id": 0, "chapter_id": 1, "content": 1, "content_type": 1, "subject_id": 1, "priority": 1, "topic_name": 1, "chapter_title": 1}).sort("priority", 1).limit(15).to_list(15),
                     db.subjects.find(subj_kw_filter, _subj_proj).limit(55).to_list(55),
                     db.chapters.find(ch_title_filter, _ch_proj).sort("order_index", 1).limit(25).to_list(25),
                 )
