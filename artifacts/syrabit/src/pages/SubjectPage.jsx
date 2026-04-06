@@ -163,7 +163,7 @@ function BlogView({ subject, subjectId }) {
     try { return JSON.parse(post.headings); } catch { return []; }
   }, [post]);
 
-  const _siteOrigin = import.meta.env.VITE_SITE_URL || window.location.origin;
+  const _siteOrigin = 'https://syrabit.ai';
   const subjectUrl = subject?.board_slug && subject?.class_slug && subject?.stream_slug && subject?.slug
     ? `${_siteOrigin}/${subject.board_slug}/${subject.class_slug}/${subject.stream_slug}/${subject.slug}`
     : `${_siteOrigin}/subject/${subjectId}`;
@@ -496,7 +496,7 @@ export default function SubjectPage() {
     </AppLayout>
   );
 
-  const SITE_ORIGIN = import.meta.env.VITE_SITE_URL || window.location.origin;
+  const SITE_ORIGIN = 'https://syrabit.ai';
   const BACKEND_ORIGIN = import.meta.env.VITE_BACKEND_URL || '';
   const subjectUrl  = subject.board_slug && subject.class_slug && subject.stream_slug && subject.slug
     ? `${SITE_ORIGIN}/${subject.board_slug}/${subject.class_slug}/${subject.stream_slug}/${subject.slug}`
