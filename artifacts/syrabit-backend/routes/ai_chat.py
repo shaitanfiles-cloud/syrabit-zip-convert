@@ -1274,22 +1274,31 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     else:
         rag_topic_name = None
 
-    if rag_chapter_name and not rag_chapter_slug:
-        try:
-            _slug_sid = rag_subject_id or msg.subject_id or None
-            _slug_filter: dict = {"title": {"$regex": f"^{re.escape(rag_chapter_name)}$", "$options": "i"}}
-            if _slug_sid:
-                _slug_filter["subject_id"] = _slug_sid
-            _slug_ch = await db.chapters.find_one(_slug_filter, {"_id": 0, "slug": 1})
-            if _slug_ch and _slug_ch.get("slug"):
-                rag_chapter_slug = _slug_ch["slug"]
-        except Exception:
-            pass
+    async def _resolve_chapter_slug_bg():
+        nonlocal rag_chapter_slug
+        if rag_chapter_name and not rag_chapter_slug:
+            try:
+                _slug_sid = rag_subject_id or msg.subject_id or None
+                _slug_filter: dict = {"title": {"$regex": f"^{re.escape(rag_chapter_name)}$", "$options": "i"}}
+                if _slug_sid:
+                    _slug_filter["subject_id"] = _slug_sid
+                _slug_ch = await db.chapters.find_one(_slug_filter, {"_id": 0, "slug": 1})
+                if _slug_ch and _slug_ch.get("slug"):
+                    rag_chapter_slug = _slug_ch["slug"]
+            except Exception:
+                pass
 
-    # Derive sources from the same RAG context sent to the LLM (no mismatch)
+    async def _resolve_source_ctx_bg():
+        _src_sid_s = rag_subject_id or msg.subject_id
+        if _src_sid_s and _src_sid_s == msg.subject_id and subj_ctx:
+            return subj_ctx
+        return await _resolve_subject_context(_src_sid_s) if _src_sid_s else {}
+
+    _slug_task = asyncio.create_task(_resolve_chapter_slug_bg())
+    _src_ctx_task = asyncio.create_task(_resolve_source_ctx_bg())
+
     rag_sources = _sources_from_rag_ctx(rag_ctx)
 
-    # ── Cache check (moved BEFORE SSE generator for faster cached responses) ──
     _cache_is_casual = _stream_intent in ("casual", "general")
     _cache_key_val = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
     _cache_ttl_val = REDIS_CASUAL_CACHE_TTL if _cache_is_casual else REDIS_AI_CACHE_TTL
@@ -1300,24 +1309,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _cached_answer = _ai_response_cache[_cache_key_val]
         logger.info(f"Memory cache HIT (pre-SSE): {_cache_key_val}")
 
-    _src_sid_s = rag_subject_id or msg.subject_id
-    if _src_sid_s and _src_sid_s == msg.subject_id and subj_ctx:
-        _src_ctx_s = subj_ctx
-    else:
-        _src_ctx_s = await _resolve_subject_context(_src_sid_s) if _src_sid_s else {}
-    _src_board_s = _src_ctx_s.get("board_name") or ctx_board_name or ""
-    _src_class_s = _src_ctx_s.get("class_name") or ctx_class_name or ""
-    _src_stream_s = _src_ctx_s.get("stream_name") or ctx_stream_name or ""
-    _src_board_slug = _src_ctx_s.get("board_slug") or ""
-    _src_class_slug = _src_ctx_s.get("class_slug") or ""
-    _src_subject_slug = _src_ctx_s.get("subject_slug") or ""
-
     async def event_stream():
         nonlocal full_response
         _credit_saved = False  # set True when answer is committed; controls refund in finally
         try:
-            # Send RAG metadata with full quality info + subject link data + web search flag
-            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'rag_chapter_slug': rag_chapter_slug or '', 'rag_topic_name': rag_topic_name or '', 'rag_chunk_snippet': rag_chunk_snippet, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': _src_board_s, 'ctx_class_name': _src_class_s, 'ctx_stream_name': _src_stream_s, 'ctx_board_slug': _src_board_slug, 'ctx_class_slug': _src_class_slug, 'ctx_subject_slug': _src_subject_slug}
+            _meta_event = {'conversation_id': conv_id, 'rag_source': rag_source_saved, 'rag_quality': rag_quality_saved, 'rag_chunks': rag_chunks_count, 'rag_subjects': rag_subjects_count, 'rag_subject_id': rag_subject_id, 'rag_subject_name': rag_subject_name, 'rag_subject_icon': rag_subject_icon or '', 'rag_subject_gradient': rag_subject_gradient or '', 'rag_chapter_name': rag_chapter_name, 'rag_chapter_slug': rag_chapter_slug or '', 'rag_topic_name': rag_topic_name or '', 'rag_chunk_snippet': rag_chunk_snippet, 'router_subject': _router_subject, 'router_chapter': _router_chapter, 'router_board': _router_board, 'web_search_used': web_search_used, 'ctx_board_name': ctx_board_name or '', 'ctx_class_name': ctx_class_name or '', 'ctx_stream_name': ctx_stream_name or ''}
             if content_card_meta:
                 _meta_event['content_card_name'] = content_card_meta.get('card_name', '')
                 _meta_event['content_card_lesson'] = content_card_meta.get('lesson_name', '')
@@ -1453,7 +1449,23 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             answer = "".join(full_response)
             new_used_optimistic = (credits_info["used"] + 1 if answer else credits_info["used"]) if credits_info else 0
 
-            # ── syrabit_done event with credits metadata + RAG-derived sources ────
+            # ── Resolve deferred source card slugs (ran in parallel with LLM) ────
+            try:
+                await asyncio.wait_for(_slug_task, timeout=0.5)
+            except (asyncio.TimeoutError, Exception):
+                pass
+            try:
+                _src_ctx_s = await asyncio.wait_for(_src_ctx_task, timeout=0.5)
+            except (asyncio.TimeoutError, Exception):
+                _src_ctx_s = subj_ctx or {}
+            _src_board_s = _src_ctx_s.get("board_name") or ctx_board_name or ""
+            _src_class_s = _src_ctx_s.get("class_name") or ctx_class_name or ""
+            _src_stream_s = _src_ctx_s.get("stream_name") or ctx_stream_name or ""
+            _src_board_slug = _src_ctx_s.get("board_slug") or ""
+            _src_class_slug = _src_ctx_s.get("class_slug") or ""
+            _src_subject_slug = _src_ctx_s.get("subject_slug") or ""
+
+            # ── syrabit_done event with credits metadata + RAG-derived sources + slugs ────
             done_payload = {
                 "event": "syrabit_done",
                 "conversation_id": conv_id,
@@ -1465,6 +1477,13 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 "words": len(answer.split()) if answer else 0,
                 "sources": rag_sources,
                 "web_search_used": web_search_used,
+                "rag_chapter_slug": rag_chapter_slug or "",
+                "ctx_board_name": _src_board_s,
+                "ctx_class_name": _src_class_s,
+                "ctx_stream_name": _src_stream_s,
+                "ctx_board_slug": _src_board_slug,
+                "ctx_class_slug": _src_class_slug,
+                "ctx_subject_slug": _src_subject_slug,
             }
             if content_card_meta:
                 done_payload["content_card_name"] = content_card_meta.get("card_name", "")
