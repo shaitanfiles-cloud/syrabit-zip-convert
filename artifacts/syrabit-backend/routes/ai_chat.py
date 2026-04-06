@@ -293,6 +293,12 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         _detected_db_category = "notes"
         logger.info(f"[NON-STREAM] Intent upgrade: general → notes (syllabus embedder matched: {getattr(_ns_route, 'subject', '')} / {getattr(_ns_route, 'chapter_hint', '')})")
 
+    _q_lower_ns = msg.message.lower()
+    if _detected_intent == "syllabus" and _topic_metadata and _topic_metadata.get("search_keywords") and "syllabus" not in _q_lower_ns and "curriculum" not in _q_lower_ns and "subject list" not in _q_lower_ns:
+        _detected_intent = "notes"
+        _detected_db_category = "notes"
+        logger.info(f"[NON-STREAM] Intent upgrade: syllabus → notes (Stage 1 has search_keywords, query is content-seeking)")
+
     _is_casual_sync = _detected_intent in ("casual", "general")
     _skip_rag_sync = _detected_intent in ("casual", "general", "syllabus")
 
@@ -908,6 +914,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _stream_intent = "notes"
         _stream_db_category = "notes"
         logger.info(f"[STREAM] Intent upgrade: general → notes (syllabus embedder matched: {getattr(_sr_route, 'subject', '')} / {getattr(_sr_route, 'chapter_hint', '')})")
+
+    _q_lower_s = msg.message.lower()
+    if _stream_intent == "syllabus" and _s_topic_meta and _s_topic_meta.get("search_keywords") and "syllabus" not in _q_lower_s and "curriculum" not in _q_lower_s and "subject list" not in _q_lower_s:
+        _stream_intent = "notes"
+        _stream_db_category = "notes"
+        logger.info(f"[STREAM] Intent upgrade: syllabus → notes (Stage 1 has search_keywords, query is content-seeking)")
 
     _is_casual = _stream_intent in ("casual", "general")
     _skip_rag_stream = _stream_intent in ("casual", "general", "syllabus")
