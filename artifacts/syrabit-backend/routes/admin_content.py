@@ -81,6 +81,12 @@ async def admin_list_chapters(subject_id: str, admin: dict = Depends(get_admin_u
         result.append(ch)
     return result
 
+@router.post("/admin/cache/flush")
+async def admin_flush_cache(admin: dict = Depends(get_admin_user)):
+    for prefix in ("boards", "classes", "streams", "subjects", "chapters"):
+        _invalidate_content_cache(prefix)
+    return {"message": "All content caches flushed"}
+
 @router.post("/admin/content/boards")
 async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
     try:

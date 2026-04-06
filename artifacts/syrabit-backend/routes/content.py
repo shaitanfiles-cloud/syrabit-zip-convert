@@ -592,12 +592,13 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
                 chapter = c
                 break
     if not chapter: raise HTTPException(404, "Chapter not found")
-    chunks = await db.chunks.find({"chapter_id": chapter["id"]}, {"_id": 0}).sort("order_index", 1).to_list(200)
-    content_parts = []
-    for chunk in chunks:
-        if chunk.get("content"):
-            content_parts.append(chunk["content"])
-    content = "\n\n".join(content_parts) if content_parts else chapter.get("content", "")
+    chapter_content = chapter.get("content", "")
+    if chapter_content:
+        content = chapter_content
+    else:
+        chunks = await db.chunks.find({"chapter_id": chapter["id"]}, {"_id": 0}).sort("order_index", 1).to_list(200)
+        content_parts = [c["content"] for c in chunks if c.get("content")]
+        content = "\n\n".join(content_parts)
     word_count = len(content.split()) if content else 0
     stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
     result = {
