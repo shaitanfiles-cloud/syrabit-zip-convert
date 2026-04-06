@@ -31,23 +31,23 @@ const PLANS = [
 
 export default function PricingSection() {
   return (
-    <section id="pricing" className="py-28 relative overflow-hidden" style={{ background: 'rgba(255,255,255,0.015)' }}>
+    <section id="pricing" className="py-28 relative overflow-hidden" style={{ background: 'hsl(var(--muted) / 0.15)' }}>
       <div className="absolute inset-0 pointer-events-none">
-        <GlowOrb color="radial-gradient(circle,#7c3aed,transparent)" size={600} x="10%" y="30%" blur={120} opacity={0.08} animRange={20} duration={22} />
+        <GlowOrb color="radial-gradient(circle,#7c3aed,transparent)" size={600} x="10%" y="30%" blur={120} opacity={0.05} animRange={20} duration={22} />
       </div>
       <div className="max-w-5xl mx-auto px-5 relative z-10">
         <Reveal className="text-center mb-14">
           <div
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-5"
-            style={{ background: 'rgba(124,58,237,0.10)', border: '1px solid rgba(139,92,246,0.22)' }}
+            style={{ background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(139,92,246,0.18)' }}
           >
-            <Zap size={14} style={{ color: '#a78bfa' }} />
-            <span className="text-xs font-semibold tracking-widest" style={{ color: '#a78bfa' }}>SIMPLE PRICING</span>
+            <Zap size={14} className="text-violet-600" />
+            <span className="text-xs font-semibold tracking-widest text-violet-600">SIMPLE PRICING</span>
           </div>
-          <h2 className="text-white mb-4" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
+          <h2 className="text-foreground mb-4" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
             Start free. Scale as you need.
           </h2>
-          <p className="max-w-lg mx-auto" style={{ color: 'rgba(255,255,255,0.40)' }}>
+          <p className="max-w-lg mx-auto text-muted-foreground">
             No subscriptions. No hidden fees. All plans include daily credits that reset at midnight UTC.
           </p>
         </Reveal>
@@ -61,25 +61,21 @@ export default function PricingSection() {
         >
           {PLANS.map((plan) => {
             const isPro = plan.id === 'pro';
-            const priceColor = isPro ? '#f59e0b' : '#a78bfa';
+            const priceColor = isPro ? '#d97706' : '#7c3aed';
             return (
               <motion.div
                 key={plan.id}
                 variants={fadeUp()}
                 whileHover={{ y: -6 }}
-                className="relative rounded-3xl p-7 flex flex-col transition-shadow duration-300"
+                className="relative rounded-3xl p-7 flex flex-col transition-shadow duration-300 glass-card"
                 data-testid="pricing-plan-card"
                 style={
                   plan.highlighted
                     ? {
-                        border: '1px solid rgba(139,92,246,0.40)',
-                        background: 'linear-gradient(135deg,rgba(124,58,237,0.14) 0%,rgba(109,40,217,0.07) 100%)',
-                        boxShadow: '0 0 50px rgba(139,92,246,0.14),0 0 0 1px rgba(139,92,246,0.10)',
+                        border: '1px solid rgba(139,92,246,0.30)',
+                        boxShadow: '0 0 50px rgba(139,92,246,0.08)',
                       }
-                    : {
-                        border: '1px solid rgba(255,255,255,0.08)',
-                        background: 'linear-gradient(135deg,rgba(255,255,255,0.04) 0%,rgba(255,255,255,0.01) 100%)',
-                      }
+                    : {}
                 }
               >
                 {plan.badge && (
@@ -88,8 +84,8 @@ export default function PricingSection() {
                     style={{
                       fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
                       ...(plan.highlighted
-                        ? { background: 'rgba(139,92,246,0.22)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.30)' }
-                        : { background: 'rgba(245,158,11,0.15)', color: '#f59e0b', border: '1px solid rgba(245,158,11,0.30)' }),
+                        ? { background: 'rgba(139,92,246,0.15)', color: '#7c3aed', border: '1px solid rgba(139,92,246,0.25)' }
+                        : { background: 'rgba(245,158,11,0.10)', color: '#d97706', border: '1px solid rgba(245,158,11,0.25)' }),
                     }}
                   >
                     {plan.badge}
@@ -98,20 +94,20 @@ export default function PricingSection() {
                 <div className="flex items-center gap-3 mb-5">
                   <div
                     className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ background: isPro ? 'rgba(245,158,11,0.10)' : 'rgba(124,58,237,0.10)' }}
+                    style={{ background: isPro ? 'rgba(245,158,11,0.08)' : 'rgba(124,58,237,0.08)' }}
                   >
                     <plan.icon className="w-5 h-5" style={{ color: priceColor }} />
                   </div>
                   <div>
-                    <p className="text-white" style={{ fontWeight: 700 }}>{plan.name}</p>
-                    <p className="text-xs" style={{ color: 'rgba(255,255,255,0.40)' }}>{plan.credits} · {plan.renewal}</p>
+                    <p className="text-foreground" style={{ fontWeight: 700 }}>{plan.name}</p>
+                    <p className="text-xs text-muted-foreground">{plan.credits} · {plan.renewal}</p>
                   </div>
                 </div>
                 <div className="mb-5">
                   <span style={{ fontSize: '2.2rem', fontWeight: 800, color: priceColor }}>{plan.price}</span>
-                  <span className="text-sm ml-1" style={{ color: 'rgba(255,255,255,0.30)' }}>{plan.period}</span>
+                  <span className="text-sm ml-1 text-muted-foreground/50">{plan.period}</span>
                   {plan.docAccess && (
-                    <p className="text-xs font-medium mt-1.5" style={{ color: isPro ? '#34d399' : plan.highlighted ? '#a78bfa' : '#94a3b8' }}>
+                    <p className="text-xs font-medium mt-1.5" style={{ color: isPro ? '#059669' : plan.highlighted ? '#7c3aed' : '#64748b' }}>
                       {plan.docAccess}
                     </p>
                   )}
@@ -119,8 +115,8 @@ export default function PricingSection() {
                 <ul className="space-y-2.5 mb-8 flex-1">
                   {plan.features.map((feat) => (
                     <li key={feat} className="flex items-center gap-2.5 text-sm">
-                      <CheckCircle className="w-4 h-4 flex-shrink-0" style={{ color: '#34d399' }} />
-                      <span style={{ color: 'rgba(255,255,255,0.65)' }}>{feat}</span>
+                      <CheckCircle className="w-4 h-4 flex-shrink-0 text-emerald-500" />
+                      <span className="text-foreground/70">{feat}</span>
                     </li>
                   ))}
                 </ul>
@@ -129,8 +125,8 @@ export default function PricingSection() {
                   className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-bold transition-all hover:opacity-90 active:scale-95"
                   style={
                     plan.highlighted
-                      ? { background: 'linear-gradient(to right,#7c3aed,#8b5cf6)', color: '#fff', boxShadow: '0 4px 20px rgba(139,92,246,0.35)' }
-                      : { background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.70)', border: '1px solid rgba(255,255,255,0.08)' }
+                      ? { background: 'linear-gradient(to right,#7c3aed,#8b5cf6)', color: '#fff', boxShadow: '0 4px 20px rgba(139,92,246,0.25)' }
+                      : { background: 'hsl(var(--muted) / 0.5)', color: 'hsl(var(--foreground))', border: '1px solid hsl(var(--border))' }
                   }
                   data-testid={`pricing-${plan.id}-cta-button`}
                 >
@@ -141,7 +137,7 @@ export default function PricingSection() {
           })}
         </motion.div>
 
-        <p className="text-center text-sm mt-8" style={{ color: 'rgba(255,255,255,0.25)' }}>
+        <p className="text-center text-sm mt-8 text-muted-foreground/50">
           All credits reset daily at midnight UTC · fresh allowance every day
         </p>
       </div>

@@ -48,11 +48,11 @@ export const PublicNavbar = () => {
       style={
         scrolled
           ? {
-              background: 'rgba(5,4,14,0.88)',
+              background: 'rgba(240,240,245,0.88)',
               backdropFilter: 'blur(28px) saturate(1.6)',
               WebkitBackdropFilter: 'blur(28px) saturate(1.6)',
               borderBottom: '1px solid rgba(139,92,246,0.14)',
-              boxShadow: '0 4px 32px rgba(0,0,0,0.28), 0 0 0 1px rgba(255,255,255,0.03) inset',
+              boxShadow: '0 4px 32px rgba(0,0,0,0.06), 0 0 0 1px rgba(139,92,246,0.05) inset',
             }
           : { background: 'transparent' }
       }
@@ -61,12 +61,10 @@ export const PublicNavbar = () => {
       <div className="max-w-6xl mx-auto px-5">
         <div className="flex items-center justify-between h-16">
 
-          {/* ─── Logo ─── */}
           <Link to="/" onClick={() => setMenuOpen(false)}>
-            <LogoFull size="sm" textClassName="text-white" hideText={false} hideIcon={true} />
+            <LogoFull size="sm" textClassName="text-foreground" hideText={false} hideIcon={true} />
           </Link>
 
-          {/* ─── Desktop Nav Links ─── */}
           <div className="hidden lg:flex items-center gap-0.5">
             {navLinks.map((link) =>
               link.internal ? (
@@ -76,7 +74,7 @@ export const PublicNavbar = () => {
                   onMouseEnter={() => handlePrefetch(link.href)}
                   onTouchStart={() => handlePrefetch(link.href)}
                   onFocus={() => handlePrefetch(link.href)}
-                  className="px-4 py-2 rounded-xl text-sm font-medium text-white/55 hover:text-white hover:bg-white/[0.07] transition-all duration-150"
+                  className="px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-primary/[0.06] transition-all duration-150"
                 >
                   {link.label}
                 </Link>
@@ -84,7 +82,7 @@ export const PublicNavbar = () => {
                 <a
                   key={link.label}
                   href={link.href}
-                  className="px-4 py-2 rounded-xl text-sm font-medium text-white/55 hover:text-white hover:bg-white/[0.07] transition-all duration-150"
+                  className="px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-primary/[0.06] transition-all duration-150"
                 >
                   {link.label}
                 </a>
@@ -92,7 +90,6 @@ export const PublicNavbar = () => {
             )}
           </div>
 
-          {/* ─── Desktop CTAs ─── */}
           <div className="hidden lg:flex items-center gap-2">
             {user ? (
               <Link
@@ -109,7 +106,7 @@ export const PublicNavbar = () => {
                   to="/login"
                   onMouseEnter={() => handlePrefetch('/login')}
                   onTouchStart={() => handlePrefetch('/login')}
-                  className="h-9 px-4 rounded-xl text-sm font-medium text-white/65 hover:text-white hover:bg-white/[0.08] transition-all duration-150"
+                  className="h-9 px-4 rounded-xl text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-primary/[0.06] transition-all duration-150"
                 >
                   Sign In
                 </Link>
@@ -126,9 +123,8 @@ export const PublicNavbar = () => {
             )}
           </div>
 
-          {/* ─── Mobile Hamburger ─── */}
           <button
-            className="lg:hidden min-w-[44px] min-h-[44px] rounded-xl text-white/70 hover:text-white hover:bg-white/[0.08] flex items-center justify-center transition-all"
+            className="lg:hidden min-w-[44px] min-h-[44px] rounded-xl text-muted-foreground hover:text-foreground hover:bg-primary/[0.06] flex items-center justify-center transition-all"
             onClick={() => setMenuOpen(!menuOpen)}
             aria-label="Toggle menu"
             data-testid="mobile-menu-button"
@@ -138,19 +134,18 @@ export const PublicNavbar = () => {
         </div>
       </div>
 
-      {/* ─── Mobile Menu Overlay ─── */}
       {menuOpen && (
         <>
           <div
             className="fixed inset-0 z-40 lg:hidden"
-            style={{ background: 'rgba(0,0,0,0.50)' }}
+            style={{ background: 'rgba(0,0,0,0.20)' }}
             onClick={() => setMenuOpen(false)}
             aria-hidden="true"
           />
           <div
             className="fixed top-16 left-0 right-0 z-50 lg:hidden px-5 py-4 space-y-1 mobile-menu-slide"
             style={{
-              background: 'rgba(5,4,14,0.97)',
+              background: 'rgba(240,240,245,0.97)',
               backdropFilter: 'blur(28px)',
               WebkitBackdropFilter: 'blur(28px)',
               borderTop: '1px solid rgba(139,92,246,0.12)',
@@ -167,7 +162,7 @@ export const PublicNavbar = () => {
                   key={link.label}
                   to={link.href}
                   role="menuitem"
-                  className="block px-3 py-3 rounded-xl text-sm text-white/60 hover:text-white hover:bg-white/[0.06] transition-all min-h-[44px] flex items-center"
+                  className="block px-3 py-3 rounded-xl text-sm text-muted-foreground hover:text-foreground hover:bg-primary/[0.06] transition-all min-h-[44px] flex items-center"
                   onClick={() => setMenuOpen(false)}
                 >
                   {link.label}
@@ -177,7 +172,7 @@ export const PublicNavbar = () => {
                   key={link.label}
                   href={link.href}
                   role="menuitem"
-                  className="block px-3 py-3 rounded-xl text-sm text-white/60 hover:text-white hover:bg-white/[0.06] transition-all min-h-[44px] flex items-center"
+                  className="block px-3 py-3 rounded-xl text-sm text-muted-foreground hover:text-foreground hover:bg-primary/[0.06] transition-all min-h-[44px] flex items-center"
                   onClick={() => setMenuOpen(false)}
                 >
                   {link.label}
@@ -199,7 +194,7 @@ export const PublicNavbar = () => {
                   <Link
                     to="/login"
                     role="menuitem"
-                    className="flex items-center justify-center w-full min-h-[44px] rounded-xl text-sm text-white/70 border border-white/10 hover:bg-white/[0.06] transition-all"
+                    className="flex items-center justify-center w-full min-h-[44px] rounded-xl text-sm text-muted-foreground border border-border/30 hover:bg-primary/[0.06] transition-all"
                     onClick={() => setMenuOpen(false)}
                   >
                     Sign In

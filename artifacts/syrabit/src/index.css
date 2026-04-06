@@ -1,6 +1,6 @@
 /* ══════════════════════════════════════════════════════════════
    SYRABIT.AI — FUTURISTIC SCI-FI GLASSMORPHISM DESIGN SYSTEM
-   Light + Dark mode via next-themes (class strategy)
+   Light-only theme
    ══════════════════════════════════════════════════════════════ */
 
 @tailwind base;
@@ -73,70 +73,6 @@
     --glow-secondary: rgba(99, 102, 241, 0.25);
     --glow-accent:    rgba(168, 85, 247, 0.30);
     --glow-tertiary:  rgba(59, 130, 246, 0.20);
-  }
-
-  /* ══════════════════════════════════════════════════════════════
-     SECTION 1b — COLOR TOKENS (DARK MODE)
-     ══════════════════════════════════════════════════════════════ */
-  .dark {
-    /* ── Surfaces — #121212 / #E8E8E8 neutral dark palette ── */
-    --background: 0 0% 7%;            /* #121212 */
-    --foreground: 0 0% 91%;           /* #E8E8E8 */
-    --card: 0 0% 10%;                 /* #1a1a1a */
-    --card-foreground: 0 0% 91%;
-    --popover: 0 0% 9%;               /* #171717 */
-    --popover-foreground: 0 0% 91%;
-
-    /* ── Brand — violet accent stays vibrant on neutral bg ── */
-    --primary: 258 60% 68%;           /* #9575e0 — violet */
-    --primary-foreground: 258 80% 12%;
-    --secondary: 255 20% 16%;         /* #231f2e */
-    --secondary-foreground: 258 55% 82%;
-
-    /* ── Neutral ── */
-    --muted: 0 0% 13%;                /* #212121 */
-    --muted-foreground: 0 0% 55%;     /* #8c8c8c */
-    --accent: 255 20% 16%;
-    --accent-foreground: 258 55% 82%;
-
-    /* ── Destructive ── */
-    --destructive: 0 72% 65%;
-    --destructive-foreground: 0 72% 17%;
-
-    /* ── Borders & Input ── */
-    --border: 0 0% 20%;               /* #333 — clean neutral border */
-    --input: 0 0% 12%;                /* #1f1f1f */
-    --ring: 258 60% 68%;
-
-    /* ── Sidebar ── */
-    --sidebar: 0 0% 6%;                /* #0f0f0f */
-    --sidebar-foreground: 0 0% 91%;
-    --sidebar-primary: 258 60% 68%;
-    --sidebar-primary-foreground: 258 80% 12%;
-    --sidebar-accent: 255 20% 14%;
-    --sidebar-accent-foreground: 258 55% 82%;
-    --sidebar-border: 0 0% 16%;        /* #292929 */
-    --sidebar-ring: 258 60% 68%;
-
-    /* ── Charts ── */
-    --chart-1: 258 60% 68%;
-    --chart-2: 258 55% 62%;
-    --chart-3: 41 70% 60%;
-    --chart-4: 160 55% 50%;
-    --chart-5: 350 65% 58%;
-
-    /* ── RGBA glassmorphism — neutral dark glass ── */
-    --card-glass: rgba(26, 26, 26, 0.90);
-    --card-glass-border: rgba(149, 117, 224, 0.12);
-    --popover-glass: rgba(23, 23, 23, 0.97);
-    --input-bg: rgba(149, 117, 224, 0.05);
-    --sidebar-glass: rgba(15, 15, 15, 0.95);
-
-    /* ── Glow ── */
-    --glow-primary:   rgba(149, 117, 224, 0.28);
-    --glow-secondary: rgba(120, 130, 210, 0.20);
-    --glow-accent:    rgba(180, 120, 240, 0.22);
-    --glow-tertiary:  rgba(80, 120, 220, 0.16);
   }
 
   /* ── Base resets ── */
@@ -718,23 +654,6 @@
   .chapter-textbook a { color: #1d4ed8; text-decoration: underline; text-underline-offset: 2px; }
   .chapter-textbook a:hover { color: #1e3a8a; }
 
-  .dark .chapter-textbook { background: #1a1a2e; color: #e2e8f0; box-shadow: 0 1px 6px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.04); }
-  .dark .chapter-textbook h1 { color: #f1f5f9; border-bottom-color: rgba(255,255,255,0.1); }
-  .dark .chapter-textbook h2 { color: #e2e8f0; border-bottom-color: rgba(255,255,255,0.06); }
-  .dark .chapter-textbook h3 { color: #cbd5e1; }
-  .dark .chapter-textbook h4, .dark .chapter-textbook h5, .dark .chapter-textbook h6 { color: #94a3b8; }
-  .dark .chapter-textbook p { color: #cbd5e1; }
-  .dark .chapter-textbook strong { color: #f1f5f9; }
-  .dark .chapter-textbook em { color: #94a3b8; }
-  .dark .chapter-textbook ul, .dark .chapter-textbook ol { color: #cbd5e1; }
-  .dark .chapter-textbook blockquote { border-left-color: #475569; color: #94a3b8; background: rgba(255,255,255,0.03); }
-  .dark .chapter-textbook code { background: rgba(255,255,255,0.08); color: #a78bfa; }
-  .dark .chapter-textbook th { background: rgba(255,255,255,0.05); color: #e2e8f0; border-color: rgba(255,255,255,0.08); }
-  .dark .chapter-textbook td { border-color: rgba(255,255,255,0.06); color: #cbd5e1; }
-  .dark .chapter-textbook tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
-  .dark .chapter-textbook hr { border-top-color: rgba(255,255,255,0.08); }
-  .dark .chapter-textbook a { color: #818cf8; }
-  .dark .chapter-textbook a:hover { color: #a78bfa; }
 
   /* Light-theme markdown (SubjectPage uses light mode) */
   .md-content-light { color: hsl(var(--foreground)); line-height: 1.75; }
@@ -926,7 +845,6 @@
   background: rgba(59,130,246,0.08);
   border-radius: 8px;
 }
-.dark .source-watermark { color: #60a5fa; background: rgba(59,130,246,0.10); }
 
 .source-chunk-badge {
   margin-left: auto;
@@ -962,14 +880,12 @@
   width: 100%;
   min-width: 0;
 }
-.dark .source-link { color: #93c5fd; }
 
 .source-link:hover:not(:disabled) {
   background: rgba(59,130,246,0.10);
   color: #1d4ed8;
   transform: translateX(4px);
 }
-.dark .source-link:hover:not(:disabled) { color: #bfdbfe; }
 
 .source-link:disabled {
   cursor: default;
@@ -1014,11 +930,10 @@
   color: #1d4ed8;
   text-decoration: none;
 }
-.dark .inline-source-link:hover { color: #bfdbfe; background: rgba(59,130,246,0.22); }
 
 /* ══════════════════════════════════════════════════════════════
    BLOG VIEW TAB — WordPress-classic white reading experience
-   (SubjectPage Blog View tab only — overrides dark theme locally)
+   (SubjectPage Blog View tab only)
    ══════════════════════════════════════════════════════════════ */
 .blog-view-tab {
   background: #f0f0f1;
@@ -1582,31 +1497,11 @@
   color: #6d28d9;
 }
 
-.dark .source-card-container {
-  background: rgba(139, 92, 246, 0.06);
-  border-color: rgba(139, 92, 246, 0.14);
-}
-.dark .source-card-container:hover {
-  background: rgba(139, 92, 246, 0.12);
-  border-color: rgba(139, 92, 246, 0.3);
-}
-.dark .source-card-icon { color: #a78bfa; }
-.dark .source-card-label { color: #a78bfa; }
-.dark .source-card-browser { color: #c4a882; }
-.dark .source-card-title { color: #4ade80; }
-.dark .source-card-badge {
-  background: rgba(139, 92, 246, 0.1);
-  color: #c4b5fd;
-}
 
-/* ── Highlight (light mode first) ── */
+/* ── Highlight ── */
 @keyframes highlightFadeIn {
   0% { background-color: rgba(74, 222, 128, 0.22) !important; box-shadow: inset 4px 0 0 0 #22c55e, 0 0 12px rgba(74, 222, 128, 0.12) !important; }
   100% { background-color: rgba(74, 222, 128, 0.10) !important; box-shadow: inset 3px 0 0 0 #22c55e !important; }
-}
-@keyframes highlightFadeInDark {
-  0% { background-color: rgba(74, 222, 128, 0.35) !important; box-shadow: inset 4px 0 0 0 #22c55e, 0 0 12px rgba(74, 222, 128, 0.15) !important; }
-  100% { background-color: rgba(74, 222, 128, 0.10) !important; box-shadow: inset 3px 0 0 0 #4ade80 !important; }
 }
 .chapter-textbook .highlight-active,
 .highlight-active {
@@ -1617,12 +1512,6 @@
   animation: highlightFadeIn 1s ease-out;
   transition: background-color 0.3s ease;
   scroll-margin-top: 80px;
-}
-.dark .chapter-textbook .highlight-active,
-.dark .highlight-active {
-  background-color: rgba(74, 222, 128, 0.10) !important;
-  box-shadow: inset 3px 0 0 0 #4ade80 !important;
-  animation-name: highlightFadeInDark;
 }
 .highlight-active.highlight-section-start {
   border-radius: 8px 8px 0 0;
@@ -1643,12 +1532,4 @@ h2.highlight-active,
 h3.highlight-active,
 h4.highlight-active {
   color: #16a34a !important;
-}
-.dark .chapter-textbook h2.highlight-active,
-.dark .chapter-textbook h3.highlight-active,
-.dark .chapter-textbook h4.highlight-active,
-.dark h2.highlight-active,
-.dark h3.highlight-active,
-.dark h4.highlight-active {
-  color: #4ade80 !important;
 }

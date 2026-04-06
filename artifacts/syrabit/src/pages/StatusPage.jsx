@@ -15,9 +15,9 @@ const SERVICE_CHECKS = [
 ];
 
 function StatusIcon({ status }) {
-  if (status === 'operational') return <CheckCircle2 size={18} className="text-emerald-400" />;
-  if (status === 'degraded') return <AlertTriangle size={18} className="text-amber-400" />;
-  return <XCircle size={18} className="text-red-400" />;
+  if (status === 'operational') return <CheckCircle2 size={18} className="text-emerald-500" />;
+  if (status === 'degraded') return <AlertTriangle size={18} className="text-amber-500" />;
+  return <XCircle size={18} className="text-red-500" />;
 }
 
 function statusLabel(s) {
@@ -27,9 +27,9 @@ function statusLabel(s) {
 }
 
 function statusColor(s) {
-  if (s === 'operational') return 'text-emerald-400';
-  if (s === 'degraded') return 'text-amber-400';
-  return 'text-red-400';
+  if (s === 'operational') return 'text-emerald-500';
+  if (s === 'degraded') return 'text-amber-500';
+  return 'text-red-500';
 }
 
 export default function StatusPage() {
@@ -90,54 +90,54 @@ export default function StatusPage() {
         description="Real-time health status of Syrabit.ai services — API, database, AI models, and frontend delivery. Check uptime and service availability."
         url="https://syrabit.ai/status"
       />
-      <div className="min-h-screen bg-[#06060e] pt-8 pb-24 px-4">
+      <div className="min-h-screen pt-8 pb-24 px-4">
         <div className="max-w-2xl mx-auto">
           <div className="flex items-center justify-between mb-8">
             <div>
-              <h1 className="text-2xl font-semibold text-white flex items-center gap-2">
+              <h1 className="text-2xl font-semibold text-foreground flex items-center gap-2">
                 <Activity size={22} className="text-primary" />
                 System Status
               </h1>
-              <p className="text-white/40 text-sm mt-1">
+              <p className="text-muted-foreground text-sm mt-1">
                 Real-time health of Syrabit.ai services
               </p>
             </div>
             <button
               onClick={checkStatus}
               disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-white/60 hover:text-white hover:bg-white/5 transition-colors disabled:opacity-40"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
             >
               <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
               Refresh
             </button>
           </div>
 
-          <div className="rounded-xl border border-white/10 overflow-hidden mb-6" style={{ background: 'rgba(255,255,255,0.02)' }}>
-            <div className="px-5 py-4 border-b border-white/10 flex items-center justify-between">
+          <div className="rounded-xl border border-border/30 overflow-hidden mb-6 glass-card">
+            <div className="px-5 py-4 border-b border-border/20 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 {services && (
-                  <div className={`w-2.5 h-2.5 rounded-full ${allOperational ? 'bg-emerald-400' : anyDown ? 'bg-red-400' : 'bg-amber-400'}`}
-                    style={{ boxShadow: `0 0 8px ${allOperational ? '#34d399' : anyDown ? '#f87171' : '#fbbf24'}` }} />
+                  <div className={`w-2.5 h-2.5 rounded-full ${allOperational ? 'bg-emerald-500' : anyDown ? 'bg-red-500' : 'bg-amber-500'}`}
+                    style={{ boxShadow: `0 0 8px ${allOperational ? '#10b981' : anyDown ? '#ef4444' : '#f59e0b'}` }} />
                 )}
-                <span className="text-white font-medium">
+                <span className="text-foreground font-medium">
                   {!services ? 'Checking…' : allOperational ? 'All Systems Operational' : anyDown ? 'Service Disruption Detected' : 'Partial Degradation'}
                 </span>
               </div>
               {latency !== null && (
-                <span className="text-white/30 text-xs">
+                <span className="text-muted-foreground/50 text-xs">
                   {latency}ms response
                 </span>
               )}
             </div>
 
-            <div className="divide-y divide-white/5">
+            <div className="divide-y divide-border/15">
               {SERVICE_CHECKS.map(({ key, label, description }) => {
                 const s = services?.[key];
                 return (
                   <div key={key} className="px-5 py-3.5 flex items-center justify-between">
                     <div>
-                      <p className="text-white/90 text-sm font-medium">{label}</p>
-                      <p className="text-white/30 text-xs">{description}</p>
+                      <p className="text-foreground text-sm font-medium">{label}</p>
+                      <p className="text-muted-foreground/50 text-xs">{description}</p>
                     </div>
                     <div className="flex items-center gap-2">
                       {s ? (
@@ -146,7 +146,7 @@ export default function StatusPage() {
                           <StatusIcon status={s} />
                         </>
                       ) : (
-                        <span className="text-white/20 text-xs">Checking…</span>
+                        <span className="text-muted-foreground/40 text-xs">Checking…</span>
                       )}
                     </div>
                   </div>
@@ -156,7 +156,7 @@ export default function StatusPage() {
           </div>
 
           {lastChecked && (
-            <p className="text-white/25 text-xs text-center">
+            <p className="text-muted-foreground/40 text-xs text-center">
               Last checked: {lastChecked.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
             </p>
           )}

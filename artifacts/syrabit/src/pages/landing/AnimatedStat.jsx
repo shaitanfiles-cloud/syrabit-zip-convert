@@ -35,15 +35,15 @@ export default function AnimatedStat({ value, label, icon: Icon }) {
         whileHover={{ scale: 1.08 }}
         className="w-12 h-12 rounded-2xl flex items-center justify-center mb-1"
         style={{
-          background: 'rgba(124,58,237,0.12)',
-          border: '1px solid rgba(139,92,246,0.22)',
-          boxShadow: '0 0 20px rgba(139,92,246,0.12)',
+          background: 'rgba(124,58,237,0.08)',
+          border: '1px solid rgba(139,92,246,0.18)',
+          boxShadow: '0 0 20px rgba(139,92,246,0.08)',
         }}
       >
-        <Icon className="w-5 h-5" style={{ color: '#a78bfa' }} />
+        <Icon className="w-5 h-5 text-violet-600" />
       </motion.div>
-      <span className="text-white" style={{ fontSize: '2rem', fontWeight: 800 }}>{display}</span>
-      <span className="text-white/40 text-sm">{label}</span>
+      <span className="text-foreground" style={{ fontSize: '2rem', fontWeight: 800 }}>{display}</span>
+      <span className="text-muted-foreground text-sm">{label}</span>
     </div>
   );
 }

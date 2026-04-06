@@ -20,7 +20,7 @@ export default function ConfirmDialog({ open, title, message, confirmLabel = 'De
   return (
     <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onCancel}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-      <div className="relative bg-[#0e0e1a] border border-white/10 rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4" onClick={(e) => e.stopPropagation()}>
+      <div className="relative rounded-2xl shadow-2xl p-6 max-w-sm w-full mx-4" style={{ background: '#0e0e1a', border: '1px solid rgba(255,255,255,0.10)' }} onClick={(e) => e.stopPropagation()}>
         <div className="flex items-start gap-3 mb-4">
           <div className={`p-2 rounded-xl ${destructive ? 'bg-red-500/10' : 'bg-violet-500/10'}`}>
             <AlertTriangle size={20} className={destructive ? 'text-red-400' : 'text-violet-400'} />

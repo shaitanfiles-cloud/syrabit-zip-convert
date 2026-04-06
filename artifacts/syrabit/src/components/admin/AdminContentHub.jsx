@@ -127,7 +127,7 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
   const activeColor = COLOR_MAP[TABS.find(t => t.id === activeTab)?.color || 'violet'];
 
   return (
-    <div className="h-full flex flex-col" style={{ background: '#06060e' }}>
+    <div className="h-full flex flex-col" style={{ background: '#080810' }}>
 
       {/* ── Delegated workflow banner ─────────────────────────────────── */}
       <div className="border-b px-4 py-1.5 flex items-center gap-1 flex-wrap"
@@ -196,7 +196,7 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
       {/* ── Tab content ──────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden relative">
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#06060e]/80 z-10">
+          <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(8,8,16,0.80)' }}>
             <div className="flex items-center gap-2 text-white/40 text-sm">
               <Loader2 size={16} className="animate-spin" /> Loading content data…
             </div>

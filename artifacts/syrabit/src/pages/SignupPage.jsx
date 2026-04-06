@@ -80,58 +80,54 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen flex bg-[#06060e]">
+    <div className="min-h-screen flex bg-background">
 
-      {/* ── Left panel — branded visual (desktop only) ── */}
       <div
         className="hidden lg:flex lg:w-[52%] relative flex-col justify-between p-12 overflow-hidden"
         style={{
-          background: 'linear-gradient(135deg, #0e0620 0%, #130928 40%, #0e0e22 100%)',
+          background: 'linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 40%, #f5f3ff 100%)',
         }}
       >
-        {/* Layered glow orbs */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[-15%] left-[-10%] w-[600px] h-[600px] rounded-full"
-            style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.28) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+            style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.10) 0%, transparent 70%)', filter: 'blur(40px)' }} />
           <div className="absolute bottom-[-10%] right-[-15%] w-[500px] h-[500px] rounded-full"
-            style={{ background: 'radial-gradient(circle, rgba(5,150,105,0.16) 0%, transparent 70%)', filter: 'blur(50px)' }} />
+            style={{ background: 'radial-gradient(circle, rgba(5,150,105,0.08) 0%, transparent 70%)', filter: 'blur(50px)' }} />
           <div className="absolute top-[35%] right-[5%] w-[350px] h-[350px] rounded-full"
-            style={{ background: 'radial-gradient(circle, rgba(168,85,247,0.14) 0%, transparent 70%)', filter: 'blur(35px)' }} />
+            style={{ background: 'radial-gradient(circle, rgba(168,85,247,0.06) 0%, transparent 70%)', filter: 'blur(35px)' }} />
         </div>
 
-        {/* Grid overlay */}
         <div className="absolute inset-0 pointer-events-none opacity-[0.04]"
           style={{
             backgroundImage: 'linear-gradient(rgba(139,92,246,1) 1px,transparent 1px),linear-gradient(to right,rgba(139,92,246,1) 1px,transparent 1px)',
             backgroundSize: '60px 60px',
           }} />
 
-        {/* Content */}
         <div className="relative z-10">
           <Link to="/" className="inline-block mb-14">
-            <LogoFull size="md" textClassName="text-white text-2xl" />
+            <LogoFull size="md" textClassName="text-foreground text-2xl" />
           </Link>
 
           <div className="anim-slide-left">
             <div
               className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-6"
-              style={{ background: 'rgba(16,185,129,0.14)', border: '1px solid rgba(16,185,129,0.25)' }}
+              style={{ background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.20)' }}
             >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span className="text-xs font-semibold tracking-widest" style={{ color: '#6ee7b7' }}>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="text-xs font-semibold tracking-widest text-emerald-600">
                 FREE TO START
               </span>
             </div>
             <h2
-              className="mb-4 text-white"
+              className="mb-4 text-foreground"
               style={{ fontSize: 'clamp(1.6rem, 3vw, 2.2rem)', fontWeight: 800, lineHeight: 1.18, letterSpacing: '-0.02em' }}
             >
               For AHSEC & Degree<br />
-              <span style={{ background: 'linear-gradient(135deg,#a78bfa,#7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
+              <span style={{ background: 'linear-gradient(135deg,#7c3aed,#a78bfa)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
                 students
               </span>
             </h2>
-            <p className="mb-10 max-w-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.52)', fontSize: '0.95rem' }}>
+            <p className="mb-10 max-w-sm leading-relaxed text-muted-foreground" style={{ fontSize: '0.95rem' }}>
               Start your AI-powered exam prep journey today. No credit card required to get started.
             </p>
 
@@ -144,57 +140,44 @@ export default function SignupPage() {
                 >
                   <div
                     className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                    style={{ background: 'rgba(16,185,129,0.14)', border: '1px solid rgba(16,185,129,0.22)' }}
+                    style={{ background: 'rgba(16,185,129,0.10)', border: '1px solid rgba(16,185,129,0.18)' }}
                   >
-                    <Icon size={14} className="text-emerald-400" />
+                    <Icon size={14} className="text-emerald-600" />
                   </div>
-                  <span className="text-sm" style={{ color: 'rgba(255,255,255,0.72)' }}>{text}</span>
+                  <span className="text-sm text-foreground/70">{text}</span>
                 </div>
               ))}
             </div>
           </div>
         </div>
 
-        {/* Bottom */}
         <div className="relative z-10">
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>
+          <p className="text-xs text-muted-foreground">
             Trusted by 500+ Assam board students
           </p>
         </div>
       </div>
 
-      {/* ── Right panel — auth form ── */}
       <div className="w-full lg:w-[48%] flex items-center justify-center p-4 sm:p-6 relative overflow-y-auto" style={{ scrollPaddingBottom: '2rem' }}>
-        {/* Subtle background glow */}
         <div className="absolute inset-0 pointer-events-none">
           <div className="absolute top-[20%] right-[10%] w-[300px] h-[300px] rounded-full opacity-60"
-            style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.08) 0%, transparent 70%)', filter: 'blur(40px)' }} />
+            style={{ background: 'radial-gradient(circle, rgba(124,58,237,0.06) 0%, transparent 70%)', filter: 'blur(40px)' }} />
         </div>
 
         <div className="w-full max-w-sm relative z-10 anim-slide-right py-4 lg:py-8">
           <Link to="/" className="flex items-center gap-2 mb-4 lg:hidden">
-            <LogoFull size="sm" textClassName="text-white" />
+            <LogoFull size="sm" textClassName="text-foreground" />
           </Link>
 
-          {/* Form card */}
-          <div
-            className="rounded-2xl p-5 sm:p-7 overflow-y-auto auth-form-card"
-            style={{
-              background: 'rgba(255,255,255,0.04)',
-              backdropFilter: 'blur(24px)',
-              WebkitBackdropFilter: 'blur(24px)',
-              border: '1px solid rgba(255,255,255,0.10)',
-              boxShadow: '0 16px 48px rgba(0,0,0,0.30), 0 0 0 1px rgba(255,255,255,0.04) inset',
-            }}
-          >
+          <div className="rounded-2xl p-5 sm:p-7 overflow-y-auto auth-form-card glass-card">
             <div className="mb-7">
-              <h1 className="text-2xl font-bold text-white tracking-tight">Create your account</h1>
-              <p className="mt-1.5 text-sm" style={{ color: 'rgba(255,255,255,0.65)' }}>Start for free — no credit card required</p>
+              <h1 className="text-2xl font-bold text-foreground tracking-tight">Create your account</h1>
+              <p className="mt-1.5 text-sm text-muted-foreground">Start for free — no credit card required</p>
             </div>
 
             {error && (
-              <div className="flex items-center gap-2 text-red-400 rounded-xl p-3 mb-5 text-sm"
-                style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.18)' }}>
+              <div className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-5 text-sm"
+                style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
                 <AlertCircle size={16} className="flex-shrink-0" />
                 {error}
               </div>
@@ -202,11 +185,11 @@ export default function SignupPage() {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1.5">
-                <Label htmlFor="name" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                <Label htmlFor="name" className="text-sm font-medium text-foreground/70">
                   Full Name
                 </Label>
                 <div className="relative">
-                  <User size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
+                  <User size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
                   <Input
                     id="name"
                     name="name"
@@ -215,7 +198,7 @@ export default function SignupPage() {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     onFocus={handleInputFocus}
-                    className="pl-10 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
+                    className="pl-10 h-11"
                     style={{ scrollMarginBottom: '4rem' }}
                     required
                   />
@@ -223,11 +206,11 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="email" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                <Label htmlFor="email" className="text-sm font-medium text-foreground/70">
                   Email address
                 </Label>
                 <div className="relative">
-                  <Mail size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
+                  <Mail size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
                   <Input
                     id="email"
                     name="email"
@@ -237,7 +220,7 @@ export default function SignupPage() {
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     onFocus={handleInputFocus}
-                    className="pl-10 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
+                    className="pl-10 h-11"
                     style={{ scrollMarginBottom: '4rem' }}
                     required
                     data-testid="auth-email-input"
@@ -246,11 +229,11 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="password" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                <Label htmlFor="password" className="text-sm font-medium text-foreground/70">
                   Password
                 </Label>
                 <div className="relative">
-                  <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
+                  <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
                   <Input
                     id="password"
                     name="password"
@@ -260,7 +243,7 @@ export default function SignupPage() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     onFocus={handleInputFocus}
-                    className="pl-10 pr-11 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25"
+                    className="pl-10 pr-11 h-11"
                     style={{ scrollMarginBottom: '4rem' }}
                     required
                     data-testid="auth-password-input"
@@ -268,7 +251,7 @@ export default function SignupPage() {
                   <button
                     type="button"
                     onClick={() => setShowPass(!showPass)}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center pass-toggle-btn"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground/40 hover:text-foreground transition-colors"
                   >
                     {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
@@ -279,11 +262,11 @@ export default function SignupPage() {
                       {[1, 2, 3, 4].map((i) => (
                         <div
                           key={i}
-                          className={`h-1 flex-1 rounded-full transition-all duration-300 ${i <= strength.score ? STRENGTH_COLORS[strength.score] : 'bg-white/10'}`}
+                          className={`h-1 flex-1 rounded-full transition-all duration-300 ${i <= strength.score ? STRENGTH_COLORS[strength.score] : 'bg-muted'}`}
                         />
                       ))}
                     </div>
-                    <p className={`text-xs ${strength.score <= 2 ? 'text-orange-400' : 'text-emerald-400'}`}>
+                    <p className={`text-xs ${strength.score <= 2 ? 'text-orange-500' : 'text-emerald-600'}`}>
                       {strength.label}
                     </p>
                   </div>
@@ -291,11 +274,11 @@ export default function SignupPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="confirm" className="text-sm font-medium" style={{ color: 'rgba(255,255,255,0.70)' }}>
+                <Label htmlFor="confirm" className="text-sm font-medium text-foreground/70">
                   Confirm Password
                 </Label>
                 <div className="relative">
-                  <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.28)' }} />
+                  <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted-foreground/40" />
                   <Input
                     id="confirm"
                     name="confirm-password"
@@ -305,20 +288,20 @@ export default function SignupPage() {
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     onFocus={handleInputFocus}
-                    className={`pl-10 pr-11 h-11 bg-white/[0.05] border-white/10 text-white placeholder:text-white/25 focus-visible:border-violet-500/50 focus-visible:ring-violet-500/25 ${confirmPassword && !passwordsMatch ? 'border-red-500/40' : ''}`}
+                    className={`pl-10 pr-11 h-11 ${confirmPassword && !passwordsMatch ? 'border-red-500/40' : ''}`}
                     style={{ scrollMarginBottom: '4rem' }}
                     required
                   />
                   <button
                     type="button"
                     onClick={() => setShowConfirm(!showConfirm)}
-                    className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center pass-toggle-btn"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 min-w-[44px] min-h-[44px] flex items-center justify-center text-muted-foreground/40 hover:text-foreground transition-colors"
                   >
                     {showConfirm ? <EyeOff size={15} /> : <Eye size={15} />}
                   </button>
                 </div>
                 {confirmPassword && !passwordsMatch && (
-                  <p className="text-xs text-red-400">Passwords don't match</p>
+                  <p className="text-xs text-red-500">Passwords don't match</p>
                 )}
               </div>
 
@@ -330,17 +313,17 @@ export default function SignupPage() {
                   aria-label="Agree to terms"
                 >
                   <span
-                    className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${agreed ? 'border-violet-500' : 'border-white/25 bg-white/5'}`}
+                    className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${agreed ? 'border-violet-500' : 'border-border bg-muted/50'}`}
                     style={agreed ? { background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' } : {}}
                   >
                     {agreed && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                   </span>
                 </button>
-                <span className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>
+                <span className="text-xs text-muted-foreground">
                   I agree to the{' '}
-                  <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Terms</Link>
+                  <Link to="/terms" target="_blank" rel="noopener noreferrer" className="font-medium text-violet-600 hover:text-violet-700 transition-colors">Terms</Link>
                   {' '}and{' '}
-                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Privacy Policy</Link>
+                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium text-violet-600 hover:text-violet-700 transition-colors">Privacy Policy</Link>
                 </span>
               </div>
 
@@ -352,15 +335,15 @@ export default function SignupPage() {
                   aria-label="Consent to data processing"
                 >
                   <span
-                    className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${consentDpdp ? 'border-violet-500' : 'border-white/25 bg-white/5'}`}
+                    className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${consentDpdp ? 'border-violet-500' : 'border-border bg-muted/50'}`}
                     style={consentDpdp ? { background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' } : {}}
                   >
                     {consentDpdp && <svg width="10" height="8" viewBox="0 0 10 8" fill="none"><path d="M1 4L3.5 6.5L9 1" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>}
                   </span>
                 </button>
-                <span className="text-xs" style={{ color: 'rgba(255,255,255,0.65)' }}>
+                <span className="text-xs text-muted-foreground">
                   I consent to the processing of my personal data as described in the{' '}
-                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium transition-colors" style={{ color: '#a78bfa' }}>Privacy Policy</Link>
+                  <Link to="/privacy" target="_blank" rel="noopener noreferrer" className="font-medium text-violet-600 hover:text-violet-700 transition-colors">Privacy Policy</Link>
                   {' '}under the DPDP Act, 2023
                 </span>
               </div>
@@ -376,9 +359,9 @@ export default function SignupPage() {
               </button>
             </form>
 
-            <p className="text-center text-sm mt-6" style={{ color: 'rgba(255,255,255,0.65)' }}>
+            <p className="text-center text-sm mt-6 text-muted-foreground">
               Already have an account?{' '}
-              <Link to="/login" className="font-semibold auth-link">
+              <Link to="/login" className="font-semibold text-violet-600 hover:text-violet-700 transition-colors">
                 Sign in
               </Link>
             </p>

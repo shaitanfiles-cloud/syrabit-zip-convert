@@ -27,7 +27,7 @@ function TrustpilotCarousel() {
       data-businessunit-id={TRUSTPILOT_BU_ID}
       data-style-height="140px"
       data-style-width="100%"
-      data-theme="dark"
+      data-theme="light"
       data-stars="4,5"
       data-review-languages="en"
     >
@@ -35,8 +35,7 @@ function TrustpilotCarousel() {
         href="https://www.trustpilot.com/review/syrabit.ai"
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center gap-2 text-sm font-medium"
-        style={{ color: 'rgba(255,255,255,0.60)' }}
+        className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground"
       >
         See our reviews on Trustpilot
       </a>
@@ -68,8 +67,7 @@ function TrustpilotMini() {
           href="https://www.trustpilot.com/review/syrabit.ai"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-2 text-sm font-medium"
-          style={{ color: 'rgba(255,255,255,0.60)' }}
+          className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground"
         >
           Rated on Trustpilot
         </a>
@@ -98,10 +96,10 @@ export default function TestimonialsFooter({ year }) {
     <>
       <section className="py-28 max-w-5xl mx-auto px-5">
         <Reveal className="text-center mb-14">
-          <h2 className="text-white mb-3" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
+          <h2 className="text-foreground mb-3" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
             Students love Syrabit.ai
           </h2>
-          <p style={{ color: 'rgba(255,255,255,0.60)' }}>
+          <p className="text-muted-foreground">
             Real feedback from students across Assam
           </p>
         </Reveal>
@@ -122,8 +120,8 @@ export default function TestimonialsFooter({ year }) {
 
       <section className="py-28 relative overflow-hidden">
         <div className="absolute inset-0 pointer-events-none">
-          <GlowOrb color="radial-gradient(circle,#7c3aed,transparent)" size={700} x="20%" y="0%" blur={140} opacity={0.12} animRange={20} duration={20} />
-          <GlowOrb color="radial-gradient(circle,#4f46e5,transparent)" size={500} x="60%" y="40%" blur={120} opacity={0.08} animRange={15} duration={16} />
+          <GlowOrb color="radial-gradient(circle,#7c3aed,transparent)" size={700} x="20%" y="0%" blur={140} opacity={0.06} animRange={20} duration={20} />
+          <GlowOrb color="radial-gradient(circle,#4f46e5,transparent)" size={500} x="60%" y="40%" blur={120} opacity={0.04} animRange={15} duration={16} />
         </div>
 
         <Reveal className="relative z-10 max-w-2xl mx-auto px-5 text-center">
@@ -135,10 +133,10 @@ export default function TestimonialsFooter({ year }) {
             <LogoMark size="lg" />
           </motion.div>
 
-          <h2 className="text-white mb-4" style={{ fontSize: 'clamp(2rem,4vw,3rem)', fontWeight: 900, letterSpacing: '-0.02em' }}>
+          <h2 className="text-foreground mb-4" style={{ fontSize: 'clamp(2rem,4vw,3rem)', fontWeight: 900, letterSpacing: '-0.02em' }}>
             Ready to ace your boards?
           </h2>
-          <p className="mb-10 text-lg" style={{ color: 'rgba(255,255,255,0.65)' }}>
+          <p className="mb-10 text-lg text-muted-foreground">
             Join hundreds of AssamBoard students (AHSEC, DEGREE &amp; SEBA) who study smarter with Syrabit.ai. Free forever — no credit card required.
           </p>
 
@@ -153,7 +151,7 @@ export default function TestimonialsFooter({ year }) {
                   borderRadius: '1rem',
                   fontSize: '1.125rem',
                   background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
-                  boxShadow: '0 8px 40px rgba(139,92,246,0.40)',
+                  boxShadow: '0 8px 40px rgba(139,92,246,0.25)',
                 }}
                 data-testid="landing-final-cta-button"
               >
@@ -164,15 +162,14 @@ export default function TestimonialsFooter({ year }) {
             <motion.div whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.97 }}>
               <Link
                 to="/pricing"
-                className="flex items-center gap-2 font-semibold"
+                className="flex items-center gap-2 font-semibold text-muted-foreground"
                 style={{
                   height: 56,
                   padding: '0 2rem',
                   borderRadius: '1rem',
                   fontSize: '1rem',
-                  color: 'rgba(255,255,255,0.60)',
-                  border: '1px solid rgba(255,255,255,0.10)',
-                  background: 'rgba(255,255,255,0.04)',
+                  border: '1px solid hsl(var(--border))',
+                  background: 'hsl(var(--muted) / 0.3)',
                 }}
               >
                 View all plans <ChevronRight size={18} />
@@ -184,13 +181,13 @@ export default function TestimonialsFooter({ year }) {
 
       <footer
         className="border-t py-12"
-        style={{ borderColor: 'rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.30)' }}
+        style={{ borderColor: 'hsl(var(--border) / 0.3)', background: 'hsl(var(--muted) / 0.3)' }}
       >
         <div className="max-w-6xl mx-auto px-5">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6 md:gap-8 mb-12">
             <div className="col-span-2 md:col-span-1 space-y-4">
-              <LogoFull size="sm" textClassName="text-white" />
-              <p className="text-sm leading-relaxed" style={{ color: 'rgba(255,255,255,0.60)' }}>
+              <LogoFull size="sm" textClassName="text-foreground" />
+              <p className="text-sm leading-relaxed text-muted-foreground">
                 AI-powered exam prep for AssamBoard students in Assam — AHSEC (Class 11–12), DEGREE (B.Com, B.A, B.Sc), and SEBA.
               </p>
               <div className="flex items-center gap-2">
@@ -198,10 +195,10 @@ export default function TestimonialsFooter({ year }) {
                   <motion.button
                     key={label}
                     aria-label={label}
-                    whileHover={{ scale: 1.1, background: 'rgba(255,255,255,0.10)' }}
+                    whileHover={{ scale: 1.1 }}
                     whileTap={{ scale: 0.95 }}
-                    className="w-11 h-11 rounded-lg flex items-center justify-center"
-                    style={{ color: 'rgba(255,255,255,0.40)', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+                    className="w-11 h-11 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+                    style={{ background: 'hsl(var(--muted) / 0.5)', border: '1px solid hsl(var(--border) / 0.3)' }}
                   >
                     <Icon size={16} />
                   </motion.button>
@@ -210,34 +207,33 @@ export default function TestimonialsFooter({ year }) {
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>PRODUCT</p>
-              <Link to="/home#features" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Features</Link>
-              <Link to="/pricing" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Pricing</Link>
-              <Link to="/library" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Subjects</Link>
-              <Link to="/chat" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Chat</Link>
+              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">PRODUCT</p>
+              <Link to="/home#features" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Features</Link>
+              <Link to="/pricing" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Pricing</Link>
+              <Link to="/library" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Subjects</Link>
+              <Link to="/chat" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Chat</Link>
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>COMPANY</p>
-              <Link to="/about" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>About Us</Link>
-              <Link to="/privacy" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Privacy Policy</Link>
-              <Link to="/terms" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>Terms of Service</Link>
-              <Link to="/status" className="block text-sm transition-colors hover:text-white/70 min-h-[44px] flex items-center" style={{ color: 'rgba(255,255,255,0.60)' }}>System Status</Link>
+              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">COMPANY</p>
+              <Link to="/about" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">About Us</Link>
+              <Link to="/privacy" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Privacy Policy</Link>
+              <Link to="/terms" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Terms of Service</Link>
+              <Link to="/status" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">System Status</Link>
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs font-bold tracking-[0.10em] pb-1" style={{ color: 'rgba(255,255,255,0.60)' }}>CONTACT</p>
-              <div className="flex items-center gap-1.5 text-sm min-h-[44px]" style={{ color: 'rgba(255,255,255,0.60)' }}>
+              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">CONTACT</p>
+              <div className="flex items-center gap-1.5 text-sm min-h-[44px] text-muted-foreground">
                 <Mail size={14} /><span>admin@syrabit.ai</span>
               </div>
-              <div className="flex items-center gap-1.5 text-sm min-h-[44px]" style={{ color: 'rgba(255,255,255,0.60)' }}>
+              <div className="flex items-center gap-1.5 text-sm min-h-[44px] text-muted-foreground">
                 <Globe size={14} /><span>syrabit.ai</span>
               </div>
               <div className="mt-4">
                 <Link
                   to="/admin/login"
-                  className="text-xs transition-colors hover:text-white/35"
-                  style={{ color: 'rgba(255,255,255,0.15)' }}
+                  className="text-xs text-muted-foreground/20 hover:text-muted-foreground/40 transition-colors"
                 >
                   Admin Portal →
                 </Link>
@@ -247,12 +243,12 @@ export default function TestimonialsFooter({ year }) {
 
           <div
             className="border-t pt-6 flex flex-col md:flex-row items-center justify-between gap-3"
-            style={{ borderColor: 'rgba(255,255,255,0.06)' }}
+            style={{ borderColor: 'hsl(var(--border) / 0.3)' }}
           >
-            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>
+            <p className="text-xs text-muted-foreground">
               © {year} Syrabit.ai · Built for AssamBoard students in Assam, India (AHSEC · DEGREE · SEBA)
             </p>
-            <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>
+            <p className="text-xs text-muted-foreground">
               Made with ♥ for Class 11 &amp; 12 exam warriors
             </p>
           </div>

@@ -118,22 +118,22 @@ export default function PrivacyPage() {
         url="https://syrabit.ai/privacy"
         keywords="Syrabit privacy policy, DPDP Act 2023, data protection, Assam Board, student data privacy"
       />
-      <div className="min-h-screen bg-[#06060e] pt-8 pb-24 px-4">
+      <div className="min-h-screen pt-8 pb-24 px-4">
         <div className="max-w-3xl mx-auto">
-          <h1 className="text-3xl font-semibold text-white mb-1">Privacy Policy</h1>
-          <p className="text-white/40 text-xs mb-1">Last updated: {LAST_UPDATED}</p>
-          <p className="text-white/50 text-sm mb-10">
+          <h1 className="text-3xl font-semibold text-foreground mb-1">Privacy Policy</h1>
+          <p className="text-muted-foreground/60 text-xs mb-1">Last updated: {LAST_UPDATED}</p>
+          <p className="text-muted-foreground text-sm mb-10">
             Syrabit.ai is committed to protecting your personal data in accordance with the
             Digital Personal Data Protection Act, 2023 (DPDP Act) and applicable Indian laws.
             This policy explains what data we collect, why, how we protect it, and your rights.
           </p>
-          <div className="space-y-8 text-white/70 leading-relaxed">
+          <div className="space-y-8 text-foreground/70 leading-relaxed">
             {sections.map(({ title, body, list, subsections, footer }) => (
               <div key={title}>
-                <h2 className="text-white font-semibold mb-2">{title}</h2>
+                <h2 className="text-foreground font-semibold mb-2">{title}</h2>
                 {body && <p className="mb-2">{body}</p>}
                 {list && (
-                  <ul className="list-disc list-outside pl-5 space-y-1.5 text-white/60 text-[0.92rem]">
+                  <ul className="list-disc list-outside pl-5 space-y-1.5 text-foreground/60 text-[0.92rem]">
                     {list.map((item, i) => (
                       <li key={i}>{item}</li>
                     ))}
@@ -142,15 +142,15 @@ export default function PrivacyPage() {
                 {subsections && (
                   <div className="space-y-1 mt-2">
                     {subsections.map(({ label, value }) => (
-                      <p key={label}><span className="text-white/80 font-medium">{label}:</span> {value}</p>
+                      <p key={label}><span className="text-foreground/80 font-medium">{label}:</span> {value}</p>
                     ))}
                   </div>
                 )}
-                {footer && <p className="mt-3 text-white/50 text-sm">{footer}</p>}
+                {footer && <p className="mt-3 text-muted-foreground text-sm">{footer}</p>}
               </div>
             ))}
           </div>
-          <div className="mt-12 pt-6 border-t border-white/10 text-white/30 text-xs">
+          <div className="mt-12 pt-6 border-t border-border/30 text-muted-foreground/50 text-xs">
             <p>This privacy policy is governed by the laws of India. Any disputes shall be subject to the exclusive jurisdiction of courts in Assam, India.</p>
           </div>
         </div>

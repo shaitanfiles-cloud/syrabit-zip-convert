@@ -22,7 +22,7 @@ export default function LandingPage() {
   const year = new Date().getFullYear();
 
   return (
-    <div className="min-h-screen text-white overflow-x-hidden" style={{ background: '#06060e' }}>
+    <div className="min-h-screen text-foreground overflow-x-hidden bg-background">
       <PageMeta
         title="Syrabit.ai — Educational Browser For AssamBoard Students"
         description="Syrabit.ai is the educational browser for AssamBoard students. Browse AHSEC Class 11-12, Degree (B.Com, B.A, B.Sc), and SEBA syllabus content, get instant answers, PYQs, notes, and MCQs — free to start. Trusted by 500+ students."

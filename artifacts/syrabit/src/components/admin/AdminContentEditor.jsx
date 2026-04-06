@@ -292,7 +292,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   if (selSubject) breadcrumb.push({ label: subjectData?.name || selSubject, onClick: () => { setEditView(null); } });
 
   return (
-    <div className="h-full flex flex-col bg-[#06060e]">
+    <div className="h-full flex flex-col" style={{ background: '#080810' }}>
       <>
         <div className="h-14 border-b border-white/10 flex items-center justify-between px-6" style={{ background: 'rgba(255,255,255,0.02)' }}>
           <div className="flex items-center gap-2 min-w-0">

@@ -7,17 +7,6 @@ import { AuthProvider } from "@/context/AuthContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ThemeProvider } from "next-themes";
-
-if (typeof window !== "undefined") {
-  try {
-    const _themeReset = "syrabit-theme-reset-v1";
-    if (!localStorage.getItem(_themeReset)) {
-      localStorage.removeItem("theme");
-      localStorage.setItem(_themeReset, "1");
-    }
-  } catch (_) {}
-}
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
 const PWAInstallPrompt = lazy(() => import("@/components/PWAInstallPrompt"));
@@ -196,7 +185,6 @@ function App() {
   return (
     <HelmetProvider>
     <ErrorBoundary>
-      <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <BrowserRouter>
@@ -263,7 +251,6 @@ function App() {
           </AuthProvider>
           <Suspense fallback={null}><PWAInstallPrompt /></Suspense>
         </QueryClientProvider>
-      </ThemeProvider>
     </ErrorBoundary>
     </HelmetProvider>
   );

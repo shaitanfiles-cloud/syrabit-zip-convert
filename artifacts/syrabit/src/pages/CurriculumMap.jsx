@@ -12,32 +12,30 @@ function slugify(str = '') {
   return str.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
 }
 
-/* ── Collapsible tree node ─────────────────────────────────────────── */
 function TreeNode({ label, icon: Icon, count, children, defaultOpen = false, depth = 0 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className={depth === 0 ? 'border border-white/10 rounded-xl overflow-hidden mb-3' : ''}>
+    <div className={depth === 0 ? 'border border-border/30 rounded-xl overflow-hidden mb-3' : ''}>
       <button
         onClick={() => setOpen((o) => !o)}
         className={`w-full flex items-center gap-3 text-left px-4 py-3 transition-colors
-          ${depth === 0 ? 'bg-white/5 hover:bg-white/8' : depth === 1 ? 'bg-white/3 hover:bg-white/6 pl-4 sm:pl-6 md:pl-8' : 'hover:bg-white/4 pl-6 sm:pl-8 md:pl-12'}`}
+          ${depth === 0 ? 'bg-muted/30 hover:bg-muted/50' : depth === 1 ? 'bg-muted/15 hover:bg-muted/30 pl-4 sm:pl-6 md:pl-8' : 'hover:bg-muted/20 pl-6 sm:pl-8 md:pl-12'}`}
       >
         <ChevronRight
-          className={`shrink-0 text-white/40 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
+          className={`shrink-0 text-muted-foreground/40 transition-transform duration-200 ${open ? 'rotate-90' : ''}`}
           size={14}
         />
-        {Icon && <Icon size={16} className="shrink-0 text-violet-400" />}
-        <span className={`flex-1 font-medium ${depth === 0 ? 'text-white text-sm' : 'text-white/80 text-sm'}`}>{label}</span>
+        {Icon && <Icon size={16} className="shrink-0 text-violet-600" />}
+        <span className={`flex-1 font-medium ${depth === 0 ? 'text-foreground text-sm' : 'text-foreground/80 text-sm'}`}>{label}</span>
         {count != null && (
-          <span className="text-xs text-white/30 bg-white/5 px-2 py-0.5 rounded-full">{count}</span>
+          <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">{count}</span>
         )}
       </button>
-      {open && <div className="border-t border-white/5">{children}</div>}
+      {open && <div className="border-t border-border/20">{children}</div>}
     </div>
   );
 }
 
-/* ── Subject block with chapters ───────────────────────────────────── */
 function SubjectNode({ subject, boardSlug, classSlug }) {
   const navigate = useNavigate();
   const chapters = subject.chapters || [];
@@ -51,7 +49,7 @@ function SubjectNode({ subject, boardSlug, classSlug }) {
     >
       <div className="pl-8 sm:pl-12 md:pl-16 pr-4 py-2 space-y-1">
         {chapters.length === 0 && (
-          <p className="text-xs text-white/30 py-2">No chapters yet</p>
+          <p className="text-xs text-muted-foreground/40 py-2">No chapters yet</p>
         )}
         {chapters.map((ch, idx) => {
           const chSlug = ch.slug || slugify(ch.title || ch.name || `chapter-${idx + 1}`);
@@ -60,19 +58,19 @@ function SubjectNode({ subject, boardSlug, classSlug }) {
             <button
               key={ch.id || idx}
               onClick={() => navigate(url)}
-              className="w-full flex items-center gap-2.5 text-left px-3 py-2 rounded-lg hover:bg-violet-500/10 group transition-colors"
+              className="w-full flex items-center gap-2.5 text-left px-3 py-2 rounded-lg hover:bg-violet-500/[0.06] group transition-colors"
             >
-              <FileText size={13} className="shrink-0 text-white/30 group-hover:text-violet-400 transition-colors" />
-              <span className="flex-1 text-xs text-white/60 group-hover:text-white/90 transition-colors leading-snug">
+              <FileText size={13} className="shrink-0 text-muted-foreground/40 group-hover:text-violet-600 transition-colors" />
+              <span className="flex-1 text-xs text-foreground/60 group-hover:text-foreground transition-colors leading-snug">
                 {ch.title || ch.name || `Chapter ${idx + 1}`}
               </span>
-              <ExternalLink size={11} className="shrink-0 text-white/20 group-hover:text-violet-400 opacity-0 group-hover:opacity-100 transition-all" />
+              <ExternalLink size={11} className="shrink-0 text-muted-foreground/30 group-hover:text-violet-600 opacity-0 group-hover:opacity-100 transition-all" />
             </button>
           );
         })}
         <button
           onClick={() => navigate(`/subject/${subject.id}`)}
-          className="mt-1 w-full text-xs text-violet-400 hover:text-violet-300 py-1.5 rounded-lg hover:bg-violet-500/10 transition-colors text-center"
+          className="mt-1 w-full text-xs text-violet-600 hover:text-violet-700 py-1.5 rounded-lg hover:bg-violet-500/[0.06] transition-colors text-center"
         >
           Open full subject →
         </button>
@@ -81,7 +79,6 @@ function SubjectNode({ subject, boardSlug, classSlug }) {
   );
 }
 
-/* ── Main page ─────────────────────────────────────────────────────── */
 export default function CurriculumMap() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['library-bundle'],
@@ -129,7 +126,7 @@ export default function CurriculumMap() {
   const totalChapters = data?.chapters?.length ?? 0;
 
   return (
-    <div className="min-h-screen text-white" style={{ background: '#06060e' }}>
+    <div className="min-h-screen text-foreground bg-background">
       <PageMeta
         title="Curriculum Map — AssamBoard Subject Browser | Syrabit.ai"
         description="Browse the full AssamBoard curriculum: AHSEC Class 11-12 (PCM, PCB, Arts, Commerce), Degree (B.Com, B.A, B.Sc), and SEBA — all subjects and chapters in one place."
@@ -139,16 +136,15 @@ export default function CurriculumMap() {
       <PublicNavbar />
 
       <div className="max-w-4xl mx-auto px-4 pt-24 pb-16">
-        {/* Header */}
         <div className="mb-10">
-          <div className="inline-flex items-center gap-2 text-xs font-medium text-violet-400 bg-violet-500/10 border border-violet-500/20 rounded-full px-3 py-1 mb-4">
+          <div className="inline-flex items-center gap-2 text-xs font-medium text-violet-600 bg-violet-500/10 border border-violet-500/20 rounded-full px-3 py-1 mb-4">
             <Layers size={12} />
             Full Curriculum
           </div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-white mb-3">
+          <h1 className="text-3xl sm:text-4xl font-bold text-foreground mb-3">
             Curriculum Map
           </h1>
-          <p className="text-white/50 text-sm max-w-xl">
+          <p className="text-muted-foreground text-sm max-w-xl">
             Browse every AssamBoard division (AHSEC, DEGREE, SEBA), class, and subject in the Syrabit library.
             Click any chapter to open its study page.
           </p>
@@ -160,25 +156,24 @@ export default function CurriculumMap() {
                 { label: 'Chapters', value: totalChapters },
               ].map(({ label, value }) => (
                 <div key={label} className="text-center">
-                  <p className="text-2xl font-bold text-violet-400">{value}</p>
-                  <p className="text-xs text-white/40">{label}</p>
+                  <p className="text-2xl font-bold text-violet-600">{value}</p>
+                  <p className="text-xs text-muted-foreground">{label}</p>
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {/* Tree */}
         {isLoading && (
           <div className="space-y-3">
             {[1, 2].map((i) => (
-              <div key={i} className="h-14 rounded-xl bg-white/5 animate-pulse" />
+              <div key={i} className="h-14 rounded-xl bg-muted/50 animate-pulse" />
             ))}
           </div>
         )}
 
         {error && (
-          <div className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl p-4">
+          <div className="text-red-600 text-sm bg-red-500/5 border border-red-500/15 rounded-xl p-4">
             Failed to load curriculum. Please refresh the page.
           </div>
         )}
@@ -204,7 +199,7 @@ export default function CurriculumMap() {
                 {cls.streams.map((stream) => (
                   stream.subjects.length > 0 && (
                     <div key={stream.id}>
-                      <p className="pl-8 pr-4 py-1.5 text-xs font-semibold text-white/30 uppercase tracking-widest">
+                      <p className="pl-8 pr-4 py-1.5 text-xs font-semibold text-muted-foreground/50 uppercase tracking-widest">
                         {stream.name}
                       </p>
                       {stream.subjects.map((sub) => (

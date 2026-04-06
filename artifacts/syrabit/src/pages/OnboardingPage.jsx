@@ -162,14 +162,14 @@ export default function OnboardingPage() {
   const getStreamColor = (name) => STREAM_COLORS[name] || 'from-violet-500/20 to-purple-500/20 border-violet-500/30';
 
   return (
-    <div className="min-h-screen bg-[#06060e] flex items-center justify-center p-4 overflow-y-auto">
+    <div className="min-h-screen bg-background flex items-center justify-center p-4 overflow-y-auto">
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
             <LogoMark size="xl" className="anim-float" />
           </div>
-          <h1 className="text-2xl font-semibold text-white mb-1">Set Up Your Profile</h1>
-          <p className="text-white/50 text-sm">Tell us about your studies so we can personalize your experience</p>
+          <h1 className="text-2xl font-semibold text-foreground mb-1">Set Up Your Profile</h1>
+          <p className="text-muted-foreground text-sm">Tell us about your studies so we can personalize your experience</p>
         </div>
 
         <div className="flex items-center gap-1 sm:gap-2 mb-8">
@@ -178,28 +178,28 @@ export default function OnboardingPage() {
               <div className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-semibold transition-colors flex-shrink-0 ${
                 i < step ? 'bg-emerald-500 text-white' :
                 i === step ? 'bg-violet-600 text-white' :
-                'bg-white/10 text-white/40'
+                'bg-muted text-muted-foreground'
               }`}>
                 {i < step ? <Check size={14} /> : i + 1}
               </div>
               <span className={`text-xs font-medium truncate hidden min-[360px]:inline ${
-                i <= step ? 'text-white' : 'text-white/30'
+                i <= step ? 'text-foreground' : 'text-muted-foreground/50'
               }`}>{label}</span>
               {i < STEPS.length - 1 && (
                 <div className={`h-px flex-1 min-w-[8px] ${
-                  i < step ? 'bg-emerald-500/50' : 'bg-white/10'
+                  i < step ? 'bg-emerald-500/50' : 'bg-border'
                 }`} />
               )}
             </div>
           ))}
         </div>
 
-        <div className="glass-card rounded-2xl p-6 border border-white/10 min-h-[300px]">
+        <div className="glass-card rounded-2xl p-6 min-h-[300px]">
             <div>
               {fetchError && (
                 <div className="flex flex-col items-center justify-center py-8 gap-3">
-                  <AlertCircle size={32} className="text-red-400" />
-                  <p className="text-white/60 text-sm text-center">Failed to load data. Check your connection and try again.</p>
+                  <AlertCircle size={32} className="text-red-500" />
+                  <p className="text-muted-foreground text-sm text-center">Failed to load data. Check your connection and try again.</p>
                   <Button
                     onClick={handleRetry}
                     className="bg-violet-600 hover:bg-violet-500 text-white text-sm"
@@ -211,13 +211,13 @@ export default function OnboardingPage() {
 
               {!fetchError && step === 0 && (
                 <div>
-                  <h2 className="text-lg font-semibold text-white mb-1">Select your Division</h2>
-                  <p className="text-white/50 text-sm mb-4">Choose your division under AssamBoard.</p>
+                  <h2 className="text-lg font-semibold text-foreground mb-1">Select your Division</h2>
+                  <p className="text-muted-foreground text-sm mb-4">Choose your division under AssamBoard.</p>
                   <div className="mb-4 px-3 py-2 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center gap-2">
-                    <span className="text-xs font-bold text-violet-400 uppercase tracking-widest">AssamBoard</span>
+                    <span className="text-xs font-bold text-violet-600 uppercase tracking-widest">AssamBoard</span>
                   </div>
                   {loading ? (
-                    <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-400" /></div>
+                    <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-500" /></div>
                   ) : (
                     <div className="space-y-3">
                       {boards.map((board) => (
@@ -226,20 +226,20 @@ export default function OnboardingPage() {
                           onClick={() => setSelectedBoard(board)}
                           className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
                             selectedBoard?.id === board.id
-                              ? 'border-violet-500 bg-violet-500/15'
-                              : 'border-white/10 bg-white/5 hover:border-white/20 hover:bg-white/8'
+                              ? 'border-violet-500 bg-violet-500/10'
+                              : 'border-border bg-muted/30 hover:border-border/80 hover:bg-muted/50'
                           }`}
                           data-testid={`board-option-${board.id}`}
                         >
-                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600/30 to-violet-800/30 flex items-center justify-center">
-                            <Globe size={20} className="text-violet-400" />
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600/20 to-violet-800/20 flex items-center justify-center">
+                            <Globe size={20} className="text-violet-600" />
                           </div>
                           <div className="text-left">
-                            <p className="text-white font-semibold">{board.name}</p>
-                            <p className="text-white/50 text-xs">{board.description}</p>
+                            <p className="text-foreground font-semibold">{board.name}</p>
+                            <p className="text-muted-foreground text-xs">{board.description}</p>
                           </div>
                           {selectedBoard?.id === board.id && (
-                            <div className="ml-auto"><Check size={18} className="text-violet-400" /></div>
+                            <div className="ml-auto"><Check size={18} className="text-violet-600" /></div>
                           )}
                         </button>
                       ))}
@@ -250,10 +250,10 @@ export default function OnboardingPage() {
 
               {!fetchError && step === 1 && (
                 <div>
-                  <h2 className="text-lg font-semibold text-white mb-1">Select your {isDegreeSel ? 'Semester' : 'Class'}</h2>
-                  <p className="text-white/50 text-sm mb-6">{isDegreeSel ? 'Which semester are you currently in?' : 'Which class are you currently in?'}</p>
+                  <h2 className="text-lg font-semibold text-foreground mb-1">Select your {isDegreeSel ? 'Semester' : 'Class'}</h2>
+                  <p className="text-muted-foreground text-sm mb-6">{isDegreeSel ? 'Which semester are you currently in?' : 'Which class are you currently in?'}</p>
                   {loading ? (
-                    <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-400" /></div>
+                    <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-500" /></div>
                   ) : (
                     <div className="grid grid-cols-2 gap-3">
                       {classes.map((cls) => (
@@ -262,23 +262,23 @@ export default function OnboardingPage() {
                           onClick={() => setSelectedClass(cls)}
                           className={`flex flex-col items-center gap-3 p-5 rounded-xl border transition-all ${
                             selectedClass?.id === cls.id
-                              ? 'border-violet-500 bg-violet-500/15'
-                              : 'border-white/10 bg-white/5 hover:border-white/20'
+                              ? 'border-violet-500 bg-violet-500/10'
+                              : 'border-border bg-muted/30 hover:border-border/80'
                           }`}
                           data-testid={`class-option-${cls.id}`}
                         >
-                          <div className="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center">
+                          <div className="w-10 h-10 rounded-xl bg-muted flex items-center justify-center">
                             {cls.name.includes('11') || cls.name.includes('2nd') ? (
-                              <BookOpen size={20} className="text-violet-400" />
+                              <BookOpen size={20} className="text-violet-600" />
                             ) : (
-                              <GraduationCap size={20} className="text-violet-400" />
+                              <GraduationCap size={20} className="text-violet-600" />
                             )}
                           </div>
                           <div className="text-center">
-                            <p className="text-white font-semibold text-sm">{cls.name}</p>
-                            <p className="text-white/40 text-xs">{cls.description}</p>
+                            <p className="text-foreground font-semibold text-sm">{cls.name}</p>
+                            <p className="text-muted-foreground text-xs">{cls.description}</p>
                           </div>
-                          {selectedClass?.id === cls.id && <Check size={16} className="text-violet-400" />}
+                          {selectedClass?.id === cls.id && <Check size={16} className="text-violet-600" />}
                         </button>
                       ))}
                     </div>
@@ -288,10 +288,10 @@ export default function OnboardingPage() {
 
               {!fetchError && step === 2 && !isDegreeSel && (
                 <div>
-                  <h2 className="text-lg font-semibold text-white mb-1">Select your Stream</h2>
-                  <p className="text-white/50 text-sm mb-6">{streamStepHint(selectedBoard?.name)}</p>
+                  <h2 className="text-lg font-semibold text-foreground mb-1">Select your Stream</h2>
+                  <p className="text-muted-foreground text-sm mb-6">{streamStepHint(selectedBoard?.name)}</p>
                   {loading ? (
-                    <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-400" /></div>
+                    <div className="flex justify-center py-8"><Loader2 size={24} className="animate-spin text-violet-500" /></div>
                   ) : (
                     <div className="space-y-3">
                       {streams.map((stream) => {
@@ -303,19 +303,19 @@ export default function OnboardingPage() {
                             onClick={() => setSelectedStream(stream)}
                             className={`w-full flex items-center gap-4 p-4 rounded-xl border transition-all ${
                               selectedStream?.id === stream.id
-                                ? 'border-violet-500 bg-violet-500/15'
-                                : 'border-white/10 bg-white/5 hover:border-white/20'
+                                ? 'border-violet-500 bg-violet-500/10'
+                                : 'border-border bg-muted/30 hover:border-border/80'
                             }`}
                             data-testid={`stream-option-${stream.id}`}
                           >
                             <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${colorClass} flex items-center justify-center border`}>
-                              <Icon size={18} className="text-white" />
+                              <Icon size={18} className="text-foreground/70" />
                             </div>
                             <div className="text-left">
-                              <p className="text-white font-semibold">{stream.name}</p>
-                              <p className="text-white/50 text-xs">{stream.description}</p>
+                              <p className="text-foreground font-semibold">{stream.name}</p>
+                              <p className="text-muted-foreground text-xs">{stream.description}</p>
                             </div>
-                            {selectedStream?.id === stream.id && <div className="ml-auto"><Check size={18} className="text-violet-400" /></div>}
+                            {selectedStream?.id === stream.id && <div className="ml-auto"><Check size={18} className="text-violet-600" /></div>}
                           </button>
                         );
                       })}
@@ -331,7 +331,7 @@ export default function OnboardingPage() {
             <Button
               variant="ghost"
               onClick={goBack}
-              className="text-white/70 hover:text-white hover:bg-white/10"
+              className="text-muted-foreground hover:text-foreground hover:bg-muted"
               data-testid="onboarding-back-button"
             >
               <ChevronLeft size={16} className="mr-1" /> Back
@@ -340,7 +340,7 @@ export default function OnboardingPage() {
             <Button
               variant="ghost"
               onClick={handleLogout}
-              className="text-white/40 hover:text-white/70 hover:bg-white/10 text-xs"
+              className="text-muted-foreground/60 hover:text-foreground hover:bg-muted text-xs"
             >
               <LogOut size={14} className="mr-1" /> Logout
             </Button>

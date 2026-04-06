@@ -85,7 +85,7 @@ export default function GoogleSignInButton({ mode = 'login' }) {
         window.google.accounts.id.renderButton(btnContainerRef.current, {
           type: 'standard',
           size: 'large',
-          theme: 'filled_black',
+          theme: 'outline',
           width: 300,
         });
       }
@@ -131,9 +131,9 @@ export default function GoogleSignInButton({ mode = 'login' }) {
         disabled={loading || !gsiReady}
         className="w-full flex items-center justify-center gap-3 h-11 rounded-xl text-sm font-semibold transition-all duration-150 active:scale-[0.97] disabled:opacity-60"
         style={{
-          background: 'rgba(255,255,255,0.08)',
-          border: '1px solid rgba(255,255,255,0.15)',
-          color: 'rgba(255,255,255,0.90)',
+          background: 'hsl(var(--muted) / 0.5)',
+          border: '1px solid hsl(var(--border))',
+          color: 'hsl(var(--foreground))',
         }}
         data-testid="google-signin-button"
       >
@@ -146,9 +146,9 @@ export default function GoogleSignInButton({ mode = 'login' }) {
       </button>
 
       <div className="flex items-center gap-3 mt-4">
-        <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.10)' }} />
-        <span className="text-xs font-medium" style={{ color: 'rgba(255,255,255,0.40)' }}>or</span>
-        <div className="flex-1 h-px" style={{ background: 'rgba(255,255,255,0.10)' }} />
+        <div className="flex-1 h-px bg-border/30" />
+        <span className="text-xs font-medium text-muted-foreground">or</span>
+        <div className="flex-1 h-px bg-border/30" />
       </div>
 
       <div

@@ -10,11 +10,11 @@ export default function TermsPage() {
         url="https://syrabit.ai/terms"
         keywords="Syrabit terms, terms of service, Assam Board, AHSEC, AI tutor terms"
       />
-      <div className="min-h-screen bg-[#06060e] pt-8 pb-24 px-4">
+      <div className="min-h-screen pt-8 pb-24 px-4">
         <div className="max-w-3xl mx-auto">
-          <h1 className="text-3xl font-semibold text-white mb-2">Terms of Service</h1>
-          <p className="text-white/50 text-sm mb-10">Last updated: January 2025</p>
-          <div className="space-y-8 text-white/70 leading-relaxed">
+          <h1 className="text-3xl font-semibold text-foreground mb-2">Terms of Service</h1>
+          <p className="text-muted-foreground text-sm mb-10">Last updated: January 2025</p>
+          <div className="space-y-8 text-foreground/70 leading-relaxed">
             {[
               { title: '1. Acceptance of Terms', body: 'By accessing Syrabit.ai, you agree to these Terms of Service. If you do not agree, please do not use our service.' },
               { title: '2. Service Description', body: 'Syrabit.ai provides AI-powered educational assistance for AssamBoard students (AHSEC, DEGREE, and SEBA divisions). The service includes access to subject content and an AI tutor powered by Groq.' },
@@ -27,7 +27,7 @@ export default function TermsPage() {
               { title: '9. Contact', body: 'For questions about these terms, contact us at admin@syrabit.ai' },
             ].map(({ title, body }) => (
               <div key={title}>
-                <h2 className="text-white font-semibold mb-2">{title}</h2>
+                <h2 className="text-foreground font-semibold mb-2">{title}</h2>
                 <p>{body}</p>
               </div>
             ))}

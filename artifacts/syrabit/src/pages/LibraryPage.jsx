@@ -2,10 +2,8 @@ import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } fro
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Search, Bookmark,
-  BookOpen, RefreshCw, Sun, Moon,
+  BookOpen, RefreshCw,
 } from 'lucide-react';
-
-import { useTheme } from 'next-themes';
 import { toast } from 'sonner';
 
 import PageMeta from '@/components/seo/PageMeta';
@@ -63,7 +61,6 @@ function getOnboardingProfile() {
 export default function LibraryPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { theme, setTheme } = useTheme();
 
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
@@ -331,14 +328,6 @@ export default function LibraryPage() {
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-                  title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-                  aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
-                  className="min-w-[44px] min-h-[44px] rounded-xl flex items-center justify-center text-muted-foreground hover:text-primary hover:bg-primary/10 transition-all duration-200"
-                >
-                  {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
-                </button>
                 <button
                   onClick={handleRefetchSubjects}
                   disabled={isFetching}

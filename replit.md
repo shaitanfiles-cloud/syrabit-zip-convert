@@ -35,7 +35,7 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection, and SEO prompts generate FAQ blocks and specific citations.
 
 **Frontend Architecture:**
-- **UI/UX:** Built with React, Vite, React Router, and Tailwind CSS, featuring a mobile-first responsive design. Light mode is the default theme; all UI components use CSS variables and `hsl(var(...))` tokens for theme-aware styling. Dark mode is available via the theme toggle on the library page.
+- **UI/UX:** Built with React, Vite, React Router, and Tailwind CSS, featuring a mobile-first responsive design. Light-only theme; all UI components use CSS variables and `hsl(var(...))` tokens (`--background`, `--foreground`, `--muted-foreground`, `--border`, etc.) for consistent styling. The `next-themes` package and all dark mode infrastructure (ThemeProvider, `.dark` CSS blocks, `dark:` Tailwind variants, theme toggle UI) have been fully removed. The admin dashboard retains its own dark styling as an internal tool.
 - **Admin Panel:** A comprehensive interface for content editing, CMS, blog publishing, SEO management, QA review, and system intelligence. Includes tools for inline editing, bulk AI generation, and cascade deletes.
 - **Component Refactoring:** Large files are split into sub-components for maintainability.
 - **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` serves cached pre-rendered HTML to search engine bots for key pages.

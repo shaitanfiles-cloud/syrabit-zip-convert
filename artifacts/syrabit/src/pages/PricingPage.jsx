@@ -86,36 +86,31 @@ export default function PricingPage() {
 
   const handleCtaClick = (plan) => {
     if (!plan.isPaid) {
-      // Free plan — go to signup or chat
       navigate(user ? '/chat' : '/signup');
       return;
     }
     if (user) {
-      // Logged-in user — go to profile with upgrade param to open payment modal
       navigate(`/profile?upgrade=${plan.id}`);
     } else {
-      // Guest — go to signup, after which they can upgrade from profile
       navigate('/signup');
     }
   };
 
   return (
     <PublicLayout>
-      <div className="min-h-screen bg-[#06060e] pt-8 pb-24 px-4">
-        {/* Header */}
+      <div className="min-h-screen pt-8 pb-24 px-4">
         <div className="text-center max-w-2xl mx-auto mb-16">
-          <Badge className="bg-violet-500/15 text-violet-400 border-violet-500/25 mb-4">
+          <Badge className="bg-violet-500/10 text-violet-600 border-violet-500/25 mb-4">
             Simple Pricing
           </Badge>
-          <h1 className="text-3xl sm:text-5xl font-semibold text-white mb-4">
+          <h1 className="text-3xl sm:text-5xl font-semibold text-foreground mb-4">
             Affordable exam prep
           </h1>
-          <p className="text-white/60 text-lg">
+          <p className="text-muted-foreground text-lg">
             Start free, upgrade when you need more. No subscriptions, no lock-in.
           </p>
         </div>
 
-        {/* Plans */}
         <div className="max-w-5xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" data-testid="pricing-page">
           {PLANS.map((plan) => {
             const Icon = plan.icon;
@@ -124,14 +119,14 @@ export default function PricingPage() {
                 key={plan.id}
                 className={`relative rounded-2xl p-6 glass-card ${
                   plan.highlighted
-                    ? 'ring-1 ring-violet-500/50 shadow-[0_26px_90px_rgba(124,58,237,0.18)]'
+                    ? 'ring-1 ring-violet-500/40 shadow-[0_26px_90px_rgba(124,58,237,0.10)]'
                     : ''
                 }`}
                 data-testid="pricing-plan-card"
               >
                 {plan.badge && (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                    <span className="text-xs font-bold text-violet-300 bg-violet-600/30 border border-violet-500/40 px-3 py-1 rounded-full">
+                    <span className="text-xs font-bold text-white bg-violet-600 border border-violet-500/40 px-3 py-1 rounded-full">
                       {plan.badge}
                     </span>
                   </div>
@@ -139,24 +134,23 @@ export default function PricingPage() {
 
                 <div className="flex items-center gap-3 mb-4">
                   <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                    plan.highlighted ? 'bg-violet-600/20' : 'bg-white/8'
+                    plan.highlighted ? 'bg-violet-600/15' : 'bg-muted'
                   }`}>
-                    <Icon size={20} className={plan.highlighted ? 'text-violet-400' : 'text-white/60'} />
+                    <Icon size={20} className={plan.highlighted ? 'text-violet-600' : 'text-muted-foreground'} />
                   </div>
                   <div>
-                    <h3 className="text-white font-semibold">{plan.name}</h3>
-                    <p className="text-white/50 text-xs">{plan.description}</p>
+                    <h3 className="text-foreground font-semibold">{plan.name}</h3>
+                    <p className="text-muted-foreground text-xs">{plan.description}</p>
                   </div>
                 </div>
 
                 <div className="mb-6">
                   <div className="flex items-baseline gap-1">
-                    <span className="text-white/50 text-sm">₹</span>
-                    <span className="text-4xl font-bold text-white">{plan.price}</span>
-                    <span className="text-white/50 text-sm">{plan.period}</span>
+                    <span className="text-muted-foreground text-sm">₹</span>
+                    <span className="text-4xl font-bold text-foreground">{plan.price}</span>
+                    <span className="text-muted-foreground text-sm">{plan.period}</span>
                   </div>
-                  <p className="text-violet-400 text-sm font-semibold mt-1">{plan.credits}</p>
-                  {/* Document access row */}
+                  <p className="text-violet-600 text-sm font-semibold mt-1">{plan.credits}</p>
                   {plan.docAccess && (() => {
                     const da = DOC_ACCESS_CONFIG[plan.docAccess];
                     return da ? (
@@ -171,12 +165,12 @@ export default function PricingPage() {
                   {plan.features.map((feature) => (
                     <li key={feature.label} className="flex items-center gap-2.5">
                       {feature.included ? (
-                        <Check size={16} className="text-emerald-400 flex-shrink-0" />
+                        <Check size={16} className="text-emerald-500 flex-shrink-0" />
                       ) : (
-                        <X size={16} className="text-white/20 flex-shrink-0" />
+                        <X size={16} className="text-muted-foreground/30 flex-shrink-0" />
                       )}
                       <span className={`text-sm ${
-                        feature.included ? 'text-white/80' : 'text-white/30'
+                        feature.included ? 'text-foreground/80' : 'text-muted-foreground/40'
                       }`}>{feature.label}</span>
                     </li>
                   ))}
@@ -186,8 +180,8 @@ export default function PricingPage() {
                   onClick={() => handleCtaClick(plan)}
                   className={`w-full ${
                     plan.highlighted
-                      ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/25'
-                      : 'bg-white/8 hover:bg-white/12 text-white border border-white/15'
+                      ? 'bg-violet-600 hover:bg-violet-500 text-white shadow-lg shadow-violet-500/20'
+                      : 'bg-muted hover:bg-muted/80 text-foreground border border-border/30'
                   }`}
                   data-testid={`pricing-${plan.id}-cta-button`}
                 >
@@ -198,16 +192,14 @@ export default function PricingPage() {
           })}
         </div>
 
-        {/* Logged-in note */}
         {user && (
-          <p className="text-center text-white/30 text-sm mt-8">
-            Signed in as <span className="text-violet-400">{user.email}</span> — upgrading will activate immediately.
+          <p className="text-center text-muted-foreground/50 text-sm mt-8">
+            Signed in as <span className="text-violet-600">{user.email}</span> — upgrading will activate immediately.
           </p>
         )}
 
-        {/* FAQ */}
         <div className="max-w-2xl mx-auto mt-20">
-          <h2 className="text-2xl font-semibold text-white text-center mb-8">FAQs</h2>
+          <h2 className="text-2xl font-semibold text-foreground text-center mb-8">FAQs</h2>
           <div className="space-y-4">
             {[
               { q: 'What are credits?', a: 'Each AI response costs 1 credit. Free users get 30/day, Starter 500/day, Pro 4,000/day. All credits reset at midnight UTC.' },
@@ -216,8 +208,8 @@ export default function PricingPage() {
               { q: 'Which AHSEC classes are supported?', a: 'We support both Class 11 and Class 12 for Science (PCM, PCB) and Arts streams.' },
             ].map(({ q, a }) => (
               <div key={q} className="glass-card rounded-xl p-5">
-                <h3 className="text-white font-medium mb-2">{q}</h3>
-                <p className="text-white/60 text-sm">{a}</p>
+                <h3 className="text-foreground font-medium mb-2">{q}</h3>
+                <p className="text-muted-foreground text-sm">{a}</p>
               </div>
             ))}
           </div>
