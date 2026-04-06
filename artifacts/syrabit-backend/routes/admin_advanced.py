@@ -2580,8 +2580,8 @@ async def admin_content_auto_heal(admin: dict = Depends(get_admin_user)):
             f"Topics to cover: {topic_text}\n\n"
             "Requirements:\n"
             "- Minimum 800 words\n"
-            "- Use markdown headings, bullet points, examples\n"
-            "- Include key definitions, formulas, and exam tips\n"
+            "- Use markdown headings, bullet points\n"
+            "- Include key definitions and formulas\n"
             "- Write in clear, student-friendly language"
         )
         try:

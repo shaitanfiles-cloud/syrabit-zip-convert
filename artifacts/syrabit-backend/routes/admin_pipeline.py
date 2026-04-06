@@ -42,7 +42,7 @@ router = APIRouter()
 
 def _extract_content_topics(content: str) -> list[str]:
     topics = []
-    skip = {"summary", "introduction", "conclusion", "key points", "exam tips", "common mistakes"}
+    skip = {"summary", "introduction", "conclusion", "key points"}
     for line in content.split("\n"):
         m = re.match(r'^#{2,3}\s+(.+)', line.strip())
         if m:
@@ -68,7 +68,7 @@ async def _polish_notes_with_sarvam(raw_notes: str, title: str, subject_name: st
 2. Improve clarity and flow of explanations
 3. Ensure all key definitions are in **bold**
 4. Tighten bullet points — remove redundancy, add missing facts
-5. Make exam tips sharper and more actionable
+5. Ensure explanations are thorough and well-structured
 6. Ensure markdown formatting is clean (##, ###, **, -, etc.)
 7. Keep the same structure and headings — do NOT add or remove topics
 8. Preserve all content — only improve quality, do not shorten
@@ -235,8 +235,7 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
    - A ## Heading matching the topic name exactly
    - 5-8 sentence thorough explanation using simple, precise academic language
    - **Key Points** as 6-8 bullets: definitions in **bold**, significance, relationships
-   - A relevant real-world example or illustrative case study
-   - Where relevant, add a "Common Mistake" or "Exam Tip" note
+   - Ensure depth and completeness for each topic
 3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
 4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
 5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
@@ -550,11 +549,7 @@ c) **Key Points for Revision** as a `### Key Points` sub-heading with 8-12 bulle
    - Include definitions, dates, names, formulas, distinctions
    - Focus on facts examiners frequently test
 
-d) A `### Example` sub-heading (3-5 sentences): A concrete real-world example, preferably from India/Assam/Northeast context where relevant.
-
-e) A `### Exam Tip` sub-heading (1-2 sentences): Common mistakes students make OR how this topic typically appears in exams (short answer, long answer, MCQ).
-
-IMPORTANT: Key Points, Example, and Exam Tip MUST be ### (H3) sub-headings under the topic's ## heading — NOT ## headings themselves.
+IMPORTANT: Key Points MUST be ### (H3) sub-headings under the topic's ## heading — NOT ## headings themselves.
 
 ### 3. Summary
 End with `## Summary` — list 10-15 most exam-critical takeaways as numbered points.
@@ -844,8 +839,7 @@ Generate detailed study notes for:
 2. Use ## headings for each topic (match topic names exactly), ### for subtopics
 3. For each topic, write 5-8 sentence thorough explanations covering definitions, mechanisms, causes, effects, and significance
 4. Include key definitions in **bold**, 6-8 bullet points per topic for key facts examiners look for
-5. Include relevant real-world examples or illustrative case studies for each topic
-6. Add "Common Mistake" or "Exam Tip" notes where relevant
+5. Ensure depth and completeness for each topic — cover definitions, mechanisms, causes, effects, and significance
 7. End with a **Summary** section listing 7-10 most exam-critical takeaways
 8. Use markdown formatting throughout. NO disclaimers, NO preamble.
 9. No filler or repetition — but cover each topic thoroughly with depth and completeness"""
