@@ -1243,8 +1243,16 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     if _rag_raw_chunks:
         _first = _rag_raw_chunks[0]
         _snippet = (_first.get("content") or "").strip()
-        if len(_snippet) > 200:
-            _snippet = _snippet[:200]
+        _snippet = re.sub(r'#{1,6}\s+', '', _snippet)
+        _snippet = re.sub(r'\*{1,3}([^*]+)\*{1,3}', r'\1', _snippet)
+        _snippet = re.sub(r'_{1,3}([^_]+)_{1,3}', r'\1', _snippet)
+        _snippet = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', _snippet)
+        _snippet = re.sub(r'`([^`]+)`', r'\1', _snippet)
+        _snippet = re.sub(r'^\s*[-*+]\s+', '', _snippet, flags=re.MULTILINE)
+        _snippet = re.sub(r'^\s*\d+\.\s+', '', _snippet, flags=re.MULTILINE)
+        _snippet = re.sub(r'\s+', ' ', _snippet).strip()
+        if len(_snippet) > 250:
+            _snippet = _snippet[:250]
         rag_chunk_snippet = _snippet
 
     _router_subject = getattr(_sr_route, "subject_name", None) or getattr(_sr_route, "subject", None) if _sr_route else None

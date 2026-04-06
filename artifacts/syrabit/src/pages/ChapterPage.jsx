@@ -320,18 +320,33 @@ export default function ChapterPage() {
     if (!topicRaw && !chunkSnippet) return;
     let decoded = '';
     try { decoded = (topicRaw ? decodeURIComponent(topicRaw) : '').toLowerCase(); } catch { decoded = (topicRaw || '').toLowerCase(); }
-    const timer = setTimeout(() => {
+
+    const stripMd = (s) => s
+      .replace(/#{1,6}\s+/g, '')
+      .replace(/\*{1,3}([^*]+)\*{1,3}/g, '$1')
+      .replace(/_{1,3}([^_]+)_{1,3}/g, '$1')
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/^\s*[-*+]\s+/gm, '')
+      .replace(/^\s*\d+\.\s+/gm, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const findTarget = () => {
       let el = null;
       const contentTop = document.getElementById('chapter-content-top');
 
-      if (!contentTop && !decoded) return;
+      if (!contentTop && !decoded) return null;
 
       if (chunkSnippet && contentTop) {
-        const snippetNorm = chunkSnippet.toLowerCase().replace(/\s+/g, ' ').trim();
+        const snippetNorm = stripMd(chunkSnippet).toLowerCase().replace(/\s+/g, ' ').trim();
         const allBlocks = contentTop.querySelectorAll('p, li, h2, h3, h4, td, ul, ol');
-        for (const block of allBlocks) {
-          const blockNorm = block.textContent.toLowerCase().replace(/\s+/g, ' ');
-          if (blockNorm.includes(snippetNorm.slice(0, 80))) { el = block; break; }
+        const snippetPrefix = snippetNorm.slice(0, 100);
+        if (snippetPrefix.length >= 20) {
+          for (const block of allBlocks) {
+            const blockNorm = block.textContent.toLowerCase().replace(/\s+/g, ' ');
+            if (blockNorm.includes(snippetPrefix)) { el = block; break; }
+          }
         }
         if (!el) {
           const words = snippetNorm.split(' ').filter(w => w.length > 3);
@@ -341,12 +356,12 @@ export default function ChapterPage() {
             for (const block of allBlocks) {
               const blockText = block.textContent.toLowerCase();
               let score = 0;
-              for (const w of words.slice(0, 12)) {
+              for (const w of words.slice(0, 15)) {
                 if (blockText.includes(w)) score++;
               }
               if (score > bestScore) { bestScore = score; bestEl = block; }
             }
-            if (bestEl && bestScore >= 3) { el = bestEl; }
+            if (bestEl && bestScore >= Math.min(3, Math.ceil(words.length * 0.3))) { el = bestEl; }
           }
         }
       }
@@ -359,6 +374,18 @@ export default function ChapterPage() {
           for (const h of allH) {
             if (h.id.includes(slugified) || slugified.includes(h.id)) { el = h; break; }
           }
+        }
+        if (!el) {
+          const allH = articleRef.current?.querySelectorAll('h2[id], h3[id]') || [];
+          const decodedWords = decoded.split(/\s+/).filter(w => w.length > 2);
+          let bestH = null;
+          let bestHScore = 0;
+          for (const h of allH) {
+            const hText = h.textContent.toLowerCase();
+            const score = decodedWords.reduce((s, kw) => s + (hText.includes(kw) ? 1 : 0), 0);
+            if (score > bestHScore) { bestHScore = score; bestH = h; }
+          }
+          if (bestH && bestHScore >= Math.min(2, decodedWords.length)) { el = bestH; }
         }
       }
 
@@ -395,44 +422,60 @@ export default function ChapterPage() {
           el = firstChild || contentTop;
         }
       }
+      return el;
+    };
 
-      if (el) {
-        document.querySelectorAll('.highlight-active, .highlight-section-start, .highlight-section-end, .highlight-single').forEach(e => {
-          e.classList.remove('highlight-active', 'highlight-section-start', 'highlight-section-end', 'highlight-single');
-        });
-
-        const isHeading = /^H[1-4]$/.test(el.tagName);
-        if (isHeading) {
-          const level = parseInt(el.tagName[1], 10);
-          const highlighted = [el];
-          let sibling = el.nextElementSibling;
-          while (sibling) {
-            if (/^H[1-4]$/.test(sibling.tagName) && parseInt(sibling.tagName[1], 10) <= level) break;
-            highlighted.push(sibling);
-            sibling = sibling.nextElementSibling;
-          }
-          highlighted.forEach((node, i) => {
-            node.classList.add('highlight-active');
-            if (i === 0) node.classList.add('highlight-section-start');
-            if (i === highlighted.length - 1) node.classList.add('highlight-section-end');
-          });
-        } else {
-          const parent = el.closest('ul, ol, table');
-          const target = parent || el;
-          target.classList.add('highlight-active', 'highlight-single');
+    const applyHighlight = (el) => {
+      document.querySelectorAll('.highlight-active, .highlight-section-start, .highlight-section-end, .highlight-single').forEach(e => {
+        e.classList.remove('highlight-active', 'highlight-section-start', 'highlight-section-end', 'highlight-single');
+      });
+      const isHeading = /^H[1-4]$/.test(el.tagName);
+      if (isHeading) {
+        const level = parseInt(el.tagName[1], 10);
+        const highlighted = [el];
+        let sibling = el.nextElementSibling;
+        while (sibling) {
+          if (/^H[1-4]$/.test(sibling.tagName) && parseInt(sibling.tagName[1], 10) <= level) break;
+          highlighted.push(sibling);
+          sibling = sibling.nextElementSibling;
         }
-
-        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        setSearchParams((prev) => {
-          const next = new URLSearchParams(prev);
-          next.delete('topic');
-          next.delete('highlight');
-          next.delete('chunk');
-          return next;
-        }, { replace: true });
+        highlighted.forEach((node, i) => {
+          node.classList.add('highlight-active');
+          if (i === 0) node.classList.add('highlight-section-start');
+          if (i === highlighted.length - 1) node.classList.add('highlight-section-end');
+        });
+      } else {
+        const parent = el.closest('ul, ol, table');
+        const target = parent || el;
+        target.classList.add('highlight-active', 'highlight-single');
       }
-    }, 300);
-    return () => clearTimeout(timer);
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('topic');
+        next.delete('highlight');
+        next.delete('chunk');
+        return next;
+      }, { replace: true });
+    };
+
+    let attempt = 0;
+    const maxAttempts = 3;
+    const delays = [500, 1000, 2000];
+    let cancelled = false;
+    const timers = [];
+    const tryScroll = () => {
+      if (cancelled) return;
+      const el = findTarget();
+      if (el) {
+        applyHighlight(el);
+      } else if (attempt < maxAttempts - 1) {
+        attempt++;
+        timers.push(setTimeout(tryScroll, delays[attempt]));
+      }
+    };
+    timers.push(setTimeout(tryScroll, delays[0]));
+    return () => { cancelled = true; timers.forEach(t => clearTimeout(t)); };
   }, [loading, data, searchParams]);
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}`;
