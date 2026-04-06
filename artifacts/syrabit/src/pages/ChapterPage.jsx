@@ -467,7 +467,7 @@ export default function ChapterPage() {
         cleanUrl.searchParams.delete('topic');
         cleanUrl.searchParams.delete('highlight');
         cleanUrl.searchParams.delete('chunk');
-        window.history.replaceState(null, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+        window.history.replaceState(window.history.state, '', cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
       } catch {}
     };
 
