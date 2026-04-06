@@ -60,6 +60,9 @@ export default defineConfig({
           if (id.includes("node_modules/framer-motion")) return "motion";
           if (id.includes("node_modules/lucide-react")) return "icons";
           if (id.includes("node_modules/@radix-ui")) return "radix";
+          if (id.includes("node_modules/react-markdown") || id.includes("node_modules/remark-") || id.includes("node_modules/rehype-") || id.includes("node_modules/unified") || id.includes("node_modules/mdast-") || id.includes("node_modules/hast-") || id.includes("node_modules/micromark")) return "markdown";
+          if (id.includes("node_modules/react-helmet-async")) return "seo";
+          if (id.includes("node_modules/sonner")) return "ui-extras";
         },
       },
     },

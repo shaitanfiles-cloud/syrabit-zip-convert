@@ -28,7 +28,7 @@ __all__ = [
     "get_hierarchy_cache", "set_hierarchy_cache",
 ]
 
-_ai_response_cache = cachetools.TTLCache(maxsize=512, ttl=3600)
+_ai_response_cache = cachetools.TTLCache(maxsize=1024, ttl=3600)
 
 # ── User Object Cache ─────────────────────────────────────────────────────────
 # Keyed by user_id, 120-second TTL — eliminates DB round-trip on every auth'd request
@@ -50,13 +50,13 @@ def _invalidate_conv_cache(conv_id: str, uid: str):
 
 # ── RAG Result Cache ───────────────────────────────────────────────────────────
 # Keyed by (query_hash, subject_id), 600-second TTL — skips 3 MongoDB queries on repeat
-_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=600)
+_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=2048, ttl=900)
 
 # Vector RAG cache — 300-second TTL (Gemini embed API calls are expensive to re-run)
 _vector_rag_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
 
 # Query embedding cache — avoids repeated Gemini embed calls for the same/similar queries
-_query_embed_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=256, ttl=600)
+_query_embed_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=900)
 
 # Content card cache — 180-second TTL (avoids duplicate seo_pages + chapters queries)
 _content_card_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
@@ -79,7 +79,7 @@ def _vector_rag_cache_key(query: str, subject_id: Optional[str], top_k: int) -> 
     raw = f"{query.strip().lower()}|{subject_id or ''}|{top_k}"
     return hashlib.md5(raw.encode()).hexdigest()
 
-_embedding_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
+_embedding_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=900)
 
 def _embedding_cache_key(text: str, task_type: str) -> str:
     raw = f"{text[:200].strip().lower()}|{task_type}"
@@ -181,7 +181,7 @@ def get_hierarchy_cache(stream_id: str):
 def set_hierarchy_cache(stream_id: str, data: dict):
     _hierarchy_cache[stream_id] = data
 
-_content_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=600)
+_content_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=900)
 CONTENT_CACHE_SECONDS = 600
 REDIS_CONTENT_PREFIX = "content:"
 

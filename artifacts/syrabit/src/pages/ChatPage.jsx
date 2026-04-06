@@ -4,7 +4,7 @@
  * actions bar (copy / regenerate / timestamp / credit badge),
  * credit progress bar, sync indicator, RAG source badge.
  */
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -12,11 +12,11 @@ import { getConversation, getAnonConversation, getSubject, getChapters, API_BASE
 import { AppLayout } from '@/components/layout/AppLayout';
 import { toast } from 'sonner';
 
-
 import { MessageBubble } from './chat/MessageBubble';
-import { EmptyState } from './chat/EmptyState';
 import { InputBar } from './chat/InputBar';
 import { ModelSelector, MODELS } from './chat/ModelSelector';
+
+const EmptyState = lazy(() => import('./chat/EmptyState').then(m => ({ default: m.EmptyState })));
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
@@ -381,7 +381,9 @@ export default function ChatPage() {
         <div className="flex-1 overflow-y-auto min-h-0 pb-[calc(8rem+68px+env(safe-area-inset-bottom,0px))] md:pb-32" onClick={() => setShowModelMenu(false)} role="log" aria-label="Chat messages" aria-live="polite">
           <div className="max-w-3xl mx-auto px-4 md:px-6 py-4">
             {messages.length === 0 && (
-              <EmptyState subject={subject} scopedChapters={scopedChapters} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
+              <Suspense fallback={<div className="flex-1" />}>
+                <EmptyState subject={subject} scopedChapters={scopedChapters} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
+              </Suspense>
             )}
               {(() => {
                 let lastUIdx = -1;

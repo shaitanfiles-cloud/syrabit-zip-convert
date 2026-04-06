@@ -7,20 +7,32 @@ export const pageImports = {
 };
 
 export function prefetchCriticalRoutes() {
-  const doPrefetch = () => {
+  const schedule = (fn, delay) => {
     if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(() => {
-        pageImports.chat();
-        requestIdleCallback(() => {
-          pageImports.library();
-          requestIdleCallback(() => { pageImports.chapter(); });
-        });
-      });
+      setTimeout(() => requestIdleCallback(fn, { timeout: 3000 }), delay);
     } else {
-      pageImports.chat();
-      setTimeout(() => { pageImports.library(); }, 150);
-      setTimeout(() => { pageImports.chapter(); }, 300);
+      setTimeout(fn, delay);
     }
   };
-  setTimeout(doPrefetch, 500);
+
+  const afterInteractive = () => {
+    const path = window.location.pathname;
+    if (path === '/chat' || path === '/') {
+      schedule(() => pageImports.library(), 200);
+      schedule(() => pageImports.chapter(), 800);
+    } else if (path === '/library' || path.match(/^\/[a-z]+\/[a-z]/)) {
+      schedule(() => pageImports.chat(), 200);
+      schedule(() => pageImports.chapter(), 600);
+    } else {
+      schedule(() => pageImports.chat(), 300);
+      schedule(() => pageImports.library(), 800);
+      schedule(() => pageImports.chapter(), 1200);
+    }
+  };
+
+  if (document.readyState === 'complete') {
+    setTimeout(afterInteractive, 100);
+  } else {
+    window.addEventListener('load', () => setTimeout(afterInteractive, 200), { once: true });
+  }
 }

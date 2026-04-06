@@ -120,24 +120,21 @@ function App() {
       });
     };
 
-    const token = localStorage.getItem('token');
-    if (token) {
+    const isOnLibrary = window.location.pathname === '/library' || window.location.pathname.match(/^\/[a-z]+\/[a-z]/);
+    if (isOnLibrary) {
       prefetchBundle();
       return;
     }
 
     let done = false;
-    const trigger = () => {
-      if (done) return;
-      done = true;
-      prefetchBundle();
-      detach();
-    };
-
     const onHoverLibrary = (e) => {
       if (!e.target || typeof e.target.closest !== 'function') return;
-      const link = e.target.closest('a[href="/library"]');
-      if (link) trigger();
+      const link = e.target.closest('a[href="/library"], a[href*="/library"]');
+      if (link && !done) {
+        done = true;
+        prefetchBundle();
+        detach();
+      }
     };
 
     document.addEventListener('mouseenter', onHoverLibrary, { capture: true, passive: true });
@@ -148,7 +145,9 @@ function App() {
       document.removeEventListener('touchstart', onHoverLibrary, { capture: true });
     };
 
-    const fallback = setTimeout(trigger, 5000);
+    const fallback = setTimeout(() => {
+      if (!done) { done = true; prefetchBundle(); detach(); }
+    }, 8000);
     return () => { clearTimeout(fallback); detach(); };
   }, []);
 

@@ -512,6 +512,8 @@ export default defineConfig({
           if (
             id.includes('react-markdown') ||
             id.includes('remark') ||
+            id.includes('rehype') ||
+            id.includes('unified') ||
             id.includes('micromark') ||
             id.includes('mdast') ||
             id.includes('unist') ||

@@ -819,7 +819,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    _PRE_LLM_BUDGET = 3.5
+    _PRE_LLM_BUDGET = 2.5
 
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
@@ -840,30 +840,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         return StreamingResponse(_instant_stream(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-    _stream_followup_info = None
-    if msg.conversation_id and user_id:
-        try:
-            _conv_for_fu_s = await supa_get_conversation(msg.conversation_id, user_id)
-            if _conv_for_fu_s:
-                _conv_meta_s = _safe_metadata(_conv_for_fu_s.get("metadata"))
-                _stream_followup_info = detect_followup(msg.message, _conv_meta_s)
-                if _stream_followup_info:
-                    _stream_intent = _stream_followup_info["prev_intent"]
-                    _stream_db_category = {"notes": "notes", "important_questions": "important_questions", "pyq": "question_paper"}.get(_stream_intent)
-                    msg.message = merge_followup_into_query(
-                        msg.message, _stream_followup_info,
-                        subject_name=msg.subject_name or "",
-                        chapter_name=msg.chapter_name or "",
-                    )
-                    logger.info(f"[STREAM] Follow-up detected: intent={_stream_intent}, rewritten query='{msg.message[:60]}'")
-        except Exception as _fu_err_s:
-            logger.warning(f"[STREAM] Follow-up detection failed: {_fu_err_s}")
-
     _s_should_pipeline, _s_stage1, _s_apply_s1, _s_enhance_q = should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query
 
     _s_hard_bypass = _stream_intent in ("syllabus", "chapter_meta")
 
-    # ── Phase 0+1 fully parallel: context, semester, doc, search scope, Stage 1 all at once ──
+    # ── Phase 0+1 fully parallel: context, semester, doc, search scope, Stage 1, follow-up all at once ──
     _t_phase0 = _time_mod.time()
 
     _is_card_context = bool(msg.card_context and msg.card_context.strip())
@@ -896,13 +877,36 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         result = await _s_stage1(msg.message)
         return result if result else {}
 
-    _subj_ctx_result, _sem_class_result, document_text, (_sr_scoped_query, _sr_route), _s_topic_meta = await asyncio.gather(
+    async def _fetch_followup_info():
+        if not (msg.conversation_id and user_id):
+            return None
+        try:
+            _conv_for_fu_s = await supa_get_conversation(msg.conversation_id, user_id)
+            if _conv_for_fu_s:
+                _conv_meta_s = _safe_metadata(_conv_for_fu_s.get("metadata"))
+                return detect_followup(msg.message, _conv_meta_s)
+        except Exception as _fu_err_s:
+            logger.warning(f"[STREAM] Follow-up detection failed: {_fu_err_s}")
+        return None
+
+    _subj_ctx_result, _sem_class_result, document_text, (_sr_scoped_query, _sr_route), _s_topic_meta, _stream_followup_info = await asyncio.gather(
         _resolve_subject_context(msg.subject_id),
         _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
         _fetch_doc(),
         _fetch_search_scope_early(),
         _fetch_stage1_stream(),
+        _fetch_followup_info(),
     )
+
+    if _stream_followup_info:
+        _stream_intent = _stream_followup_info["prev_intent"]
+        _stream_db_category = {"notes": "notes", "important_questions": "important_questions", "pyq": "question_paper"}.get(_stream_intent)
+        msg.message = merge_followup_into_query(
+            msg.message, _stream_followup_info,
+            subject_name=msg.subject_name or "",
+            chapter_name=msg.chapter_name or "",
+        )
+        logger.info(f"[STREAM] Follow-up detected: intent={_stream_intent}, rewritten query='{msg.message[:60]}'")
 
     if _s_topic_meta and _s_topic_meta.get("intent"):
         _stream_intent, _stream_db_category = _s_apply_s1(
@@ -1055,7 +1059,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
                 return []
 
-        _skip_web = len(msg.message) < 40 or _is_card_context
+        _skip_web = len(msg.message) < 60 or _is_card_context
         if _skip_web:
             _web_done_future = asyncio.get_event_loop().create_future()
             _web_done_future.set_result([])

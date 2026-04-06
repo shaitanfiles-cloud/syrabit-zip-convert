@@ -230,24 +230,26 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
-        try:
-            from deps import db
-            from deps import is_mongo_available
-            if await is_mongo_available():
-                await db.server_hits.insert_one({
-                    "path": path,
-                    "ip_hash": ip_hash_daily,
-                    "ip_hash_stable": ip_hash_stable,
-                    "user_agent": ua[:500],
-                    "is_bot": is_bot,
-                    "bot_name": _SERVER_BOT_RE.search(ua).group(0) if is_bot and ua else "",
-                    "date": today,
-                    "timestamp": now_iso,
-                    "status_code": response.status_code,
-                    "country": cf_country,
-                })
-        except Exception as e:
-            logger.debug(f"server-side tracking failed: {e}")
+        import asyncio
+        async def _bg_track():
+            try:
+                from deps import db, is_mongo_available
+                if await is_mongo_available():
+                    await db.server_hits.insert_one({
+                        "path": path,
+                        "ip_hash": ip_hash_daily,
+                        "ip_hash_stable": ip_hash_stable,
+                        "user_agent": ua[:500],
+                        "is_bot": is_bot,
+                        "bot_name": _SERVER_BOT_RE.search(ua).group(0) if is_bot and ua else "",
+                        "date": today,
+                        "timestamp": now_iso,
+                        "status_code": response.status_code,
+                        "country": cf_country,
+                    })
+            except Exception as e:
+                logger.debug(f"server-side tracking failed: {e}")
+        asyncio.create_task(_bg_track())
 
         return response
 
