@@ -179,11 +179,11 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
 if _GROQ_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.3-70b-versatile"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "google/gemini-2.0-flash-lite-001"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _FIREWORKS_KEY:
@@ -210,7 +210,9 @@ _MODEL_PROVIDER_MAP = {
     "google/gemini-2.0-flash-lite-001": "openrouter",
     "google/gemma-3-27b-it": "openrouter",
     "meta-llama/llama-4-maverick": "openrouter",
-    "llama-3.3-70b-versatile": "openrouter",
+    "meta-llama/llama-4-scout": "openrouter",
+    "meta-llama/llama-4-scout-17b-16e-instruct": "groq",
+    "llama-3.3-70b-versatile": "groq",
 }
 
 _MODEL_ALIAS_MAP = {
@@ -225,11 +227,11 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("groq",        "llama-3.3-70b-versatile",                           4, 0),
+    ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 0),
     ("cerebras",    "llama3.1-8b",                                       4, 1),
-    ("openrouter",  "google/gemini-2.0-flash-lite-001",                  4, 2),
-    ("gemini",      "gemini-2.5-flash",                                  6, 3),
-    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 4),
+    ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
+    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 3),
+    ("gemini",      "gemini-2.5-flash",                                  6, 4),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
@@ -425,8 +427,8 @@ def _safe_model_for_provider(model: str, provider: str, provider_list=None) -> s
     Otherwise fall back to the provider's configured default_model."""
     if provider == "sarvam" and not model.startswith("sarvam-"):
         return "sarvam-m"
-    if provider == "groq" and not model.startswith("llama-"):
-        return "llama-3.3-70b-versatile"
+    if provider == "groq" and not model.startswith(("llama-", "meta-llama/")):
+        return "meta-llama/llama-4-scout-17b-16e-instruct"
     mapped_provider = _MODEL_PROVIDER_MAP.get(model)
     if mapped_provider == provider:
         return model

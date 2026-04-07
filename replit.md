@@ -56,7 +56,7 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **Databases:** PostgreSQL (for users/auth) and MongoDB (for content/RAG).
 - **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers, Google OAuth (Sign In with Google).
 - **Caching:** Redis (distributed cache) and in-memory caching.
-- **LLM Providers (SLM pool for chat):** Groq, Gemini, OpenRouter, Cerebras, Fireworks. Sarvam relegated to content generation only (too slow/unreliable for real-time chat). Also Gemini Vision and gemini-embedding-001.
+- **LLM Providers (SLM pool for chat):** Groq (llama-4-scout-17b-16e-instruct, 302 t/s), Cerebras (llama3.1-8b, 190 t/s), OpenRouter (llama-4-scout), Fireworks (gpt-oss-120b, 120 t/s), Gemini (2.5-flash, slow/thinking model — last resort). Sarvam relegated to content generation only (too slow/unreliable for real-time chat). Also Gemini Vision and gemini-embedding-001.
 - **Cloudflare AI Gateway:** Routes LLM traffic, provides caching, analytics, and graceful degradation.
 - **Voyage AI Rerank:** `rerank-2` model for re-scoring vector search results.
 - **Payment Gateways:** Razorpay (INR) and Stripe (USD).
