@@ -699,14 +699,14 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     return await _llm_batcher.call(messages, model, max_tokens)
 
 _LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
 
 logger.info(
     f"Admin content providers (quality-first order): "
@@ -714,8 +714,8 @@ logger.info(
 )
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
-    """LLM call for admin content generation — quality-first: Gemini 2.5 Flash preferred
-    (large context, high quality), Sarvam secondary, Cerebras emergency fallback.
+    """LLM call for admin content generation — Cerebras preferred (qwen-3-235b, fast + high quality),
+    Sarvam secondary (sarvam-m), Gemini 2.5 Flash last resort.
     Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
     Retries with exponential backoff instead of instant failover."""
     if model is None and _LLM_PROVIDERS_CONTENT:
