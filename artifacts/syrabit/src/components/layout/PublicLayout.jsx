@@ -1,16 +1,18 @@
 import { Outlet } from 'react-router-dom';
 import { Link } from 'react-router-dom';
 import { PublicNavbar } from './PublicNavbar';
+import { PublicBottomNav } from './PublicBottomNav';
 
 export const PublicLayout = ({ children }) => {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <PublicNavbar />
-      <main className="pt-16">
+      <main className="pt-16 pb-20 md:pb-0">
         {children || <Outlet />}
       </main>
+      <PublicBottomNav />
       <footer
-        className="py-10 px-4"
+        className="hidden md:block py-10 px-4"
         style={{ borderTop: '1px solid hsl(var(--border) / 0.3)' }}
       >
         <div className="max-w-7xl mx-auto">

@@ -5,7 +5,7 @@ import axios from 'axios';
 import { ChevronRight, BookOpen, GraduationCap, Layers, FileText, ExternalLink } from 'lucide-react';
 import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
-import { BottomNav } from '@/components/layout/BottomNav';
+import { PublicBottomNav } from '@/components/layout/PublicBottomNav';
 import { API_BASE } from '@/utils/api';
 
 function slugify(str = '') {
@@ -219,7 +219,7 @@ export default function CurriculumMap() {
         ))}
       </div>
       <div className="pb-20 md:pb-0" />
-      <BottomNav />
+      <PublicBottomNav />
     </div>
   );
 }

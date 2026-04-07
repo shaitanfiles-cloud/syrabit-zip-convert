@@ -2,6 +2,7 @@ import { useEffect, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
+import { PublicBottomNav } from '@/components/layout/PublicBottomNav';
 import { useAuth } from '@/context/AuthContext';
 import HeroSection from './landing/HeroSection';
 const FeaturesGrid = lazy(() => import('./landing/FeaturesGrid'));
@@ -37,6 +38,7 @@ export default function LandingPage() {
         <PricingSection />
         <TestimonialsFooter year={year} />
       </Suspense>
+      <PublicBottomNav />
     </div>
   );
 }
