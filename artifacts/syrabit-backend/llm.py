@@ -180,8 +180,6 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
 _LLM_PROVIDERS_CHAT: list[dict] = []
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _GEMINI_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
 if _CEREBRAS_KEY:
@@ -231,13 +229,10 @@ _SLM_SLOT_CANDIDATES = [
     ("cerebras",    "llama3.1-8b",                                       4, 1),
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
     ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 3),
-    ("gemini",      "gemini-2.5-flash",                                  6, 4),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
-    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    6, 0),
-    ("sarvam",      "sarvam-m",                                          4, 1),
-    ("openrouter",  "google/gemini-2.0-flash-lite-001",                  4, 2),
+    ("gemini",      "gemini-2.5-flash",                                  6, 0),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -648,14 +643,6 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     return await _llm_batcher.call(messages, model, max_tokens)
 
 _LLM_PROVIDERS_CONTENT: list[dict] = []
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
-if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "google/gemini-2.0-flash-lite-001"})
-if _FIREWORKS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 
