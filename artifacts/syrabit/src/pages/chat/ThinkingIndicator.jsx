@@ -32,7 +32,7 @@ export function ThinkingIndicator() {
           ))}
         </div>
         <span
-          style={{ fontSize: 13, color: 'var(--muted-foreground)', fontStyle: 'italic' }}
+          style={{ fontSize: 13, color: '#6b7280', fontWeight: 500, fontStyle: 'italic' }}
         >
           {THINKING_STEPS[stepIdx]}{dots}
         </span>
@@ -44,7 +44,7 @@ export function ThinkingIndicator() {
               style={{ height: '100%', width: '50%', borderRadius: 4, background: 'linear-gradient(90deg,#7c3aed,#a78bfa)' }}
             />
           </div>
-          <span style={{ fontSize: 11, color: 'var(--muted-foreground)', opacity: 0.55 }}>
+          <span style={{ fontSize: 11, color: '#9ca3af' }}>
             {elapsed}s
           </span>
         </div>
