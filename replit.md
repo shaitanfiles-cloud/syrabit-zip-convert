@@ -68,3 +68,4 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm.
 - **Containerization:** Docker.
+- **Production Deployment:** Hybrid architecture — FastAPI backend on Render Starter ($7/mo, always-hot), Cloudflare Worker edge proxy for caching/rate-limiting light routes, frontend on Cloudflare Pages. Frontend uses `VITE_RENDER_API_URL` (heavy: AI/admin/payments) and `VITE_WORKER_API_URL` (light: content/SEO/PYQ) env vars; both fall back to `VITE_BACKEND_URL` when not set. Worker config in `workers/edge-proxy/`, Render config in `artifacts/syrabit-backend/render.yaml`.

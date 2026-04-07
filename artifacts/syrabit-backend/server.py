@@ -791,8 +791,8 @@ app.add_middleware(
     allow_credentials=_CORS_ALLOW_CREDENTIALS,
     allow_origins=CORS_ORIGINS,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"],
-    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "x-anon-id"],
+    expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After", "X-Request-Id"],
     max_age=600,
 )
 

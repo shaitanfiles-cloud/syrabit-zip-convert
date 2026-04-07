@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useParams } from 'react-router-dom';
-import { API_BASE } from '../utils/api';
+import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 
 export default function PYQReplicaPage() {
@@ -22,7 +22,7 @@ export default function PYQReplicaPage() {
     setNotFound(false);
     setHtml('');
 
-    fetch(`${API_BASE}/pyq/${slug}`, { method: 'GET' })
+    fetch(`${WORKER_API}/pyq/${slug}`, { method: 'GET' })
       .then(async (res) => {
         if (res.status === 404) { setNotFound(true); return; }
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

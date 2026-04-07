@@ -4,6 +4,11 @@ import { toast } from 'sonner';
 const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
 export const API_BASE = `${BACKEND_URL}/api`;
 
+const _RENDER_URL = (import.meta.env.VITE_RENDER_API_URL || '').replace(/\/+$/, '');
+const _WORKER_URL = (import.meta.env.VITE_WORKER_API_URL || '').replace(/\/+$/, '');
+const RENDER_API = _RENDER_URL ? `${_RENDER_URL}/api` : API_BASE;
+export const WORKER_API = _WORKER_URL ? `${_WORKER_URL}/api` : API_BASE;
+
 let _authToken = null;
 
 export const setAuthToken = (token) => {
@@ -72,17 +77,17 @@ axios.interceptors.response.use(
 export const apiClient = () =>
   axios.create({ baseURL: API_BASE, withCredentials: true });
 
-export const getBoards = () => axios.get(`${API_BASE}/content/boards`);
-export const getClasses = (boardId) => axios.get(`${API_BASE}/content/classes?board_id=${boardId}`);
-export const getStreams = (classId) => axios.get(`${API_BASE}/content/streams?class_id=${classId}`);
-export const getAllSubjects = () => axios.get(`${API_BASE}/content/subjects`);
-export const getSubjectsByCourseType = (boardId) => axios.get(`${API_BASE}/content/subjects-by-course-type?board_id=${boardId}`);
-export const getSubject = (id) => axios.get(`${API_BASE}/content/subjects/${id}`);
-export const getChapters = (subjectId) => axios.get(`${API_BASE}/content/chapters/${subjectId}`);
-export const getChunks = (chapterId) => axios.get(`${API_BASE}/content/chunks/${chapterId}`);
-export const getChapterTopicSummary = (chapterId) => axios.get(`${API_BASE}/content/chapters/${chapterId}/topic-summary`);
-export const getChapterTopicContent = (chapterId) => axios.get(`${API_BASE}/content/chapters/${chapterId}/topic-content`);
-export const getTopicPage = (topicId, pageType) => axios.get(`${API_BASE}/content/topic/${topicId}/page/${pageType}`);
+export const getBoards = () => axios.get(`${WORKER_API}/content/boards`);
+export const getClasses = (boardId) => axios.get(`${WORKER_API}/content/classes?board_id=${boardId}`);
+export const getStreams = (classId) => axios.get(`${WORKER_API}/content/streams?class_id=${classId}`);
+export const getAllSubjects = () => axios.get(`${WORKER_API}/content/subjects`);
+export const getSubjectsByCourseType = (boardId) => axios.get(`${WORKER_API}/content/subjects-by-course-type?board_id=${boardId}`);
+export const getSubject = (id) => axios.get(`${WORKER_API}/content/subjects/${id}`);
+export const getChapters = (subjectId) => axios.get(`${WORKER_API}/content/chapters/${subjectId}`);
+export const getChunks = (chapterId) => axios.get(`${WORKER_API}/content/chunks/${chapterId}`);
+export const getChapterTopicSummary = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-summary`);
+export const getChapterTopicContent = (chapterId) => axios.get(`${WORKER_API}/content/chapters/${chapterId}/topic-content`);
+export const getTopicPage = (topicId, pageType) => axios.get(`${WORKER_API}/content/topic/${topicId}/page/${pageType}`);
 
 export const getConversations = () =>
   axios.get(`${API_BASE}/conversations`, authConfig());
@@ -203,24 +208,24 @@ export const adminGetActivityLog = (token) =>
   axios.get(`${API_BASE}/admin/activity-log`, { headers: adminHeaders(token), withCredentials: true });
 
 export const getSeoPage = (board, classSlug, subjectSlug, topicSlug, pageType) => {
-  let url = `${API_BASE}/seo/page/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
+  let url = `${WORKER_API}/seo/page/${board}/${classSlug}/${subjectSlug}/${topicSlug}`;
   if (pageType && pageType !== 'notes') url += `/${pageType}`;
   return axios.get(url);
 };
 
 export const getSeoPageBundle = (board, classSlug, subjectSlug, topicSlug, pageType) =>
-  axios.get(`${API_BASE}/seo/page-bundle/${board}/${classSlug}/${subjectSlug}/${topicSlug}`, {
+  axios.get(`${WORKER_API}/seo/page-bundle/${board}/${classSlug}/${subjectSlug}/${topicSlug}`, {
     params: pageType && pageType !== 'notes' ? { pt: pageType } : undefined,
   });
 
 export const getSeoPageTypes = (board, classSlug, subjectSlug, topicSlug) =>
-  axios.get(`${API_BASE}/seo/page-types/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
+  axios.get(`${WORKER_API}/seo/page-types/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
 
 export const getSeoRelated = (topicSlug) =>
-  axios.get(`${API_BASE}/seo/related/${topicSlug}`);
+  axios.get(`${WORKER_API}/seo/related/${topicSlug}`);
 
 export const getChapterBySlug = (board, classSlug, subjectSlug, chapterSlug) =>
-  axios.get(`${API_BASE}/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`);
+  axios.get(`${WORKER_API}/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`);
 
 // ── Admin SEO management ──────────────────────────────────────────────────────
 

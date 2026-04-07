@@ -1,0 +1,11 @@
+name = "syrabit-edge"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[vars]
+RENDER_BACKEND_URL = "https://syrabit-api.onrender.com"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = ""
+preview_id = ""

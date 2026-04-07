@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { PublicLayout } from '@/components/layout/PublicLayout';
 import PageMeta from '@/components/seo/PageMeta';
-import { API_BASE } from '@/utils/api';
+import { API_BASE, WORKER_API } from '@/utils/api';
 import axios from 'axios';
 import { CheckCircle2, XCircle, AlertTriangle, RefreshCw, Activity } from 'lucide-react';
 

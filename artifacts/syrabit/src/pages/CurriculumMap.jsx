@@ -6,7 +6,7 @@ import { ChevronRight, BookOpen, GraduationCap, Layers, FileText, ExternalLink }
 import PageMeta from '@/components/seo/PageMeta';
 import { PublicNavbar } from '@/components/layout/PublicNavbar';
 import { PublicBottomNav } from '@/components/layout/PublicBottomNav';
-import { API_BASE } from '@/utils/api';
+import { WORKER_API } from '@/utils/api';
 
 function slugify(str = '') {
   return str.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
@@ -82,7 +82,7 @@ function SubjectNode({ subject, boardSlug, classSlug }) {
 export default function CurriculumMap() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['library-bundle'],
-    queryFn: () => axios.get(`${API_BASE}/content/library-bundle`).then((r) => r.data),
+    queryFn: () => axios.get(`${WORKER_API}/content/library-bundle`).then((r) => r.data),
     staleTime: 30 * 60 * 1000,
   });
 
