@@ -33,46 +33,56 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4">
-      <div className="w-full max-w-sm space-y-4">
-        {/* Header mark */}
-        <div className="text-center mb-6">
-          <img src="/logo.webp" alt="Syrabit.ai" width="56" height="56" className="w-14 h-14 rounded-2xl mx-auto mb-3 object-cover" style={{ boxShadow: '0 0 24px rgba(99,102,241,0.15)' }} />
-          <h1 className="text-lg font-semibold text-white">Administrator Access</h1>
-          <p className="text-slate-500 text-sm mt-0.5">Syrabit.ai Control Panel</p>
+    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
+      style={{ background: 'linear-gradient(145deg, #050510 0%, #0a0a1a 50%, #080816 100%)' }}>
+      <div className="absolute inset-0 pointer-events-none">
+        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full opacity-[0.03]"
+          style={{ background: 'radial-gradient(circle, #7c3aed 0%, transparent 70%)' }} />
+      </div>
+
+      <div className="w-full max-w-sm space-y-4 relative">
+        <div className="text-center mb-8">
+          <div className="relative inline-block mb-4">
+            <div className="absolute -inset-3 rounded-2xl blur-2xl opacity-20" style={{ background: 'radial-gradient(circle, #7c3aed 0%, transparent 70%)' }} />
+            <img src="/logo.webp" alt="Syrabit.ai" width="56" height="56"
+              className="relative w-14 h-14 rounded-2xl mx-auto object-cover"
+              style={{ boxShadow: '0 0 30px rgba(124,58,237,0.2), 0 0 60px rgba(124,58,237,0.08)' }} />
+          </div>
+          <h1 className="text-lg font-semibold text-white tracking-tight">Administrator Access</h1>
+          <p className="text-white/30 text-sm mt-1">Syrabit.ai Control Center</p>
         </div>
 
-        {/* Login form */}
         <div
           className="rounded-2xl p-6"
           style={{
-            background: '#111827',
-            border: '1px solid rgba(255,255,255,0.07)',
+            background: 'rgba(15,15,30,0.7)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            backdropFilter: 'blur(20px)',
           }}
         >
           {error && (
-            <div className="flex items-center gap-2 text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl p-3 mb-4 text-sm">
+            <div className="flex items-center gap-2 text-red-400 rounded-xl p-3 mb-4 text-sm"
+              style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
               <AlertCircle size={15} />
               {error}
             </div>
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
-            {/* Email */}
             <div className="space-y-1.5">
-              <label className="text-slate-400 text-xs font-medium">Email</label>
+              <label className="text-white/40 text-xs font-medium">Email</label>
               <div className="relative">
-                <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
+                <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20" />
                 <input
                   type="email"
                   autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="admin@syrabit.ai"
-                  className="w-full pl-9 pr-3 h-10 rounded-lg text-sm text-white outline-none transition-all"
+                  className="w-full pl-9 pr-3 h-10 rounded-xl text-sm text-white outline-none transition-all focus:ring-1 focus:ring-violet-500/30"
                   style={{
-                    background: '#1f2937',
-                    border: '1px solid rgba(255,255,255,0.08)',
+                    background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(255,255,255,0.06)',
                   }}
                   required
                   data-testid="admin-email-input"
@@ -80,21 +90,20 @@ export default function AdminLoginPage() {
               </div>
             </div>
 
-            {/* Password */}
             <div className="space-y-1.5">
-              <label className="text-slate-400 text-xs font-medium">Password</label>
+              <label className="text-white/40 text-xs font-medium">Password</label>
               <div className="relative">
-                <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-600" />
+                <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20" />
                 <input
                   type={showPass ? 'text' : 'password'}
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full pl-9 pr-10 h-10 rounded-lg text-sm text-white outline-none transition-all"
+                  className="w-full pl-9 pr-10 h-10 rounded-xl text-sm text-white outline-none transition-all focus:ring-1 focus:ring-violet-500/30"
                   style={{
-                    background: '#1f2937',
-                    border: '1px solid rgba(255,255,255,0.08)',
+                    background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(255,255,255,0.06)',
                   }}
                   required
                   data-testid="admin-password-input"
@@ -102,21 +111,20 @@ export default function AdminLoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPass(!showPass)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-600 hover:text-slate-400 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/40 transition-colors"
                 >
                   {showPass ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
               </div>
             </div>
 
-            {/* Submit */}
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 h-10 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-60"
+              className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
               style={{
-                background: 'linear-gradient(135deg, #4338ca, #6366f1)',
-                boxShadow: '0 4px 16px rgba(99,102,241,0.3)',
+                background: 'linear-gradient(135deg, #6d28d9, #7c3aed)',
+                boxShadow: '0 4px 20px rgba(124,58,237,0.25), 0 0 40px rgba(124,58,237,0.08)',
               }}
               data-testid="admin-login-submit-button"
             >
@@ -127,8 +135,8 @@ export default function AdminLoginPage() {
             </button>
           </form>
 
-          <p className="text-center text-slate-700 text-xs mt-4 flex items-center justify-center gap-1.5">
-            <ShieldCheck size={11} />
+          <p className="text-center text-white/15 text-xs mt-5 flex items-center justify-center gap-1.5">
+            <ShieldCheck size={10} />
             Protected by HMAC authentication · 8-hour session
           </p>
         </div>

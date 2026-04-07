@@ -15,28 +15,57 @@ import {
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
 } from 'recharts';
 
-function StatCard({ label, value, icon: Icon, color, subLabel, subValue, pulse }) {
+function GlassCard({ children, className = '', glow, ...props }) {
   return (
     <div
-      className="relative bg-slate-900 border border-slate-800 rounded-xl p-5 overflow-hidden"
+      className={`relative rounded-2xl overflow-hidden ${className}`}
+      style={{
+        background: 'rgba(15,15,30,0.6)',
+        border: '1px solid rgba(255,255,255,0.06)',
+        backdropFilter: 'blur(12px)',
+      }}
+      {...props}
+    >
+      {glow && (
+        <div className="absolute inset-0 pointer-events-none" style={{
+          background: `radial-gradient(ellipse at top left, ${glow}08, transparent 60%)`,
+        }} />
+      )}
+      <div className="relative">{children}</div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, icon: Icon, color, subLabel, subValue, pulse, onClick }) {
+  return (
+    <div
+      className={`relative rounded-2xl p-5 overflow-hidden transition-all duration-300 group ${onClick ? 'cursor-pointer' : ''}`}
+      style={{
+        background: 'rgba(15,15,30,0.6)',
+        border: '1px solid rgba(255,255,255,0.06)',
+      }}
+      onClick={onClick}
       data-testid="dashboard-stat-card"
     >
+      <div className="absolute inset-0 pointer-events-none transition-opacity duration-300 opacity-0 group-hover:opacity-100" style={{
+        background: `radial-gradient(ellipse at top right, ${color}08, transparent 60%)`,
+      }} />
       {pulse && (
         <span className="absolute top-3 right-3 flex h-2 w-2">
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-75" style={{ background: color }} />
           <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: color }} />
         </span>
       )}
-      <div className="flex items-center justify-between mb-3">
-        <p className="text-slate-500 text-sm">{label}</p>
-        <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}22` }}>
+      <div className="relative flex items-center justify-between mb-3">
+        <p className="text-white/40 text-xs font-medium tracking-wide uppercase">{label}</p>
+        <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: `${color}12` }}>
           <Icon size={16} style={{ color }} />
         </div>
       </div>
-      <p className="text-2xl font-bold text-white">{typeof value === 'number' ? value.toLocaleString() : (value ?? 0)}</p>
+      <p className="relative text-2xl font-bold text-white tracking-tight">{typeof value === 'number' ? value.toLocaleString() : (value ?? 0)}</p>
       {subLabel && (
-        <p className="text-xs text-slate-500 mt-1">
-          {subLabel}: <span className="text-slate-400 font-medium">{typeof subValue === 'number' ? subValue.toLocaleString() : (subValue ?? 0)}</span>
+        <p className="relative text-xs text-white/30 mt-1.5">
+          {subLabel}: <span className="text-white/50 font-medium">{typeof subValue === 'number' ? subValue.toLocaleString() : (subValue ?? 0)}</span>
         </p>
       )}
     </div>
@@ -58,12 +87,12 @@ function formatTimeAgo(dateStr) {
 }
 
 const EVENT_ICONS = {
-  signup:       { icon: UserPlus, color: '#10b981', bg: 'rgba(16,185,129,0.10)' },
-  conversation: { icon: MessageSquare, color: '#8b5cf6', bg: 'rgba(139,92,246,0.10)' },
-  search:       { icon: Search, color: '#60a5fa', bg: 'rgba(96,165,250,0.10)' },
-  subject_view: { icon: BookOpen, color: '#f59e0b', bg: 'rgba(245,158,11,0.10)' },
-  ai_click:     { icon: Bot, color: '#a78bfa', bg: 'rgba(167,139,250,0.10)' },
-  page_view:    { icon: Eye, color: '#64748b', bg: 'rgba(100,116,139,0.10)' },
+  signup:       { icon: UserPlus, color: '#10b981', bg: 'rgba(16,185,129,0.08)' },
+  conversation: { icon: MessageSquare, color: '#8b5cf6', bg: 'rgba(139,92,246,0.08)' },
+  search:       { icon: Search, color: '#60a5fa', bg: 'rgba(96,165,250,0.08)' },
+  subject_view: { icon: BookOpen, color: '#f59e0b', bg: 'rgba(245,158,11,0.08)' },
+  ai_click:     { icon: Bot, color: '#a78bfa', bg: 'rgba(167,139,250,0.08)' },
+  page_view:    { icon: Eye, color: '#64748b', bg: 'rgba(100,116,139,0.08)' },
 };
 
 function ActivityItem({ event, idx }) {
@@ -72,17 +101,17 @@ function ActivityItem({ event, idx }) {
   return (
     <div
       key={event.timestamp + idx}
-      className="flex items-center gap-3 py-2.5 px-3 rounded-lg"
-      style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}
+      className="flex items-center gap-3 py-2.5 px-3 rounded-xl transition-colors duration-200 hover:bg-white/[0.02]"
+      style={{ border: '1px solid rgba(255,255,255,0.03)' }}
     >
       <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: cfg.bg }}>
         <Icon size={13} style={{ color: cfg.color }} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm text-white/80 truncate">{event.message}</p>
-        {event.details && <p className="text-xs text-slate-500 truncate">{event.details}</p>}
+        <p className="text-sm text-white/70 truncate">{event.message}</p>
+        {event.details && <p className="text-xs text-white/25 truncate">{event.details}</p>}
       </div>
-      <span className="text-xs text-slate-600 flex-shrink-0 ml-2">{formatTimeAgo(event.timestamp)}</span>
+      <span className="text-[11px] text-white/20 flex-shrink-0 ml-2">{formatTimeAgo(event.timestamp)}</span>
     </div>
   );
 }
@@ -94,18 +123,19 @@ function DepStatusCard({ name, status, latency }) {
   const Icon = DEP_ICONS[name] || Server;
   const color = STATUS_COLORS[status] || STATUS_COLORS.unknown;
   return (
-    <div className="flex items-center gap-3 p-3 bg-slate-800/50 rounded-xl border border-slate-700/50">
-      <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}20` }}>
+    <div className="flex items-center gap-3 p-3 rounded-xl transition-all duration-200 hover:bg-white/[0.02]"
+      style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
+      <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}15` }}>
         <Icon size={14} style={{ color }} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-white text-sm font-medium capitalize">{name}</p>
+        <p className="text-white/80 text-sm font-medium capitalize">{name}</p>
         <p className="text-xs" style={{ color }}>{status === 'ok' ? 'Connected' : status}</p>
       </div>
       {status === 'ok' && (
         <div className="text-right">
-          <p className="text-white text-sm font-bold">{latency}ms</p>
-          <div className="h-1.5 w-16 rounded-full bg-slate-700 overflow-hidden mt-1">
+          <p className="text-white/90 text-sm font-bold font-mono">{latency}ms</p>
+          <div className="h-1.5 w-16 rounded-full overflow-hidden mt-1" style={{ background: 'rgba(255,255,255,0.06)' }}>
             <div
               className="h-full rounded-full transition-all"
               style={{
@@ -133,15 +163,15 @@ function PipelineWidget({ token }) {
     { label: 'Needs Links', value: pipe.needs_internal_links, total: pipe.total_topics, color: '#3b82f6', invert: true },
   ];
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+    <GlassCard className="p-5">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <Layers size={14} className="text-violet-400" />
-          <h3 className="text-slate-300 font-semibold text-sm">Content Pipeline</h3>
-          <span className="text-xs text-slate-600">({pipe.total_topics} topics · {pipe.pages_total} pages)</span>
+          <h3 className="text-white/70 font-semibold text-sm">Content Pipeline</h3>
+          <span className="text-xs text-white/25">({pipe.total_topics} topics · {pipe.pages_total} pages)</span>
         </div>
         {pipe.published_today > 0 && (
-          <span style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)', color: '#10b981', borderRadius: 20, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}>
+          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', color: '#10b981' }}>
             +{pipe.published_today} today
           </span>
         )}
@@ -152,17 +182,17 @@ function PipelineWidget({ token }) {
           return (
             <div key={b.label}>
               <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-slate-500">{b.label}</span>
+                <span className="text-xs text-white/35">{b.label}</span>
                 <span className="text-xs font-mono" style={{ color: b.color }}>{b.value} ({pct}%)</span>
               </div>
-              <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
-                <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: b.color }} />
+              <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: b.color }} />
               </div>
             </div>
           );
         })}
       </div>
-    </div>
+    </GlassCard>
   );
 }
 
@@ -177,8 +207,8 @@ function AlertBadge({ alert }) {
   const label = alert === 'red' ? 'RED' : alert === 'yellow' ? 'YELLOW' : 'GREEN';
   return (
     <span
-      className="text-xs font-bold px-2 py-0.5 rounded-full"
-      style={{ background: `${color}20`, color, border: `1px solid ${color}40` }}
+      className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+      style={{ background: `${color}12`, color, border: `1px solid ${color}25` }}
     >
       {label}
     </span>
@@ -194,7 +224,7 @@ function RagAccuracyGauge({ accuracy }) {
   return (
     <div className="flex flex-col items-center justify-center gap-2">
       <svg width="100" height="100" viewBox="0 0 100 100">
-        <circle cx="50" cy="50" r="40" fill="none" stroke="#1e293b" strokeWidth="10" />
+        <circle cx="50" cy="50" r="40" fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth="10" />
         <circle
           cx="50" cy="50" r="40"
           fill="none"
@@ -204,11 +234,34 @@ function RagAccuracyGauge({ accuracy }) {
           strokeDashoffset={offset}
           strokeLinecap="round"
           transform="rotate(-90 50 50)"
-          style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+          style={{ transition: 'stroke-dashoffset 0.8s cubic-bezier(0.4,0,0.2,1)' }}
         />
-        <text x="50" y="53" textAnchor="middle" fontSize="16" fontWeight="bold" fill="white">{pct.toFixed(1)}%</text>
-        <text x="50" y="67" textAnchor="middle" fontSize="8" fill="#64748b">Target: 98%</text>
+        <text x="50" y="50" textAnchor="middle" fontSize="17" fontWeight="bold" fill="white" dominantBaseline="central">{pct.toFixed(1)}%</text>
+        <text x="50" y="70" textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.3)">Target: 98%</text>
       </svg>
+    </div>
+  );
+}
+
+const TOOLTIP_STYLE = {
+  background: 'rgba(15,15,30,0.95)',
+  border: '1px solid rgba(255,255,255,0.08)',
+  borderRadius: 12,
+  color: '#e2e8f0',
+  fontSize: 12,
+  backdropFilter: 'blur(12px)',
+};
+
+function ChartTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div style={TOOLTIP_STYLE} className="p-3 shadow-2xl">
+      <p className="text-[11px] text-white/30 mb-1">{label}</p>
+      {payload.map((p, i) => (
+        <p key={i} className="text-xs" style={{ color: p.color }}>
+          {p.name}: <span className="font-mono font-bold">{p.value}</span>
+        </p>
+      ))}
     </div>
   );
 }
@@ -290,8 +343,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
   if (loading) {
     return (
-      <div className="flex justify-center p-10">
-        <Loader2 size={24} className="animate-spin text-slate-400" />
+      <div className="flex flex-col items-center justify-center p-16 gap-3">
+        <Loader2 size={24} className="animate-spin text-violet-400/50" />
+        <span className="text-sm text-white/20">Loading dashboard...</span>
       </div>
     );
   }
@@ -309,44 +363,47 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const hasRagIssue = ragAlert === 'red' || latencyAlert === 'red';
 
   const quickActions = [
-    { id: 'users',     label: 'View Users',     icon: Users,    color: 'from-violet-600 to-violet-500' },
-    { id: 'blog',      label: 'Blog Publisher', icon: PenTool,  color: 'from-blue-600 to-blue-500'    },
-    { id: 'analytics', label: 'Analytics',       icon: BarChart2, color: 'from-emerald-600 to-emerald-500' },
-    { id: 'monetization', label: 'Monetization', icon: Crown,    color: 'from-amber-600 to-amber-500'  },
+    { id: 'users',     label: 'View Users',     icon: Users,    gradient: 'linear-gradient(135deg, #7c3aed, #6d28d9)' },
+    { id: 'blog',      label: 'Blog Publisher', icon: PenTool,  gradient: 'linear-gradient(135deg, #3b82f6, #2563eb)' },
+    { id: 'analytics', label: 'Analytics',       icon: BarChart2, gradient: 'linear-gradient(135deg, #10b981, #059669)' },
+    { id: 'monetization', label: 'Monetization', icon: Crown,    gradient: 'linear-gradient(135deg, #f59e0b, #d97706)' },
   ];
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-4 md:p-6 space-y-5 max-w-[1400px]">
 
       {failedSections.length > 0 && (
-        <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
-          <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
-          <p className="text-xs text-amber-300 flex-1">
+        <div className="flex items-center gap-3 p-3 rounded-xl" style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.15)' }}>
+          <AlertTriangle size={14} className="text-amber-400/80 flex-shrink-0" />
+          <p className="text-xs text-amber-300/70 flex-1">
             Some widgets failed to load ({failedSections.join(', ')}). Metrics may be stale.
           </p>
-          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">
+          <button onClick={() => load(true)} className="text-xs text-amber-300/70 hover:text-white px-2.5 py-1 rounded-lg transition-colors" style={{ background: 'rgba(245,158,11,0.1)' }}>
             Retry
           </button>
         </div>
       )}
 
       <div className="flex items-center justify-between">
-        <h2 className="text-slate-200 font-semibold text-lg">Overview</h2>
+        <div>
+          <h2 className="text-white/90 font-semibold text-lg tracking-tight">Overview</h2>
+          {lastRefresh && (
+            <p className="text-white/20 text-xs mt-0.5">
+              Updated {formatTimeAgo(lastRefresh.toISOString())} · auto-refreshes every 60s
+            </p>
+          )}
+        </div>
         <div className="flex items-center gap-3">
           {metrics?.response_time_ms && (
-            <span className="text-xs text-slate-600 flex items-center gap-1">
+            <span className="text-xs text-white/20 flex items-center gap-1">
               <Clock size={10} /> API: {metrics.response_time_ms}ms
             </span>
-          )}
-          {lastRefresh && (
-            <p className="text-xs text-slate-600">
-              Updated {formatTimeAgo(lastRefresh.toISOString())}
-            </p>
           )}
           <button
             onClick={() => load(true)}
             disabled={refreshing}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 border border-slate-700 transition-all disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-medium text-white/40 hover:text-white/70 transition-all disabled:opacity-40"
+            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}
           >
             <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
             Refresh
@@ -355,10 +412,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       </div>
 
       {Object.keys(deps).length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-4">
             <Wifi size={14} className="text-violet-400" />
-            <h3 className="text-slate-400 text-sm font-medium">System Health</h3>
+            <h3 className="text-white/50 text-sm font-semibold">System Health</h3>
             <div className="ml-auto flex items-center gap-1.5">
               {Object.values(deps).every(d => d.status === 'ok') && !hasRagIssue ? (
                 <>
@@ -385,25 +442,24 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               />
             ))}
           </div>
-        </div>
+        </GlassCard>
       )}
 
-      {/* Data recovery summary banner */}
       {data?.conversation_date_range?.oldest && (
-        <div style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.18)', borderRadius: 12, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, color: '#10b981', fontWeight: 700 }}>✓ Data Recovered</span>
-          <span style={{ fontSize: 12, color: 'rgba(232,232,232,0.55)' }}>
-            Conversations since <strong style={{ color: '#e8e8e8' }}>{data.conversation_date_range.oldest}</strong>
-            {' · '}PG: <strong style={{ color: '#60a5fa' }}>{data.pg_conversations}</strong>
-            {' + '}Supabase: <strong style={{ color: '#34d399' }}>{data.supa_conversations}</strong>
-            {' = '}<strong style={{ color: '#e8e8e8' }}>{data.total_conversations}</strong> total
-            {' · '}<strong style={{ color: '#e8e8e8' }}>{data.conversations_with_messages}</strong> with messages
-            {' · '}<strong style={{ color: '#e8e8e8' }}>{data.unique_chatters}</strong> unique chatters
+        <div className="flex items-center gap-3 p-3 rounded-xl flex-wrap" style={{ background: 'rgba(16,185,129,0.04)', border: '1px solid rgba(16,185,129,0.12)' }}>
+          <span className="text-xs text-emerald-400/80 font-bold">Data Recovered</span>
+          <span className="text-xs text-white/40">
+            Conversations since <strong className="text-white/70">{data.conversation_date_range.oldest}</strong>
+            {' · '}PG: <strong className="text-blue-400/80">{data.pg_conversations}</strong>
+            {' + '}Supabase: <strong className="text-emerald-400/80">{data.supa_conversations}</strong>
+            {' = '}<strong className="text-white/70">{data.total_conversations}</strong> total
+            {' · '}<strong className="text-white/70">{data.conversations_with_messages}</strong> with messages
+            {' · '}<strong className="text-white/70">{data.unique_chatters}</strong> unique chatters
           </span>
         </div>
       )}
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Total Users"     value={data?.total_users}          icon={Users}         color="#8b5cf6"
           subLabel="Chatted" subValue={data?.unique_chatters ?? 0} />
         <StatCard label="Conversations"   value={data?.total_conversations}  icon={MessageSquare} color="#3b82f6"
@@ -414,7 +470,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       </div>
 
       {metrics?.revenue && (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard
             label="Revenue (INR)"
             value={'₹' + Math.round(metrics.revenue.total_inr || 0).toLocaleString('en-IN')}
@@ -425,132 +481,123 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           />
           <StatCard label="Paid Users"      value={metrics.users?.paid || 0}     icon={Crown}  color="#f59e0b" />
           <StatCard label="Free Users"      value={metrics.users?.free || 0}     icon={Users}  color="#64748b" />
-          <div className="cursor-pointer" onClick={() => onNavigate?.('seomanager')}>
-            <StatCard label="SEO Pages"       value={metrics.seo?.published_pages || 0} icon={Globe} color="#06b6d4"
-              subLabel="Topics" subValue={metrics.seo?.topics || 0} />
-          </div>
+          <StatCard label="SEO Pages"       value={metrics.seo?.published_pages || 0} icon={Globe} color="#06b6d4"
+            subLabel="Topics" subValue={metrics.seo?.topics || 0}
+            onClick={() => onNavigate?.('seomanager')} />
         </div>
       )}
 
-      {/* ── TRAFFIC SOURCES (Three-tier breakdown) ─────────────────────────── */}
-      <div style={{ background: 'rgba(6,182,212,0.04)', border: '1px solid rgba(6,182,212,0.15)', borderRadius: 14, padding: '14px 18px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+      <GlassCard className="p-5" glow="#06b6d4">
+        <div className="flex items-center gap-2 mb-4 flex-wrap">
           <Globe size={14} style={{ color: '#22d3ee' }} />
-          <span style={{ fontSize: 12, fontWeight: 700, color: '#22d3ee' }}>Traffic Sources</span>
-          <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(232,232,232,0.3)', fontStyle: 'italic' }}>
+          <span className="text-xs font-bold text-cyan-400">Traffic Sources</span>
+          <span className="ml-auto text-[10px] text-white/20 italic">
             Server-side = Cloudflare-equivalent · JS-tracked = engaged users · Bot = crawlers
           </span>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3" style={{ marginBottom: 14 }}>
-          {/* Tier 1: All Traffic (server-side) */}
-          <div style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.18)', borderRadius: 12, padding: '12px 14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              <Server size={12} style={{ color: '#10b981' }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#10b981', textTransform: 'uppercase', letterSpacing: '0.05em' }}>All Traffic</span>
-              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.3)', marginLeft: 'auto' }}>server-side</span>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
+          <div className="rounded-xl p-3" style={{ background: 'rgba(16,185,129,0.04)', border: '1px solid rgba(16,185,129,0.12)' }}>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Server size={11} style={{ color: '#10b981' }} />
+              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">All Traffic</span>
+              <span className="text-[9px] text-white/20 ml-auto">server-side</span>
             </div>
-            <div style={{ display: 'flex', gap: 16 }}>
+            <div className="flex gap-4">
               <div>
-                <p className="text-white font-bold text-xl">{(vs.server_side?.total_unique ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>Unique visitors</p>
+                <p className="text-white font-bold text-lg">{(vs.server_side?.total_unique ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">Unique</p>
               </div>
               <div>
-                <p className="text-white font-bold text-xl">{(vs.server_side?.unique_today ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>Today</p>
+                <p className="text-white font-bold text-lg">{(vs.server_side?.unique_today ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">Today</p>
               </div>
               <div>
-                <p className="text-slate-400 font-bold text-xl">{(vs.server_side?.total_hits ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>Total hits</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Tier 2: Engaged Visitors (JS-tracked) */}
-          <div style={{ background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.18)', borderRadius: 12, padding: '12px 14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              <Eye size={12} style={{ color: '#8b5cf6' }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#8b5cf6', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Engaged Visitors</span>
-              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.3)', marginLeft: 'auto' }}>JS-tracked</span>
-            </div>
-            <div style={{ display: 'flex', gap: 16 }}>
-              <div>
-                <p className="text-white font-bold text-xl">{(vs.total_visitors ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>All-time</p>
-              </div>
-              <div>
-                <p className="text-white font-bold text-xl">{(vs.visitors_today ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>Today</p>
-              </div>
-              <div>
-                <p className="text-slate-400 font-bold text-xl">{(vs.total_page_views ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>Page views</p>
+                <p className="text-white/50 font-bold text-lg">{(vs.server_side?.total_hits ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">Hits</p>
               </div>
             </div>
           </div>
 
-          {/* Tier 3: Bot/Crawler Traffic */}
-          <div style={{ background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.18)', borderRadius: 12, padding: '12px 14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-              <Bot size={12} style={{ color: '#f59e0b' }} />
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Bot/Crawler Traffic</span>
-              <span style={{ fontSize: 9, color: 'rgba(232,232,232,0.3)', marginLeft: 'auto' }}>separate</span>
+          <div className="rounded-xl p-3" style={{ background: 'rgba(139,92,246,0.04)', border: '1px solid rgba(139,92,246,0.12)' }}>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Eye size={11} style={{ color: '#8b5cf6' }} />
+              <span className="text-[10px] font-bold text-violet-400 uppercase tracking-wider">Engaged Visitors</span>
+              <span className="text-[9px] text-white/20 ml-auto">JS-tracked</span>
             </div>
-            <div style={{ display: 'flex', gap: 16 }}>
+            <div className="flex gap-4">
               <div>
-                <p className="text-white font-bold text-xl">{(vs.bot_traffic?.unique_total ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>Unique bots</p>
+                <p className="text-white font-bold text-lg">{(vs.total_visitors ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">All-time</p>
               </div>
               <div>
-                <p className="text-white font-bold text-xl">{(vs.bot_traffic?.hits_today ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>Hits today</p>
+                <p className="text-white font-bold text-lg">{(vs.visitors_today ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">Today</p>
               </div>
               <div>
-                <p className="text-slate-400 font-bold text-xl">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</p>
-                <p style={{ fontSize: 10, color: '#64748b' }}>Total hits</p>
+                <p className="text-white/50 font-bold text-lg">{(vs.total_page_views ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">Views</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl p-3" style={{ background: 'rgba(245,158,11,0.04)', border: '1px solid rgba(245,158,11,0.12)' }}>
+            <div className="flex items-center gap-1.5 mb-2">
+              <Bot size={11} style={{ color: '#f59e0b' }} />
+              <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider">Bot/Crawler Traffic</span>
+              <span className="text-[9px] text-white/20 ml-auto">separate</span>
+            </div>
+            <div className="flex gap-4">
+              <div>
+                <p className="text-white font-bold text-lg">{(vs.bot_traffic?.unique_total ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">Unique bots</p>
+              </div>
+              <div>
+                <p className="text-white font-bold text-lg">{(vs.bot_traffic?.hits_today ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">Today</p>
+              </div>
+              <div>
+                <p className="text-white/50 font-bold text-lg">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-white/25">Total</p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Drop-off funnel indicator */}
         {vs.server_side?.total_unique > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'rgba(255,255,255,0.02)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.04)' }}>
-            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.4)', fontWeight: 600 }}>TRACKING FUNNEL:</span>
-            <span style={{ fontSize: 11, color: '#10b981', fontWeight: 700 }}>{(vs.server_side?.total_unique ?? 0).toLocaleString()}</span>
-            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.25)' }}>server</span>
-            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.15)' }}>&rarr;</span>
-            <span style={{ fontSize: 11, color: '#8b5cf6', fontWeight: 700 }}>{(vs.total_visitors ?? 0).toLocaleString()}</span>
-            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.25)' }}>JS-tracked</span>
-            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.15)' }}>&rarr;</span>
-            <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</span>
-            <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.25)' }}>bot hits (separate)</span>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg flex-wrap" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.03)' }}>
+            <span className="text-[10px] text-white/25 font-semibold">TRACKING FUNNEL:</span>
+            <span className="text-[11px] text-emerald-400 font-bold">{(vs.server_side?.total_unique ?? 0).toLocaleString()}</span>
+            <span className="text-[10px] text-white/15">server</span>
+            <span className="text-[10px] text-white/10">&rarr;</span>
+            <span className="text-[11px] text-violet-400 font-bold">{(vs.total_visitors ?? 0).toLocaleString()}</span>
+            <span className="text-[10px] text-white/15">JS-tracked</span>
+            <span className="text-[10px] text-white/10">&rarr;</span>
+            <span className="text-[11px] text-amber-400 font-bold">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</span>
+            <span className="text-[10px] text-white/15">bot hits</span>
             {vs.total_visitors > 0 && vs.server_side?.total_unique > 0 && (
-              <span style={{ marginLeft: 'auto', fontSize: 10, color: 'rgba(232,232,232,0.35)' }}>
+              <span className="ml-auto text-[10px] text-white/20">
                 JS capture rate: {Math.round((vs.total_visitors / vs.server_side.total_unique) * 100)}%
               </span>
             )}
           </div>
         )}
 
-        {/* Top bots breakdown */}
         {vs.bot_traffic?.top_bots?.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Top Crawlers
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          <div className="mt-3">
+            <div className="text-[10px] text-white/20 font-semibold mb-1.5 uppercase tracking-wider">Top Crawlers</div>
+            <div className="flex flex-wrap gap-1.5">
               {vs.bot_traffic.top_bots.slice(0, 8).map((b, i) => (
-                <span key={i} style={{ fontSize: 10, color: '#f59e0b', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.15)', borderRadius: 6, padding: '2px 8px' }}>
+                <span key={i} className="text-[10px] px-2 py-0.5 rounded-md" style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.1)' }}>
                   {b.bot}: {b.hits}
                 </span>
               ))}
             </div>
           </div>
         )}
-      </div>
+      </GlassCard>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
         <StatCard label="Total Page Views" value={vs?.total_page_views ?? 0} icon={BarChart2} color="#84cc16"
           subLabel="Today" subValue={vs?.page_views_today ?? 0} />
@@ -558,39 +605,34 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         <StatCard label="Avg Session"  value={vs.avg_session_duration != null ? `${vs.avg_session_duration}s` : '—'} icon={Clock} color="#a78bfa" />
       </div>
 
-      {/* ── AI HEALTH SECTION ─────────────────────────────────────────────── */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+      <GlassCard className="p-5" glow="#7c3aed">
         <div className="flex items-center gap-2 mb-5">
           <ShieldCheck size={16} className="text-violet-400" />
-          <h3 className="text-slate-300 font-semibold">AI Health</h3>
+          <h3 className="text-white/70 font-semibold">AI Health</h3>
           <div className="ml-auto flex items-center gap-2">
             <AlertBadge alert={ragAlert} />
           </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-          {/* Widget 1: RAG Accuracy Gauge */}
-          <div className="bg-slate-800/60 rounded-xl p-4 flex flex-col items-center gap-2">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="rounded-xl p-4 flex flex-col items-center gap-2" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
             <div className="flex items-center justify-between w-full mb-1">
-              <span className="text-slate-400 text-xs font-medium flex items-center gap-1">
+              <span className="text-white/35 text-xs font-medium flex items-center gap-1">
                 <Target size={11} /> RAG Accuracy
               </span>
               <AlertBadge alert={ragAlert} />
             </div>
-            <RagAccuracyGauge
-              accuracy={ragAccuracy?.accuracy_pct ?? 98}
-            />
-            <p className="text-xs text-slate-500 text-center">
+            <RagAccuracyGauge accuracy={ragAccuracy?.accuracy_pct ?? 98} />
+            <p className="text-xs text-white/25 text-center">
               {ragAccuracy?.has_data
                 ? `${ragAccuracy.answered_queries} / ${ragAccuracy.total_queries} queries answered`
                 : 'No queries yet — showing default'}
             </p>
           </div>
 
-          {/* Widget 2: Fallback Rate Line Chart */}
-          <div className="bg-slate-800/60 rounded-xl p-4">
+          <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-slate-400 text-xs font-medium flex items-center gap-1">
+              <span className="text-white/35 text-xs font-medium flex items-center gap-1">
                 <Activity size={11} /> Daily Fallback Rate
               </span>
               <AlertBadge alert={fallbackAlert} />
@@ -598,39 +640,33 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             {chatFallbacks?.has_data && chatFallbacks.daily.length > 0 ? (
               <ResponsiveContainer width="100%" height={90}>
                 <LineChart data={chatFallbacks.daily}>
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={d => d.slice(5)} />
-                  <YAxis tick={{ fontSize: 9, fill: '#64748b' }} domain={[0, 'auto']} />
-                  <Tooltip
-                    contentStyle={{ background: '#1e293b', border: 'none', fontSize: 11 }}
-                    formatter={v => [`${v}%`, 'Fallback Rate']}
-                  />
+                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'rgba(255,255,255,0.2)' }} tickFormatter={d => d.slice(5)} />
+                  <YAxis tick={{ fontSize: 9, fill: 'rgba(255,255,255,0.2)' }} domain={[0, 'auto']} />
+                  <Tooltip content={<ChartTooltip />} />
                   <ReferenceLine y={5} stroke="#ef4444" strokeDasharray="3 3" label={{ value: '5% max', fill: '#ef4444', fontSize: 9 }} />
                   <Line type="monotone" dataKey="fallback_rate" stroke="#f59e0b" strokeWidth={2} dot={false} />
                 </LineChart>
               </ResponsiveContainer>
             ) : failedSections.includes('fallbacks') ? (
-              <div className="flex flex-col items-center justify-center h-[90px] text-slate-600 text-xs gap-1">
-                <Activity size={20} className="opacity-40" />
-                <span className="text-amber-500/80">Could not load fallback data</span>
+              <div className="flex flex-col items-center justify-center h-[90px] text-white/20 text-xs gap-1">
+                <Activity size={20} className="opacity-30" />
+                <span className="text-amber-500/60">Could not load fallback data</span>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center h-[90px] text-slate-600 text-xs gap-1">
-                <Activity size={20} className="opacity-40" />
-                <span>No query data yet. Populates after first chat.</span>
-                <span className="text-emerald-500 text-xs font-medium">
+              <div className="flex flex-col items-center justify-center h-[90px] text-white/20 text-xs gap-1">
+                <Activity size={20} className="opacity-30" />
+                <span>No query data yet</span>
+                <span className="text-emerald-400/70 text-xs font-medium">
                   {chatFallbacks?.fallback_rate_pct ?? 0}% fallback rate
                 </span>
               </div>
             )}
-            <p className="text-xs text-slate-500 mt-1">
-              Target: &lt;5% fallback rate
-            </p>
+            <p className="text-xs text-white/20 mt-1">Target: &lt;5% fallback rate</p>
           </div>
 
-          {/* Widget 3: Vector Coverage Progress Bar */}
-          <div className="bg-slate-800/60 rounded-xl p-4">
+          <div className="rounded-xl p-4" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-slate-400 text-xs font-medium flex items-center gap-1">
+              <span className="text-white/35 text-xs font-medium flex items-center gap-1">
                 <Database size={11} /> Vector Coverage
               </span>
               <AlertBadge alert={vectorAlert} />
@@ -644,80 +680,74 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 ].map(({ label, pct, color }) => (
                   <div key={label}>
                     <div className="flex justify-between mb-1">
-                      <span className="text-xs text-slate-500">{label}</span>
+                      <span className="text-xs text-white/30">{label}</span>
                       <span className="text-xs font-mono" style={{ color }}>{pct}%</span>
                     </div>
-                    <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+                    <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
                       <div
-                        className="h-full rounded-full transition-all"
+                        className="h-full rounded-full transition-all duration-500"
                         style={{ width: `${pct}%`, background: pct >= 90 ? color : '#f59e0b' }}
                       />
                     </div>
                   </div>
                 ))}
-                <p className="text-xs text-slate-500 pt-1">
+                <p className="text-xs text-white/25 pt-1">
                   {vectorStats.embedded ?? 0} / {vectorStats.total ?? 0} items embedded
                 </p>
                 {(vectorStats.embedded ?? 0) === 0 && (vectorStats.total ?? 0) > 0 && (
-                  <p className="text-xs text-amber-500/80 mt-1">
+                  <p className="text-xs text-amber-400/60 mt-1">
                     Add VERTEX_SERVICE_ACCOUNT to enable embedding
                   </p>
                 )}
               </div>
             ) : (
-              <div className="flex items-center justify-center h-20 text-slate-600 text-xs">
+              <div className="flex items-center justify-center h-20 text-white/20 text-xs">
                 No vector data
               </div>
             )}
-            <p className="text-xs text-slate-500 mt-1">Target: ≥90%</p>
+            <p className="text-xs text-white/20 mt-1">Target: &ge;90%</p>
           </div>
         </div>
-      </div>
+      </GlassCard>
 
-      {/* ── PERFORMANCE & QUERIES ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Widget 4: P95 Latency Sparkline */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <GlassCard className="p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Clock size={14} className="text-violet-400" />
-              <h3 className="text-slate-300 font-semibold text-sm">Query Latency P95</h3>
+              <h3 className="text-white/70 font-semibold text-sm">Query Latency P95</h3>
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500">P95: <span className="text-white font-medium">{latency?.p95_ms ?? 0}ms</span></span>
+              <span className="text-xs text-white/30">P95: <span className="text-white/80 font-medium">{latency?.p95_ms ?? 0}ms</span></span>
               <AlertBadge alert={latencyAlert} />
             </div>
           </div>
           {latency?.has_data && latency.daily.length > 0 ? (
             <ResponsiveContainer width="100%" height={110}>
               <LineChart data={latency.daily}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#64748b' }} tickFormatter={d => d.slice(5)} />
-                <YAxis tick={{ fontSize: 9, fill: '#64748b' }} domain={[0, 'auto']} />
-                <Tooltip
-                  contentStyle={{ background: '#1e293b', border: 'none', fontSize: 11 }}
-                  formatter={v => [`${v}ms`, 'P95']}
-                />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'rgba(255,255,255,0.2)' }} tickFormatter={d => d.slice(5)} />
+                <YAxis tick={{ fontSize: 9, fill: 'rgba(255,255,255,0.2)' }} domain={[0, 'auto']} />
+                <Tooltip content={<ChartTooltip />} />
                 <ReferenceLine y={2000} stroke="#ef4444" strokeDasharray="4 4" label={{ value: '2s target', fill: '#ef4444', fontSize: 9 }} />
                 <Line type="monotone" dataKey="p95_ms" stroke="#7c3aed" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div className="flex flex-col items-center justify-center h-[110px] text-slate-600 text-xs gap-1">
-              <Cpu size={20} className="opacity-40" />
+            <div className="flex flex-col items-center justify-center h-[110px] text-white/20 text-xs gap-1">
+              <Cpu size={20} className="opacity-30" />
               <span>No latency data yet</span>
-              <span className="text-xs text-slate-500">Data recorded after first chat</span>
+              <span className="text-xs text-white/15">Data recorded after first chat</span>
             </div>
           )}
-          <p className="text-xs text-slate-500 mt-1">Target: P95 &lt;2 s · Avg: {latency?.avg_ms ?? 0}ms</p>
-        </div>
+          <p className="text-xs text-white/20 mt-1">Target: P95 &lt;2 s · Avg: {latency?.avg_ms ?? 0}ms</p>
+        </GlassCard>
 
-        {/* Widget 5: Top 10 Queries Leaderboard */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-3">
             <Search size={14} className="text-violet-400" />
-            <h3 className="text-slate-300 font-semibold text-sm">Top Queries</h3>
-            <span className="text-xs text-slate-600">content gap signal</span>
+            <h3 className="text-white/70 font-semibold text-sm">Top Queries</h3>
+            <span className="text-xs text-white/20">content gap signal</span>
           </div>
           {topQueries?.has_data && topQueries.top_queries.length > 0 ? (
             <div className="space-y-1.5 max-h-[150px] overflow-y-auto pr-1">
@@ -726,14 +756,14 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 const pct = Math.round((q.count / maxCount) * 100);
                 return (
                   <div key={i} className="flex items-center gap-2">
-                    <span className="text-slate-600 text-xs w-4 flex-shrink-0">{i + 1}</span>
+                    <span className="text-white/20 text-xs w-4 flex-shrink-0 font-mono">{i + 1}</span>
                     <div className="flex-1 min-w-0">
                       <div className="flex justify-between mb-0.5">
-                        <span className="text-xs text-slate-300 truncate">{q.query}</span>
+                        <span className="text-xs text-white/60 truncate">{q.query}</span>
                         <span className="text-xs text-violet-400 font-mono ml-2 flex-shrink-0">{q.count}</span>
                       </div>
-                      <div className="h-1 rounded-full bg-slate-800 overflow-hidden">
-                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: '#7c3aed' }} />
+                      <div className="h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: 'linear-gradient(90deg, #7c3aed, #a78bfa)' }} />
                       </div>
                     </div>
                   </div>
@@ -741,62 +771,59 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               })}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-[100px] text-slate-600 text-xs gap-1">
-              <Search size={20} className="opacity-40" />
+            <div className="flex flex-col items-center justify-center h-[100px] text-white/20 text-xs gap-1">
+              <Search size={20} className="opacity-30" />
               <span>No query data yet</span>
-              <span className="text-xs text-slate-500">Populates after user chats</span>
+              <span className="text-xs text-white/15">Populates after user chats</span>
             </div>
           )}
-          <p className="text-xs text-slate-500 mt-2">
+          <p className="text-xs text-white/20 mt-2">
             {topQueries?.total_unique ?? 0} unique queries in last 7 days
           </p>
-        </div>
+        </GlassCard>
       </div>
 
-      {/* ── REVENUE INTELLIGENCE ─────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
-        {/* Widget 6: Token Spend Bar Chart */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-3">
             <Cpu size={14} className="text-violet-400" />
-            <h3 className="text-slate-300 font-semibold text-sm">Token Spend</h3>
+            <h3 className="text-white/70 font-semibold text-sm">Token Spend</h3>
           </div>
           {tokenSpend?.has_data && tokenSpend.daily.length > 0 ? (
             <ResponsiveContainer width="100%" height={130}>
               <BarChart data={tokenSpend.daily} barSize={8}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="date" tick={{ fontSize: 8, fill: '#64748b' }} tickFormatter={d => d.slice(5)} />
-                <YAxis tick={{ fontSize: 8, fill: '#64748b' }} />
-                <Tooltip contentStyle={{ background: '#1e293b', border: 'none', fontSize: 10 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="date" tick={{ fontSize: 8, fill: 'rgba(255,255,255,0.2)' }} tickFormatter={d => d.slice(5)} />
+                <YAxis tick={{ fontSize: 8, fill: 'rgba(255,255,255,0.2)' }} />
+                <Tooltip content={<ChartTooltip />} />
                 <Legend wrapperStyle={{ fontSize: 9 }} />
-                <Bar dataKey="gemini_tokens" fill="#8b5cf6" name="Gemini" />
-                <Bar dataKey="xai_tokens" fill="#06b6d4" name="xAI" />
-                <Bar dataKey="groq_tokens" fill="#10b981" name="Groq" />
+                <Bar dataKey="gemini_tokens" fill="#8b5cf6" name="Gemini" radius={[3,3,0,0]} />
+                <Bar dataKey="xai_tokens" fill="#06b6d4" name="xAI" radius={[3,3,0,0]} />
+                <Bar dataKey="groq_tokens" fill="#10b981" name="Groq" radius={[3,3,0,0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="flex flex-col items-center justify-center h-[130px] text-slate-600 text-xs gap-1">
-              <BarChart2 size={20} className="opacity-40" />
+            <div className="flex flex-col items-center justify-center h-[130px] text-white/20 text-xs gap-1">
+              <BarChart2 size={20} className="opacity-30" />
               <span>No token data yet</span>
-              <span className="text-xs text-slate-500">Grows with AI usage</span>
+              <span className="text-xs text-white/15">Grows with AI usage</span>
             </div>
           )}
           {tokenSpend && Object.keys(tokenSpend.totals || {}).length > 0 && (
             <div className="flex gap-3 mt-2 flex-wrap">
               {Object.entries(tokenSpend.totals).map(([p, v]) => (
-                <span key={p} className="text-xs text-slate-500">
-                  {p}: <span className="text-slate-300">{(v.tokens || 0).toLocaleString()}</span>
+                <span key={p} className="text-xs text-white/30">
+                  {p}: <span className="text-white/50">{(v.tokens || 0).toLocaleString()}</span>
                 </span>
               ))}
             </div>
           )}
-        </div>
+        </GlassCard>
 
-        {/* Widget 7: Pro Conversion Funnel */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-3">
             <TrendingUp size={14} className="text-violet-400" />
-            <h3 className="text-slate-300 font-semibold text-sm">Conversion Funnel</h3>
+            <h3 className="text-white/70 font-semibold text-sm">Conversion Funnel</h3>
           </div>
           {funnel ? (
             <div className="space-y-2">
@@ -807,44 +834,43 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 return (
                   <div key={step.stage}>
                     <div className="flex justify-between mb-0.5">
-                      <span className="text-xs text-slate-400">{step.stage}</span>
-                      <span className="text-xs font-mono text-white">{step.count.toLocaleString()}</span>
+                      <span className="text-xs text-white/40">{step.stage}</span>
+                      <span className="text-xs font-mono text-white/80">{step.count.toLocaleString()}</span>
                     </div>
-                    <div className="h-2.5 rounded-full bg-slate-800 overflow-hidden">
+                    <div className="h-2 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)' }}>
                       <div
-                        className="h-full rounded-full transition-all"
+                        className="h-full rounded-full transition-all duration-500"
                         style={{ width: `${pct}%`, background: colors[i] || '#7c3aed' }}
                       />
                     </div>
                   </div>
                 );
               })}
-              <div className="pt-2 border-t border-slate-800 grid grid-cols-2 gap-2">
+              <div className="pt-2 border-t border-white/[0.04] grid grid-cols-2 gap-2">
                 <div className="text-center">
                   <p className="text-lg font-bold text-emerald-400">{funnel.free_to_paid_rate}%</p>
-                  <p className="text-xs text-slate-500">Free→Paid</p>
+                  <p className="text-xs text-white/25">Free→Paid</p>
                 </div>
                 <div className="text-center">
                   <p className="text-lg font-bold text-amber-400">{funnel.starter_to_pro_rate}%</p>
-                  <p className="text-xs text-slate-500">Starter→Pro</p>
+                  <p className="text-xs text-white/25">Starter→Pro</p>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="flex items-center justify-center h-[130px] text-slate-600 text-xs">
+            <div className="flex items-center justify-center h-[130px] text-white/20 text-xs">
               Loading funnel…
             </div>
           )}
-        </div>
+        </GlassCard>
 
-        {/* Widget 8: AssamBoard Coverage Heatmap */}
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <GlassCard className="p-5">
           <div className="flex items-center gap-2 mb-3">
             <FileCheck size={14} className="text-violet-400" />
-            <h3 className="text-slate-300 font-semibold text-sm">AssamBoard Coverage</h3>
-            <span className="text-xs text-slate-600">chapter × subject</span>
+            <h3 className="text-white/70 font-semibold text-sm">Assam Board Coverage</h3>
+            <span className="text-xs text-white/20">chapter × subject</span>
             {coverage?.has_data && coverage.subjects.length > 0 && (
-              <span className="ml-auto text-xs text-slate-500">{coverage.subjects.length} subjects</span>
+              <span className="ml-auto text-xs text-white/25">{coverage.subjects.length} subjects</span>
             )}
           </div>
           {coverage?.has_data && coverage.subjects.length > 0 ? (
@@ -852,10 +878,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               {coverage.subjects.map(sub => (
                 <div key={sub.subject_id}>
                   <div className="flex justify-between mb-1">
-                    <span className="text-xs text-slate-300 truncate flex items-center gap-1.5">
+                    <span className="text-xs text-white/60 truncate flex items-center gap-1.5">
                       {sub.subject_name}
                       {(sub.class_name || sub.stream_name) && (
-                        <span className="text-[10px] text-slate-600 font-normal shrink-0">
+                        <span className="text-[10px] text-white/20 font-normal shrink-0">
                           {[sub.class_name, sub.stream_name].filter(Boolean).join(' · ')}
                         </span>
                       )}
@@ -876,8 +902,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                         style={{
                           background: ch.coverage === 'full' ? '#10b981'
                             : ch.coverage === 'partial' ? '#f59e0b'
-                            : '#1e293b',
-                          border: '1px solid rgba(255,255,255,0.05)',
+                            : 'rgba(255,255,255,0.04)',
+                          border: '1px solid rgba(255,255,255,0.04)',
                         }}
                       />
                     ))}
@@ -886,26 +912,26 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               ))}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-[130px] text-slate-600 text-xs gap-1">
-              <BookOpen size={20} className="opacity-40" />
+            <div className="flex flex-col items-center justify-center h-[130px] text-white/20 text-xs gap-1">
+              <BookOpen size={20} className="opacity-30" />
               <span>No subjects found</span>
-              <span className="text-xs text-slate-500">Add subjects to see coverage</span>
+              <span className="text-xs text-white/15">Add subjects to see coverage</span>
             </div>
           )}
-          <div className="flex items-center gap-3 mt-2 pt-2 border-t border-slate-800">
-            {[['#10b981', 'Full'], ['#f59e0b', 'Partial'], ['#1e293b', 'None']].map(([c, label]) => (
+          <div className="flex items-center gap-3 mt-2 pt-2 border-t border-white/[0.04]">
+            {[['#10b981', 'Full'], ['#f59e0b', 'Partial'], ['rgba(255,255,255,0.04)', 'None']].map(([c, label]) => (
               <div key={label} className="flex items-center gap-1">
-                <div className="w-2.5 h-2.5 rounded-sm" style={{ background: c, border: '1px solid rgba(255,255,255,0.1)' }} />
-                <span className="text-xs text-slate-500">{label}</span>
+                <div className="w-2.5 h-2.5 rounded-sm" style={{ background: c, border: '1px solid rgba(255,255,255,0.06)' }} />
+                <span className="text-xs text-white/25">{label}</span>
               </div>
             ))}
           </div>
-        </div>
+        </GlassCard>
       </div>
 
       {data?.plan_distribution && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
-          <h3 className="text-slate-400 text-sm font-medium mb-4">Plan Distribution</h3>
+        <GlassCard className="p-5">
+          <h3 className="text-white/50 text-sm font-semibold mb-4">Plan Distribution</h3>
           <div className="grid grid-cols-3 gap-4">
             {[
               { key: 'free',    label: 'Free',    color: '#64748b' },
@@ -916,90 +942,78 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               const total = Object.values(data.plan_distribution).reduce((a, b) => a + b, 0) || 1;
               const pct = Math.round((count / total) * 100);
               return (
-                <div key={key} className="text-center p-4 bg-slate-800/50 rounded-xl">
+                <div key={key} className="text-center p-4 rounded-xl" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
                   <p className="text-2xl font-bold" style={{ color }}>{count}</p>
-                  <p className="text-slate-400 text-sm">{label}</p>
-                  <div className="mt-2 h-1 rounded-full bg-slate-700 overflow-hidden">
-                    <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+                  <p className="text-white/40 text-sm">{label}</p>
+                  <div className="mt-2 h-1 rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.05)' }}>
+                    <div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, background: color }} />
                   </div>
-                  <p className="text-xs text-slate-600 mt-1">{pct}%</p>
+                  <p className="text-xs text-white/20 mt-1">{pct}%</p>
                 </div>
               );
             })}
           </div>
-        </div>
+        </GlassCard>
       )}
 
       {pwaStats && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <GlassCard className="p-5" glow="#8b5cf6">
           <div className="flex items-center gap-2 mb-4">
             <Smartphone size={14} className="text-violet-400" />
-            <h3 className="text-slate-300 font-semibold text-sm">PWA App Downloads</h3>
+            <h3 className="text-white/70 font-semibold text-sm">PWA App Downloads</h3>
             {pwaStats.installs_today > 0 && (
-              <span style={{ background: 'rgba(16,185,129,0.12)', border: '1px solid rgba(16,185,129,0.25)', color: '#10b981', borderRadius: 20, padding: '2px 8px', fontSize: 11, fontWeight: 700 }}>
+              <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full" style={{ background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.2)', color: '#10b981' }}>
                 +{pwaStats.installs_today} today
               </span>
             )}
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-            <div className="bg-slate-800/50 rounded-xl p-3 text-center">
-              <p className="text-xl font-bold text-violet-400">{pwaStats.total_installs}</p>
-              <p className="text-xs text-slate-500 mt-0.5">Total Installs</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl p-3 text-center">
-              <p className="text-xl font-bold text-emerald-400">{pwaStats.installs_7d}</p>
-              <p className="text-xs text-slate-500 mt-0.5">Last 7 Days</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl p-3 text-center">
-              <p className="text-xl font-bold text-cyan-400">{pwaStats.prompts_shown}</p>
-              <p className="text-xs text-slate-500 mt-0.5">Prompts Shown</p>
-            </div>
-            <div className="bg-slate-800/50 rounded-xl p-3 text-center">
-              <p className="text-xl font-bold" style={{ color: pwaStats.conversion_rate >= 30 ? '#10b981' : pwaStats.conversion_rate >= 15 ? '#f59e0b' : '#ef4444' }}>
-                {pwaStats.conversion_rate}%
-              </p>
-              <p className="text-xs text-slate-500 mt-0.5">Install Rate</p>
-            </div>
+            {[
+              { label: 'Total Installs', value: pwaStats.total_installs, color: '#a78bfa' },
+              { label: 'Last 7 Days', value: pwaStats.installs_7d, color: '#10b981' },
+              { label: 'Prompts Shown', value: pwaStats.prompts_shown, color: '#22d3ee' },
+              { label: 'Install Rate', value: `${pwaStats.conversion_rate}%`, color: pwaStats.conversion_rate >= 30 ? '#10b981' : pwaStats.conversion_rate >= 15 ? '#f59e0b' : '#ef4444' },
+            ].map(item => (
+              <div key={item.label} className="rounded-xl p-3 text-center" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
+                <p className="text-xl font-bold" style={{ color: item.color }}>{item.value}</p>
+                <p className="text-xs text-white/25 mt-0.5">{item.label}</p>
+              </div>
+            ))}
           </div>
 
           {pwaStats.daily_installs?.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  Daily Installs (14 days)
-                </span>
+                <span className="text-[10px] text-white/20 font-semibold uppercase tracking-wider">Daily Installs (14 days)</span>
                 <div className="flex items-center gap-3">
                   <div className="flex items-center gap-1">
                     <div className="w-2 h-2 rounded-sm" style={{ background: '#8b5cf6' }} />
-                    <span className="text-[10px] text-slate-500">Installs</span>
+                    <span className="text-[10px] text-white/25">Installs</span>
                   </div>
                   <div className="flex items-center gap-1">
                     <div className="w-2 h-2 rounded-sm" style={{ background: 'rgba(139,92,246,0.25)' }} />
-                    <span className="text-[10px] text-slate-500">Prompts</span>
+                    <span className="text-[10px] text-white/25">Prompts</span>
                   </div>
                 </div>
               </div>
               <ResponsiveContainer width="100%" height={100}>
                 <BarChart data={pwaStats.daily_installs} barSize={10}>
-                  <XAxis dataKey="date" tick={{ fontSize: 8, fill: '#64748b' }} tickFormatter={d => d.slice(5)} />
-                  <YAxis tick={{ fontSize: 8, fill: '#64748b' }} allowDecimals={false} />
-                  <Tooltip
-                    contentStyle={{ background: '#1e293b', border: 'none', fontSize: 11, borderRadius: 8 }}
-                    labelStyle={{ color: '#94a3b8' }}
-                  />
-                  <Bar dataKey="prompts" fill="rgba(139,92,246,0.25)" name="Prompts" radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="installs" fill="#8b5cf6" name="Installs" radius={[2, 2, 0, 0]} />
+                  <XAxis dataKey="date" tick={{ fontSize: 8, fill: 'rgba(255,255,255,0.2)' }} tickFormatter={d => d.slice(5)} />
+                  <YAxis tick={{ fontSize: 8, fill: 'rgba(255,255,255,0.2)' }} allowDecimals={false} />
+                  <Tooltip content={<ChartTooltip />} />
+                  <Bar dataKey="prompts" fill="rgba(139,92,246,0.25)" name="Prompts" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="installs" fill="#8b5cf6" name="Installs" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           )}
 
-          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-slate-800 text-xs text-slate-500">
-            <span>Dismissed: <span className="text-slate-400 font-medium">{pwaStats.dismissed ?? 0}</span></span>
-            <span>Rejected: <span className="text-slate-400 font-medium">{pwaStats.rejected ?? 0}</span></span>
+          <div className="flex items-center gap-4 mt-3 pt-3 border-t border-white/[0.04] text-xs text-white/25">
+            <span>Dismissed: <span className="text-white/40 font-medium">{pwaStats.dismissed ?? 0}</span></span>
+            <span>Rejected: <span className="text-white/40 font-medium">{pwaStats.rejected ?? 0}</span></span>
           </div>
-        </div>
+        </GlassCard>
       )}
 
       <PipelineWidget token={adminToken} />
@@ -1009,25 +1023,29 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           <button
             key={action.id}
             onClick={() => onNavigate?.(action.id)}
-            className="flex items-center justify-between p-4 bg-slate-900 border border-slate-800 rounded-xl hover:border-slate-700 transition-all group"
+            className="flex items-center justify-between p-4 rounded-2xl transition-all duration-300 group hover:scale-[1.01]"
+            style={{
+              background: 'rgba(15,15,30,0.6)',
+              border: '1px solid rgba(255,255,255,0.06)',
+            }}
             data-testid={`quick-action-${action.id}`}
           >
             <div className="flex items-center gap-3">
-              <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${action.color} flex items-center justify-center`}>
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: action.gradient }}>
                 <action.icon size={15} className="text-white" />
               </div>
-              <span className="text-sm font-medium text-white">{action.label}</span>
+              <span className="text-sm font-medium text-white/80 group-hover:text-white transition-colors">{action.label}</span>
             </div>
-            <ArrowRight size={14} className="text-slate-600 group-hover:text-slate-400 transition-colors" />
+            <ArrowRight size={14} className="text-white/15 group-hover:text-white/40 transition-colors" />
           </button>
         ))}
       </div>
 
       {vs.daily_visitors?.length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 rounded-xl p-5">
+        <GlassCard className="p-5">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="text-slate-400 text-sm font-medium">Visitor Trend — Last 7 Days</h3>
-            <span className="text-xs text-slate-600">Unique visitors per day</span>
+            <h3 className="text-white/50 text-sm font-semibold">Visitor Trend — Last 7 Days</h3>
+            <span className="text-xs text-white/20">Unique visitors per day</span>
           </div>
           <div className="flex items-end gap-2 h-20">
             {vs.daily_visitors.map((d, i) => {
@@ -1037,17 +1055,17 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               return (
                 <div key={d.date} className="flex-1 flex flex-col items-center gap-1">
                   <div
-                    className="w-full rounded-t transition-all"
+                    className="w-full rounded-t transition-all duration-300"
                     style={{
                       height: `${pct}%`,
                       background: isToday
                         ? 'linear-gradient(to top, #7c3aed, #a78bfa)'
-                        : 'rgba(139,92,246,0.30)',
+                        : 'rgba(139,92,246,0.20)',
                       minHeight: 4,
                     }}
                     title={`${d.date}: ${d.visitors} visitors, ${d.page_views} views`}
                   />
-                  <span className="text-[10px] text-slate-600 whitespace-nowrap">
+                  <span className="text-[10px] text-white/20 whitespace-nowrap">
                     {d.date.slice(5)}
                   </span>
                 </div>
@@ -1056,29 +1074,29 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
           <div className="flex gap-4 mt-3">
             {vs.daily_visitors.slice(-1).map(d => (
-              <div key="today-summary" className="flex gap-4 text-xs text-slate-500">
+              <div key="today-summary" className="flex gap-4 text-xs text-white/30">
                 <span>Today: <span className="text-violet-400 font-medium">{d.visitors} visitors</span></span>
                 <span>·</span>
-                <span><span className="text-slate-300 font-medium">{d.page_views}</span> page views</span>
+                <span><span className="text-white/50 font-medium">{d.page_views}</span> page views</span>
               </div>
             ))}
           </div>
-        </div>
+        </GlassCard>
       )}
 
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6" data-testid="recent-activity">
+      <GlassCard className="p-5" data-testid="recent-activity">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Activity size={16} className="text-violet-400" />
-            <h3 className="text-slate-300 font-semibold">Recent Activity</h3>
-            <span className="flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-2 w-2 rounded-full bg-emerald-400 opacity-75" />
+            <h3 className="text-white/70 font-semibold">Recent Activity</h3>
+            <span className="flex h-2 w-2 relative">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
               <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
             </span>
           </div>
           <button
             onClick={() => onNavigate?.('activitylog')}
-            className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
+            className="text-xs text-violet-400/70 hover:text-violet-400 transition-colors"
           >
             View all logs →
           </button>
@@ -1086,8 +1104,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
         {recentEvents.length === 0 ? (
           <div className="text-center py-8">
-            <Activity size={28} className="text-slate-700 mx-auto mb-3" />
-            <p className="text-slate-600 text-sm">No activity yet — events will appear here in real time</p>
+            <Activity size={28} className="text-white/10 mx-auto mb-3" />
+            <p className="text-white/20 text-sm">No activity yet — events will appear here in real time</p>
           </div>
         ) : (
           <div className="space-y-1.5">
@@ -1096,7 +1114,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             ))}
           </div>
         )}
-      </div>
+      </GlassCard>
+
       <AdminQuickLinks links={['content','seomanager','analytics','users','conversations','vertex','monetization']} onNavigate={onNavigate} />
     </div>
   );

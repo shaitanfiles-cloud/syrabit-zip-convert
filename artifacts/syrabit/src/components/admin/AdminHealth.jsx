@@ -31,7 +31,7 @@ function PeakBadge({ label, value, color = 'violet' }) {
   );
 }
 
-const TOOLTIP_STYLE = { background: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px', color: '#e2e8f0', fontSize: 12 };
+const TOOLTIP_STYLE = { background: 'rgba(15,15,30,0.95)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', color: '#e2e8f0', fontSize: 12, backdropFilter: 'blur(12px)' };
 
 function CustomTooltip({ active, payload, label }) {
   if (!active || !payload?.length) return null;
@@ -116,15 +116,15 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const current = metricsData?.current || {};
 
   return (
-    <div className="space-y-6 max-w-4xl">
-      {/* Tab Bar */}
-      <div style={{ display: 'flex', gap: 4 }}>
+    <div className="space-y-5 max-w-4xl">
+      <div className="flex gap-1 p-1 rounded-xl w-fit" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}>
         {[
-          { id: 'infra', label: '🖥 Infrastructure' },
-          { id: 'llm',   label: '🤖 LLM Cost Tracker' },
+          { id: 'infra', label: 'Infrastructure' },
+          { id: 'llm',   label: 'LLM Cost Tracker' },
         ].map(t => (
           <button key={t.id} onClick={() => setHealthTab(t.id)}
-            style={{ padding: '6px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: 'none', background: healthTab === t.id ? '#7c3aed' : 'rgba(255,255,255,0.04)', color: healthTab === t.id ? '#fff' : 'rgba(232,232,232,0.45)' }}>
+            className="transition-all duration-200"
+            style={{ padding: '7px 18px', borderRadius: 10, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: healthTab === t.id ? '1px solid rgba(124,58,237,0.3)' : '1px solid transparent', background: healthTab === t.id ? 'rgba(124,58,237,0.15)' : 'transparent', color: healthTab === t.id ? '#c4b5fd' : 'rgba(255,255,255,0.35)' }}>
             {t.label}
           </button>
         ))}
@@ -207,11 +207,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
 
       {/* Infrastructure Tab */}
       {healthTab === 'infra' && (<>
-      <div className={`rounded-2xl p-4 flex items-center gap-3 border ${
-        loading ? 'border-white/8 bg-zinc-500/5' :
-        hasError ? 'border-red-500/20 bg-red-500/5' :
-        'border-emerald-500/20 bg-emerald-500/5'
-      }`}>
+      <div className={`rounded-2xl p-4 flex items-center gap-3`}
+        style={{
+          background: loading ? 'rgba(255,255,255,0.02)' : hasError ? 'rgba(239,68,68,0.04)' : 'rgba(16,185,129,0.04)',
+          border: `1px solid ${loading ? 'rgba(255,255,255,0.06)' : hasError ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)'}`,
+        }}>
         {loading ? <Wifi size={20} className="text-white/30 animate-pulse" /> :
          hasError ? <AlertTriangle size={20} className="text-red-400" /> :
          <ShieldCheck size={20} className="text-emerald-400" />}
@@ -354,7 +354,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           const KNOWN_SERVICES = [
             { key: 'mongodb',  icon: Database, label: 'Syrabit DB (MongoDB)', desc: 'User data, sessions, content, rate limits' },
             { key: 'redis',    icon: Wifi,     label: 'Redis Cache (Upstash)', desc: 'Shared content cache & session store' },
-            { key: 'llm',      icon: Zap,      label: 'AI Provider (Groq)',    desc: 'LLM inference — llama-3.1-8b-instant' },
+            { key: 'llm',      icon: Zap,      label: 'AI Provider Pool',      desc: 'Multi-provider SLM pool — Groq, Cerebras, Sarvam, OpenRouter, Fireworks' },
             { key: 'supabase', icon: Database, label: 'Supabase',              desc: 'Auth, user profiles, persistent storage' },
           ];
           const knownKeys = new Set(KNOWN_SERVICES.map(s => s.key));

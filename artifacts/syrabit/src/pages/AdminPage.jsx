@@ -1,8 +1,3 @@
-/**
- * AdminPage — /admin
- * Full spec rebuild: AdminShell with 15 sections, 6 navigation groups,
- * collapsible sidebar, system status badge, admin name/session display.
- */
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
@@ -11,6 +6,7 @@ import {
   Shield, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, Globe,
   Crown, Cpu, Layers, Zap, BarChart2, ThumbsUp,
+  ExternalLink,
 } from 'lucide-react';
 import axios from 'axios';
 import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
@@ -94,14 +90,13 @@ const SECTION_COMPONENTS = {
   intelligence:  AdminIntelligence,
 };
 
-// ── AdminPage ─────────────────────────────────────────────────────────────────
 export default function AdminPage() {
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('dashboard');
   const [navContext, setNavContext]        = useState(null);
   const [collapsed, setCollapsed]         = useState(false);
   const [verifying, setVerifying]         = useState(true);
-  const [sysStatus, setSysStatus]         = useState('ok'); // ok | warn | maintenance
+  const [sysStatus, setSysStatus]         = useState('ok');
 
   const [adminEmail, setAdminEmail] = useState('');
   const [adminName,  setAdminName]  = useState('Admin');
@@ -123,7 +118,6 @@ export default function AdminPage() {
       });
   }, [navigate]);
 
-  // ── Session keep-alive: ping /admin/verify every 20 min to slide cookie ──
   useEffect(() => {
     if (verifying) return;
     const id = setInterval(() => {
@@ -137,11 +131,10 @@ export default function AdminPage() {
           toast.error('Session expired. Please log in again.');
           navigate('/admin/login');
         });
-    }, 20 * 60 * 1000); // 20 minutes
+    }, 20 * 60 * 1000);
     return () => clearInterval(id);
   }, [verifying, navigate]);
 
-  // ── Dynamic system status ──────────────────────────────────────────────
   useEffect(() => {
     if (verifying) return;
     const checkStatus = async () => {
@@ -173,7 +166,6 @@ export default function AdminPage() {
   }, [verifying, adminToken]);
 
   const handleLogout = async () => {
-    // Call logout endpoint - this clears the httpOnly cookie server-side
     await adminLogout().catch(() => {});
     localStorage.removeItem('admin_token');
     setAdminToken(null);
@@ -184,9 +176,12 @@ export default function AdminPage() {
   if (verifying) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center"
-        style={{ background: '#070711' }}>
-        <Loader2 className="w-8 h-8 animate-spin text-violet-400 mb-3" />
-        <p className="text-sm text-white/40">Verifying admin session...</p>
+        style={{ background: 'linear-gradient(145deg, #050510 0%, #0a0a1a 50%, #080816 100%)' }}>
+        <div className="relative">
+          <div className="absolute inset-0 rounded-full blur-xl opacity-30" style={{ background: 'radial-gradient(circle, #7c3aed 0%, transparent 70%)' }} />
+          <Loader2 className="w-8 h-8 animate-spin text-violet-400 mb-3 relative" />
+        </div>
+        <p className="text-sm text-white/30 mt-4">Verifying admin session...</p>
       </div>
     );
   }
@@ -194,80 +189,100 @@ export default function AdminPage() {
   const ActiveComponent = SECTION_COMPONENTS[activeSection] || AdminDashboard;
   const activeLabel = SECTIONS.find((s) => s.id === activeSection)?.label || 'Admin';
 
-  // System status badge config
   const statusConfig = {
-    ok:          { label: 'All Systems Operational', dot: 'bg-emerald-400', text: 'text-emerald-400', border: 'border-emerald-500/30' },
-    warn:        { label: 'Setup Required',          dot: 'bg-amber-400',   text: 'text-amber-400',   border: 'border-amber-500/30'   },
-    maintenance: { label: 'Maintenance Mode',        dot: 'bg-red-400',     text: 'text-red-400',     border: 'border-red-500/30'     },
+    ok:          { label: 'All Systems Operational', dot: 'bg-emerald-400', text: 'text-emerald-400', border: 'border-emerald-500/20', bg: 'bg-emerald-500/[0.06]' },
+    warn:        { label: 'Setup Required',          dot: 'bg-amber-400',   text: 'text-amber-400',   border: 'border-amber-500/20',   bg: 'bg-amber-500/[0.06]'   },
+    maintenance: { label: 'Maintenance Mode',        dot: 'bg-red-400',     text: 'text-red-400',     border: 'border-red-500/20',     bg: 'bg-red-500/[0.06]'     },
   };
   const sc = statusConfig[sysStatus];
 
   return (
-    <div className="min-h-screen flex" style={{ background: '#080810' }} data-testid="admin-dashboard">
-      {/* ═══════════════════════════════════════════
-          SIDEBAR
-          ═══════════════════════════════════════════ */}
+    <div className="min-h-screen flex" style={{ background: 'linear-gradient(145deg, #050510 0%, #0a0a1a 50%, #080816 100%)' }} data-testid="admin-dashboard">
       <aside
-        className="flex flex-col h-screen sticky top-0 transition-all duration-300 flex-shrink-0"
+        className="flex flex-col h-screen sticky top-0 transition-all duration-300 flex-shrink-0 z-20"
         style={{
-          width: collapsed ? 64 : 240,
-          background: '#0d0d1a',
-          borderRight: '1px solid rgba(139,92,246,0.12)',
+          width: collapsed ? 68 : 252,
+          background: 'linear-gradient(180deg, rgba(13,13,28,0.98) 0%, rgba(8,8,20,0.98) 100%)',
+          borderRight: '1px solid rgba(139,92,246,0.08)',
+          backdropFilter: 'blur(20px)',
         }}
       >
-        {/* Logo block */}
-        <div className="flex items-center h-14 px-3 border-b border-white/[0.06]">
+        <div
+          className="flex items-center px-4 border-b border-white/[0.04]"
+          style={{ height: 60 }}
+        >
           {collapsed ? (
-            <img src="/logo.webp" alt="Syrabit.ai" width="32" height="32" className="w-8 h-8 rounded-lg object-cover flex-shrink-0" />
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center mx-auto" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(139,92,246,0.1))' }}>
+              <img src="/logo.webp" alt="S" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
+            </div>
           ) : (
-            <div className="flex items-center gap-2.5">
-              <img src="/logo.webp" alt="Syrabit.ai" width="32" height="32" className="w-8 h-8 rounded-lg object-cover flex-shrink-0" />
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <div className="absolute -inset-1 rounded-xl blur-md opacity-40" style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }} />
+                <div className="relative w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.25), rgba(139,92,246,0.15))' }}>
+                  <img src="/logo.webp" alt="Syrabit.ai" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
+                </div>
+              </div>
               <div>
-                <p className="text-sm font-bold text-white shimmer-text" style={{ lineHeight: 1.2 }}>Syrabit.ai</p>
-                <p className="text-[9px] text-violet-400 tracking-[0.1em] flex items-center gap-1">
-                  <Shield size={8} /> ADMIN PORTAL
+                <p className="text-sm font-bold text-white tracking-tight" style={{ lineHeight: 1.2 }}>Syrabit.ai</p>
+                <p className="text-[9px] font-semibold tracking-[0.15em] flex items-center gap-1" style={{ color: 'rgba(167,139,250,0.7)' }}>
+                  CONTROL CENTER
                 </p>
               </div>
             </div>
           )}
         </div>
 
-        {/* Navigation */}
-        <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
+        <nav className="flex-1 overflow-y-auto py-3 px-2.5 space-y-0.5 scrollbar-thin">
           {GROUPS.map((group) => {
             const groupSections = SECTIONS.filter((s) => s.group === group);
             const label = GROUP_LABELS[group];
             return (
               <div key={group}>
                 {label && !collapsed && (
-                  <p className="text-[9px] font-bold tracking-[0.12em] px-3 py-2 mt-2"
-                    style={{ color: 'rgba(255,255,255,0.25)' }}>
-                    {label}
-                  </p>
+                  <div className="flex items-center gap-2 px-3 py-2 mt-3 mb-0.5">
+                    <div className="h-px flex-1" style={{ background: 'linear-gradient(90deg, rgba(139,92,246,0.15), transparent)' }} />
+                    <p className="text-[9px] font-bold tracking-[0.15em] flex-shrink-0"
+                      style={{ color: 'rgba(167,139,250,0.35)' }}>
+                      {label}
+                    </p>
+                    <div className="h-px flex-1" style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15))' }} />
+                  </div>
                 )}
+                {collapsed && label && <div className="h-px mx-3 my-2" style={{ background: 'rgba(139,92,246,0.1)' }} />}
                 {groupSections.map(({ id, icon: Icon, label: sectionLabel }) => {
                   const isActive = activeSection === id;
                   return (
                     <button
                       key={id}
                       onClick={() => setActiveSection(id)}
-                      className="relative w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all duration-150 text-left"
+                      className="relative w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 text-left group"
                       style={{
-                        background: isActive ? 'rgba(124,58,237,0.20)' : 'transparent',
-                        color: isActive ? 'rgb(196,181,253)' : 'rgba(255,255,255,0.40)',
-                        boxShadow: isActive ? '0 0 16px rgba(139,92,246,0.12)' : 'none',
+                        background: isActive
+                          ? 'linear-gradient(135deg, rgba(124,58,237,0.18) 0%, rgba(139,92,246,0.08) 100%)'
+                          : 'transparent',
+                        color: isActive ? 'rgb(196,181,253)' : 'rgba(255,255,255,0.35)',
                         fontWeight: isActive ? 600 : 400,
                       }}
                       data-testid={`admin-nav-${id}`}
                     >
-                      {/* Active left bar */}
                       {isActive && (
-                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-r-full bg-violet-400" />
+                        <div
+                          className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
+                          style={{ background: 'linear-gradient(180deg, #a78bfa, #7c3aed)' }}
+                        />
                       )}
-                      <Icon size={16} className="flex-shrink-0"
-                        style={{ color: isActive ? 'rgb(167,139,250)' : 'inherit' }} />
+                      <div
+                        className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-all duration-200"
+                        style={{
+                          background: isActive ? 'rgba(124,58,237,0.2)' : 'transparent',
+                        }}
+                      >
+                        <Icon size={15} className="flex-shrink-0 transition-colors duration-200"
+                          style={{ color: isActive ? '#a78bfa' : 'inherit' }} />
+                      </div>
                       {!collapsed && (
-                        <span className="text-sm truncate">{sectionLabel}</span>
+                        <span className="text-[13px] truncate group-hover:text-white/60 transition-colors duration-200">{sectionLabel}</span>
                       )}
                     </button>
                   );
@@ -277,74 +292,76 @@ export default function AdminPage() {
           })}
         </nav>
 
-        {/* Admin info + logout */}
-        <div className="border-t border-white/[0.06] px-2 py-3 space-y-1">
+        <div className="border-t border-white/[0.04] px-2.5 py-3 space-y-1">
           {!collapsed && (
-            <div className="flex items-center gap-2 px-3 py-2 mb-1">
-              <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
-                style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' }}>
-                <Shield size={12} className="text-white" />
+            <div className="flex items-center gap-2.5 px-3 py-2 mb-1 rounded-xl" style={{ background: 'rgba(124,58,237,0.06)' }}>
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                style={{ background: 'linear-gradient(135deg, #7c3aed, #6d28d9)' }}>
+                <span className="text-xs font-bold text-white">{adminName?.charAt(0)?.toUpperCase() || 'A'}</span>
               </div>
               <div className="min-w-0 flex-1">
                 <p className="text-xs text-white/70 font-medium truncate">{adminName}</p>
-                <p className="text-[10px] text-white/30 truncate">Session · 8h</p>
+                <p className="text-[10px] text-white/25 truncate">{adminEmail || 'Active session'}</p>
               </div>
             </div>
           )}
           <Link to="/library">
-            <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-white/30 hover:text-white/60 hover:bg-white/5 transition-colors">
-              <img src="/logo.webp" alt="" width="14" height="14" className="w-3.5 h-3.5 rounded-sm object-cover flex-shrink-0" />
+            <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-white/25 hover:text-white/50 hover:bg-white/[0.03] transition-all duration-200">
+              <ExternalLink size={13} className="flex-shrink-0" />
               {!collapsed && <span>Student View</span>}
             </button>
           </Link>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-colors"
-            style={{ color: 'rgba(248,113,113,0.7)' }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-all duration-200 hover:bg-red-500/[0.06]"
+            style={{ color: 'rgba(248,113,113,0.6)' }}
           >
-            <LogOut size={14} className="flex-shrink-0" />
+            <LogOut size={13} className="flex-shrink-0" />
             {!collapsed && <span>Logout</span>}
           </button>
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="w-full flex items-center justify-center py-1.5 rounded-xl text-white/20 hover:text-white/40 transition-colors"
+            className="w-full flex items-center justify-center py-1.5 rounded-xl text-white/15 hover:text-white/30 hover:bg-white/[0.02] transition-all duration-200"
           >
             {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
           </button>
         </div>
       </aside>
 
-      {/* ═══════════════════════════════════════════
-          MAIN CONTENT
-          ═══════════════════════════════════════════ */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Top bar */}
         <header
-          className="flex items-center justify-between h-14 px-6 border-b flex-shrink-0"
+          className="flex items-center justify-between px-6 border-b flex-shrink-0 z-10"
           style={{
-            background: 'rgba(13,13,26,0.90)',
-            backdropFilter: 'blur(20px)',
-            borderColor: 'rgba(255,255,255,0.06)',
+            height: 60,
+            background: 'rgba(8,8,20,0.80)',
+            backdropFilter: 'blur(24px)',
+            borderColor: 'rgba(255,255,255,0.04)',
           }}
         >
-          <p className="text-sm font-semibold text-white">
-            {activeLabel}
-            <span className="text-white/20 font-normal ml-2 inline-flex items-center gap-1.5">— <img src="/logo.webp" alt="" width="16" height="16" className="w-4 h-4 rounded-sm inline-block" /> Syrabit.ai</span>
-          </p>
+          <div className="flex items-center gap-3">
+            <h1 className="text-sm font-semibold text-white/90">{activeLabel}</h1>
+            <span className="text-white/10">|</span>
+            <span className="text-xs text-white/20 flex items-center gap-1.5">
+              <img src="/logo.webp" alt="" width="14" height="14" className="w-3.5 h-3.5 rounded-sm inline-block opacity-50" />
+              Syrabit.ai
+            </span>
+          </div>
 
-          {/* System status badge */}
           <div
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border ${sc.text} ${sc.border}`}
-            style={{ background: 'rgba(255,255,255,0.03)' }}
+            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium border ${sc.text} ${sc.border} ${sc.bg}`}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${sc.dot} animate-pulse`} />
-            {sc.label}
+            <span className="text-[11px]">{sc.label}</span>
           </div>
         </header>
 
-        {/* Section content */}
         <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
-          <Suspense fallback={<div className="flex items-center justify-center h-40"><Loader2 className="w-6 h-6 animate-spin text-purple-400" /></div>}>
+          <Suspense fallback={
+            <div className="flex items-center justify-center h-40 gap-3">
+              <Loader2 className="w-5 h-5 animate-spin text-violet-400/60" />
+              <span className="text-sm text-white/20">Loading section...</span>
+            </div>
+          }>
             <ActiveComponent
               adminToken={adminToken}
               adminName={adminName}
