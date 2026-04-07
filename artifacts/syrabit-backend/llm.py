@@ -244,7 +244,7 @@ _SLM_SLOT_CANDIDATES = [
 _CONTENT_SLOT_CANDIDATES = [
     ("gemini",      "gemini-2.5-flash",                                  6, 0),
     ("sarvam",      "sarvam-m",                                          4, 1),
-    ("cerebras",    "llama-4-scout-17b-16e-instruct",                    4, 2),
+    ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    4, 2),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -701,10 +701,12 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
 _LLM_PROVIDERS_CONTENT: list[dict] = []
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY_2, "default_model": "gemini-2.5-flash"})
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-4-scout-17b-16e-instruct"})
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "qwen-3-235b-a22b-instruct-2507"})
 
 logger.info(
     f"Admin content providers (quality-first order): "
@@ -716,6 +718,8 @@ async def call_llm_api_content(messages: list, model: str = None, max_tokens: in
     (large context, high quality), Sarvam secondary, Cerebras emergency fallback.
     Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
     Retries with exponential backoff instead of instant failover."""
+    if model is None and _LLM_PROVIDERS_CONTENT:
+        model = _LLM_PROVIDERS_CONTENT[0]["default_model"]
     return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
 
 
