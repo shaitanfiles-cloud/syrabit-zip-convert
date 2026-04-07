@@ -72,7 +72,7 @@ async def admin_list_subjects(admin: dict = Depends(get_admin_user)):
 @router.get("/admin/content/chapters/{subject_id}")
 async def admin_list_chapters(subject_id: str, admin: dict = Depends(get_admin_user)):
     """Admin chapter list — always reads live from DB, no caching, includes all statuses and coverage score."""
-    chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(None)
+    chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(500)
     result = []
     for c in chapters:
         ch = {k: v for k, v in c.items() if k != "_id"}

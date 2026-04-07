@@ -1,7 +1,8 @@
+import { memo } from 'react';
 import { Link } from 'react-router-dom';
 import { Clock, ArrowRight } from 'lucide-react';
 
-export default function CmsDocCard({ doc }) {
+const CmsDocCard = memo(function CmsDocCard({ doc }) {
   const tags = doc.seo_tags ? doc.seo_tags.split(',').map(t => t.trim()).filter(Boolean).slice(0, 3) : [];
   return (
     <Link
@@ -50,4 +51,6 @@ export default function CmsDocCard({ doc }) {
       </div>
     </Link>
   );
-}
+});
+
+export default CmsDocCard;

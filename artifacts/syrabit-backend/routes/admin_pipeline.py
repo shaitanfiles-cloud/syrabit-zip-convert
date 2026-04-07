@@ -1202,13 +1202,13 @@ def _compute_topic_coverage(topics: list, content: str, questions: list = None, 
 @router.get("/admin/content/chapters/{subject_id}/coverage")
 async def admin_subject_coverage(subject_id: str, admin: dict = Depends(get_admin_user)):
     """Compute per-chapter syllabus topic coverage scores for a subject."""
-    chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(None)
+    chapters = await db.chapters.find({"subject_id": subject_id}).sort("order_index", 1).to_list(500)
     if not chapters:
         return {"subject_id": subject_id, "chapters": []}
     chapter_ids = [c["id"] for c in chapters]
     pyq_docs, fc_docs = await asyncio.gather(
-        db.ai_pyq_collections.find({"chapter_id": {"$in": chapter_ids}}, {"_id": 0}).to_list(None),
-        db.flashcard_collections.find({"chapter_id": {"$in": chapter_ids}}, {"_id": 0}).to_list(None),
+        db.ai_pyq_collections.find({"chapter_id": {"$in": chapter_ids}}, {"_id": 0}).to_list(500),
+        db.flashcard_collections.find({"chapter_id": {"$in": chapter_ids}}, {"_id": 0}).to_list(500),
     )
     pyq_map = {d["chapter_id"]: d.get("pyqs", []) for d in pyq_docs}
     fc_map = {d["chapter_id"]: d.get("flashcards", []) for d in fc_docs}

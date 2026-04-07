@@ -222,14 +222,14 @@ async def seo_internal_links_inject(slug: str, admin: dict = Depends(get_admin_u
 @router.get("/admin/seo/internal-links/validate")
 async def seo_internal_links_validate(admin: dict = Depends(get_admin_user)):
     """Validate all tracked internal links. Flag broken links where target is unpublished."""
-    all_links = await db.seo_internal_links.find({}).to_list(50000)
+    all_links = await db.seo_internal_links.find({}).to_list(5000)
     if not all_links:
         return {"total_links": 0, "valid": 0, "broken": 0, "broken_links": []}
 
     published_slugs = set()
     published_topics = await db.seo_topics.find(
         {"status": "published"}, {"_id": 0, "slug": 1}
-    ).to_list(50000)
+    ).to_list(5000)
     for t in published_topics:
         published_slugs.add(t.get("slug", ""))
 
@@ -1349,35 +1349,49 @@ async def admin_content_coverage(admin: dict = Depends(get_admin_user)):
         subjects = await db.subjects.find(
             {"status": "published"},
             {"_id": 0, "id": 1, "name": 1, "class_name": 1, "stream_name": 1}
-        ).sort("name", 1).to_list(None)
+        ).sort("name", 1).to_list(500)
+
+        all_subject_ids = [s["id"] for s in subjects]
+
+        all_chapters = await db.chapters.find(
+            {"subject_id": {"$in": all_subject_ids}},
+            {"_id": 0, "id": 1, "title": 1, "subject_id": 1, "order": 1, "embedding": 1}
+        ).sort("order", 1).to_list(5000)
+
+        all_chapter_ids = [ch["id"] for ch in all_chapters]
+
+        chunk_counts_pipeline = [
+            {"$match": {"chapter_id": {"$in": all_chapter_ids}}},
+            {"$group": {"_id": "$chapter_id", "count": {"$sum": 1}}},
+        ]
+        chunk_counts_raw = await db.chunks.aggregate(chunk_counts_pipeline).to_list(5000)
+        chunk_count_map = {r["_id"]: r["count"] for r in chunk_counts_raw}
+
+        seo_counts_pipeline = [
+            {"$match": {"subject_id": {"$in": all_subject_ids}, "chapter_slug": {"$exists": True}, "status": "published"}},
+            {"$group": {"_id": "$subject_id", "count": {"$sum": 1}}},
+        ]
+        seo_counts_raw = await db.seo_pages.aggregate(seo_counts_pipeline).to_list(5000)
+        seo_count_map = {r["_id"]: r["count"] for r in seo_counts_raw}
+
+        chapters_by_subject = {}
+        for ch in all_chapters:
+            chapters_by_subject.setdefault(ch["subject_id"], []).append(ch)
 
         result = []
         for sub in subjects:
             sid = sub["id"]
-            chapters = await db.chapters.find(
-                {"subject_id": sid},
-                {"_id": 0, "id": 1, "title": 1}
-            ).sort("order", 1).to_list(None)
+            chapters = chapters_by_subject.get(sid, [])
 
             chapter_data = []
             for ch in chapters:
-                chunk_count = await db.chunks.count_documents({"chapter_id": ch["id"]})
-                has_embedding = await db.chapters.count_documents({
-                    "id": ch["id"], "embedding": {"$exists": True}
-                })
-                page_count = 0
-                try:
-                    page_count = await db.seo_pages.count_documents({
-                        "subject_id": sid, "chapter_slug": {"$exists": True},
-                        "status": "published",
-                    })
-                except Exception:
-                    pass
+                chunk_count = chunk_count_map.get(ch["id"], 0)
+                has_embedding = bool(ch.get("embedding"))
                 chapter_data.append({
                     "chapter_id": ch["id"],
                     "title": ch["title"],
                     "chunks": chunk_count,
-                    "has_embedding": bool(has_embedding),
+                    "has_embedding": has_embedding,
                     "coverage": "full" if chunk_count >= 3 and has_embedding else (
                         "partial" if chunk_count > 0 else "none"
                     ),

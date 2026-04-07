@@ -73,6 +73,7 @@ export default function LibraryPage() {
   const allChapters = bundle?.chapters  || [];
   const { data: savedSubjects = [] } = useSavedSubjects(user);
   const toggleSaved = useToggleSavedSubject();
+  const handleToggleSave = useCallback((id) => toggleSaved.mutate(id), [toggleSaved]);
 
   useEffect(() => {
     const handleContentUploaded = () => { refetchBundle(); };
@@ -466,7 +467,7 @@ export default function LibraryPage() {
                     sub={sub}
                     chapters={chaptersBySubject.get(sub.id) || []}
                     isSaved={savedSubjects.includes(sub.id)}
-                    onToggleSave={(id) => toggleSaved.mutate(id)}
+                    onToggleSave={handleToggleSave}
                     onAskAI={handleAskAI}
                     index={index}
                   />

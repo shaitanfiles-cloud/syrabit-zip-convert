@@ -40,7 +40,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
       await navigator.clipboard.writeText(msg.content || '');
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-      if (onCopy) onCopy();
+      if (onCopy) onCopy(msg.id);
     } catch (err) {
       // Fallback for clipboard restrictions
       const textArea = document.createElement('textarea');
@@ -53,7 +53,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
         document.execCommand('copy');
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
-        if (onCopy) onCopy();
+        if (onCopy) onCopy(msg.id);
       } catch (e) {
         log.error('Clipboard copy failed', { error: e.message });
       }

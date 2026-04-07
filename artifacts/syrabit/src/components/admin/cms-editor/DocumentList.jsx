@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Plus, Trash2, FileText, Globe, Lock, Search } from 'lucide-react';
 
 const STATUS_COLORS = {
@@ -13,7 +14,7 @@ const FILTER_OPTIONS = [
   { id: 'revision', label: 'Revisions' },
 ];
 
-export default function DocumentList({
+const DocumentList = memo(function DocumentList({
   docs, loading, filtered, searchQ, setSearchQ,
   filterType, setFilterType, editDoc, openNew, openEdit, handleDelete,
 }) {
@@ -107,4 +108,6 @@ export default function DocumentList({
       </div>
     </div>
   );
-}
+});
+
+export default DocumentList;

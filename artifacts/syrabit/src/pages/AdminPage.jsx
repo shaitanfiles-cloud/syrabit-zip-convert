@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   LayoutDashboard, GitBranch, BookOpen, Users,
@@ -94,6 +94,15 @@ export default function AdminPage() {
   const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('dashboard');
   const [navContext, setNavContext]        = useState(null);
+  const handleNavigate = useCallback((section, ctx = null) => {
+    if (section === 'blog') {
+      setNavContext({ initialTab: 'blog' });
+      setActiveSection('contenthub');
+    } else {
+      setNavContext(ctx);
+      setActiveSection(section);
+    }
+  }, []);
   const [collapsed, setCollapsed]         = useState(false);
   const [verifying, setVerifying]         = useState(true);
   const [sysStatus, setSysStatus]         = useState('ok');
@@ -333,15 +342,7 @@ export default function AdminPage() {
             <ActiveComponent
               adminToken={adminToken}
               adminName={adminName}
-              onNavigate={(section, ctx = null) => {
-                if (section === 'blog') {
-                  setNavContext({ initialTab: 'blog' });
-                  setActiveSection('contenthub');
-                } else {
-                  setNavContext(ctx);
-                  setActiveSection(section);
-                }
-              }}
+              onNavigate={handleNavigate}
               navContext={activeSection === 'users' || activeSection === 'contenthub' ? navContext : null}
             />
           </Suspense>

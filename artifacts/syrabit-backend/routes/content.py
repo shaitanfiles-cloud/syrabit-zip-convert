@@ -97,7 +97,7 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
                     db.seo_pages.aggregate([
                         {"$match": {"topic_id": {"$in": seo_topic_ids}, "status": "published"}},
                         {"$group": {"_id": {"topic_id": "$topic_id", "page_type": "$page_type"}}},
-                    ]).to_list(50000),
+                    ]).to_list(5000),
                     timeout=5.0,
                 )
         except asyncio.TimeoutError:
