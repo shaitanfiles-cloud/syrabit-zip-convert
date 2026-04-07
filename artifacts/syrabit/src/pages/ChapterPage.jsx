@@ -480,6 +480,11 @@ export default function ChapterPage() {
       }
       el.scrollIntoView({ behavior: 'smooth', block: 'start' });
       highlightDoneRef.current = true;
+      setTimeout(() => {
+        document.querySelectorAll('.highlight-active, .highlight-section-start, .highlight-section-end, .highlight-single').forEach(e => {
+          e.classList.remove('highlight-active', 'highlight-section-start', 'highlight-section-end', 'highlight-single');
+        });
+      }, 5000);
       try {
         const cleanUrl = new URL(window.location.href);
         cleanUrl.searchParams.delete('topic');

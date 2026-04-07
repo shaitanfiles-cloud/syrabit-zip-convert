@@ -1510,7 +1510,7 @@
   padding: 4px 10px;
   margin-left: -10px;
   animation: highlightFadeIn 1s ease-out;
-  transition: background-color 0.3s ease;
+  transition: background-color 0.6s ease, box-shadow 0.6s ease, color 0.6s ease;
   scroll-margin-top: 80px;
 }
 .highlight-active.highlight-section-start {
