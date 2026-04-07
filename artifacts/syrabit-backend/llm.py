@@ -180,10 +180,12 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
 _LLM_PROVIDERS_CHAT: list[dict] = []
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _OPENROUTER_KEY:
+    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
 if _FIREWORKS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/gpt-oss-120b"})
 
@@ -227,8 +229,9 @@ _MODEL_ALIAS_MAP = {
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 0),
     ("cerebras",    "llama3.1-8b",                                       4, 1),
-    ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
-    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 3),
+    ("sarvam",      "sarvam-m",                                          4, 2),
+    ("openrouter",  "meta-llama/llama-4-scout",                          4, 3),
+    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 4),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
