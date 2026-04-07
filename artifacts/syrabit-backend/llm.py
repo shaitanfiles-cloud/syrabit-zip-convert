@@ -580,7 +580,8 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     tried: set = set()
     last_err = None
 
-    _PROVIDER_TIMEOUT = 6.0
+    _is_content = provider_list is _LLM_PROVIDERS_CONTENT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else 6.0
 
     provider, key = primary_provider, primary_key
     try_model = _safe_model_for_provider(use_model, provider, providers)
@@ -657,7 +658,8 @@ logger.info(
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
     """LLM call for admin content generation — uses OPPOSITE priority from chat.
     OpenRouter/Fireworks first (high-capacity, slower), keeping Sarvam/Cerebras
-    reserved for student chat. Separate concurrency semaphore (6 vs 20)."""
+    reserved for student chat. Separate concurrency semaphore (6 vs 20).
+    Uses a longer timeout (30s) since content generation produces 800+ word outputs."""
     return await _llm_batcher.call(messages, model or "deepseek/deepseek-chat-v3-0324", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
 
 async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:

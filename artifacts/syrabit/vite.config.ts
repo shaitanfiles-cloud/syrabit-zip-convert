@@ -61,8 +61,10 @@ export default defineConfig({
           if (id.includes("node_modules/lucide-react")) return "icons";
           if (id.includes("node_modules/@radix-ui")) return "radix";
           if (id.includes("node_modules/react-markdown") || id.includes("node_modules/remark-") || id.includes("node_modules/rehype-") || id.includes("node_modules/unified") || id.includes("node_modules/mdast-") || id.includes("node_modules/hast-") || id.includes("node_modules/micromark")) return "markdown";
+          if (id.includes("node_modules/recharts") || id.includes("node_modules/d3-") || id.includes("node_modules/victory-")) return "charts";
           if (id.includes("node_modules/react-helmet-async")) return "seo";
           if (id.includes("node_modules/sonner")) return "ui-extras";
+          if (id.includes("node_modules/codemirror") || id.includes("node_modules/@codemirror") || id.includes("node_modules/@lezer")) return "codemirror";
         },
       },
     },

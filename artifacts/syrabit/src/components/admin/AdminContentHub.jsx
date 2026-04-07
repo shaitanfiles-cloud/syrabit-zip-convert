@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
 import {
   PenTool, FileText, ArrowRight,
   Loader2, Globe,
@@ -7,9 +7,9 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import { API_BASE } from '@/utils/api';
 
-import AdminContentEditor    from './AdminContentEditor';
-import AdminCmsDocEditor     from './AdminCmsDocEditor';
-import BlogPublishWizard     from './BlogPublishWizard';
+const AdminContentEditor = lazy(() => import('./AdminContentEditor'));
+const AdminCmsDocEditor  = lazy(() => import('./AdminCmsDocEditor'));
+const BlogPublishWizard  = lazy(() => import('./BlogPublishWizard'));
 
 
 const API = API_BASE;
@@ -189,37 +189,39 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
           </div>
         )}
 
-        {activeTab === 'editor' && (
-          <div className="h-full overflow-hidden">
-            <AdminContentEditor
-              adminToken={adminToken}
-              onNavigate={navigate}
-              hubContext={hubContext}
-              onHubContext={setHubContext}
-            />
-          </div>
-        )}
+        <Suspense fallback={<div className="flex items-center justify-center py-12 text-gray-400 text-sm"><Loader2 size={16} className="animate-spin mr-2" />Loading…</div>}>
+          {activeTab === 'editor' && (
+            <div className="h-full overflow-hidden">
+              <AdminContentEditor
+                adminToken={adminToken}
+                onNavigate={navigate}
+                hubContext={hubContext}
+                onHubContext={setHubContext}
+              />
+            </div>
+          )}
 
-        {activeTab === 'cms' && (
-          <div className="h-full overflow-hidden">
-            <AdminCmsDocEditor
-              adminToken={adminToken}
-              onNavigate={navigate}
-              hubContext={hubContext}
-            />
-          </div>
-        )}
+          {activeTab === 'cms' && (
+            <div className="h-full overflow-hidden">
+              <AdminCmsDocEditor
+                adminToken={adminToken}
+                onNavigate={navigate}
+                hubContext={hubContext}
+              />
+            </div>
+          )}
 
-        {activeTab === 'blog' && (
-          <div className="h-full overflow-y-auto">
-            <BlogPublishWizard
-              adminToken={adminToken}
-              onNavigate={navigate}
-              hubContext={hubContext}
-              onHubContext={setHubContext}
-            />
-          </div>
-        )}
+          {activeTab === 'blog' && (
+            <div className="h-full overflow-y-auto">
+              <BlogPublishWizard
+                adminToken={adminToken}
+                onNavigate={navigate}
+                hubContext={hubContext}
+                onHubContext={setHubContext}
+              />
+            </div>
+          )}
+        </Suspense>
       </div>
 
     </div>

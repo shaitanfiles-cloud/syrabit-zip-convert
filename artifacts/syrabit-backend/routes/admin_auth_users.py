@@ -146,12 +146,14 @@ async def admin_verify(response: Response, admin: dict = Depends(get_admin_user)
 # ─────────────────────────────────────────────
 # ADMIN ROUTES
 # ─────────────────────────────────────────────
-@router.get("/admin/dashboard")
-async def admin_dashboard(admin: dict = Depends(get_admin_user)):
+_dashboard_cache: dict = {"data": None, "ts": 0}
+_dashboard_lock = asyncio.Lock()
+_DASHBOARD_CACHE_TTL = 60
+
+async def _compute_dashboard():
     total_users = await supa_count_users()
 
-    # ── Conversations + messages: merge PG and Supabase ──────────────────────
-    pg_conv_map: dict = {}   # id -> {"messages": [...]}
+    pg_conv_map: dict = {}
     supa_conv_rows: list = []
 
     if deps.pg_pool:
@@ -191,12 +193,11 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
         except Exception as e:
             logger.warning(f"dashboard supa conv fetch: {e}")
 
-    # Merge: PG rows take precedence (better message fidelity); Supabase fills the rest
     merged_convs: dict = {}
     for row in supa_conv_rows:
         merged_convs[row["id"]] = row
     for cid, row in pg_conv_map.items():
-        merged_convs[cid] = row   # PG overwrites supa for same id
+        merged_convs[cid] = row
 
     total_convs = len(merged_convs)
     pg_conv_count = len(pg_conv_map)
@@ -205,7 +206,6 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
     convs_with_messages = sum(1 for c in merged_convs.values() if len(c.get("messages") or []) > 0)
     total_messages = sum(len(c.get("messages") or []) for c in merged_convs.values())
 
-    # Date range of conversations
     all_dates = [c.get("created_at", "") for c in merged_convs.values() if c.get("created_at")]
     oldest_conv = min(all_dates)[:10] if all_dates else None
     newest_conv = max(all_dates)[:10] if all_dates else None
@@ -222,7 +222,6 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
         p = u.get("plan", "free")
         plan_dist[p] = plan_dist.get(p, 0) + 1
 
-    # Visitor analytics + recent user events
     visitor_stats, recent_events = await asyncio.gather(
         get_visitor_stats(),
         get_recent_user_events(limit=10),
@@ -245,6 +244,21 @@ async def admin_dashboard(admin: dict = Depends(get_admin_user)):
         "pg_conversations": pg_conv_count,
         "supa_conversations": supa_conv_count,
     }
+
+@router.get("/admin/dashboard")
+async def admin_dashboard(admin: dict = Depends(get_admin_user)):
+    import time as _t
+    now = _t.time()
+    if _dashboard_cache["data"] and (now - _dashboard_cache["ts"]) < _DASHBOARD_CACHE_TTL:
+        return _dashboard_cache["data"]
+    async with _dashboard_lock:
+        now = _t.time()
+        if _dashboard_cache["data"] and (now - _dashboard_cache["ts"]) < _DASHBOARD_CACHE_TTL:
+            return _dashboard_cache["data"]
+        result = await _compute_dashboard()
+        _dashboard_cache["data"] = result
+        _dashboard_cache["ts"] = _t.time()
+        return result
 
 @router.get("/admin/users")
 async def admin_get_users(

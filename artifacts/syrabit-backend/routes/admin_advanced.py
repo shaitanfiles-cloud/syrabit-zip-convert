@@ -1326,60 +1326,77 @@ async def admin_monetization_funnel(admin: dict = Depends(get_admin_user)):
     }
 
 
+_coverage_cache: dict = {"data": None, "ts": 0}
+_coverage_lock = asyncio.Lock()
+_COVERAGE_CACHE_TTL = 120
+
 @router.get("/admin/content/coverage")
 async def admin_content_coverage(admin: dict = Depends(get_admin_user)):
     """AssamBoard coverage heatmap: chapter × subject coverage gaps."""
-    if not await is_mongo_available():
-        return {"subjects": [], "has_data": False}
+    import time as _t
+    now = _t.time()
+    if _coverage_cache["data"] and (now - _coverage_cache["ts"]) < _COVERAGE_CACHE_TTL:
+        return _coverage_cache["data"]
 
-    subjects = await db.subjects.find(
-        {"status": "published"},
-        {"_id": 0, "id": 1, "name": 1, "class_name": 1, "stream_name": 1}
-    ).sort("name", 1).to_list(None)
+    async with _coverage_lock:
+        now = _t.time()
+        if _coverage_cache["data"] and (now - _coverage_cache["ts"]) < _COVERAGE_CACHE_TTL:
+            return _coverage_cache["data"]
 
-    result = []
-    for sub in subjects:
-        sid = sub["id"]
-        chapters = await db.chapters.find(
-            {"subject_id": sid},
-            {"_id": 0, "id": 1, "title": 1}
-        ).sort("order", 1).to_list(None)
+        if not await is_mongo_available():
+            return {"subjects": [], "has_data": False}
 
-        chapter_data = []
-        for ch in chapters:
-            chunk_count = await db.chunks.count_documents({"chapter_id": ch["id"]})
-            has_embedding = await db.chapters.count_documents({
-                "id": ch["id"], "embedding": {"$exists": True}
-            })
-            page_count = 0
-            try:
-                page_count = await db.seo_pages.count_documents({
-                    "subject_id": sid, "chapter_slug": {"$exists": True},
-                    "status": "published",
+        subjects = await db.subjects.find(
+            {"status": "published"},
+            {"_id": 0, "id": 1, "name": 1, "class_name": 1, "stream_name": 1}
+        ).sort("name", 1).to_list(None)
+
+        result = []
+        for sub in subjects:
+            sid = sub["id"]
+            chapters = await db.chapters.find(
+                {"subject_id": sid},
+                {"_id": 0, "id": 1, "title": 1}
+            ).sort("order", 1).to_list(None)
+
+            chapter_data = []
+            for ch in chapters:
+                chunk_count = await db.chunks.count_documents({"chapter_id": ch["id"]})
+                has_embedding = await db.chapters.count_documents({
+                    "id": ch["id"], "embedding": {"$exists": True}
                 })
-            except Exception:
-                pass
-            chapter_data.append({
-                "chapter_id": ch["id"],
-                "title": ch["title"],
-                "chunks": chunk_count,
-                "has_embedding": bool(has_embedding),
-                "coverage": "full" if chunk_count >= 3 and has_embedding else (
-                    "partial" if chunk_count > 0 else "none"
-                ),
+                page_count = 0
+                try:
+                    page_count = await db.seo_pages.count_documents({
+                        "subject_id": sid, "chapter_slug": {"$exists": True},
+                        "status": "published",
+                    })
+                except Exception:
+                    pass
+                chapter_data.append({
+                    "chapter_id": ch["id"],
+                    "title": ch["title"],
+                    "chunks": chunk_count,
+                    "has_embedding": bool(has_embedding),
+                    "coverage": "full" if chunk_count >= 3 and has_embedding else (
+                        "partial" if chunk_count > 0 else "none"
+                    ),
+                })
+
+            covered = sum(1 for c in chapter_data if c["coverage"] == "full")
+            result.append({
+                "subject_id": sid,
+                "subject_name": sub["name"],
+                "class_name": sub.get("class_name", ""),
+                "stream_name": sub.get("stream_name", ""),
+                "chapters": chapter_data,
+                "coverage_pct": round(covered / max(len(chapter_data), 1) * 100, 1),
             })
 
-        covered = sum(1 for c in chapter_data if c["coverage"] == "full")
-        result.append({
-            "subject_id": sid,
-            "subject_name": sub["name"],
-            "class_name": sub.get("class_name", ""),
-            "stream_name": sub.get("stream_name", ""),
-            "chapters": chapter_data,
-            "coverage_pct": round(covered / max(len(chapter_data), 1) * 100, 1),
-        })
-
-    return {"subjects": result, "has_data": bool(result)}
+        response = {"subjects": result, "has_data": bool(result)}
+        _coverage_cache["data"] = response
+        _coverage_cache["ts"] = now
+        return response
 
 
 

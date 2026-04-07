@@ -2155,59 +2155,72 @@ class CmsNoIndexMiddleware(BaseHTTPMiddleware):
 # ─────────────────────────────────────────────
 # PHASE A: ENHANCED DASHBOARD METRICS
 # ─────────────────────────────────────────────
+_metrics_cache: dict = {"data": None, "ts": 0}
+_metrics_lock = asyncio.Lock()
+_METRICS_CACHE_TTL = 60
+
 @router.get("/admin/dashboard/metrics")
 async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
-    start = time.time()
-    health_data = {}
-    try:
-        # Use the background-warmed cache if it is fresh (≤ 30 s old).
-        # This avoids the 500 ms+ Supabase round-trip on every dashboard load.
-        cache_age = time.time() - _health_deps_cache_at
-        if _health_deps_cache and cache_age < _HEALTH_CACHE_TTL_S:
-            h_resp = _health_deps_cache
-        else:
-            # Cache is cold (first load or stale) — fetch live with a 5 s guard
-            h_resp = await asyncio.wait_for(_check_health_deps(), timeout=5)
-        health_data = h_resp if isinstance(h_resp, dict) else {}
-    except Exception:
-        pass
+    now_ts = time.time()
+    if _metrics_cache["data"] and (now_ts - _metrics_cache["ts"]) < _METRICS_CACHE_TTL:
+        return _metrics_cache["data"]
 
-    deps_status = {}
-    if isinstance(health_data, dict):
-        for k, v in health_data.items():
-            if isinstance(v, dict):
-                deps_status[k] = {
-                    "status": v.get("status", "unknown"),
-                    "latency_ms": v.get("latencyMs", 0),
-                }
+    async with _metrics_lock:
+        now_ts = time.time()
+        if _metrics_cache["data"] and (now_ts - _metrics_cache["ts"]) < _METRICS_CACHE_TTL:
+            return _metrics_cache["data"]
 
-    users = await supa_list_users()
-    total_users = len(users)
-    paid_users = sum(1 for u in users if u.get("plan") in ("starter", "pro"))
-    free_users = total_users - paid_users
+        start = time.time()
+        health_data = {}
+        try:
+            cache_age = time.time() - _health_deps_cache_at
+            if _health_deps_cache and cache_age < _HEALTH_CACHE_TTL_S:
+                h_resp = _health_deps_cache
+            else:
+                h_resp = await asyncio.wait_for(_check_health_deps(), timeout=5)
+            health_data = h_resp if isinstance(h_resp, dict) else {}
+        except Exception:
+            pass
 
-    payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(500)
-    total_revenue_inr = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100
-    total_revenue_usd = sum(p.get("amount_cents", 0) for p in payments if p.get("provider") == "stripe") / 100
+        deps_status = {}
+        if isinstance(health_data, dict):
+            for k, v in health_data.items():
+                if isinstance(v, dict):
+                    deps_status[k] = {
+                        "status": v.get("status", "unknown"),
+                        "latency_ms": v.get("latencyMs", 0),
+                    }
 
-    now = datetime.now(timezone.utc)
-    thirty_days_ago = (now - timedelta(days=30)).isoformat()
-    recent_payments = [p for p in payments if p.get("verified_at", "") >= thirty_days_ago]
-    mrr_inr = sum(p.get("amount_paise", 0) for p in recent_payments if p.get("provider") != "stripe") / 100
+        users = await supa_list_users()
+        total_users = len(users)
+        paid_users = sum(1 for u in users if u.get("plan") in ("starter", "pro"))
+        free_users = total_users - paid_users
 
-    seo_count = await db.seo_topics.count_documents({}) if await is_mongo_available() else 0
-    seo_published = await db.seo_pages.count_documents({"status": "published"}) if await is_mongo_available() else 0
+        payments = await db.payments.find({}, {"_id": 0}).sort("verified_at", -1).to_list(500)
+        total_revenue_inr = sum(p.get("amount_paise", 0) for p in payments if p.get("provider") != "stripe") / 100
+        total_revenue_usd = sum(p.get("amount_cents", 0) for p in payments if p.get("provider") == "stripe") / 100
 
-    elapsed = round((time.time() - start) * 1000, 1)
+        now = datetime.now(timezone.utc)
+        thirty_days_ago = (now - timedelta(days=30)).isoformat()
+        recent_payments = [p for p in payments if p.get("verified_at", "") >= thirty_days_ago]
+        mrr_inr = sum(p.get("amount_paise", 0) for p in recent_payments if p.get("provider") != "stripe") / 100
 
-    return {
-        "dependencies": deps_status,
-        "response_time_ms": elapsed,
-        "users": {"total": total_users, "paid": paid_users, "free": free_users},
-        "revenue": {"total_inr": total_revenue_inr, "total_usd": total_revenue_usd, "mrr_inr": mrr_inr},
-        "seo": {"topics": seo_count, "published_pages": seo_published},
-        "payments_count": len(payments),
-    }
+        seo_count = await db.seo_topics.count_documents({}) if await is_mongo_available() else 0
+        seo_published = await db.seo_pages.count_documents({"status": "published"}) if await is_mongo_available() else 0
+
+        elapsed = round((time.time() - start) * 1000, 1)
+
+        result = {
+            "dependencies": deps_status,
+            "response_time_ms": elapsed,
+            "users": {"total": total_users, "paid": paid_users, "free": free_users},
+            "revenue": {"total_inr": total_revenue_inr, "total_usd": total_revenue_usd, "mrr_inr": mrr_inr},
+            "seo": {"topics": seo_count, "published_pages": seo_published},
+            "payments_count": len(payments),
+        }
+        _metrics_cache["data"] = result
+        _metrics_cache["ts"] = now_ts
+        return result
 
 
 
