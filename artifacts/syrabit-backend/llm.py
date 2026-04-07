@@ -183,7 +183,7 @@ if _GROQ_KEY:
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "google/gemma-3-27b-it"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "google/gemini-2.5-flash-preview:free"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _FIREWORKS_KEY:
@@ -207,6 +207,7 @@ _MODEL_PROVIDER_MAP = {
     "deepseek/deepseek-r1": "openrouter",
     "qwen/qwen3-235b-a22b": "openrouter",
     "google/gemini-2.5-flash-preview": "openrouter",
+    "google/gemini-2.5-flash-preview:free": "openrouter",
     "google/gemma-3-27b-it": "openrouter",
     "meta-llama/llama-4-maverick": "openrouter",
     "llama-3.3-70b-versatile": "openrouter",
@@ -224,9 +225,9 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("groq",        "llama-3.3-70b-versatile",                           4, 0),
-    ("gemini",      "gemini-2.5-flash",                                  6, 1),
-    ("openrouter",  "google/gemma-3-27b-it",                             4, 2),
+    ("openrouter",  "google/gemini-2.5-flash-preview:free",              4, 0),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 1),
+    ("gemini",      "gemini-2.5-flash",                                  6, 2),
     ("cerebras",    "llama3.1-8b",                                       4, 3),
     ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 4),
 ]
@@ -234,7 +235,7 @@ _SLM_SLOT_CANDIDATES = [
 _CONTENT_SLOT_CANDIDATES = [
     ("cerebras",    "qwen-3-235b-a22b-instruct-2507",                    6, 0),
     ("sarvam",      "sarvam-m",                                          4, 1),
-    ("openrouter",  "google/gemma-3-27b-it",                             4, 2),
+    ("openrouter",  "google/gemini-2.5-flash-preview:free",              4, 2),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -650,7 +651,7 @@ if _CEREBRAS_KEY:
 if _SARVAM_LLM_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _OPENROUTER_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "google/gemma-3-27b-it"})
+    _LLM_PROVIDERS_CONTENT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "google/gemini-2.5-flash-preview:free"})
 if _FIREWORKS_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/deepseek-v3p2"})
 if _GEMINI_KEY:
