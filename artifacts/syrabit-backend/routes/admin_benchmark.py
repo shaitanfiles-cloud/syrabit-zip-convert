@@ -65,7 +65,7 @@ STAGE3_SYSTEM_PROMPT = (
 )
 
 _CEREBRAS_PROVIDER_LIST = [{"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"}] if _CEREBRAS_KEY else []
-_GROQ_PROVIDER_LIST = [{"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.3-70b-versatile"}] if _GROQ_KEY else []
+_GROQ_PROVIDER_LIST = [{"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"}] if _GROQ_KEY else []
 _GEMINI_PROVIDER_LIST = [{"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"}] if _GEMINI_KEY else []
 
 
@@ -298,7 +298,7 @@ async def _run_method_b(
 
     try:
         draft, stage2_ms = await _timed_llm_call(
-            stage2_messages, "llama-3.3-70b-versatile", max_tokens, _GROQ_PROVIDER_LIST,
+            stage2_messages, "meta-llama/llama-4-scout-17b-16e-instruct", max_tokens, _GROQ_PROVIDER_LIST,
         )
     except Exception as e:
         draft = f"[Stage 2 error: {type(e).__name__}]"
@@ -309,7 +309,7 @@ async def _run_method_b(
     timings["stage2_synthesis_ms"] = stage2_ms
     stages["stage2_synthesis"] = {
         "provider": "groq",
-        "model": "llama-3.3-70b-versatile",
+        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
         "time_ms": stage2_ms,
         "ttft_ms": stage2_ms,
         "ttft_note": "non-streaming: TTFT equals full response time",
@@ -384,7 +384,7 @@ async def admin_ai_benchmark(
 
     providers_status = {
         "cerebras": {"available": bool(_CEREBRAS_KEY), "model": "llama3.1-8b"},
-        "groq": {"available": bool(_GROQ_KEY), "model": "llama-3.3-70b-versatile"},
+        "groq": {"available": bool(_GROQ_KEY), "model": "meta-llama/llama-4-scout-17b-16e-instruct"},
         "gemini": {"available": bool(_GEMINI_KEY), "model": "gemini-2.5-flash"},
         "smart_key_pool": {"available": True, "model": "pool_selected"},
     }

@@ -630,6 +630,11 @@ _LLM_COST_MAX = 10_000
 COST_PER_1K_TOKENS = {
     "gemini-2.5-flash":       {"in": 0.00015, "out": 0.0006},
     "gemini-1.5-pro":         {"in": 0.00125,   "out": 0.005},
+    "meta-llama/llama-4-scout-17b-16e-instruct": {"in": 0.00011, "out": 0.00034},
+    "meta-llama/llama-4-scout": {"in": 0.00015, "out": 0.00040},
+    "llama3.1-8b":            {"in": 0.00005,   "out": 0.00008},
+    "sarvam-m":               {"in": 0.00008,   "out": 0.00024},
+    "accounts/fireworks/models/gpt-oss-120b": {"in": 0.00045, "out": 0.00045},
     "llama-3.3-70b-versatile":{"in": 0.00059,   "out": 0.00079},
     "llama-3.1-8b-instant":   {"in": 0.00005,   "out": 0.00008},
 }

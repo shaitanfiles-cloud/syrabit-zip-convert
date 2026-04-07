@@ -161,9 +161,9 @@ if _SARVAM_LLM_KEY:
 if _SARVAM_LLM_KEY_2 and _SARVAM_LLM_KEY_2 != _SARVAM_LLM_KEY:
     _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_2, "default_model": "sarvam-m"})
 if _GROQ_KEY:
-    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY,       "default_model": "llama-3.3-70b-versatile"})
+    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
-    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "llama-3.3-70b-versatile"})
+    _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _CEREBRAS_KEY:
     _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
 if _GEMINI_KEY:
@@ -171,7 +171,7 @@ if _GEMINI_KEY:
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
 if _FIREWORKS_KEY:
-    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/deepseek-v3p2"})
+    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/gpt-oss-120b"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
