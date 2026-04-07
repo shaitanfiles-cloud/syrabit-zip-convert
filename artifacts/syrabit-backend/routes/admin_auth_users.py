@@ -475,6 +475,13 @@ async def admin_get_conversations(admin: dict = Depends(get_admin_user)):
         except Exception as e:
             logger.warning(f"admin_get_conversations supa fetch: {e}")
 
+    # Fetch anonymous conversations from Redis
+    anon_convs: list = []
+    try:
+        anon_convs = redis_list_all_anon_conversations()
+    except Exception as e:
+        logger.warning(f"admin_get_conversations anon fetch: {e}")
+
     # Merge: use PG row if available (has real messages), otherwise use Supabase row
     pg_ids = {c.get("id") for c in pg_convs}
     merged = list(pg_convs)
@@ -484,6 +491,16 @@ async def admin_get_conversations(admin: dict = Depends(get_admin_user)):
                 pass  # already parsed
             sc["messages"] = sc.get("messages") or []
             merged.append(sc)
+
+    # Add anonymous conversations with composite IDs to avoid collisions
+    seen_anon = set()
+    for ac in anon_convs:
+        anon_key = f"anon:{ac.get('anon_id')}:{ac.get('id')}"
+        if anon_key not in seen_anon:
+            seen_anon.add(anon_key)
+            ac["original_id"] = ac["id"]
+            ac["id"] = anon_key
+            merged.append(ac)
 
     # Sort by updated_at desc
     def _conv_sort_key(c):
@@ -502,15 +519,24 @@ async def admin_get_conversations(admin: dict = Depends(get_admin_user)):
         except Exception:
             pass
     for c in merged:
-        uid = c.get("user_id")
-        u = users_map.get(uid, {})
-        c["user_name"] = u.get("name", "")
-        c["user_email"] = u.get("email", c.get("user_email", ""))
-        c["user_plan"] = u.get("plan", "free")
-        c["user_avatar"] = u.get("avatar_url", "")
-        c["user_board"] = u.get("board_name", "")
-        c["user_class"] = u.get("class_name", "")
-        c["user_stream"] = u.get("stream_name", "")
+        if c.get("is_anonymous"):
+            c["user_name"] = "Anonymous User"
+            c["user_email"] = ""
+            c["user_plan"] = "anonymous"
+            c["user_avatar"] = ""
+            c["user_board"] = ""
+            c["user_class"] = ""
+            c["user_stream"] = ""
+        else:
+            uid = c.get("user_id")
+            u = users_map.get(uid, {})
+            c["user_name"] = u.get("name", "")
+            c["user_email"] = u.get("email", c.get("user_email", ""))
+            c["user_plan"] = u.get("plan", "free")
+            c["user_avatar"] = u.get("avatar_url", "")
+            c["user_board"] = u.get("board_name", "")
+            c["user_class"] = u.get("class_name", "")
+            c["user_stream"] = u.get("stream_name", "")
         c["has_messages"] = len(c.get("messages") or []) > 0
 
     return merged

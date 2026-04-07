@@ -24,7 +24,8 @@ __all__ = [
     "_redis_set", "_set_content_cache", "_syllabus_cache", "_syllabus_cache_key",
     "_user_cache", "_vector_rag_cache", "_vector_rag_cache_key",
     "redis_save_anon_conversation", "redis_get_anon_conversation",
-    "redis_list_anon_conversations", "redis_delete_anon_conversation",
+    "redis_list_anon_conversations", "redis_list_all_anon_conversations",
+    "redis_delete_anon_conversation",
     "get_hierarchy_cache", "set_hierarchy_cache",
 ]
 
@@ -293,6 +294,44 @@ def redis_list_anon_conversations(anon_id: str) -> list:
         return results
     except Exception as e:
         logger.warning(f"redis_list_anon_conversations: {e}")
+    return []
+
+def redis_list_all_anon_conversations() -> list:
+    if not redis_client:
+        return []
+    try:
+        idx_keys = []
+        cursor = 0
+        while True:
+            cursor, keys = redis_client.scan(cursor, match=f"{_ANON_INDEX_PREFIX}*", count=200)
+            idx_keys.extend(keys)
+            if cursor == 0:
+                break
+        results = []
+        for idx_key in idx_keys:
+            idx_key_str = idx_key if isinstance(idx_key, str) else idx_key.decode()
+            anon_id = idx_key_str[len(_ANON_INDEX_PREFIX):]
+            conv_ids = redis_client.zrevrange(idx_key_str, 0, _ANON_MAX_CONVS - 1)
+            for cid in conv_ids:
+                cid_str = cid if isinstance(cid, str) else cid.decode()
+                val = redis_client.get(f"{_ANON_CONV_PREFIX}{anon_id}:{cid_str}")
+                if val:
+                    data = json.loads(val) if isinstance(val, str) else json.loads(val.decode())
+                    results.append({
+                        "id": data.get("id", cid_str),
+                        "title": data.get("title", "Untitled"),
+                        "preview": data.get("preview", ""),
+                        "subject_name": data.get("subject_name", ""),
+                        "created_at": data.get("created_at", ""),
+                        "updated_at": data.get("updated_at", ""),
+                        "messages": data.get("messages", []),
+                        "is_anonymous": True,
+                        "anon_id": anon_id,
+                        "user_id": None,
+                    })
+        return results
+    except Exception as e:
+        logger.warning(f"redis_list_all_anon_conversations: {e}")
     return []
 
 def redis_delete_anon_conversation(anon_id: str, conv_id: str) -> bool:

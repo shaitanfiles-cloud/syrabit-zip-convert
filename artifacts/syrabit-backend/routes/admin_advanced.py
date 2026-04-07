@@ -330,10 +330,21 @@ async def conversations_sentiment(admin: dict = Depends(get_admin_user)):
     except Exception:
         msgs = []
 
-    if not msgs:
+    anon_texts = []
+    try:
+        from cache import redis_list_all_anon_conversations
+        anon_convs = redis_list_all_anon_conversations()
+        for ac in anon_convs:
+            for m in (ac.get("messages") or []):
+                if m.get("role") == "user" and m.get("content"):
+                    anon_texts.append(m["content"])
+    except Exception:
+        pass
+
+    if not msgs and not anon_texts:
         return {"positive": 0, "negative": 0, "neutral": 0, "total": 0}
 
-    texts = [m["content"] for m in msgs if m.get("content")]
+    texts = [m["content"] for m in msgs if m.get("content")] + anon_texts
     positive = sum(1 for t in texts if any(w in t.lower() for w in ["thank", "great", "awesome", "help", "good", "love", "clear", "easy"]))
     negative = sum(1 for t in texts if any(w in t.lower() for w in ["wrong", "bad", "error", "confused", "not working", "fail", "broken", "terrible"]))
     neutral = len(texts) - positive - negative

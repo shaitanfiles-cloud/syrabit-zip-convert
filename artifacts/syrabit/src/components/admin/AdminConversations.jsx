@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Loader2, MessageSquare, BookOpen, Search, Mail, User,
+  Loader2, MessageSquare, BookOpen, Search, Mail, User, Ghost,
   ChevronRight, Crown, X, Clock, ArrowLeft, Sparkles, SmilePlus, Frown, Meh, TrendingUp, RefreshCw,
 } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
@@ -14,7 +14,17 @@ const PLAN_COLORS = {
   pro: 'text-amber-400 bg-amber-400/10 border-amber-400/20',
 };
 
-function UserAvatar({ name, avatar, size = 32 }) {
+function UserAvatar({ name, avatar, size = 32, isAnonymous = false }) {
+  if (isAnonymous) {
+    return (
+      <div
+        className="rounded-lg flex items-center justify-center flex-shrink-0"
+        style={{ width: size, height: size, background: 'linear-gradient(135deg, #475569, #64748b)' }}
+      >
+        <Ghost size={size * 0.5} color="#cbd5e1" />
+      </div>
+    );
+  }
   const initials = (name || 'U').split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
   if (avatar) {
     return <img src={avatar} alt="" className="rounded-lg object-cover flex-shrink-0" style={{ width: size, height: size }} />;
@@ -65,7 +75,7 @@ export default function AdminConversations({ adminToken, onNavigate }) {
   const [faqs, setFaqs] = useState(null);
   const [faqLoading, setFaqLoading] = useState(false);
   const [sentiment, setSentiment] = useState(null);
-  const [filterMode, setFilterMode] = useState('all'); // 'all' | 'with_messages'
+  const [filterMode, setFilterMode] = useState('all'); // 'all' | 'with_messages' | 'anonymous' | 'registered'
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const chatEndRef = useRef(null);
@@ -113,18 +123,24 @@ export default function AdminConversations({ adminToken, onNavigate }) {
 
   const totalMessages = useMemo(() => conversations.reduce((sum, c) => sum + (c.messages || []).length, 0), [conversations]);
   const withMessages = useMemo(() => conversations.filter(c => (c.messages || []).length > 0), [conversations]);
+  const anonymousConvs = useMemo(() => conversations.filter(c => c.is_anonymous), [conversations]);
+  const registeredConvs = useMemo(() => conversations.filter(c => !c.is_anonymous), [conversations]);
 
   const filtered = useMemo(() => {
-    let base = filterMode === 'with_messages' ? withMessages : conversations;
+    let base = conversations;
+    if (filterMode === 'with_messages') base = withMessages;
+    else if (filterMode === 'anonymous') base = anonymousConvs;
+    else if (filterMode === 'registered') base = registeredConvs;
     if (!search.trim()) return base;
     const q = search.toLowerCase();
     return base.filter((c) =>
       (c.title || '').toLowerCase().includes(q) ||
       (c.subject_name || '').toLowerCase().includes(q) ||
       (c.user_email || '').toLowerCase().includes(q) ||
-      (c.user_name || '').toLowerCase().includes(q)
+      (c.user_name || '').toLowerCase().includes(q) ||
+      (c.messages || []).some(m => (m.content || '').toLowerCase().includes(q))
     );
-  }, [conversations, withMessages, search, filterMode]);
+  }, [conversations, withMessages, anonymousConvs, registeredConvs, search, filterMode]);
 
   const selectedConv = useMemo(() => conversations.find(c => c.id === selected), [conversations, selected]);
 
@@ -226,12 +242,14 @@ export default function AdminConversations({ adminToken, onNavigate }) {
           <div className="flex items-start justify-between gap-2">
             <div>
               <h2 className="text-slate-200 font-semibold">Conversations ({conversations.length})</h2>
-              <p className="text-xs text-slate-500">{withMessages.length} with messages · {totalMessages} total messages</p>
+              <p className="text-xs text-slate-500">{withMessages.length} with messages · {totalMessages} total msgs · {anonymousConvs.length} anonymous</p>
             </div>
             <div className="flex gap-1 flex-shrink-0">
               {[
                 { id: 'all', label: 'All' },
                 { id: 'with_messages', label: 'With msgs' },
+                { id: 'anonymous', label: `Anon (${anonymousConvs.length})` },
+                { id: 'registered', label: 'Registered' },
               ].map(f => (
                 <button key={f.id} onClick={() => setFilterMode(f.id)}
                   style={{ padding: '3px 10px', borderRadius: 6, fontSize: 10, fontWeight: 700, cursor: 'pointer', border: 'none',
@@ -272,7 +290,7 @@ export default function AdminConversations({ adminToken, onNavigate }) {
                 selected === conv.id ? 'bg-violet-500/10 border-l-2 border-l-violet-500' : 'hover:bg-white/[0.03]'
               }`}
             >
-              <UserAvatar name={conv.user_name} avatar={conv.user_avatar} size={36} />
+              <UserAvatar name={conv.user_name} avatar={conv.user_avatar} size={36} isAnonymous={conv.is_anonymous} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-sm font-medium text-slate-200 truncate">{conv.title || 'Untitled'}</p>
@@ -280,7 +298,14 @@ export default function AdminConversations({ adminToken, onNavigate }) {
                     {formatDistanceToNow(new Date(conv.updated_at || conv.created_at), { addSuffix: true })}
                   </span>
                 </div>
-                <p className="text-xs text-slate-400 truncate">{conv.user_name || 'Unknown'}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-slate-400 truncate">{conv.is_anonymous ? 'Anonymous User' : (conv.user_name || 'Unknown')}</p>
+                  {conv.is_anonymous && (
+                    <span style={{ fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 20, background: 'rgba(100,116,139,0.2)', color: '#94a3b8', border: '1px solid rgba(100,116,139,0.3)' }}>
+                      Anonymous
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 mt-1 text-[10px]">
                   {conv.subject_name && <span className="text-slate-500 truncate">{conv.subject_name}</span>}
                   {hasMsgs ? (
@@ -316,27 +341,43 @@ export default function AdminConversations({ adminToken, onNavigate }) {
                 >
                   <ArrowLeft size={16} />
                 </button>
-                <UserAvatar name={selectedConv.user_name} avatar={selectedConv.user_avatar} size={44} />
+                <UserAvatar name={selectedConv.user_name} avatar={selectedConv.user_avatar} size={44} isAnonymous={selectedConv.is_anonymous} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-white truncate">{selectedConv.user_name || 'Unknown User'}</h3>
-                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${PLAN_COLORS[selectedConv.user_plan] || PLAN_COLORS.free}`}>
-                      <Crown size={8} />
-                      {(selectedConv.user_plan || 'free').charAt(0).toUpperCase() + (selectedConv.user_plan || 'free').slice(1)}
-                    </span>
+                    <h3 className="text-sm font-semibold text-white truncate">{selectedConv.is_anonymous ? 'Anonymous User' : (selectedConv.user_name || 'Unknown User')}</h3>
+                    {selectedConv.is_anonymous ? (
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border text-slate-400 bg-slate-400/10 border-slate-400/20">
+                        <Ghost size={8} />
+                        Anonymous
+                      </span>
+                    ) : (
+                      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${PLAN_COLORS[selectedConv.user_plan] || PLAN_COLORS.free}`}>
+                        <Crown size={8} />
+                        {(selectedConv.user_plan || 'free').charAt(0).toUpperCase() + (selectedConv.user_plan || 'free').slice(1)}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5 flex-wrap">
-                    {selectedConv.user_email && (
-                      <span className="flex items-center gap-1"><Mail size={10} />{selectedConv.user_email}</span>
-                    )}
-                    {selectedConv.user_board && (
-                      <span>{selectedConv.user_board}</span>
-                    )}
-                    {selectedConv.user_class && (
-                      <span>{selectedConv.user_class}</span>
-                    )}
-                    {selectedConv.user_stream && (
-                      <span>{selectedConv.user_stream}</span>
+                    {selectedConv.is_anonymous ? (
+                      <span className="flex items-center gap-1 text-slate-500">
+                        <Ghost size={10} />
+                        ID: {selectedConv.anon_id?.slice(0, 12)}…
+                      </span>
+                    ) : (
+                      <>
+                        {selectedConv.user_email && (
+                          <span className="flex items-center gap-1"><Mail size={10} />{selectedConv.user_email}</span>
+                        )}
+                        {selectedConv.user_board && (
+                          <span>{selectedConv.user_board}</span>
+                        )}
+                        {selectedConv.user_class && (
+                          <span>{selectedConv.user_class}</span>
+                        )}
+                        {selectedConv.user_stream && (
+                          <span>{selectedConv.user_stream}</span>
+                        )}
+                      </>
                     )}
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-500 mt-1">
@@ -362,7 +403,7 @@ export default function AdminConversations({ adminToken, onNavigate }) {
                 >
                   <div className="flex-shrink-0 mt-1">
                     {msg.role === 'user' ? (
-                      <UserAvatar name={selectedConv.user_name} avatar={selectedConv.user_avatar} size={28} />
+                      <UserAvatar name={selectedConv.user_name} avatar={selectedConv.user_avatar} size={28} isAnonymous={selectedConv.is_anonymous} />
                     ) : (
                       <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-violet-600 flex items-center justify-center">
                         <img
@@ -377,7 +418,7 @@ export default function AdminConversations({ adminToken, onNavigate }) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className={`text-xs font-semibold ${msg.role === 'user' ? 'text-blue-400' : 'text-violet-400'}`}>
-                        {msg.role === 'user' ? (selectedConv.user_name || 'Student') : 'Syra AI'}
+                        {msg.role === 'user' ? (selectedConv.is_anonymous ? 'Anonymous User' : (selectedConv.user_name || 'Student')) : 'Syra AI'}
                       </span>
                       {msg.timestamp && (
                         <span className="text-[10px] text-slate-600">
