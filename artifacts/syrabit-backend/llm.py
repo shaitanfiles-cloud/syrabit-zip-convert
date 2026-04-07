@@ -36,7 +36,7 @@ def _get_oai_client(api_key: str, base_url: str) -> _oai.AsyncOpenAI:
         _oai_client_cache[ck] = client
     return client
 
-_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 20)))
+_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("LLM_MAX_CONCURRENT", 40)))
 _ADMIN_LLM_SEMAPHORE = asyncio.Semaphore(int(os.environ.get("ADMIN_LLM_MAX_CONCURRENT", 6)))
 
 _LLM_PROVIDER_METRICS: list = []
@@ -92,7 +92,7 @@ def get_llm_provider_stats(window_seconds: int = 3600) -> dict:
         "fallback_rate": round(fallback_calls / max(total_calls, 1) * 100, 1),
         "window_seconds": window_seconds,
     }
-_LLM_BATCH_WINDOW_MS = int(os.environ.get("LLM_BATCH_WINDOW_MS", 15))
+_LLM_BATCH_WINDOW_MS = int(os.environ.get("LLM_BATCH_WINDOW_MS", 5))
 
 class _LlmBatcher:
     """

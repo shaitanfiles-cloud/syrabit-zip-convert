@@ -35,7 +35,7 @@ _embed_http_client: Optional[httpx.AsyncClient] = None
 def _get_embed_client() -> httpx.AsyncClient:
     global _embed_http_client
     if _embed_http_client is None or _embed_http_client.is_closed:
-        _embed_http_client = httpx.AsyncClient(timeout=12, http2=True, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
+        _embed_http_client = httpx.AsyncClient(timeout=5, http2=True, limits=httpx.Limits(max_connections=30, max_keepalive_connections=15))
     return _embed_http_client
 
 # ── Model names ───────────────────────────────────────────────────────────────

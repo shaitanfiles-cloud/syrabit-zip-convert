@@ -962,34 +962,34 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     if _sem_class_result:
         logger.info(f"Chat [STREAM]: Semester override class_id={_sem_class_result} (from query)")
 
-    syllabus = None
-    if ctx_board_id and _syl_class_id_s:
+    async def _fetch_syllabus_async():
+        if not (ctx_board_id and _syl_class_id_s):
+            return None
         _sck = _syllabus_cache_key(ctx_board_id, _syl_class_id_s, ctx_stream_id, msg.subject_id)
         if _sck in _syllabus_cache:
-            syllabus = _syllabus_cache[_sck]
-        else:
-            try:
-                queries = []
-                if ctx_stream_id and msg.subject_id:
-                    queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0}))
-                if ctx_stream_id:
-                    queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id}, {"_id": 0}))
-                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": {"$exists": False}}, {"_id": 0}))
-                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s}, {"_id": 0}))
-                results = await asyncio.gather(*queries, return_exceptions=True)
-                for r in results:
-                    if r and not isinstance(r, Exception):
-                        syllabus = r
-                        break
-                if syllabus:
-                    _syllabus_cache[_sck] = syllabus
-            except Exception:
-                pass
+            return _syllabus_cache[_sck]
+        try:
+            queries = []
+            if ctx_stream_id and msg.subject_id:
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0}))
+            if ctx_stream_id:
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": ctx_stream_id}, {"_id": 0}))
+            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s, "stream_id": {"$exists": False}}, {"_id": 0}))
+            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id_s}, {"_id": 0}))
+            results = await asyncio.gather(*queries, return_exceptions=True)
+            for r in results:
+                if r and not isinstance(r, Exception):
+                    _syllabus_cache[_sck] = r
+                    return r
+        except Exception:
+            pass
+        return None
+    _syllabus_task = asyncio.create_task(_fetch_syllabus_async())
 
     _t_phase1_done = _time_mod.time()
-    logger.info(f"[STREAM][TIMING] Phase 0+1 (context+doc+syllabus+scope): {_t_phase1_done - _t_phase0:.3f}s")
+    logger.info(f"[STREAM][TIMING] Phase 0+1 (context+doc+scope): {_t_phase1_done - _t_phase0:.3f}s")
 
-    # ── Phase 2: RAG + history (essential, gate LLM), web search (best-effort, never blocks LLM) ──
+    # ── Phase 2: RAG + history + syllabus (all parallel, gate LLM), web search (best-effort, never blocks LLM) ──
     _t_phase2 = _time_mod.time()
     _deadline = _stream_t0 + _PRE_LLM_BUDGET
 
@@ -1000,6 +1000,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.info(f"[PIPELINE][S1][STREAM] Enhanced RAG query: '{_s_rag_query[:80]}'")
 
     _rag_quality = "none"
+    try:
+        syllabus = await _syllabus_task
+    except Exception:
+        syllabus = None
     if _skip_rag_stream:
         web_results = []
         raw_conv = _prefetched_conv

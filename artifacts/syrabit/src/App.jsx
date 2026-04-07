@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-
 import { lazy, Suspense, useEffect, useState } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
 import { initGA4 } from "@/utils/analytics";
-import { Toaster } from "sonner";
 import { AuthProvider } from "@/context/AuthContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
@@ -10,7 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
 const PWAInstallPrompt = lazy(() => import("@/components/PWAInstallPrompt"));
-import { Loader2 } from "lucide-react";
+const LazyToaster = lazy(() => import("sonner").then(m => ({ default: m.Toaster })));
 import { apiClient } from "@/utils/api";
 
 // ── React Query client ────────────────────────────────────────────────────────
@@ -83,10 +82,9 @@ const PageFallbackContent = () => (
           aria-hidden="true"
         />
       </div>
-      <Loader2
-        className="w-5 h-5 animate-spin text-primary"
-        aria-hidden="true"
-      />
+      <svg className="w-5 h-5 animate-spin text-primary" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+      </svg>
       <span className="sr-only">Loading page…</span>
     </div>
   </div>
@@ -146,7 +144,7 @@ function App() {
 
     const fallback = setTimeout(() => {
       if (!done) { done = true; prefetchBundle(); detach(); }
-    }, 8000);
+    }, 4000);
     return () => { clearTimeout(fallback); detach(); };
   }, []);
 
@@ -189,7 +187,7 @@ function App() {
           <AuthProvider>
             <BrowserRouter>
               <PageTracker />
-              <Toaster richColors position="top-center" closeButton />
+              <Suspense fallback={null}><LazyToaster richColors position="top-center" closeButton /></Suspense>
               <Suspense fallback={<DeferredFallback />}>
                 <Routes>
                   {/* ── Public routes ── */}
