@@ -2,10 +2,18 @@ name = "syrabit-edge"
 main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
-[vars]
-RENDER_BACKEND_URL = "https://syrabit-api.onrender.com"
+routes = [
+  { pattern = "api.syrabit.ai/*", zone_name = "syrabit.ai" }
+]
 
+[vars]
+BACKEND_URL = "https://syrabit-api.onrender.com"
+
+# Create KV namespaces before deploying:
+#   wrangler kv:namespace create RATE_LIMIT
+#   wrangler kv:namespace create RATE_LIMIT --preview
+# Then paste the returned IDs below.
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
-id = ""
-preview_id = ""
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"

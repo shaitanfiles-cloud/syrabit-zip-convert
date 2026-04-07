@@ -224,6 +224,15 @@ else:
             CORS_ORIGINS.append(f"https://{_rd}")
     _CORS_ALLOW_CREDENTIALS = True
 
+_HARDCODED_PROD_ORIGINS = [
+    "https://syrabit.ai",
+    "https://www.syrabit.ai",
+    "https://api.syrabit.ai",
+]
+for _hpo in _HARDCODED_PROD_ORIGINS:
+    if _hpo not in CORS_ORIGINS:
+        CORS_ORIGINS.append(_hpo)
+
 _prod_origins_raw = os.environ.get('PRODUCTION_ORIGINS', '').strip()
 if _prod_origins_raw:
     for _po in _prod_origins_raw.split(','):

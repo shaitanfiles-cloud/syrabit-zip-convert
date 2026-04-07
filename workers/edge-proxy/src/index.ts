@@ -1,11 +1,12 @@
 interface Env {
-  RENDER_BACKEND_URL: string;
+  BACKEND_URL: string;
   RATE_LIMIT: KVNamespace;
 }
 
 const ALLOWED_ORIGINS = [
   "https://syrabit.ai",
   "https://www.syrabit.ai",
+  "https://api.syrabit.ai",
 ];
 
 const CACHEABLE_PREFIXES = [
@@ -170,7 +171,7 @@ export default {
         return resp;
       }
 
-      const backendUrl = `${env.RENDER_BACKEND_URL}${pathname}${url.search}`;
+      const backendUrl = `${env.BACKEND_URL}${pathname}${url.search}`;
       const backendHeaders = new Headers();
       for (const [key, value] of request.headers.entries()) {
         if (
@@ -237,7 +238,7 @@ export default {
       }
     }
 
-    const backendUrl = `${env.RENDER_BACKEND_URL}${pathname}${url.search}`;
+    const backendUrl = `${env.BACKEND_URL}${pathname}${url.search}`;
     const proxyHeaders = new Headers();
     for (const [key, value] of request.headers.entries()) {
       if (
