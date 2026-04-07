@@ -37,7 +37,7 @@ from analytics_helpers import *
 from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
 from subject_router import build_search_scope
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
-from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, run_pipeline_stream
+from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, run_pipeline_stream, get_instant_response
 
 _CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
 
@@ -221,7 +221,6 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
 
     _detected_intent, _detected_db_category = classify_intent(msg.message)
 
-    from pipeline import get_instant_response
     _instant = get_instant_response(msg.message) if _detected_intent == "casual" else None
     if _instant:
         logger.info(f"[NON-STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant)} chars (0 LLM calls)")
@@ -788,9 +787,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     anon_id = None
     if is_anon:
         _raw_anon = request.headers.get("x-anon-id", "")
-        import re as _re_mod
-        if _raw_anon and _re_mod.match(r"^anon_[a-f0-9]{32}$", _raw_anon):
+        if _raw_anon and re.match(r"^anon_[a-f0-9]{32}$", _raw_anon):
             anon_id = _raw_anon
+
+    safe_prompt, fallback_msg, guardrail_tag = evaluate_prompt_safety(msg.message)
+    _stream_intent, _stream_db_category = classify_intent(msg.message)
+
     credits_info = None
     if not is_anon:
         credits_info = await get_user_credits(user)
@@ -800,7 +802,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         if not deducted:
             raise HTTPException(status_code=402, detail="Credit limit reached. Upgrade your plan for more.")
 
-    safe_prompt, fallback_msg, guardrail_tag = evaluate_prompt_safety(msg.message)
     if fallback_msg:
         logger.info(f"[guardrails] Prompt blocked ({guardrail_tag}) for user {user_id or 'anon'}: {msg.message[:80]!r}")
         async def _blocked_stream():
@@ -824,9 +825,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
 
-    _stream_intent, _stream_db_category = classify_intent(msg.message)
-
-    from pipeline import get_instant_response
     _instant_s = get_instant_response(msg.message) if _stream_intent == "casual" else None
     if _instant_s:
         logger.info(f"[STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant_s)} chars (0 LLM calls)")

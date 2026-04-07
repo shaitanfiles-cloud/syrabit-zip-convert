@@ -18,6 +18,8 @@ import { ModelSelector, MODELS } from './chat/ModelSelector';
 
 const EmptyState = lazy(() => import('./chat/EmptyState').then(m => ({ default: m.EmptyState })));
 
+const _mdPreload = import('./chat/MarkdownContent');
+
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
   const { user } = useAuth();
@@ -53,9 +55,14 @@ export default function ChatPage() {
     return () => { if (abortControllerRef.current) abortControllerRef.current.abort(); };
   }, []);
 
+  const lastMsgLenRef = useRef(0);
   useEffect(() => {
+    const lastMsg = messages[messages.length - 1];
+    const isStreaming = lastMsg?.streaming;
+    const contentLen = (lastMsg?.content || '').length;
+    if (isStreaming && contentLen - lastMsgLenRef.current < 80 && lastMsgLenRef.current > 0) return;
+    lastMsgLenRef.current = contentLen;
     if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current);
-    const isStreaming = messages.length > 0 && messages[messages.length - 1]?.streaming;
     scrollTimeoutRef.current = setTimeout(() => {
       if (pendingSendScroll.current && lastUserMsgRef.current) {
         pendingSendScroll.current = false;
@@ -69,7 +76,7 @@ export default function ChatPage() {
           messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? 'auto' : 'smooth', block: 'end' });
         }
       }
-    }, isStreaming ? 80 : 40);
+    }, isStreaming ? 120 : 40);
     return () => { if (scrollTimeoutRef.current) clearTimeout(scrollTimeoutRef.current); };
   }, [messages]);
 
@@ -242,19 +249,21 @@ export default function ChatPage() {
       };
 
       let pendingChunk = '';
-      let rafId = null;
+      let flushTimer = null;
+      const FLUSH_INTERVAL = 40;
       const flushPending = () => {
         if (!pendingChunk) return;
-        fullContent += pendingChunk; pendingChunk = ''; rafId = null;
+        fullContent += pendingChunk; pendingChunk = '';
+        flushTimer = null;
         const snapshot = fullContent;
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last && last.id === aiMsgId) {
-            const updated = [...prev];
+            const updated = prev.slice();
             updated[updated.length - 1] = { ...last, content: snapshot };
             return updated;
           }
-          return prev.map((m) => m.id === aiMsgId ? { ...m, content: snapshot } : m);
+          return prev;
         });
       };
       let sseBuffer = '';
@@ -268,57 +277,55 @@ export default function ChatPage() {
           if (!line.startsWith('data: ')) continue;
           const raw = line.slice(6);
           if (raw === '[DONE]') break;
-          try {
-            const parsed = JSON.parse(raw);
-            if (parsed.conversation_id) meta.convId = parsed.conversation_id;
-            if (parsed.rag_source) meta.ragSource = parsed.rag_source;
-            if (parsed.rag_chunks !== undefined) meta.ragChunks = parsed.rag_chunks;
-            if (parsed.rag_subject_id) meta.ragSubjectId = parsed.rag_subject_id;
-            if (parsed.rag_subject_name) meta.ragSubjectName = parsed.rag_subject_name;
-            if (parsed.rag_subject_icon) meta.ragSubjectIcon = parsed.rag_subject_icon;
-            if (parsed.rag_subject_gradient) meta.ragSubjectGradient = parsed.rag_subject_gradient;
-            if (parsed.rag_chapter_name) meta.ragChapterName = parsed.rag_chapter_name;
-            if (parsed.rag_chapter_slug) meta.ragChapterSlug = parsed.rag_chapter_slug;
-            if (parsed.ctx_board_name) meta.ragBoardName = parsed.ctx_board_name;
-            if (parsed.ctx_class_name) meta.ragClassName = parsed.ctx_class_name;
-            if (parsed.ctx_stream_name) meta.ragStreamName = parsed.ctx_stream_name;
-            if (parsed.ctx_board_slug) meta.ragBoardSlug = parsed.ctx_board_slug;
-            if (parsed.ctx_class_slug) meta.ragClassSlug = parsed.ctx_class_slug;
-            if (parsed.ctx_subject_slug) meta.ragSubjectSlug = parsed.ctx_subject_slug;
-            if (parsed.rag_topic_name) meta.ragTopicName = parsed.rag_topic_name;
-            if (parsed.rag_chunk_snippet) meta.ragChunkSnippet = parsed.rag_chunk_snippet;
-            if (parsed.content_card_name && !meta.ragTopicName) meta.ragTopicName = parsed.content_card_name;
-            if (parsed.content_card_board && !meta.ragBoardName) meta.ragBoardName = parsed.content_card_board;
-            if (parsed.content_card_class && !meta.ragClassName) meta.ragClassName = parsed.content_card_class;
-            if (parsed.content_card_subject && !meta.ragSubjectName) meta.ragSubjectName = parsed.content_card_subject;
-            if (parsed.error) {
-              meta.hasError = true;
-              toast.error(parsed.error || 'AI service error — please try again.');
-              setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Sorry, something went wrong. Please try again.', streaming: false } : m));
-              continue;
+          let parsed;
+          try { parsed = JSON.parse(raw); } catch { continue; }
+          if (parsed.conversation_id) meta.convId = parsed.conversation_id;
+          if (parsed.rag_source) meta.ragSource = parsed.rag_source;
+          if (parsed.rag_chunks !== undefined) meta.ragChunks = parsed.rag_chunks;
+          if (parsed.rag_subject_id) meta.ragSubjectId = parsed.rag_subject_id;
+          if (parsed.rag_subject_name) meta.ragSubjectName = parsed.rag_subject_name;
+          if (parsed.rag_subject_icon) meta.ragSubjectIcon = parsed.rag_subject_icon;
+          if (parsed.rag_subject_gradient) meta.ragSubjectGradient = parsed.rag_subject_gradient;
+          if (parsed.rag_chapter_name) meta.ragChapterName = parsed.rag_chapter_name;
+          if (parsed.rag_chapter_slug) meta.ragChapterSlug = parsed.rag_chapter_slug;
+          if (parsed.ctx_board_name) meta.ragBoardName = parsed.ctx_board_name;
+          if (parsed.ctx_class_name) meta.ragClassName = parsed.ctx_class_name;
+          if (parsed.ctx_stream_name) meta.ragStreamName = parsed.ctx_stream_name;
+          if (parsed.ctx_board_slug) meta.ragBoardSlug = parsed.ctx_board_slug;
+          if (parsed.ctx_class_slug) meta.ragClassSlug = parsed.ctx_class_slug;
+          if (parsed.ctx_subject_slug) meta.ragSubjectSlug = parsed.ctx_subject_slug;
+          if (parsed.rag_topic_name) meta.ragTopicName = parsed.rag_topic_name;
+          if (parsed.rag_chunk_snippet) meta.ragChunkSnippet = parsed.rag_chunk_snippet;
+          if (parsed.content_card_name && !meta.ragTopicName) meta.ragTopicName = parsed.content_card_name;
+          if (parsed.content_card_board && !meta.ragBoardName) meta.ragBoardName = parsed.content_card_board;
+          if (parsed.content_card_class && !meta.ragClassName) meta.ragClassName = parsed.content_card_class;
+          if (parsed.content_card_subject && !meta.ragSubjectName) meta.ragSubjectName = parsed.content_card_subject;
+          if (parsed.error) {
+            meta.hasError = true;
+            toast.error(parsed.error || 'AI service error — please try again.');
+            setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: 'Sorry, something went wrong. Please try again.', streaming: false } : m));
+            continue;
+          }
+          if (meta.hasError) continue;
+          if (parsed.content) {
+            pendingChunk += parsed.content;
+            if (!fullContent && !flushTimer) flushPending();
+            else if (!flushTimer) flushTimer = setTimeout(flushPending, FLUSH_INTERVAL);
+          }
+          if (parsed.event === 'syrabit_done') {
+            if (parsed.sources) meta.libSources = parsed.sources;
+            if (parsed.credits_used_total != null) {
+              setCredits((c) => ({ ...c, used: parsed.credits_used_total }));
             }
-            if (meta.hasError) continue;
-            if (parsed.content) {
-              pendingChunk += parsed.content;
-              if (!fullContent && !rafId) flushPending();
-              else if (!rafId) rafId = requestAnimationFrame(flushPending);
-            }
-            if (parsed.event === 'syrabit_done') {
-              if (parsed.sources) meta.libSources = parsed.sources;
-              if (parsed.credits_used_total != null) {
-                setCredits((c) => ({ ...c, used: parsed.credits_used_total }));
-              }
-              const remaining = parsed.remaining_credits ?? 0;
-              try {
-                const { Analytics } = await import('@/utils/analytics');
-                Analytics.chatMessage(meta.ragSource, remaining, model);
-                if (remaining <= 0) Analytics.chatCreditsExhausted();
-              } catch {}
-            }
-          } catch {}
+            const remaining = parsed.remaining_credits ?? 0;
+            import('@/utils/analytics').then(({ Analytics }) => {
+              Analytics.chatMessage(meta.ragSource, remaining, model);
+              if (remaining <= 0) Analytics.chatCreditsExhausted();
+            }).catch(() => {});
+          }
         }
       }
-      if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
       if (pendingChunk) { fullContent += pendingChunk; pendingChunk = ''; }
       if (meta.convId && meta.convId !== conversationId) {
         setConversationId(meta.convId);

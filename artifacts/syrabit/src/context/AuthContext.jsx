@@ -46,6 +46,8 @@ export const AuthProvider = ({ children }) => {
     if (savedToken) {
       _inMemoryToken = savedToken;
       setAuthToken(savedToken);
+    } else {
+      setAuthChecked(true);
     }
     setLoading(false);
     fetchMe();

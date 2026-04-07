@@ -121,18 +121,12 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
             </div>
             <span className="text-xs font-semibold text-foreground/70">Syrabit AI</span>
           </div>
-          <div className="w-full">
+          <div className="w-full" style={msg.streaming ? { willChange: 'contents', contain: 'layout style' } : undefined}>
             {msg.streaming && !msg.content && <ThinkingIndicator />}
 
-            {msg.streaming && msg.content && (
+            {msg.content && (
               <Suspense fallback={<div className="md-content-light" style={{ fontSize: '0.9375rem' }}>{cleanContent}</div>}>
-                <MarkdownContent content={cleanContent} streaming={true} sources={msg.sources} />
-              </Suspense>
-            )}
-
-            {!msg.streaming && msg.content && (
-              <Suspense fallback={<div className="md-content-light" style={{ fontSize: '0.9375rem' }}>{cleanContent}</div>}>
-                <MarkdownContent content={cleanContent} streaming={false} sources={msg.sources} />
+                <MarkdownContent content={cleanContent} streaming={!!msg.streaming} sources={msg.sources} />
               </Suspense>
             )}
 
