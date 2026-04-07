@@ -178,8 +178,6 @@ if _OPENAI_KEY and _OPENAI_KEY != 'x':
     _LLM_PROVIDERS.append({"provider": "openai",      "key": _OPENAI_KEY,     "default_model": "gpt-4o-mini"})
 
 _LLM_PROVIDERS_CHAT: list[dict] = []
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "llama-3.3-70b-versatile"})
 if _GEMINI_KEY:
@@ -226,12 +224,11 @@ _MODEL_ALIAS_MAP = {
 # Slots in the same tier are load-balanced by in-flight count.
 #
 _SLM_SLOT_CANDIDATES = [
-    ("sarvam:2",    "sarvam-m",                                          4, 0),
-    ("groq",        "llama-3.3-70b-versatile",                           4, 1),
-    ("gemini",      "gemini-2.5-flash",                                  6, 2),
-    ("openrouter",  "google/gemma-3-27b-it",                             4, 3),
-    ("cerebras",    "llama3.1-8b",                                       4, 4),
-    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 5),
+    ("groq",        "llama-3.3-70b-versatile",                           4, 0),
+    ("gemini",      "gemini-2.5-flash",                                  6, 1),
+    ("openrouter",  "google/gemma-3-27b-it",                             4, 2),
+    ("cerebras",    "llama3.1-8b",                                       4, 3),
+    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 4),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
@@ -582,6 +579,8 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     tried: set = set()
     last_err = None
 
+    _PROVIDER_TIMEOUT = 6.0
+
     provider, key = primary_provider, primary_key
     try_model = _safe_model_for_provider(use_model, provider, providers)
     if try_model != use_model:
@@ -589,12 +588,20 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     try:
         tried.add((provider, try_model, id(key) if key else 0))
         _t0 = _t.perf_counter()
-        result = await _call_single_provider(messages, provider, key, try_model, max_tokens)
+        result = await asyncio.wait_for(
+            _call_single_provider(messages, provider, key, try_model, max_tokens),
+            timeout=_PROVIDER_TIMEOUT,
+        )
         _dur = int((_t.perf_counter() - _t0) * 1000)
         tok = len(result.split())
         _record_llm_call(provider, try_model, _dur, True, tok, False)
         logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
         return result
+    except asyncio.TimeoutError:
+        _dur = int((_t.perf_counter() - _t0) * 1000)
+        _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
+        last_err = TimeoutError(f"{provider}/{try_model} timed out after {_PROVIDER_TIMEOUT}s")
+        logger.warning(f"LLM primary TIMEOUT ({provider}/{try_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
     except Exception as e:
         _dur = int((_t.perf_counter() - _t0) * 1000)
         _record_llm_call(provider, try_model, _dur, False, 0, False, type(e).__name__)
@@ -609,12 +616,20 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
         tried.add((fallback["provider"], fb_model, fb_key_id))
         try:
             _t0 = _t.perf_counter()
-            result = await _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens)
+            result = await asyncio.wait_for(
+                _call_single_provider(messages, fallback["provider"], fallback["key"], fb_model, max_tokens),
+                timeout=_PROVIDER_TIMEOUT,
+            )
             _dur = int((_t.perf_counter() - _t0) * 1000)
             tok = len(result.split())
             _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
             logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
             return result
+        except asyncio.TimeoutError:
+            _dur = int((_t.perf_counter() - _t0) * 1000)
+            _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
+            last_err = TimeoutError(f"{fallback['provider']}/{fb_model} timed out after {_PROVIDER_TIMEOUT}s")
+            logger.warning(f"LLM fallback TIMEOUT ({fallback['provider']}/{fb_model}): {_dur}ms > {_PROVIDER_TIMEOUT}s limit")
         except Exception as e:
             _dur = int((_t.perf_counter() - _t0) * 1000)
             _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, type(e).__name__)
