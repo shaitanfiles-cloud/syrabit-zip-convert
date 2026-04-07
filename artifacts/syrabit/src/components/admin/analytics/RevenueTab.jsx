@@ -9,10 +9,14 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
   return (
     <div className="space-y-4">
       {widgetErrors.revenue && (
-        <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+        <div className="flex items-center gap-3 p-3.5 rounded-xl" style={{
+          background: 'rgba(245,158,11,0.06)',
+          border: '1px solid rgba(245,158,11,0.15)',
+        }}>
           <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
-          <p className="text-xs text-amber-300 flex-1">Revenue data failed to load.</p>
-          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">Retry</button>
+          <p className="text-xs text-amber-300/80 flex-1">Revenue data failed to load.</p>
+          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2.5 py-1 rounded-lg transition-colors"
+            style={{ background: 'rgba(245,158,11,0.12)' }}>Retry</button>
         </div>
       )}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -28,9 +32,9 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
         empty={!dailyRev.length} emptyMsg="No payment data yet">
         <ResponsiveContainer width="100%" height={220}>
           <LineChart data={dailyRev} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-            <XAxis dataKey="date" tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={fmt} />
-            <YAxis tick={{ fill: '#64748b', fontSize: 11 }} tickFormatter={v => `₹${v}`} />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+            <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} tickFormatter={fmt} />
+            <YAxis tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} tickFormatter={v => `₹${v}`} />
             <Tooltip {...TT} formatter={v => [`₹${v}`, 'Revenue']} />
             <Line type="monotone" dataKey="revenue_inr" name="Revenue ₹" stroke="#10b981" strokeWidth={2.5}
               dot={{ r: 3, fill: '#10b981' }} activeDot={{ r: 5 }} />
@@ -43,9 +47,9 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
           {cohortData.length > 0 && (
             <ResponsiveContainer width="100%" height={160}>
               <BarChart data={cohortData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
-                <XAxis dataKey="plan" tick={{ fill: '#64748b', fontSize: 11 }} />
-                <YAxis tick={{ fill: '#64748b', fontSize: 11 }} allowDecimals={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
+                <XAxis dataKey="plan" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} />
+                <YAxis tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} allowDecimals={false} />
                 <Tooltip {...TT} />
                 <Bar dataKey="count" name="Users" radius={[4, 4, 0, 0]}>
                   {cohortData.map((entry, i) => (
@@ -66,8 +70,10 @@ export default function RevenueTab({ widgetErrors, load, mrr, predicted, growth,
               { label: 'Signups (last month)',   value: predict?.signups_last_month   || 0, color: '#64748b' },
               { label: 'Total payments (30d)',   value: revenue?.total_payments       || 0, color: '#f59e0b' },
             ].map((item, i) => (
-              <div key={i} className="flex items-center justify-between">
-                <span className="text-slate-400 text-sm">{item.label}</span>
+              <div key={i} className="flex items-center justify-between p-2 rounded-lg" style={{
+                background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent',
+              }}>
+                <span className="text-white/40 text-sm">{item.label}</span>
                 <span className="font-semibold text-sm" style={{ color: item.color }}>{item.value.toLocaleString()}</span>
               </div>
             ))}

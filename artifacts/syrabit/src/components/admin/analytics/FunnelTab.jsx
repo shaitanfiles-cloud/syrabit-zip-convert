@@ -15,13 +15,13 @@ export default function FunnelTab({ funnel, widgetErrors, load }) {
         <div className="space-y-3">
           {funnel.funnel?.map((stage, i) => (
             <div key={i}>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-white text-sm font-medium">{stage.stage}</span>
-                <span className="text-slate-400 text-sm">{stage.count?.toLocaleString()} ({stage.pct}%)</span>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-white/80 text-sm font-medium">{stage.stage}</span>
+                <span className="text-white/30 text-sm">{stage.count?.toLocaleString()} ({stage.pct}%)</span>
               </div>
-              <div className="h-8 rounded-lg overflow-hidden bg-slate-800">
-                <div className="h-full rounded-lg transition-all duration-500"
-                  style={{ width: `${stage.pct}%`, background: `linear-gradient(90deg, ${FUNNEL_COLORS[i]||'#8b5cf6'}, ${FUNNEL_COLORS[i]||'#8b5cf6'}aa)` }} />
+              <div className="h-8 rounded-xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)' }}>
+                <div className="h-full rounded-xl transition-all duration-500"
+                  style={{ width: `${stage.pct}%`, background: `linear-gradient(90deg, ${FUNNEL_COLORS[i]||'#8b5cf6'}, ${FUNNEL_COLORS[i]||'#8b5cf6'}88)` }} />
               </div>
             </div>
           ))}

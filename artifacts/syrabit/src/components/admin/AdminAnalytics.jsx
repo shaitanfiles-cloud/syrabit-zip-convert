@@ -144,13 +144,17 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
 
   if (loading) return (
     <div className="flex justify-center p-10">
-      <Loader2 size={24} className="animate-spin text-slate-400" />
+      <Loader2 size={24} className="animate-spin text-violet-400/60" />
     </div>
   );
   if (!data) return (
     <div className="p-6">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl p-8 text-center">
-        <p className="text-slate-400">Unable to load analytics</p>
+      <div className="rounded-2xl p-8 text-center" style={{
+        background: 'rgba(15,15,30,0.6)',
+        border: '1px solid rgba(255,255,255,0.06)',
+        backdropFilter: 'blur(12px)',
+      }}>
+        <p className="text-white/30">Unable to load analytics</p>
         <button onClick={load} className="mt-3 text-sm text-violet-400 hover:underline">Retry</button>
       </div>
     </div>
@@ -176,38 +180,51 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
 
   const TABS = [
     { id: 'overview',  label: 'Overview' },
-    { id: 'daily',     label: '📅 Daily' },
+    { id: 'daily',     label: 'Daily' },
     { id: 'funnel',    label: 'Funnel' },
     { id: 'heatmap',   label: 'Heatmap' },
     { id: 'seo',       label: 'SEO & Pages' },
-    { id: 'revenue',   label: '₹ Revenue' },
-    { id: 'predict',   label: '🔮 Predictions' },
-    { id: 'pages',     label: '📄 Page Conversions' },
+    { id: 'revenue',   label: 'Revenue' },
+    { id: 'predict',   label: 'Predictions' },
+    { id: 'pages',     label: 'Page Conversions' },
   ];
 
   return (
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-slate-200 font-semibold">Analytics</h2>
+          <h2 className="text-white/90 font-semibold text-lg">Analytics</h2>
           {lastRefresh && (
-            <p className="text-slate-600 text-xs mt-0.5">
+            <p className="text-white/20 text-xs mt-0.5">
               Updated {Math.floor((Date.now() - lastRefresh) / 1000)}s ago · auto-refreshes every 60s
             </p>
           )}
         </div>
         <button onClick={() => load(true)} disabled={refreshing}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-slate-400 hover:text-white bg-slate-800 border border-slate-700 transition-all">
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-all"
+          style={{
+            background: 'rgba(15,15,30,0.6)',
+            border: '1px solid rgba(255,255,255,0.06)',
+          }}>
           <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
 
-      <div className="flex gap-1 flex-wrap bg-slate-800/50 rounded-xl p-1 w-fit">
+      <div className="flex gap-1 flex-wrap rounded-xl p-1 w-fit" style={{
+        background: 'rgba(15,15,30,0.5)',
+        border: '1px solid rgba(255,255,255,0.04)',
+      }}>
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              tab === t.id ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'
-            }`}>
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
+              tab === t.id
+                ? 'text-white shadow-lg'
+                : 'text-white/30 hover:text-white/60'
+            }`}
+            style={tab === t.id ? {
+              background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
+              boxShadow: '0 2px 12px rgba(124,58,237,0.3)',
+            } : {}}>
             {t.label}
           </button>
         ))}

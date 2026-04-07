@@ -6,10 +6,14 @@ export default function PredictionsTab({ widgetErrors, load, mrr, predicted, gro
   return (
     <div className="space-y-4">
       {widgetErrors.predictions && (
-        <div className="flex items-center gap-3 p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+        <div className="flex items-center gap-3 p-3.5 rounded-xl" style={{
+          background: 'rgba(245,158,11,0.06)',
+          border: '1px solid rgba(245,158,11,0.15)',
+        }}>
           <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
-          <p className="text-xs text-amber-300 flex-1">Predictions data failed to load — showing estimates only.</p>
-          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 transition-colors">Retry</button>
+          <p className="text-xs text-amber-300/80 flex-1">Predictions data failed to load — showing estimates only.</p>
+          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2.5 py-1 rounded-lg transition-colors"
+            style={{ background: 'rgba(245,158,11,0.12)' }}>Retry</button>
         </div>
       )}
 
@@ -33,13 +37,16 @@ export default function PredictionsTab({ widgetErrors, load, mrr, predicted, gro
             { pages: 5000,  est: '₹60–90k', label: 'Scale phase — 5k SEO pages' },
             { pages: 10000, est: '₹1–1.5L', label: '₹1Cr MRR target — 10k SEO pages' },
           ].map((row, i) => (
-            <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-slate-800/40">
-              <div className="w-8 h-8 rounded-lg bg-violet-900/40 flex items-center justify-center flex-shrink-0">
+            <div key={i} className="flex items-center gap-3 p-3.5 rounded-xl transition-all duration-300 group" style={{
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid rgba(255,255,255,0.04)',
+            }}>
+              <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(139,92,246,0.12)' }}>
                 <FileText size={13} className="text-violet-400" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-slate-200 text-sm font-medium">{row.label}</p>
-                <p className="text-slate-500 text-xs">{row.pages.toLocaleString()} pages × ~200 organic visits/mo × 2% conversion</p>
+                <p className="text-white/70 text-sm font-medium">{row.label}</p>
+                <p className="text-white/20 text-xs">{row.pages.toLocaleString()} pages × ~200 organic visits/mo × 2% conversion</p>
               </div>
               <span className="text-emerald-400 font-bold text-sm flex-shrink-0">{row.est}/mo</span>
             </div>
@@ -49,16 +56,21 @@ export default function PredictionsTab({ widgetErrors, load, mrr, predicted, gro
 
       {aiInsight && (
         <Card title="AI Content Gap Insight">
-          <div className="flex items-start gap-3 p-3 rounded-lg bg-violet-900/20 border border-violet-800/30">
+          <div className="flex items-start gap-3 p-3.5 rounded-xl" style={{
+            background: 'rgba(139,92,246,0.06)',
+            border: '1px solid rgba(139,92,246,0.12)',
+          }}>
             <Zap size={15} className="text-violet-400 flex-shrink-0 mt-0.5" />
-            <p className="text-slate-300 text-sm leading-relaxed">{aiInsight}</p>
+            <p className="text-white/60 text-sm leading-relaxed">{aiInsight}</p>
           </div>
           {topSubject && (
             <div className="mt-4 space-y-2">
-              <p className="text-slate-500 text-xs font-medium uppercase tracking-wide">Revenue opportunity</p>
+              <p className="text-white/20 text-xs font-medium uppercase tracking-wide">Revenue opportunity</p>
               {['MCQ Practice', 'Important Questions', 'Notes', 'Definitions'].map((pt, i) => (
-                <div key={i} className="flex items-center justify-between p-2 rounded-lg bg-slate-800/40">
-                  <span className="text-slate-300 text-sm">{topSubject.name} — {pt}</span>
+                <div key={i} className="flex items-center justify-between p-2.5 rounded-xl" style={{
+                  background: 'rgba(255,255,255,0.02)',
+                }}>
+                  <span className="text-white/60 text-sm">{topSubject.name} — {pt}</span>
                   <span className="text-xs text-emerald-400 font-medium">+{[120, 95, 80, 60][i]} organic/mo est.</span>
                 </div>
               ))}

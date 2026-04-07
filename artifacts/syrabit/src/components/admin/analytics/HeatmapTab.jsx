@@ -12,12 +12,12 @@ export default function HeatmapTab({ heatmap, aiInsight, widgetErrors, load }) {
   return (
     <div className="space-y-4">
       {aiInsight && (
-        <div className="flex items-start gap-3 p-4 rounded-xl border"
-          style={{ background: 'rgba(139,92,246,0.07)', borderColor: 'rgba(139,92,246,0.20)' }}>
+        <div className="flex items-start gap-3 p-4 rounded-xl"
+          style={{ background: 'rgba(139,92,246,0.07)', border: '1px solid rgba(139,92,246,0.15)' }}>
           <Zap size={15} className="text-violet-400 flex-shrink-0 mt-0.5" />
           <div>
-            <p className="text-xs font-semibold text-violet-300 mb-0.5">AI Content Insight</p>
-            <p className="text-slate-300 text-sm leading-relaxed">{aiInsight}</p>
+            <p className="text-xs font-semibold text-violet-300/80 mb-0.5">AI Content Insight</p>
+            <p className="text-white/60 text-sm leading-relaxed">{aiInsight}</p>
           </div>
         </div>
       )}
@@ -39,10 +39,10 @@ export default function HeatmapTab({ heatmap, aiInsight, widgetErrors, load }) {
           {heatmap.top_searches?.length > 0 && (
             <div className="space-y-2">
               {heatmap.top_searches.map((s, i) => (
-                <div key={i} className="flex items-center gap-2 p-1.5 hover:bg-slate-800/50 rounded-lg">
+                <div key={i} className="flex items-center gap-2 p-2 rounded-lg transition-colors hover:bg-white/[0.03]">
                   <Search size={12} className="text-blue-400 flex-shrink-0" />
-                  <span className="text-slate-300 text-sm flex-1 truncate">{s.query}</span>
-                  <span className="text-slate-500 text-xs flex-shrink-0">{s.count}x</span>
+                  <span className="text-white/60 text-sm flex-1 truncate">{s.query}</span>
+                  <span className="text-white/25 text-xs flex-shrink-0">{s.count}x</span>
                 </div>
               ))}
             </div>
