@@ -77,8 +77,8 @@ export default function Step2DraftContent({ state, set, goNext, goPrev, adminTok
     <div className="h-full flex flex-col">
       <div className="px-6 pt-5 pb-3 flex items-center justify-between flex-shrink-0">
         <div>
-          <h2 className="text-base font-bold text-white">Step 2 — Draft Content</h2>
-          <p className="text-xs text-white/40 mt-0.5">Write, paste, or extract content. Need ≥ 150 words to continue.</p>
+          <h2 className="text-base font-bold text-gray-900">Step 2 — Draft Content</h2>
+          <p className="text-xs text-gray-400 mt-0.5">Write, paste, or extract content. Need ≥ 150 words to continue.</p>
         </div>
         <div className="flex items-center gap-2">
           <div className={`text-xs font-semibold px-2.5 py-1 rounded-lg ${canContinue ? 'text-emerald-400 bg-emerald-500/10' : 'text-amber-400 bg-amber-500/10'}`}>
@@ -97,7 +97,7 @@ export default function Step2DraftContent({ state, set, goNext, goPrev, adminTok
         </div>
       </div>
 
-      <div className="flex-1 mx-6 mb-4 rounded-xl overflow-hidden border" style={{ borderColor: 'rgba(255,255,255,0.10)', minHeight: 300 }}>
+      <div className="flex-1 mx-6 mb-4 rounded-xl overflow-hidden border" style={{ borderColor: '#e5e7eb', minHeight: 300 }}>
         <SharedMdxEditor
           key={editorKey}
           ref={editorRef}
@@ -108,7 +108,7 @@ export default function Step2DraftContent({ state, set, goNext, goPrev, adminTok
       </div>
 
       <div className="px-6 mb-4 flex-shrink-0">
-        <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+        <div className="h-1.5 rounded-full bg-gray-50 overflow-hidden">
           <div
             className="h-full rounded-full transition-all"
             style={{
@@ -121,14 +121,14 @@ export default function Step2DraftContent({ state, set, goNext, goPrev, adminTok
 
       <div className="px-6 pb-5 flex items-center justify-between flex-shrink-0">
         <button onClick={goPrev}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white/50 hover:text-white/80 transition">
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-gray-500 hover:text-gray-700 transition">
           <ChevronLeft size={14} /> Back
         </button>
         <button
           onClick={handleContinue}
           disabled={!canContinue || saving}
           className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-40"
-          style={{ background: canContinue ? '#7c3aed' : 'rgba(255,255,255,0.08)', color: canContinue ? 'white' : 'rgba(255,255,255,0.4)' }}
+          style={{ background: canContinue ? '#7c3aed' : '#e5e7eb', color: canContinue ? 'white' : '#9ca3af' }}
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
           {saving ? 'Saving…' : `Continue to AI Enrichment`}

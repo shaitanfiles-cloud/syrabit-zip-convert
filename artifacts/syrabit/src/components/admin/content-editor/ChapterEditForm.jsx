@@ -40,35 +40,35 @@ export default function ChapterEditForm({
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="px-8 pt-7 pb-4 flex-shrink-0">
-        <button onClick={onCancel} className="flex items-center gap-1.5 text-sm text-white/50 hover:text-white mb-5"><ArrowLeft size={16} /> Back</button>
-        <h3 className="text-2xl font-bold text-white mb-0.5">{editView === 'edit-chapter' ? 'Edit Chapter' : 'Create Chapter'}</h3>
-        <p className="text-white/50 text-sm">for {subjectData?.name}</p>
+        <button onClick={onCancel} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-5"><ArrowLeft size={16} /> Back</button>
+        <h3 className="text-2xl font-bold text-gray-900 mb-0.5">{editView === 'edit-chapter' ? 'Edit Chapter' : 'Create Chapter'}</h3>
+        <p className="text-gray-500 text-sm">for {subjectData?.name}</p>
       </div>
       <div className="flex-1 flex flex-col min-h-0 px-8 pb-8 gap-4">
         <div className="flex-shrink-0 grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div>
-            <label className="text-sm text-white/60 block mb-1.5">Title *</label>
-            <input value={contentForm.title} onChange={(e) => { const title = e.target.value; setContentForm(f => ({ ...f, title, slug: f.slug === autoSlug(f.title) || !f.slug ? autoSlug(title) : f.slug })); }} placeholder="Chapter title" className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+            <label className="text-sm text-gray-500 block mb-1.5">Title *</label>
+            <input value={contentForm.title} onChange={(e) => { const title = e.target.value; setContentForm(f => ({ ...f, title, slug: f.slug === autoSlug(f.title) || !f.slug ? autoSlug(title) : f.slug })); }} placeholder="Chapter title" className="w-full h-11 px-4 rounded-xl text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500" />
           </div>
           <div>
-            <label className="text-sm text-white/60 block mb-1.5">URL Slug</label>
+            <label className="text-sm text-gray-500 block mb-1.5">URL Slug</label>
             <div className="flex items-center gap-2">
-              <div className="flex items-center flex-1 h-11 rounded-xl bg-white/5 border border-white/10 overflow-hidden">
-                <span className="px-3 text-xs text-white/30 flex-shrink-0"><Link2 size={12} /></span>
-                <input value={contentForm.slug} onChange={(e) => setContentForm({ ...contentForm, slug: e.target.value })} placeholder="auto-generated-slug" className="flex-1 h-full text-sm text-white bg-transparent outline-none font-mono pr-3" />
+              <div className="flex items-center flex-1 h-11 rounded-xl bg-gray-50 border border-gray-200 overflow-hidden">
+                <span className="px-3 text-xs text-gray-400 flex-shrink-0"><Link2 size={12} /></span>
+                <input value={contentForm.slug} onChange={(e) => setContentForm({ ...contentForm, slug: e.target.value })} placeholder="auto-generated-slug" className="flex-1 h-full text-sm text-gray-900 bg-transparent outline-none font-mono pr-3" />
               </div>
             </div>
           </div>
         </div>
         <div className="flex-shrink-0 grid grid-cols-1 lg:grid-cols-2 gap-3">
           <div>
-            <label className="text-sm text-white/60 block mb-1.5">Content Type</label>
+            <label className="text-sm text-gray-500 block mb-1.5">Content Type</label>
             <div className="flex flex-wrap gap-1.5">
               {CONTENT_TYPES.map(ct => (
                 <button
                   key={ct.value}
                   onClick={() => setContentForm(f => ({ ...f, content_type: ct.value }))}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${contentForm.content_type === ct.value ? 'border-violet-500 bg-violet-500/20 text-violet-300' : 'border-white/10 bg-white/5 text-white/50 hover:text-white hover:border-white/20'}`}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${contentForm.content_type === ct.value ? 'border-violet-500 bg-violet-500/20 text-violet-300' : 'border-gray-200 bg-gray-50 text-gray-500 hover:text-gray-900 hover:border-gray-200'}`}
                 >
                   {ct.label}
                 </button>
@@ -76,13 +76,13 @@ export default function ChapterEditForm({
             </div>
           </div>
           <div>
-            <label className="text-sm text-white/60 block mb-1.5">Description</label>
-            <input value={contentForm.description} onChange={(e) => setContentForm({ ...contentForm, description: e.target.value })} placeholder="Brief description..." className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+            <label className="text-sm text-gray-500 block mb-1.5">Description</label>
+            <input value={contentForm.description} onChange={(e) => setContentForm({ ...contentForm, description: e.target.value })} placeholder="Brief description..." className="w-full h-11 px-4 rounded-xl text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500" />
           </div>
         </div>
 
         <div className="flex-shrink-0">
-          <label className="text-sm text-white/60 block mb-1.5">Topics <span className="text-white/30">(used for AI embeddings — comma-separated)</span></label>
+          <label className="text-sm text-gray-500 block mb-1.5">Topics <span className="text-gray-400">(used for AI embeddings — comma-separated)</span></label>
           <input
             value={(contentForm.topics || []).join(', ')}
             onChange={(e) => {
@@ -90,14 +90,14 @@ export default function ChapterEditForm({
               setContentForm(f => ({ ...f, topics }));
             }}
             placeholder="e.g. Photosynthesis, Carbon cycle, Nitrogen fixation"
-            className="w-full h-11 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 text-sm"
+            className="w-full h-11 px-4 rounded-xl text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500 text-sm"
           />
           {(contentForm.topics || []).length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-2">
               {contentForm.topics.map((topic, i) => (
                 <span key={i} className="px-2 py-0.5 rounded-full text-[11px] bg-violet-500/15 text-violet-300 border border-violet-500/20">
                   {topic}
-                  <button onClick={() => setContentForm(f => ({ ...f, topics: f.topics.filter((_, j) => j !== i) }))} className="ml-1 text-white/30 hover:text-white/60">×</button>
+                  <button onClick={() => setContentForm(f => ({ ...f, topics: f.topics.filter((_, j) => j !== i) }))} className="ml-1 text-gray-400 hover:text-gray-500">×</button>
                 </span>
               ))}
             </div>
@@ -105,12 +105,12 @@ export default function ChapterEditForm({
         </div>
 
         {chapterStats && (
-          <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs flex-wrap">
-            <div className="flex items-center gap-1.5 text-white/60">
+          <div className="flex-shrink-0 flex items-center gap-3 px-4 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-xs flex-wrap">
+            <div className="flex items-center gap-1.5 text-gray-500">
               <BarChart3 size={12} className="text-violet-400" />
               <span>{chapterStats.chunk_count} chunks</span>
             </div>
-            <div className="text-white/40">{chapterStats.content_length?.toLocaleString()} chars</div>
+            <div className="text-gray-400">{chapterStats.content_length?.toLocaleString()} chars</div>
             {chapterStats.notes_generated && (
               <div className="flex items-center gap-1 text-emerald-400"><CheckCircle size={11} />Notes</div>
             )}
@@ -126,13 +126,13 @@ export default function ChapterEditForm({
             {(chapterStats.attached_files || []).length > 0 && (
               <div className="flex items-center gap-1 text-blue-400"><Paperclip size={11} />{chapterStats.attached_files.length} files</div>
             )}
-            <button onClick={() => onLoadChapterStats(editTarget?.id)} className="ml-auto text-white/30 hover:text-white p-1"><RefreshCw size={11} /></button>
+            <button onClick={() => onLoadChapterStats(editTarget?.id)} className="ml-auto text-gray-400 hover:text-gray-900 p-1"><RefreshCw size={11} /></button>
           </div>
         )}
         <div className="flex-1 flex flex-col min-h-0">
           <div className="flex items-center gap-1.5 mb-2 flex-shrink-0 flex-wrap">
-            <LayoutTemplate size={11} className="text-white/25 flex-shrink-0" />
-            <span className="text-[10px] text-white/30 flex-shrink-0 mr-0.5">Insert:</span>
+            <LayoutTemplate size={11} className="text-gray-300 flex-shrink-0" />
+            <span className="text-[10px] text-gray-400 flex-shrink-0 mr-0.5">Insert:</span>
             {TEMPLATES.map(t => (
               <button
                 key={t.label}
@@ -141,19 +141,19 @@ export default function ChapterEditForm({
                   setContentForm(f => ({ ...f, content: current + t.shortcode }));
                   setEditorKey(k => k + 1);
                 }}
-                className="px-2 py-0.5 rounded text-[10px] border border-white/10 bg-white/5 text-white/40 hover:text-violet-300 hover:border-violet-500/40 transition-colors"
+                className="px-2 py-0.5 rounded text-[10px] border border-gray-200 bg-gray-50 text-gray-400 hover:text-violet-300 hover:border-violet-500/40 transition-colors"
               >
                 {t.label}
               </button>
             ))}
             <div className="ml-auto flex items-center gap-2">
-              <span className="text-[10px] text-white/25">{contentForm.content.length}ch</span>
+              <span className="text-[10px] text-gray-300">{contentForm.content.length}ch</span>
               <button
                 onClick={() => setShowPreview(p => !p)}
                 className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium border transition-colors ${
                   showPreview
                     ? 'bg-violet-600/25 text-violet-300 border-violet-500/30'
-                    : 'bg-white/5 text-white/40 border-white/10 hover:text-white'
+                    : 'bg-gray-50 text-gray-400 border-gray-200 hover:text-gray-900'
                 }`}
               >
                 <Eye size={10} />
@@ -259,17 +259,17 @@ export default function ChapterEditForm({
                 Attach File (PDF / TXT / MD)
               </button>
               {chapterStats && (
-                <span className="text-[11px] text-white/30">{chapterStats.chunk_count} chunks · {chapterStats.content_length?.toLocaleString()} chars</span>
+                <span className="text-[11px] text-gray-400">{chapterStats.chunk_count} chunks · {chapterStats.content_length?.toLocaleString()} chars</span>
               )}
             </div>
           )}
         </div>
         <div className="flex gap-3 flex-shrink-0">
-          <button onClick={onCancel} className="flex-1 h-12 rounded-xl bg-white/5 hover:bg-white/10 text-white font-medium">Cancel</button>
+          <button onClick={onCancel} className="flex-1 h-12 rounded-xl bg-gray-50 hover:bg-gray-100 text-gray-900 font-medium">Cancel</button>
           <button
             onClick={onSave}
             disabled={saving || !contentForm.title}
-            className="flex-1 h-12 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-semibold disabled:opacity-40 flex items-center justify-center gap-2"
+            className="flex-1 h-12 rounded-xl bg-violet-600 hover:bg-violet-500 text-gray-900 font-semibold disabled:opacity-40 flex items-center justify-center gap-2"
           >
             {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
             {saving ? 'Saving...' : editView === 'edit-chapter' ? 'Update Chapter' : 'Create Chapter'}

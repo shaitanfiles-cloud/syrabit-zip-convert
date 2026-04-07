@@ -39,23 +39,23 @@ export default function NlpConceptsCard({ token }) {
       <div className="flex items-center gap-3 mb-4">
         <Brain size={18} color="#a855f7" />
         <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: '#e8e8e8' }}>NLP Key Concepts</div>
-          <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.45)' }}>Cloud Natural Language API · Extract entities, terms &amp; exam weightage</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#111827' }}>NLP Key Concepts</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Cloud Natural Language API · Extract entities, terms &amp; exam weightage</div>
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
         <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="Subject (e.g. Physics)"
-          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }} />
+          style={{ background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }} />
         <select value={className} onChange={e => setClassName(e.target.value)}
-          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }}>
+          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }}>
           {['Class 11', 'Class 12', 'Degree 1st Year', 'Degree 2nd Year', 'Degree 3rd Year'].map(c => <option key={c}>{c}</option>)}
         </select>
       </div>
 
       <textarea value={text} onChange={e => setText(e.target.value)} placeholder="Paste chapter content here (min 50 characters)…"
         rows={5}
-        style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none', resize: 'vertical', marginBottom: 10, boxSizing: 'border-box' }}
+        style={{ width: '100%', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#111827', outline: 'none', resize: 'vertical', marginBottom: 10, boxSizing: 'border-box' }}
       />
 
       <button onClick={run} disabled={loading} style={{ ...btn('#a855f7'), width: '100%', justifyContent: 'center', marginBottom: 14 }}>
@@ -79,29 +79,29 @@ export default function NlpConceptsCard({ token }) {
           </div>
 
           {result.chapter_summary && (
-            <div style={{ background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 10, padding: 12, fontSize: 13, color: 'rgba(232,232,232,0.8)', lineHeight: 1.7 }}>
+            <div style={{ background: 'rgba(168,85,247,0.06)', border: '1px solid rgba(168,85,247,0.2)', borderRadius: 10, padding: 12, fontSize: 13, color: '#374151', lineHeight: 1.7 }}>
               {result.chapter_summary}
             </div>
           )}
 
           {result.key_terms?.length > 0 && (
-            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'rgba(232,232,232,0.5)', textTransform: 'uppercase', marginBottom: 8 }}>Key Terms ({result.key_terms.length})</div>
+            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', marginBottom: 8 }}>Key Terms ({result.key_terms.length})</div>
               {result.key_terms.map((t, i) => (
-                <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '6px 0' }}>
-                  <span style={{ fontSize: 13, color: '#e8e8e8', fontWeight: 700 }}>{t.term}</span>
-                  <span style={{ fontSize: 11, marginLeft: 8, color: t.importance === 'high' ? '#10b981' : t.importance === 'medium' ? '#f59e0b' : 'rgba(232,232,232,0.4)' }}>
+                <div key={i} style={{ borderBottom: '1px solid #f3f4f6', padding: '6px 0' }}>
+                  <span style={{ fontSize: 13, color: '#111827', fontWeight: 700 }}>{t.term}</span>
+                  <span style={{ fontSize: 11, marginLeft: 8, color: t.importance === 'high' ? '#10b981' : t.importance === 'medium' ? '#f59e0b' : '#9ca3af' }}>
                     [{t.importance}]
                   </span>
-                  {t.definition && <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.55)', marginTop: 2, lineHeight: 1.5 }}>{t.definition}</div>}
+                  {t.definition && <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2, lineHeight: 1.5 }}>{t.definition}</div>}
                 </div>
               ))}
             </div>
           )}
 
           {result.prerequisite_topics?.length > 0 && (
-            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'rgba(232,232,232,0.5)', textTransform: 'uppercase', marginBottom: 6 }}>Prerequisites</div>
+            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', marginBottom: 6 }}>Prerequisites</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {result.prerequisite_topics.map((t, i) => (
                   <span key={i} style={{ background: 'rgba(168,85,247,0.12)', color: '#c084fc', border: '1px solid rgba(168,85,247,0.25)', borderRadius: 20, padding: '2px 10px', fontSize: 11 }}>{t}</span>

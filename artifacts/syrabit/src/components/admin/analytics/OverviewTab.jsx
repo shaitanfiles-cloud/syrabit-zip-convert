@@ -36,8 +36,8 @@ function HeroStat({ icon: Icon, color, value, label, source, glow }) {
     <div
       className="flex items-center gap-3 p-4 rounded-2xl relative overflow-hidden group transition-all duration-300"
       style={{
-        background: 'rgba(15,15,30,0.6)',
-        border: '1px solid rgba(255,255,255,0.06)',
+        background: '#ffffff',
+        border: '1px solid #e5e7eb',
       }}
     >
       <div className="absolute inset-0 pointer-events-none transition-opacity duration-300 opacity-0 group-hover:opacity-100" style={{
@@ -47,8 +47,8 @@ function HeroStat({ icon: Icon, color, value, label, source, glow }) {
         <Icon size={16} style={{ color }} />
       </div>
       <div className="flex-1 min-w-0 relative">
-        <p className="text-white font-bold text-xl leading-none">{value}</p>
-        <p className="text-white/30 text-xs mt-1">{label}</p>
+        <p className="text-gray-900 font-bold text-xl leading-none">{value}</p>
+        <p className="text-gray-400 text-xs mt-1">{label}</p>
         <SourceBadge source={source} />
       </div>
     </div>
@@ -74,21 +74,21 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         }}>
           <AlertTriangle size={14} className="text-amber-400 flex-shrink-0" />
           <p className="text-xs text-amber-300/80 flex-1">Overview data failed to load — some metrics unavailable.</p>
-          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-white px-2.5 py-1 rounded-lg transition-colors"
+          <button onClick={() => load(true)} className="text-xs text-amber-300 hover:text-gray-900 px-2.5 py-1 rounded-lg transition-colors"
             style={{ background: 'rgba(245,158,11,0.12)' }}>Retry</button>
         </div>
       )}
 
       <GlassCard className="p-3.5">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-white/30 text-xs font-medium">Data Sources:</span>
+          <span className="text-gray-400 text-xs font-medium">Data Sources:</span>
           <div className="flex items-center gap-1.5">
-            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium ${cfConnected ? 'text-orange-400' : 'text-white/20'}`}
-              style={{ background: cfConnected ? 'rgba(246,130,31,0.12)' : 'rgba(255,255,255,0.04)' }}>
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium ${cfConnected ? 'text-orange-400' : 'text-gray-300'}`}
+              style={{ background: cfConnected ? 'rgba(246,130,31,0.12)' : '#f9fafb' }}>
               <Cloud size={10} /> Cloudflare {cfConnected ? <CheckCircle size={9} /> : '(off)'}
             </span>
-            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium ${ga4Connected ? 'text-blue-400' : 'text-white/20'}`}
-              style={{ background: ga4Connected ? 'rgba(66,133,244,0.12)' : 'rgba(255,255,255,0.04)' }}>
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium ${ga4Connected ? 'text-blue-400' : 'text-gray-300'}`}
+              style={{ background: ga4Connected ? 'rgba(66,133,244,0.12)' : '#f9fafb' }}>
               <BarChart3 size={10} /> GA4 {ga4Connected ? <CheckCircle size={9} /> : '(off)'}
             </span>
             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium text-emerald-400"
@@ -101,8 +101,8 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
             </span>
           </div>
           <button onClick={() => onSyncHistorical(90)} disabled={syncing}
-            className="ml-auto flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-all disabled:opacity-50"
-            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+            className="ml-auto flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-gray-400 hover:text-gray-900 transition-all disabled:opacity-50"
+            style={{ background: '#f9fafb', border: '1px solid #e5e7eb' }}>
             {syncing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
             {syncing ? 'Syncing...' : 'Sync Historical'}
           </button>
@@ -135,16 +135,16 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         <div
           className="flex items-center gap-3 p-3.5 rounded-xl relative overflow-hidden group transition-all duration-300"
           style={{
-            background: 'rgba(15,15,30,0.5)',
-            border: '1px solid rgba(255,255,255,0.06)',
+            background: '#ffffff',
+            border: '1px solid #e5e7eb',
           }}
         >
           <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(16,185,129,0.15)' }}>
             <Activity size={15} style={{ color: '#10b981' }} />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-white font-bold text-lg leading-none">{liveVisitors !== null ? liveVisitors : '—'}</p>
-            <p className="text-white/30 text-xs mt-0.5">Live Now</p>
+            <p className="text-gray-900 font-bold text-lg leading-none">{liveVisitors !== null ? liveVisitors : '—'}</p>
+            <p className="text-gray-400 text-xs mt-0.5">Live Now</p>
           </div>
           {liveVisitors > 0 && (
             <span className="absolute top-2.5 right-2.5 flex h-2 w-2">
@@ -158,19 +158,19 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         <div
           className="flex items-center gap-3 p-3.5 rounded-xl group transition-all duration-300"
           style={{
-            background: 'rgba(15,15,30,0.5)',
-            border: '1px solid rgba(255,255,255,0.06)',
+            background: '#ffffff',
+            border: '1px solid #e5e7eb',
           }}
         >
           <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'rgba(245,158,11,0.15)' }}>
             <Clock size={15} style={{ color: '#f59e0b' }} />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-white font-bold text-lg leading-none">
+            <p className="text-gray-900 font-bold text-lg leading-none">
               {vs.avg_session_duration != null ? `${Math.floor(vs.avg_session_duration / 60)}m ${vs.avg_session_duration % 60}s` : '—'}
             </p>
-            <p className="text-white/30 text-xs mt-0.5">Avg Session</p>
-            {vs.bounce_rate != null && <p className="text-white/15 text-[10px] mt-0.5">Bounce: {vs.bounce_rate}%</p>}
+            <p className="text-gray-400 text-xs mt-0.5">Avg Session</p>
+            {vs.bounce_rate != null && <p className="text-gray-200 text-[10px] mt-0.5">Bounce: {vs.bounce_rate}%</p>}
           </div>
         </div>
       </div>
@@ -181,7 +181,7 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
             const devData = vs.device_breakdown || {};
             const entries = Object.entries(devData);
             const hasData = entries.some(([, v]) => v.count > 0);
-            if (!hasData) return <p className="text-white/20 text-sm text-center py-6">No device data yet</p>;
+            if (!hasData) return <p className="text-gray-300 text-sm text-center py-6">No device data yet</p>;
             const DEVICE_COLORS = { mobile: '#8b5cf6', desktop: '#06b6d4', tablet: '#f59e0b' };
             const DEVICE_ICONS = { mobile: Smartphone, desktop: Monitor, tablet: Tablet };
             const pieData = entries.map(([k, v]) => ({ name: k, value: v.count, pct: v.pct }));
@@ -204,8 +204,8 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
                       <div key={entry.name} className="flex items-center gap-2">
                         <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: DEVICE_COLORS[entry.name] || '#64748b' }} />
                         <Icon size={11} style={{ color: DEVICE_COLORS[entry.name] || '#64748b' }} />
-                        <span className="text-white/60 text-xs capitalize flex-1">{entry.name}</span>
-                        <span className="text-white/25 text-xs">{entry.pct}%</span>
+                        <span className="text-gray-500 text-xs capitalize flex-1">{entry.name}</span>
+                        <span className="text-gray-300 text-xs">{entry.pct}%</span>
                       </div>
                     );
                   })}
@@ -218,19 +218,19 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         <Card title="Top Countries">
           {(() => {
             const countries = vs.top_countries || [];
-            if (!countries.length) return <p className="text-white/20 text-sm text-center py-6">No country data yet</p>;
+            if (!countries.length) return <p className="text-gray-300 text-sm text-center py-6">No country data yet</p>;
             const maxCount = countries[0]?.count || 1;
             return (
               <div className="space-y-2.5">
                 {countries.map((c, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <span className="text-white/20 text-xs w-6 text-right flex-shrink-0">{i + 1}</span>
+                    <span className="text-gray-300 text-xs w-6 text-right flex-shrink-0">{i + 1}</span>
                     <Globe size={11} className="text-cyan-400 flex-shrink-0" />
-                    <span className="text-white/70 text-sm flex-1 truncate font-medium">{c.country}</span>
-                    <div className="w-16 h-1.5 rounded-full overflow-hidden flex-shrink-0" style={{ background: 'rgba(255,255,255,0.06)' }}>
+                    <span className="text-gray-600 text-sm flex-1 truncate font-medium">{c.country}</span>
+                    <div className="w-16 h-1.5 rounded-full overflow-hidden flex-shrink-0" style={{ background: '#e5e7eb' }}>
                       <div className="h-full rounded-full bg-cyan-500" style={{ width: `${Math.round(c.count / maxCount * 100)}%` }} />
                     </div>
-                    <span className="text-white/25 text-xs w-8 text-right flex-shrink-0">{c.count}</span>
+                    <span className="text-gray-300 text-xs w-8 text-right flex-shrink-0">{c.count}</span>
                   </div>
                 ))}
               </div>
@@ -243,7 +243,7 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
             const nv = vs.new_visitors ?? 0;
             const rv = vs.returning_visitors ?? 0;
             const total = nv + rv;
-            if (total === 0) return <p className="text-white/20 text-sm text-center py-6">No visitor data today yet</p>;
+            if (total === 0) return <p className="text-gray-300 text-sm text-center py-6">No visitor data today yet</p>;
             const pieData = [
               { name: 'New', value: nv },
               { name: 'Returning', value: rv },
@@ -262,11 +262,11 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
                 <div className="flex justify-around">
                   <div className="text-center">
                     <p className="text-violet-400 font-bold text-lg">{nv}</p>
-                    <p className="text-white/25 text-xs">New</p>
+                    <p className="text-gray-300 text-xs">New</p>
                   </div>
                   <div className="text-center">
                     <p className="text-cyan-400 font-bold text-lg">{rv}</p>
-                    <p className="text-white/25 text-xs">Returning</p>
+                    <p className="text-gray-300 text-xs">Returning</p>
                   </div>
                 </div>
               </div>
@@ -304,11 +304,11 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
             return (
               <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                  <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} tickFormatter={fmt} />
-                  <YAxis tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
+                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+                  <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
                   <Tooltip {...TT} />
-                  <Legend wrapperStyle={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }} />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
                   {hasCf && <Area type="monotone" dataKey="cf_visitors" name="Cloudflare" stroke="#f6821f" fill="rgba(246,130,31,0.10)" strokeWidth={2} />}
                   {hasGa4 && <Area type="monotone" dataKey="ga4_visitors" name="GA4" stroke="#4285f4" fill="rgba(66,133,244,0.10)" strokeWidth={2} />}
                   {hasSs && <Area type="monotone" dataKey="ss_visitors" name="Server-side" stroke="#10b981" fill="rgba(16,185,129,0.10)" strokeWidth={2} />}
@@ -331,11 +331,11 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
           return (
             <ResponsiveContainer width="100%" height={250}>
               <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} tickFormatter={fmt} />
-                <YAxis tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
+                <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+                <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
                 <Tooltip {...TT} />
-                <Legend wrapperStyle={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }} />
+                <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
                 <Area type="monotone" dataKey="ss_visitors" name="Server-side" stroke="#10b981" fill="rgba(16,185,129,0.12)" strokeWidth={2} />
                 <Area type="monotone" dataKey="js_visitors" name="JS-tracked" stroke="#8b5cf6" fill="rgba(139,92,246,0.10)" strokeWidth={2} />
               </AreaChart>
@@ -364,11 +364,11 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
             return (
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                  <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} tickFormatter={fmt} />
-                  <YAxis tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
+                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+                  <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
                   <Tooltip {...TT} />
-                  <Legend wrapperStyle={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }} />
+                  <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
                   {hasCf && <Area type="monotone" dataKey="cf_pv" name="Cloudflare PV" stroke="#f6821f" fill="rgba(246,130,31,0.10)" strokeWidth={2} />}
                   {hasGa4 && <Area type="monotone" dataKey="ga4_pv" name="GA4 PV" stroke="#4285f4" fill="rgba(66,133,244,0.10)" strokeWidth={2} />}
                   {hasSs && <Area type="monotone" dataKey="ss_pv" name="Server PV" stroke="#10b981" fill="rgba(16,185,129,0.10)" strokeWidth={2} />}
@@ -389,11 +389,11 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
           return (
             <ResponsiveContainer width="100%" height={220}>
               <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-                <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} tickFormatter={fmt} />
-                <YAxis tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
+                <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+                <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
                 <Tooltip {...TT} />
-                <Legend wrapperStyle={{ fontSize: 11, color: 'rgba(255,255,255,0.4)' }} />
+                <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
                 <Area type="monotone" dataKey="ss_pv" name="Server PV" stroke="#10b981" fill="rgba(16,185,129,0.12)" strokeWidth={2} />
                 <Area type="monotone" dataKey="js_pv" name="JS-tracked PV" stroke="#8b5cf6" fill="rgba(139,92,246,0.10)" strokeWidth={2} />
               </AreaChart>
@@ -405,9 +405,9 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
       <Card title="Daily Signups — Last 7 Days" empty={!hasDailySignup} emptyMsg="No signups in the last 7 days">
         <ResponsiveContainer width="100%" height={180}>
           <BarChart data={data.daily_signups} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-            <XAxis dataKey="date" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} tickFormatter={fmt} />
-            <YAxis tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} allowDecimals={false} />
+            <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
+            <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+            <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} allowDecimals={false} />
             <Tooltip {...TT} />
             <Bar dataKey="count" name="Signups" fill="#7c3aed" radius={[4, 4, 0, 0]} />
           </BarChart>
@@ -419,9 +419,9 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
           <ResponsiveContainer width="100%" height={140}>
             <BarChart data={Object.entries(data.plan_usage).map(([plan, used]) => ({ plan, used }))}
               margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.04)" />
-              <XAxis dataKey="plan" tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} />
-              <YAxis tick={{ fill: 'rgba(255,255,255,0.25)', fontSize: 11 }} />
+              <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
+              <XAxis dataKey="plan" tick={{ fill: '#9ca3af', fontSize: 11 }} />
+              <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
               <Tooltip {...TT} />
               <Bar dataKey="used" name="Credits Used" fill="#7c3aed" radius={[4, 4, 0, 0]} />
             </BarChart>

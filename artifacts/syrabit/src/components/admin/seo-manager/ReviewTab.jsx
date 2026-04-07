@@ -13,7 +13,7 @@ export default function ReviewTab({
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-sm font-semibold" style={{ color: '#e8e8e8' }}>
+        <h3 className="text-sm font-semibold" style={{ color: '#111827' }}>
           Draft Pages for Review ({reviewQueue.length})
         </h3>
         <div className="flex gap-2 items-center flex-wrap">
@@ -33,10 +33,10 @@ export default function ReviewTab({
             Flag Low-Quality Published
           </button>
           <div className="flex items-center gap-1">
-            <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.40)' }}>Bulk approve score ≥</span>
+            <span className="text-[10px]" style={{ color: '#6b7280' }}>Bulk approve score ≥</span>
             <input type="number" value={bulkThreshold} onChange={e => setBulkThreshold(Number(e.target.value))}
               className="w-12 h-7 text-center rounded text-xs"
-              style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)', color: '#e8e8e8' }}
+              style={{ background: '#e5e7eb', border: '1px solid #e5e7eb', color: '#111827' }}
             />
             <button onClick={async () => {
               if (!confirm(`Publish all draft pages scoring ${bulkThreshold}+?`)) return;
@@ -52,8 +52,8 @@ export default function ReviewTab({
             </button>
           </div>
           <button onClick={loadReviewQueue} className="h-7 w-7 rounded flex items-center justify-center"
-            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}>
-            <RefreshCw size={11} style={{ color: 'rgba(255,255,255,0.40)' }} />
+            style={{ background: '#f9fafb', border: '1px solid #e5e7eb' }}>
+            <RefreshCw size={11} style={{ color: '#6b7280' }} />
           </button>
         </div>
       </div>
@@ -63,7 +63,7 @@ export default function ReviewTab({
           <Loader2 className="animate-spin" size={20} style={{ color: '#7c3aed' }} />
         </div>
       ) : reviewQueue.length === 0 ? (
-        <div className="text-center py-12 text-sm" style={{ color: 'rgba(255,255,255,0.30)' }}>
+        <div className="text-center py-12 text-sm" style={{ color: '#9ca3af' }}>
           No pages in review queue — all pages either published or rejected
         </div>
       ) : (
@@ -75,22 +75,22 @@ export default function ReviewTab({
             const selected = reviewSelected.has(p.id);
             return (
               <div key={p.id} className="rounded-lg p-3 flex items-center gap-3"
-                style={{ background: selected ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.02)', border: `1px solid ${selected ? 'rgba(124,58,237,0.30)' : 'rgba(255,255,255,0.06)'}` }}>
+                style={{ background: selected ? 'rgba(124,58,237,0.08)' : '#f9fafb', border: `1px solid ${selected ? 'rgba(124,58,237,0.30)' : '#e5e7eb'}` }}>
                 <input type="checkbox" checked={selected} onChange={() => {
                   const s = new Set(reviewSelected);
                   s.has(p.id) ? s.delete(p.id) : s.add(p.id);
                   setReviewSelected(s);
                 }} />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium truncate" style={{ color: '#e8e8e8' }}>{p.topic_title || p.title}</p>
-                  <p className="text-[10px] mt-0.5" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                  <p className="text-xs font-medium truncate" style={{ color: '#111827' }}>{p.topic_title || p.title}</p>
+                  <p className="text-[10px] mt-0.5" style={{ color: '#9ca3af' }}>
                     {p.board_name} · {p.class_name} · {p.subject_name} · {p.page_type}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="text-center">
                     <span className="text-sm font-bold" style={{ color: tierColor }}>{score}</span>
-                    <p className="text-[9px]" style={{ color: 'rgba(255,255,255,0.25)' }}>{qs.word_count ?? '?'}w</p>
+                    <p className="text-[9px]" style={{ color: '#9ca3af' }}>{qs.word_count ?? '?'}w</p>
                   </div>
                   <div className="flex gap-1">
                     {qs.anchored && <span className="text-[8px] px-1 rounded" style={{ background: 'rgba(52,211,153,0.15)', color: '#34d399' }}>anchored</span>}

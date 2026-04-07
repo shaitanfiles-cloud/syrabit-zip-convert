@@ -46,14 +46,14 @@ export default function AdminVertexPanel({ token, adminToken, onNavigate }) {
           return (
             <button key={s.id} onClick={() => setActive(s.id)}
               style={{
-                background: isActive ? `${s.color}18` : 'rgba(255,255,255,0.025)',
-                border: `1px solid ${isActive ? s.color + '55' : 'rgba(255,255,255,0.08)'}`,
+                background: isActive ? `${s.color}14` : '#ffffff',
+                border: `1px solid ${isActive ? s.color + '44' : '#e5e7eb'}`,
                 borderRadius: 12, padding: '10px 14px', cursor: 'pointer',
                 display: 'flex', alignItems: 'center', gap: 8, transition: 'all 0.15s',
-                textAlign: 'left',
+                textAlign: 'left', boxShadow: isActive ? 'none' : '0 1px 3px rgba(0,0,0,0.04)',
               }}>
-              <Icon size={15} color={isActive ? s.color : 'rgba(232,232,232,0.4)'} />
-              <span style={{ fontSize: 12, fontWeight: 700, color: isActive ? s.color : 'rgba(232,232,232,0.55)' }}>
+              <Icon size={15} color={isActive ? s.color : '#9ca3af'} />
+              <span style={{ fontSize: 12, fontWeight: 700, color: isActive ? s.color : '#6b7280' }}>
                 {s.label}
               </span>
             </button>
@@ -63,16 +63,16 @@ export default function AdminVertexPanel({ token, adminToken, onNavigate }) {
 
       {ActiveCard && <ActiveCard token={tk} onNavigate={onNavigate} />}
 
-      <div style={{ marginTop: 24, padding: 16, background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.15)', borderRadius: 12 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#8b5cf6', marginBottom: 8, textTransform: 'uppercase' }}>Also Available In Other Panels</div>
-        <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', lineHeight: 1.8 }}>
-          • <strong style={{ color: '#e8e8e8' }}>CMS Editor</strong> — Translate button on any document<br />
-          • <strong style={{ color: '#e8e8e8' }}>Content Studio</strong> — Enhance + Quality Score on generated blocks<br />
-          • <strong style={{ color: '#e8e8e8' }}>Thumbnail Studio</strong> — Gemini Vision analysis (replaces Groq)<br />
-          • <strong style={{ color: '#e8e8e8' }}>Document Upload</strong> — Extract topics/MCQs from AHSEC PDFs<br />
-          • <strong style={{ color: '#e8e8e8' }}>Vision OCR</strong> — Scan question paper images (Cloud Vision)<br />
-          • <strong style={{ color: '#e8e8e8' }}>NLP Concepts</strong> — Entity &amp; keyword extraction (Cloud Natural Language)<br />
-          • <strong style={{ color: '#e8e8e8' }}>Flashcard + MCQ</strong> — Generate student revision material from any chapter
+      <div style={{ marginTop: 24, padding: 16, background: '#f5f3ff', border: '1px solid #e9d5ff', borderRadius: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#7c3aed', marginBottom: 8, textTransform: 'uppercase' }}>Also Available In Other Panels</div>
+        <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.8 }}>
+          • <strong style={{ color: '#111827' }}>CMS Editor</strong> — Translate button on any document<br />
+          • <strong style={{ color: '#111827' }}>Content Studio</strong> — Enhance + Quality Score on generated blocks<br />
+          • <strong style={{ color: '#111827' }}>Thumbnail Studio</strong> — Gemini Vision analysis (replaces Groq)<br />
+          • <strong style={{ color: '#111827' }}>Document Upload</strong> — Extract topics/MCQs from AHSEC PDFs<br />
+          • <strong style={{ color: '#111827' }}>Vision OCR</strong> — Scan question paper images (Cloud Vision)<br />
+          • <strong style={{ color: '#111827' }}>NLP Concepts</strong> — Entity &amp; keyword extraction (Cloud Natural Language)<br />
+          • <strong style={{ color: '#111827' }}>Flashcard + MCQ</strong> — Generate student revision material from any chapter
         </div>
       </div>
       <AdminQuickLinks links={['seomanager','content','analytics','dashboard']} onNavigate={onNavigate} />

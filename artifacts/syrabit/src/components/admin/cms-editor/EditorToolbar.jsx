@@ -19,14 +19,14 @@ export default function EditorToolbar({
   translateOpen, setTranslateOpen, setTranslateResult,
 }) {
   return (
-    <div className="h-14 flex-shrink-0 border-b flex items-center px-4 gap-2" style={{ background: '#191919', borderColor: 'rgba(255,255,255,0.07)' }}>
+    <div className="h-14 flex-shrink-0 border-b flex items-center px-4 gap-2" style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
       <div className="flex-1 min-w-0">
         <input
           value={form.title}
           onChange={e => handleTitleChange(e.target.value)}
           placeholder="Document title…"
           className="w-full text-lg font-bold bg-transparent outline-none truncate"
-          style={{ color: '#E8E8E8' }}
+          style={{ color: '#374151' }}
         />
       </div>
 
@@ -48,8 +48,8 @@ export default function EditorToolbar({
       <button onClick={() => setShowPreview(v => !v)} title="Toggle live preview"
         className="h-8 px-2.5 rounded-lg flex items-center gap-1.5 text-xs font-medium flex-shrink-0 border transition-all"
         style={showPreview
-          ? { background: 'rgba(124,58,237,0.20)', color: '#c4b0f0', borderColor: 'rgba(124,58,237,0.35)' }
-          : { background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.45)', borderColor: 'rgba(255,255,255,0.10)' }}>
+          ? { background: 'rgba(124,58,237,0.20)', color: '#7c3aed', borderColor: 'rgba(124,58,237,0.35)' }
+          : { background: '#f3f4f6', color: '#6b7280', borderColor: '#e5e7eb' }}>
         <Monitor size={12} /> Preview
       </button>
 
@@ -105,7 +105,7 @@ export default function EditorToolbar({
 
       <button onClick={handleSave} disabled={saving || !form.title.trim()}
         className="h-8 px-3 rounded-lg flex items-center gap-1.5 text-xs font-semibold disabled:opacity-40 flex-shrink-0"
-        style={{ background: '#9575e0', color: 'white' }}>
+        style={{ background: '#7c3aed', color: 'white' }}>
         {saving ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
         {saving ? 'Saving…' : 'Save'}
       </button>

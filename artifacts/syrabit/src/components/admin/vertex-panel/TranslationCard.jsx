@@ -44,15 +44,15 @@ export default function TranslationCard({ token }) {
     <div style={card}>
       <div className="flex items-center gap-2 mb-4">
         <Languages size={16} color="#10b981" />
-        <span style={{ fontWeight: 700, color: '#e8e8e8' }}>Regional Language Translation</span>
+        <span style={{ fontWeight: 700, color: '#111827' }}>Regional Language Translation</span>
         <Badge label="Gemini Multilingual" color="#10b981" />
       </div>
-      <p style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', marginBottom: 12 }}>
+      <p style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
         Translate educational content into Assamese, Hindi, Bengali, or Bodo. Keeps all technical terms intact.
       </p>
       <div className="flex gap-2 mb-3">
         <select value={lang} onChange={e => setLang(e.target.value)}
-          style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px', color: '#e8e8e8', fontSize: 13 }}>
+          style={{ background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', color: '#111827', fontSize: 13 }}>
           {langs.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
         </select>
         <button onClick={run} disabled={loading || !text.trim()} style={btn('#10b981')}>
@@ -62,7 +62,7 @@ export default function TranslationCard({ token }) {
       </div>
       <textarea value={text} onChange={e => setText(e.target.value)} rows={4}
         placeholder="Paste English content here to translate..."
-        style={{ width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '10px 14px', color: '#e8e8e8', fontSize: 13, resize: 'vertical', fontFamily: 'inherit' }}
+        style={{ width: '100%', background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 14px', color: '#111827', fontSize: 13, resize: 'vertical', fontFamily: 'inherit' }}
       />
       {result && (
         <div style={{ marginTop: 12, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)', borderRadius: 10, padding: 14 }}>
@@ -73,7 +73,7 @@ export default function TranslationCard({ token }) {
               <Copy size={13} />
             </button>
           </div>
-          <p style={{ fontSize: 14, color: '#e8e8e8', lineHeight: 1.7 }}>{result}</p>
+          <p style={{ fontSize: 14, color: '#111827', lineHeight: 1.7 }}>{result}</p>
         </div>
       )}
     </div>

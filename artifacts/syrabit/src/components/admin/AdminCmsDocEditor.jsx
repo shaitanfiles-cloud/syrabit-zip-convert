@@ -11,7 +11,7 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate, hubContext }
   const ctx = useCmsEditor(adminToken, onNavigate, hubContext);
 
   return (
-    <div className="h-full flex overflow-hidden" style={{ background: '#121212' }}>
+    <div className="h-full flex overflow-hidden" style={{ background: '#f8f9fc' }}>
       <DocumentList
         docs={ctx.docs} loading={ctx.loading} filtered={ctx.filtered}
         searchQ={ctx.searchQ} setSearchQ={ctx.setSearchQ}
@@ -20,11 +20,11 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate, hubContext }
       />
 
       {!ctx.inEditor ? (
-        <div className="flex-1 flex items-center justify-center" style={{ color: 'rgba(232,232,232,0.40)' }}>
+        <div className="flex-1 flex items-center justify-center" style={{ color: '#9ca3af' }}>
           <div className="text-center">
-            <BookOpen size={36} className="mx-auto mb-4" style={{ color: 'rgba(255,255,255,0.10)' }} />
+            <BookOpen size={36} className="mx-auto mb-4" style={{ color: '#d1d5db' }} />
             <p className="text-sm mb-1">Select a document or create a new one</p>
-            <button onClick={ctx.openNew} className="mt-3 h-9 px-4 rounded-xl text-sm font-medium flex items-center gap-2 mx-auto" style={{ background: '#9575e0', color: 'white' }}>
+            <button onClick={ctx.openNew} className="mt-3 h-9 px-4 rounded-xl text-sm font-medium flex items-center gap-2 mx-auto bg-violet-600 hover:bg-violet-700 text-white transition-colors">
               <Plus size={14} /> New Document
             </button>
           </div>
@@ -43,7 +43,7 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate, hubContext }
             translateOpen={ctx.translateOpen} setTranslateOpen={ctx.setTranslateOpen} setTranslateResult={ctx.setTranslateResult}
           />
 
-          <div className="flex-shrink-0 border-b flex gap-0" style={{ background: 'rgba(255,255,255,0.012)', borderColor: 'rgba(255,255,255,0.07)' }}>
+          <div className="flex-shrink-0 border-b border-gray-200 flex gap-0 bg-white">
             {[
               { id: 'content', label: 'Content',    icon: Edit2 },
               { id: 'seo',     label: 'SEO & Meta', icon: Tag },
@@ -51,23 +51,20 @@ export default function AdminCmsDocEditor({ adminToken, onNavigate, hubContext }
             ].map(t => (
               <button key={t.id} onClick={() => ctx.setSeoTab(t.id)}
                 className="flex items-center gap-1.5 px-5 py-3 text-xs font-medium border-b-2 transition-colors"
-                style={{ borderBottomColor: ctx.seoTab === t.id ? '#9575e0' : 'transparent', color: ctx.seoTab === t.id ? '#c4b0f0' : 'rgba(255,255,255,0.35)' }}>
+                style={{ borderBottomColor: ctx.seoTab === t.id ? '#7c3aed' : 'transparent', color: ctx.seoTab === t.id ? '#7c3aed' : '#9ca3af' }}>
                 <t.icon size={12} />
                 {t.label}
               </button>
             ))}
             <div className="ml-auto flex items-center px-4 gap-3">
               {ctx.form.content && (
-                <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.20)' }}>
+                <span className="text-[10px] text-gray-400">
                   {ctx.form.content.split(/\s+/).filter(Boolean).length}w · {ctx.form.content.length}ch
                 </span>
               )}
               {ctx.editDoc && ctx.form.seo_slug && (
                 <a href={`/learn/${ctx.form.seo_slug}`} target="_blank" rel="noreferrer"
-                  className="flex items-center gap-1 text-[10px] transition-colors"
-                  style={{ color: 'rgba(255,255,255,0.25)' }}
-                  onMouseEnter={e => e.currentTarget.style.color = '#c4b0f0'}
-                  onMouseLeave={e => e.currentTarget.style.color = 'rgba(255,255,255,0.25)'}>
+                  className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-violet-600 transition-colors">
                   <ExternalLink size={10} /> View
                 </a>
               )}

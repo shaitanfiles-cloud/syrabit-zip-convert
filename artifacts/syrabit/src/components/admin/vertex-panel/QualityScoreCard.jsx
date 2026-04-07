@@ -27,19 +27,19 @@ export default function QualityScoreCard({ token }) {
     <div style={card}>
       <div className="flex items-center gap-2 mb-4">
         <BarChart2 size={16} color="#f59e0b" />
-        <span style={{ fontWeight: 700, color: '#e8e8e8' }}>Content Quality Scorer</span>
+        <span style={{ fontWeight: 700, color: '#111827' }}>Content Quality Scorer</span>
         <Badge label="Gemini Review" color="#f59e0b" />
       </div>
-      <p style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', marginBottom: 12 }}>
+      <p style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
         Score accuracy, completeness, clarity and exam relevance before publishing.
       </p>
       <div className="flex gap-2 mb-3">
         <input value={topic} onChange={e => setTopic(e.target.value)} placeholder="Topic"
-          style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '7px 12px', color: '#e8e8e8', fontSize: 13 }} />
+          style={{ flex: 1, background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '7px 12px', color: '#111827', fontSize: 13 }} />
         <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="Subject"
-          style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '7px 12px', color: '#e8e8e8', fontSize: 13 }} />
+          style={{ flex: 1, background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '7px 12px', color: '#111827', fontSize: 13 }} />
         <select value={pageType} onChange={e => setPageType(e.target.value)}
-          style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '7px 12px', color: '#e8e8e8', fontSize: 13 }}>
+          style={{ background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '7px 12px', color: '#111827', fontSize: 13 }}>
           {['notes', 'mcqs', 'definition', 'important-questions', 'examples'].map(t =>
             <option key={t} value={t}>{t}</option>
           )}
@@ -47,7 +47,7 @@ export default function QualityScoreCard({ token }) {
       </div>
       <textarea value={content} onChange={e => setContent(e.target.value)} rows={4}
         placeholder="Paste content to score..."
-        style={{ width: '100%', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '10px 14px', color: '#e8e8e8', fontSize: 13, resize: 'vertical', fontFamily: 'inherit', marginBottom: 10 }}
+        style={{ width: '100%', background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 14px', color: '#111827', fontSize: 13, resize: 'vertical', fontFamily: 'inherit', marginBottom: 10 }}
       />
       <button onClick={run} disabled={loading || !content.trim()} style={btn('#f59e0b')}>
         {loading ? <Loader2 size={13} className="animate-spin" /> : <BarChart2 size={13} />}
@@ -60,7 +60,7 @@ export default function QualityScoreCard({ token }) {
               {result.overall}/10
             </div>
             <div>
-              <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', fontWeight: 600 }}>Overall Score</div>
+              <div style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>Overall Score</div>
               <div style={{ fontSize: 11, color: result.overall >= 7 ? '#10b981' : '#f59e0b' }}>
                 {result.overall >= 8 ? 'Ready to publish' : result.overall >= 6 ? 'Needs minor edits' : 'Needs improvement'}
               </div>
@@ -73,13 +73,13 @@ export default function QualityScoreCard({ token }) {
           {result.issues?.length > 0 && (
             <div style={{ marginTop: 10 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', marginBottom: 4 }}>ISSUES</div>
-              {result.issues.map((iss, i) => <div key={i} style={{ fontSize: 12, color: 'rgba(232,232,232,0.6)', paddingLeft: 10 }}>• {iss}</div>)}
+              {result.issues.map((iss, i) => <div key={i} style={{ fontSize: 12, color: '#6b7280', paddingLeft: 10 }}>• {iss}</div>)}
             </div>
           )}
           {result.strengths?.length > 0 && (
             <div style={{ marginTop: 8 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: '#10b981', marginBottom: 4 }}>STRENGTHS</div>
-              {result.strengths.map((s, i) => <div key={i} style={{ fontSize: 12, color: 'rgba(232,232,232,0.6)', paddingLeft: 10 }}>✓ {s}</div>)}
+              {result.strengths.map((s, i) => <div key={i} style={{ fontSize: 12, color: '#6b7280', paddingLeft: 10 }}>✓ {s}</div>)}
             </div>
           )}
         </div>

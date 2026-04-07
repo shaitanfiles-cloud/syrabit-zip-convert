@@ -101,15 +101,15 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
     } finally { setSaving(false); }
   };
 
-  const inp = 'w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 transition';
-  const sel = 'w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 transition cursor-pointer';
-  const lbl = 'text-xs font-semibold text-white/50 mb-1 block';
+  const inp = 'w-full h-9 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500 transition';
+  const sel = 'w-full h-9 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500 transition cursor-pointer';
+  const lbl = 'text-xs font-semibold text-gray-500 mb-1 block';
 
   return (
     <div className="p-6 max-w-2xl mx-auto">
       <div className="mb-6">
-        <h2 className="text-base font-bold text-white">Step 1 — Target & Scope</h2>
-        <p className="text-xs text-white/40 mt-1">Select the board/class/subject scope and define the primary keyword.</p>
+        <h2 className="text-base font-bold text-gray-900">Step 1 — Target & Scope</h2>
+        <p className="text-xs text-gray-400 mt-1">Select the board/class/subject scope and define the primary keyword.</p>
       </div>
 
       <div className="space-y-4">
@@ -175,7 +175,7 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
           <input className={inp} placeholder="e.g. photosynthesis class 12 assamboard"
             value={state.primaryKeyword}
             onChange={e => set({ primaryKeyword: e.target.value })} />
-          <p className="text-[10px] text-white/25 mt-1">4–7 words. This is the core search query you're targeting.</p>
+          <p className="text-[10px] text-gray-300 mt-1">4–7 words. This is the core search query you're targeting.</p>
         </div>
 
         <div>
@@ -184,7 +184,7 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
             {CONTENT_TYPES.map(t => (
               <button key={t}
                 onClick={() => set({ contentType: t })}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${state.contentType === t ? 'bg-violet-600 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}>
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${state.contentType === t ? 'bg-violet-600 text-white' : 'bg-gray-50 text-gray-500 hover:bg-gray-100'}`}>
                 {t}
               </button>
             ))}
@@ -194,7 +194,7 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
         {state.subjectId && (
           <div className="rounded-xl p-3" style={{ background: 'rgba(139,92,246,0.10)', border: '1px solid rgba(139,92,246,0.20)' }}>
             <p className="text-xs font-semibold text-violet-300 mb-1">Selected Scope</p>
-            <p className="text-xs text-white/60">
+            <p className="text-xs text-gray-500">
               {[state.boardName, state.className, state.streamName, state.subjectName].filter(Boolean).join(' → ')}
             </p>
           </div>
@@ -219,7 +219,7 @@ export default function Step1TargetScope({ state, set, goNext, boards, classes, 
           onClick={handleContinue}
           disabled={!canContinue || saving || linkingScope}
           className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-40"
-          style={{ background: canContinue ? '#7c3aed' : 'rgba(255,255,255,0.08)', color: canContinue ? 'white' : 'rgba(255,255,255,0.4)' }}
+          style={{ background: canContinue ? '#7c3aed' : '#e5e7eb', color: canContinue ? 'white' : '#9ca3af' }}
         >
           {(saving || linkingScope) ? <Loader2 size={14} className="animate-spin" /> : <ChevronRight size={14} />}
           {saving ? 'Creating document…' : linkingScope ? 'Linking scope…' : 'Continue to Draft'}

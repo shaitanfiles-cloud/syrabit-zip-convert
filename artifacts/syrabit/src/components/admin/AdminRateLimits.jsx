@@ -11,10 +11,10 @@ const adminHeaders = (token) => {
 };
 
 const TIERS = [
-  { id: 'free',       label: 'Free',       color: 'text-white/60',   bg: 'bg-white/[0.06]', border: 'border-white/[0.12]' },
-  { id: 'starter',    label: 'Starter',    color: 'text-violet-300', bg: 'bg-violet-500/10',border: 'border-violet-500/20' },
-  { id: 'pro',        label: 'Pro',        color: 'text-amber-300',  bg: 'bg-amber-500/10', border: 'border-amber-500/20'  },
-  { id: 'enterprise', label: 'Enterprise', color: 'text-cyan-300',   bg: 'bg-cyan-500/10',  border: 'border-cyan-500/20'  },
+  { id: 'free',       label: 'Free',       color: 'text-gray-600',   bg: 'bg-gray-100',    border: 'border-gray-200' },
+  { id: 'starter',    label: 'Starter',    color: 'text-violet-600', bg: 'bg-violet-50',    border: 'border-violet-200' },
+  { id: 'pro',        label: 'Pro',        color: 'text-amber-600',  bg: 'bg-amber-50',     border: 'border-amber-200' },
+  { id: 'enterprise', label: 'Enterprise', color: 'text-cyan-600',   bg: 'bg-cyan-50',      border: 'border-cyan-200' },
 ];
 
 const DEFAULT_POLICIES = {
@@ -29,28 +29,28 @@ function TierCard({ tier, policy, onSave }) {
   const [draft, setDraft] = useState({...policy});
   const c = TIERS.find((t) => t.id === tier);
   return (
-    <div className={`rounded-xl border ${c.border} overflow-hidden`} style={{ background: 'rgba(15,15,30,0.6)', backdropFilter: 'blur(12px)' }}>
+    <div className={`rounded-xl border ${c.border} overflow-hidden bg-white shadow-sm`}>
       <div className={`flex items-center justify-between p-3 ${c.bg}`}>
         <span className={`text-sm font-bold ${c.color}`}>{c.label}</span>
-        <button onClick={() => setEditing(!editing)} className="text-white/30 hover:text-white/60 p-1">
+        <button onClick={() => setEditing(!editing)} className="text-gray-400 hover:text-gray-600 p-1">
           {editing ? <X size={14} /> : <Edit2 size={14} />}
         </button>
       </div>
       <div className="p-3 space-y-2">
         {[['req_per_min','Req/min (user)'],['credits_per_day','Credits/day'],['max_tokens','Max tokens'],['req_per_min_ip','Req/min (IP)']].map(([k,l]) => (
           <div key={k} className="flex items-center justify-between">
-            <span className="text-xs text-white/40">{l}</span>
+            <span className="text-xs text-gray-500">{l}</span>
             {editing ? (
               <input type="number" value={draft[k]} onChange={(e) => setDraft((d) => ({...d,[k]:Number(e.target.value)}))}
-                className="h-7 w-24 px-2 rounded-lg text-xs text-right text-white outline-none" style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)' }} />
+                className="h-7 w-24 px-2 rounded-lg text-xs text-right text-gray-900 outline-none bg-gray-50 border border-gray-200 focus:border-violet-400" />
             ) : (
-              <span className="text-xs text-white font-mono">{policy[k]?.toLocaleString()}</span>
+              <span className="text-xs text-gray-900 font-mono">{policy[k]?.toLocaleString()}</span>
             )}
           </div>
         ))}
         {editing && (
           <button onClick={() => { onSave(tier, draft); setEditing(false); }}
-            className={`w-full h-8 rounded-xl text-xs font-semibold text-white mt-1 ${c.bg.replace('/10','/20')} border ${c.border}`}>
+            className={`w-full h-8 rounded-xl text-xs font-semibold text-white mt-1 bg-violet-600 hover:bg-violet-700 transition-colors`}>
             <CheckCircle2 size={12} className="inline mr-1" /> Save {c.label}
           </button>
         )}
@@ -90,35 +90,32 @@ export default function AdminRateLimits({ adminToken, onNavigate }) {
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
-        <h2 className="text-lg font-bold text-white">Rate Limits</h2>
-        <p className="text-sm text-white/40 mt-0.5">Tier-based rate policies and daily token budget</p>
+        <h2 className="text-lg font-bold text-gray-900">Rate Limits</h2>
+        <p className="text-sm text-gray-400 mt-0.5">Tier-based rate policies and daily token budget</p>
       </div>
-      {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[[Cpu,'Active Requests',stats.active_requests,'text-white'],[Zap,'Tokens Today',(stats.tokens_today/1000).toFixed(0)+'K','text-amber-400'],[Globe,'Budget Used',budgetPct.toFixed(1)+'%',budgetPct>80?'text-red-400':'text-emerald-400'],[CheckCircle2,'Cost Mode',stats.cost_degraded?'Degraded':'Normal',stats.cost_degraded?'text-red-400':'text-emerald-400']].map(([Icon,label,val,color]) => (
-          <div key={label} className="rounded-xl p-3" style={{ background: 'rgba(15,15,30,0.6)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(12px)' }}>
+        {[[Cpu,'Active Requests',stats.active_requests,'text-gray-900'],[Zap,'Tokens Today',(stats.tokens_today/1000).toFixed(0)+'K','text-amber-600'],[Globe,'Budget Used',budgetPct.toFixed(1)+'%',budgetPct>80?'text-red-600':'text-emerald-600'],[CheckCircle2,'Cost Mode',stats.cost_degraded?'Degraded':'Normal',stats.cost_degraded?'text-red-600':'text-emerald-600']].map(([Icon,label,val,color]) => (
+          <div key={label} className="rounded-xl p-3 bg-white border border-gray-200 shadow-sm">
             <Icon size={16} className={`${color} mb-2`} />
             <p className={`text-xl font-bold ${color}`}>{val}</p>
-            <p className="text-[10px] text-white/30">{label}</p>
+            <p className="text-[10px] text-gray-400">{label}</p>
           </div>
         ))}
       </div>
-      {/* Budget bar */}
       <div>
-        <div className="flex justify-between text-xs text-white/40 mb-2">
+        <div className="flex justify-between text-xs text-gray-500 mb-2">
           <span>Daily Token Budget</span>
           <span>{stats.tokens_today.toLocaleString()} / {stats.daily_budget.toLocaleString()}</span>
         </div>
-        <div className="h-2 rounded-full bg-white/5 overflow-hidden">
+        <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
           <div className={`h-full rounded-full transition-all ${budgetColor}`} style={{ width: `${budgetPct}%` }} />
         </div>
         {stats.cost_degraded && (
-          <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
+          <p className="text-xs text-red-500 mt-1 flex items-center gap-1">
             <AlertTriangle size={11} /> Model degraded to gemini-1.5-flash (reduced capacity)
           </p>
         )}
       </div>
-      {/* Tier cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {TIERS.map(({id}) => <TierCard key={id} tier={id} policy={policies[id] || DEFAULT_POLICIES[id]} onSave={handleSave} />)}
       </div>

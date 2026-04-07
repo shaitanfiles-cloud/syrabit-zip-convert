@@ -57,7 +57,7 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
           onDrop={handleDrop}
           onDragOver={e => e.preventDefault()}
           className="relative w-full rounded-xl border-2 border-dashed transition cursor-pointer"
-          style={{ borderColor: loading ? 'rgba(139,92,246,0.50)' : 'rgba(255,255,255,0.10)' }}
+          style={{ borderColor: loading ? 'rgba(139,92,246,0.50)' : '#e5e7eb' }}
           onClick={() => !loading && inputRef.current?.click()}
         >
           <input ref={inputRef} type="file" accept=".png,.jpg,.jpeg,.webp"
@@ -67,14 +67,14 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
               ? <>
                   <Loader2 size={24} className="text-violet-400 animate-spin" />
                   <p className="text-xs text-violet-300 font-medium">Analyzing cover & extracting color DNA…</p>
-                  <p className="text-[10px] text-white/30">Generating 3 abstract variants</p>
+                  <p className="text-[10px] text-gray-400">Generating 3 abstract variants</p>
                 </>
               : <>
                   <div className="w-10 h-10 rounded-xl flex items-center justify-center mb-1"
                     style={{ background: 'rgba(139,92,246,0.15)' }}>
                     <FileUp size={18} className="text-violet-400" />
                   </div>
-                  <p className="text-sm font-semibold text-white/70">Upload a book cover</p>
+                  <p className="text-sm font-semibold text-gray-600">Upload a book cover</p>
                   <p className="text-[11px] text-white/35 text-center max-w-xs">
                     PNG, JPG, WebP — max 2 MB. The AI will extract its color DNA and generate 3 copyright-safe abstract variants.
                   </p>
@@ -91,14 +91,14 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
         <div>
           {analysis?.dominant_colors?.length > 0 && (
             <div className="flex items-center gap-2 mb-3 flex-wrap">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-white/30">Color DNA</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Color DNA</span>
               {analysis.dominant_colors.slice(0, 5).map((c, i) => (
                 <div key={i} title={c}
-                  className="w-5 h-5 rounded-full border-2 border-white/10 flex-shrink-0"
+                  className="w-5 h-5 rounded-full border-2 border-gray-200 flex-shrink-0"
                   style={{ background: c }} />
               ))}
               {analysis.style && (
-                <span className="text-[10px] text-white/30 italic">
+                <span className="text-[10px] text-gray-400 italic">
                   {analysis.style}{analysis.mood ? ` · ${analysis.mood}` : ''}
                 </span>
               )}
@@ -107,9 +107,9 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
 
           <div className="grid grid-cols-4 gap-2">
             <div className="space-y-1.5">
-              <p className="text-[10px] font-semibold text-white/30 text-center uppercase tracking-wider">Original</p>
-              <div className="relative rounded-xl overflow-hidden border border-white/10"
-                style={{ aspectRatio: '2/3', background: 'rgba(255,255,255,0.03)' }}>
+              <p className="text-[10px] font-semibold text-gray-400 text-center uppercase tracking-wider">Original</p>
+              <div className="relative rounded-xl overflow-hidden border border-gray-200"
+                style={{ aspectRatio: '2/3', background: '#f9fafb' }}>
                 <img src={original} alt="original cover" className="w-full h-full object-cover" />
               </div>
             </div>
@@ -117,14 +117,14 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
             {variants.map((v, i) => (
               <div key={i} className="space-y-1.5">
                 <p className="text-[10px] font-semibold text-center uppercase tracking-wider"
-                  style={{ color: selected === i ? '#a78bfa' : 'rgba(255,255,255,0.30)' }}>
+                  style={{ color: selected === i ? '#a78bfa' : '#9ca3af' }}>
                   {VARIANT_LABELS[i]}
                 </p>
                 <button
                   onClick={() => { setSelected(i); onChange(v); }}
                   className="relative w-full rounded-xl overflow-hidden border-2 transition"
                   style={{
-                    borderColor: selected === i ? '#7c3aed' : 'rgba(255,255,255,0.08)',
+                    borderColor: selected === i ? '#7c3aed' : '#e5e7eb',
                     aspectRatio: '2/3',
                     display: 'block',
                   }}
@@ -146,7 +146,7 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
           <div className="mt-2 flex items-center justify-between">
             <button
               onClick={() => { setVariants(null); setOriginal(null); setSelected(null); onChange(''); }}
-              className="flex items-center gap-1.5 text-[11px] text-white/30 hover:text-white/60 transition"
+              className="flex items-center gap-1.5 text-[11px] text-gray-400 hover:text-gray-500 transition"
             >
               <RefreshCw size={10} /> Upload different cover
             </button>
@@ -160,9 +160,9 @@ export default function ThumbnailUploader({ docId, value, onChange, altText, onA
       )}
 
       <div>
-        <label className="text-xs font-semibold text-white/50 mb-1 block">Alt Text</label>
+        <label className="text-xs font-semibold text-gray-500 mb-1 block">Alt Text</label>
         <input
-          className="w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 transition"
+          className="w-full h-9 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500 transition"
           placeholder="Descriptive alt text for accessibility and SEO"
           value={altText}
           onChange={e => onAltChange(e.target.value)}

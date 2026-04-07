@@ -80,12 +80,12 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
   return (
     <div className="p-6 max-w-2xl mx-auto">
       <div className="mb-5">
-        <h2 className="text-base font-bold text-white">Step 5 — Review & Publish</h2>
-        <p className="text-xs text-white/40 mt-1">Check all fields, then publish or save as draft.</p>
+        <h2 className="text-base font-bold text-gray-900">Step 5 — Review & Publish</h2>
+        <p className="text-xs text-gray-400 mt-1">Check all fields, then publish or save as draft.</p>
       </div>
 
-      <div className="rounded-xl border p-4 mb-5" style={{ background: 'rgba(255,255,255,0.025)', borderColor: 'rgba(255,255,255,0.08)' }}>
-        <p className="text-xs font-bold text-white/50 uppercase tracking-wider mb-3">Document Summary</p>
+      <div className="rounded-xl border p-4 mb-5" style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
+        <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Document Summary</p>
         <div className="space-y-2">
           {[
             ['Scope', [state.boardName, state.className, state.streamName, state.subjectName].filter(Boolean).join(' → ')],
@@ -107,16 +107,16 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
         </div>
       </div>
 
-      <div className="rounded-xl border p-4 mb-5" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.07)' }}>
-        <p className="text-xs font-bold text-white/50 uppercase tracking-wider mb-3">Completeness Checklist</p>
+      <div className="rounded-xl border p-4 mb-5" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
+        <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Completeness Checklist</p>
         <div className="space-y-2">
           {checks.map(({ label, ok, value }) => (
             <div key={label} className="flex items-center gap-3 text-xs">
               {ok
                 ? <CheckCircle2 size={14} className="text-emerald-400 flex-shrink-0" />
                 : <AlertCircle size={14} className="text-amber-400 flex-shrink-0" />}
-              <span className={ok ? 'text-white/60' : 'text-amber-300/70'}>{label}</span>
-              <span className="ml-auto text-white/30 truncate max-w-[120px]">{value}</span>
+              <span className={ok ? 'text-gray-500' : 'text-amber-300/70'}>{label}</span>
+              <span className="ml-auto text-gray-400 truncate max-w-[120px]">{value}</span>
             </div>
           ))}
         </div>
@@ -130,7 +130,7 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
           </div>
           {liveUrl && (
             <div className="flex items-center gap-2">
-              <span className="text-xs text-white/50 truncate flex-1">https://syrabit.ai{liveUrl}</span>
+              <span className="text-xs text-gray-500 truncate flex-1">https://syrabit.ai{liveUrl}</span>
               <button onClick={copyUrl}
                 className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition flex-shrink-0"
                 style={{ background: 'rgba(16,185,129,0.18)', color: '#34d399' }}>
@@ -149,7 +149,7 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
 
       <div className="flex items-center justify-between gap-3">
         <button onClick={goPrev}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white/50 hover:text-white/80 transition">
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-gray-500 hover:text-gray-700 transition">
           <ChevronLeft size={14} /> Back
         </button>
         <div className="flex gap-2">
@@ -157,7 +157,7 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
             onClick={handleSaveDraft}
             disabled={saving || publishing}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-40"
-            style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.70)', border: '1px solid rgba(255,255,255,0.10)' }}
+            style={{ background: '#e5e7eb', color: '#374151', border: '1px solid #e5e7eb' }}
           >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
             {saving ? 'Saving…' : 'Save Draft'}
@@ -169,10 +169,10 @@ export default function Step5ReviewPublish({ state, set, goPrev, adminToken, aut
             style={{
               background: state.publishedStatus === 'published'
                 ? 'rgba(239,68,68,0.18)'
-                : (allGreen ? '#10b981' : 'rgba(255,255,255,0.08)'),
+                : (allGreen ? '#10b981' : '#e5e7eb'),
               color: state.publishedStatus === 'published'
                 ? '#f87171'
-                : (allGreen ? 'white' : 'rgba(255,255,255,0.4)'),
+                : (allGreen ? 'white' : '#9ca3af'),
             }}
           >
             {publishing ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}

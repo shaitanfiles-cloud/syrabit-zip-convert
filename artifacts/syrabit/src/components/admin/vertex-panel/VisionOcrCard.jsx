@@ -46,8 +46,8 @@ export default function VisionOcrCard({ token }) {
       <div className="flex items-center gap-3 mb-4">
         <Eye size={18} color="#f97316" />
         <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: '#e8e8e8' }}>Vision OCR</div>
-          <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.45)' }}>Cloud Vision API · Extract text from AHSEC question papers &amp; textbook pages</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#111827' }}>Vision OCR</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>Cloud Vision API · Extract text from AHSEC question papers &amp; textbook pages</div>
         </div>
       </div>
 
@@ -63,8 +63,8 @@ export default function VisionOcrCard({ token }) {
         ) : (
           <>
             <Upload size={28} color="rgba(249,115,22,0.5)" style={{ margin: '0 auto 8px' }} />
-            <div style={{ fontSize: 13, color: 'rgba(232,232,232,0.5)' }}>Drop image here or click to upload</div>
-            <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.3)', marginTop: 4 }}>JPEG · PNG · WebP · max 10MB</div>
+            <div style={{ fontSize: 13, color: '#6b7280' }}>Drop image here or click to upload</div>
+            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>JPEG · PNG · WebP · max 10MB</div>
           </>
         )}
       </div>
@@ -91,30 +91,30 @@ export default function VisionOcrCard({ token }) {
           </div>
 
           {result.raw_text && (
-            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: 12 }}>
+            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
               <div className="flex items-center justify-between mb-2">
-                <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(232,232,232,0.5)', textTransform: 'uppercase' }}>Extracted Text</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase' }}>Extracted Text</span>
                 <button onClick={() => copy(result.raw_text)} style={{ ...btn('#f97316'), padding: '4px 10px', fontSize: 11 }}>
                   <Copy size={11} /> Copy
                 </button>
               </div>
-              <pre style={{ fontSize: 12, color: 'rgba(232,232,232,0.75)', whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto', lineHeight: 1.7 }}>
+              <pre style={{ fontSize: 12, color: '#374151', whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto', lineHeight: 1.7 }}>
                 {result.raw_text}
               </pre>
             </div>
           )}
 
           {result.questions?.length > 0 && (
-            <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 10, padding: 12 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: 'rgba(232,232,232,0.5)', textTransform: 'uppercase', marginBottom: 8 }}>Structured Questions</div>
+            <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', marginBottom: 8 }}>Structured Questions</div>
               {result.questions.slice(0, 5).map((q, i) => (
-                <div key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '6px 0', fontSize: 12, color: 'rgba(232,232,232,0.75)' }}>
+                <div key={i} style={{ borderBottom: '1px solid #f3f4f6', padding: '6px 0', fontSize: 12, color: '#374151' }}>
                   <span style={{ color: '#fb923c', fontWeight: 700 }}>Q{q.number || i + 1}.</span> {q.text}
                   {q.marks && <span style={{ color: '#34d399', marginLeft: 8, fontSize: 11 }}>[{q.marks} marks]</span>}
                 </div>
               ))}
               {result.questions.length > 5 && (
-                <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.4)', marginTop: 4 }}>+{result.questions.length - 5} more questions</div>
+                <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 4 }}>+{result.questions.length - 5} more questions</div>
               )}
             </div>
           )}

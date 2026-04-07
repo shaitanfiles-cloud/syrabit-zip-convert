@@ -17,20 +17,20 @@ export default function SeoMetaTab({
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Sparkles size={13} style={{ color: '#a78bfa' }} />
-              <span className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>AI SEO &amp; GEO Generator</span>
+              <span className="text-xs font-semibold" style={{ color: '#7c3aed' }}>AI SEO &amp; GEO Generator</span>
               <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(139,92,246,0.18)', color: '#a78bfa' }}>Beta</span>
             </div>
             <button
               onClick={handleGenerateSeoMeta}
               disabled={seoGenerating}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-opacity disabled:opacity-50"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+              style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', color: '#fff' }}>
               {seoGenerating
                 ? <><Loader2 size={11} className="animate-spin" /> Generating…</>
                 : <><Zap size={11} /> Generate Title + Meta</>}
             </button>
           </div>
-          <p className="text-[11px] leading-relaxed" style={{ color: 'rgba(255,255,255,0.35)' }}>
+          <p className="text-[11px] leading-relaxed" style={{ color: '#9ca3af' }}>
             Generates a 55–65 char SEO title + 148–158 char GEO-rich meta description optimised for Google ranking and AI citation (Perplexity, ChatGPT search). Uses your current title, keyword, content, and linked syllabus scope as context.
           </p>
 
@@ -38,35 +38,35 @@ export default function SeoMetaTab({
             <div className="mt-4 space-y-3 pt-4 border-t" style={{ borderColor: 'rgba(139,92,246,0.18)' }}>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'rgba(255,255,255,0.35)' }}>SEO Title</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#9ca3af' }}>SEO Title</span>
                   <span className="text-[10px]" style={{ color: seoResult.char_counts?.title > 65 ? '#dc2626' : '#16a34a' }}>
                     {seoResult.char_counts?.title || seoResult.seo_title?.length || 0} / 65 chars
                   </span>
                 </div>
-                <p className="text-sm font-medium px-3 py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', color: '#e8e8e8' }}>
+                <p className="text-sm font-medium px-3 py-2 rounded-lg" style={{ background: '#f3f4f6', color: '#111827' }}>
                   {seoResult.seo_title}
                 </p>
               </div>
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: 'rgba(255,255,255,0.35)' }}>Meta Description</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide" style={{ color: '#9ca3af' }}>Meta Description</span>
                   <span className="text-[10px]" style={{ color: seoResult.char_counts?.meta > 160 ? '#dc2626' : seoResult.char_counts?.meta >= 140 ? '#16a34a' : '#f59e0b' }}>
                     {seoResult.char_counts?.meta || seoResult.meta_description?.length || 0} / 160 chars
                   </span>
                 </div>
-                <p className="text-xs leading-relaxed px-3 py-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(232,232,232,0.75)' }}>
+                <p className="text-xs leading-relaxed px-3 py-2 rounded-lg" style={{ background: '#f3f4f6', color: '#374151' }}>
                   {seoResult.meta_description}
                 </p>
               </div>
               <div>
-                <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1" style={{ color: 'rgba(255,255,255,0.35)' }}>Primary Keyword</span>
-                <p className="text-xs font-mono px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.05)', color: '#a78bfa' }}>
+                <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1" style={{ color: '#9ca3af' }}>Primary Keyword</span>
+                <p className="text-xs font-mono px-3 py-1.5 rounded-lg" style={{ background: '#f3f4f6', color: '#a78bfa' }}>
                   {seoResult.primary_keyword}
                 </p>
               </div>
               {seoResult.geo_phrases?.length > 0 && (
                 <div>
-                  <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1.5" style={{ color: 'rgba(255,255,255,0.35)' }}>GEO Authority Phrases</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1.5" style={{ color: '#9ca3af' }}>GEO Authority Phrases</span>
                   <div className="flex flex-wrap gap-2">
                     {seoResult.geo_phrases.map((p, i) => (
                       <span key={i} className="text-[10px] px-2 py-1 rounded-lg" style={{ background: 'rgba(16,185,129,0.10)', color: '#34d399', border: '1px solid rgba(16,185,129,0.18)' }}>
@@ -78,10 +78,10 @@ export default function SeoMetaTab({
               )}
               {seoResult.seo_tags && (
                 <div>
-                  <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1.5" style={{ color: 'rgba(255,255,255,0.35)' }}>SEO Tags</span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wide block mb-1.5" style={{ color: '#9ca3af' }}>SEO Tags</span>
                   <div className="flex flex-wrap gap-1.5">
                     {seoResult.seo_tags.split(',').map(t => t.trim()).filter(Boolean).map((t, i) => (
-                      <span key={i} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.45)' }}>
+                      <span key={i} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: '#e5e7eb', color: '#6b7280' }}>
                         {t}
                       </span>
                     ))}
@@ -91,12 +91,12 @@ export default function SeoMetaTab({
               <div className="flex gap-2 pt-1">
                 <button onClick={applySeoResult}
                   className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-semibold"
-                  style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+                  style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', color: '#fff' }}>
                   <CheckCircle size={12} /> Apply All to Page
                 </button>
                 <button onClick={() => setSeoResult(null)}
                   className="px-3 py-2 rounded-lg text-xs"
-                  style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.40)' }}>
+                  style={{ background: '#f3f4f6', color: '#6b7280' }}>
                   Dismiss
                 </button>
               </div>
@@ -105,10 +105,10 @@ export default function SeoMetaTab({
         </div>
 
         <div>
-          <p className="text-xs font-medium mb-2" style={{ color: 'rgba(255,255,255,0.40)' }}>Google Search Preview</p>
+          <p className="text-xs font-medium mb-2" style={{ color: '#6b7280' }}>Google Search Preview</p>
           <div className="rounded-xl p-4" style={{ background: '#ffffff' }}>
             <div className="flex items-center gap-2 mb-1.5">
-              <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)' }} />
+              <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)' }} />
               <div className="min-w-0">
                 <p className="text-xs font-medium truncate" style={{ color: '#202124' }}>syrabit.ai</p>
                 <p className="text-[10px] truncate" style={{ color: '#4d5156' }}>https://syrabit.ai/{form.seo_slug || 'your-slug-here'}</p>
@@ -139,7 +139,7 @@ export default function SeoMetaTab({
         </div>
 
         <div>
-          <p className="text-xs font-medium mb-2" style={{ color: 'rgba(255,255,255,0.40)' }}>Perplexity AI Citation Preview</p>
+          <p className="text-xs font-medium mb-2" style={{ color: '#6b7280' }}>Perplexity AI Citation Preview</p>
           <div className="rounded-xl p-4" style={{ background: '#0d1117', border: '1px solid rgba(139,92,246,0.25)' }}>
             <div className="flex items-start gap-3">
               <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-0.5" style={{ background: 'linear-gradient(135deg,#6366f1,#8b5cf6)' }}>
@@ -162,7 +162,7 @@ export default function SeoMetaTab({
                     syrabit.ai/{form.seo_slug || 'slug'}
                   </div>
                   {form.seo_tags && form.seo_tags.split(',').slice(0, 3).map(tag => (
-                    <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(255,255,255,0.05)', color: 'rgba(255,255,255,0.35)' }}>
+                    <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: '#f3f4f6', color: '#9ca3af' }}>
                       {tag.trim()}
                     </span>
                   ))}
@@ -180,34 +180,34 @@ export default function SeoMetaTab({
             <Link2 size={14} style={{ color: '#34d399', flexShrink: 0 }} />
             <div className="flex-1 min-w-0">
               <p className="text-[10px] font-medium mb-0.5" style={{ color: '#34d399' }}>Canonical URL</p>
-              <p className="text-xs font-mono truncate" style={{ color: 'rgba(255,255,255,0.55)' }}>
+              <p className="text-xs font-mono truncate" style={{ color: '#6b7280' }}>
                 {'<link rel="canonical" href="' + (editDoc.canonical_url || `/${editDoc.linked_scope?.replace(/\//g, '/')}`) + '" />'}
               </p>
             </div>
-            <button onClick={() => { navigator.clipboard.writeText(editDoc.canonical_url || ''); toast.success('Copied'); }} style={{ color: 'rgba(255,255,255,0.30)' }}>
+            <button onClick={() => { navigator.clipboard.writeText(editDoc.canonical_url || ''); toast.success('Copied'); }} style={{ color: '#9ca3af' }}>
               <Copy size={12} />
             </button>
           </div>
         )}
 
         <div>
-          <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>URL Slug</label>
-          <div className="flex items-center gap-2 h-10 rounded-xl overflow-hidden px-3" style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}>
-            <Link2 size={13} style={{ color: 'rgba(255,255,255,0.25)' }} className="flex-shrink-0" />
-            <span className="text-sm" style={{ color: 'rgba(255,255,255,0.20)' }}>/learn/</span>
+          <label className="text-xs block mb-1.5" style={{ color: '#6b7280' }}>URL Slug</label>
+          <div className="flex items-center gap-2 h-10 rounded-xl overflow-hidden px-3" style={{ background: '#f3f4f6', border: '1px solid #e5e7eb' }}>
+            <Link2 size={13} style={{ color: '#9ca3af' }} className="flex-shrink-0" />
+            <span className="text-sm" style={{ color: '#d1d5db' }}>/learn/</span>
             <input
               value={form.seo_slug}
               onChange={e => setForm(f => ({ ...f, seo_slug: e.target.value }))}
               placeholder="auto-from-title"
               className="flex-1 h-full text-sm bg-transparent outline-none font-mono"
-              style={{ color: '#E8E8E8' }}
+              style={{ color: '#374151' }}
             />
           </div>
         </div>
 
         <div>
-          <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>
-            Meta Description <span style={{ color: 'rgba(255,255,255,0.20)' }}>({form.meta_description?.length || 0}/160)</span>
+          <label className="text-xs block mb-1.5" style={{ color: '#6b7280' }}>
+            Meta Description <span style={{ color: '#d1d5db' }}>({form.meta_description?.length || 0}/160)</span>
           </label>
           <textarea
             value={form.meta_description}
@@ -215,13 +215,13 @@ export default function SeoMetaTab({
             placeholder="160-character description for Google snippets…"
             rows={3}
             className="w-full px-4 py-2.5 rounded-xl text-sm outline-none resize-none"
-            style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            style={{ color: '#374151', background: '#f3f4f6', border: '1px solid #e5e7eb' }}
           />
         </div>
 
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs" style={{ color: 'rgba(255,255,255,0.45)' }}>Primary Keyword</label>
+            <label className="text-xs" style={{ color: '#6b7280' }}>Primary Keyword</label>
             <button onClick={handleAutoKeyword}
               className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-lg border"
               style={{ color: '#a78bfa', borderColor: 'rgba(167,139,250,0.25)', background: 'rgba(167,139,250,0.08)' }}>
@@ -233,41 +233,41 @@ export default function SeoMetaTab({
             onChange={e => setForm(f => ({ ...f, primary_keyword: e.target.value }))}
             placeholder="e.g. Assamboard Class 12 Physics Notes"
             className="w-full h-10 px-4 rounded-xl text-sm outline-none"
-            style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            style={{ color: '#374151', background: '#f3f4f6', border: '1px solid #e5e7eb' }}
           />
         </div>
 
         <div>
-          <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>SEO Tags <span style={{ color: 'rgba(255,255,255,0.20)' }}>(comma-separated)</span></label>
+          <label className="text-xs block mb-1.5" style={{ color: '#6b7280' }}>SEO Tags <span style={{ color: '#d1d5db' }}>(comma-separated)</span></label>
           <input
             value={form.seo_tags}
             onChange={e => setForm(f => ({ ...f, seo_tags: e.target.value }))}
             placeholder="assamboard, class 12, physics, optics, notes"
             className="w-full h-10 px-4 rounded-xl text-sm outline-none"
-            style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            style={{ color: '#374151', background: '#f3f4f6', border: '1px solid #e5e7eb' }}
           />
         </div>
 
         <div>
-          <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Category Path</label>
+          <label className="text-xs block mb-1.5" style={{ color: '#6b7280' }}>Category Path</label>
           <input
             value={form.category}
             onChange={e => setForm(f => ({ ...f, category: e.target.value }))}
             placeholder="ahsec/class12/science/physics"
             className="w-full h-10 px-4 rounded-xl text-sm font-mono outline-none"
-            style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            style={{ color: '#374151', background: '#f3f4f6', border: '1px solid #e5e7eb' }}
           />
         </div>
 
         <div>
-          <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Schema Type</label>
+          <label className="text-xs block mb-1.5" style={{ color: '#6b7280' }}>Schema Type</label>
           <div className="flex gap-2 flex-wrap">
             {['Article', 'FAQPage', 'HowTo', 'EducationalOccupationalProgram'].map(s => (
               <button key={s} onClick={() => setForm(f => ({ ...f, schema_type: s }))}
                 className="px-3 py-1.5 rounded-lg text-xs font-medium border transition-all"
                 style={form.schema_type === s
-                  ? { borderColor: '#9575e0', background: 'rgba(149,117,224,0.18)', color: '#c4b0f0' }
-                  : { borderColor: 'rgba(255,255,255,0.10)', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.40)' }}>
+                  ? { borderColor: '#7c3aed', background: 'rgba(149,117,224,0.18)', color: '#7c3aed' }
+                  : { borderColor: '#e5e7eb', background: '#f9fafb', color: '#6b7280' }}>
                 {s}
               </button>
             ))}
@@ -275,36 +275,36 @@ export default function SeoMetaTab({
         </div>
 
         <div>
-          <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Long Description</label>
+          <label className="text-xs block mb-1.5" style={{ color: '#6b7280' }}>Long Description</label>
           <textarea
             value={form.description}
             onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
             placeholder="Optional extended description…"
             rows={4}
             className="w-full px-4 py-2.5 rounded-xl text-sm outline-none resize-none"
-            style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+            style={{ color: '#374151', background: '#f3f4f6', border: '1px solid #e5e7eb' }}
           />
         </div>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Thumbnail URL</label>
+            <label className="text-xs block mb-1.5" style={{ color: '#6b7280' }}>Thumbnail URL</label>
             <input
               value={form.thumbnail_url}
               onChange={e => setForm(f => ({ ...f, thumbnail_url: e.target.value }))}
               placeholder="https://…"
               className="w-full h-10 px-4 rounded-xl text-sm outline-none"
-              style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+              style={{ color: '#374151', background: '#f3f4f6', border: '1px solid #e5e7eb' }}
             />
           </div>
           <div>
-            <label className="text-xs block mb-1.5" style={{ color: 'rgba(255,255,255,0.45)' }}>Alt Text</label>
+            <label className="text-xs block mb-1.5" style={{ color: '#6b7280' }}>Alt Text</label>
             <input
               value={form.alt_text}
               onChange={e => setForm(f => ({ ...f, alt_text: e.target.value }))}
               placeholder="Image alt text"
               className="w-full h-10 px-4 rounded-xl text-sm outline-none"
-              style={{ color: '#E8E8E8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
+              style={{ color: '#374151', background: '#f3f4f6', border: '1px solid #e5e7eb' }}
             />
           </div>
         </div>

@@ -8,8 +8,8 @@ export default function PilotTab({
   return (
     <div className="space-y-5 max-w-lg">
       <div>
-        <p className="text-sm font-semibold mb-1" style={{ color: '#E8E8E8' }}>Seed Pilot Content</p>
-        <p className="text-xs" style={{ color: 'rgba(255,255,255,0.35)' }}>
+        <p className="text-sm font-semibold mb-1" style={{ color: '#374151' }}>Seed Pilot Content</p>
+        <p className="text-xs" style={{ color: '#9ca3af' }}>
           Generate full SEO content for the first N chapters of a subject — use this to test the pipeline before running at scale.
         </p>
       </div>
@@ -21,25 +21,25 @@ export default function PilotTab({
           { label: 'Subject keyword', value: pilotSubject, onChange: setPilotSubject, placeholder: 'maths / physics / english…' },
         ].map(({ label, value, onChange, placeholder }) => (
           <div key={label}>
-            <label className="text-[11px] block mb-1.5" style={{ color: 'rgba(255,255,255,0.40)' }}>{label}</label>
+            <label className="text-[11px] block mb-1.5" style={{ color: '#6b7280' }}>{label}</label>
             <input value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder}
               className="w-full h-10 px-3 rounded-xl text-sm outline-none"
-              style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
+              style={{ background: '#f3f4f6', border: '1px solid #e5e7eb', color: '#374151' }}
             />
           </div>
         ))}
         <div>
-          <label className="text-[11px] block mb-1.5" style={{ color: 'rgba(255,255,255,0.40)' }}>Chapter limit</label>
+          <label className="text-[11px] block mb-1.5" style={{ color: '#6b7280' }}>Chapter limit</label>
           <input type="number" min={1} max={20} value={pilotChapters} onChange={e => setPilotChapters(Number(e.target.value))}
             className="w-full h-10 px-3 rounded-xl text-sm outline-none"
-            style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
+            style={{ background: '#f3f4f6', border: '1px solid #e5e7eb', color: '#374151' }}
           />
         </div>
       </div>
 
       <button onClick={handlePilot} disabled={piloting || !pilotSubject.trim()}
         className="w-full h-11 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-40"
-        style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+        style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', color: '#fff' }}>
         {piloting ? <><Loader2 size={15} className="animate-spin" /> Generating pilot…</> : <><Sparkles size={15} /> Run Pilot</>}
       </button>
 
@@ -53,9 +53,9 @@ export default function PilotTab({
             ['Pages generated', pilotResult.pages_generated],
             ['Errors', pilotResult.errors],
           ].map(([k, v]) => (
-            <div key={k} className="flex justify-between py-1 border-b" style={{ borderColor: 'rgba(255,255,255,0.05)' }}>
-              <span className="text-xs" style={{ color: 'rgba(255,255,255,0.40)' }}>{k}</span>
-              <span className="text-xs font-semibold" style={{ color: '#E8E8E8' }}>{v ?? '—'}</span>
+            <div key={k} className="flex justify-between py-1 border-b" style={{ borderColor: '#f3f4f6' }}>
+              <span className="text-xs" style={{ color: '#6b7280' }}>{k}</span>
+              <span className="text-xs font-semibold" style={{ color: '#374151' }}>{v ?? '—'}</span>
             </div>
           ))}
         </div>

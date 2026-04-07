@@ -52,34 +52,34 @@ export default function McqGeneratorCard({ token }) {
       <div className="flex items-center gap-3 mb-4">
         <ListChecks size={18} color="#10b981" />
         <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: '#e8e8e8' }}>MCQ Generator</div>
-          <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.45)' }}>AHSEC-pattern multiple choice questions from chapter text</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#111827' }}>MCQ Generator</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>AHSEC-pattern multiple choice questions from chapter text</div>
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
         <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="Subject"
-          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }} />
+          style={{ background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }} />
         <select value={className} onChange={e => setClassName(e.target.value)}
-          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }}>
+          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }}>
           {['Class 11', 'Class 12', 'Degree 1st Year', 'Degree 2nd Year', 'Degree 3rd Year'].map(c => <option key={c}>{c}</option>)}
         </select>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
         <select value={count} onChange={e => setCount(Number(e.target.value))}
-          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }}>
+          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }}>
           {[5, 8, 10, 15, 20].map(n => <option key={n} value={n}>{n} questions</option>)}
         </select>
         <select value={difficulty} onChange={e => setDifficulty(e.target.value)}
-          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }}>
+          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }}>
           {['mixed', 'easy', 'medium', 'hard'].map(d => <option key={d} value={d}>{d.charAt(0).toUpperCase() + d.slice(1)}</option>)}
         </select>
       </div>
 
       <textarea value={text} onChange={e => setText(e.target.value)} placeholder="Paste chapter content (min 100 characters)…"
         rows={4}
-        style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none', resize: 'vertical', marginBottom: 10, boxSizing: 'border-box' }}
+        style={{ width: '100%', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#111827', outline: 'none', resize: 'vertical', marginBottom: 10, boxSizing: 'border-box' }}
       />
 
       <div className="flex gap-2 mb-4">
@@ -97,30 +97,30 @@ export default function McqGeneratorCard({ token }) {
       {mcqs.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div className="flex items-center gap-2 mb-1">
-            <span style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)' }}>{mcqs.length} questions generated</span>
+            <span style={{ fontSize: 12, color: '#6b7280' }}>{mcqs.length} questions generated</span>
             <span style={{ background: `${diffColor[difficulty]}18`, color: diffColor[difficulty], border: `1px solid ${diffColor[difficulty]}33`, borderRadius: 20, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>
               {difficulty.toUpperCase()}
             </span>
           </div>
 
           {mcqs.map((q, i) => (
-            <div key={i} style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${expanded === i ? 'rgba(16,185,129,0.35)' : 'rgba(255,255,255,0.08)'}`, borderRadius: 12, padding: 14, cursor: 'pointer' }}
+            <div key={i} style={{ background: '#f9fafb', border: `1px solid ${expanded === i ? 'rgba(16,185,129,0.35)' : '#e5e7eb'}`, borderRadius: 12, padding: 14, cursor: 'pointer' }}
               onClick={() => setExpanded(expanded === i ? null : i)}>
               <div className="flex items-start justify-between gap-2">
-                <div style={{ fontSize: 13, color: '#e8e8e8', lineHeight: 1.5, flex: 1 }}>
+                <div style={{ fontSize: 13, color: '#111827', lineHeight: 1.5, flex: 1 }}>
                   <span style={{ color: '#34d399', fontWeight: 700 }}>Q{i + 1}.</span> {q.question}
                 </div>
-                {expanded === i ? <ChevronUp size={14} color="rgba(232,232,232,0.4)" /> : <ChevronDown size={14} color="rgba(232,232,232,0.4)" />}
+                {expanded === i ? <ChevronUp size={14} color="#9ca3af" /> : <ChevronDown size={14} color="#9ca3af" />}
               </div>
               {expanded === i && (
                 <div style={{ marginTop: 10 }}>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 8 }}>
                     {['A', 'B', 'C', 'D'].map(opt => (
                       <div key={opt} style={{
-                        background: q.correct_answer === opt ? 'rgba(16,185,129,0.12)' : 'rgba(255,255,255,0.04)',
-                        border: `1px solid ${q.correct_answer === opt ? 'rgba(16,185,129,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                        background: q.correct_answer === opt ? 'rgba(16,185,129,0.12)' : '#f9fafb',
+                        border: `1px solid ${q.correct_answer === opt ? 'rgba(16,185,129,0.35)' : '#e5e7eb'}`,
                         borderRadius: 8, padding: '6px 10px', fontSize: 12,
-                        color: q.correct_answer === opt ? '#34d399' : 'rgba(232,232,232,0.7)',
+                        color: q.correct_answer === opt ? '#34d399' : '#4b5563',
                         fontWeight: q.correct_answer === opt ? 700 : 400,
                       }}>
                         <span style={{ fontWeight: 700 }}>{opt})</span> {q.options?.[opt]}
@@ -128,12 +128,12 @@ export default function McqGeneratorCard({ token }) {
                     ))}
                   </div>
                   {q.explanation && (
-                    <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.6)', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.6 }}>
+                    <div style={{ fontSize: 12, color: '#6b7280', background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)', borderRadius: 8, padding: '8px 10px', lineHeight: 1.6 }}>
                       <strong style={{ color: '#34d399' }}>Explanation:</strong> {q.explanation}
                     </div>
                   )}
                   <div className="flex gap-2 mt-2 flex-wrap">
-                    {q.topic && <span style={{ fontSize: 10, color: '#94a3b8', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 20, padding: '1px 8px' }}>{q.topic}</span>}
+                    {q.topic && <span style={{ fontSize: 10, color: '#94a3b8', background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 20, padding: '1px 8px' }}>{q.topic}</span>}
                     {q.difficulty && <span style={{ fontSize: 10, color: diffColor[q.difficulty] || '#8b5cf6', background: `${diffColor[q.difficulty] || '#8b5cf6'}18`, border: `1px solid ${diffColor[q.difficulty] || '#8b5cf6'}33`, borderRadius: 20, padding: '1px 8px' }}>{q.difficulty}</span>}
                   </div>
                 </div>

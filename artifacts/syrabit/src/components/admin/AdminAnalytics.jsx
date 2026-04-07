@@ -144,18 +144,14 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
 
   if (loading) return (
     <div className="flex justify-center p-10">
-      <Loader2 size={24} className="animate-spin text-violet-400/60" />
+      <Loader2 size={24} className="animate-spin text-violet-500" />
     </div>
   );
   if (!data) return (
     <div className="p-6">
-      <div className="rounded-2xl p-8 text-center" style={{
-        background: 'rgba(15,15,30,0.6)',
-        border: '1px solid rgba(255,255,255,0.06)',
-        backdropFilter: 'blur(12px)',
-      }}>
-        <p className="text-white/30">Unable to load analytics</p>
-        <button onClick={load} className="mt-3 text-sm text-violet-400 hover:underline">Retry</button>
+      <div className="rounded-2xl p-8 text-center bg-white border border-gray-200 shadow-sm">
+        <p className="text-gray-400">Unable to load analytics</p>
+        <button onClick={load} className="mt-3 text-sm text-violet-600 hover:underline">Retry</button>
       </div>
     </div>
   );
@@ -193,38 +189,27 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-white/90 font-semibold text-lg">Analytics</h2>
+          <h2 className="text-gray-900 font-semibold text-lg">Analytics</h2>
           {lastRefresh && (
-            <p className="text-white/20 text-xs mt-0.5">
+            <p className="text-gray-400 text-xs mt-0.5">
               Updated {Math.floor((Date.now() - lastRefresh) / 1000)}s ago · auto-refreshes every 60s
             </p>
           )}
         </div>
         <button onClick={() => load(true)} disabled={refreshing}
-          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-all"
-          style={{
-            background: 'rgba(15,15,30,0.6)',
-            border: '1px solid rgba(255,255,255,0.06)',
-          }}>
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-gray-500 hover:text-gray-700 transition-all bg-white border border-gray-200 shadow-sm">
           <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} /> Refresh
         </button>
       </div>
 
-      <div className="flex gap-1 flex-wrap rounded-xl p-1 w-fit" style={{
-        background: 'rgba(15,15,30,0.5)',
-        border: '1px solid rgba(255,255,255,0.04)',
-      }}>
+      <div className="flex gap-1 flex-wrap rounded-xl p-1 w-fit bg-gray-100">
         {TABS.map(t => (
           <button key={t.id} onClick={() => setTab(t.id)}
             className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all ${
               tab === t.id
-                ? 'text-white shadow-lg'
-                : 'text-white/30 hover:text-white/60'
-            }`}
-            style={tab === t.id ? {
-              background: 'linear-gradient(135deg, #7c3aed, #6d28d9)',
-              boxShadow: '0 2px 12px rgba(124,58,237,0.3)',
-            } : {}}>
+                ? 'text-white bg-violet-600 shadow-sm'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}>
             {t.label}
           </button>
         ))}

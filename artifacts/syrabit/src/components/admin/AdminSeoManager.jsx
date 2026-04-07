@@ -35,19 +35,18 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
     <div className="space-y-5 max-w-5xl">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-lg font-bold text-white">SEO Content Manager</h2>
-          <p className="text-sm mt-0.5" style={{ color: 'rgba(255,255,255,0.35)' }}>Manage topic pages, generate AI content, and control what Googlebot crawls</p>
+          <h2 className="text-lg font-bold text-gray-900">SEO Content Manager</h2>
+          <p className="text-sm mt-0.5 text-gray-400">Manage topic pages, generate AI content, and control what Googlebot crawls</p>
         </div>
         <div className="flex items-center gap-2">
           <button onClick={() => s.load()} disabled={s.loading}
-            className="p-1.5 rounded-lg border hover:bg-white/5 transition-colors" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+            className="p-1.5 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors text-gray-400">
             <RefreshCw size={14} className={s.loading ? 'animate-spin' : ''} />
           </button>
           <button
             onClick={() => s.handleAutoRun()}
             disabled={s.activeJob?.status === 'queued' || s.activeJob?.status === 'running'}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
-            style={{ color: '#a78bfa' }}>
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-violet-50 border border-violet-200 hover:bg-violet-100 transition-colors text-violet-600">
             {s.activeJob?.status === 'running' ? <Loader2 size={13} className="animate-spin" />
               : <><Play size={13} /> Auto-Run All</>}
           </button>
@@ -61,31 +60,31 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
       {s.loading ? (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {[...Array(5)].map((_, i) => (
-            <div key={i} className="rounded-xl p-4 border h-24 animate-pulse" style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }} />
+            <div key={i} className="rounded-xl p-4 border border-gray-200 h-24 animate-pulse bg-gray-50" />
           ))}
         </div>
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          <StatCard icon={BookOpen}     label="Topics"          value={s.topics.length}      color="rgba(255,255,255,0.70)" />
-          <StatCard icon={CheckCircle2} label="Published"       value={s.publishedCount}     color="#34d399" />
-          <StatCard icon={FileText}     label="Drafts"          value={s.draftCount}         color="#fbbf24" />
-          <StatCard icon={Globe}        label="Sitemap URLs"    value={s.stats?.sitemap_urls ?? s.publishedCount} color="#a78bfa" />
-          <StatCard icon={Activity}     label="Coverage"        value={`${s.coverage}%`}     color={s.coverage >= 80 ? '#34d399' : s.coverage >= 40 ? '#fbbf24' : '#f87171'}
+          <StatCard icon={BookOpen}     label="Topics"          value={s.topics.length}      color="#374151" />
+          <StatCard icon={CheckCircle2} label="Published"       value={s.publishedCount}     color="#10b981" />
+          <StatCard icon={FileText}     label="Drafts"          value={s.draftCount}         color="#f59e0b" />
+          <StatCard icon={Globe}        label="Sitemap URLs"    value={s.stats?.sitemap_urls ?? s.publishedCount} color="#7c3aed" />
+          <StatCard icon={Activity}     label="Coverage"        value={`${s.coverage}%`}     color={s.coverage >= 80 ? '#10b981' : s.coverage >= 40 ? '#f59e0b' : '#ef4444'}
             sub={`${s.topics.length} topics × 5 types`} />
         </div>
       )}
 
-      <div className="flex gap-1 p-1 rounded-xl overflow-x-auto" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+      <div className="flex gap-1 p-1 rounded-xl overflow-x-auto bg-gray-100">
         {TABS.map(({ id, label, count }) => (
           <button key={id} onClick={() => s.setTab(id)}
             className={`flex-shrink-0 h-8 px-3 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-              s.tab === id ? 'text-white shadow' : 'hover:text-white/70'
+              s.tab === id ? 'text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
             }`}
-            style={s.tab === id ? { background: '#7c3aed', color: '#fff' } : { color: 'rgba(255,255,255,0.40)' }}>
+            style={s.tab === id ? { background: '#7c3aed', color: '#fff' } : {}}>
             {label}
             {count !== null && (
               <span className="px-1.5 py-0.5 rounded-full text-[10px]"
-                style={{ background: s.tab === id ? 'rgba(255,255,255,0.20)' : 'rgba(255,255,255,0.06)', color: s.tab === id ? '#fff' : 'rgba(255,255,255,0.30)' }}>
+                style={{ background: s.tab === id ? 'rgba(124,58,237,0.15)' : '#e5e7eb', color: s.tab === id ? '#7c3aed' : '#9ca3af' }}>
                 {count}
               </span>
             )}

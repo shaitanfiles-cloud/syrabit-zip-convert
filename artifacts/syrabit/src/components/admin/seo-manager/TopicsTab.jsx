@@ -30,7 +30,7 @@ export default function TopicsTab({
                 onChange={e => setScopeSubjectOnly(e.target.checked)}
                 className="rounded"
               />
-              <span className="text-[11px]" style={{ color: 'rgba(255,255,255,0.45)' }}>
+              <span className="text-[11px]" style={{ color: '#6b7280' }}>
                 Show this subject only
               </span>
             </label>
@@ -40,10 +40,10 @@ export default function TopicsTab({
 
       <div className="flex gap-2 flex-wrap items-center">
         <div className="relative flex-1 min-w-48">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.25)' }} />
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#9ca3af' }} />
           <input value={topicSearch} onChange={e => setTopicSearch(e.target.value)} placeholder="Search topics…"
             className="w-full h-9 pl-8 pr-3 rounded-xl text-sm outline-none"
-            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
+            style={{ background: '#f9fafb', border: '1px solid #e5e7eb', color: '#374151' }}
           />
         </div>
         <button onClick={() => handleExtract(false)} disabled={extracting}
@@ -66,11 +66,11 @@ export default function TopicsTab({
       </div>
 
       {loading ? (
-        <div className="space-y-2">{[...Array(6)].map((_, i) => <div key={i} className="h-14 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.02)' }} />)}</div>
+        <div className="space-y-2">{[...Array(6)].map((_, i) => <div key={i} className="h-14 rounded-xl animate-pulse" style={{ background: '#f9fafb' }} />)}</div>
       ) : filteredTopics.length === 0 ? (
-        <div className="rounded-xl p-10 text-center border" style={{ background: 'rgba(255,255,255,0.01)', borderColor: 'rgba(255,255,255,0.06)' }}>
-          <BookOpen size={28} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
-          <p className="text-sm" style={{ color: 'rgba(255,255,255,0.30)' }}>
+        <div className="rounded-xl p-10 text-center border" style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
+          <BookOpen size={28} className="mx-auto mb-3" style={{ color: '#e5e7eb' }} />
+          <p className="text-sm" style={{ color: '#9ca3af' }}>
             {topics.length === 0
               ? 'No topics yet. Click "Auto-Extract from Chapters" to bootstrap.'
               : 'No topics match your search.'}
@@ -85,20 +85,20 @@ export default function TopicsTab({
               <div key={tid} onClick={() => toggleTopic(tid)}
                 className="flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all"
                 style={{
-                  background: isSel ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.02)',
-                  borderColor: isSel ? 'rgba(124,58,237,0.35)' : 'rgba(255,255,255,0.06)',
+                  background: isSel ? 'rgba(124,58,237,0.08)' : '#f9fafb',
+                  borderColor: isSel ? 'rgba(124,58,237,0.35)' : '#e5e7eb',
                 }}>
                 <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 border transition-all ${isSel ? 'border-violet-500' : ''}`}
-                  style={isSel ? { background: '#7c3aed', borderColor: '#7c3aed' } : { borderColor: 'rgba(255,255,255,0.20)' }}>
+                  style={isSel ? { background: '#7c3aed', borderColor: '#7c3aed' } : { borderColor: '#d1d5db' }}>
                   {isSel && <CheckCircle2 size={10} className="text-white" />}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate" style={{ color: '#E8E8E8' }}>{topic.title}</p>
-                  <p className="text-xs truncate" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                  <p className="text-sm font-medium truncate" style={{ color: '#374151' }}>{topic.title}</p>
+                  <p className="text-xs truncate" style={{ color: '#9ca3af' }}>
                     {[topic.subject_name, topic.chapter_title].filter(Boolean).join(' › ')}
                   </p>
                 </div>
-                <span className="text-[10px] font-mono hidden sm:inline" style={{ color: 'rgba(255,255,255,0.18)' }}>{topic.slug}</span>
+                <span className="text-[10px] font-mono hidden sm:inline" style={{ color: '#d1d5db' }}>{topic.slug}</span>
                 {onNavigate && (
                   <button
                     onClick={e => {
@@ -122,7 +122,7 @@ export default function TopicsTab({
                   </button>
                 )}
                 <button onClick={e => { e.stopPropagation(); handleDeleteTopic(topic); }}
-                  className="flex-shrink-0 p-1 rounded transition-colors" style={{ color: 'rgba(255,255,255,0.20)' }}>
+                  className="flex-shrink-0 p-1 rounded transition-colors" style={{ color: '#d1d5db' }}>
                   <Trash2 size={13} />
                 </button>
               </div>
@@ -134,7 +134,7 @@ export default function TopicsTab({
       {selectedTopics.size > 0 && (
         <div className="flex items-center justify-between p-3 rounded-xl border"
           style={{ background: 'rgba(124,58,237,0.08)', borderColor: 'rgba(124,58,237,0.30)' }}>
-          <span className="text-sm" style={{ color: '#c4b0f0' }}>{selectedTopics.size} topic{selectedTopics.size !== 1 ? 's' : ''} selected</span>
+          <span className="text-sm" style={{ color: '#7c3aed' }}>{selectedTopics.size} topic{selectedTopics.size !== 1 ? 's' : ''} selected</span>
           <button onClick={() => setTab('generate')}
             className="h-8 px-3 rounded-lg text-xs font-semibold flex items-center gap-1"
             style={{ background: '#7c3aed', color: '#fff' }}>

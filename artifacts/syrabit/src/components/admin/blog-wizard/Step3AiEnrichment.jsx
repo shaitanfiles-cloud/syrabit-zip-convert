@@ -89,8 +89,8 @@ export default function Step3AiEnrichment({ state, set, goNext, goPrev, adminTok
     <div className="p-6 max-w-3xl mx-auto">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-bold text-white">Step 3 — AI Enrichment</h2>
-          <p className="text-xs text-white/40 mt-1">Let AI restructure your draft into rich GEO-optimized content blocks.</p>
+          <h2 className="text-base font-bold text-gray-900">Step 3 — AI Enrichment</h2>
+          <p className="text-xs text-gray-400 mt-1">Let AI restructure your draft into rich GEO-optimized content blocks.</p>
         </div>
         <button
           onClick={handleEnrich}
@@ -103,36 +103,36 @@ export default function Step3AiEnrichment({ state, set, goNext, goPrev, adminTok
         </button>
       </div>
 
-      <div className="rounded-xl p-4 mb-4" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }}>
-        <p className="text-xs font-semibold text-white/40 mb-2">BEFORE (Raw Draft)</p>
-        <p className="text-xs text-white/50">{wordCount(state.draftContent)} words · {state.draftContent.length} chars</p>
-        <p className="text-xs text-white/30 mt-1 line-clamp-2">{state.draftContent.slice(0, 200)}…</p>
+      <div className="rounded-xl p-4 mb-4" style={{ background: '#f9fafb', border: '1px solid #e5e7eb' }}>
+        <p className="text-xs font-semibold text-gray-400 mb-2">BEFORE (Raw Draft)</p>
+        <p className="text-xs text-gray-500">{wordCount(state.draftContent)} words · {state.draftContent.length} chars</p>
+        <p className="text-xs text-gray-400 mt-1 line-clamp-2">{state.draftContent.slice(0, 200)}…</p>
       </div>
 
       {localBlocks && localBlocks.length > 0 && (
         <>
           <div className="flex items-center gap-2 mb-3">
-            <span className="text-xs font-semibold text-white/40">AFTER (AI-Enriched — {localBlocks.length} blocks)</span>
+            <span className="text-xs font-semibold text-gray-400">AFTER (AI-Enriched — {localBlocks.length} blocks)</span>
           </div>
           <div className="space-y-3 mb-5">
             {localBlocks.map((block, i) => {
               const cfg = BLOCK_ICONS[block.type] || BLOCK_ICONS.note;
               const Icon = cfg.icon;
               return (
-                <div key={i} className="rounded-xl p-4 border group" style={{ borderColor: 'rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.025)' }}>
+                <div key={i} className="rounded-xl p-4 border group" style={{ borderColor: '#e5e7eb', background: '#ffffff' }}>
                   <div className="flex items-center gap-2 mb-2">
                     <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0"
                       style={{ background: `${cfg.color}18` }}>
                       <Icon size={12} style={{ color: cfg.color }} />
                     </div>
                     <span className="text-[10px] font-bold uppercase tracking-wider flex-shrink-0" style={{ color: cfg.color }}>{block.type}</span>
-                    <span className="text-sm font-medium text-white/70 truncate min-w-0">{block.title}</span>
+                    <span className="text-sm font-medium text-gray-600 truncate min-w-0">{block.title}</span>
                     <button onClick={() => removeBlock(i)}
                       className="ml-auto opacity-0 group-hover:opacity-100 transition-opacity text-red-400/70 hover:text-red-400 flex-shrink-0">
                       <X size={12} />
                     </button>
                   </div>
-                  <p className="text-xs text-white/40 leading-relaxed line-clamp-3">{block.content}</p>
+                  <p className="text-xs text-gray-400 leading-relaxed line-clamp-3">{block.content}</p>
                 </div>
               );
             })}
@@ -141,9 +141,9 @@ export default function Step3AiEnrichment({ state, set, goNext, goPrev, adminTok
       )}
 
       {!localBlocks && !enriching && (
-        <div className="rounded-xl p-8 text-center mb-5" style={{ background: 'rgba(255,255,255,0.02)', border: '1px dashed rgba(255,255,255,0.08)' }}>
+        <div className="rounded-xl p-8 text-center mb-5" style={{ background: '#f9fafb', border: '1px dashed #e5e7eb' }}>
           <Sparkles size={24} className="text-violet-400 mx-auto mb-2" />
-          <p className="text-sm text-white/40">Click "Enrich with AI" to restructure your content into definitions, FAQs, examples, and GEO authority phrases.</p>
+          <p className="text-sm text-gray-400">Click "Enrich with AI" to restructure your content into definitions, FAQs, examples, and GEO authority phrases.</p>
         </div>
       )}
 
@@ -156,14 +156,14 @@ export default function Step3AiEnrichment({ state, set, goNext, goPrev, adminTok
       )}
       <div className="flex items-center justify-between">
         <button onClick={goPrev}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white/50 hover:text-white/80 transition">
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-gray-500 hover:text-gray-700 transition">
           <ChevronLeft size={14} /> Back
         </button>
         <button
           onClick={handleAccept}
           disabled={!localBlocks?.length || saving}
           className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-40"
-          style={{ background: localBlocks?.length ? '#7c3aed' : 'rgba(255,255,255,0.08)', color: localBlocks?.length ? 'white' : 'rgba(255,255,255,0.4)' }}
+          style={{ background: localBlocks?.length ? '#7c3aed' : '#e5e7eb', color: localBlocks?.length ? 'white' : '#9ca3af' }}
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
           {saving ? 'Saving…' : saveError ? 'Retry Save' : 'Accept & Continue'}

@@ -17,7 +17,7 @@ export default function TagChips({ value, onChange, placeholder }) {
             style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
             {t}
             <button onClick={() => onChange(tags.filter((_, idx) => idx !== i).join(', '))}
-              className="text-white/40 hover:text-white/70"><X size={10} /></button>
+              className="text-gray-400 hover:text-gray-600"><X size={10} /></button>
           </span>
         ))}
       </div>
@@ -25,7 +25,7 @@ export default function TagChips({ value, onChange, placeholder }) {
         <input value={input} onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && addTag()}
           placeholder={placeholder}
-          className="flex-1 h-8 px-3 rounded-lg text-xs text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+          className="flex-1 h-8 px-3 rounded-lg text-xs text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500" />
         <button onClick={addTag} className="px-2 h-8 rounded-lg text-xs font-semibold"
           style={{ background: 'rgba(139,92,246,0.20)', color: '#c4b5fd' }}>Add</button>
       </div>

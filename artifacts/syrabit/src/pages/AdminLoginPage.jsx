@@ -33,36 +33,20 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden"
-      style={{ background: 'linear-gradient(145deg, #050510 0%, #0a0a1a 50%, #080816 100%)' }}>
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[600px] rounded-full opacity-[0.03]"
-          style={{ background: 'radial-gradient(circle, #7c3aed 0%, transparent 70%)' }} />
-      </div>
-
-      <div className="w-full max-w-sm space-y-4 relative">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-[#f8f9fc]">
+      <div className="w-full max-w-sm space-y-4">
         <div className="text-center mb-8">
-          <div className="relative inline-block mb-4">
-            <div className="absolute -inset-3 rounded-2xl blur-2xl opacity-20" style={{ background: 'radial-gradient(circle, #7c3aed 0%, transparent 70%)' }} />
+          <div className="inline-block mb-4">
             <img src="/logo.webp" alt="Syrabit.ai" width="56" height="56"
-              className="relative w-14 h-14 rounded-2xl mx-auto object-cover"
-              style={{ boxShadow: '0 0 30px rgba(124,58,237,0.2), 0 0 60px rgba(124,58,237,0.08)' }} />
+              className="w-14 h-14 rounded-2xl mx-auto object-cover shadow-lg" />
           </div>
-          <h1 className="text-lg font-semibold text-white tracking-tight">Administrator Access</h1>
-          <p className="text-white/30 text-sm mt-1">Syrabit.ai Control Center</p>
+          <h1 className="text-lg font-semibold text-gray-900 tracking-tight">Administrator Access</h1>
+          <p className="text-gray-500 text-sm mt-1">Syrabit.ai Control Center</p>
         </div>
 
-        <div
-          className="rounded-2xl p-6"
-          style={{
-            background: 'rgba(15,15,30,0.7)',
-            border: '1px solid rgba(255,255,255,0.06)',
-            backdropFilter: 'blur(20px)',
-          }}
-        >
+        <div className="rounded-2xl p-6 bg-white shadow-sm border border-gray-200">
           {error && (
-            <div className="flex items-center gap-2 text-red-400 rounded-xl p-3 mb-4 text-sm"
-              style={{ background: 'rgba(239,68,68,0.06)', border: '1px solid rgba(239,68,68,0.15)' }}>
+            <div className="flex items-center gap-2 text-red-600 rounded-xl p-3 mb-4 text-sm bg-red-50 border border-red-200">
               <AlertCircle size={15} />
               {error}
             </div>
@@ -70,20 +54,16 @@ export default function AdminLoginPage() {
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1.5">
-              <label className="text-white/40 text-xs font-medium">Email</label>
+              <label className="text-gray-600 text-xs font-medium">Email</label>
               <div className="relative">
-                <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20" />
+                <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="email"
                   autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="admin@syrabit.ai"
-                  className="w-full pl-9 pr-3 h-10 rounded-xl text-sm text-white outline-none transition-all focus:ring-1 focus:ring-violet-500/30"
-                  style={{
-                    background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                  }}
+                  className="w-full pl-9 pr-3 h-10 rounded-xl text-sm text-gray-900 outline-none transition-all border border-gray-200 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400"
                   required
                   data-testid="admin-email-input"
                 />
@@ -91,27 +71,23 @@ export default function AdminLoginPage() {
             </div>
 
             <div className="space-y-1.5">
-              <label className="text-white/40 text-xs font-medium">Password</label>
+              <label className="text-gray-600 text-xs font-medium">Password</label>
               <div className="relative">
-                <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/20" />
+                <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type={showPass ? 'text' : 'password'}
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••••••"
-                  className="w-full pl-9 pr-10 h-10 rounded-xl text-sm text-white outline-none transition-all focus:ring-1 focus:ring-violet-500/30"
-                  style={{
-                    background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.06)',
-                  }}
+                  className="w-full pl-9 pr-10 h-10 rounded-xl text-sm text-gray-900 outline-none transition-all border border-gray-200 bg-gray-50 focus:bg-white focus:ring-2 focus:ring-violet-500/20 focus:border-violet-400"
                   required
                   data-testid="admin-password-input"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPass(!showPass)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-white/20 hover:text-white/40 transition-colors"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   {showPass ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
@@ -121,11 +97,7 @@ export default function AdminLoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-semibold text-white transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
-              style={{
-                background: 'linear-gradient(135deg, #6d28d9, #7c3aed)',
-                boxShadow: '0 4px 20px rgba(124,58,237,0.25), 0 0 40px rgba(124,58,237,0.08)',
-              }}
+              className="w-full flex items-center justify-center gap-2 h-11 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-700 transition-all active:scale-[0.98] disabled:opacity-50 shadow-sm"
               data-testid="admin-login-submit-button"
             >
               {loading
@@ -135,7 +107,7 @@ export default function AdminLoginPage() {
             </button>
           </form>
 
-          <p className="text-center text-white/15 text-xs mt-5 flex items-center justify-center gap-1.5">
+          <p className="text-center text-gray-400 text-xs mt-5 flex items-center justify-center gap-1.5">
             <ShieldCheck size={10} />
             Protected by HMAC authentication · 8-hour session
           </p>

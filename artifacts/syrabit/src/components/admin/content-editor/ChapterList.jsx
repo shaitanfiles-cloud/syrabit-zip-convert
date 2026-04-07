@@ -30,16 +30,16 @@ export default function ChapterList({
         className="w-full p-5 rounded-xl border border-dashed border-violet-500/30 hover:border-violet-500/60 bg-violet-500/5 hover:bg-violet-500/10 text-center transition-colors"
       >
         <BookOpen size={28} className="mx-auto text-violet-400 mb-2" />
-        <p className="text-sm font-bold text-white">Create New Chapter</p>
-        <p className="text-[11px] text-white/40 mt-1">Add chapter content with Markdown — slug auto-generated</p>
+        <p className="text-sm font-bold text-gray-900">Create New Chapter</p>
+        <p className="text-[11px] text-gray-400 mt-1">Add chapter content with Markdown — slug auto-generated</p>
       </button>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <p className="text-sm font-semibold text-white">Chapters ({chapters.length})</p>
+          <p className="text-sm font-semibold text-gray-900">Chapters ({chapters.length})</p>
         </div>
 
-        {chapters.length === 0 && <p className="text-xs text-white/30 py-4 text-center">No chapters yet — create the first one above</p>}
+        {chapters.length === 0 && <p className="text-xs text-gray-400 py-4 text-center">No chapters yet — create the first one above</p>}
         {chapters.map(ch => {
           const assets   = chapterAssets[ch.id] || {};
           const hasNotes = assets.notesGenerated || (ch.content && ch.content.trim().length > 50);
@@ -56,8 +56,8 @@ export default function ChapterList({
             <div key={ch.id}
               className="rounded-xl border transition-all"
               style={{
-                borderColor: hasNotes ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.08)',
-                background:  'rgba(255,255,255,0.02)',
+                borderColor: hasNotes ? 'rgba(16,185,129,0.18)' : '#e5e7eb',
+                background:  '#f9fafb',
               }}>
               <div className="flex items-start gap-2 p-3 pb-2">
                 <div className="flex-shrink-0 mt-1">
@@ -67,22 +67,22 @@ export default function ChapterList({
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <p className="text-sm font-semibold text-white truncate">{ch.title}</p>
+                    <p className="text-sm font-semibold text-gray-900 truncate">{ch.title}</p>
                     {ch.content_type && ch.content_type !== 'notes' && (
-                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-white/10 text-white/40 uppercase tracking-wide">{ch.content_type}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-gray-100 text-gray-400 uppercase tracking-wide">{ch.content_type}</span>
                     )}
                     {wordCount > 0 && (
-                      <span className="text-[9px] text-white/25 font-mono">{wordCount.toLocaleString()} words</span>
+                      <span className="text-[9px] text-gray-300 font-mono">{wordCount.toLocaleString()} words</span>
                     )}
                   </div>
                   {ch.description && !preview && (
                     <p className="text-xs text-white/35 mt-0.5 truncate">{ch.description}</p>
                   )}
                   {preview && (
-                    <p className="text-[11px] text-white/40 mt-1 leading-relaxed line-clamp-2">{preview}{preview.length >= 130 ? '…' : ''}</p>
+                    <p className="text-[11px] text-gray-400 mt-1 leading-relaxed line-clamp-2">{preview}{preview.length >= 130 ? '…' : ''}</p>
                   )}
                   {!hasNotes && !preview && (
-                    <p className="text-[11px] text-white/20 mt-1 italic">No notes yet — generate with AI or edit manually</p>
+                    <p className="text-[11px] text-gray-300 mt-1 italic">No notes yet — generate with AI or edit manually</p>
                   )}
                 </div>
                 <div className="flex gap-0.5 flex-shrink-0 ml-1">
@@ -92,17 +92,17 @@ export default function ChapterList({
                     className="flex items-center gap-1 h-6 px-2 rounded-lg text-[10px] font-semibold disabled:opacity-40 transition-all hover:brightness-110"
                     style={hasNotes
                       ? { background: 'rgba(16,185,129,0.15)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.25)' }
-                      : { background: 'linear-gradient(135deg,rgba(124,58,237,0.35),rgba(79,70,229,0.35))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.35)' }}
+                      : { background: 'linear-gradient(135deg,rgba(124,58,237,0.35),rgba(79,70,229,0.35))', color: '#7c3aed', border: '1px solid rgba(139,92,246,0.35)' }}
                     title={hasNotes ? 'Regenerate AI notes for this chapter' : 'Generate AI notes for this chapter'}
                   >
                     {generatingNotes.has(ch.id)
                       ? <><Loader2 size={10} className="animate-spin" /> Generating…</>
                       : <><Sparkles size={10} /> {hasNotes ? 'Regen' : 'AI ⚡'}</>}
                   </button>
-                  <button onClick={() => onViewChapter(ch)} className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-white/30 hover:text-emerald-400" title="Preview lesson" data-testid={`open-chapter-${ch.id}`}><Eye size={13} /></button>
+                  <button onClick={() => onViewChapter(ch)} className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-gray-400 hover:text-emerald-400" title="Preview lesson" data-testid={`open-chapter-${ch.id}`}><Eye size={13} /></button>
                   <button onClick={() => onEditChapter(ch)}
-                    className="p-1.5 rounded-lg hover:bg-violet-500/10 text-white/30 hover:text-violet-400" title="Edit chapter"><Edit2 size={13} /></button>
-                  <button onClick={() => onDeleteChapter(ch.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400" title="Delete chapter"><Trash2 size={13} /></button>
+                    className="p-1.5 rounded-lg hover:bg-violet-500/10 text-gray-400 hover:text-violet-400" title="Edit chapter"><Edit2 size={13} /></button>
+                  <button onClick={() => onDeleteChapter(ch.id)} className="p-1.5 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-400" title="Delete chapter"><Trash2 size={13} /></button>
                 </div>
               </div>
               {(hasNotes || hasPyqs || hasFc || hasBlogs || hasSeoTopics || hasSeoPages || ch.slug) && (
@@ -162,7 +162,7 @@ export default function ChapterList({
                     {(hasPyqs || hasSeoTopics || hasSeoPages) && (
                       <button
                         onClick={(e) => { e.stopPropagation(); setExpandedCard(expandedCard === ch.id ? null : ch.id); }}
-                        className="ml-auto flex items-center gap-0.5 text-[9px] text-white/25 hover:text-white/50 transition"
+                        className="ml-auto flex items-center gap-0.5 text-[9px] text-gray-300 hover:text-gray-500 transition"
                       >
                         {expandedCard === ch.id ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
                         Details
@@ -172,11 +172,11 @@ export default function ChapterList({
 
                   {expandedCard === ch.id && (
                     <div className="rounded-lg p-2.5 space-y-2"
-                      style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                      style={{ background: '#f9fafb', border: '1px solid #e5e7eb' }}>
 
                       {Object.keys(markWise).length > 0 && (
                         <div>
-                          <p className="text-[9px] text-white/30 font-semibold uppercase tracking-wider mb-1">Mark-wise Questions</p>
+                          <p className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider mb-1">Mark-wise Questions</p>
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {Object.entries(markWise).sort(([a], [b]) => Number(a) - Number(b)).map(([mark, count]) => {
                               const mc = MARK_COLORS[mark] || MARK_COLORS['1'];
@@ -193,18 +193,18 @@ export default function ChapterList({
 
                       {assets.linkedTopics?.length > 0 && (
                         <div>
-                          <p className="text-[9px] text-white/30 font-semibold uppercase tracking-wider mb-1">Linked SEO Topics</p>
+                          <p className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider mb-1">Linked SEO Topics</p>
                           <div className="flex flex-wrap gap-1">
                             {assets.linkedTopics.map(t => (
                               <span key={t.id} className="flex items-center gap-1 px-2 py-0.5 rounded text-[9px]"
                                 style={{
-                                  background: t.status === 'published' ? 'rgba(139,92,246,0.10)' : 'rgba(255,255,255,0.04)',
-                                  color: t.status === 'published' ? '#c4b5fd' : 'rgba(255,255,255,0.35)',
-                                  border: `1px solid ${t.status === 'published' ? 'rgba(139,92,246,0.20)' : 'rgba(255,255,255,0.08)'}`,
+                                  background: t.status === 'published' ? 'rgba(139,92,246,0.10)' : '#f9fafb',
+                                  color: t.status === 'published' ? '#c4b5fd' : '#9ca3af',
+                                  border: `1px solid ${t.status === 'published' ? 'rgba(139,92,246,0.20)' : '#e5e7eb'}`,
                                 }}>
                                 {t.status === 'published' && <CheckCircle size={8} />}
                                 {t.title}
-                                {t.primary_keyword && <span className="text-white/20 ml-0.5">({t.primary_keyword})</span>}
+                                {t.primary_keyword && <span className="text-gray-300 ml-0.5">({t.primary_keyword})</span>}
                               </span>
                             ))}
                           </div>
@@ -213,7 +213,7 @@ export default function ChapterList({
 
                       {Object.keys(seoTypes).length > 0 && (
                         <div>
-                          <p className="text-[9px] text-white/30 font-semibold uppercase tracking-wider mb-1">SEO Pages by Type</p>
+                          <p className="text-[9px] text-gray-400 font-semibold uppercase tracking-wider mb-1">SEO Pages by Type</p>
                           <div className="flex items-center gap-1.5 flex-wrap">
                             {Object.entries(seoTypes).map(([type, count]) => (
                               <span key={type} className="px-2 py-0.5 rounded text-[9px] font-medium"

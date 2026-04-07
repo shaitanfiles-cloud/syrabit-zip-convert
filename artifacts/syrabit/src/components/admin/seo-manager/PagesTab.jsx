@@ -23,10 +23,10 @@ export default function PagesTab({
     <div className="space-y-3">
       <div className="flex gap-2 flex-wrap">
         <div className="relative flex-1 min-w-48">
-          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: 'rgba(255,255,255,0.25)' }} />
+          <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#9ca3af' }} />
           <input value={pageSearch} onChange={e => setPageSearch(e.target.value)} placeholder="Search pages…"
             className="w-full h-9 pl-8 pr-3 rounded-xl text-sm outline-none"
-            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', color: '#E8E8E8' }}
+            style={{ background: '#f9fafb', border: '1px solid #e5e7eb', color: '#374151' }}
           />
         </div>
         {['all', 'published', 'draft'].map(f => (
@@ -34,25 +34,25 @@ export default function PagesTab({
             className="h-9 px-3 rounded-xl text-xs capitalize font-medium transition-all"
             style={pageFilter === f
               ? { background: '#7c3aed', color: '#fff' }
-              : { color: 'rgba(255,255,255,0.40)', border: '1px solid rgba(255,255,255,0.08)' }}>
+              : { color: '#6b7280', border: '1px solid #e5e7eb' }}>
             {f === 'all' ? 'All' : f === 'published' ? `Published (${publishedCount})` : `Draft (${draftCount})`}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="space-y-2">{[...Array(5)].map((_, i) => <div key={i} className="h-16 rounded-xl animate-pulse" style={{ background: 'rgba(255,255,255,0.02)' }} />)}</div>
+        <div className="space-y-2">{[...Array(5)].map((_, i) => <div key={i} className="h-16 rounded-xl animate-pulse" style={{ background: '#f9fafb' }} />)}</div>
       ) : filteredPages.length === 0 ? (
-        <div className="rounded-xl p-10 text-center border" style={{ background: 'rgba(255,255,255,0.01)', borderColor: 'rgba(255,255,255,0.06)' }}>
-          <FileText size={28} className="mx-auto mb-3" style={{ color: 'rgba(255,255,255,0.10)' }} />
-          <p className="text-sm" style={{ color: 'rgba(255,255,255,0.30)' }}>
+        <div className="rounded-xl p-10 text-center border" style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
+          <FileText size={28} className="mx-auto mb-3" style={{ color: '#e5e7eb' }} />
+          <p className="text-sm" style={{ color: '#9ca3af' }}>
             {pages.length === 0
               ? 'No SEO pages yet. Click Auto-Run All to start the pipeline.'
               : 'No pages match your filter.'}
           </p>
           {pages.length === 0 && (
             <button onClick={handleAutoRun} className="mt-4 h-9 px-5 rounded-xl text-xs font-semibold flex items-center gap-2 mx-auto"
-              style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)', color: '#fff' }}>
+              style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)', color: '#fff' }}>
               <Play size={13} /> Auto-Run All
             </button>
           )}
@@ -65,14 +65,14 @@ export default function PagesTab({
             const typeInfo = PAGE_TYPES.find(p => p.id === page.page_type);
             return (
               <div key={pid} className="flex items-center gap-3 p-3 rounded-xl border transition-colors"
-                style={{ background: 'rgba(255,255,255,0.02)', borderColor: 'rgba(255,255,255,0.06)' }}>
+                style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
                 {typeInfo && (
                   <div className="w-1.5 h-8 rounded-full flex-shrink-0" style={{ background: typeInfo.color }} />
                 )}
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium truncate" style={{ color: '#E8E8E8' }}>{page.title || page.topic_title || '—'}</p>
+                  <p className="text-sm font-medium truncate" style={{ color: '#374151' }}>{page.title || page.topic_title || '—'}</p>
                   <div className="flex items-center gap-2 mt-0.5">
-                    <p className="text-xs truncate" style={{ color: 'rgba(255,255,255,0.30)' }}>
+                    <p className="text-xs truncate" style={{ color: '#9ca3af' }}>
                       {[page.board_name, page.class_name, page.subject_name, page.page_type].filter(Boolean).join(' · ')}
                     </p>
                     {page.quality_score != null && (
@@ -92,13 +92,13 @@ export default function PagesTab({
                 </span>
                 <button onClick={() => handleToggleStatus(page)} title={page.status === 'published' ? 'Unpublish' : 'Publish'}
                   className="flex-shrink-0 p-1.5 rounded-lg transition-colors"
-                  style={{ color: 'rgba(255,255,255,0.25)' }}>
+                  style={{ color: '#9ca3af' }}>
                   {page.status === 'published' ? <EyeOff size={14} /> : <Eye size={14} />}
                 </button>
                 {page.url && (
                   <a href={page.url} target="_blank" rel="noopener"
                     className="flex-shrink-0 p-1.5 rounded-lg transition-colors"
-                    style={{ color: 'rgba(255,255,255,0.25)' }}>
+                    style={{ color: '#9ca3af' }}>
                     <Globe size={14} />
                   </a>
                 )}

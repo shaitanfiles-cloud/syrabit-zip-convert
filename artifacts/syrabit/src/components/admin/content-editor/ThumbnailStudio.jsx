@@ -80,12 +80,12 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
   };
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/8">
+    <div className="rounded-xl border border-gray-200 bg-white overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
         <div className="flex items-center gap-2">
           <Wand2 size={13} className="text-violet-400" />
-          <span className="text-sm font-semibold text-white">AI Thumbnail Studio</span>
-          <span className="text-[10px] text-white/30 bg-white/5 px-2 py-0.5 rounded-full">background on Library card</span>
+          <span className="text-sm font-semibold text-gray-900">AI Thumbnail Studio</span>
+          <span className="text-[10px] text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">background on Library card</span>
         </div>
         {subjectData?.thumbnailUrl && (
           <button onClick={handleClearThumbnail} className="text-[11px] text-red-400/70 hover:text-red-400 transition-colors flex items-center gap-1">
@@ -96,15 +96,15 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
       <div className="p-4 space-y-4">
         <div className="flex items-start gap-4">
           <div className="w-20 h-[72px] rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden"
-            style={{ border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
+            style={{ border: '1px solid #e5e7eb', background: '#f9fafb' }}>
             {subjectData?.thumbnailUrl ? (
               <img src={subjectData.thumbnailUrl} alt="thumbnail" className="w-full h-full object-cover" />
             ) : (
-              <span className="text-white/20 text-[10px] text-center px-1">No image</span>
+              <span className="text-gray-300 text-[10px] text-center px-1">No image</span>
             )}
           </div>
           <div className="flex-1 space-y-2">
-            <p className="text-xs text-white/40">Upload a book cover (PNG, JPG, WebP — max 2 MB). The AI will detect all text on it and generate 3 clean replicas with text removed.</p>
+            <p className="text-xs text-gray-400">Upload a book cover (PNG, JPG, WebP — max 2 MB). The AI will detect all text on it and generate 3 clean replicas with text removed.</p>
             <input ref={thumbnailInputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden"
               onChange={async (e) => {
                 const file = e.target.files?.[0];
@@ -122,7 +122,7 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
               {subjectData?.thumbnailUrl && (
                 <button onClick={() => handleGenerateAiThumbnails()} disabled={aiThumbLoading}
                   className="flex items-center gap-2 h-9 px-4 rounded-lg text-xs font-semibold disabled:opacity-50 transition-all hover:opacity-90"
-                  style={{ background: 'rgba(139,92,246,0.20)', border: '1px solid rgba(139,92,246,0.35)', color: '#c4b0f0' }}>
+                  style={{ background: 'rgba(139,92,246,0.20)', border: '1px solid rgba(139,92,246,0.35)', color: '#7c3aed' }}>
                   {aiThumbLoading ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
                   {aiThumbLoading ? 'Analyzing…' : thumbVariants.length > 0 ? 'Regenerate' : 'Generate AI Variants'}
                 </button>
@@ -135,7 +135,7 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
           <div className="rounded-xl p-4 flex items-center gap-3" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.20)' }}>
             <Loader2 size={16} className="animate-spin flex-shrink-0" style={{ color: '#a78bfa' }} />
             <div>
-              <p className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>Groq Vision detecting text regions…</p>
+              <p className="text-xs font-semibold" style={{ color: '#7c3aed' }}>Groq Vision detecting text regions…</p>
               <p className="text-[10px] mt-0.5" style={{ color: 'rgba(167,139,250,0.60)' }}>Locating text → removing it → generating 3 clean replicas</p>
             </div>
           </div>
@@ -145,7 +145,7 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold" style={{ color: '#c4b0f0' }}>Text-Free Replicas</span>
+                <span className="text-xs font-semibold" style={{ color: '#7c3aed' }}>Text-Free Replicas</span>
                 {thumbAnalysis?.style && (
                   <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa' }}>
                     {thumbAnalysis.style} · {thumbAnalysis.mood}
@@ -154,15 +154,15 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
               </div>
               <button onClick={() => handleGenerateAiThumbnails()} disabled={aiThumbLoading}
                 className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg"
-                style={{ color: 'rgba(255,255,255,0.35)', background: 'rgba(255,255,255,0.06)' }}>
+                style={{ color: '#9ca3af', background: '#e5e7eb' }}>
                 <RefreshCw size={9} /> New set
               </button>
             </div>
             {thumbAnalysis?.dominant_colors && (
               <div className="flex items-center gap-1.5">
-                <span className="text-[10px]" style={{ color: 'rgba(255,255,255,0.30)' }}>Palette:</span>
+                <span className="text-[10px]" style={{ color: '#9ca3af' }}>Palette:</span>
                 {[...(thumbAnalysis.dominant_colors || []), ...(thumbAnalysis.secondary_colors || [])].slice(0, 5).map((hex, i) => (
-                  <div key={i} title={hex} className="w-4 h-4 rounded-full border border-white/15 flex-shrink-0" style={{ background: hex }} />
+                  <div key={i} title={hex} className="w-4 h-4 rounded-full border border-gray-200 flex-shrink-0" style={{ background: hex }} />
                 ))}
               </div>
             )}
@@ -170,7 +170,7 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
               {thumbVariants.map((varUrl, i) => (
                 <div key={i}
                   className="relative group rounded-xl overflow-hidden cursor-pointer transition-all"
-                  style={{ border: `2px solid ${selectedThumbVariant === i ? '#7c3aed' : 'rgba(255,255,255,0.08)'}` }}
+                  style={{ border: `2px solid ${selectedThumbVariant === i ? '#7c3aed' : '#e5e7eb'}` }}
                   onClick={() => setSelectedThumbVariant(i)}>
                   <img src={varUrl} alt={`Variant ${i + 1}`} className="w-full object-cover" style={{ aspectRatio: '2/3' }} />
                   <div className="absolute inset-0 flex flex-col justify-end p-2 opacity-0 group-hover:opacity-100 transition-opacity"
@@ -187,14 +187,14 @@ export default function ThumbnailStudio({ adminToken, selSubject, subjectData, o
                     </div>
                   )}
                   <div className="absolute bottom-0 left-0 right-0 text-center py-1 text-[8px] font-medium"
-                    style={{ background: 'rgba(0,0,0,0.65)', color: 'rgba(255,255,255,0.55)' }}>
+                    style={{ background: 'rgba(0,0,0,0.65)', color: '#6b7280' }}>
                     {['Smooth Fill', 'Gradient Fill', 'Median Fill'][i]}
                   </div>
                 </div>
               ))}
             </div>
             <button onClick={() => handleApplyVariant(selectedThumbVariant)}
-              className="w-full py-2.5 rounded-xl text-sm font-semibold text-white"
+              className="w-full py-2.5 rounded-xl text-sm font-semibold text-gray-900"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)', boxShadow: '0 2px 10px rgba(124,58,237,0.30)' }}>
               Apply "{['Smooth Fill', 'Gradient Fill', 'Median Fill'][selectedThumbVariant]}" as Thumbnail
             </button>

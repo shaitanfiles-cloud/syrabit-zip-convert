@@ -292,39 +292,39 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   if (selSubject) breadcrumb.push({ label: subjectData?.name || selSubject, onClick: () => { setEditView(null); } });
 
   return (
-    <div className="h-full flex flex-col" style={{ background: '#080810' }}>
+    <div className="h-full flex flex-col" style={{ background: '#f8f9fc' }}>
       <>
-        <div className="h-14 border-b border-white/10 flex items-center justify-between px-6" style={{ background: 'rgba(255,255,255,0.02)' }}>
+        <div className="h-14 border-b border-gray-200 flex items-center justify-between px-6 bg-white">
           <div className="flex items-center gap-2 min-w-0">
             {breadcrumb.length > 0 && (
-              <div className="flex items-center gap-1 text-sm text-white/40 min-w-0 overflow-hidden">
+              <div className="flex items-center gap-1 text-sm text-gray-400 min-w-0 overflow-hidden">
                 {breadcrumb.map((b, i) => (
                   <span key={i} className="flex items-center gap-1 min-w-0">
                     <ChevronRight size={12} className="flex-shrink-0" />
-                    <button onClick={b.onClick} className="hover:text-violet-400 truncate max-w-[120px] transition-colors">{b.label}</button>
+                    <button onClick={b.onClick} className="hover:text-violet-600 truncate max-w-[120px] transition-colors">{b.label}</button>
                   </span>
                 ))}
               </div>
             )}
           </div>
           <div className="relative flex-shrink-0 w-64">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
-            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search all subjects..." className="w-full h-9 pl-8 pr-3 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" data-testid="search-subjects" />
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search all subjects..." className="w-full h-9 pl-8 pr-3 rounded-xl text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-500/20" data-testid="search-subjects" />
           </div>
         </div>
 
         {searchQuery && searchFiltered ? (
           <div className="flex-1 overflow-y-auto p-6">
-            <p className="text-sm text-white/40 mb-4">{searchFiltered.length} subject(s) matching "{searchQuery}"</p>
+            <p className="text-sm text-gray-400 mb-4">{searchFiltered.length} subject(s) matching "{searchQuery}"</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {searchFiltered.map(s => (
                 <button key={s.id} onClick={() => { setSearchQuery(''); const st = streams.find(x => x.id === s.stream_id); if (st) { const cl = classes.find(x => x.id === st.class_id); if (cl) setSelBoard(cl.board_id); setSelClass(st.class_id); } setSelStream(s.stream_id); setSelSubject(s.id); }}
-                  className="p-4 rounded-xl border border-white/10 hover:border-violet-500/30 bg-white/[0.02] text-left transition-colors">
-                  <p className="text-sm font-medium text-white">{s.icon} {s.name}</p>
-                  <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
+                  className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors shadow-sm">
+                  <p className="text-sm font-medium text-gray-900">{s.icon} {s.name}</p>
+                  <p className="text-xs text-gray-400 truncate mt-1">{s.description}</p>
                 </button>
               ))}
-              {searchFiltered.length === 0 && <p className="text-white/30 text-sm col-span-3">No subjects found</p>}
+              {searchFiltered.length === 0 && <p className="text-gray-400 text-sm col-span-3">No subjects found</p>}
             </div>
           </div>
         ) : editView === 'new-chapter' || editView === 'edit-chapter' ? (
@@ -352,45 +352,45 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
               {!selStream && !selSubject ? (
                 <div className="flex items-center justify-center h-full">
                   <div className="text-center max-w-md">
-                    <Layers size={56} className="mx-auto text-white/15 mb-4" />
-                    <h3 className="text-xl font-bold text-white mb-2">All-in-One Content Manager</h3>
-                    <p className="text-white/50 text-sm mb-2">Navigate the tree on the left: Board → Class → {streamPlaceholder} → Subject</p>
-                    <p className="text-white/30 text-xs">Or use the search bar to find any subject</p>
+                    <Layers size={56} className="mx-auto text-gray-200 mb-4" />
+                    <h3 className="text-xl font-bold text-gray-900 mb-2">All-in-One Content Manager</h3>
+                    <p className="text-gray-500 text-sm mb-2">Navigate the tree on the left: Board → Class → {streamPlaceholder} → Subject</p>
+                    <p className="text-gray-400 text-xs">Or use the search bar to find any subject</p>
                   </div>
                 </div>
               ) : selStream && !selSubject ? (
                 <div className="p-6 max-w-4xl mx-auto space-y-4">
                   <div className="mb-2">
-                    <h3 className="text-xl font-bold text-white">{streamData?.icon} {streamData?.name}</h3>
-                    <p className="text-sm text-white/40">{streamData?.description}</p>
+                    <h3 className="text-xl font-bold text-gray-900">{streamData?.icon} {streamData?.name}</h3>
+                    <p className="text-sm text-gray-400">{streamData?.description}</p>
                   </div>
-                  <p className="text-sm font-semibold text-white/60">Subjects ({filteredSubjects.length})</p>
+                  <p className="text-sm font-semibold text-gray-500">Subjects ({filteredSubjects.length})</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {filteredSubjects.map(s => (
-                      <div key={s.id} className="p-4 rounded-xl border border-white/10 hover:border-violet-500/30 bg-white/[0.02] text-left transition-colors group cursor-pointer" onClick={() => setSelSubject(s.id)}>
+                      <div key={s.id} className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors group cursor-pointer shadow-sm" onClick={() => setSelSubject(s.id)}>
                         <div className="flex items-center justify-between">
-                          <p className="text-sm font-medium text-white">{s.icon || '📚'} {s.name}</p>
+                          <p className="text-sm font-medium text-gray-900">{s.icon || '📚'} {s.name}</p>
                           <div className="flex items-center gap-1">
-                            <button onClick={(e) => { e.stopPropagation(); setEditingSubject(s.id); setSubjectEditForm({ name: s.name || '', description: s.description || '' }); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-violet-400"><Edit2 size={12} /></button>
-                            <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-white/20 hover:text-red-400"><Trash2 size={12} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); setEditingSubject(s.id); setSubjectEditForm({ name: s.name || '', description: s.description || '' }); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-violet-600"><Edit2 size={12} /></button>
+                            <button onClick={(e) => { e.stopPropagation(); handleDelete('subject', s.id); }} className="p-1 rounded opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500"><Trash2 size={12} /></button>
                           </div>
                         </div>
                         {editingSubject === s.id ? (
                           <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
-                            <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-8 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" autoFocus />
-                            <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-8 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+                            <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-8 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" autoFocus />
+                            <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-8 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" />
                             <div className="flex gap-2">
-                              <button onClick={() => setEditingSubject(null)} className="flex-1 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 text-xs">Cancel</button>
-                              <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="flex-1 h-7 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
+                              <button onClick={() => setEditingSubject(null)} className="flex-1 h-7 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs">Cancel</button>
+                              <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="flex-1 h-7 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
                                 {savingSubject ? <Loader2 size={10} className="animate-spin" /> : null} Save
                               </button>
                             </div>
                           </div>
                         ) : (
                           <>
-                            <p className="text-xs text-white/40 truncate mt-1">{s.description}</p>
+                            <p className="text-xs text-gray-400 truncate mt-1">{s.description}</p>
                             <div className="flex items-center justify-between mt-2">
-                              <p className="text-[10px] text-white/25">{s.chapter_count || 0} chapters</p>
+                              <p className="text-[10px] text-gray-400">{s.chapter_count || 0} chapters</p>
                             </div>
                           </>
                         )}
@@ -404,11 +404,11 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                   <div className="flex items-start justify-between">
                     {editingSubject === selSubject ? (
                       <div className="flex-1 max-w-md space-y-2">
-                        <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-10 px-4 rounded-xl text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 text-lg font-bold" autoFocus />
-                        <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-9 px-4 rounded-xl text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500" />
+                        <input value={subjectEditForm.name} onChange={(e) => setSubjectEditForm(f => ({ ...f, name: e.target.value }))} className="w-full h-10 px-4 rounded-xl text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400 text-lg font-bold" autoFocus />
+                        <input value={subjectEditForm.description} onChange={(e) => setSubjectEditForm(f => ({ ...f, description: e.target.value }))} placeholder="Description" className="w-full h-9 px-4 rounded-xl text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-400" />
                         <div className="flex gap-2">
-                          <button onClick={() => setEditingSubject(null)} className="h-8 px-4 rounded-lg bg-white/5 hover:bg-white/10 text-white/60 text-xs">Cancel</button>
-                          <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="h-8 px-4 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
+                          <button onClick={() => setEditingSubject(null)} className="h-8 px-4 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-600 text-xs">Cancel</button>
+                          <button onClick={handleUpdateSubject} disabled={savingSubject || !subjectEditForm.name.trim()} className="h-8 px-4 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-xs font-medium disabled:opacity-40 flex items-center justify-center gap-1">
                             {savingSubject ? <Loader2 size={10} className="animate-spin" /> : null} Save
                           </button>
                         </div>
@@ -416,18 +416,17 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     ) : (
                       <div>
                         <div className="flex items-center gap-2">
-                          <h3 className="text-xl font-bold text-white">{subjectData?.icon} {subjectData?.name}</h3>
-                          <button onClick={() => { setEditingSubject(selSubject); setSubjectEditForm({ name: subjectData?.name || '', description: subjectData?.description || '' }); }} className="p-1 rounded text-white/20 hover:text-violet-400"><Edit2 size={14} /></button>
+                          <h3 className="text-xl font-bold text-gray-900">{subjectData?.icon} {subjectData?.name}</h3>
+                          <button onClick={() => { setEditingSubject(selSubject); setSubjectEditForm({ name: subjectData?.name || '', description: subjectData?.description || '' }); }} className="p-1 rounded text-gray-300 hover:text-violet-600"><Edit2 size={14} /></button>
                         </div>
-                        <p className="text-sm text-white/40">{subjectData?.description}</p>
+                        <p className="text-sm text-gray-400">{subjectData?.description}</p>
                       </div>
                     )}
                     {chapters.length > 0 && (
                       <button
                         onClick={handleBulkFormatNotes}
                         disabled={bulkGenerating || generatingNotes.size > 0}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all"
-                        style={{ background: 'linear-gradient(135deg,rgba(124,58,237,0.25),rgba(79,70,229,0.25))', color: '#c4b0f0', border: '1px solid rgba(139,92,246,0.30)' }}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold disabled:opacity-40 transition-all bg-violet-50 text-violet-600 border border-violet-200 hover:bg-violet-100"
                       >
                         {bulkGenerating ? <Loader2 size={12} className="animate-spin" /> : <AlignLeft size={12} />}
                         {bulkGenerating ? 'Formatting...' : 'Format Notes'}

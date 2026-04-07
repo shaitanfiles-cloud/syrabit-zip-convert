@@ -4,7 +4,7 @@ export default function SerpPreview({ title, slug, metaDescription }) {
   return (
     <div className="rounded-xl p-4" style={{ background: '#ffffff' }}>
       <div className="flex items-center gap-2 mb-1.5">
-        <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: 'linear-gradient(135deg,#7c3aed,#9575e0)' }} />
+        <div className="w-5 h-5 rounded-full flex-shrink-0" style={{ background: 'linear-gradient(135deg,#7c3aed,#6d28d9)' }} />
         <div className="min-w-0">
           <p className="text-xs font-medium" style={{ color: '#202124' }}>syrabit.ai</p>
           <p className="text-[10px] truncate" style={{ color: '#4d5156' }}>https://syrabit.ai/{slug || 'your-slug'}</p>

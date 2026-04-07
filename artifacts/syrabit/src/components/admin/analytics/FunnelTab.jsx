@@ -16,10 +16,10 @@ export default function FunnelTab({ funnel, widgetErrors, load }) {
           {funnel.funnel?.map((stage, i) => (
             <div key={i}>
               <div className="flex items-center justify-between mb-1.5">
-                <span className="text-white/80 text-sm font-medium">{stage.stage}</span>
-                <span className="text-white/30 text-sm">{stage.count?.toLocaleString()} ({stage.pct}%)</span>
+                <span className="text-gray-700 text-sm font-medium">{stage.stage}</span>
+                <span className="text-gray-400 text-sm">{stage.count?.toLocaleString()} ({stage.pct}%)</span>
               </div>
-              <div className="h-8 rounded-xl overflow-hidden" style={{ background: 'rgba(255,255,255,0.04)' }}>
+              <div className="h-8 rounded-xl overflow-hidden" style={{ background: '#f9fafb' }}>
                 <div className="h-full rounded-xl transition-all duration-500"
                   style={{ width: `${stage.pct}%`, background: `linear-gradient(90deg, ${FUNNEL_COLORS[i]||'#8b5cf6'}, ${FUNNEL_COLORS[i]||'#8b5cf6'}88)` }} />
               </div>

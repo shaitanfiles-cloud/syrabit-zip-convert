@@ -52,27 +52,27 @@ export default function FlashcardGeneratorCard({ token }) {
       <div className="flex items-center gap-3 mb-4">
         <CreditCard size={18} color="#06b6d4" />
         <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: '#e8e8e8' }}>Flashcard Generator</div>
-          <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.45)' }}>AI-powered Q&amp;A flashcards from chapter content for student revision</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: '#111827' }}>Flashcard Generator</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>AI-powered Q&amp;A flashcards from chapter content for student revision</div>
         </div>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 8, marginBottom: 10 }}>
         <input value={subject} onChange={e => setSubject(e.target.value)} placeholder="Subject"
-          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }} />
+          style={{ background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }} />
         <select value={className} onChange={e => setClassName(e.target.value)}
-          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }}>
+          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }}>
           {['Class 11', 'Class 12', 'Degree 1st Year', 'Degree 2nd Year', 'Degree 3rd Year'].map(c => <option key={c}>{c}</option>)}
         </select>
         <select value={count} onChange={e => setCount(Number(e.target.value))}
-          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none' }}>
+          style={{ background: 'rgba(30,30,40,0.95)', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: '#111827', outline: 'none' }}>
           {[5, 8, 10, 15, 20].map(n => <option key={n} value={n}>{n} cards</option>)}
         </select>
       </div>
 
       <textarea value={text} onChange={e => setText(e.target.value)} placeholder="Paste chapter content (min 100 characters)…"
         rows={4}
-        style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#e8e8e8', outline: 'none', resize: 'vertical', marginBottom: 10, boxSizing: 'border-box' }}
+        style={{ width: '100%', background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '10px 12px', fontSize: 13, color: '#111827', outline: 'none', resize: 'vertical', marginBottom: 10, boxSizing: 'border-box' }}
       />
 
       <div className="flex gap-2 mb-4">
@@ -90,7 +90,7 @@ export default function FlashcardGeneratorCard({ token }) {
       {cards.length > 0 && current && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <span style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)' }}>{activeIdx + 1} / {cards.length}</span>
+            <span style={{ fontSize: 12, color: '#6b7280' }}>{activeIdx + 1} / {cards.length}</span>
             <div style={{ display: 'flex', gap: 4 }}>
               <button onClick={() => setActiveIdx(i => Math.max(0, i - 1))} disabled={activeIdx === 0}
                 style={{ ...btn('#06b6d4'), padding: '4px 10px', fontSize: 11, opacity: activeIdx === 0 ? 0.4 : 1 }}>← Prev</button>
@@ -104,8 +104,8 @@ export default function FlashcardGeneratorCard({ token }) {
             style={{
               cursor: 'pointer',
               minHeight: 120,
-              background: flipped[activeIdx] ? 'rgba(6,182,212,0.08)' : 'rgba(255,255,255,0.04)',
-              border: `1px solid ${flipped[activeIdx] ? 'rgba(6,182,212,0.35)' : 'rgba(255,255,255,0.1)'}`,
+              background: flipped[activeIdx] ? 'rgba(6,182,212,0.08)' : '#f9fafb',
+              border: `1px solid ${flipped[activeIdx] ? 'rgba(6,182,212,0.35)' : '#e5e7eb'}`,
               borderRadius: 14,
               padding: 20,
               display: 'flex',
@@ -116,10 +116,10 @@ export default function FlashcardGeneratorCard({ token }) {
               transition: 'all 0.2s',
             }}
           >
-            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: flipped[activeIdx] ? '#22d3ee' : 'rgba(232,232,232,0.35)', marginBottom: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', color: flipped[activeIdx] ? '#22d3ee' : '#9ca3af', marginBottom: 8 }}>
               {flipped[activeIdx] ? 'ANSWER' : 'QUESTION — tap to reveal'}
             </div>
-            <div style={{ fontSize: 14, color: '#e8e8e8', lineHeight: 1.6 }}>
+            <div style={{ fontSize: 14, color: '#111827', lineHeight: 1.6 }}>
               {flipped[activeIdx] ? current.back : current.front}
             </div>
             <div className="flex gap-2 mt-3 flex-wrap justify-center">
@@ -128,18 +128,18 @@ export default function FlashcardGeneratorCard({ token }) {
                   {current.difficulty}
                 </span>
               )}
-              {current.type && <span style={{ fontSize: 10, color: '#94a3b8', background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 20, padding: '1px 8px' }}>{current.type}</span>}
+              {current.type && <span style={{ fontSize: 10, color: '#94a3b8', background: '#e5e7eb', border: '1px solid #d1d5db', borderRadius: 20, padding: '1px 8px' }}>{current.type}</span>}
             </div>
           </div>
 
           <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
             {cards.slice(0, 8).map((_, i) => (
               <button key={i} onClick={() => { setActiveIdx(i); setFlipped(f => ({ ...f, [i]: false })); }}
-                style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${i === activeIdx ? 'rgba(6,182,212,0.5)' : 'rgba(255,255,255,0.08)'}`, background: i === activeIdx ? 'rgba(6,182,212,0.15)' : 'rgba(255,255,255,0.03)', cursor: 'pointer', fontSize: 11, color: i === activeIdx ? '#22d3ee' : 'rgba(232,232,232,0.4)', fontWeight: 700 }}>
+                style={{ width: 28, height: 28, borderRadius: 8, border: `1px solid ${i === activeIdx ? 'rgba(6,182,212,0.5)' : '#e5e7eb'}`, background: i === activeIdx ? 'rgba(6,182,212,0.15)' : '#f9fafb', cursor: 'pointer', fontSize: 11, color: i === activeIdx ? '#22d3ee' : '#9ca3af', fontWeight: 700 }}>
                 {i + 1}
               </button>
             ))}
-            {cards.length > 8 && <span style={{ fontSize: 11, color: 'rgba(232,232,232,0.4)', alignSelf: 'center' }}>+{cards.length - 8} more</span>}
+            {cards.length > 8 && <span style={{ fontSize: 11, color: '#9ca3af', alignSelf: 'center' }}>+{cards.length - 8} more</span>}
           </div>
         </div>
       )}

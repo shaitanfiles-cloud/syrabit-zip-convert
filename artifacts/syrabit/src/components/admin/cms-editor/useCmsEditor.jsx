@@ -430,8 +430,8 @@ export default function useCmsEditor(adminToken, onNavigate, hubContext) {
   const canPreview = showPreview && !!form.seo_slug;
 
   const selectStyle = {
-    color: '#E8E8E8', background: 'rgba(255,255,255,0.05)',
-    border: '1px solid rgba(255,255,255,0.10)', borderRadius: 8,
+    color: '#374151', background: '#f3f4f6',
+    border: '1px solid #e5e7eb', borderRadius: 8,
     padding: '4px 8px', fontSize: 11, outline: 'none',
   };
 

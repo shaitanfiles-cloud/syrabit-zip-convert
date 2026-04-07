@@ -39,16 +39,16 @@ export default function SeoMetaCard({ token }) {
     } finally { setLoading(false); }
   }
 
-  const inp = { background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '7px 12px', color: '#e8e8e8', fontSize: 13 };
+  const inp = { background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '7px 12px', color: '#111827', fontSize: 13 };
 
   return (
     <div style={card}>
       <div className="flex items-center gap-2 mb-4">
         <TrendingUp size={16} color="#06b6d4" />
-        <span style={{ fontWeight: 700, color: '#e8e8e8' }}>SEO Meta Generator</span>
+        <span style={{ fontWeight: 700, color: '#111827' }}>SEO Meta Generator</span>
         <Badge label="Structured Output" color="#06b6d4" />
       </div>
-      <p style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', marginBottom: 12 }}>
+      <p style={{ fontSize: 12, color: '#6b7280', marginBottom: 12 }}>
         Generate title (60 chars), meta description (160 chars), keywords, OG tags — all optimised for AssamBoard search intent.
       </p>
       <div className="grid grid-cols-2 gap-2 mb-2">
@@ -76,9 +76,9 @@ export default function SeoMetaCard({ token }) {
               <div key={key} style={{ marginBottom: 10 }}>
                 <div className="flex items-center justify-between mb-1">
                   <span style={{ fontSize: 10, fontWeight: 700, color, textTransform: 'uppercase' }}>{label}</span>
-                  <span style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)' }}>{result[key].length} chars</span>
+                  <span style={{ fontSize: 10, color: '#9ca3af' }}>{result[key].length} chars</span>
                 </div>
-                <div style={{ fontSize: 13, color: '#e8e8e8', background: 'rgba(255,255,255,0.04)', borderRadius: 8, padding: '8px 10px' }}>
+                <div style={{ fontSize: 13, color: '#111827', background: '#f9fafb', borderRadius: 8, padding: '8px 10px' }}>
                   {result[key]}
                 </div>
               </div>

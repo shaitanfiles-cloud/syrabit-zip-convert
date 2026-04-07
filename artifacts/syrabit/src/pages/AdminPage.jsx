@@ -175,13 +175,9 @@ export default function AdminPage() {
 
   if (verifying) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center"
-        style={{ background: 'linear-gradient(145deg, #050510 0%, #0a0a1a 50%, #080816 100%)' }}>
-        <div className="relative">
-          <div className="absolute inset-0 rounded-full blur-xl opacity-30" style={{ background: 'radial-gradient(circle, #7c3aed 0%, transparent 70%)' }} />
-          <Loader2 className="w-8 h-8 animate-spin text-violet-400 mb-3 relative" />
-        </div>
-        <p className="text-sm text-white/30 mt-4">Verifying admin session...</p>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50">
+        <Loader2 className="w-8 h-8 animate-spin text-violet-500 mb-3" />
+        <p className="text-sm text-gray-400 mt-4">Verifying admin session...</p>
       </div>
     );
   }
@@ -190,43 +186,35 @@ export default function AdminPage() {
   const activeLabel = SECTIONS.find((s) => s.id === activeSection)?.label || 'Admin';
 
   const statusConfig = {
-    ok:          { label: 'All Systems Operational', dot: 'bg-emerald-400', text: 'text-emerald-400', border: 'border-emerald-500/20', bg: 'bg-emerald-500/[0.06]' },
-    warn:        { label: 'Setup Required',          dot: 'bg-amber-400',   text: 'text-amber-400',   border: 'border-amber-500/20',   bg: 'bg-amber-500/[0.06]'   },
-    maintenance: { label: 'Maintenance Mode',        dot: 'bg-red-400',     text: 'text-red-400',     border: 'border-red-500/20',     bg: 'bg-red-500/[0.06]'     },
+    ok:          { label: 'All Systems Operational', dot: 'bg-emerald-500', text: 'text-emerald-700', border: 'border-emerald-200', bg: 'bg-emerald-50' },
+    warn:        { label: 'Setup Required',          dot: 'bg-amber-500',   text: 'text-amber-700',   border: 'border-amber-200',   bg: 'bg-amber-50'   },
+    maintenance: { label: 'Maintenance Mode',        dot: 'bg-red-500',     text: 'text-red-700',     border: 'border-red-200',     bg: 'bg-red-50'     },
   };
   const sc = statusConfig[sysStatus];
 
   return (
-    <div className="min-h-screen flex" style={{ background: 'linear-gradient(145deg, #050510 0%, #0a0a1a 50%, #080816 100%)' }} data-testid="admin-dashboard">
+    <div className="min-h-screen flex bg-[#f8f9fc]" data-testid="admin-dashboard">
       <aside
-        className="flex flex-col h-screen sticky top-0 transition-all duration-300 flex-shrink-0 z-20"
+        className="flex flex-col h-screen sticky top-0 transition-all duration-300 flex-shrink-0 z-20 bg-white"
         style={{
           width: collapsed ? 68 : 252,
-          background: 'linear-gradient(180deg, rgba(13,13,28,0.98) 0%, rgba(8,8,20,0.98) 100%)',
-          borderRight: '1px solid rgba(139,92,246,0.08)',
-          backdropFilter: 'blur(20px)',
+          borderRight: '1px solid #e5e7eb',
         }}
       >
-        <div
-          className="flex items-center px-4 border-b border-white/[0.04]"
-          style={{ height: 60 }}
-        >
+        <div className="flex items-center px-4 border-b border-gray-100" style={{ height: 60 }}>
           {collapsed ? (
-            <div className="w-9 h-9 rounded-xl flex items-center justify-center mx-auto" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(139,92,246,0.1))' }}>
+            <div className="w-9 h-9 rounded-xl flex items-center justify-center mx-auto bg-violet-50">
               <img src="/logo.webp" alt="S" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
             </div>
           ) : (
             <div className="flex items-center gap-3">
-              <div className="relative">
-                <div className="absolute -inset-1 rounded-xl blur-md opacity-40" style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }} />
-                <div className="relative w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.25), rgba(139,92,246,0.15))' }}>
-                  <img src="/logo.webp" alt="Syrabit.ai" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
-                </div>
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-violet-50">
+                <img src="/logo.webp" alt="Syrabit.ai" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
               </div>
               <div>
-                <p className="text-sm font-bold text-white tracking-tight" style={{ lineHeight: 1.2 }}>Syrabit.ai</p>
-                <p className="text-[9px] font-semibold tracking-[0.15em] flex items-center gap-1" style={{ color: 'rgba(167,139,250,0.7)' }}>
-                  CONTROL CENTER
+                <p className="text-sm font-bold text-gray-900 tracking-tight" style={{ lineHeight: 1.2 }}>Syrabit.ai</p>
+                <p className="text-[9px] font-semibold tracking-[0.15em] text-violet-500 uppercase">
+                  Control Center
                 </p>
               </div>
             </div>
@@ -241,48 +229,37 @@ export default function AdminPage() {
               <div key={group}>
                 {label && !collapsed && (
                   <div className="flex items-center gap-2 px-3 py-2 mt-3 mb-0.5">
-                    <div className="h-px flex-1" style={{ background: 'linear-gradient(90deg, rgba(139,92,246,0.15), transparent)' }} />
-                    <p className="text-[9px] font-bold tracking-[0.15em] flex-shrink-0"
-                      style={{ color: 'rgba(167,139,250,0.35)' }}>
+                    <div className="h-px flex-1 bg-gray-100" />
+                    <p className="text-[9px] font-bold tracking-[0.15em] text-gray-400 flex-shrink-0">
                       {label}
                     </p>
-                    <div className="h-px flex-1" style={{ background: 'linear-gradient(90deg, transparent, rgba(139,92,246,0.15))' }} />
+                    <div className="h-px flex-1 bg-gray-100" />
                   </div>
                 )}
-                {collapsed && label && <div className="h-px mx-3 my-2" style={{ background: 'rgba(139,92,246,0.1)' }} />}
+                {collapsed && label && <div className="h-px mx-3 my-2 bg-gray-100" />}
                 {groupSections.map(({ id, icon: Icon, label: sectionLabel }) => {
                   const isActive = activeSection === id;
                   return (
                     <button
                       key={id}
                       onClick={() => setActiveSection(id)}
-                      className="relative w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 text-left group"
-                      style={{
-                        background: isActive
-                          ? 'linear-gradient(135deg, rgba(124,58,237,0.18) 0%, rgba(139,92,246,0.08) 100%)'
-                          : 'transparent',
-                        color: isActive ? 'rgb(196,181,253)' : 'rgba(255,255,255,0.35)',
-                        fontWeight: isActive ? 600 : 400,
-                      }}
+                      className={`relative w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all duration-200 text-left group ${
+                        isActive
+                          ? 'bg-violet-50 text-violet-700 font-semibold'
+                          : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
+                      }`}
                       data-testid={`admin-nav-${id}`}
                     >
                       {isActive && (
-                        <div
-                          className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
-                          style={{ background: 'linear-gradient(180deg, #a78bfa, #7c3aed)' }}
-                        />
+                        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full bg-violet-500" />
                       )}
-                      <div
-                        className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-all duration-200"
-                        style={{
-                          background: isActive ? 'rgba(124,58,237,0.2)' : 'transparent',
-                        }}
-                      >
-                        <Icon size={15} className="flex-shrink-0 transition-colors duration-200"
-                          style={{ color: isActive ? '#a78bfa' : 'inherit' }} />
+                      <div className={`w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-all duration-200 ${
+                        isActive ? 'bg-violet-100' : ''
+                      }`}>
+                        <Icon size={15} className={`flex-shrink-0 ${isActive ? 'text-violet-600' : ''}`} />
                       </div>
                       {!collapsed && (
-                        <span className="text-[13px] truncate group-hover:text-white/60 transition-colors duration-200">{sectionLabel}</span>
+                        <span className="text-[13px] truncate">{sectionLabel}</span>
                       )}
                     </button>
                   );
@@ -292,36 +269,34 @@ export default function AdminPage() {
           })}
         </nav>
 
-        <div className="border-t border-white/[0.04] px-2.5 py-3 space-y-1">
+        <div className="border-t border-gray-100 px-2.5 py-3 space-y-1">
           {!collapsed && (
-            <div className="flex items-center gap-2.5 px-3 py-2 mb-1 rounded-xl" style={{ background: 'rgba(124,58,237,0.06)' }}>
-              <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                style={{ background: 'linear-gradient(135deg, #7c3aed, #6d28d9)' }}>
+            <div className="flex items-center gap-2.5 px-3 py-2 mb-1 rounded-xl bg-violet-50">
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 bg-violet-600">
                 <span className="text-xs font-bold text-white">{adminName?.charAt(0)?.toUpperCase() || 'A'}</span>
               </div>
               <div className="min-w-0 flex-1">
-                <p className="text-xs text-white/70 font-medium truncate">{adminName}</p>
-                <p className="text-[10px] text-white/25 truncate">{adminEmail || 'Active session'}</p>
+                <p className="text-xs text-gray-700 font-medium truncate">{adminName}</p>
+                <p className="text-[10px] text-gray-400 truncate">{adminEmail || 'Active session'}</p>
               </div>
             </div>
           )}
           <Link to="/library">
-            <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-white/25 hover:text-white/50 hover:bg-white/[0.03] transition-all duration-200">
+            <button className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-all duration-200">
               <ExternalLink size={13} className="flex-shrink-0" />
               {!collapsed && <span>Student View</span>}
             </button>
           </Link>
           <button
             onClick={handleLogout}
-            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs transition-all duration-200 hover:bg-red-500/[0.06]"
-            style={{ color: 'rgba(248,113,113,0.6)' }}
+            className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs text-red-400 hover:text-red-600 hover:bg-red-50 transition-all duration-200"
           >
             <LogOut size={13} className="flex-shrink-0" />
             {!collapsed && <span>Logout</span>}
           </button>
           <button
             onClick={() => setCollapsed(!collapsed)}
-            className="w-full flex items-center justify-center py-1.5 rounded-xl text-white/15 hover:text-white/30 hover:bg-white/[0.02] transition-all duration-200"
+            className="w-full flex items-center justify-center py-1.5 rounded-xl text-gray-300 hover:text-gray-500 hover:bg-gray-50 transition-all duration-200"
           >
             {collapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
           </button>
@@ -330,26 +305,19 @@ export default function AdminPage() {
 
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <header
-          className="flex items-center justify-between px-6 border-b flex-shrink-0 z-10"
-          style={{
-            height: 60,
-            background: 'rgba(8,8,20,0.80)',
-            backdropFilter: 'blur(24px)',
-            borderColor: 'rgba(255,255,255,0.04)',
-          }}
+          className="flex items-center justify-between px-6 border-b border-gray-200 flex-shrink-0 z-10 bg-white"
+          style={{ height: 60 }}
         >
           <div className="flex items-center gap-3">
-            <h1 className="text-sm font-semibold text-white/90">{activeLabel}</h1>
-            <span className="text-white/10">|</span>
-            <span className="text-xs text-white/20 flex items-center gap-1.5">
-              <img src="/logo.webp" alt="" width="14" height="14" className="w-3.5 h-3.5 rounded-sm inline-block opacity-50" />
+            <h1 className="text-sm font-semibold text-gray-900">{activeLabel}</h1>
+            <span className="text-gray-200">|</span>
+            <span className="text-xs text-gray-400 flex items-center gap-1.5">
+              <img src="/logo.webp" alt="" width="14" height="14" className="w-3.5 h-3.5 rounded-sm inline-block opacity-60" />
               Syrabit.ai
             </span>
           </div>
 
-          <div
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium border ${sc.text} ${sc.border} ${sc.bg}`}
-          >
+          <div className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium border ${sc.text} ${sc.border} ${sc.bg}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${sc.dot} animate-pulse`} />
             <span className="text-[11px]">{sc.label}</span>
           </div>
@@ -358,8 +326,8 @@ export default function AdminPage() {
         <main className={`flex-1 overflow-hidden flex flex-col ${activeSection === 'contenthub' ? '' : 'overflow-y-auto p-3 sm:p-4 md:p-6'}`}>
           <Suspense fallback={
             <div className="flex items-center justify-center h-40 gap-3">
-              <Loader2 className="w-5 h-5 animate-spin text-violet-400/60" />
-              <span className="text-sm text-white/20">Loading section...</span>
+              <Loader2 className="w-5 h-5 animate-spin text-violet-500" />
+              <span className="text-sm text-gray-400">Loading section...</span>
             </div>
           }>
             <ActiveComponent

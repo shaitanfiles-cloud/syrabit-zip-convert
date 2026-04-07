@@ -26,9 +26,9 @@ export default function SeoPagesTab({
       <div
         className="rounded-2xl p-5 relative overflow-hidden"
         style={{
-          background: 'rgba(15,15,30,0.6)',
-          border: '1px solid rgba(255,255,255,0.06)',
-          backdropFilter: 'blur(12px)',
+          background: '#ffffff',
+          border: '1px solid #e5e7eb',
+          
         }}
       >
         <div className="absolute inset-0 pointer-events-none" style={{
@@ -40,14 +40,14 @@ export default function SeoPagesTab({
               <Globe size={14} className="text-blue-400" />
             </div>
             <div className="flex-1">
-              <h3 className="text-white/80 font-medium text-sm">Google Analytics 4</h3>
-              <p className="text-white/25 text-xs">Real visitor & page data from GA4</p>
+              <h3 className="text-gray-700 font-medium text-sm">Google Analytics 4</h3>
+              <p className="text-gray-300 text-xs">Real visitor & page data from GA4</p>
             </div>
             {ga4Status && (
               <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${
-                ga4Status.connected ? 'text-emerald-400' : 'text-white/30'
+                ga4Status.connected ? 'text-emerald-400' : 'text-gray-400'
               }`} style={{
-                background: ga4Status.connected ? 'rgba(16,185,129,0.12)' : 'rgba(255,255,255,0.04)',
+                background: ga4Status.connected ? 'rgba(16,185,129,0.12)' : '#f9fafb',
               }}>
                 {ga4Status.connected
                   ? <><CheckCircle size={11} /> Connected</>
@@ -58,11 +58,11 @@ export default function SeoPagesTab({
 
           {ga4Status && !ga4Status.connected && (
             <div className="space-y-3">
-              <p className="text-white/40 text-sm">
+              <p className="text-gray-400 text-sm">
                 Connect GA4 to pull real visitor counts, page views, and top pages directly into this dashboard.
               </p>
-              <div className="rounded-xl p-3 space-y-1.5 text-xs text-white/30" style={{ background: 'rgba(255,255,255,0.03)' }}>
-                <p className="font-medium text-white/50 mb-1">Setup steps:</p>
+              <div className="rounded-xl p-3 space-y-1.5 text-xs text-gray-400" style={{ background: '#f9fafb' }}>
+                <p className="font-medium text-gray-500 mb-1">Setup steps:</p>
                 <p>1. Add <code className="text-violet-300">GA4_REFRESH_TOKEN</code> secret after connecting below</p>
                 <p>2. Your Property ID is already saved: <code className="text-emerald-300">{ga4Status.property_id || 'not set'}</code></p>
                 <p>3. OAuth credentials: {ga4Status.client_id_set ? '✓ Client ID' : '✗ Client ID'} · {ga4Status.client_secret_set ? '✓ Secret' : '✗ Secret'}</p>
@@ -77,10 +77,10 @@ export default function SeoPagesTab({
 
           {ga4Status?.connected && (
             <div className="flex items-center gap-3 flex-wrap">
-              <p className="text-white/40 text-sm flex-1">Property <code className="text-emerald-300">{ga4Status.property_id}</code> · Data flows automatically</p>
+              <p className="text-gray-400 text-sm flex-1">Property <code className="text-emerald-300">{ga4Status.property_id}</code> · Data flows automatically</p>
               <button onClick={handleGA4Test} disabled={ga4Testing}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-white/40 hover:text-white transition-all"
-                style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs text-gray-400 hover:text-gray-900 transition-all"
+                style={{ background: '#f9fafb', border: '1px solid #e5e7eb' }}>
                 {ga4Testing ? <Loader2 size={11} className="animate-spin" /> : <BarChart2 size={11} />} Test Connection
               </button>
             </div>
@@ -117,12 +117,12 @@ export default function SeoPagesTab({
         <div className="space-y-1.5">
           {(data.top_pages || []).map((pg, i) => (
             <div key={i} className="flex items-center gap-2 px-2.5 py-2 rounded-xl transition-colors"
-              style={{ background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent' }}>
-              <span className="text-white/15 text-xs w-5 text-right">{i + 1}</span>
+              style={{ background: i % 2 === 0 ? '#f9fafb' : 'transparent' }}>
+              <span className="text-gray-200 text-xs w-5 text-right">{i + 1}</span>
               <FileText size={11} className="text-violet-400 flex-shrink-0" />
-              <span className="text-white/60 text-xs flex-1 truncate font-mono">{pg.path}</span>
-              <span className="text-white/25 text-xs flex-shrink-0">{pg.views} views</span>
-              <span className="text-white/15 text-xs flex-shrink-0">{pg.unique_visitors} uniq</span>
+              <span className="text-gray-500 text-xs flex-1 truncate font-mono">{pg.path}</span>
+              <span className="text-gray-300 text-xs flex-shrink-0">{pg.views} views</span>
+              <span className="text-gray-200 text-xs flex-shrink-0">{pg.unique_visitors} uniq</span>
             </div>
           ))}
         </div>
@@ -134,8 +134,8 @@ export default function SeoPagesTab({
           {(data.top_referrers || []).map((ref, i) => (
             <div key={i} className="flex items-center gap-2">
               <Globe size={11} className="text-cyan-400 flex-shrink-0" />
-              <span className="text-white/60 text-sm flex-1 truncate">{ref.source || 'Direct'}</span>
-              <span className="text-xs text-white/25">{ref.count} visits</span>
+              <span className="text-gray-500 text-sm flex-1 truncate">{ref.source || 'Direct'}</span>
+              <span className="text-xs text-gray-300">{ref.count} visits</span>
             </div>
           ))}
         </div>

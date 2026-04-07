@@ -66,10 +66,10 @@ export default function TopicSuggesterCard({ token, onNavigate }) {
     <div style={card}>
       <div className="flex items-center gap-2 mb-4">
         <Lightbulb size={16} color="#a855f7" />
-        <span style={{ fontWeight: 700, color: '#e8e8e8' }}>Topic Suggester</span>
+        <span style={{ fontWeight: 700, color: '#111827' }}>Topic Suggester</span>
         <Badge label="Gap Analysis" color="#a855f7" />
       </div>
-      <p style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)', marginBottom: optionsError ? 8 : 12 }}>
+      <p style={{ fontSize: 12, color: '#6b7280', marginBottom: optionsError ? 8 : 12 }}>
         AI finds high-search-volume topics you haven't covered yet. Add them to your SEO pipeline.
       </p>
       {optionsError && (
@@ -79,11 +79,11 @@ export default function TopicSuggesterCard({ token, onNavigate }) {
       )}
       <div className="flex gap-2 mb-4">
         <select value={subject} onChange={e => setSubject(e.target.value)}
-          style={{ flex: 1, background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px', color: '#e8e8e8', fontSize: 13 }}>
+          style={{ flex: 1, background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', color: '#111827', fontSize: 13 }}>
           {subjects.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
         <select value={classN} onChange={e => setClassN(e.target.value)}
-          style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 10, padding: '8px 12px', color: '#e8e8e8', fontSize: 13 }}>
+          style={{ background: '#e5e7eb', border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 12px', color: '#111827', fontSize: 13 }}>
           {classes.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <button onClick={run} disabled={loading} style={btn('#a855f7')}>
@@ -95,23 +95,23 @@ export default function TopicSuggesterCard({ token, onNavigate }) {
         <div>
           <div style={{ maxHeight: 300, overflowY: 'auto' }}>
             {results.map((r, i) => (
-              <div key={i} style={{ padding: '10px 14px', borderBottom: '1px solid rgba(255,255,255,0.05)', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <div key={i} style={{ padding: '10px 14px', borderBottom: '1px solid #f3f4f6', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                 <div style={{ marginTop: 2 }}>
                   <Badge label={r.priority || 'medium'} color={r.priority === 'high' ? '#ef4444' : '#f59e0b'} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: '#e8e8e8' }}>{r.title}</div>
-                  <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.45)', marginTop: 2 }}>{r.reason}</div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#111827' }}>{r.title}</div>
+                  <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{r.reason}</div>
                 </div>
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 700, color: '#a855f7' }}>~{r.search_volume_estimate?.toLocaleString()}</div>
-                  <div style={{ fontSize: 10, color: 'rgba(232,232,232,0.35)' }}>searches/mo</div>
+                  <div style={{ fontSize: 10, color: '#9ca3af' }}>searches/mo</div>
                 </div>
               </div>
             ))}
           </div>
           {onNavigate && (
-            <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ display: 'flex', gap: 8, marginTop: 12, paddingTop: 12, borderTop: '1px solid #e5e7eb' }}>
               <button
                 onClick={async () => {
                   if (!token) { toast.error('Not authenticated'); return; }

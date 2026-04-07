@@ -10,18 +10,14 @@ import { API_BASE } from '@/utils/api';
 
 function InsightCard({ icon: Icon, title, value, color, children }) {
   return (
-    <div className="rounded-2xl p-5" style={{
-      background: 'rgba(15,15,30,0.6)',
-      border: '1px solid rgba(255,255,255,0.06)',
-      backdropFilter: 'blur(12px)',
-    }}>
+    <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
       <div className="flex items-center gap-2 mb-4">
-        <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}18` }}>
+        <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${color}15` }}>
           <Icon size={16} style={{ color }} />
         </div>
         <div>
-          <p className="text-white font-semibold text-sm">{title}</p>
-          {value !== undefined && <p className="text-white/25 text-xs">{value}</p>}
+          <p className="text-gray-900 font-semibold text-sm">{title}</p>
+          {value !== undefined && <p className="text-gray-400 text-xs">{value}</p>}
         </div>
       </div>
       {children}
@@ -30,11 +26,11 @@ function InsightCard({ icon: Icon, title, value, color, children }) {
 }
 
 const SEVERITY_STYLE = {
-  critical: { bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)', text: '#f87171', icon: XCircle },
-  high:     { bg: 'rgba(239,68,68,0.06)', border: 'rgba(239,68,68,0.18)', text: '#fca5a5', icon: AlertCircle },
-  medium:   { bg: 'rgba(245,158,11,0.07)', border: 'rgba(245,158,11,0.20)', text: '#fcd34d', icon: AlertTriangle },
-  warning:  { bg: 'rgba(245,158,11,0.05)', border: 'rgba(245,158,11,0.15)', text: '#fde68a', icon: Info },
-  info:     { bg: 'rgba(99,102,241,0.05)', border: 'rgba(99,102,241,0.15)', text: '#a5b4fc', icon: Info },
+  critical: { bg: '#fef2f2', border: '#fecaca', text: '#dc2626', icon: XCircle },
+  high:     { bg: '#fef2f2', border: '#fecaca', text: '#ef4444', icon: AlertCircle },
+  medium:   { bg: '#fffbeb', border: '#fde68a', text: '#d97706', icon: AlertTriangle },
+  warning:  { bg: '#fffbeb', border: '#fef3c7', text: '#f59e0b', icon: Info },
+  info:     { bg: '#eef2ff', border: '#c7d2fe', text: '#6366f1', icon: Info },
 };
 
 function BlockerItem({ blocker }) {
@@ -49,18 +45,18 @@ function BlockerItem({ blocker }) {
           {blocker.type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
           {blocker.count > 0 && <span className="ml-1 opacity-70">({blocker.count})</span>}
         </p>
-        <p className="text-xs text-white/30 mt-0.5 leading-relaxed">{blocker.message}</p>
+        <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{blocker.message}</p>
       </div>
     </div>
   );
 }
 
 const STATUS_PILL = {
-  ok:       { label: 'Healthy', bg: 'rgba(16,185,129,0.12)', color: '#6ee7b7', border: 'rgba(16,185,129,0.25)' },
-  warning:  { label: 'Warning', bg: 'rgba(245,158,11,0.12)', color: '#fcd34d', border: 'rgba(245,158,11,0.25)' },
-  degraded: { label: 'Degraded', bg: 'rgba(239,68,68,0.10)', color: '#f87171', border: 'rgba(239,68,68,0.22)' },
-  critical: { label: 'Critical', bg: 'rgba(239,68,68,0.14)', color: '#fca5a5', border: 'rgba(239,68,68,0.30)' },
-  error:    { label: 'Error', bg: 'rgba(239,68,68,0.14)', color: '#fca5a5', border: 'rgba(239,68,68,0.30)' },
+  ok:       { label: 'Healthy', bg: '#ecfdf5', color: '#059669', border: '#a7f3d0' },
+  warning:  { label: 'Warning', bg: '#fffbeb', color: '#d97706', border: '#fde68a' },
+  degraded: { label: 'Degraded', bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  critical: { label: 'Critical', bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
+  error:    { label: 'Error', bg: '#fef2f2', color: '#dc2626', border: '#fecaca' },
 };
 
 export default function AdminAutomation({ adminToken }) {
@@ -108,7 +104,7 @@ export default function AdminAutomation({ adminToken }) {
 
   if (loading) return (
     <div className="flex justify-center p-10">
-      <Loader2 size={24} className="animate-spin text-violet-400/60" />
+      <Loader2 size={24} className="animate-spin text-violet-500" />
     </div>
   );
 
@@ -124,26 +120,24 @@ export default function AdminAutomation({ adminToken }) {
     <div className="p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-white/90 font-bold text-lg flex items-center gap-2">
-            <Zap size={18} className="text-amber-400" />
+          <h2 className="text-gray-900 font-bold text-lg flex items-center gap-2">
+            <Zap size={18} className="text-amber-500" />
             Automation Engine
           </h2>
-          <p className="text-white/30 text-sm mt-1">AI-powered content insights, gap detection, and auto-generation</p>
+          <p className="text-gray-500 text-sm mt-1">AI-powered content insights, gap detection, and auto-generation</p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleAutoGenerate}
             disabled={generating || gaps.length === 0}
-            className="flex items-center gap-2 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-sm font-medium transition-all hover:opacity-90"
-            style={{ background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 2px 12px rgba(124,58,237,0.3)' }}
+            className="flex items-center gap-2 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-sm font-medium transition-all hover:opacity-90 bg-violet-600 shadow-sm"
           >
             {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
             Auto-Generate Topics
           </button>
           <button
             onClick={() => { load(); loadScraperStatus(); }}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs text-white/30 hover:text-white transition-colors"
-            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs text-gray-500 hover:text-gray-700 transition-colors bg-white border border-gray-200 shadow-sm"
           >
             <RefreshCw size={12} />
           </button>
@@ -151,14 +145,14 @@ export default function AdminAutomation({ adminToken }) {
       </div>
 
       {generated && (
-        <div className="rounded-2xl p-4" style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.2)' }}>
+        <div className="rounded-2xl p-4 bg-emerald-50 border border-emerald-200">
           <div className="flex items-center gap-2 mb-2">
-            <CheckCircle size={14} className="text-emerald-400" />
-            <span className="text-emerald-300 text-sm font-medium">Generated {generated.count} new topics as drafts</span>
+            <CheckCircle size={14} className="text-emerald-500" />
+            <span className="text-emerald-700 text-sm font-medium">Generated {generated.count} new topics as drafts</span>
           </div>
           <div className="space-y-1">
             {generated.generated?.map((g, i) => (
-              <p key={i} className="text-white/30 text-xs">• {g.title} <code className="text-white/20">/{g.slug}</code></p>
+              <p key={i} className="text-gray-500 text-xs">• {g.title} <code className="text-gray-400">/{g.slug}</code></p>
             ))}
           </div>
         </div>
@@ -167,17 +161,13 @@ export default function AdminAutomation({ adminToken }) {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {[
           { value: data?.total_seo_topics || 0, label: 'Total SEO Topics', color: '#a78bfa' },
-          { value: data?.published_count || 0, label: 'Published Pages', color: '#6ee7b7' },
-          { value: gaps.length, label: 'Content Gaps', color: '#fbbf24' },
+          { value: data?.published_count || 0, label: 'Published Pages', color: '#10b981' },
+          { value: gaps.length, label: 'Content Gaps', color: '#f59e0b' },
           { value: data?.promotable_chats || 0, label: 'Promotable Chats', color: '#60a5fa' },
         ].map((s, i) => (
-          <div key={i} className="rounded-2xl p-4 text-center" style={{
-            background: 'rgba(15,15,30,0.6)',
-            border: '1px solid rgba(255,255,255,0.06)',
-            backdropFilter: 'blur(12px)',
-          }}>
+          <div key={i} className="rounded-2xl p-4 text-center bg-white border border-gray-200 shadow-sm">
             <p className="text-2xl font-bold" style={{ color: s.color }}>{s.value}</p>
-            <p className="text-white/25 text-xs mt-1">{s.label}</p>
+            <p className="text-gray-400 text-xs mt-1">{s.label}</p>
           </div>
         ))}
       </div>
@@ -190,14 +180,14 @@ export default function AdminAutomation({ adminToken }) {
           color="#f59e0b"
         >
           {gaps.length === 0 ? (
-            <p className="text-white/20 text-sm text-center py-4">No content gaps detected</p>
+            <p className="text-gray-400 text-sm text-center py-4">No content gaps detected</p>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {gaps.map((gap, i) => (
-                <div key={i} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
-                  <AlertTriangle size={12} className="text-amber-400 flex-shrink-0" />
-                  <span className="text-white/50 text-xs flex-1 truncate">{gap.query}</span>
-                  <span className="text-white/25 text-xs flex-shrink-0">{gap.count}×</span>
+                <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 border border-gray-100">
+                  <AlertTriangle size={12} className="text-amber-500 flex-shrink-0" />
+                  <span className="text-gray-600 text-xs flex-1 truncate">{gap.query}</span>
+                  <span className="text-gray-400 text-xs flex-shrink-0">{gap.count}×</span>
                 </div>
               ))}
             </div>
@@ -211,14 +201,14 @@ export default function AdminAutomation({ adminToken }) {
           color="#ef4444"
         >
           {lowContent.length === 0 ? (
-            <p className="text-white/20 text-sm text-center py-4">All subjects have adequate content</p>
+            <p className="text-gray-400 text-sm text-center py-4">All subjects have adequate content</p>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {lowContent.map((subj, i) => (
-                <div key={i} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
-                  <BookOpen size={12} className="text-red-400 flex-shrink-0" />
-                  <span className="text-white/50 text-xs flex-1 truncate">{subj.name}</span>
-                  <span className="text-white/25 text-xs flex-shrink-0">{subj.seo_pages} pages</span>
+                <div key={i} className="flex items-center gap-2 p-2 rounded-lg bg-gray-50 border border-gray-100">
+                  <BookOpen size={12} className="text-red-500 flex-shrink-0" />
+                  <span className="text-gray-600 text-xs flex-1 truncate">{subj.name}</span>
+                  <span className="text-gray-400 text-xs flex-shrink-0">{subj.seo_pages} pages</span>
                 </div>
               ))}
             </div>
@@ -226,18 +216,14 @@ export default function AdminAutomation({ adminToken }) {
         </InsightCard>
       </div>
 
-      <div className="rounded-2xl p-5" style={{
-        background: 'rgba(15,15,30,0.6)',
-        border: '1px solid rgba(255,255,255,0.06)',
-        backdropFilter: 'blur(12px)',
-      }}>
+      <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            <Shield size={16} className="text-violet-400" />
-            <h3 className="text-white font-semibold text-sm">Personalized CMS Scraper</h3>
+            <Shield size={16} className="text-violet-500" />
+            <h3 className="text-gray-900 font-semibold text-sm">Personalized CMS Scraper</h3>
           </div>
           {scraperLoading ? (
-            <Loader2 size={13} className="animate-spin text-white/25" />
+            <Loader2 size={13} className="animate-spin text-gray-400" />
           ) : (
             <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold" style={{ background: scraperPill.bg, color: scraperPill.color, border: `1px solid ${scraperPill.border}` }}>
               {scraperPill.label}
@@ -247,56 +233,56 @@ export default function AdminAutomation({ adminToken }) {
 
         {scraperLoading ? (
           <div className="flex justify-center py-4">
-            <Loader2 size={20} className="animate-spin text-white/20" />
+            <Loader2 size={20} className="animate-spin text-gray-400" />
           </div>
         ) : (
           <>
             <div className="grid grid-cols-3 gap-2 mb-2">
               {[
                 { label: 'Total Plans', value: scraperStats.total_plans ?? '—', color: '#a78bfa' },
-                { label: 'Published', value: scraperStats.published_plans ?? '—', color: '#6ee7b7' },
-                { label: 'Errors', value: scraperStats.error_plans ?? '—', color: scraperStats.error_plans > 0 ? '#f87171' : '#64748b' },
+                { label: 'Published', value: scraperStats.published_plans ?? '—', color: '#10b981' },
+                { label: 'Errors', value: scraperStats.error_plans ?? '—', color: scraperStats.error_plans > 0 ? '#ef4444' : '#64748b' },
               ].map((s, i) => (
-                <div key={i} className="rounded-lg p-2.5 text-center" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)' }}>
+                <div key={i} className="rounded-lg p-2.5 text-center bg-gray-50 border border-gray-100">
                   <p className="text-base font-bold" style={{ color: s.color }}>{s.value}</p>
-                  <p className="text-[10px] text-white/25 mt-0.5">{s.label}</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">{s.label}</p>
                 </div>
               ))}
             </div>
             {(scraperStats.paid_users !== undefined || scraperStats.free_users !== undefined) && (
               <div className="grid grid-cols-2 gap-2 mb-4">
-                <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(16,185,129,0.04)', border: '1px solid rgba(16,185,129,0.12)' }}>
-                  <p className="text-sm font-bold text-emerald-400">{scraperStats.paid_users ?? '—'}</p>
-                  <p className="text-[10px] text-white/25">Paid Users (can access)</p>
+                <div className="rounded-lg p-2 text-center bg-emerald-50 border border-emerald-200">
+                  <p className="text-sm font-bold text-emerald-600">{scraperStats.paid_users ?? '—'}</p>
+                  <p className="text-[10px] text-gray-400">Paid Users (can access)</p>
                 </div>
-                <div className="rounded-lg p-2 text-center" style={{ background: 'rgba(148,163,184,0.04)', border: '1px solid rgba(148,163,184,0.10)' }}>
-                  <p className="text-sm font-bold text-white/40">{scraperStats.free_users ?? '—'}</p>
-                  <p className="text-[10px] text-white/25">Free Users (402 gated)</p>
+                <div className="rounded-lg p-2 text-center bg-gray-50 border border-gray-200">
+                  <p className="text-sm font-bold text-gray-500">{scraperStats.free_users ?? '—'}</p>
+                  <p className="text-[10px] text-gray-400">Free Users (402 gated)</p>
                 </div>
               </div>
             )}
 
             {scraperBlockers.length === 0 ? (
-              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg" style={{ background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)' }}>
-                <CheckCircle size={13} className="text-emerald-400 flex-shrink-0" />
-                <span className="text-xs text-emerald-300">No scraper blockers detected — CMS pipeline is healthy</span>
+              <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-emerald-50 border border-emerald-200">
+                <CheckCircle size={13} className="text-emerald-500 flex-shrink-0" />
+                <span className="text-xs text-emerald-700">No scraper blockers detected — CMS pipeline is healthy</span>
               </div>
             ) : (
               <div className="space-y-2">
-                <p className="text-xs text-white/25 font-medium uppercase tracking-wide mb-1">Detected Blockers</p>
+                <p className="text-xs text-gray-500 font-medium uppercase tracking-wide mb-1">Detected Blockers</p>
                 {scraperBlockers.map((b, i) => <BlockerItem key={i} blocker={b} />)}
               </div>
             )}
 
             {recentPlans.length > 0 && (
               <div className="mt-4">
-                <p className="text-[10px] text-white/25 font-semibold uppercase tracking-widest mb-2">Recent Plans</p>
+                <p className="text-[10px] text-gray-400 font-semibold uppercase tracking-widest mb-2">Recent Plans</p>
                 <div className="space-y-1.5 max-h-36 overflow-y-auto">
                   {recentPlans.map((p, i) => (
-                    <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)' }}>
-                      <FileText size={11} className="text-white/25 flex-shrink-0" />
-                      <span className="text-xs text-white/50 flex-1 truncate">{p.title || p.id}</span>
-                      <span className="text-[10px] text-white/20 flex-shrink-0">{p.word_count}w</span>
+                    <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-gray-50">
+                      <FileText size={11} className="text-gray-400 flex-shrink-0" />
+                      <span className="text-xs text-gray-600 flex-1 truncate">{p.title || p.id}</span>
+                      <span className="text-[10px] text-gray-400 flex-shrink-0">{p.word_count}w</span>
                     </div>
                   ))}
                 </div>
@@ -306,14 +292,10 @@ export default function AdminAutomation({ adminToken }) {
         )}
       </div>
 
-      <div className="rounded-2xl p-5" style={{
-        background: 'rgba(15,15,30,0.6)',
-        border: '1px solid rgba(255,255,255,0.06)',
-        backdropFilter: 'blur(12px)',
-      }}>
+      <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
         <div className="flex items-center gap-2 mb-4">
-          <Target size={16} className="text-violet-400" />
-          <h3 className="text-white font-semibold text-sm">Automation Rules</h3>
+          <Target size={16} className="text-violet-500" />
+          <h3 className="text-gray-900 font-semibold text-sm">Automation Rules</h3>
         </div>
         <div className="space-y-3">
           {[
@@ -323,13 +305,13 @@ export default function AdminAutomation({ adminToken }) {
             { label: 'Auto-generate SEO topics from gaps', status: 'manual', icon: Sparkles },
             { label: 'Personalized CMS scraper blocker detection', status: 'active', icon: Shield },
           ].map((rule, i) => (
-            <div key={i} className="flex items-center gap-3 p-3 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)' }}>
-              <rule.icon size={14} className="text-white/30" />
-              <span className="text-white/50 text-sm flex-1">{rule.label}</span>
+            <div key={i} className="flex items-center gap-3 p-3 rounded-lg bg-gray-50 border border-gray-100">
+              <rule.icon size={14} className="text-gray-400" />
+              <span className="text-gray-600 text-sm flex-1">{rule.label}</span>
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                 rule.status === 'active'
-                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                  : 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
+                  ? 'bg-emerald-50 text-emerald-600 border border-emerald-200'
+                  : 'bg-amber-50 text-amber-600 border border-amber-200'
               }`}>
                 {rule.status === 'active' ? 'Active' : 'Manual'}
               </span>

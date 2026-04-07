@@ -4,6 +4,8 @@ import { toast } from 'sonner';
 import axios from 'axios';
 import { API, authHeaders } from '@/utils/adminHelpers';
 
+const selectClass = "h-10 rounded-xl bg-gray-50 border border-gray-200 text-sm text-gray-900 px-3 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-500/20";
+
 export default function BlogPublishWizard({ adminToken, hubContext, onHubContext }) {
   const [boards, setBoards] = useState([]);
   const [classes, setClasses] = useState([]);
@@ -64,10 +66,10 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
   return (
     <div className="p-6 max-w-2xl mx-auto space-y-6">
       <div>
-        <h2 className="text-lg font-bold text-white flex items-center gap-2">
-          <Globe size={18} className="text-violet-400" /> One-Click Publish
+        <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+          <Globe size={18} className="text-violet-500" /> One-Click Publish
         </h2>
-        <p className="text-sm text-white/40 mt-1">
+        <p className="text-sm text-gray-400 mt-1">
           Select a subject and publish all chapters as a merged blog post.
         </p>
       </div>
@@ -76,7 +78,7 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
         <select
           value={selBoard}
           onChange={e => { setSelBoard(e.target.value); setSelClass(''); setSelStream(''); setSelSubject(''); setLastResult(null); }}
-          className="h-10 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 outline-none focus:border-violet-500"
+          className={selectClass}
         >
           <option value="">Board</option>
           {boards.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
@@ -84,7 +86,7 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
         <select
           value={selClass}
           onChange={e => { setSelClass(e.target.value); setSelStream(''); setSelSubject(''); setLastResult(null); }}
-          className="h-10 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 outline-none focus:border-violet-500"
+          className={selectClass}
         >
           <option value="">Class</option>
           {filteredClasses.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -92,7 +94,7 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
         <select
           value={selStream}
           onChange={e => { setSelStream(e.target.value); setSelSubject(''); setLastResult(null); }}
-          className="h-10 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 outline-none focus:border-violet-500"
+          className={selectClass}
         >
           <option value="">Stream</option>
           {filteredStreams.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -100,7 +102,7 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
         <select
           value={selSubject}
           onChange={e => { setSelSubject(e.target.value); setLastResult(null); }}
-          className="h-10 rounded-xl bg-white/5 border border-white/10 text-sm text-white px-3 outline-none focus:border-violet-500"
+          className={selectClass}
         >
           <option value="">Subject</option>
           {filteredSubjects.map(s => <option key={s.id} value={s.id}>{s.icon} {s.name}</option>)}
@@ -108,22 +110,21 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
       </div>
 
       {selSubject && selectedSubject && (
-        <div className="rounded-xl border border-white/10 p-4 space-y-3" style={{ background: 'rgba(255,255,255,0.02)' }}>
+        <div className="rounded-xl border border-gray-200 p-4 space-y-3 bg-white shadow-sm">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-violet-500/10 flex items-center justify-center text-lg">
+            <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center text-lg">
               {selectedSubject.icon || '📚'}
             </div>
             <div>
-              <p className="text-sm font-medium text-white">{selectedSubject.name}</p>
-              <p className="text-xs text-white/40">{selectedSubject.description || 'No description'}</p>
+              <p className="text-sm font-medium text-gray-900">{selectedSubject.name}</p>
+              <p className="text-xs text-gray-400">{selectedSubject.description || 'No description'}</p>
             </div>
           </div>
 
           <button
             onClick={handlePublish}
             disabled={publishing}
-            className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50"
-            style={{ background: 'linear-gradient(135deg, #7c3aed, #6d28d9)' }}
+            className="w-full h-11 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90 active:scale-[0.98] disabled:opacity-50 bg-violet-600 hover:bg-violet-700"
           >
             {publishing ? (
               <><Loader2 size={14} className="animate-spin" /> Publishing...</>
@@ -138,27 +139,27 @@ export default function BlogPublishWizard({ adminToken, hubContext, onHubContext
         <div
           className="rounded-xl border p-4"
           style={{
-            background: lastResult.success ? 'rgba(16,185,129,0.05)' : 'rgba(239,68,68,0.05)',
-            borderColor: lastResult.success ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)',
+            background: lastResult.success ? '#ecfdf5' : '#fef2f2',
+            borderColor: lastResult.success ? '#a7f3d0' : '#fecaca',
           }}
         >
           <div className="flex items-center gap-2">
             {lastResult.success ? (
-              <CheckCircle2 size={16} className="text-emerald-400" />
+              <CheckCircle2 size={16} className="text-emerald-500" />
             ) : (
-              <RefreshCw size={16} className="text-red-400" />
+              <RefreshCw size={16} className="text-red-500" />
             )}
-            <p className="text-sm font-medium" style={{ color: lastResult.success ? '#6ee7b7' : '#fca5a5' }}>
+            <p className="text-sm font-medium" style={{ color: lastResult.success ? '#059669' : '#dc2626' }}>
               {lastResult.success ? 'Published successfully' : 'Publish failed'}
             </p>
           </div>
           {lastResult.success && lastResult.data?.word_count && (
-            <p className="text-xs text-white/40 mt-1">
+            <p className="text-xs text-gray-500 mt-1">
               {lastResult.data.word_count.toLocaleString()} words merged
             </p>
           )}
           {lastResult.error && (
-            <p className="text-xs text-red-300/60 mt-1">{lastResult.error}</p>
+            <p className="text-xs text-red-500 mt-1">{lastResult.error}</p>
           )}
         </div>
       )}

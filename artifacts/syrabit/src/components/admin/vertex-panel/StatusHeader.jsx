@@ -22,8 +22,8 @@ export default function StatusHeader({ token }) {
           <Cpu size={18} color="#8b5cf6" />
         </div>
         <div>
-          <div style={{ fontSize: 16, fontWeight: 800, color: '#e8e8e8' }}>Vertex AI Studio</div>
-          <div style={{ fontSize: 12, color: 'rgba(232,232,232,0.5)' }}>10 Google Cloud APIs · Gemini Vision · NLP · MCQ · Flashcards · SEO · OCR</div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: '#111827' }}>Vertex AI Studio</div>
+          <div style={{ fontSize: 12, color: '#6b7280' }}>10 Google Cloud APIs · Gemini Vision · NLP · MCQ · Flashcards · SEO · OCR</div>
         </div>
         {loading ? <Loader2 size={16} className="animate-spin ml-auto" color="#8b5cf6" /> : (
           <div className="ml-auto flex items-center gap-2">
@@ -46,13 +46,13 @@ export default function StatusHeader({ token }) {
       {status && !status.ok && (
         <div style={{ marginTop: 10, padding: 12, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', borderRadius: 10, fontSize: 12, color: '#fca5a5', lineHeight: 1.8 }}>
           <strong style={{ color: '#f87171', display: 'block', marginBottom: 6 }}>⚠ GEMINI_API_KEY is missing or invalid</strong>
-          Add one of these to Replit Secrets as <code style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 4 }}>GEMINI_API_KEY</code>, then restart the API:
+          Add one of these to Replit Secrets as <code style={{ background: '#e5e7eb', padding: '1px 5px', borderRadius: 4 }}>GEMINI_API_KEY</code>, then restart the API:
           <br /><br />
-          <strong style={{ color: '#e8e8e8' }}>Option A — Google AI Studio key</strong> (free, instant)
+          <strong style={{ color: '#111827' }}>Option A — Google AI Studio key</strong> (free, instant)
           <br />
-          Get it at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#818cf8', textDecoration: 'underline' }}>aistudio.google.com/app/apikey</a> · starts with <code style={{ background: 'rgba(255,255,255,0.08)', padding: '1px 5px', borderRadius: 4 }}>AIza...</code>
+          Get it at <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noreferrer" style={{ color: '#818cf8', textDecoration: 'underline' }}>aistudio.google.com/app/apikey</a> · starts with <code style={{ background: '#e5e7eb', padding: '1px 5px', borderRadius: 4 }}>AIza...</code>
           <br /><br />
-          <strong style={{ color: '#e8e8e8' }}>Option B — Vertex AI service account JSON</strong>
+          <strong style={{ color: '#111827' }}>Option B — Vertex AI service account JSON</strong>
           <br />
           Paste the full JSON from Google Cloud Console → IAM → Service Accounts. Must have the <em>Vertex AI User</em> role.
         </div>

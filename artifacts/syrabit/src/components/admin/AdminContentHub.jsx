@@ -1,14 +1,3 @@
-/**
- * AdminContentHub — Centralized content workflow
- * Tabs: Content Editor → CMS/Docs → Blog Publisher
- *
- * Shared hubContext propagates Board/Class/Stream/Subject selection across
- * all tabs so the user never has to re-pick the same hierarchy.
- *
- * Cross-tab wiring:
- *   Editor    →  CMS     : localStorage(syrabit_cms_prefill)    + onNavigate('cms')
- *   CMS       →  Editor  : localStorage(syrabit_content_prefill)+ onNavigate('editor')
- */
 import { useState, useEffect, useCallback } from 'react';
 import {
   PenTool, FileText, ArrowRight,
@@ -38,12 +27,12 @@ const FLOW = [
 ];
 
 const COLOR_MAP = {
-  indigo:  { active: 'border-indigo-500 text-indigo-400',  dot: 'bg-indigo-500', badge: 'bg-indigo-500/20 text-indigo-300' },
-  violet:  { active: 'border-violet-500 text-violet-400',  dot: 'bg-violet-500', badge: 'bg-violet-500/20 text-violet-300' },
-  amber:   { active: 'border-amber-500 text-amber-400',    dot: 'bg-amber-500',  badge: 'bg-amber-500/20 text-amber-300'  },
-  emerald: { active: 'border-emerald-500 text-emerald-400',dot: 'bg-emerald-500',badge: 'bg-emerald-500/20 text-emerald-300'},
-  rose:    { active: 'border-rose-500 text-rose-400',      dot: 'bg-rose-500',   badge: 'bg-rose-500/20 text-rose-300'    },
-  sky:     { active: 'border-sky-500 text-sky-400',        dot: 'bg-sky-500',    badge: 'bg-sky-500/20 text-sky-300'      },
+  indigo:  { active: 'border-indigo-500 text-indigo-600',  dot: 'bg-indigo-500', badge: 'bg-indigo-50 text-indigo-600' },
+  violet:  { active: 'border-violet-500 text-violet-600',  dot: 'bg-violet-500', badge: 'bg-violet-50 text-violet-600' },
+  amber:   { active: 'border-amber-500 text-amber-600',    dot: 'bg-amber-500',  badge: 'bg-amber-50 text-amber-600'  },
+  emerald: { active: 'border-emerald-500 text-emerald-600',dot: 'bg-emerald-500',badge: 'bg-emerald-50 text-emerald-600'},
+  rose:    { active: 'border-rose-500 text-rose-600',      dot: 'bg-rose-500',   badge: 'bg-rose-50 text-rose-600'    },
+  sky:     { active: 'border-sky-500 text-sky-600',        dot: 'bg-sky-500',    badge: 'bg-sky-50 text-sky-600'      },
 };
 
 const EMPTY_CTX = {
@@ -127,12 +116,11 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
   const activeColor = COLOR_MAP[TABS.find(t => t.id === activeTab)?.color || 'violet'];
 
   return (
-    <div className="h-full flex flex-col" style={{ background: '#080810' }}>
+    <div className="h-full flex flex-col" style={{ background: '#f8f9fc' }}>
 
-      {/* ── Delegated workflow banner ─────────────────────────────────── */}
       <div className="border-b px-4 py-1.5 flex items-center gap-1 flex-wrap"
-        style={{ background: 'rgba(255,255,255,0.015)', borderColor: 'rgba(255,255,255,0.07)' }}>
-        <span className="text-[10px] font-semibold text-white/25 uppercase tracking-widest mr-2">Workflow</span>
+        style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
+        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-widest mr-2">Workflow</span>
         {FLOW.map((step, i) => (
           <span key={i} className="flex items-center gap-1">
             <button
@@ -140,36 +128,35 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
               className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold transition-all ${
                 activeTab === step.tab
                   ? COLOR_MAP[TABS.find(t => t.id === step.tab)?.color]?.badge
-                  : 'text-white/30 hover:text-white/60'
+                  : 'text-gray-400 hover:text-gray-600'
               }`}
             >
               {step.label}
             </button>
-            {step.arrow && <ArrowRight size={10} className="text-white/15 flex-shrink-0" />}
+            {step.arrow && <ArrowRight size={10} className="text-gray-300 flex-shrink-0" />}
           </span>
         ))}
 
         {hubContext.subjectName && (
           <span className="ml-auto flex items-center gap-1.5 flex-wrap">
             <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px]"
-              style={{ background: 'rgba(139,92,246,0.15)', color: '#c4b5fd' }}>
-              <span className="text-white/25">subject:</span>
+              style={{ background: '#f5f3ff', color: '#7c3aed' }}>
+              <span className="text-gray-400">subject:</span>
               <span className="font-semibold truncate max-w-[120px]">{hubContext.subjectName}</span>
               <button
                 onClick={() => setHubContext(EMPTY_CTX)}
-                className="text-white/30 hover:text-white/70 ml-0.5"
+                className="text-gray-400 hover:text-gray-600 ml-0.5"
                 title="Clear context"
               >×</button>
             </span>
           </span>
         )}
         {!hubContext.subjectName && (
-          <span className="ml-auto text-[10px] text-white/20">{boards.length} boards · {subjects.length} subjects</span>
+          <span className="ml-auto text-[10px] text-gray-400">{boards.length} boards · {subjects.length} subjects</span>
         )}
       </div>
 
-      {/* ── Tab bar ──────────────────────────────────────────────────── */}
-      <div className="border-b flex-shrink-0" style={{ borderColor: 'rgba(255,255,255,0.07)', background: 'rgba(255,255,255,0.02)' }}>
+      <div className="border-b flex-shrink-0" style={{ borderColor: '#e5e7eb', background: '#ffffff' }}>
         <div className="flex px-4 gap-1 h-12 items-end">
           {TABS.map(tab => {
             const colors = COLOR_MAP[tab.color];
@@ -181,8 +168,8 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
                 onClick={() => setActiveTab(tab.id)}
                 className={`flex items-center gap-2 h-10 px-4 rounded-t-lg border-b-2 transition-all text-sm font-medium ${
                   isActive
-                    ? `${colors.active} bg-white/[0.04]`
-                    : 'border-transparent text-white/40 hover:text-white/70 hover:bg-white/[0.02]'
+                    ? `${colors.active} bg-gray-50`
+                    : 'border-transparent text-gray-400 hover:text-gray-600 hover:bg-gray-50'
                 }`}
               >
                 <Icon size={14} />
@@ -193,11 +180,10 @@ export default function AdminContentHub({ adminToken, onNavigate: topNavigate, n
         </div>
       </div>
 
-      {/* ── Tab content ──────────────────────────────────────────────── */}
       <div className="flex-1 overflow-hidden relative">
         {loading && (
-          <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(8,8,16,0.80)' }}>
-            <div className="flex items-center gap-2 text-white/40 text-sm">
+          <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'rgba(248,249,252,0.80)' }}>
+            <div className="flex items-center gap-2 text-gray-400 text-sm">
               <Loader2 size={16} className="animate-spin" /> Loading content data…
             </div>
           </div>

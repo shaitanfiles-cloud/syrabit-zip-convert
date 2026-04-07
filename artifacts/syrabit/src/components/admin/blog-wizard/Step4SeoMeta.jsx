@@ -18,7 +18,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
 
   const metaLen = (state.metaDescription || '').length;
   const metaValid = metaLen >= 120 && metaLen <= 160;
-  const metaColor = metaLen === 0 ? 'text-white/30' : metaValid ? 'text-emerald-400' : 'text-red-400';
+  const metaColor = metaLen === 0 ? 'text-gray-400' : metaValid ? 'text-emerald-400' : 'text-red-400';
   const metaErrorMsg = metaLen > 0 && !metaValid
     ? (metaLen < 120 ? `Too short (${metaLen}/120 min)` : `Too long (${metaLen}/160 max)`)
     : '';
@@ -98,15 +98,15 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRun, requiredFilled, state.docId, generating, saving]);
 
-  const inp = (err) => `w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border outline-none focus:border-violet-500 transition ${err ? 'border-red-500/50' : 'border-white/10'}`;
-  const lbl = 'text-xs font-semibold text-white/50 mb-1 block';
+  const inp = (err) => `w-full h-9 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border outline-none focus:border-violet-500 transition ${err ? 'border-red-500/50' : 'border-gray-200'}`;
+  const lbl = 'text-xs font-semibold text-gray-500 mb-1 block';
 
   return (
     <div className="p-6 max-w-2xl mx-auto">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
-          <h2 className="text-base font-bold text-white">Step 4 — SEO & GEO Metadata</h2>
-          <p className="text-xs text-white/40 mt-1">Fill all fields for maximum search and AI visibility.</p>
+          <h2 className="text-base font-bold text-gray-900">Step 4 — SEO & GEO Metadata</h2>
+          <p className="text-xs text-gray-400 mt-1">Fill all fields for maximum search and AI visibility.</p>
         </div>
         <button
           onClick={handleAutoFill}
@@ -127,12 +127,12 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
             value={state.seoSlug}
             onChange={e => set({ seoSlug: autoSlug(e.target.value) })} />
           {state.canonicalUrl && (
-            <p className="text-[10px] text-white/30 mt-1">Canonical: {state.canonicalUrl}</p>
+            <p className="text-[10px] text-gray-400 mt-1">Canonical: {state.canonicalUrl}</p>
           )}
         </div>
 
         <div>
-          <label className={lbl}>SEO Title * <span className="text-white/25 font-normal">({(state.seoTitle || '').length}/65 chars)</span></label>
+          <label className={lbl}>SEO Title * <span className="text-gray-300 font-normal">({(state.seoTitle || '').length}/65 chars)</span></label>
           <input className={inp(!state.seoTitle && saving)}
             placeholder="Topic Complete Notes Assamboard Class 12 | Syrabit"
             value={state.seoTitle}
@@ -144,13 +144,13 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
             Meta Description * <span className={`font-semibold ml-1 ${metaColor}`}>{metaLen} chars {metaLen > 0 && `(target: 120–160)`}</span>
           </label>
           <textarea
-            className={`w-full px-3 py-2 rounded-lg text-sm text-white bg-white/5 border outline-none focus:border-violet-500 transition resize-none ${!metaValid && metaLen > 0 ? 'border-red-500/50' : 'border-white/10'}`}
+            className={`w-full px-3 py-2 rounded-lg text-sm text-gray-900 bg-gray-50 border outline-none focus:border-violet-500 transition resize-none ${!metaValid && metaLen > 0 ? 'border-red-500/50' : 'border-gray-200'}`}
             rows={3}
             placeholder="Topic covers definitions, solved PYQ, MCQs per Assamboard syllabus. Free on Syrabit."
             value={state.metaDescription}
             onChange={e => set({ metaDescription: e.target.value })}
           />
-          <div className="h-1 rounded-full bg-white/5 mt-1.5 overflow-hidden">
+          <div className="h-1 rounded-full bg-gray-50 mt-1.5 overflow-hidden">
             <div className="h-full rounded-full transition-all"
               style={{
                 width: `${Math.min(100, (metaLen / 160) * 100)}%`,
@@ -184,7 +184,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
 
         <div>
           <label className={lbl}>Schema Type</label>
-          <select className="w-full h-9 px-3 rounded-lg text-sm text-white bg-white/5 border border-white/10 outline-none focus:border-violet-500 transition cursor-pointer"
+          <select className="w-full h-9 px-3 rounded-lg text-sm text-gray-900 bg-gray-50 border border-gray-200 outline-none focus:border-violet-500 transition cursor-pointer"
             value={state.schemaType}
             onChange={e => set({ schemaType: e.target.value })}>
             {SCHEMA_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
@@ -213,10 +213,10 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
       </div>
 
       <div className="mt-6 space-y-3">
-        <p className="text-xs font-semibold text-white/40 uppercase tracking-wider">Live Previews</p>
+        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Live Previews</p>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <p className="text-[10px] text-white/30 mb-1.5 font-medium">Google SERP</p>
+            <p className="text-[10px] text-gray-400 mb-1.5 font-medium">Google SERP</p>
             <SerpPreview
               title={state.seoTitle}
               slug={state.seoSlug}
@@ -224,7 +224,7 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
             />
           </div>
           <div>
-            <p className="text-[10px] text-white/30 mb-1.5 font-medium">Perplexity / AI Overview</p>
+            <p className="text-[10px] text-gray-400 mb-1.5 font-medium">Perplexity / AI Overview</p>
             <PerplexityPreview
               title={state.seoTitle}
               slug={state.seoSlug}
@@ -236,14 +236,14 @@ export default function Step4SeoMeta({ state, set, goNext, goPrev, adminToken, a
 
       <div className="mt-6 flex items-center justify-between">
         <button onClick={goPrev}
-          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white/50 hover:text-white/80 transition">
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-gray-500 hover:text-gray-700 transition">
           <ChevronLeft size={14} /> Back
         </button>
         <button
           onClick={handleContinue}
           disabled={!requiredFilled || saving}
           className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-40"
-          style={{ background: requiredFilled ? '#7c3aed' : 'rgba(255,255,255,0.08)', color: requiredFilled ? 'white' : 'rgba(255,255,255,0.4)' }}
+          style={{ background: requiredFilled ? '#7c3aed' : '#e5e7eb', color: requiredFilled ? 'white' : '#9ca3af' }}
         >
           {saving ? <Loader2 size={14} className="animate-spin" /> : saveError ? <RefreshCw size={14} /> : <ChevronRight size={14} />}
           {saving ? 'Saving…' : saveError ? 'Retry Save' : 'Continue to Review'}
