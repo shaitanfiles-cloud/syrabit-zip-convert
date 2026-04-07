@@ -375,7 +375,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             scoped_query=_ns_scoped_query,
         ))
         _ns_hist_task = asyncio.create_task(_ns_fetch_history())
-        _NS_BUDGET = 3.5
+        _NS_BUDGET = 2.5
         done, pending = await asyncio.wait(
             [_ns_rag_task, _ns_web_task, _ns_hist_task],
             timeout=_NS_BUDGET,
@@ -819,7 +819,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    _PRE_LLM_BUDGET = 2.5
+    _PRE_LLM_BUDGET = 2.0
 
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0

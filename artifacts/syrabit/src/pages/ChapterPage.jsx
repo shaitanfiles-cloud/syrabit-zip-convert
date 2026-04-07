@@ -1,15 +1,13 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { useParams, Link, useSearchParams } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import {
   BookOpen, ArrowLeft, ChevronRight, Home, Share2, RefreshCw,
-  Clock, Hash, Sparkles, Loader2, FileText, HelpCircle, ChevronDown,
+  Clock, Hash, Sparkles, FileText, HelpCircle, ChevronDown,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeRaw from 'rehype-raw';
+const MarkdownRenderer = lazy(() => import('@/components/MarkdownRenderer'));
 import { apiClient } from '@/utils/api';
 import { useShare, SerpPreviewModal } from '@/hooks/useShare';
 import Analytics from '@/utils/analytics';
@@ -683,7 +681,7 @@ export default function ChapterPage() {
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground hover:bg-accent/30 active:scale-95 disabled:opacity-50"
               style={{ border: '1px solid hsl(var(--border) / 0.3)' }}
             >
-              {sharing ? <Loader2 size={14} className="animate-spin" /> : <Share2 size={14} />} Share
+              {sharing ? <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> : <Share2 size={14} />} Share
             </button>
           </div>
         </div>
@@ -701,13 +699,17 @@ export default function ChapterPage() {
                   {data.meta_description}
                 </p>
               )}
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                rehypePlugins={[rehypeRaw]}
-                components={markdownComponents}
-              >
-                {data.content}
-              </ReactMarkdown>
+              <Suspense fallback={
+                <div className="space-y-3">
+                  {[...Array(6)].map((_, i) => (
+                    <Skeleton key={i} className="h-5 w-full" style={{ width: `${65 + (i % 3) * 12}%` }} />
+                  ))}
+                </div>
+              }>
+                <MarkdownRenderer components={markdownComponents}>
+                  {data.content}
+                </MarkdownRenderer>
+              </Suspense>
             </div>
 
             <ImportantQuestions chapterTitle={chapterTitle} pyqData={pyqData} />

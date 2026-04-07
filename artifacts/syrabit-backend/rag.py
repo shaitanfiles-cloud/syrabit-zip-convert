@@ -946,10 +946,10 @@ async def vector_rag_search(
     try:
         return await asyncio.wait_for(
             _vector_rag_search_inner(query, subject_id, top_k, _vk_cat, db_category=db_category),
-            timeout=3.0,
+            timeout=2.0,
         )
     except asyncio.TimeoutError:
-        logger.warning(f"vector_rag_search timed out (3s budget): query='{query[:40]}'")
+        logger.warning(f"vector_rag_search timed out (2s budget): query='{query[:40]}'")
         return []
     except Exception as e:
         logger.error(f"vector_rag_search failed: {e}")
@@ -1034,7 +1034,7 @@ async def _vector_rag_search_inner(
 
         reranked = False
         global _voyage_backoff_until
-        _voyage_available = voyage_client and top and time.time() >= _voyage_backoff_until
+        _voyage_available = voyage_client and len(top) >= 4 and time.time() >= _voyage_backoff_until
         if _voyage_available:
             pre_rerank_titles = [r.get("title", "")[:30] for r in top[:3]]
             try:
@@ -1052,7 +1052,7 @@ async def _vector_rag_search_inner(
                             top_k=_rerank_top_k,
                         ),
                     ),
-                    timeout=1.5,
+                    timeout=0.8,
                 )
                 _rerank_ms = (time.time() - _rerank_start) * 1000
                 reranked_top = []
@@ -1069,7 +1069,7 @@ async def _vector_rag_search_inner(
                 top = reranked_top
                 reranked = True
             except asyncio.TimeoutError:
-                logger.warning(f"Voyage rerank timed out after 1.5s: query='{query[:40]}'")
+                logger.warning(f"Voyage rerank timed out after 0.8s: query='{query[:40]}'")
             except Exception as _rerank_err:
                 _err_str = str(_rerank_err)
                 if "429" in _err_str or "rate" in _err_str.lower() or "Ratelimit" in _err_str or "payment" in _err_str.lower():
