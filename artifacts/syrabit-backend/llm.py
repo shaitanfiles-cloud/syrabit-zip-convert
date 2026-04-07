@@ -93,16 +93,22 @@ def get_llm_provider_stats(window_seconds: int = 3600) -> dict:
         "window_seconds": window_seconds,
     }
 _LLM_BATCH_WINDOW_MS = int(os.environ.get("LLM_BATCH_WINDOW_MS", 5))
+_CONTENT_BATCH_WINDOW_MS = int(os.environ.get("CONTENT_BATCH_WINDOW_MS", 300))
+
+_CONTENT_RETRY_MAX = 3
+_CONTENT_RETRY_BACKOFF = [2.0, 4.0, 8.0]
+_CONTENT_RPM_MAX_WAIT = float(os.environ.get("CONTENT_RPM_MAX_WAIT", 30))
 
 class _LlmBatcher:
     """
     Smart LLM Batching: deduplicates identical questions arriving within a
     short window so only one API call is made per unique question.
     """
-    def __init__(self):
+    def __init__(self, batch_window_ms: int = None):
         self._pending: Dict[str, asyncio.Future] = {}
         self._lock = asyncio.Lock()
         self._stats = {"batched": 0, "deduped": 0, "solo": 0, "errors": 0}
+        self._batch_window_ms = batch_window_ms if batch_window_ms is not None else _LLM_BATCH_WINDOW_MS
 
     async def call(self, messages: list, model: str = None, max_tokens: int = 1024, provider_list=None, use_admin_sem: bool = False) -> str:
         if provider_list is _LLM_PROVIDERS_CHAT:
@@ -134,7 +140,7 @@ class _LlmBatcher:
             raise HTTPException(status_code=504, detail="AI response timed out. Please try again.")
 
     async def _execute(self, batch_key: str, messages: list, model: str, max_tokens: int, future: asyncio.Future, provider_list=None, use_admin_sem: bool = False):
-        await asyncio.sleep(_LLM_BATCH_WINDOW_MS / 1000.0)
+        await asyncio.sleep(self._batch_window_ms / 1000.0)
 
         sem = _ADMIN_LLM_SEMAPHORE if use_admin_sem else _LLM_SEMAPHORE
         try:
@@ -153,7 +159,8 @@ class _LlmBatcher:
     def stats(self):
         return {**self._stats, "pending": len(self._pending)}
 
-_llm_batcher = _LlmBatcher()
+_llm_batcher = _LlmBatcher(batch_window_ms=_LLM_BATCH_WINDOW_MS)
+_content_batcher = _LlmBatcher(batch_window_ms=_CONTENT_BATCH_WINDOW_MS)
 
 _LLM_PROVIDERS = []
 if _SARVAM_LLM_KEY:
@@ -236,6 +243,8 @@ _SLM_SLOT_CANDIDATES = [
 
 _CONTENT_SLOT_CANDIDATES = [
     ("gemini",      "gemini-2.5-flash",                                  6, 0),
+    ("sarvam",      "sarvam-m",                                          4, 1),
+    ("cerebras",    "llama-4-scout-17b-16e-instruct",                    4, 2),
 ]
 
 _CONTENT_INTENTS = {"notes", "important_questions", "pyq"}
@@ -404,7 +413,50 @@ class _SmartKeyPool:
         return self._slots
 
 _slm_pool = _SmartKeyPool(_SLM_SLOT_CANDIDATES)
-_content_pool = _SmartKeyPool(_CONTENT_SLOT_CANDIDATES)
+
+
+class _ContentSmartKeyPool(_SmartKeyPool):
+    _RPM_SOFT_THRESHOLD = 0.90
+    _RPM_HARD_THRESHOLD = 0.95
+
+    async def pick_or_wait(self, max_wait: float = None, exclude_ids: set = None):
+        if max_wait is None:
+            max_wait = _CONTENT_RPM_MAX_WAIT
+        slot = self.pick(exclude_ids=exclude_ids)
+        if slot is not None:
+            return slot
+
+        deadline = time.time() + max_wait
+        while time.time() < deadline:
+            wait_time = min(2.0, deadline - time.time())
+            if wait_time <= 0:
+                break
+            best_wait = None
+            for s in self._slots:
+                if exclude_ids and id(s) in exclude_ids:
+                    continue
+                if s["cooldown_until"] > time.time():
+                    cd_remaining = s["cooldown_until"] - time.time()
+                    if cd_remaining <= max_wait:
+                        best_wait = min(best_wait or cd_remaining, cd_remaining)
+                secs = self._seconds_until_rpm_drop(s)
+                if secs > 0:
+                    best_wait = min(best_wait or secs, secs)
+
+            actual_wait = min(best_wait or 2.0, wait_time)
+            logger.info(
+                f"Content pool: all providers at capacity, waiting {actual_wait:.1f}s for RPM to free up "
+                f"(max wait remaining: {deadline - time.time():.1f}s)"
+            )
+            await asyncio.sleep(actual_wait)
+            slot = self.pick(exclude_ids=exclude_ids)
+            if slot is not None:
+                return slot
+        logger.warning("Content pool: max wait exceeded, no provider available")
+        return None
+
+
+_content_pool = _ContentSmartKeyPool(_CONTENT_SLOT_CANDIDATES)
 
 def _resolve_provider_for_model(model: str, provider_list=None):
     plist = _LLM_PROVIDERS if provider_list is None else provider_list
@@ -647,23 +699,61 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     return await _llm_batcher.call(messages, model, max_tokens)
 
 _LLM_PROVIDERS_CONTENT: list[dict] = []
-if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-4-scout-17b-16e-instruct"})
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-4-scout-17b-16e-instruct"})
 
 logger.info(
-    f"Admin content providers (priority order): "
+    f"Admin content providers (quality-first order): "
     f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
 )
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
-    """LLM call for admin content generation — Cerebras first (fastest), then Sarvam,
-    then Gemini as fallback. Separate concurrency semaphore (6 vs 20).
-    Uses a longer timeout (30s) since content generation produces 800+ word outputs."""
-    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+    """LLM call for admin content generation — quality-first: Gemini 2.5 Flash preferred
+    (large context, high quality), Sarvam secondary, Cerebras emergency fallback.
+    Uses dedicated content batcher with 300ms batch window (vs 5ms for chat).
+    Retries with exponential backoff instead of instant failover."""
+    return await _content_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+
+
+async def call_llm_api_content_with_retry(
+    messages: list, model: str = None, max_tokens: int = 3072,
+    validate_fn=None,
+) -> str:
+    """Content LLM call with retry-with-backoff and optional output validation.
+    
+    validate_fn: optional callable(result_str) -> bool. If it returns False,
+    the result is treated as a failure and retried.
+    """
+    last_err = None
+    for attempt in range(_CONTENT_RETRY_MAX):
+        try:
+            result = await call_llm_api_content(messages, model, max_tokens)
+            if validate_fn is not None and not validate_fn(result):
+                logger.warning(
+                    f"Content LLM output failed validation (attempt {attempt + 1}/{_CONTENT_RETRY_MAX})"
+                )
+                last_err = ValueError("Output failed validation")
+                if attempt < _CONTENT_RETRY_MAX - 1:
+                    backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                    logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                    await asyncio.sleep(backoff)
+                continue
+            return result
+        except Exception as e:
+            last_err = e
+            logger.warning(
+                f"Content LLM call failed (attempt {attempt + 1}/{_CONTENT_RETRY_MAX}): "
+                f"{type(e).__name__}: {str(e)[:150]}"
+            )
+            if attempt < _CONTENT_RETRY_MAX - 1:
+                backoff = _CONTENT_RETRY_BACKOFF[min(attempt, len(_CONTENT_RETRY_BACKOFF) - 1)]
+                logger.info(f"Content retry backoff: waiting {backoff}s before attempt {attempt + 2}")
+                await asyncio.sleep(backoff)
+    raise last_err or HTTPException(status_code=503, detail="Content generation failed after retries")
 
 async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
     """LLM call for student chat — excludes Emergent provider (admin-only)."""

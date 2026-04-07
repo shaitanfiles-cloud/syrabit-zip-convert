@@ -28,7 +28,7 @@ from auth_deps import (
     get_current_user_optional,
 )
 from db_ops import *
-from llm import call_llm_api, call_llm_api_content, call_llm_api_stream
+from llm import call_llm_api, call_llm_api_content, call_llm_api_content_with_retry, call_llm_api_stream
 from rag import *
 from utils import *
 from analytics_helpers import *
@@ -114,6 +114,21 @@ Return ONLY the polished notes in markdown. NO preamble, NO commentary."""
         return raw_notes
 
 
+def _validate_mcq_output(result: str, expected_count: int = 5) -> bool:
+    try:
+        cleaned = result.strip()
+        if cleaned.startswith("```"):
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        data = json.loads(cleaned)
+        items = data if isinstance(data, list) else data.get("mcqs", data.get("questions", []))
+        return isinstance(items, list) and len(items) >= max(1, expected_count // 2)
+    except Exception:
+        return False
+
+
 async def _pipeline_generate_mcqs(
     content: str, subject_name: str, chapter_title: str, class_name: str, count: int = 20,
 ) -> list:
@@ -133,7 +148,11 @@ async def _pipeline_generate_mcqs(
     )
     try:
         async with _pipeline_sem:
-            result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
+            result = await call_llm_api_content_with_retry(
+                [{"role": "user", "content": prompt}],
+                max_tokens=3000,
+                validate_fn=lambda r: _validate_mcq_output(r, count),
+            )
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -146,6 +165,21 @@ async def _pipeline_generate_mcqs(
         return data.get("mcqs", data.get("questions", []))
     except Exception:
         return []
+
+
+def _validate_flashcard_output(result: str) -> bool:
+    try:
+        cleaned = result.strip()
+        if cleaned.startswith("```"):
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        data = json.loads(cleaned)
+        cards = data.get("flashcards", []) if isinstance(data, dict) else data
+        return isinstance(cards, list) and len(cards) >= 1
+    except Exception:
+        return False
 
 
 async def _pipeline_generate_flashcards(
@@ -172,7 +206,11 @@ async def _pipeline_generate_flashcards(
     )
     try:
         async with _pipeline_sem:
-            result = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=3000)
+            result = await call_llm_api_content_with_retry(
+                [{"role": "user", "content": prompt}],
+                max_tokens=3000,
+                validate_fn=_validate_flashcard_output,
+            )
         cleaned = result.strip()
         if cleaned.startswith("```"):
             parts = cleaned.split("```")
@@ -255,9 +293,16 @@ Generate **topic-wise study notes** for the chapter below.
 5. Maximum 3-4 lines before the first ## heading. Do NOT write a long introduction paragraph. The very first line of output should ideally be a ## heading.
 6. Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else."""
 
+        def _validate_notes(text: str) -> bool:
+            return bool(text) and len(text.split()) >= 300
+
         try:
             async with _pipeline_sem:
-                notes_raw = await call_llm_api_content([{"role": "user", "content": notes_prompt}], max_tokens=6000)
+                notes_raw = await call_llm_api_content_with_retry(
+                    [{"role": "user", "content": notes_prompt}],
+                    max_tokens=6000,
+                    validate_fn=_validate_notes,
+                )
         except Exception as e:
             notes_raw = None
             result["notes"] = {"status": "error", "reason": str(e)}
@@ -426,25 +471,51 @@ async def admin_generate_subject_all(
         chapter_ids.append((ch["id"], per_ch_gen))
 
     t0 = time.time()
-    tasks = [_generate_chapter_all(cid, gl) for cid, gl in chapter_ids]
-    batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+    results = []
+    total_waves = (len(chapter_ids) + _WAVE_SIZE - 1) // _WAVE_SIZE
+
+    for wave_idx in range(total_waves):
+        wave_start = wave_idx * _WAVE_SIZE
+        wave_end = min(wave_start + _WAVE_SIZE, len(chapter_ids))
+        wave_items = chapter_ids[wave_start:wave_end]
+        wave_t0 = time.time()
+
+        logger.info(
+            f"[WAVE {wave_idx + 1}/{total_waves}] Processing chapters "
+            f"{wave_start + 1}–{wave_end} of {len(chapter_ids)} "
+            f"({len(wave_items)} in this wave)"
+        )
+
+        wave_tasks = [_generate_chapter_all(cid, gl) for cid, gl in wave_items]
+        wave_results = await asyncio.gather(*wave_tasks, return_exceptions=True)
+
+        wave_ok = 0
+        for i, r in enumerate(wave_results):
+            if isinstance(r, Exception):
+                cid = wave_items[i][0] if i < len(wave_items) else "unknown"
+                results.append({"chapter_id": cid, "status": "error", "reason": str(r)})
+            else:
+                results.append(r)
+                if isinstance(r, dict) and r.get("status") == "ok":
+                    wave_ok += 1
+
+        wave_elapsed = round(time.time() - wave_t0, 1)
+        logger.info(
+            f"[WAVE {wave_idx + 1}/{total_waves}] Completed: "
+            f"{wave_ok}/{len(wave_items)} succeeded in {wave_elapsed}s"
+        )
+
     elapsed = round(time.time() - t0, 1)
 
-    results = []
-    for i, r in enumerate(batch_results):
-        if isinstance(r, Exception):
-            cid = chapter_ids[i][0] if i < len(chapter_ids) else "unknown"
-            results.append({"chapter_id": cid, "status": "error", "reason": str(r)})
-        else:
-            results.append(r)
-
-    ok_count = sum(1 for r in results if r.get("status") == "ok")
+    ok_count = sum(1 for r in results if isinstance(r, dict) and r.get("status") == "ok")
     return {
         "subject_id": subject_id,
         "total_chapters": len(chapters),
         "processed": len(results),
         "succeeded": ok_count,
         "elapsed_seconds": elapsed,
+        "total_waves": total_waves,
+        "wave_size": _WAVE_SIZE,
         "concurrency": _PIPELINE_CONCURRENCY,
         "results": results,
     }
@@ -792,6 +863,7 @@ async def admin_list_thin_chapters(
 
 _PIPELINE_CONCURRENCY = int(os.environ.get("PIPELINE_LLM_CONCURRENCY", 4))
 _pipeline_sem = asyncio.Semaphore(_PIPELINE_CONCURRENCY)
+_WAVE_SIZE = int(os.environ.get("CONTENT_WAVE_SIZE", 3))
 
 
 async def _resolve_board_context(subject: dict) -> tuple:
