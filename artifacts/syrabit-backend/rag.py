@@ -32,10 +32,10 @@ __all__ = [
 
 _HEADING_RE = re.compile(r'^(#{1,4})\s+(.+)$', re.MULTILINE)
 _SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
-_CHUNK_TARGET = 600
-_CHUNK_MAX = 1200
+_CHUNK_TARGET = 400
+_CHUNK_MAX = 800
 _CHUNK_MIN = 80
-_OVERLAP_SENTENCES = 2
+_OVERLAP_SENTENCES = 0
 _VECTOR_SIM_THRESHOLD = 0.30
 
 _VECTOR_SIM_METRICS: list = []
@@ -223,8 +223,8 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
     - If topics are provided, split by topic headings (one chunk per topic)
     - Otherwise, split by markdown headings (###) to keep concepts together
     - Merge short sections; split long ones by sentences
-    - Target 300-600 chars per chunk for optimal retrieval
-    - 2-sentence overlap between consecutive chunks
+    - Target 400 chars per chunk for tight single-topic retrieval
+    - No overlap between chunks to avoid duplicating content
     - Store chapter_title, geo_tags, keywords per chunk
 
     Returns: List of created chunk IDs

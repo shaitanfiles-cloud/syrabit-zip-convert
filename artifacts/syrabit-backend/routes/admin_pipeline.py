@@ -42,7 +42,7 @@ router = APIRouter()
 
 def _extract_content_topics(content: str) -> list[str]:
     topics = []
-    skip = {"summary", "introduction", "conclusion", "key points"}
+    skip = {"summary", "introduction", "conclusion", "key points", "key facts"}
     for line in content.split("\n"):
         m = re.match(r'^#{2,3}\s+(.+)', line.strip())
         if m:
@@ -53,7 +53,7 @@ def _extract_content_topics(content: str) -> list[str]:
 
 
 async def _polish_notes_with_sarvam(raw_notes: str, title: str, subject_name: str) -> str:
-    polish_prompt = f"""You are a senior academic editor. Polish and improve the following study notes.
+    polish_prompt = f"""You are a senior academic editor. Polish the following study notes.
 
 **Chapter:** {title}
 **Subject:** {subject_name}
@@ -65,13 +65,14 @@ async def _polish_notes_with_sarvam(raw_notes: str, title: str, subject_name: st
 
 **YOUR TASK — improve the notes by:**
 1. Fix any grammar, spelling, or formatting errors
-2. Improve clarity and flow of explanations
+2. Improve clarity and precision of explanations
 3. Ensure all key definitions are in **bold**
-4. Tighten bullet points — remove redundancy, add missing facts
-5. Ensure explanations are thorough and well-structured
-6. Ensure markdown formatting is clean (##, ###, **, -, etc.)
-7. Keep the same structure and headings — do NOT add or remove topics
-8. Preserve all content — only improve quality, do not shorten
+4. Tighten bullet points — remove redundancy
+5. Ensure markdown formatting is clean (##, ###, **, -, etc.)
+6. Keep the same structure and headings — do NOT add or remove topics
+7. Do NOT add introductions, summaries, exam tips, extra examples, or cross-references
+8. Do NOT expand content beyond what exists — only improve quality and clarity
+9. Preserve the lean, topic-only format: each section should have a definition, explanation, and key facts only
 
 Return ONLY the polished notes in markdown. NO preamble, NO commentary."""
 
@@ -153,7 +154,7 @@ async def _pipeline_generate_flashcards(
         f"Each card should use exam-relevant terms matching AHSEC/SEBA/Degree paper patterns.\n\n"
         f"Return ONLY valid JSON (no markdown fences):\n"
         f'{{"flashcards": [{{"id": 1, "front": "...", "back": "...", "type": "mnemonic", '
-        f'"difficulty": "easy", "exam_tip": "...", "tags": ["..."]}}]}}\n\n'
+        f'"difficulty": "easy", "tags": ["..."]}}]}}\n\n'
         f"Chapter content:\n{content[:4500]}"
     )
     try:
@@ -218,7 +219,7 @@ async def _generate_chapter_all(chapter_id: str, generate: list[str]) -> dict:
 
         notes_prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students.
 
-Generate **exam-focused, topic-wise study notes** for the chapter below.
+Generate **topic-wise study notes** for the chapter below.
 
 **Chapter:** {title}
 **Subject:** {subject_name or "Degree Course"}
@@ -230,17 +231,15 @@ Generate **exam-focused, topic-wise study notes** for the chapter below.
 ---
 
 **INSTRUCTIONS:**
-1. Open with a crisp **introduction** (3-4 sentences) — state the chapter's exam relevance and what students will learn.
-2. For EACH topic listed above, write:
+1. For EACH topic listed above, write:
    - A ## Heading matching the topic name exactly
-   - 5-8 sentence thorough explanation using simple, precise academic language
-   - **Key Points** as 6-8 bullets: definitions in **bold**, significance, relationships
-   - Ensure depth and completeness for each topic
-3. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
-4. End with a **Summary** section listing the 7-10 most exam-critical takeaways.
-5. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
-6. Target 1500-2000 words of dense, high-value content. More topics = more words — cover every topic thoroughly.
-7. Write as though every word costs marks — no filler, no repetition."""
+   - A **bold definition** (1-2 sentences) as the opening line
+   - A focused explanation in 5-8 sentences using simple, precise academic language
+   - 4-6 bullet points of key facts: definitions in **bold**, significance, relationships
+2. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
+3. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
+4. NO introduction section. NO summary section. NO exam tips. NO extra examples. NO cross-references between topics. Start directly with the first ## topic heading.
+5. Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else."""
 
         try:
             async with _pipeline_sem:
@@ -519,9 +518,9 @@ async def admin_generate_chapter_notes(chapter_id: str, admin: dict = Depends(ge
     if not desc_block:
         desc_block = "**Description:** (No additional description provided.)\n"
 
-    prompt = f"""You are an expert academic content writer creating comprehensive study material for {board_ctx} {class_ctx} students in Assam, India.
+    prompt = f"""You are an expert academic content writer creating study material for {board_ctx} {class_ctx} students in Assam, India.
 
-Write **complete, exam-ready study notes** for the chapter below. These notes will be the PRIMARY study resource for students — they must be thorough enough that a student can score full marks using ONLY these notes.
+Write **topic-wise study notes** for the chapter below.
 
 **Chapter:** {title}
 **Subject:** {subject_ctx} ({paper_ctx} — {class_ctx})
@@ -534,36 +533,27 @@ Write **complete, exam-ready study notes** for the chapter below. These notes wi
 
 ## OUTPUT FORMAT — follow exactly:
 
-### 1. Introduction (4-6 sentences)
-Start with `## Introduction` heading. State what the chapter covers, why it matters for the exam, and what students will master.
-
-### 2. Topic Sections — ONE `## Section` per syllabus topic above
 For EACH topic, write under a `## <Topic Name>` heading (use the EXACT topic name from the list):
 
 a) **Opening definition** (1-2 sentences): Define the concept in bold. Example: "**Ecosystem** is a self-sustaining unit of nature..."
 
-b) **Detailed explanation** (10-15 sentences): Cover the concept comprehensively — definitions, types/classification, characteristics, causes, effects, mechanisms, historical context, significance, and relationships to other topics. Use sub-headings (`###`) to organize if the topic has multiple dimensions. Write in clear academic language a first-year student can understand.
+b) **Focused explanation** (5-8 sentences): Cover the concept clearly — definition, characteristics, causes/effects, and significance. Write in clear academic language a first-year student can understand.
 
-c) **Key Points for Revision** as a `### Key Points` sub-heading with 8-12 bullet points:
+c) **Key Facts** as a `### Key Facts` sub-heading with 4-6 bullet points:
    - Every bullet starts with a **bold keyword or phrase**
    - Include definitions, dates, names, formulas, distinctions
-   - Focus on facts examiners frequently test
 
-IMPORTANT: Key Points MUST be ### (H3) sub-headings under the topic's ## heading — NOT ## headings themselves.
-
-### 3. Summary
-End with `## Summary` — list 10-15 most exam-critical takeaways as numbered points.
+IMPORTANT: Key Facts MUST be ### (H3) sub-headings under the topic's ## heading — NOT ## headings themselves.
 
 ---
 
 ## CRITICAL RULES:
-- Target **{word_target_min}-{word_target_max} words**. Each topic section should be 200-350 words minimum.
+- NO introduction section. NO summary section. NO exam tips. NO extra examples. NO cross-references between topics. Start directly with the first `## <Topic Name>`.
+- Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else.
 - Use markdown: `##` for topics, `###` for sub-sections, `**bold**` for key terms, `-` for bullets.
-- NO disclaimers, NO preamble, NO "Here are the notes" intro. Start directly with `## Introduction`.
-- Every **bold term** in the text must be a genuinely important academic concept worth remembering.
-- Write with exam-scoring density — every sentence should teach something testable.
+- NO disclaimers, NO preamble, NO "Here are the notes" intro.
+- Every **bold term** must be a genuinely important academic concept.
 - If a topic involves people, dates, places, or events — name them specifically. No vague references.
-- Relate topics to each other where natural (cross-references strengthen understanding).
 """
 
     try:
@@ -826,7 +816,7 @@ async def _regenerate_one_chapter(chapter: dict, subject: dict, min_words: int) 
 
     prompt = f"""You are an expert academic content writer for {board_ctx} {class_ctx} students.
 
-Generate detailed study notes for:
+Generate topic-wise study notes for:
 **Chapter:** {title}
 **Subject:** {subject_name or "Degree Course"}
 {desc_block}
@@ -835,14 +825,15 @@ Generate detailed study notes for:
 {topic_block}
 
 **INSTRUCTIONS:**
-1. Write 1500-2000 words of detailed, exam-focused notes. More topics = more words — cover every topic thoroughly.
+1. For EACH topic, write:
+   - A ## Heading matching the topic name exactly
+   - A **bold definition** (1-2 sentences) as the opening line
+   - A focused explanation in 5-8 sentences covering definition, characteristics, causes/effects, and significance
+   - 4-6 bullet points of key facts with **bold** keywords
 2. Use ## headings for each topic (match topic names exactly), ### for subtopics
-3. For each topic, write 5-8 sentence thorough explanations covering definitions, mechanisms, causes, effects, and significance
-4. Include key definitions in **bold**, 6-8 bullet points per topic for key facts examiners look for
-5. Ensure depth and completeness for each topic — cover definitions, mechanisms, causes, effects, and significance
-7. End with a **Summary** section listing 7-10 most exam-critical takeaways
-8. Use markdown formatting throughout. NO disclaimers, NO preamble.
-9. No filler or repetition — but cover each topic thoroughly with depth and completeness"""
+3. Use markdown formatting throughout. NO disclaimers, NO preamble.
+4. NO introduction section. NO summary section. NO exam tips. NO extra examples. NO cross-references. Start directly with the first ## topic heading.
+5. Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else."""
 
     try:
         async with _pipeline_sem:
