@@ -184,8 +184,9 @@ class FeedbackPayload(BaseModel):
     comment: Optional[str] = None
 
 @router.post("/chat-feedback")
-async def post_chat_feedback(payload: FeedbackPayload, user: Optional[dict] = Depends(get_current_user_optional)):
+async def post_chat_feedback(payload: FeedbackPayload, request: Request, user: Optional[dict] = Depends(get_current_user_optional)):
     uid = user["id"] if user else None
+    anon_id = request.headers.get("x-anon-id") if not uid else None
     if not payload.reaction and not payload.comment:
         raise HTTPException(status_code=400, detail="Nothing to save")
     if payload.reaction and payload.reaction not in ("like", "dislike"):
@@ -195,12 +196,16 @@ async def post_chat_feedback(payload: FeedbackPayload, user: Optional[dict] = De
         if pg_pool:
             async with pg_pool.acquire() as conn:
                 await conn.execute(
-                    """INSERT INTO chat_feedback (user_id, conversation_id, message_index, message_preview, reaction, comment)
-                       VALUES ($1, $2, $3, $4, $5, $6)""",
-                    uid, payload.conversation_id, payload.message_index, preview,
+                    """INSERT INTO chat_feedback (user_id, anon_id, conversation_id, message_index, message_preview, reaction, comment)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7)""",
+                    uid, anon_id, payload.conversation_id, payload.message_index, preview,
                     payload.reaction, (payload.comment or "")[:1000] if payload.comment else None,
                 )
+        else:
+            raise HTTPException(status_code=503, detail="Database unavailable")
         return {"ok": True}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"chat-feedback save error: {e}")
         raise HTTPException(status_code=500, detail="Failed to save feedback")

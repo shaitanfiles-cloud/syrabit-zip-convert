@@ -180,6 +180,20 @@ CREATE TABLE IF NOT EXISTS password_resets (
     email TEXT NOT NULL,
     expires TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS chat_feedback (
+    id SERIAL PRIMARY KEY,
+    user_id TEXT,
+    anon_id TEXT,
+    conversation_id TEXT,
+    message_index INTEGER,
+    message_preview TEXT,
+    reaction TEXT,
+    comment TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS chat_feedback_created_idx ON chat_feedback(created_at DESC);
+CREATE INDEX IF NOT EXISTS chat_feedback_user_idx ON chat_feedback(user_id);
+ALTER TABLE chat_feedback ADD COLUMN IF NOT EXISTS anon_id TEXT;
 CREATE TABLE IF NOT EXISTS activity_log (
     id TEXT PRIMARY KEY,
     action TEXT NOT NULL DEFAULT '',
