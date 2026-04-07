@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
 const PWAInstallPrompt = lazy(() => import("@/components/PWAInstallPrompt"));
+const SignupEncouragementPopup = lazy(() => import("@/components/SignupEncouragementPopup"));
 const LazyToaster = lazy(() => import("sonner").then(m => ({ default: m.Toaster })));
 import { apiClient } from "@/utils/api";
 
@@ -246,6 +247,7 @@ function App() {
                 </Routes>
               </Suspense>
             </BrowserRouter>
+            <Suspense fallback={null}><SignupEncouragementPopup /></Suspense>
           </AuthProvider>
           <Suspense fallback={null}><PWAInstallPrompt /></Suspense>
         </QueryClientProvider>
