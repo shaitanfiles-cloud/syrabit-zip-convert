@@ -214,10 +214,10 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
     return None
 
 
-async def embed_batch(texts: List[str]) -> List[Optional[List[float]]]:
+async def embed_batch(texts: List[str], task_type: str = "RETRIEVAL_DOCUMENT") -> List[Optional[List[float]]]:
     """Embed a batch of texts. Returns list of vectors (or None per item)."""
     import asyncio
-    tasks = [embed_text(t) for t in texts]
+    tasks = [embed_text(t, task_type=task_type) for t in texts]
     return await asyncio.gather(*tasks)
 
 

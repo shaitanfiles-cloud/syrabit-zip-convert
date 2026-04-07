@@ -259,10 +259,40 @@ async def lifespan(app):
             await db.streams.create_index("class_id")
             await db.classes.create_index("board_id")
             await db.chunks.create_index("chapter_id")
+            await db.chunks.create_index("subject_id")
+            await db.chunks.create_index("category")
+            await db.chunks.create_index([("subject_id", 1), ("category", 1)])
             try:
                 await db.chunks.create_index([("content", "text")], name="chunks_content_text")
             except Exception:
                 pass
+            try:
+                from pymongo.operations import SearchIndexModel
+                _vs_def = {
+                    "fields": [
+                        {
+                            "type": "vector",
+                            "path": "embedding",
+                            "numDimensions": 3072,
+                            "similarity": "cosine",
+                        },
+                        {"type": "filter", "path": "subject_id"},
+                        {"type": "filter", "path": "category"},
+                    ]
+                }
+                _vs_model = SearchIndexModel(
+                    definition=_vs_def,
+                    name="chunk_vector_index",
+                    type="vectorSearch",
+                )
+                await db.chunks.create_search_index(model=_vs_model)
+                logger.info("MongoDB Atlas Vector Search index 'chunk_vector_index' created on chunks collection")
+            except Exception as _vs_idx_err:
+                _vs_msg = str(_vs_idx_err)
+                if "already exists" in _vs_msg.lower() or "duplicate" in _vs_msg.lower():
+                    logger.info("MongoDB Atlas Vector Search index 'chunk_vector_index' already exists")
+                else:
+                    logger.warning(f"Vector Search index creation skipped (may need Atlas UI): {_vs_msg[:120]}")
             await db.analytics.create_index([("event_type", 1), ("timestamp", -1)])
             await db.analytics.create_index([("subject_id", 1), ("event_type", 1)])
             await db.analytics.create_index("user_id")

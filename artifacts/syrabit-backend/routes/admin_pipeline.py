@@ -1428,6 +1428,53 @@ async def admin_delete_chapter(chapter_id: str, admin: dict = Depends(get_admin_
     _invalidate_content_cache("subjects")
     return {"message": "Chapter deleted"}
 
+@router.post("/admin/content/chunks/backfill-embeddings")
+async def admin_backfill_chunk_embeddings(
+    batch_size: int = Query(10, ge=1, le=50),
+    delay: float = Query(1.0, ge=0.0, le=10.0),
+    admin: dict = Depends(get_admin_user),
+):
+    """
+    Backfill embeddings for all chunks that don't have one yet.
+    Processes in batches with rate limiting to avoid API quota issues.
+
+    Query params:
+    - batch_size: Number of chunks to embed per batch (default: 10, max: 50)
+    - delay: Seconds to wait between batches (default: 1.0)
+    """
+    try:
+        result = await backfill_chunk_embeddings(batch_size=batch_size, delay=delay)
+        return result
+    except Exception as e:
+        logger.error(f"Chunk embedding backfill failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Backfill failed: {str(e)}")
+
+
+@router.get("/admin/content/chunks/embedding-stats")
+async def get_chunk_embedding_stats(admin: dict = Depends(get_admin_user)):
+    """Get stats about chunk embeddings coverage."""
+    try:
+        total_chunks = await db.chunks.count_documents({})
+        _needs_embedding = {
+            "$or": [
+                {"embedding": {"$exists": False}},
+                {"embedding": None},
+                {"embedding": []},
+            ]
+        }
+        without_embeddings = await db.chunks.count_documents(_needs_embedding)
+        with_embeddings = total_chunks - without_embeddings
+        return {
+            "total_chunks": total_chunks,
+            "with_embeddings": with_embeddings,
+            "without_embeddings": without_embeddings,
+            "coverage_percent": round((with_embeddings / total_chunks * 100) if total_chunks > 0 else 0, 1),
+        }
+    except Exception as e:
+        logger.error(f"Chunk embedding stats failed: {e}")
+        return {"total_chunks": 0, "with_embeddings": 0, "without_embeddings": 0, "coverage_percent": 0}
+
+
 @router.post("/admin/reseed-embeddings")
 async def admin_reseed_embeddings(
     force: bool = Query(False),

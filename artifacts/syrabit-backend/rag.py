@@ -23,7 +23,7 @@ __all__ = [
     "_embed_and_store_chapter", "_embed_and_store_page", "_embed_cms_document", "_extract_relevant_sections",
     "_fetch_content_card", "_fetch_enrichment_blocks", "_rag_telemetry", "_record_chat_latency",
     "_record_rag_event", "_sources_from_rag_ctx", "_trim_history",
-    "auto_chunk_content", "build_rag_system_prompt", "rag_search", "rechunk_chapter",
+    "auto_chunk_content", "backfill_chunk_embeddings", "build_rag_system_prompt", "rag_search", "rechunk_chapter",
     "resolve_rag_context", "syrabit_library_search", "vector_rag_search",
     "web_search_with_fallback",
     "get_vector_search_stats", "get_pipeline_stats", "record_pipeline_run",
@@ -274,6 +274,7 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
                     raw_chunks_with_topic.append((s, heading))
 
     chunks_created = []
+    chunk_docs = []
     now_iso = datetime.now(timezone.utc).isoformat()
     for idx, (chunk_text, chunk_topic) in enumerate(raw_chunks_with_topic):
         chunk_text = chunk_text.strip()
@@ -300,12 +301,35 @@ async def auto_chunk_content(chapter_id: str, content: str, subject_id: str = No
             chunk["syllabus_id"] = syllabus_id
         if geo_tags:
             chunk["geo_tags"] = geo_tags[:5]
-        await db.chunks.insert_one(chunk)
-        chunks_created.append(chunk["id"])
+        chunk_docs.append(chunk)
+
+    if chunk_docs:
+        texts_to_embed = [c["content"] for c in chunk_docs]
+        try:
+            _EMBED_BATCH = 20
+            all_vectors: list = []
+            for i in range(0, len(texts_to_embed), _EMBED_BATCH):
+                batch = texts_to_embed[i:i + _EMBED_BATCH]
+                batch_vecs = await vertex_services.embed_batch(batch, task_type="RETRIEVAL_DOCUMENT")
+                all_vectors.extend(batch_vecs)
+            for doc, vec in zip(chunk_docs, all_vectors):
+                if vec:
+                    doc["embedding"] = vec
+                    doc["embedding_model"] = vertex_services._EMBED_MODEL
+            _embedded_count = sum(1 for v in all_vectors if v)
+            logger.info(f"Chunk embeddings: {_embedded_count}/{len(chunk_docs)} embedded for chapter {chapter_id}")
+        except Exception as _embed_err:
+            logger.warning(f"Chunk embedding failed for chapter {chapter_id} (chunks saved without embeddings): {_embed_err}")
+
+        for doc in chunk_docs:
+            await db.chunks.insert_one(doc)
+            chunks_created.append(doc["id"])
 
     if chunks_created and old_chunk_ids:
         deleted = await db.chunks.delete_many({"_id": {"$in": old_chunk_ids}})
         logger.info(f"Dedup: removed {deleted.deleted_count} old chunks for chapter {chapter_id}")
+
+    _vector_rag_cache.clear()
 
     logger.info(f"Auto-chunked chapter {chapter_id}: {len(chunks_created)} chunks from {len(content)} chars")
     return chunks_created
@@ -345,6 +369,84 @@ async def rechunk_chapter(chapter_id: str) -> dict:
         "chunks_created": len(chunks_created),
         "message": f"Re-chunked successfully"
     }
+
+
+async def backfill_chunk_embeddings(batch_size: int = 10, delay: float = 1.0) -> dict:
+    """
+    Backfill embeddings for all existing chunks that don't have one.
+    Processes in batches with rate limiting to avoid API quota issues.
+    Returns stats dict.
+    """
+    _needs_embedding_filter = {
+        "$or": [
+            {"embedding": {"$exists": False}},
+            {"embedding": None},
+            {"embedding": []},
+        ]
+    }
+    total = await db.chunks.count_documents(_needs_embedding_filter)
+    if total == 0:
+        return {"total": 0, "embedded": 0, "failed": 0, "message": "All chunks already have embeddings"}
+
+    embedded = 0
+    failed = 0
+    cursor = db.chunks.find(
+        _needs_embedding_filter,
+        {"_id": 1, "id": 1, "content": 1},
+    )
+
+    batch = []
+    async for doc in cursor:
+        batch.append(doc)
+        if len(batch) >= batch_size:
+            _e, _f = await _embed_chunk_batch(batch)
+            embedded += _e
+            failed += _f
+            batch = []
+            if delay > 0:
+                await asyncio.sleep(delay)
+
+    if batch:
+        _e, _f = await _embed_chunk_batch(batch)
+        embedded += _e
+        failed += _f
+
+    _vector_rag_cache.clear()
+
+    logger.info(f"Chunk embedding backfill complete: {embedded}/{total} embedded, {failed} failed")
+    return {
+        "total": total,
+        "embedded": embedded,
+        "failed": failed,
+        "message": f"Backfill complete: {embedded}/{total} embedded",
+    }
+
+
+async def _embed_chunk_batch(batch: list) -> tuple:
+    """Embed a batch of chunk docs and update them in the DB. Returns (embedded, failed)."""
+    texts = [doc.get("content", "") for doc in batch]
+    try:
+        vectors = await vertex_services.embed_batch(texts, task_type="RETRIEVAL_DOCUMENT")
+    except Exception as e:
+        logger.warning(f"Batch embedding failed: {e}")
+        return 0, len(batch)
+
+    embedded = 0
+    failed = 0
+    for doc, vec in zip(batch, vectors):
+        if vec:
+            try:
+                await db.chunks.update_one(
+                    {"_id": doc["_id"]},
+                    {"$set": {"embedding": vec, "embedding_model": vertex_services._EMBED_MODEL}},
+                )
+                embedded += 1
+            except Exception as e:
+                logger.warning(f"Failed to store embedding for chunk {doc.get('id')}: {e}")
+                failed += 1
+        else:
+            failed += 1
+    return embedded, failed
 
 
 async def _fetch_content_card(
@@ -829,11 +931,11 @@ async def vector_rag_search(
     db_category: Optional[str] = None,
 ) -> list:
     """
-    Vector similarity search over all published seo_pages + chapters.
-    Returns top-k results sorted by cosine similarity with [PAGE: slug] metadata.
+    Vector search over chunks collection using MongoDB Atlas $vectorSearch.
+    Returns top-k chunk-level results with content, topic_name, chapter_id directly.
 
     Falls back to empty list if embedding fails or no vectors exist yet.
-    Caches results for 300 seconds — Gemini embed calls are expensive.
+    Caches results for 600 seconds — Gemini embed calls are expensive.
     """
     _vk = _vector_rag_cache_key(query, subject_id, top_k)
     _vk_cat = f"{_vk}:{db_category or ''}"
@@ -844,10 +946,10 @@ async def vector_rag_search(
     try:
         return await asyncio.wait_for(
             _vector_rag_search_inner(query, subject_id, top_k, _vk_cat, db_category=db_category),
-            timeout=2.0,
+            timeout=3.0,
         )
     except asyncio.TimeoutError:
-        logger.warning(f"vector_rag_search timed out (2s budget): query='{query[:40]}'")
+        logger.warning(f"vector_rag_search timed out (3s budget): query='{query[:40]}'")
         return []
     except Exception as e:
         logger.error(f"vector_rag_search failed: {e}")
@@ -871,120 +973,70 @@ async def _vector_rag_search_inner(
         if not query_vec:
             return []
 
-        page_filter: dict = {"status": "published", "embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
-        subj = None
+        vs_filter: dict = {}
         if subject_id:
-            subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "slug": 1})
-            if subj and subj.get("slug"):
-                page_filter["subject_slug"] = subj["slug"]
-
-        _page_proj = {"_id": 0, "topic_slug": 1, "topic_title": 1,
-             "chapter_title": 1, "page_type": 1, "embedding": 1, "subject_slug": 1}
-        _ch_proj = {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "embedding": 1}
-        _cms_proj = {"_id": 0, "seo_slug": 1, "title": 1, "category": 1, "embedding": 1, "linked_subject_id": 1, "subject_id": 1}
-
-        ch_filter: dict = {"embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
-        if subject_id:
-            ch_filter["subject_id"] = subject_id
+            vs_filter["subject_id"] = subject_id
         if db_category:
-            ch_filter["category"] = db_category
+            vs_filter["category"] = db_category
 
-        cms_filter: dict = {"status": "published", "embedding": {"$exists": True}, "content": {"$exists": True, "$ne": ""}}
-        if subject_id:
-            cms_filter["$or"] = [{"linked_subject_id": subject_id}, {"subject_id": subject_id}]
+        pipeline = [
+            {
+                "$vectorSearch": {
+                    "index": "chunk_vector_index",
+                    "path": "embedding",
+                    "queryVector": query_vec,
+                    "numCandidates": max(top_k * 10, 100),
+                    "limit": top_k,
+                    **({"filter": vs_filter} if vs_filter else {}),
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "id": 1,
+                    "chapter_id": 1,
+                    "subject_id": 1,
+                    "topic_name": 1,
+                    "chapter_title": 1,
+                    "content": 1,
+                    "content_type": 1,
+                    "category": 1,
+                    "tags": 1,
+                    "score": {"$meta": "vectorSearchScore"},
+                }
+            },
+        ]
 
-        pages, chapters, cms_docs = await asyncio.gather(
-            db.seo_pages.find(page_filter, _page_proj).limit(15).to_list(15),
-            db.chapters.find(ch_filter, _ch_proj).limit(10).to_list(10),
-            db.cms_documents.find(cms_filter, _cms_proj).limit(5).to_list(5),
-        )
+        try:
+            results = await db.chunks.aggregate(pipeline).to_list(top_k)
+        except Exception as _vs_err:
+            logger.warning(f"$vectorSearch failed, falling back to app-side cosine: {str(_vs_err)[:150]}")
+            return await _vector_rag_search_fallback(query, query_vec, subject_id, top_k, _vk, db_category)
 
-        scored = []
-        q_dim = len(query_vec)
-        _subj_slug_to_id = {}
-        if subj and subj.get("slug"):
-            _subj_slug_to_id[subj["slug"]] = subject_id
+        top = []
+        for r in results:
+            score = r.get("score", 0.0)
+            if score < _VECTOR_SIM_THRESHOLD:
+                continue
+            top.append({
+                "slug": f"chunk/{r.get('id', '')}",
+                "title": r.get("topic_name") or r.get("chapter_title") or "",
+                "content": r.get("content", ""),
+                "score": score,
+                "source": "chunk",
+                "chapter_id": r.get("chapter_id", ""),
+                "subject_id": r.get("subject_id", ""),
+                "topic_name": r.get("topic_name", ""),
+                "content_type": r.get("content_type", ""),
+            })
 
-        for p in pages:
-            vec = p.get("embedding")
-            if vec and len(vec) == q_dim:
-                sim = vertex_services.cosine_similarity(query_vec, vec)
-                slug = p.get("topic_slug", "")
-                title = p.get("topic_title") or p.get("chapter_title") or slug
-                _p_subj_slug = p.get("subject_slug", "")
-                scored.append({
-                    "slug":    slug,
-                    "title":   title,
-                    "content": title,
-                    "score":   sim,
-                    "source":  "page",
-                    "page_type": p.get("page_type", ""),
-                    "subject_id": _subj_slug_to_id.get(_p_subj_slug, ""),
-                })
-        for ch in chapters:
-            vec = ch.get("embedding")
-            if vec and len(vec) == q_dim:
-                sim = vertex_services.cosine_similarity(query_vec, vec)
-                scored.append({
-                    "slug":    f"chapter/{ch.get('id', '')}",
-                    "title":   ch.get("title", ""),
-                    "content": ch.get("title", ""),
-                    "score":   sim,
-                    "source":  "chapter",
-                    "subject_id": ch.get("subject_id", ""),
-                })
-        for cms in cms_docs:
-            vec = cms.get("embedding")
-            if vec and len(vec) == q_dim:
-                sim = vertex_services.cosine_similarity(query_vec, vec)
-                scored.append({
-                    "slug":    cms.get("seo_slug", ""),
-                    "title":   cms.get("title", ""),
-                    "content": cms.get("title", ""),
-                    "score":   sim,
-                    "source":  "cms",
-                    "subject_id": cms.get("linked_subject_id") or cms.get("subject_id", ""),
-                })
-
-        scored.sort(key=lambda x: -x["score"])
-        top = [r for r in scored if r["score"] >= _VECTOR_SIM_THRESHOLD][:top_k]
-
-        if top:
-            _content_fetch_tasks = []
-            _content_fetch_indices = []
-            for i, hit in enumerate(top):
-                if hit["source"] == "page":
-                    _page_q = {"topic_slug": hit["slug"], "status": "published"}
-                    if hit.get("page_type"):
-                        _page_q["page_type"] = hit["page_type"]
-                    _content_fetch_tasks.append(
-                        db.seo_pages.find_one(_page_q, {"_id": 0, "content": 1})
-                    )
-                    _content_fetch_indices.append(i)
-                elif hit["source"] == "chapter":
-                    _ch_id = hit["slug"].replace("chapter/", "")
-                    _content_fetch_tasks.append(
-                        db.chapters.find_one({"id": _ch_id}, {"_id": 0, "content": 1})
-                    )
-                    _content_fetch_indices.append(i)
-                elif hit["source"] == "cms":
-                    _content_fetch_tasks.append(
-                        db.cms_documents.find_one({"seo_slug": hit["slug"], "status": "published"}, {"_id": 0, "content": 1})
-                    )
-                    _content_fetch_indices.append(i)
-            if _content_fetch_tasks:
-                _fetched = await asyncio.gather(*_content_fetch_tasks, return_exceptions=True)
-                for idx, doc in zip(_content_fetch_indices, _fetched):
-                    if doc and not isinstance(doc, Exception) and doc.get("content"):
-                        top[idx]["content"] = _extract_relevant_sections(doc["content"], [], max_chars=1500)
-        all_scores = [r["score"] for r in scored]
-        below = sum(1 for s in all_scores if s < _VECTOR_SIM_THRESHOLD)
+        below = len(results) - len(top)
 
         reranked = False
         global _voyage_backoff_until
         _voyage_available = voyage_client and top and time.time() >= _voyage_backoff_until
         if _voyage_available:
-            pre_rerank_slugs = [r["slug"] for r in top[:3]]
+            pre_rerank_titles = [r.get("title", "")[:30] for r in top[:3]]
             try:
                 _rerank_start = time.time()
                 documents = [r.get("content", "") or r.get("title", "") for r in top]
@@ -1008,35 +1060,88 @@ async def _vector_rag_search_inner(
                     item = dict(top[rr.index])
                     item["rerank_score"] = rr.relevance_score
                     reranked_top.append(item)
-                post_rerank_slugs = [r["slug"] for r in reranked_top[:3]]
+                post_rerank_titles = [r.get("title", "")[:30] for r in reranked_top[:3]]
                 logger.info(
-                    f"Voyage rerank: latency={_rerank_ms:.0f}ms | "
-                    f"before={pre_rerank_slugs} → after={post_rerank_slugs} | "
+                    f"Voyage rerank (chunks): latency={_rerank_ms:.0f}ms | "
+                    f"before={pre_rerank_titles} → after={post_rerank_titles} | "
                     f"query='{query[:40]}'"
                 )
                 top = reranked_top
                 reranked = True
             except asyncio.TimeoutError:
-                logger.warning(f"Voyage rerank timed out after 1.5s (falling back to cosine): query='{query[:40]}'")
+                logger.warning(f"Voyage rerank timed out after 1.5s: query='{query[:40]}'")
             except Exception as _rerank_err:
                 _err_str = str(_rerank_err)
                 if "429" in _err_str or "rate" in _err_str.lower() or "Ratelimit" in _err_str or "payment" in _err_str.lower():
                     _voyage_backoff_until = time.time() + 120
                     logger.warning(f"Voyage rerank rate-limited → backing off 120s: {_err_str[:100]}")
                 else:
-                    logger.warning(f"Voyage rerank failed (falling back to cosine): {_rerank_err}")
+                    logger.warning(f"Voyage rerank failed: {_rerank_err}")
 
-        _record_vector_search(query, len(top), [r["score"] for r in top] if top else [], below, len(scored), reranked=reranked)
+        _record_vector_search(query, len(top), [r["score"] for r in top] if top else [], below, len(results), reranked=reranked)
         logger.info(
-            f"Vector RAG: query='{query[:40]}' → {len(top)} results "
-            f"(best_sim={top[0]['score']:.3f} [{top[0]['slug']}], threshold={_VECTOR_SIM_THRESHOLD}, reranked={reranked})" if top else
-            f"Vector RAG: query='{query[:40]}' → no results above threshold ({_VECTOR_SIM_THRESHOLD})"
+            f"Vector RAG (chunks): query='{query[:40]}' → {len(top)} results "
+            f"(best_score={top[0]['score']:.3f}, threshold={_VECTOR_SIM_THRESHOLD}, reranked={reranked})" if top else
+            f"Vector RAG (chunks): query='{query[:40]}' → no results above threshold ({_VECTOR_SIM_THRESHOLD})"
         )
         _vector_rag_cache[_vk] = top
         return top
     except Exception as e:
         logger.error(f"vector_rag_search failed: {e}")
         return []
+
+
+async def _vector_rag_search_fallback(
+    query: str,
+    query_vec: list,
+    subject_id: Optional[str],
+    top_k: int,
+    _vk: str,
+    db_category: Optional[str] = None,
+) -> list:
+    """App-side cosine similarity fallback when $vectorSearch index is unavailable."""
+    chunk_filter: dict = {"embedding": {"$exists": True}}
+    if subject_id:
+        chunk_filter["subject_id"] = subject_id
+    if db_category:
+        chunk_filter["category"] = db_category
+
+    _proj = {
+        "_id": 0, "id": 1, "chapter_id": 1, "subject_id": 1,
+        "topic_name": 1, "chapter_title": 1, "content": 1,
+        "content_type": 1, "category": 1, "embedding": 1,
+    }
+    _fallback_limit = max(top_k * 20, 500)
+    chunks = await db.chunks.find(chunk_filter, _proj).limit(_fallback_limit).to_list(_fallback_limit)
+
+    q_dim = len(query_vec)
+    scored = []
+    for c in chunks:
+        vec = c.get("embedding")
+        if vec and len(vec) == q_dim:
+            sim = vertex_services.cosine_similarity(query_vec, vec)
+            if sim >= _VECTOR_SIM_THRESHOLD:
+                scored.append({
+                    "slug": f"chunk/{c.get('id', '')}",
+                    "title": c.get("topic_name") or c.get("chapter_title") or "",
+                    "content": c.get("content", ""),
+                    "score": sim,
+                    "source": "chunk",
+                    "chapter_id": c.get("chapter_id", ""),
+                    "subject_id": c.get("subject_id", ""),
+                    "topic_name": c.get("topic_name", ""),
+                    "content_type": c.get("content_type", ""),
+                })
+
+    scored.sort(key=lambda x: -x["score"])
+    top = scored[:top_k]
+    _record_vector_search(query, len(top), [r["score"] for r in top] if top else [], len(chunks) - len(scored), len(chunks), reranked=False)
+    logger.info(
+        f"Vector RAG fallback (chunks): query='{query[:40]}' → {len(top)} results" if top else
+        f"Vector RAG fallback (chunks): query='{query[:40]}' → no results"
+    )
+    _vector_rag_cache[_vk] = top
+    return top
 
 
 async def rag_search(
@@ -1961,9 +2066,11 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
         if cid:
             chunk_chapter_map[cid] = cc
 
-    # SEO vector hits (have real topic slugs → /learn/...)
     for hit in rag_ctx.get("vector_hits", []):
-        _add(hit.get("slug", ""), hit.get("title", ""), hit.get("url", ""))
+        _hit_slug = hit.get("slug", "")
+        if _hit_slug.startswith("chunk/") and hit.get("chapter_id"):
+            _hit_slug = f"chapter/{hit['chapter_id']}"
+        _add(_hit_slug, hit.get("title") or hit.get("topic_name", ""), hit.get("url", ""), hit.get("subject_id", ""))
 
     # Chunks — group by parent chapter so 15 chunks from 3 chapters show 3 source entries
     for chunk in rag_ctx.get("chunks", []):
@@ -2188,31 +2295,27 @@ def build_rag_system_prompt(
                 _budget_used += len(_trimmed_card)
 
             if vector_hits and _budget_used < _GROUNDING_BUDGET:
-                grounding += "**[VECTOR SEARCH RESULTS — Semantically matched pages]:**\n\n"
-                _VH_MAX_HITS = 3
+                grounding += "**[VECTOR SEARCH RESULTS — Semantically matched chunks]:**\n\n"
+                _VH_MAX_HITS = 5
                 _seen_titles = set()
                 _sorted_hits = sorted(vector_hits, key=lambda h: h.get("score", 0), reverse=True)
                 for hit in _sorted_hits[:_VH_MAX_HITS]:
                     if _budget_used >= _GROUNDING_BUDGET:
                         break
                     slug = hit.get("slug", "")
-                    title = hit.get("title", slug)
-                    if title.lower() in _seen_titles:
-                        continue
-                    _seen_titles.add(title.lower())
+                    title = hit.get("title") or hit.get("topic_name") or slug
+                    _title_key = title.lower()
                     _raw_content = hit.get("content", "")
+                    if _title_key in _seen_titles and not _raw_content:
+                        continue
+                    _seen_titles.add(_title_key)
                     _vh_budget = min(1500, _GROUNDING_BUDGET - _budget_used)
-                    if _raw_content and _intent == "notes" and query:
-                        _raw_content = _extract_relevant_sections(
-                            _raw_content, _extract_keywords(query),
-                            max_chars=_vh_budget, intent=_intent, query=query,
-                        )
-                    elif len(_raw_content) > _vh_budget:
+                    if len(_raw_content) > _vh_budget:
                         _raw_content = _raw_content[:_vh_budget] + "…"
                     score = hit.get("score", 0)
-                    _pt = hit.get("page_type", "")
-                    _pt_label = f" | type={_pt}" if _pt else ""
-                    _vh_block = f"[PAGE: {slug}{_pt_label}] — {title} (relevance: {score:.2f})\n{_raw_content}\n\n"
+                    _ct = hit.get("content_type", "")
+                    _ct_label = f" | type={_ct}" if _ct else ""
+                    _vh_block = f"[CHUNK: {title}{_ct_label}] (relevance: {score:.2f})\n{_raw_content}\n\n"
                     grounding += _vh_block
                     _budget_used += len(_vh_block)
 
