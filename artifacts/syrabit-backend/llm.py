@@ -252,18 +252,18 @@ class _SmartKeyPool:
       rpm_window     list[float]    — timestamps of requests in the current minute
       rpm_limit      int            — max requests per minute for this provider
 
-    pick() uses RPM-aware scoring: when a slot hits 70-80% of its RPM limit,
+    pick() uses RPM-aware scoring: when a slot hits 70% of its RPM limit,
     it gets deprioritized so traffic shifts to the next provider BEFORE hitting 429.
     """
     _RL_COOLDOWN  = 20.0
     _ERR_COOLDOWN = 7.0
-    _RPM_SOFT_THRESHOLD = 0.80
+    _RPM_SOFT_THRESHOLD = 0.70
     _RPM_HARD_THRESHOLD = 0.90
 
     _PROVIDER_RPM_LIMITS = {
         "groq": 30,
         "cerebras": 30,
-        "sarvam": 60,
+        "sarvam": 30,
         "gemini": 30,
         "openrouter": 60,
         "fireworksai": 60,
