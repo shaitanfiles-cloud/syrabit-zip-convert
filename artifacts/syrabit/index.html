@@ -53,10 +53,7 @@
     <!-- Backend API preconnect — injected at build time by Vite (see vite.config.js htmlPlugin) -->
     <!--BACKEND_PRECONNECT-->
 
-    <!-- Preconnect to third-party origins used on initial load -->
-    <link rel="preconnect" href="https://us.i.posthog.com" crossorigin />
     <link rel="dns-prefetch" href="https://us.i.posthog.com" />
-    <link rel="preconnect" href="https://us-assets.i.posthog.com" crossorigin />
     <link rel="dns-prefetch" href="https://us-assets.i.posthog.com" />
     <link rel="dns-prefetch" href="https://assets.emergent.sh" />
 
@@ -156,11 +153,12 @@
 
     <script>
       (function(){
-        var CURRENT='syrabit-v3.1-pwa';
+        var V='7';
+        var keep=new Set(['syrabit-static-v'+V,'syrabit-runtime-v'+V]);
         if('caches' in window){
           caches.keys().then(function(names){
             names.forEach(function(name){
-              if(name!==CURRENT) caches.delete(name);
+              if(!keep.has(name)) caches.delete(name);
             });
           });
         }
@@ -197,17 +195,9 @@
       </div>
     </noscript>
     <div id="root"></div>
-        <!--
-      This HTML file is a template.
-      If you open it directly in the browser, you will see an empty page.
-
-      You can add webfonts, meta tags, or analytics to this file.
-      The build step will place the bundled scripts into the <body> tag.
-
-      To begin the development, run `npm start` or `yarn start`.
-      To create a production bundle, use `npm run build` or `yarn build`.
-    -->
-        <script>
+      <script type="module" src="/src/index.jsx"></script>
+      <script>
+        (window.requestIdleCallback||function(cb){setTimeout(cb,1500)})(function(){
             !(function (t, e) {
                 var o, n, p, r;
                 e.__SV ||
@@ -271,13 +261,13 @@
             })(document, window.posthog || []);
             posthog.init("phc_xAvL2Iq4tFmANRE7kzbKwaSqp1HJjN7x48s3vr0CMjs", {
                 api_host: "https://us.i.posthog.com",
-                person_profiles: "identified_only", // or 'always' to create profiles for anonymous users as well,
+                person_profiles: "identified_only",
                 session_recording: {
                     recordCrossOriginIframes: true,
                     capturePerformance: false,
                 },
             });
-        </script>
-      <script type="module" src="/src/index.jsx"></script>
+        },{timeout:3000});
+      </script>
   </body>
 </html>

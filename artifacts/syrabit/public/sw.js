@@ -1,4 +1,4 @@
-const CACHE_VERSION = '6';
+const CACHE_VERSION = '7';
 const STATIC_CACHE = 'syrabit-static-v' + CACHE_VERSION;
 const RUNTIME_CACHE = 'syrabit-runtime-v' + CACHE_VERSION;
 
@@ -44,7 +44,12 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (request.mode === 'navigate') {
-    event.respondWith(networkFirst(request));
+    event.respondWith(staleWhileRevalidate(request));
+    return;
+  }
+
+  if (isHashedAsset(url.pathname)) {
+    event.respondWith(cacheFirst(request));
     return;
   }
 
@@ -53,25 +58,35 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  event.respondWith(networkFirst(request));
+  event.respondWith(staleWhileRevalidate(request));
 });
 
-async function networkFirst(request) {
-  try {
-    const response = await fetch(request);
+function isHashedAsset(pathname) {
+  return /\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\.(js|css)$/.test(pathname);
+}
+
+async function staleWhileRevalidate(request) {
+  const cached = await caches.match(request);
+  const fetchPromise = fetch(request).then((response) => {
     if (response.ok) {
-      const cache = await caches.open(RUNTIME_CACHE);
-      cache.put(request, response.clone());
+      const cache_promise = caches.open(RUNTIME_CACHE);
+      cache_promise.then((cache) => cache.put(request, response.clone()));
     }
     return response;
-  } catch {
-    const cached = await caches.match(request);
-    if (cached) return cached;
-    if (request.mode === 'navigate') {
-      return caches.match('/offline.html');
-    }
-    return new Response('', { status: 408 });
+  }).catch(() => null);
+
+  if (cached) {
+    fetchPromise.catch(() => {});
+    return cached;
   }
+
+  const networkResponse = await fetchPromise;
+  if (networkResponse) return networkResponse;
+
+  if (request.mode === 'navigate') {
+    return caches.match('/offline.html');
+  }
+  return new Response('', { status: 408 });
 }
 
 async function cacheFirst(request) {
