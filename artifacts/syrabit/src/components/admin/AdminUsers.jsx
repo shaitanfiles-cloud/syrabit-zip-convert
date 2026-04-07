@@ -8,7 +8,7 @@ import { adminGetUsers, adminUpdateUserStatus, adminUpdateUserPlan, churnRisk, a
 import { toast } from 'sonner';
 
 const PLAN_COLORS = {
-  free: 'bg-slate-700 text-slate-300',
+  free: 'bg-white/[0.06] text-white/50',
   starter: 'bg-violet-700/30 text-violet-300',
   pro: 'bg-amber-700/30 text-amber-300',
 };
@@ -20,9 +20,9 @@ const STATUS_COLORS = {
 };
 
 const RISK_COLORS = {
-  high:   { text: '#ef4444', bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.25)', label: '🔴 High' },
-  medium: { text: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.25)', label: '🟡 Medium' },
-  low:    { text: '#10b981', bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.25)', label: '🟢 Low' },
+  high:   { text: '#ef4444', bg: 'rgba(239,68,68,0.12)', border: 'rgba(239,68,68,0.25)', label: 'High' },
+  medium: { text: '#f59e0b', bg: 'rgba(245,158,11,0.12)', border: 'rgba(245,158,11,0.25)', label: 'Medium' },
+  low:    { text: '#10b981', bg: 'rgba(16,185,129,0.12)', border: 'rgba(16,185,129,0.25)', label: 'Low' },
 };
 
 function RiskBadge({ risk, score }) {
@@ -59,20 +59,24 @@ function CreditsModal({ user, adminToken, onClose, onUpdated }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)' }}>
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-sm mx-4 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)' }}>
+      <div className="w-full max-w-sm mx-4 rounded-2xl p-6 shadow-2xl" style={{
+        background: 'rgba(15,15,30,0.95)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        backdropFilter: 'blur(20px)',
+      }}>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h3 className="text-white font-semibold text-sm">Credits Management</h3>
-            <p className="text-slate-500 text-xs mt-0.5">{user.name || user.email}</p>
-            <p className="text-slate-400 text-xs">Today: {user.credits_used || 0} used (daily reset)</p>
+            <p className="text-white/25 text-xs mt-0.5">{user.name || user.email}</p>
+            <p className="text-white/35 text-xs">Today: {user.credits_used || 0} used (daily reset)</p>
           </div>
-          <button onClick={onClose} className="p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-800">
+          <button onClick={onClose} className="p-1.5 rounded-lg text-white/30 hover:text-white hover:bg-white/[0.06]">
             <X size={16} />
           </button>
         </div>
 
-        <div className="flex gap-1 mb-4 p-1 bg-slate-800 rounded-lg">
+        <div className="flex gap-1 mb-4 p-1 rounded-xl" style={{ background: 'rgba(255,255,255,0.04)' }}>
           {[
             { id: 'add', label: 'Add Credits', icon: Plus },
             { id: 'deduct', label: 'Deduct', icon: Minus },
@@ -80,48 +84,53 @@ function CreditsModal({ user, adminToken, onClose, onUpdated }) {
           ].map(({ id, label, icon: Icon }) => (
             <button key={id} onClick={() => setMode(id)}
               className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-lg text-xs font-medium transition-all ${
-                mode === id ? 'bg-violet-600 text-white' : 'text-slate-400 hover:text-slate-200'
-              }`}>
+                mode === id ? 'text-white' : 'text-white/30 hover:text-white/60'
+              }`}
+              style={mode === id ? { background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 2px 12px rgba(124,58,237,0.3)' } : {}}>
               <Icon size={10} /> {label}
             </button>
           ))}
         </div>
 
-        {mode === 'add' && <p className="text-xs text-slate-500 mb-3">Restores daily credits — reduces today's usage count.</p>}
-        {mode === 'deduct' && <p className="text-xs text-slate-500 mb-3">Marks credits as consumed — increases today's usage count.</p>}
-        {mode === 'reset' && <p className="text-xs text-slate-500 mb-3">Resets today's usage to 0 — restores full daily allowance.</p>}
+        {mode === 'add' && <p className="text-xs text-white/25 mb-3">Restores daily credits — reduces today's usage count.</p>}
+        {mode === 'deduct' && <p className="text-xs text-white/25 mb-3">Marks credits as consumed — increases today's usage count.</p>}
+        {mode === 'reset' && <p className="text-xs text-white/25 mb-3">Resets today's usage to 0 — restores full daily allowance.</p>}
 
         {mode !== 'reset' && (
           <div className="mb-3">
-            <label className="text-xs text-slate-400 mb-1 block">Amount</label>
+            <label className="text-xs text-white/30 mb-1 block">Amount</label>
             <input
               type="number"
               min="1"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
               placeholder="e.g. 100"
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-violet-500 outline-none"
+              className="w-full rounded-xl px-3 py-2 text-sm text-white focus:border-violet-500 outline-none"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
             />
           </div>
         )}
 
         <div className="mb-4">
-          <label className="text-xs text-slate-400 mb-1 block">Reason (optional)</label>
+          <label className="text-xs text-white/30 mb-1 block">Reason (optional)</label>
           <input
             type="text"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             placeholder="e.g. Compensation, promo..."
-            className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-violet-500 outline-none"
+            className="w-full rounded-xl px-3 py-2 text-sm text-white focus:border-violet-500 outline-none"
+            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)' }}
           />
         </div>
 
         <div className="flex gap-2">
-          <button onClick={onClose} className="flex-1 py-2 rounded-lg text-sm text-slate-400 bg-slate-800 hover:bg-slate-700 border border-slate-700">
+          <button onClick={onClose} className="flex-1 py-2 rounded-xl text-sm text-white/40 transition-colors hover:text-white/60"
+            style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
             Cancel
           </button>
           <button onClick={handleSave} disabled={saving || (mode !== 'reset' && (!amount || parseInt(amount, 10) <= 0))}
-            className="flex-1 py-2 rounded-lg text-sm text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-50 flex items-center justify-center gap-1.5">
+            className="flex-1 py-2 rounded-xl text-sm text-white disabled:opacity-50 flex items-center justify-center gap-1.5 transition-all hover:opacity-90"
+            style={{ background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 2px 12px rgba(124,58,237,0.3)' }}>
             {saving && <Loader2 size={12} className="animate-spin" />}
             {mode === 'add' ? 'Add Credits' : mode === 'reset' ? 'Reset Credits' : 'Deduct Credits'}
           </button>
@@ -207,7 +216,7 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
 
   const atRiskUsers = riskData?.users?.filter(u => u.risk === 'high') || [];
 
-  if (loading && users.length === 0) return <div className="flex justify-center p-10"><Loader2 size={24} className="animate-spin text-slate-400" /></div>;
+  if (loading && users.length === 0) return <div className="flex justify-center p-10"><Loader2 size={24} className="animate-spin text-violet-400/60" /></div>;
 
   return (
     <div className="p-6 space-y-4">
@@ -221,26 +230,28 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
       )}
 
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h2 className="text-slate-200 font-semibold">Users ({users.length}{hasMore ? '+' : ''})</h2>
+        <h2 className="text-white/90 font-semibold text-lg">Users ({users.length}{hasMore ? '+' : ''})</h2>
         <div className="flex items-center gap-3">
           <button onClick={loadChurnRisk} disabled={riskLoading}
-            style={{ background: 'rgba(239,68,68,0.12)', border: '1px solid rgba(239,68,68,0.25)', color: '#ef4444', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all"
+            style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.2)', color: '#ef4444' }}>
             {riskLoading ? <Loader2 size={12} className="animate-spin" /> : <TrendingDown size={12} />}
             Churn Risk
           </button>
           <div className="relative w-60">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-            <Input placeholder="Search users (server-side)..." value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
-              className="pl-8 bg-slate-800 border-slate-700 text-white text-sm h-8" />
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/25" />
+            <input placeholder="Search users (server-side)..." value={searchInput} onChange={(e) => setSearchInput(e.target.value)}
+              className="w-full pl-8 h-8 rounded-xl text-sm text-white placeholder-white/25 outline-none focus:border-violet-500"
+              style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }} />
           </div>
         </div>
       </div>
 
       {riskData && (
-        <div style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.15)', borderRadius: 12, padding: 16 }}>
+        <div className="rounded-2xl p-4" style={{ background: 'rgba(239,68,68,0.04)', border: '1px solid rgba(239,68,68,0.12)' }}>
           <div className="flex items-center gap-2 mb-3">
             <TrendingDown size={15} color="#ef4444" />
-            <span style={{ fontWeight: 700, color: '#e8e8e8', fontSize: 14 }}>Churn Risk Summary</span>
+            <span className="font-bold text-white/90 text-sm">Churn Risk Summary</span>
           </div>
           <div className="grid grid-cols-3 gap-3 mb-3">
             {[
@@ -248,22 +259,22 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
               { label: 'Medium Risk', count: riskData.summary.medium_risk, color: '#f59e0b' },
               { label: 'Low Risk', count: riskData.summary.low_risk, color: '#10b981' },
             ].map(s => (
-              <div key={s.label} style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '10px 14px', textAlign: 'center' }}>
-                <div style={{ fontSize: 22, fontWeight: 900, color: s.color }}>{s.count}</div>
-                <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.5)' }}>{s.label}</div>
+              <div key={s.label} className="rounded-xl p-3 text-center" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                <div className="text-xl font-black" style={{ color: s.color }}>{s.count}</div>
+                <div className="text-[11px] text-white/30">{s.label}</div>
               </div>
             ))}
           </div>
           {atRiskUsers.length > 0 && (
             <div>
-              <p style={{ fontSize: 11, fontWeight: 700, color: '#ef4444', marginBottom: 6, textTransform: 'uppercase' }}>High Risk Users (take action now)</p>
+              <p className="text-[11px] font-bold text-red-400 mb-2 uppercase tracking-wide">High Risk Users (take action)</p>
               {atRiskUsers.slice(0, 5).map(u => (
-                <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                  <div style={{ flex: 1 }}>
-                    <span style={{ fontSize: 13, color: '#e8e8e8', fontWeight: 600 }}>{u.name || u.email}</span>
-                    <span style={{ fontSize: 11, color: 'rgba(232,232,232,0.45)', marginLeft: 8 }}>{u.email}</span>
+                <div key={u.id} className="flex items-center gap-3 py-2" style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                  <div className="flex-1">
+                    <span className="text-sm text-white/80 font-semibold">{u.name || u.email}</span>
+                    <span className="text-xs text-white/25 ml-2">{u.email}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: 'rgba(232,232,232,0.45)' }}>{u.factors?.join(' · ')}</div>
+                  <div className="text-xs text-white/25">{u.factors?.join(' · ')}</div>
                   <RiskBadge risk={u.risk} score={u.risk_score} />
                 </div>
               ))}
@@ -272,27 +283,31 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
         </div>
       )}
 
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden">
+      <div className="rounded-2xl overflow-hidden" style={{
+        background: 'rgba(15,15,30,0.6)',
+        border: '1px solid rgba(255,255,255,0.06)',
+        backdropFilter: 'blur(12px)',
+      }}>
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-slate-800">
-              <th className="text-left text-slate-500 font-medium px-4 py-3">User</th>
-              <th className="text-left text-slate-500 font-medium px-4 py-3">Plan</th>
-              <th className="text-left text-slate-500 font-medium px-4 py-3">Status</th>
-              <th className="text-left text-slate-500 font-medium px-4 py-3">Credits</th>
-              {Object.keys(riskMap).length > 0 && <th className="text-left text-slate-500 font-medium px-4 py-3">Churn Risk</th>}
-              <th className="text-left text-slate-500 font-medium px-4 py-3">Actions</th>
+            <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+              <th className="text-left text-white/30 font-medium px-4 py-3 text-xs">User</th>
+              <th className="text-left text-white/30 font-medium px-4 py-3 text-xs">Plan</th>
+              <th className="text-left text-white/30 font-medium px-4 py-3 text-xs">Status</th>
+              <th className="text-left text-white/30 font-medium px-4 py-3 text-xs">Credits</th>
+              {Object.keys(riskMap).length > 0 && <th className="text-left text-white/30 font-medium px-4 py-3 text-xs">Churn Risk</th>}
+              <th className="text-left text-white/30 font-medium px-4 py-3 text-xs">Actions</th>
             </tr>
           </thead>
           <tbody>
             {users.map((user) => {
               const risk = riskMap[user.id];
               return (
-                <tr key={user.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
+                <tr key={user.id} className="hover:bg-white/[0.02] transition-colors" style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
                   <td className="px-4 py-3">
                     <div>
-                      <p className="text-slate-200 font-medium">{user.name}</p>
-                      <p className="text-slate-500 text-xs">{user.email}</p>
+                      <p className="text-white/80 font-medium">{user.name}</p>
+                      <p className="text-white/25 text-xs">{user.email}</p>
                     </div>
                   </td>
                   <td className="px-4 py-3">
@@ -303,9 +318,9 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
                           <ChevronDown size={10} />
                         </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent className="bg-slate-900 border-slate-800">
+                      <DropdownMenuContent style={{ background: 'rgba(15,15,30,0.95)', border: '1px solid rgba(255,255,255,0.08)' }}>
                         {['free', 'starter', 'pro'].map((p) => (
-                          <DropdownMenuItem key={p} className="text-slate-300 focus:bg-slate-800" onClick={() => handlePlanChange(user.id, p)}>
+                          <DropdownMenuItem key={p} className="text-white/60 focus:bg-white/[0.06]" onClick={() => handlePlanChange(user.id, p)}>
                             {p}
                           </DropdownMenuItem>
                         ))}
@@ -320,7 +335,7 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
                   <td className="px-4 py-3">
                     <button
                       onClick={() => setCreditsUser(user)}
-                      className="flex items-center gap-1.5 text-slate-400 hover:text-violet-300 text-xs transition-colors"
+                      className="flex items-center gap-1.5 text-white/30 hover:text-violet-300 text-xs transition-colors"
                       title="Manage credits"
                     >
                       <CreditCard size={12} />
@@ -329,27 +344,27 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
                   </td>
                   {Object.keys(riskMap).length > 0 && (
                     <td className="px-4 py-3">
-                      {risk ? <RiskBadge risk={risk.risk} score={risk.risk_score} /> : <span className="text-slate-600 text-xs">—</span>}
+                      {risk ? <RiskBadge risk={risk.risk} score={risk.risk_score} /> : <span className="text-white/15 text-xs">—</span>}
                     </td>
                   )}
                   <td className="px-4 py-3">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" className="h-7 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800">
-                          Actions <ChevronDown size={10} className="ml-1" />
-                        </Button>
+                        <button className="h-7 px-2 text-xs text-white/30 hover:text-white/60 rounded-lg hover:bg-white/[0.04] transition-colors flex items-center gap-1">
+                          Actions <ChevronDown size={10} />
+                        </button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent className="bg-slate-900 border-slate-800">
-                        <DropdownMenuItem className="text-slate-300 focus:bg-slate-800" onClick={() => setCreditsUser(user)}>
+                      <DropdownMenuContent style={{ background: 'rgba(15,15,30,0.95)', border: '1px solid rgba(255,255,255,0.08)' }}>
+                        <DropdownMenuItem className="text-white/60 focus:bg-white/[0.06]" onClick={() => setCreditsUser(user)}>
                           <CreditCard size={14} className="mr-2 text-violet-400" /> Manage Credits
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-slate-300 focus:bg-slate-800" onClick={() => handleStatusChange(user.id, 'active')}>
+                        <DropdownMenuItem className="text-white/60 focus:bg-white/[0.06]" onClick={() => handleStatusChange(user.id, 'active')}>
                           <CheckCircle size={14} className="mr-2 text-emerald-400" /> Set Active
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-slate-300 focus:bg-slate-800" onClick={() => handleStatusChange(user.id, 'suspended')}>
+                        <DropdownMenuItem className="text-white/60 focus:bg-white/[0.06]" onClick={() => handleStatusChange(user.id, 'suspended')}>
                           Set Suspended
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-red-400 focus:bg-slate-800" onClick={() => handleStatusChange(user.id, 'banned')}>
+                        <DropdownMenuItem className="text-red-400 focus:bg-white/[0.06]" onClick={() => handleStatusChange(user.id, 'banned')}>
                           <Ban size={14} className="mr-2" /> Ban User
                         </DropdownMenuItem>
                       </DropdownMenuContent>
@@ -362,13 +377,14 @@ export default function AdminUsers({ adminToken, navContext, onNavigate }) {
         </table>
         {loading && (
           <div className="flex justify-center p-4">
-            <Loader2 size={16} className="animate-spin text-slate-500" />
+            <Loader2 size={16} className="animate-spin text-violet-400/40" />
           </div>
         )}
         {hasMore && !loading && (
           <div className="flex justify-center p-4">
             <button onClick={() => loadUsers(search, page + 1)}
-              className="text-xs text-slate-400 hover:text-violet-300 px-4 py-2 rounded-lg border border-slate-700 hover:border-violet-500 transition-colors">
+              className="text-xs text-white/30 hover:text-violet-300 px-4 py-2 rounded-xl transition-colors"
+              style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
               Load more users
             </button>
           </div>

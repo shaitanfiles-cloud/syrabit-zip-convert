@@ -11,7 +11,7 @@ const adminHeaders = (token) => {
 };
 
 const TIERS = [
-  { id: 'free',       label: 'Free',       color: 'text-slate-300',  bg: 'bg-slate-500/10', border: 'border-slate-500/20' },
+  { id: 'free',       label: 'Free',       color: 'text-white/60',   bg: 'bg-white/[0.06]', border: 'border-white/[0.12]' },
   { id: 'starter',    label: 'Starter',    color: 'text-violet-300', bg: 'bg-violet-500/10',border: 'border-violet-500/20' },
   { id: 'pro',        label: 'Pro',        color: 'text-amber-300',  bg: 'bg-amber-500/10', border: 'border-amber-500/20'  },
   { id: 'enterprise', label: 'Enterprise', color: 'text-cyan-300',   bg: 'bg-cyan-500/10',  border: 'border-cyan-500/20'  },
@@ -29,7 +29,7 @@ function TierCard({ tier, policy, onSave }) {
   const [draft, setDraft] = useState({...policy});
   const c = TIERS.find((t) => t.id === tier);
   return (
-    <div className={`rounded-xl border ${c.border} overflow-hidden`} style={{ background: 'rgba(255,255,255,0.02)' }}>
+    <div className={`rounded-xl border ${c.border} overflow-hidden`} style={{ background: 'rgba(15,15,30,0.6)', backdropFilter: 'blur(12px)' }}>
       <div className={`flex items-center justify-between p-3 ${c.bg}`}>
         <span className={`text-sm font-bold ${c.color}`}>{c.label}</span>
         <button onClick={() => setEditing(!editing)} className="text-white/30 hover:text-white/60 p-1">
@@ -96,7 +96,7 @@ export default function AdminRateLimits({ adminToken, onNavigate }) {
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[[Cpu,'Active Requests',stats.active_requests,'text-white'],[Zap,'Tokens Today',(stats.tokens_today/1000).toFixed(0)+'K','text-amber-400'],[Globe,'Budget Used',budgetPct.toFixed(1)+'%',budgetPct>80?'text-red-400':'text-emerald-400'],[CheckCircle2,'Cost Mode',stats.cost_degraded?'Degraded':'Normal',stats.cost_degraded?'text-red-400':'text-emerald-400']].map(([Icon,label,val,color]) => (
-          <div key={label} className="rounded-xl p-3 border border-white/6" style={{ background: 'rgba(255,255,255,0.02)' }}>
+          <div key={label} className="rounded-xl p-3" style={{ background: 'rgba(15,15,30,0.6)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(12px)' }}>
             <Icon size={16} className={`${color} mb-2`} />
             <p className={`text-xl font-bold ${color}`}>{val}</p>
             <p className="text-[10px] text-white/30">{label}</p>

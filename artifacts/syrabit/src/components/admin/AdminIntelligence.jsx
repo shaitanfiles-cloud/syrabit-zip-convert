@@ -9,12 +9,20 @@ import { toast } from 'sonner';
 import { SectionErrorBoundary } from '@/components/ErrorBoundary';
 
 function MetricCard({ label, value, sub, color = '#8b5cf6', alert }) {
-  const alertColors = { green: 'border-emerald-500/30', red: 'border-red-500/30', amber: 'border-amber-500/30' };
+  const alertBorders = {
+    green: 'rgba(16,185,129,0.2)',
+    red: 'rgba(239,68,68,0.2)',
+    amber: 'rgba(245,158,11,0.2)',
+  };
   return (
-    <div className={`bg-slate-900 border rounded-xl p-4 ${alertColors[alert] || 'border-slate-800'}`}>
-      <p className="text-xs text-slate-500 mb-1">{label}</p>
+    <div className="rounded-xl p-4" style={{
+      background: 'rgba(15,15,30,0.6)',
+      border: `1px solid ${alertBorders[alert] || 'rgba(255,255,255,0.06)'}`,
+      backdropFilter: 'blur(12px)',
+    }}>
+      <p className="text-xs text-white/30 mb-1">{label}</p>
       <p className="text-2xl font-bold font-mono" style={{ color }}>{value}</p>
-      {sub && <p className="text-[11px] text-slate-500 mt-1">{sub}</p>}
+      {sub && <p className="text-[11px] text-white/25 mt-1">{sub}</p>}
     </div>
   );
 }
@@ -25,13 +33,13 @@ function ProviderRow({ name, stats }) {
     <div className="flex items-center justify-between py-2.5 px-3 rounded-lg" style={{ background: 'rgba(255,255,255,0.02)' }}>
       <div className="flex items-center gap-3">
         <div className="w-2 h-2 rounded-full" style={{ background: statusColor }} />
-        <span className="text-sm text-white font-medium capitalize">{name}</span>
-        <span className="text-[10px] text-slate-500">{stats.models?.join(', ')}</span>
+        <span className="text-sm text-white/80 font-medium capitalize">{name}</span>
+        <span className="text-[10px] text-white/25">{stats.models?.join(', ')}</span>
       </div>
       <div className="flex items-center gap-4 text-xs">
-        <span className="text-slate-400">{stats.calls} calls</span>
+        <span className="text-white/30">{stats.calls} calls</span>
         <span style={{ color: statusColor }}>{stats.success_rate}%</span>
-        <span className="text-slate-500 font-mono">{stats.avg_latency_ms}ms</span>
+        <span className="text-white/25 font-mono">{stats.avg_latency_ms}ms</span>
       </div>
     </div>
   );
@@ -86,21 +94,26 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
+          <h2 className="text-xl font-bold text-white/90 flex items-center gap-2">
             <Activity size={20} className="text-violet-400" /> Intelligence Panel
           </h2>
-          <p className="text-sm text-slate-500 mt-1">Real-time system health, content quality, and pipeline metrics</p>
+          <p className="text-sm text-white/30 mt-1">Real-time system health, content quality, and pipeline metrics</p>
         </div>
-        <button onClick={loadData} className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-slate-400 border border-slate-700 hover:bg-slate-800 transition-colors">
+        <button onClick={loadData} className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs text-white/30 hover:text-white transition-colors"
+          style={{ border: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.04)' }}>
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
 
       <SectionErrorBoundary name="LLM Provider Health">
-        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5">
+        <div className="rounded-2xl p-5" style={{
+          background: 'rgba(15,15,30,0.6)',
+          border: '1px solid rgba(255,255,255,0.06)',
+          backdropFilter: 'blur(12px)',
+        }}>
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Server size={16} className="text-blue-400" /> LLM Provider Health
-            <span className="text-[10px] text-slate-500 ml-auto">Last 1h</span>
+            <span className="text-[10px] text-white/25 ml-auto">Last 1h</span>
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
             <MetricCard label="Total Calls" value={llm_health.total_calls} color="#60a5fa" />
@@ -118,7 +131,7 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
               <ProviderRow key={name} name={name} stats={stats} />
             ))}
             {Object.keys(llm_health.providers || {}).length === 0 && (
-              <p className="text-xs text-slate-500 text-center py-3">No LLM calls recorded yet</p>
+              <p className="text-xs text-white/25 text-center py-3">No LLM calls recorded yet</p>
             )}
           </div>
         </div>
@@ -126,7 +139,11 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         <SectionErrorBoundary name="Vector Search">
-          <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5">
+          <div className="rounded-2xl p-5" style={{
+            background: 'rgba(15,15,30,0.6)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            backdropFilter: 'blur(12px)',
+          }}>
             <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
               <Database size={16} className="text-emerald-400" /> RAG Vector Search
             </h3>
@@ -138,13 +155,17 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
                 <MetricCard label="Zero-Result Rate" value={`${vector_search.zero_result_pct}%`} color={vector_search.zero_result_pct < 10 ? '#10b981' : '#ef4444'} />
               </div>
             ) : (
-              <p className="text-xs text-slate-500 text-center py-6">No vector searches recorded yet</p>
+              <p className="text-xs text-white/25 text-center py-6">No vector searches recorded yet</p>
             )}
           </div>
         </SectionErrorBoundary>
 
         <SectionErrorBoundary name="Pipeline Runs">
-          <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5">
+          <div className="rounded-2xl p-5" style={{
+            background: 'rgba(15,15,30,0.6)',
+            border: '1px solid rgba(255,255,255,0.06)',
+            backdropFilter: 'blur(12px)',
+          }}>
             <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
               <Zap size={16} className="text-amber-400" /> Pipeline Runs (24h)
             </h3>
@@ -156,14 +177,18 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
                 <MetricCard label="Chunks Created" value={pipeline.total_chunks} color="#60a5fa" />
               </div>
             ) : (
-              <p className="text-xs text-slate-500 text-center py-6">No pipeline runs recorded yet</p>
+              <p className="text-xs text-white/25 text-center py-6">No pipeline runs recorded yet</p>
             )}
           </div>
         </SectionErrorBoundary>
       </div>
 
       <SectionErrorBoundary name="Content Health">
-        <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-5">
+        <div className="rounded-2xl p-5" style={{
+          background: 'rgba(15,15,30,0.6)',
+          border: '1px solid rgba(255,255,255,0.06)',
+          backdropFilter: 'blur(12px)',
+        }}>
           <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
             <Layers size={16} className="text-violet-400" /> Content Health
           </h3>
@@ -182,7 +207,7 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
               ) : (
                 <CheckCircle size={14} className="text-emerald-400" />
               )}
-              <span className="text-xs text-slate-400">
+              <span className="text-xs text-white/30">
                 {content_health.thin_count} thin chapters (&lt;600 words), {content_health.no_embedding_count} missing embeddings
               </span>
             </div>
@@ -190,8 +215,8 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
               <button
                 onClick={handleAutoHeal}
                 disabled={healing}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-all hover:opacity-90 disabled:opacity-50"
-                style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-medium text-white transition-all hover:opacity-90 disabled:opacity-50"
+                style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)', boxShadow: '0 2px 12px rgba(124,58,237,0.3)' }}
               >
                 {healing ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
                 {healing ? 'Healing...' : 'Auto-Heal Thin Content'}
@@ -200,10 +225,10 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
           </div>
 
           {content_health.thin_chapters?.length > 0 && (
-            <div className="rounded-lg overflow-hidden border border-slate-800">
+            <div className="rounded-xl overflow-hidden" style={{ border: '1px solid rgba(255,255,255,0.06)' }}>
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="text-slate-500 border-b border-slate-800" style={{ background: 'rgba(255,255,255,0.02)' }}>
+                  <tr className="text-white/25" style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(255,255,255,0.02)' }}>
                     <th className="text-left px-3 py-2">Chapter</th>
                     <th className="text-right px-3 py-2">Words</th>
                     <th className="text-right px-3 py-2">Chunks</th>
@@ -212,15 +237,15 @@ export default function AdminIntelligence({ adminToken, onNavigate }) {
                 </thead>
                 <tbody>
                   {content_health.thin_chapters.slice(0, 15).map((ch) => (
-                    <tr key={ch.id} className="border-b border-slate-800/50 hover:bg-slate-800/30">
-                      <td className="px-3 py-2 text-slate-300">{ch.title}</td>
+                    <tr key={ch.id} className="hover:bg-white/[0.02] transition-colors" style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                      <td className="px-3 py-2 text-white/50">{ch.title}</td>
                       <td className="px-3 py-2 text-right font-mono text-amber-400">{ch.word_count}</td>
-                      <td className="px-3 py-2 text-right font-mono text-slate-400">{ch.chunk_count}</td>
+                      <td className="px-3 py-2 text-right font-mono text-white/30">{ch.chunk_count}</td>
                       <td className="px-3 py-2 text-right">
                         {ch.needs_review ? (
                           <span className="text-amber-400">Needs Review</span>
                         ) : (
-                          <span className="text-slate-500">Thin</span>
+                          <span className="text-white/25">Thin</span>
                         )}
                       </td>
                     </tr>

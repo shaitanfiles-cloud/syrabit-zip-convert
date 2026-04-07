@@ -5,7 +5,7 @@ import { toast } from 'sonner';
 import { adminGetDashboard, adminGetPlanConfig, adminUpdatePlanConfig } from '@/utils/api';
 
 const PLAN_UI = {
-  free:    { icon: Zap,      gradient: 'from-slate-600 to-slate-700',   docAccess: 'zero',    docLabel: '🔒 Zero document access',    color: 'text-slate-300'  },
+  free:    { icon: Zap,      gradient: 'from-gray-600 to-gray-700',     docAccess: 'zero',    docLabel: '🔒 Zero document access',    color: 'text-white/60'   },
   starter: { icon: Crown,    gradient: 'from-violet-600 to-purple-700', docAccess: 'limited', docLabel: '📄 Limited document access', color: 'text-violet-300' },
   pro:     { icon: Sparkles, gradient: 'from-amber-500 to-orange-600',  docAccess: 'full',    docLabel: '📚 Full document access',    color: 'text-amber-300'  },
 };
@@ -27,7 +27,7 @@ function PlanCard({ planKey, ui, config, dist, onSave, saving }) {
   };
 
   return (
-    <div className="rounded-2xl border border-white/6 overflow-hidden" style={{ background: 'rgba(255,255,255,0.02)' }}>
+    <div className="rounded-2xl overflow-hidden" style={{ background: 'rgba(15,15,30,0.6)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(12px)' }}>
       <div className={`h-1.5 bg-gradient-to-r ${ui.gradient}`} />
       <div className="p-4">
         <div className="flex items-center justify-between mb-3">
@@ -56,7 +56,7 @@ function PlanCard({ planKey, ui, config, dist, onSave, saving }) {
               )}
             </div>
           ))}
-          <div className="flex items-center justify-between pt-1 border-t border-white/6">
+          <div className="flex items-center justify-between pt-1 border-t border-white/[0.06]">
             <span className="text-xs text-white/30">Document access</span>
             <span className={`text-xs font-medium ${ui.color}`}>{ui.docLabel}</span>
           </div>
@@ -144,7 +144,7 @@ export default function AdminPlans({ adminToken, onNavigate }) {
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[['Est. Revenue',`₹${estRevenue.toLocaleString()}`,'text-emerald-400'],['Total Users',totalUsers.toLocaleString(),'text-white'],['Paid Users',paidUsers.toLocaleString(),'text-violet-400'],['Credits Issued',creditsIssued.toLocaleString(),'text-amber-400']].map(([label,val,color]) => (
-          <div key={label} className="rounded-xl p-3 border border-white/6" style={{ background: 'rgba(255,255,255,0.02)' }}>
+          <div key={label} className="rounded-xl p-3" style={{ background: 'rgba(15,15,30,0.6)', border: '1px solid rgba(255,255,255,0.06)', backdropFilter: 'blur(12px)' }}>
             <p className={`text-xl font-bold ${color}`}>{val}</p>
             <p className="text-[10px] text-white/30 mt-0.5">{label}</p>
           </div>
