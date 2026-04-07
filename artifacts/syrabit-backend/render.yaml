@@ -84,12 +84,12 @@ services:
       - key: IP_HASH_SALT
         sync: false
       - key: CORS_ORIGINS
-        value: "https://syrabit.ai,https://www.syrabit.ai"
+        value: "https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai"
       - key: PRODUCTION_ORIGINS
-        value: "https://syrabit.ai,https://www.syrabit.ai"
+        value: "https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai"
       - key: FRONTEND_URL
         value: "https://syrabit.ai"
       - key: SECURE_COOKIES
         value: "true"
       - key: COOKIE_DOMAIN
-        value: ""
+        value: ".syrabit.ai"

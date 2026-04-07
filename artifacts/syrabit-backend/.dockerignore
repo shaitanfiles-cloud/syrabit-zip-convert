@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+!.env.example
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.mypy_cache
+node_modules
+docker-compose.yml
+DEPLOY.md
+render.yaml
+*.md
+.vscode
+.idea

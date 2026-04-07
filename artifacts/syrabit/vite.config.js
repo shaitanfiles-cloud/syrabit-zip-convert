@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isProd = process.env.NODE_ENV === 'production';
+const BACKEND_TARGET = process.env.VITE_BACKEND_URL || 'http://localhost:8000';
 
 const BOT_UA = /googlebot|google-extended|googleother|google-inspectiontool|bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|meta-externalagent|cohere-ai|bytespider|ccbot/i;
 
@@ -243,7 +244,7 @@ function pyqPagePlugin() {
         const slug = rawPath.slice(5); // strip leading "/pyq/"
         if (!slug || slug.includes('/') || slug.includes('.')) return next();
         try {
-          const backendRes = await fetch(`http://localhost:8000/api/pyq/${encodeURIComponent(slug)}`);
+          const backendRes = await fetch(`${BACKEND_TARGET}/api/pyq/${encodeURIComponent(slug)}`);
           if (!backendRes.ok) return next();
           const html = await backendRes.text();
           res.statusCode = 200;
@@ -276,7 +277,7 @@ function botRenderPlugin() {
 
         if (parts.length === 3) {
           try {
-            const apiBase = `http://localhost:8000/api/content`;
+            const apiBase = `${BACKEND_TARGET}/api/content`;
             const subjectRes = await fetch(`${apiBase}/resolve-subject/${board}/${classSlug}/${subjectSlug}`);
             if (!subjectRes.ok) return next();
             const subject = await subjectRes.json();
@@ -354,7 +355,7 @@ function botRenderPlugin() {
         }
 
         try {
-          const apiBase = `http://localhost:8000/api/content`;
+          const apiBase = `${BACKEND_TARGET}/api/content`;
           const chapterRes = await fetch(`${apiBase}/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${topicSlug}`);
           if (!chapterRes.ok) return next();
 
@@ -478,11 +479,11 @@ export default defineConfig({
     host: '0.0.0.0',
     allowedHosts: true,
     proxy: {
-      '/api': { target: 'http://localhost:8000', changeOrigin: true },
-      '/health': { target: 'http://localhost:8000', changeOrigin: true },
-      '/docs': { target: 'http://localhost:8000', changeOrigin: true },
-      '/openapi.json': { target: 'http://localhost:8000', changeOrigin: true },
-      '/ads.txt': { target: 'http://localhost:8000', changeOrigin: true },
+      '/api': { target: BACKEND_TARGET, changeOrigin: true },
+      '/health': { target: BACKEND_TARGET, changeOrigin: true },
+      '/docs': { target: BACKEND_TARGET, changeOrigin: true },
+      '/openapi.json': { target: BACKEND_TARGET, changeOrigin: true },
+      '/ads.txt': { target: BACKEND_TARGET, changeOrigin: true },
     },
   },
 

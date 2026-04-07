@@ -231,6 +231,15 @@ if _prod_origins_raw:
         if _po and _po not in CORS_ORIGINS:
             CORS_ORIGINS.append(_po)
 
+_default_prod_origins = [
+    "https://syrabit.ai",
+    "https://www.syrabit.ai",
+    "https://api.syrabit.ai",
+]
+for _dpo in _default_prod_origins:
+    if _dpo not in CORS_ORIGINS:
+        CORS_ORIGINS.append(_dpo)
+
 # ── Admin accounts ────────────────────────────────────────────────────────────
 # Admin accounts loaded from environment (no credentials in source code)
 def _load_admin_accounts():
