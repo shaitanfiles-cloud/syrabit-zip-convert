@@ -55,13 +55,49 @@ def _validate_anon_id(anon_id: str) -> str:
 async def list_anon_conversations(request: Request):
     anon_id = request.headers.get("x-anon-id", "")
     anon_id = _validate_anon_id(anon_id)
-    return redis_list_anon_conversations(anon_id)
+    redis_convs = redis_list_anon_conversations(anon_id)
+    redis_ids = {c.get("id") for c in redis_convs}
+
+    import deps as _deps
+    if _deps.pg_pool:
+        try:
+            async with _deps.pg_pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT * FROM conversations WHERE user_id = $1 AND is_anonymous = TRUE ORDER BY updated_at DESC",
+                    anon_id,
+                )
+            from db_ops import _pg_rows
+            pg_convs = _pg_rows(rows)
+            for pc in pg_convs:
+                if pc.get("id") not in redis_ids:
+                    pc["anon_id"] = anon_id
+                    redis_convs.append(pc)
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"anon list PG fallback: {e}")
+
+    redis_convs.sort(key=lambda c: c.get("updated_at", ""), reverse=True)
+    return redis_convs
 
 @router.get("/conversations/anon/{conv_id}")
 async def get_anon_conversation(conv_id: str, request: Request):
     anon_id = request.headers.get("x-anon-id", "")
     anon_id = _validate_anon_id(anon_id)
     conv = redis_get_anon_conversation(anon_id, conv_id)
+    if not conv:
+        import deps as _deps
+        if _deps.pg_pool:
+            try:
+                async with _deps.pg_pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT * FROM conversations WHERE id = $1 AND user_id = $2 AND is_anonymous = TRUE LIMIT 1",
+                        conv_id, anon_id,
+                    )
+                if row:
+                    from db_ops import _pg_row
+                    conv = _pg_row(row)
+                    conv["anon_id"] = anon_id
+            except Exception as e:
+                logging.getLogger(__name__).warning(f"anon get PG fallback: {e}")
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found or expired")
     return conv

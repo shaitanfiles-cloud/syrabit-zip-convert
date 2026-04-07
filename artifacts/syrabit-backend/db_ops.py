@@ -516,23 +516,27 @@ async def supa_upsert_conversation(conv: dict):
     if _deps_mod.pg_pool:
         try:
             msgs = json.dumps(conv.get("messages", [])) if isinstance(conv.get("messages"), list) else (conv.get("messages") or "[]")
+            _is_anon = conv.get("is_anonymous", False)
+            _anon_id = conv.get("anon_id") or None
             async with _deps_mod.pg_pool.acquire() as conn:
                 await conn.execute(
                     """INSERT INTO conversations (id, user_id, title, preview, subject_id, subject_name,
-                       starred, archived, messages, tokens, created_at, updated_at)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                       starred, archived, messages, tokens, created_at, updated_at, is_anonymous, anon_id)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
                        ON CONFLICT (id) DO UPDATE SET
                          title=EXCLUDED.title, preview=EXCLUDED.preview,
                          subject_id=EXCLUDED.subject_id, subject_name=EXCLUDED.subject_name,
                          starred=EXCLUDED.starred, archived=EXCLUDED.archived,
                          messages=EXCLUDED.messages, tokens=EXCLUDED.tokens,
-                         updated_at=EXCLUDED.updated_at""",
+                         updated_at=EXCLUDED.updated_at,
+                         is_anonymous=EXCLUDED.is_anonymous, anon_id=EXCLUDED.anon_id""",
                     conv.get("id",""), conv.get("user_id",""),
                     conv.get("title","New Chat"), conv.get("preview",""),
                     conv.get("subject_id"), conv.get("subject_name"),
                     conv.get("starred",False), conv.get("archived",False),
                     msgs, conv.get("tokens",0),
-                    conv.get("created_at",""), conv.get("updated_at","")
+                    conv.get("created_at",""), conv.get("updated_at",""),
+                    _is_anon, _anon_id,
                 )
             _mirror_fields = {"id","user_id","title","preview","subject_id","subject_name","starred","archived","messages","tokens","created_at","updated_at"}
             _mirror_data = {}

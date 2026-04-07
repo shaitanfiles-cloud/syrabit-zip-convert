@@ -160,9 +160,12 @@ CREATE TABLE IF NOT EXISTS conversations (
     created_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT ''
 );
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS is_anonymous BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS anon_id TEXT;
 CREATE INDEX IF NOT EXISTS conversations_user_id_idx ON conversations(user_id);
 CREATE INDEX IF NOT EXISTS conversations_id_user_idx ON conversations(id, user_id);
 CREATE INDEX IF NOT EXISTS conversations_updated_idx ON conversations(updated_at DESC);
+CREATE INDEX IF NOT EXISTS conversations_anon_idx ON conversations(is_anonymous) WHERE is_anonymous = TRUE;
 CREATE INDEX IF NOT EXISTS users_email_idx ON users(email);
 CREATE TABLE IF NOT EXISTS app_settings (
     id INTEGER PRIMARY KEY DEFAULT 1,

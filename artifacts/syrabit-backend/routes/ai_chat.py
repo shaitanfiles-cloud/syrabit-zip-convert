@@ -1183,18 +1183,22 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     elif not conv_id and anon_id:
         conv_id = str(uuid.uuid4())
         title = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
+        _now_ts = datetime.now(timezone.utc).isoformat()
         _anon_conv_doc = {
             "id": conv_id,
             "anon_id": anon_id,
+            "user_id": anon_id,
             "title": title,
             "subject_id": msg.subject_id or "",
             "subject_name": msg.subject_name or "",
             "messages": [],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "is_anonymous": True,
+            "created_at": _now_ts,
+            "updated_at": _now_ts,
         }
         from cache import redis_save_anon_conversation
         redis_save_anon_conversation(anon_id, conv_id, _anon_conv_doc)
+        asyncio.create_task(supa_upsert_conversation(_anon_conv_doc))
     elif not conv_id:
         conv_id = None
 
@@ -1608,6 +1612,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         from cache import redis_get_anon_conversation, redis_save_anon_conversation
                         _now = datetime.now(timezone.utc).isoformat()
                         _existing = redis_get_anon_conversation(anon_id, conv_id)
+                        if not _existing:
+                            _existing = await supa_get_conversation(conv_id, anon_id)
                         _prev_msgs = (_existing.get("messages") or []) if _existing else []
                         _prev_msgs.append({"role": "user", "content": user_msg_saved, "timestamp": _now})
                         _asst_msg = {"role": "assistant", "content": answer, "timestamp": _now,
@@ -1642,11 +1648,36 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         _anon_doc = _existing or {}
                         _anon_doc.update({
                             "id": conv_id, "anon_id": anon_id,
+                            "user_id": anon_id,
                             "messages": _prev_msgs,
                             "preview": answer[:100],
                             "updated_at": _now,
+                            "is_anonymous": True,
                         })
                         redis_save_anon_conversation(anon_id, conv_id, _anon_doc)
+                        asyncio.create_task(supa_upsert_conversation({
+                            "id": conv_id, "user_id": anon_id,
+                            "title": _anon_doc.get("title", user_msg_saved[:50]),
+                            "preview": answer[:100],
+                            "subject_id": msg.subject_id or "",
+                            "subject_name": msg.subject_name or "",
+                            "messages": _prev_msgs,
+                            "tokens": len(answer.split()),
+                            "created_at": _anon_doc.get("created_at", _now),
+                            "updated_at": _now,
+                            "is_anonymous": True,
+                            "anon_id": anon_id,
+                        }))
+                        asyncio.create_task(_log_chat_message(
+                            user_id=anon_id,
+                            question=user_msg_saved,
+                            raw_ai_answer=answer,
+                            subject_id=msg.subject_id,
+                            subject_name=msg.subject_name,
+                            board_name=ctx_board_name,
+                            class_name=ctx_class_name,
+                            conversation_id=conv_id,
+                        ))
                     except Exception as _anon_err:
                         logger.warning(f"anon persist failed: {_anon_err}")
         finally:

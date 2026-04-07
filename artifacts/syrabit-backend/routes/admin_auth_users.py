@@ -489,13 +489,6 @@ async def admin_get_conversations(admin: dict = Depends(get_admin_user)):
         except Exception as e:
             logger.warning(f"admin_get_conversations supa fetch: {e}")
 
-    # Fetch anonymous conversations from Redis
-    anon_convs: list = []
-    try:
-        anon_convs = redis_list_all_anon_conversations()
-    except Exception as e:
-        logger.warning(f"admin_get_conversations anon fetch: {e}")
-
     # Merge: use PG row if available (has real messages), otherwise use Supabase row
     pg_ids = {c.get("id") for c in pg_convs}
     merged = list(pg_convs)
@@ -506,15 +499,33 @@ async def admin_get_conversations(admin: dict = Depends(get_admin_user)):
             sc["messages"] = sc.get("messages") or []
             merged.append(sc)
 
-    # Add anonymous conversations with composite IDs to avoid collisions
-    seen_anon = set()
+    merged_ids = {c.get("id") for c in merged}
+
+    anon_convs: list = []
+    try:
+        anon_convs = redis_list_all_anon_conversations()
+    except Exception as e:
+        logger.warning(f"admin_get_conversations anon fetch: {e}")
+
     for ac in anon_convs:
-        anon_key = f"anon:{ac.get('anon_id')}:{ac.get('id')}"
-        if anon_key not in seen_anon:
-            seen_anon.add(anon_key)
-            ac["original_id"] = ac["id"]
-            ac["id"] = anon_key
+        raw_id = ac.get("id")
+        if raw_id in merged_ids:
+            for mc in merged:
+                if mc.get("id") == raw_id:
+                    redis_updated = ac.get("updated_at", "")
+                    pg_updated = mc.get("updated_at", "")
+                    if redis_updated > pg_updated:
+                        mc["messages"] = ac.get("messages") or mc.get("messages") or []
+                        mc["updated_at"] = redis_updated
+                    if not mc.get("is_anonymous"):
+                        mc["is_anonymous"] = True
+                        mc["anon_id"] = ac.get("anon_id")
+                    break
+        else:
+            ac["is_anonymous"] = True
+            ac["user_id"] = ac.get("anon_id") or ac.get("user_id")
             merged.append(ac)
+            merged_ids.add(raw_id)
 
     # Sort by updated_at desc
     def _conv_sort_key(c):
