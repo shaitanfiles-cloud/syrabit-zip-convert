@@ -647,20 +647,23 @@ async def call_llm_api(messages: list, model: str = None, max_tokens: int = 2048
     return await _llm_batcher.call(messages, model, max_tokens)
 
 _LLM_PROVIDERS_CONTENT: list[dict] = []
+if _CEREBRAS_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-4-scout-17b-16e-instruct"})
+if _SARVAM_LLM_KEY:
+    _LLM_PROVIDERS_CONTENT.append({"provider": "sarvam", "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS_CONTENT.append({"provider": "gemini", "key": _GEMINI_KEY, "default_model": "gemini-2.5-flash"})
 
 logger.info(
-    f"Admin content providers (reversed priority): "
+    f"Admin content providers (priority order): "
     f"{[p['provider'] + '/' + p['default_model'] for p in _LLM_PROVIDERS_CONTENT]}"
 )
 
 async def call_llm_api_content(messages: list, model: str = None, max_tokens: int = 3072) -> str:
-    """LLM call for admin content generation — uses OPPOSITE priority from chat.
-    OpenRouter/Fireworks first (high-capacity, slower), keeping Sarvam/Cerebras
-    reserved for student chat. Separate concurrency semaphore (6 vs 20).
+    """LLM call for admin content generation — Cerebras first (fastest), then Sarvam,
+    then Gemini as fallback. Separate concurrency semaphore (6 vs 20).
     Uses a longer timeout (30s) since content generation produces 800+ word outputs."""
-    return await _llm_batcher.call(messages, model or "deepseek/deepseek-chat-v3-0324", max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
+    return await _llm_batcher.call(messages, model, max_tokens, provider_list=_LLM_PROVIDERS_CONTENT, use_admin_sem=True)
 
 async def call_llm_api_chat(messages: list, model: str = None, max_tokens: int = 2048) -> str:
     """LLM call for student chat — excludes Emergent provider (admin-only)."""
