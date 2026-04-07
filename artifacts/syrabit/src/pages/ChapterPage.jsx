@@ -558,7 +558,7 @@ export default function ChapterPage() {
   if (loading) {
     return (
       <div className="min-h-screen bg-background text-foreground">
-        <div className="max-w-4xl mx-auto px-4 py-8">
+        <div className="max-w-7xl mx-auto px-4 py-8">
           <Skeleton className="h-4 w-48 mb-6" />
           <Skeleton className="h-10 w-full mb-4" />
           <Skeleton className="h-4 w-64 mb-8" />
@@ -625,7 +625,7 @@ export default function ChapterPage() {
       <ChapterJsonLd data={data} url={canonical} basePath={basePath} />
 
       <header className="border-b border-border/40 bg-card/80 backdrop-blur-md">
-        <div className="max-w-4xl mx-auto px-4 py-5">
+        <div className="max-w-7xl mx-auto px-4 py-5">
           <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 text-sm text-muted-foreground mb-4 flex-wrap">
             <Link to="/" className="hover:text-primary transition-colors flex items-center gap-1">
               <Home size={13} /> Home
@@ -689,7 +689,7 @@ export default function ChapterPage() {
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex gap-8">
           <article ref={articleRef} className="flex-1 min-w-0">
             <div

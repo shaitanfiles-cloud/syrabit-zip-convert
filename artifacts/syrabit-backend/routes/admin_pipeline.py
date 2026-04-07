@@ -52,6 +52,18 @@ def _extract_content_topics(content: str) -> list[str]:
     return list(dict.fromkeys(topics))
 
 
+def _trim_long_intro(content: str, max_intro_lines: int = 4) -> str:
+    lines = content.split("\n")
+    first_heading_idx = None
+    for i, line in enumerate(lines):
+        if re.match(r'^#{2,3}\s+', line.strip()):
+            first_heading_idx = i
+            break
+    if first_heading_idx is None or first_heading_idx <= max_intro_lines:
+        return content
+    return "\n".join(lines[first_heading_idx:]).strip()
+
+
 async def _polish_notes_with_sarvam(raw_notes: str, title: str, subject_name: str) -> str:
     polish_prompt = f"""You are a senior academic editor. Polish the following study notes.
 
@@ -73,6 +85,7 @@ async def _polish_notes_with_sarvam(raw_notes: str, title: str, subject_name: st
 7. Do NOT add introductions, summaries, exam tips, extra examples, or cross-references
 8. Do NOT expand content beyond what exists — only improve quality and clarity
 9. Preserve the lean, topic-only format: each section should have a definition, explanation, and key facts only
+10. If there is any introduction text before the first ## heading longer than 3-4 lines, trim it down or remove it entirely. The content should start with the first ## topic heading.
 
 Return ONLY the polished notes in markdown. NO preamble, NO commentary."""
 
@@ -239,7 +252,8 @@ Generate **topic-wise study notes** for the chapter below.
 2. If SEO keyword seeds are provided, naturally incorporate them in headings and body text.
 3. Use markdown (##, ###, **, -, etc.). NO disclaimers, NO preamble.
 4. NO introduction section. NO summary section. NO exam tips. NO extra examples. NO cross-references between topics. Start directly with the first ## topic heading.
-5. Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else."""
+5. Maximum 3-4 lines before the first ## heading. Do NOT write a long introduction paragraph. The very first line of output should ideally be a ## heading.
+6. Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else."""
 
         try:
             async with _pipeline_sem:
@@ -250,8 +264,10 @@ Generate **topic-wise study notes** for the chapter below.
 
         if notes_raw and len(notes_raw.split()) >= 200:
             notes_text = _normalize_headings(notes_raw).strip()
+            notes_text = _trim_long_intro(notes_text)
             notes_text = await _polish_notes_with_sarvam(notes_text, title, subject_name or "")
             notes_text = _normalize_headings(notes_text).strip()
+            notes_text = _trim_long_intro(notes_text)
             wc = len(notes_text.split())
 
             new_topics = _extract_content_topics(notes_text)
@@ -549,6 +565,7 @@ IMPORTANT: Key Facts MUST be ### (H3) sub-headings under the topic's ## heading 
 
 ## CRITICAL RULES:
 - NO introduction section. NO summary section. NO exam tips. NO extra examples. NO cross-references between topics. Start directly with the first `## <Topic Name>`.
+- Maximum 3-4 lines before the first ## heading. Do NOT write a long introduction paragraph. The very first line of output should ideally be a ## heading.
 - Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else.
 - Use markdown: `##` for topics, `###` for sub-sections, `**bold**` for key terms, `-` for bullets.
 - NO disclaimers, NO preamble, NO "Here are the notes" intro.
@@ -568,6 +585,7 @@ IMPORTANT: Key Facts MUST be ### (H3) sub-headings under the topic's ## heading 
         raise HTTPException(status_code=502, detail="AI returned empty or too-short content")
 
     notes_text = _normalize_headings(generated).strip()
+    notes_text = _trim_long_intro(notes_text)
 
     await db.chapters.update_one(
         {"id": chapter_id},
@@ -833,15 +851,18 @@ Generate topic-wise study notes for:
 2. Use ## headings for each topic (match topic names exactly), ### for subtopics
 3. Use markdown formatting throughout. NO disclaimers, NO preamble.
 4. NO introduction section. NO summary section. NO exam tips. NO extra examples. NO cross-references. Start directly with the first ## topic heading.
-5. Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else."""
+5. Maximum 3-4 lines before the first ## heading. Do NOT write a long introduction paragraph. The very first line of output should ideally be a ## heading.
+6. Each topic section must be self-contained — one concept, one definition, one explanation, key facts. Nothing else."""
 
     try:
         async with _pipeline_sem:
             generated = await call_llm_api_content([{"role": "user", "content": prompt}], max_tokens=6000)
         if generated and len(generated.split()) >= 200:
             generated = _normalize_headings(generated).strip()
+            generated = _trim_long_intro(generated)
             generated = await _polish_notes_with_sarvam(generated, title, subject_name or "")
             generated = _normalize_headings(generated).strip()
+            generated = _trim_long_intro(generated)
             wc = len(generated.split())
             update_fields = {
                 "content": generated,
