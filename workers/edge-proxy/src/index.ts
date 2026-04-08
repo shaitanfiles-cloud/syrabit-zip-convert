@@ -23,6 +23,12 @@ const CACHEABLE_PREFIXES = [
   "/api/pyq/",
   "/api/sitemap",
   "/api/robots.txt",
+  "/api/notes/public",
+  "/api/mcq/",
+  "/api/user/stats",
+  "/api/cms/articles",
+  "/api/flashcards/",
+  "/api/content/syllabus/",
 ];
 
 const CACHE_TTL: Record<string, number> = {
@@ -30,14 +36,28 @@ const CACHE_TTL: Record<string, number> = {
   "/api/content/classes": 300,
   "/api/content/streams": 300,
   "/api/content/subjects": 300,
+  "/api/content/chapters/": 3600,
+  "/api/content/chunks/": 3600,
   "/api/content/library-bundle": 300,
   "/api/content/chapter-by-slug/": 300,
   "/api/content/topic/": 300,
+  "/api/content/syllabus/": 3600,
   "/api/seo/": 600,
   "/api/pyq/": 600,
-  "/api/sitemap": 3600,
-  "/api/robots.txt": 3600,
+  "/api/notes/public": 3600,
+  "/api/mcq/": 3600,
+  "/api/user/stats": 900,
+  "/api/cms/articles": 900,
+  "/api/flashcards/": 3600,
+  "/api/sitemap": 86400,
+  "/api/robots.txt": 86400,
 };
+
+const BYPASS_PREFIXES = [
+  "/api/ai/chat",
+  "/api/webhooks",
+  "/api/auth",
+];
 
 const RATE_LIMIT_RPM = 120;
 const RATE_LIMIT_WINDOW_S = 60;
@@ -62,11 +82,15 @@ function getCacheTtl(pathname: string): number {
   for (const [prefix, ttl] of Object.entries(CACHE_TTL)) {
     if (pathname.startsWith(prefix)) return ttl;
   }
-  return 120;
+  return 300;
 }
 
 function isCacheable(pathname: string): boolean {
   return CACHEABLE_PREFIXES.some((p) => pathname.startsWith(p));
+}
+
+function isBypass(pathname: string): boolean {
+  return BYPASS_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
 async function checkRateLimit(
@@ -94,6 +118,71 @@ async function checkRateLimit(
     return { allowed: true, remaining: RATE_LIMIT_RPM - timestamps.length };
   } catch {
     return { allowed: true, remaining: RATE_LIMIT_RPM };
+  }
+}
+
+function buildProxyHeaders(request: Request, clientIp: string): Headers {
+  const headers = new Headers();
+  for (const [key, value] of request.headers.entries()) {
+    if (
+      key.toLowerCase() === "host" ||
+      key.toLowerCase() === "cf-connecting-ip"
+    )
+      continue;
+    headers.set(key, value);
+  }
+  headers.set("X-Forwarded-For", clientIp);
+  return headers;
+}
+
+async function proxyToBackend(
+  request: Request,
+  env: Env,
+  pathname: string,
+  search: string,
+  clientIp: string,
+  cors: Record<string, string>,
+  remaining: number,
+): Promise<Response> {
+  const backendUrl = `${env.BACKEND_URL}${pathname}${search}`;
+  const proxyHeaders = buildProxyHeaders(request, clientIp);
+
+  try {
+    const backendResp = await fetch(backendUrl, {
+      method: request.method,
+      headers: proxyHeaders,
+      body:
+        request.method !== "GET" && request.method !== "HEAD"
+          ? request.body
+          : undefined,
+    });
+
+    const respHeaders = new Headers(cors);
+    for (const [key, value] of backendResp.headers.entries()) {
+      if (
+        key.toLowerCase() !== "access-control-allow-origin" &&
+        key.toLowerCase() !== "access-control-allow-credentials" &&
+        key.toLowerCase() !== "access-control-allow-methods" &&
+        key.toLowerCase() !== "access-control-allow-headers"
+      ) {
+        respHeaders.set(key, value);
+      }
+    }
+    respHeaders.set("X-RateLimit-Remaining", String(remaining));
+    respHeaders.set("X-Cache", "BYPASS");
+
+    return new Response(backendResp.body, {
+      status: backendResp.status,
+      headers: respHeaders,
+    });
+  } catch {
+    return new Response(
+      JSON.stringify({ detail: "Backend unavailable", edge: true }),
+      {
+        status: 502,
+        headers: { ...cors, "Content-Type": "application/json" },
+      }
+    );
   }
 }
 
@@ -126,7 +215,11 @@ export default {
         }),
         {
           status: 200,
-          headers: { ...cors, "Content-Type": "application/json" },
+          headers: {
+            ...cors,
+            "Content-Type": "application/json",
+            "Cache-Control": "public, max-age=30, stale-while-revalidate=60",
+          },
         }
       );
     }
@@ -153,35 +246,32 @@ export default {
       );
     }
 
+    if (request.method !== "GET" || isBypass(pathname)) {
+      return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
+    }
+
     const hasAuth =
       request.headers.has("Authorization") ||
       request.headers.has("Cookie") ||
       request.headers.has("x-anon-id");
 
-    if (request.method === "GET" && isCacheable(pathname) && !hasAuth) {
+    if (isCacheable(pathname) && !hasAuth) {
       const cache = caches.default;
       const cacheKey = new Request(url.toString(), { method: "GET" });
 
       const cachedResponse = await cache.match(cacheKey);
       if (cachedResponse) {
+        const ttl = getCacheTtl(pathname);
         const resp = new Response(cachedResponse.body, cachedResponse);
         Object.entries(cors).forEach(([k, v]) => resp.headers.set(k, v));
+        resp.headers.set("Cache-Control", `public, max-age=${ttl}, stale-while-revalidate=${ttl * 2}`);
         resp.headers.set("X-Cache", "HIT");
         resp.headers.set("X-RateLimit-Remaining", String(remaining));
         return resp;
       }
 
       const backendUrl = `${env.BACKEND_URL}${pathname}${url.search}`;
-      const backendHeaders = new Headers();
-      for (const [key, value] of request.headers.entries()) {
-        if (
-          key.toLowerCase() === "host" ||
-          key.toLowerCase() === "cf-connecting-ip"
-        )
-          continue;
-        backendHeaders.set(key, value);
-      }
-      backendHeaders.set("X-Forwarded-For", clientIp);
+      const backendHeaders = buildProxyHeaders(request, clientIp);
 
       try {
         const backendResp = await fetch(backendUrl, {
@@ -238,53 +328,6 @@ export default {
       }
     }
 
-    const backendUrl = `${env.BACKEND_URL}${pathname}${url.search}`;
-    const proxyHeaders = new Headers();
-    for (const [key, value] of request.headers.entries()) {
-      if (
-        key.toLowerCase() === "host" ||
-        key.toLowerCase() === "cf-connecting-ip"
-      )
-        continue;
-      proxyHeaders.set(key, value);
-    }
-    proxyHeaders.set("X-Forwarded-For", clientIp);
-
-    try {
-      const backendResp = await fetch(backendUrl, {
-        method: request.method,
-        headers: proxyHeaders,
-        body:
-          request.method !== "GET" && request.method !== "HEAD"
-            ? request.body
-            : undefined,
-      });
-
-      const respHeaders = new Headers(cors);
-      for (const [key, value] of backendResp.headers.entries()) {
-        if (
-          key.toLowerCase() !== "access-control-allow-origin" &&
-          key.toLowerCase() !== "access-control-allow-credentials" &&
-          key.toLowerCase() !== "access-control-allow-methods" &&
-          key.toLowerCase() !== "access-control-allow-headers"
-        ) {
-          respHeaders.set(key, value);
-        }
-      }
-      respHeaders.set("X-RateLimit-Remaining", String(remaining));
-
-      return new Response(backendResp.body, {
-        status: backendResp.status,
-        headers: respHeaders,
-      });
-    } catch {
-      return new Response(
-        JSON.stringify({ detail: "Backend unavailable", edge: true }),
-        {
-          status: 502,
-          headers: { ...cors, "Content-Type": "application/json" },
-        }
-      );
-    }
+    return proxyToBackend(request, env, pathname, url.search, clientIp, cors, remaining);
   },
 };
