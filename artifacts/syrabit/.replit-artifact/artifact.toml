@@ -18,7 +18,7 @@ localPort = 25144
 run = "pnpm --filter @workspace/syrabit run dev"
 
 [services.production]
-build = [ "sh", "-c", "mkdir -p $HOME/.local/bin && corepack enable --install-directory=$HOME/.local/bin && export PATH=$HOME/.local/bin:$PATH && pnpm --filter @workspace/syrabit run build" ]
+build = [ "sh", "-c", "corepack pnpm --filter @workspace/syrabit run build" ]
 publicDir = "artifacts/syrabit/dist"
 serve = "static"
 
