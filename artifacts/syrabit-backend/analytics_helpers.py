@@ -199,21 +199,6 @@ async def get_library_analytics(days: int = 30):
         return {"period_days": days, "top_searches": [], "most_viewed_subjects": [], "most_ask_ai_subjects": [], "document_opens": 0, "events_by_type": {}}
 
 
-# ── Bot/crawler User-Agent patterns ───────────────────────────────────────────
-_BOT_PATTERNS = re.compile(
-    r'(googlebot|bingbot|yandexbot|duckduckbot|baiduspider|facebookexternalhit|'
-    r'twitterbot|rogerbot|linkedinbot|embedly|quora link preview|showyoubot|'
-    r'outbrain|pinterest/0\.|developers\.google\.com/\+/web/snippet|slackbot|'
-    r'vkshare|w3c_validator|redditbot|applebot|whatsapp|googleweblight|'
-    r'ia_archiver|curl|wget|python-requests|go-http-client|okhttp|'
-    r'scrapy|heritrix|nmap|masscan|zgrab)',
-    re.IGNORECASE,
-)
-
-def _is_bot(user_agent: str) -> bool:
-    if not user_agent:
-        return False
-    return bool(_BOT_PATTERNS.search(user_agent))
 
 def _get_device_type(user_agent: str) -> str:
     if not user_agent:

@@ -79,21 +79,7 @@ class SecurityHeadersMiddleware:
 
         await self.app(scope, receive, send_with_security_headers)
 
-_SEARCH_BOT_UA_RE = re.compile(
-    r"googlebot|google-extended|googleother|google-inspectiontool|"
-    r"bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|"
-    r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|"
-    r"applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|"
-    r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|"
-    r"meta-externalagent|cohere-ai|bytespider|ccbot",
-    re.IGNORECASE,
-)
-
-_ABUSIVE_SCRAPER_UA_RE = re.compile(
-    r"scrapy|wget|curl|python-requests|go-http-client|java/|"
-    r"ahrefsbot|semrushbot|nmap|masscan|zgrab|heritrix",
-    re.IGNORECASE,
-)
+from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE
 
 _BOT_RATE_LIMIT = 600
 
@@ -218,7 +204,9 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         ua = request.headers.get("user-agent", "")
-        is_bot = bool(ua and _SERVER_BOT_RE.search(ua))
+        bot_match = _SERVER_BOT_RE.search(ua) if ua else None
+        is_bot = bool(bot_match)
+        bot_name = bot_match.group(0).lower() if bot_match else ""
         cf_connecting_ip = request.headers.get("cf-connecting-ip", "")
         x_forwarded = request.headers.get("x-forwarded-for", "")
         client_ip = cf_connecting_ip or (x_forwarded.split(",")[0].strip() if x_forwarded else "") or (request.client.host if request.client else "unknown")
@@ -241,7 +229,7 @@ class ServerSideTrackingMiddleware(BaseHTTPMiddleware):
                         "ip_hash_stable": ip_hash_stable,
                         "user_agent": ua[:500],
                         "is_bot": is_bot,
-                        "bot_name": _SERVER_BOT_RE.search(ua).group(0) if is_bot and ua else "",
+                        "bot_name": bot_name,
                         "date": today,
                         "timestamp": now_iso,
                         "status_code": response.status_code,

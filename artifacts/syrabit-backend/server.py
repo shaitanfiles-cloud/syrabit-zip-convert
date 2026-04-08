@@ -314,6 +314,33 @@ async def lifespan(app):
             await db.server_hits.create_index([("is_bot", 1), ("bot_name", 1)])
             await db.server_hits.create_index([("timestamp", -1)])
 
+            try:
+                from middleware import _SERVER_BOT_RE
+                from pymongo import UpdateOne
+                empty_bot_cursor = db.server_hits.find(
+                    {"is_bot": True, "$or": [{"bot_name": ""}, {"bot_name": {"$exists": False}}]},
+                    {"_id": 1, "user_agent": 1},
+                )
+                _batch = []
+                _total_backfilled = 0
+                _BATCH_SIZE = 500
+                async for doc in empty_bot_cursor:
+                    ua = doc.get("user_agent", "")
+                    m = _SERVER_BOT_RE.search(ua) if ua else None
+                    name = m.group(0).lower() if m else "unknown"
+                    _batch.append(UpdateOne({"_id": doc["_id"]}, {"$set": {"bot_name": name}}))
+                    if len(_batch) >= _BATCH_SIZE:
+                        await db.server_hits.bulk_write(_batch)
+                        _total_backfilled += len(_batch)
+                        _batch = []
+                if _batch:
+                    await db.server_hits.bulk_write(_batch)
+                    _total_backfilled += len(_batch)
+                if _total_backfilled:
+                    logger.info(f"Backfilled bot_name for {_total_backfilled} server_hits records")
+            except Exception as e:
+                logger.warning(f"bot_name backfill skipped: {e}")
+
             await db.users.create_index("email", unique=True, sparse=True)
             await db.users.create_index("id", unique=True)
             await db.conversations.create_index([("user_id", 1), ("updated_at", -1)])

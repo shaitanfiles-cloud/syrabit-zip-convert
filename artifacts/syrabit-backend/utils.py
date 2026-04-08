@@ -9,7 +9,8 @@ from deps import db, is_mongo_available
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "_BOT_PATTERNS", "_SlowQueryTimer", "_extract_keywords", "_get_device_type",
+    "_BOT_PATTERNS", "_SEARCH_BOT_UA_RE", "_ABUSIVE_SCRAPER_UA_RE",
+    "_SlowQueryTimer", "_extract_keywords", "_get_device_type",
     "_ip_country_cache", "_is_bot", "_resolve_country", "_slow_query",
     "get_library_analytics", "track_library_event",
 ]
@@ -163,14 +164,28 @@ async def get_library_analytics(days: int = 30):
         return {"period_days": days, "top_searches": [], "most_viewed_subjects": [], "most_ask_ai_subjects": [], "document_opens": 0, "events_by_type": {}}
 
 
-# ── Bot/crawler User-Agent patterns ───────────────────────────────────────────
+# ── Bot/crawler User-Agent patterns (canonical source) ────────────────────────
+_SEARCH_BOT_UA_RE = re.compile(
+    r"googlebot|google-extended|googleother|google-inspectiontool|"
+    r"bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|"
+    r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|"
+    r"applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|"
+    r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|"
+    r"meta-externalagent|cohere-ai|bytespider|ccbot|"
+    r"rogerbot|embedly|quora link preview|showyoubot|"
+    r"outbrain|pinterest/0\.|developers\.google\.com/\+/web/snippet|slackbot|"
+    r"vkshare|w3c_validator|redditbot|googleweblight",
+    re.IGNORECASE,
+)
+
+_ABUSIVE_SCRAPER_UA_RE = re.compile(
+    r"scrapy|wget|curl|python-requests|go-http-client|java/|okhttp|"
+    r"ahrefsbot|semrushbot|nmap|masscan|zgrab|heritrix",
+    re.IGNORECASE,
+)
+
 _BOT_PATTERNS = re.compile(
-    r'(googlebot|bingbot|yandexbot|duckduckbot|baiduspider|facebookexternalhit|'
-    r'twitterbot|rogerbot|linkedinbot|embedly|quora link preview|showyoubot|'
-    r'outbrain|pinterest/0\.|developers\.google\.com/\+/web/snippet|slackbot|'
-    r'vkshare|w3c_validator|redditbot|applebot|whatsapp|googleweblight|'
-    r'ia_archiver|curl|wget|python-requests|go-http-client|okhttp|'
-    r'scrapy|heritrix|nmap|masscan|zgrab)',
+    _SEARCH_BOT_UA_RE.pattern + r"|" + _ABUSIVE_SCRAPER_UA_RE.pattern,
     re.IGNORECASE,
 )
 
