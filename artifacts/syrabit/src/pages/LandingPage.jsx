@@ -26,7 +26,7 @@ export default function LandingPage() {
     <div className="min-h-screen text-foreground overflow-x-hidden bg-background">
       <PageMeta
         title="Syrabit.ai — Educational Browser For AssamBoard Students"
-        description="Syrabit.ai is the educational browser for AssamBoard students. Browse AHSEC Class 11-12, Degree (B.Com, B.A, B.Sc), and SEBA syllabus content, get instant answers, PYQs, notes, and MCQs — free to start. Trusted by 500+ students."
+        description="Syrabit.ai is the educational browser for AssamBoard students. Browse AHSEC Class 11-12, Degree (B.Com, B.A, B.Sc), and SEBA syllabus content, get instant answers, PYQs, notes, and MCQs — free to start. Trusted by students across Assam."
         url="https://syrabit.ai/"
         keywords="AssamBoard educational browser, AHSEC study app, SEBA study tool, Class 11 12 exam prep, AHSEC syllabus browser, degree exam prep Assam, B.Com B.A B.Sc notes, AssamBoard 2025 study tool, free educational browser India"
       />

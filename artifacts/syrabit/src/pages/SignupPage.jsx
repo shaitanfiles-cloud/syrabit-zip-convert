@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, Loader2, User, CheckCircle, AlertCircle, BookOpen, Zap, GraduationCap } from 'lucide-react';
+import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
@@ -30,6 +31,8 @@ const PERKS = [
 ];
 
 export default function SignupPage() {
+  const publicStats = usePublicStats();
+  const userCount = publicStats?.total_users || 100;
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -153,7 +156,7 @@ export default function SignupPage() {
 
         <div className="relative z-10">
           <p className="text-xs text-muted-foreground">
-            Trusted by 500+ Assam board students
+            Trusted by {userCount}+ Assam board students
           </p>
         </div>
       </div>

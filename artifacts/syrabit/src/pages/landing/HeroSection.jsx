@@ -6,14 +6,17 @@ import { fadeUp, staggerContainer } from './shared';
 import AnimatedStat from './AnimatedStat';
 import AnimatedChatDemo from './AnimatedChatDemo';
 import { prefetchRoute } from '@/utils/prefetchRoute';
-
-const STATS = [
-  { value: '3',    label: 'AssamBoard Divisions', icon: BookOpen   },
-  { value: '500+', label: 'Students',              icon: Users      },
-  { value: '3',    label: 'Plans',                 icon: TrendingUp },
-];
+import { usePublicStats } from '@/hooks/usePublicStats';
 
 export default function HeroSection() {
+  const publicStats = usePublicStats();
+  const userCount = publicStats?.total_users || 100;
+
+  const stats = [
+    { value: '3',               label: 'AssamBoard Divisions', icon: BookOpen   },
+    { value: `${userCount}+`,   label: 'Students',              icon: Users      },
+    { value: '3',               label: 'Plans',                 icon: TrendingUp },
+  ];
   const [browserPath, setBrowserPath] = useState('chat');
   const handleUrlChange = useCallback((path) => setBrowserPath(path), []);
 
@@ -188,7 +191,7 @@ export default function HeroSection() {
           variants={staggerContainer}
           className="max-w-4xl mx-auto px-5 grid grid-cols-1 sm:grid-cols-3 gap-8"
         >
-          {STATS.map((s, i) => (
+          {stats.map((s, i) => (
             <motion.div key={s.label} variants={fadeUp(i * 0.07)}>
               <AnimatedStat value={s.value} label={s.label} icon={s.icon} />
             </motion.div>

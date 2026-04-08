@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Mail, Lock, Eye, EyeOff, Loader2, MessageSquare, BarChart3, AlertCircle, Sparkles } from 'lucide-react';
+import { usePublicStats } from '@/hooks/usePublicStats';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useAuth } from '@/context/AuthContext';
@@ -36,6 +37,8 @@ const BENEFITS = [
 ];
 
 export default function LoginPage() {
+  const publicStats = usePublicStats();
+  const userCount = publicStats?.total_users || 100;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPass, setShowPass] = useState(false);
@@ -152,7 +155,7 @@ export default function LoginPage() {
 
         <div className="relative z-10">
           <p className="text-xs text-muted-foreground">
-            Trusted by 500+ Assam board students · Free to start
+            Trusted by {userCount}+ Assam board students · Free to start
           </p>
         </div>
       </div>

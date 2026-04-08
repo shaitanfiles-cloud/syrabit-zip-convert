@@ -398,6 +398,39 @@ async def track_page_view_endpoint(
     return {"status": "ok"}
 
 
+_public_stats_cache: Dict[str, Any] = {"data": None, "ts": 0}
+
+@router.get("/analytics/public-stats")
+async def public_stats():
+    """Lightweight cached stats for landing page (no auth required)."""
+    now = time.time()
+    if _public_stats_cache["data"] and now - _public_stats_cache["ts"] < 300:
+        return _public_stats_cache["data"]
+
+    total_users = 0
+    try:
+        from db_ops import supa_list_users
+        users = await supa_list_users()
+        total_users = len(users)
+    except Exception:
+        pass
+
+    total_subjects = 0
+    try:
+        if db is not None and await is_mongo_available():
+            total_subjects = await db.subjects.count_documents({})
+    except Exception:
+        pass
+
+    result = {
+        "total_users": total_users,
+        "total_subjects": total_subjects,
+    }
+    _public_stats_cache["data"] = result
+    _public_stats_cache["ts"] = now
+    return result
+
+
 @router.post("/analytics/session-ping")
 async def session_ping_endpoint(
     session_id: str = Body(...),
