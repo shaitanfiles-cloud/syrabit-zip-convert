@@ -1150,7 +1150,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
     _SLM_SLOT_TIMEOUT = 2.0    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 2.0    # max seconds to wait for FIRST token from a slot
+    _SLM_TTFT_TIMEOUT = 1.5    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,

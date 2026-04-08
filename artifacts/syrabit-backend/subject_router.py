@@ -35,6 +35,7 @@ class SubjectRoute:
     scope_query: str = ""    # ready-made search-scoped string (board + class + subject + query)
     subject_id: str = ""     # MongoDB _id of resolved subject (from embedder)
     subject_name: str = ""   # Canonical subject name (from embedder)
+    raw_syl_match: object = None
 
     def build_scope(self, user_query: str) -> "SubjectRoute":
         parts = [self.board, self.class_name, self.stream, self.subject, user_query]
@@ -827,7 +828,7 @@ async def classify_subject(
     # Tier 0 — Syllabus DB vector search (highest accuracy, uses live embeddings)
     if embedder is not None:
         try:
-            match = await asyncio.wait_for(embedder.classify(query), timeout=1.5)
+            match = await asyncio.wait_for(embedder.classify(query), timeout=0.8)
             if match:
                 route = SubjectRoute(
                     board=match.board,
@@ -838,6 +839,7 @@ async def classify_subject(
                     confidence="high",
                     subject_id=match.subject_id or "",
                     subject_name=match.subject_name or "",
+                    raw_syl_match=match,
                 )
                 logger.debug(
                     f"SubjectRouter Tier0 DB: {route.subject} / {route.chapter_hint} "

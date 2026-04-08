@@ -946,10 +946,10 @@ async def vector_rag_search(
     try:
         return await asyncio.wait_for(
             _vector_rag_search_inner(query, subject_id, top_k, _vk_cat, db_category=db_category),
-            timeout=2.0,
+            timeout=1.2,
         )
     except asyncio.TimeoutError:
-        logger.warning(f"vector_rag_search timed out (2s budget): query='{query[:40]}'")
+        logger.warning(f"vector_rag_search timed out (1.2s budget): query='{query[:40]}'")
         return []
     except Exception as e:
         logger.error(f"vector_rag_search failed: {e}")
@@ -1052,7 +1052,7 @@ async def _vector_rag_search_inner(
                             top_k=_rerank_top_k,
                         ),
                     ),
-                    timeout=0.8,
+                    timeout=0.5,
                 )
                 _rerank_ms = (time.time() - _rerank_start) * 1000
                 reranked_top = []
@@ -1612,6 +1612,7 @@ async def resolve_rag_context(
     document_text: Optional[str] = None,
     intent: Optional[str] = None,
     db_category: Optional[str] = None,
+    pre_syl_match=None,
 ) -> dict:
     """
     Master RAG resolver — 4-tier priority chain:
@@ -1676,25 +1677,28 @@ async def resolve_rag_context(
     _syllabus_sim = 0.0
     _syllabus_chapter_title = ""
     _syllabus_topic_name = ""
-    _syl_match = None
-    try:
-        import server as _srv
-        _embedder = getattr(_srv, "_syllabus_embedder", None)
-        if _embedder is not None:
-            _syl_match = await asyncio.wait_for(
-                _embedder.classify(query, subject_id=subject_id),
-                timeout=2.0,
-            )
-            if _syl_match:
-                _syllabus_sim = _syl_match.similarity
-                _syllabus_chapter_title = _syl_match.chapter_title or ""
-                _syllabus_topic_name = _syl_match.topic or ""
-                logger.info(
-                    f"RAG resolve: syllabus classify sim={_syllabus_sim:.3f} "
-                    f"chapter='{_syllabus_chapter_title}' | query: {query[:50]}"
+    _syl_match = pre_syl_match
+    if _syl_match is None:
+        try:
+            import server as _srv
+            _embedder = getattr(_srv, "_syllabus_embedder", None)
+            if _embedder is not None:
+                _syl_match = await asyncio.wait_for(
+                    _embedder.classify(query, subject_id=subject_id),
+                    timeout=1.0,
                 )
-    except Exception as _syl_exc:
-        logger.warning(f"RAG resolve: syllabus classify failed: {_syl_exc}")
+        except Exception as _syl_exc:
+            logger.warning(f"RAG resolve: syllabus classify failed: {_syl_exc}")
+    else:
+        logger.info(f"RAG resolve: using pre-computed syllabus match (skipping redundant classify)")
+    if _syl_match:
+        _syllabus_sim = _syl_match.similarity
+        _syllabus_chapter_title = _syl_match.chapter_title or ""
+        _syllabus_topic_name = _syl_match.topic or ""
+        logger.info(
+            f"RAG resolve: syllabus classify sim={_syllabus_sim:.3f} "
+            f"chapter='{_syllabus_chapter_title}' | query: {query[:50]}"
+        )
 
     _syllabus_high_conf = _syllabus_sim >= HIGH_CONFIDENCE_THRESHOLD
 

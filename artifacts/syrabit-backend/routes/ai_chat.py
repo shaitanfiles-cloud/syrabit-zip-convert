@@ -269,13 +269,17 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     async def _ns_fetch_search_scope():
         if _hard_bypass and msg.subject_id:
             return "", None
-        return await build_search_scope(
-            msg.message,
-            board_name=ctx_board_name,
-            class_name=ctx_class_name,
-            subject_name=msg.subject_name or "",
-            embedder=_get_syllabus_embedder(),
-        )
+        try:
+            return await asyncio.wait_for(build_search_scope(
+                msg.message,
+                board_name=ctx_board_name,
+                class_name=ctx_class_name,
+                subject_name=msg.subject_name or "",
+                embedder=_get_syllabus_embedder(),
+            ), timeout=0.8)
+        except asyncio.TimeoutError:
+            logger.info("[NON-STREAM] search_scope timed out at 0.8s — proceeding without route")
+            return "", None
 
     syllabus, (_ns_scoped_query, _ns_route), _topic_metadata = await asyncio.gather(
         _ns_fetch_syllabus(), _ns_fetch_search_scope(), _ns_fetch_stage1(),
@@ -358,6 +362,9 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             except Exception as _ns_ch_err:
                 logger.warning(f"[NON-STREAM] Syllabus chapter fetch failed: {_ns_ch_err}")
     else:
+        _ns_pre_syl = getattr(_ns_route, 'raw_syl_match', None) if _ns_route else None
+        if _ns_pre_syl and msg.subject_id and getattr(_ns_pre_syl, 'subject_id', None) != msg.subject_id:
+            _ns_pre_syl = None
         _ns_rag_task = asyncio.create_task(resolve_rag_context(
             _rag_query,
             subject_id=msg.subject_id,
@@ -365,6 +372,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             document_text=document_text,
             intent=_detected_intent,
             db_category=_detected_db_category,
+            pre_syl_match=_ns_pre_syl,
         ))
         _ns_web_task = asyncio.create_task(_safe_web_search(
             query=_rag_query, num_results=5,
@@ -374,7 +382,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             scoped_query=_ns_scoped_query,
         ))
         _ns_hist_task = asyncio.create_task(_ns_fetch_history())
-        _NS_BUDGET = 2.5
+        _NS_BUDGET = 1.5
         done, pending = await asyncio.wait(
             [_ns_rag_task, _ns_web_task, _ns_hist_task],
             timeout=_NS_BUDGET,
@@ -820,7 +828,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    _PRE_LLM_BUDGET = 2.0
+    _PRE_LLM_BUDGET = 1.5
 
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
@@ -861,13 +869,17 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             return "", None
         if msg.card_context and msg.subject_id and msg.subject_name:
             return msg.subject_name, None
-        return await build_search_scope(
-            msg.message,
-            board_name=msg.board_name or (user.get("board_name", "") if user else ""),
-            class_name=msg.class_name or (user.get("class_name", "") if user else ""),
-            subject_name=msg.subject_name or "",
-            embedder=_get_syllabus_embedder(),
-        )
+        try:
+            return await asyncio.wait_for(build_search_scope(
+                msg.message,
+                board_name=msg.board_name or (user.get("board_name", "") if user else ""),
+                class_name=msg.class_name or (user.get("class_name", "") if user else ""),
+                subject_name=msg.subject_name or "",
+                embedder=_get_syllabus_embedder(),
+            ), timeout=0.8)
+        except asyncio.TimeoutError:
+            logger.info("[STREAM] search_scope timed out at 0.8s — proceeding without route")
+            return "", None
 
     async def _fetch_stage1_stream():
         if not _s_should_pipeline(_stream_intent, msg.message):
@@ -1035,11 +1047,15 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 logger.warning(f"[STREAM] Syllabus chapter fetch failed: {_ch_err}")
         _rag_quality = rag_ctx.get("quality", "none")
     else:
+        _pre_syl = getattr(_sr_route, 'raw_syl_match', None) if _sr_route else None
+        if _pre_syl and msg.subject_id and getattr(_pre_syl, 'subject_id', None) != msg.subject_id:
+            _pre_syl = None
         _rag_task = asyncio.create_task(resolve_rag_context(
             _s_rag_query, subject_id=msg.subject_id,
             subject_name=msg.subject_name, document_text=document_text,
             intent=_stream_intent,
             db_category=_stream_db_category,
+            pre_syl_match=_pre_syl,
         ))
         _history_ready = _prefetched_conv
 
@@ -1076,7 +1092,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _web_task = asyncio.create_task(_safe_web_search_stream())
 
         _essential = {_rag_task}
-        _essential_budget = max(1.0, _deadline - _time_mod.time())
+        _essential_budget = max(0.5, _deadline - _time_mod.time())
         done, _ = await asyncio.wait(_essential, timeout=_essential_budget, return_when=asyncio.ALL_COMPLETED)
 
         _empty_rag = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
