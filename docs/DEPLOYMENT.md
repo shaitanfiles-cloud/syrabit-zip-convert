@@ -16,7 +16,7 @@ Users
                                   • CORS enforcement
                                   │
                                   └──► Railway (FastAPI backend)
-                                        • https://syrabit-api.up.railway.app
+                                        • Docker-based deploy
                                         • MongoDB, PostgreSQL, Redis
                                         • AI chat, auth, payments, admin
 ```
@@ -69,42 +69,76 @@ wrangler deploy
 
 The `RATE_LIMIT` KV binding handles distributed rate limiting at the edge.
 
-## Backend — Railway (FastAPI)
+## Backend — Railway (Docker)
 
-The backend runs on Railway. Configuration is in `artifacts/syrabit-backend/railway.json`.
+The backend deploys to Railway using a Dockerfile. Configuration is in `artifacts/syrabit-backend/railway.json`.
 
 ### Railway Project Setup
 
 1. Create a new Railway project and link the GitHub repo.
-2. Set the root directory to `artifacts/syrabit-backend`.
-3. Railway auto-detects `requirements.txt` and uses Nixpacks to build.
-4. The start command is defined in `railway.json`: `gunicorn server:app -c gunicorn.conf.py`.
-5. Health check endpoint: `/api/health`.
+2. **Set the root directory** to `artifacts/syrabit-backend`.
+3. Railway auto-detects `Dockerfile` and builds the image.
+4. The start command (`railway.json`): `gunicorn server:app -c gunicorn.conf.py`.
+5. Health check endpoint: `GET /api/health` (120s timeout).
 
-### Key Environment Variables (Railway)
+### Required Environment Variables (Railway)
 
-| Variable              | Value                                                               |
+| Variable              | Description                                                         |
 | --------------------- | ------------------------------------------------------------------- |
 | `PORT`                | Railway assigns automatically                                       |
+| `MONGO_URL`           | MongoDB Atlas connection string                                     |
+| `DB_NAME`             | MongoDB database name (e.g. `syrabit_prod`)                         |
+| `JWT_SECRET`          | Random 96-char hex (`python3 -c "import secrets; print(secrets.token_hex(48))"`) |
+| `ADMIN_JWT_SECRET`    | Different random 96-char hex                                        |
+| `ADMIN_EMAILS`        | Comma-separated admin emails                                        |
+| `ADMIN_PASSWORDS`     | Comma-separated admin passwords (matching order)                    |
+| `ADMIN_NAMES`         | Comma-separated admin display names                                 |
 | `CORS_ORIGINS`        | `https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai` |
-| `PRODUCTION_ORIGINS`  | `https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai` |
+| `PRODUCTION_ORIGINS`  | Same as CORS_ORIGINS                                                |
 | `FRONTEND_URL`        | `https://syrabit.ai`                                                |
 | `SECURE_COOKIES`      | `true`                                                              |
 | `COOKIE_DOMAIN`       | `.syrabit.ai`                                                       |
-| `MONGO_URL`           | (your MongoDB connection string)                                    |
-| `DB_NAME`             | (your MongoDB database name)                                        |
-| `JWT_SECRET`          | (your JWT secret)                                                   |
-| `ADMIN_JWT_SECRET`    | (your admin JWT secret)                                             |
-| `PG_URL`              | (your PostgreSQL connection string)                                 |
-| `UPSTASH_REDIS_URL`   | (your Upstash Redis URL)                                            |
-| `UPSTASH_REDIS_TOKEN` | (your Upstash Redis token)                                          |
 
-Plus all LLM provider API keys (GROQ, GEMINI, CEREBRAS, OPENROUTER, FIREWORKS, SARVAM, VOYAGE, EMERGENT, XAI) and payment keys (RAZORPAY, STRIPE, RESEND).
+### Optional Environment Variables
+
+| Variable              | Description                                                         |
+| --------------------- | ------------------------------------------------------------------- |
+| `PG_URL` / `DATABASE_URL` | PostgreSQL connection string (Supabase)                         |
+| `SUPABASE_URL`        | Supabase project URL                                                |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key                                          |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL                                           |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token                                      |
+| `GUNICORN_WORKERS`    | Number of gunicorn workers (default: 4)                             |
+| `GUNICORN_THREADS`    | Number of threads per worker (default: 4)                           |
+| `LOG_LEVEL`           | Gunicorn log level (default: `warning`)                             |
+
+### API Keys (Railway)
+
+| Variable              | Provider               |
+| --------------------- | ---------------------- |
+| `GROQ_API_KEY`        | Groq (primary chat)    |
+| `GROQ_API_KEY_2`      | Groq (fallback)        |
+| `CEREBRAS_API_KEY`    | Cerebras               |
+| `SARVAM_API_KEY`      | Sarvam AI              |
+| `SARVAM_API_KEY_2`    | Sarvam AI (fallback)   |
+| `GEMINI_API_KEY`      | Google Gemini          |
+| `GEMINI_API_KEY_2`    | Google Gemini (backup) |
+| `OPENROUTER_API_KEY`  | OpenRouter             |
+| `FIREWORKS_API_KEY`   | Fireworks AI           |
+| `XAI_API_KEY`         | xAI (Grok)             |
+| `EMERGENT_API_KEY`    | Emergent AI            |
+| `VOYAGE_API_KEY`      | Voyage AI (embeddings) |
+| `RAZORPAY_KEY_ID`     | Razorpay payments      |
+| `RAZORPAY_KEY_SECRET` | Razorpay secret        |
+| `RAZORPAY_WEBHOOK_SECRET` | Razorpay webhook   |
+| `RESEND_API_KEY`      | Resend (email)         |
+| `GOOGLE_CLIENT_ID`    | Google OAuth           |
+| `GOOGLE_CLIENT_SECRET`| Google OAuth           |
 
 ### Custom Domain (Optional)
 
 To use a custom domain like `api-backend.syrabit.ai` directly on Railway:
-1. Go to Railway project → Settings → Networking → Custom Domain.
+1. Go to Railway project > Settings > Networking > Custom Domain.
 2. Add your domain and configure the CNAME in Cloudflare DNS.
 
 Note: The Cloudflare Worker already proxies `api.syrabit.ai` to the Railway backend, so a custom Railway domain is optional.
@@ -138,4 +172,4 @@ Configure these callback URLs in the respective payment provider dashboards:
 | Razorpay | `https://api.syrabit.ai/api/webhooks/razorpay` |
 | Stripe   | `https://api.syrabit.ai/api/webhooks/stripe`   |
 
-Both endpoints verify signatures using their respective secrets (`RAZORPAY_WEBHOOK_SECRET`, `STRIPE_WEBHOOK_SECRET`).
+Both endpoints verify signatures using their respective secrets.

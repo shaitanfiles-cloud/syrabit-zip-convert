@@ -9,8 +9,9 @@ __pycache__
 .mypy_cache
 node_modules
 docker-compose.yml
-DEPLOY.md
-render.yaml
 *.md
 .vscode
 .idea
+tests
+.gitignore
+railway.json

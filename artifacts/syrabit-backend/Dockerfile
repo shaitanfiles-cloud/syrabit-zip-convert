@@ -3,7 +3,7 @@ FROM python:3.11-slim AS base
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl && \
+    curl build-essential libpq-dev && \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -18,7 +18,7 @@ USER appuser
 ENV PORT=8000
 EXPOSE ${PORT}
 
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=15s \
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
     CMD curl -f http://localhost:${PORT}/api/health || exit 1
 
-CMD sh -c "uvicorn server:app --host 0.0.0.0 --port ${PORT} --workers ${WORKERS:-2} --no-access-log"
+CMD ["gunicorn", "server:app", "-c", "gunicorn.conf.py"]
