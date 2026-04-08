@@ -305,6 +305,7 @@ async def track_page_view(
                         "visitor_id": visitor_id,
                         "start_time": now_iso,
                         "entry_path": path,
+                        "is_bot": False,
                     },
                     "$set": {"last_ping": now_iso},
                     "$inc": {"page_count": 1},
@@ -385,14 +386,40 @@ async def get_visitor_stats() -> dict:
         top_countries = [{"country": r["_id"], "count": r["count"]} for r in country_rows]
 
         # Session metrics (avg duration + bounce rate)
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+
+        bot_visitor_ids = await db.page_views.distinct(
+            "visitor_id",
+            {"is_bot": True, "date": {"$gte": (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")}},
+        )
+
+        session_match = {
+            "start_time": {"$gte": seven_days_ago},
+            "is_bot": {"$ne": True},
+        }
+        if bot_visitor_ids:
+            session_match["visitor_id"] = {"$nin": bot_visitor_ids}
+
         session_pipeline = [
-            {"$match": {"end_time": {"$exists": True}}},
+            {"$match": session_match},
+            {"$addFields": {
+                "effective_end": {
+                    "$ifNull": ["$end_time", "$last_ping"]
+                },
+                "effective_page_count": {
+                    "$ifNull": ["$page_count", 0]
+                },
+            }},
+            {"$match": {
+                "effective_end": {"$exists": True, "$ne": None},
+                "effective_page_count": {"$gte": 1},
+            }},
             {"$project": {
-                "page_count": 1,
+                "effective_page_count": 1,
                 "duration_secs": {
                     "$divide": [
                         {"$subtract": [
-                            {"$toDate": "$end_time"},
+                            {"$toDate": "$effective_end"},
                             {"$toDate": "$start_time"},
                         ]},
                         1000,
@@ -402,7 +429,7 @@ async def get_visitor_stats() -> dict:
             {"$group": {
                 "_id": None,
                 "total": {"$sum": 1},
-                "bounces": {"$sum": {"$cond": [{"$lte": ["$page_count", 1]}, 1, 0]}},
+                "bounces": {"$sum": {"$cond": [{"$eq": ["$effective_page_count", 1]}, 1, 0]}},
                 "avg_duration": {"$avg": "$duration_secs"},
             }},
         ]

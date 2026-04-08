@@ -448,6 +448,8 @@ async def session_ping_endpoint(
                         "visitor_id": visitor_id,
                         "start_time": now_iso,
                         "entry_path": "",
+                        "page_count": 0,
+                        "is_bot": False,
                     },
                     "$set": {"last_ping": now_iso},
                 },
@@ -462,14 +464,23 @@ async def session_ping_endpoint(
 async def session_end_endpoint(
     session_id: str = Body(...),
     visitor_id: str = Body(None),
+    end_timestamp: str = Body(None),
 ):
     """Record session end time. Called via sendBeacon on tab close."""
     try:
         if db is not None and await is_mongo_available():
-            now_iso = datetime.now(timezone.utc).isoformat()
+            end_iso = None
+            if end_timestamp:
+                try:
+                    datetime.fromisoformat(end_timestamp.replace("Z", "+00:00"))
+                    end_iso = end_timestamp
+                except (ValueError, AttributeError):
+                    pass
+            if not end_iso:
+                end_iso = datetime.now(timezone.utc).isoformat()
             await db.sessions.update_one(
                 {"session_id": session_id},
-                {"$set": {"end_time": now_iso, "last_ping": now_iso}},
+                {"$set": {"end_time": end_iso, "last_ping": end_iso}},
             )
     except Exception as e:
         logger.debug(f"session_end failed: {e}")

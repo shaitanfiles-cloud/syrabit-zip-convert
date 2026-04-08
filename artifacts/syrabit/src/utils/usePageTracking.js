@@ -62,6 +62,9 @@ function getOrCreateSessionId() {
 
 let heartbeatInterval = null;
 let lastSessionId = null;
+let hiddenAt = null;
+
+const SESSION_RESUME_WINDOW_MS = 30 * 60 * 1000;
 
 function startHeartbeat(sessionId, visitorId) {
   if (heartbeatInterval) clearInterval(heartbeatInterval);
@@ -80,12 +83,16 @@ function startHeartbeat(sessionId, visitorId) {
   heartbeatInterval = setInterval(sendPing, 30000);
 }
 
-function sendSessionEnd(sessionId, visitorId) {
+function sendSessionEnd(sessionId, visitorId, endTimestamp) {
   const sid = sessionId || lastSessionId || sessionStorage.getItem('syrabit:session_id');
   const vid = visitorId || localStorage.getItem('syrabit:visitor_id');
   if (sid && vid) {
+    const payload = { session_id: sid, visitor_id: vid };
+    if (endTimestamp) {
+      payload.end_timestamp = new Date(endTimestamp).toISOString();
+    }
     const blob = new Blob(
-      [JSON.stringify({ session_id: sid, visitor_id: vid })],
+      [JSON.stringify(payload)],
       { type: 'application/json' }
     );
     navigator.sendBeacon(`${API_BASE}/analytics/session-end`, blob);
@@ -120,13 +127,34 @@ export function usePageTracking() {
           clearInterval(heartbeatInterval);
           heartbeatInterval = null;
         }
-        sendSessionEnd(sessionIdRef.current, visitorIdRef.current);
+        hiddenAt = Date.now();
       } else {
-        try { sessionStorage.removeItem('syrabit:session_id'); } catch {}
-        const newSid = getOrCreateSessionId();
-        sessionIdRef.current = newSid;
-        lastSessionId = newSid;
-        startHeartbeat(newSid, visitorIdRef.current);
+        const elapsed = hiddenAt ? Date.now() - hiddenAt : 0;
+        hiddenAt = null;
+        if (elapsed > SESSION_RESUME_WINDOW_MS) {
+          const actualEndTime = Date.now() - elapsed;
+          sendSessionEnd(sessionIdRef.current, visitorIdRef.current, actualEndTime);
+          try { sessionStorage.removeItem('syrabit:session_id'); } catch {}
+          const newSid = getOrCreateSessionId();
+          sessionIdRef.current = newSid;
+          lastSessionId = newSid;
+
+          const currentPath = window.location.pathname;
+          axios.post(
+            `${API_BASE}/analytics/page-view`,
+            {
+              path: currentPath,
+              visitor_id: visitorIdRef.current,
+              session_id: newSid,
+              referrer: document.referrer || null,
+              user_agent: navigator.userAgent,
+              screen_width: window.screen.width,
+              is_404_hint: detectIs404(currentPath),
+            },
+            { withCredentials: true }
+          ).catch(() => {});
+        }
+        startHeartbeat(sessionIdRef.current, visitorIdRef.current);
       }
     };
 
