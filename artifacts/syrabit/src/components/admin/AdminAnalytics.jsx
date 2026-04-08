@@ -15,6 +15,7 @@ import SeoPagesTab from './analytics/SeoPagesTab';
 import RevenueTab from './analytics/RevenueTab';
 import PredictionsTab from './analytics/PredictionsTab';
 import ConversionsTab from './analytics/ConversionsTab';
+import ContentCardViewsTab from './analytics/ContentCardViewsTab';
 
 export default function AdminAnalytics({ adminToken, onNavigate }) {
   const [data, setData]         = useState(null);
@@ -179,6 +180,7 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
     { id: 'daily',     label: 'Daily' },
     { id: 'funnel',    label: 'Funnel' },
     { id: 'heatmap',   label: 'Heatmap' },
+    { id: 'cardviews', label: 'Card Views' },
     { id: 'seo',       label: 'SEO & Pages' },
     { id: 'revenue',   label: 'Revenue' },
     { id: 'predict',   label: 'Predictions' },
@@ -233,6 +235,10 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
 
       {tab === 'heatmap' && (
         <HeatmapTab heatmap={heatmap} aiInsight={aiInsight} widgetErrors={widgetErrors} load={load} />
+      )}
+
+      {tab === 'cardviews' && (
+        <ContentCardViewsTab adminToken={adminToken} />
       )}
 
       {tab === 'seo' && (

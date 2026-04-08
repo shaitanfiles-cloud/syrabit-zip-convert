@@ -2692,6 +2692,115 @@ async def admin_analytics_content_heatmap(admin: dict = Depends(get_admin_user))
         "top_searches": [{"query": r["_id"] or "Unknown", "count": r["count"]} for r in top_searches if r["_id"]],
     }
 
+@router.get("/admin/analytics/content-card-views")
+async def admin_analytics_content_card_views(days: int = Query(0, ge=0), admin: dict = Depends(get_admin_user)):
+    cutoff = None
+    if days > 0:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+
+    subjects = await db.subjects.find(
+        {},
+        {"_id": 0, "id": 1, "name": 1, "slug": 1, "boardId": 1, "boardName": 1, "className": 1}
+    ).to_list(1000)
+
+    def _slugify_lower(s):
+        return re.sub(r"[^a-z0-9]+", "-", (s or "").lower()).strip("-")
+
+    path_key_to_subject = {}
+    id_to_subject = {}
+    for s in subjects:
+        slug = s.get("slug", "")
+        board_slug = _slugify_lower(s.get("boardName", ""))
+        class_slug = _slugify_lower(s.get("className", ""))
+        if slug and board_slug and class_slug:
+            path_key_to_subject[f"{board_slug}/{class_slug}/{slug}"] = s
+        id_to_subject[s["id"]] = s
+
+    pv_match = {"path": {"$regex": r"^/[^/]+/[^/]+/[^/]+/?$"}}
+    if cutoff:
+        pv_match["timestamp"] = {"$gte": cutoff}
+    pv_pipeline = [
+        {"$match": pv_match},
+        {"$group": {
+            "_id": "$path",
+            "views": {"$sum": 1},
+            "unique_visitors": {"$addToSet": "$visitor_id"},
+        }},
+        {"$project": {
+            "path": "$_id",
+            "views": 1,
+            "unique_visitors": {"$size": "$unique_visitors"},
+            "_id": 0,
+        }},
+    ]
+    try:
+        pv_results = await db.page_views.aggregate(pv_pipeline).to_list(1000)
+    except Exception:
+        pv_results = []
+
+    sv_match = {"event_type": "subject_view", "subject_id": {"$ne": None}}
+    if cutoff:
+        sv_match["timestamp"] = {"$gte": cutoff}
+    sv_pipeline = [
+        {"$match": sv_match},
+        {"$group": {
+            "_id": "$subject_id",
+            "views": {"$sum": 1},
+            "unique_visitors": {"$addToSet": "$user_id"},
+        }},
+        {"$project": {
+            "subject_id": "$_id",
+            "views": 1,
+            "unique_visitors": {"$size": "$unique_visitors"},
+            "_id": 0,
+        }},
+    ]
+    try:
+        sv_results = await db.analytics.aggregate(sv_pipeline).to_list(1000)
+    except Exception:
+        sv_results = []
+
+    merged = {}
+    for pv in pv_results:
+        path = pv["path"].strip("/")
+        parts = path.split("/")
+        if len(parts) < 3:
+            continue
+        path_key = "/".join(parts[:3])
+        subj = path_key_to_subject.get(path_key)
+        if not subj:
+            continue
+        sid = subj["id"]
+        if sid not in merged:
+            merged[sid] = {
+                "subject_id": sid,
+                "name": subj.get("name", parts[2]),
+                "board": subj.get("boardName", parts[0]),
+                "class_name": subj.get("className", parts[1]),
+                "page_views": 0,
+                "unique_visitors": 0,
+            }
+        merged[sid]["page_views"] += pv["views"]
+        merged[sid]["unique_visitors"] = max(merged[sid]["unique_visitors"], pv["unique_visitors"])
+
+    for sv in sv_results:
+        sid = sv["subject_id"]
+        subj = id_to_subject.get(sid)
+        if sid not in merged:
+            merged[sid] = {
+                "subject_id": sid,
+                "name": subj.get("name", sid) if subj else sid,
+                "board": subj.get("boardName", "") if subj else "",
+                "class_name": subj.get("className", "") if subj else "",
+                "page_views": 0,
+                "unique_visitors": 0,
+            }
+        merged[sid]["page_views"] += sv["views"]
+        merged[sid]["unique_visitors"] = max(merged[sid]["unique_visitors"], sv["unique_visitors"])
+
+    ranked = sorted(merged.values(), key=lambda x: x["page_views"], reverse=True)[:30]
+    return {"content_card_views": ranked, "total": len(ranked), "days": days}
+
 @router.get("/admin/analytics/revenue")
 async def admin_analytics_revenue(days: int = 30, admin: dict = Depends(get_admin_user)):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
