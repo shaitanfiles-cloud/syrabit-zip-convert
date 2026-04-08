@@ -1013,6 +1013,10 @@ async def _vector_rag_search_inner(
             logger.warning(f"$vectorSearch failed, falling back to app-side cosine: {str(_vs_err)[:150]}")
             return await _vector_rag_search_fallback(query, query_vec, subject_id, top_k, _vk, db_category)
 
+        if not results:
+            logger.info(f"$vectorSearch returned empty, falling back to app-side cosine: query='{query[:40]}'")
+            return await _vector_rag_search_fallback(query, query_vec, subject_id, top_k, _vk, db_category)
+
         top = []
         for r in results:
             score = r.get("score", 0.0)

@@ -234,6 +234,20 @@ async def _seed_syllabus_embeddings():
             logger.info(f"SyllabusEmbedder: seeded {inserted} chapter embeddings in background")
     except Exception as exc:
         logger.warning(f"SyllabusEmbedder background seed failed: {exc}")
+    try:
+        await _syllabus_embedder._reload_cache()
+    except Exception as exc:
+        logger.warning(f"SyllabusEmbedder cache preload failed: {exc}")
+
+
+async def _preload_syllabus_cache():
+    global _syllabus_embedder
+    if _syllabus_embedder is None:
+        return
+    try:
+        await _syllabus_embedder._reload_cache()
+    except Exception as exc:
+        logger.warning(f"SyllabusEmbedder cache preload (worker) failed: {exc}")
 
 
 @asynccontextmanager
@@ -459,6 +473,8 @@ async def lifespan(app):
         _syllabus_embedder = SyllabusEmbedder(db)
         if _is_leader:
             asyncio.create_task(_seed_syllabus_embeddings())
+        else:
+            asyncio.create_task(_preload_syllabus_cache())
     asyncio.create_task(_load_ga4_from_db())
     from routes.admin_notifications import _exam_reminder_loop
     asyncio.create_task(_exam_reminder_loop())

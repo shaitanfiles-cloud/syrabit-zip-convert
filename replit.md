@@ -24,7 +24,7 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **SEO & Content Quality:** Implements prompt variants, title diversification, content-derived meta descriptions, and a quality scoring system.
 - **PYQ HTML Replica:** Processes PYQ PDFs via Gemini Vision OCR to create SEO-optimized, RAG-indexed HTML replicas.
 - **Syllabus Embedder:** Generates chapter and topic-level embeddings, enriched with context and keywords.
-- **RAG Pipeline:** Employs a 4-way parallel search (keyword chunks, chapter keywords, subject keywords, chunk-level vector search) with grounding citations, using MongoDB Atlas `$vectorSearch` and Voyage AI reranker.
+- **RAG Pipeline:** Employs a 4-way parallel search (keyword chunks, chapter keywords, subject keywords, chunk-level vector search) with grounding citations, using MongoDB Atlas `$vectorSearch` with app-side cosine similarity fallback and Voyage AI reranker.
 - **Subject Linking for Syllabus:** A semantic router resolves subjects for syllabus queries without a `subject_id`.
 - **Multi-LLM Pipeline:** Designed with a multi-stage architecture (Topic Resolver, RAG Synthesizer, Response Polisher) using various LLMs.
 - **Monetization:** Supports free, starter, and pro plans with credit-based usage, integrating Razorpay and Stripe.
