@@ -1,4 +1,4 @@
-const CACHE_VERSION = '7';
+const CACHE_VERSION = '8';
 const STATIC_CACHE = 'syrabit-static-v' + CACHE_VERSION;
 const RUNTIME_CACHE = 'syrabit-runtime-v' + CACHE_VERSION;
 
@@ -9,8 +9,16 @@ const PRECACHE_URLS = [
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(STATIC_CACHE)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
+    caches.open(STATIC_CACHE).then((cache) =>
+      cache.addAll(PRECACHE_URLS).then(() =>
+        fetch(new URL('precache-manifest.json', self.registration.scope).href)
+          .then((res) => res.ok ? res.json() : [])
+          .then((urls) => Promise.allSettled(
+            urls.map((u) => cache.add(new Request(new URL(u, self.registration.scope).href)))
+          ))
+          .catch(() => {})
+      )
+    )
   );
   self.skipWaiting();
 });

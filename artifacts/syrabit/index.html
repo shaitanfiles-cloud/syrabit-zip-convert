@@ -135,12 +135,7 @@
       @keyframes spin{to{transform:rotate(360deg)}}
     </style>
 
-    <!-- ── Google AdSense (deferred to not block initial paint) ── -->
-    <script async defer src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8958003374183515" crossorigin="anonymous"></script>
-
-    <!-- Emergent scripts (do not remove) -->
-    <script>window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);</script>
-    <script src="https://assets.emergent.sh/scripts/emergent-main.js" async></script>
+    <!-- modulepreload hints for vendor/router chunks injected at build time by scripts/inject-modulepreload.mjs -->
 
     <style>#emergent-badge,a[href*="emergent.sh"],[id*="emergent"],[class*="emergent"]{display:none!important;visibility:hidden!important;width:0!important;height:0!important;opacity:0!important;pointer-events:none!important;position:fixed!important;z-index:-99999!important}</style>
   </head>
@@ -153,7 +148,7 @@
 
     <script>
       (function(){
-        var V='7';
+        var V='8';
         var keep=new Set(['syrabit-static-v'+V,'syrabit-runtime-v'+V]);
         if('caches' in window){
           caches.keys().then(function(names){
@@ -196,6 +191,16 @@
     </noscript>
     <div id="root"></div>
       <script type="module" src="/src/index.jsx"></script>
+      <script>
+        (function deferThirdParty(){
+          var ric=window.requestIdleCallback||function(cb){setTimeout(cb,2000)};
+          ric(function(){
+            window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);
+            var em=document.createElement("script");em.src="https://assets.emergent.sh/scripts/emergent-main.js";em.async=true;document.body.appendChild(em);
+            var ad=document.createElement("script");ad.src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8958003374183515";ad.async=true;ad.crossOrigin="anonymous";document.body.appendChild(ad);
+          },{timeout:4000});
+        })();
+      </script>
       <script>
         (window.requestIdleCallback||function(cb){setTimeout(cb,1500)})(function(){
             !(function (t, e) {
