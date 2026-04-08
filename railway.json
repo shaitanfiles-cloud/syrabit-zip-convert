@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.railway.com/railway.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "pnpm install && pnpm --filter @workspace/syrabit build"
+  },
+  "deploy": {
+    "startCommand": "pnpm --filter @workspace/syrabit dev",
+    "runtime": "NODE"
+  }
+}
