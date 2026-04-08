@@ -32,26 +32,30 @@ const CACHEABLE_PREFIXES = [
 ];
 
 const CACHE_TTL: Record<string, number> = {
-  "/api/content/boards": 300,
-  "/api/content/classes": 300,
-  "/api/content/streams": 300,
-  "/api/content/subjects": 300,
-  "/api/content/chapters/": 3600,
-  "/api/content/chunks/": 3600,
-  "/api/content/library-bundle": 300,
-  "/api/content/chapter-by-slug/": 300,
-  "/api/content/topic/": 300,
-  "/api/content/syllabus/": 3600,
+  "/api/content/boards": 604800,
+  "/api/content/classes": 604800,
+  "/api/content/streams": 604800,
+  "/api/content/subjects": 604800,
+  "/api/content/chapters/": 604800,
+  "/api/content/chunks/": 604800,
+  "/api/content/library-bundle": 604800,
+  "/api/content/chapter-by-slug/": 604800,
+  "/api/content/topic/": 604800,
+  "/api/content/syllabus/": 604800,
   "/api/seo/": 600,
-  "/api/pyq/": 600,
-  "/api/notes/public": 3600,
-  "/api/mcq/": 3600,
+  "/api/pyq/": 604800,
+  "/api/notes/public": 604800,
+  "/api/mcq/": 604800,
   "/api/user/stats": 900,
   "/api/cms/articles": 900,
-  "/api/flashcards/": 3600,
+  "/api/flashcards/": 604800,
   "/api/sitemap": 86400,
   "/api/robots.txt": 86400,
 };
+
+const USER_SPECIFIC_PREFIXES = [
+  "/api/user/stats",
+];
 
 const BYPASS_PREFIXES = [
   "/api/ai/chat",
@@ -91,6 +95,10 @@ function isCacheable(pathname: string): boolean {
 
 function isBypass(pathname: string): boolean {
   return BYPASS_PREFIXES.some((p) => pathname.startsWith(p));
+}
+
+function isUserSpecific(pathname: string): boolean {
+  return USER_SPECIFIC_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
 async function checkRateLimit(
@@ -255,7 +263,7 @@ export default {
       request.headers.has("Cookie") ||
       request.headers.has("x-anon-id");
 
-    if (isCacheable(pathname) && !hasAuth) {
+    if (isCacheable(pathname) && (!hasAuth || !isUserSpecific(pathname))) {
       const cache = caches.default;
       const cacheKey = new Request(url.toString(), { method: "GET" });
 

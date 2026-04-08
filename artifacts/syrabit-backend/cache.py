@@ -1,5 +1,5 @@
 """Syrabit.ai — Redis + in-memory caching helpers."""
-import hashlib, json, logging, time
+import asyncio, hashlib, json, logging, time
 from typing import Optional, Dict, Any
 import cachetools
 from deps import redis_client
@@ -226,6 +226,47 @@ def _invalidate_content_cache(prefix: str):
                         redis_client.delete(rk)
         except Exception:
             pass
+    _fire_cf_edge_purge(prefix)
+
+
+_cf_purge_scheduled = False
+_cf_purge_prefixes: list = []
+
+def _fire_cf_edge_purge(prefix: str):
+    global _cf_purge_scheduled
+    _cf_purge_prefixes.append(prefix)
+    if _cf_purge_scheduled:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    _cf_purge_scheduled = True
+    try:
+        from cloudflare_client import purge_content_prefixes
+        loop.create_task(_debounced_cf_purge(purge_content_prefixes))
+    except Exception:
+        _cf_purge_scheduled = False
+        _cf_purge_prefixes.clear()
+
+
+async def _debounced_cf_purge(fn):
+    global _cf_purge_scheduled
+    try:
+        await asyncio.sleep(0.5)
+        prefixes = list(set(_cf_purge_prefixes))
+        _cf_purge_prefixes.clear()
+        result = await fn(prefixes)
+        if result:
+            logger.info(f"CF edge purge triggered for prefixes: {prefixes}")
+        else:
+            logger.warning(f"CF edge purge returned false for prefixes: {prefixes}")
+    except Exception as e:
+        logger.warning(f"CF edge purge background error: {e}")
+    finally:
+        _cf_purge_scheduled = False
+        if _cf_purge_prefixes:
+            _fire_cf_edge_purge(_cf_purge_prefixes.pop(0))
 
 def _set_content_cache(key: str, value):
     _content_cache[key] = value

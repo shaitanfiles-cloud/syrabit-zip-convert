@@ -45,6 +45,7 @@ FRONTEND_URL   = os.environ.get('FRONTEND_URL', 'https://syrabit.ai').strip().rs
 # ── Cloudflare Analytics API ─────────────────────────────────────────────────
 CF_ANALYTICS_API_TOKEN = os.environ.get('CF_ANALYTICS_API_TOKEN', '').strip()
 CF_ZONE_ID = os.environ.get('CF_ZONE_ID', '').strip()
+CF_API_TOKEN = os.environ.get('CF_API_TOKEN', '').strip() or CF_ANALYTICS_API_TOKEN
 
 # ── Cloudflare AI Gateway ────────────────────────────────────────────────────
 import time as _time

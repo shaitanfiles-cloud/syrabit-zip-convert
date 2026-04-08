@@ -475,3 +475,6 @@ export const adminGetChatFeedback = (token, limit = 100, offset = 0) =>
 
 export const adminGetFeedbackStats = (token) =>
   axios.get(`${API_BASE}/chat-feedback/stats`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminPurgeAllCache = (token) =>
+  axios.post(`${API_BASE}/admin/cache/purge-all`, {}, { headers: adminHeaders(token), withCredentials: true });

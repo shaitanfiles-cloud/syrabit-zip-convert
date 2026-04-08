@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
-import { Save, Loader2, Settings } from 'lucide-react';
+import { Save, Loader2, Settings, Trash2 } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
-import { adminGetSettings, adminUpdateSettings } from '@/utils/api';
+import { adminGetSettings, adminUpdateSettings, adminPurgeAllCache } from '@/utils/api';
 import { toast } from 'sonner';
 
 export default function AdminSettings({ adminToken, onNavigate }) {
@@ -17,6 +17,7 @@ export default function AdminSettings({ adminToken, onNavigate }) {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [purging, setPurging] = useState(false);
 
   useEffect(() => {
     adminGetSettings(adminToken)
@@ -93,6 +94,34 @@ export default function AdminSettings({ adminToken, onNavigate }) {
         {saving ? <Loader2 size={16} className="animate-spin mr-2" /> : <Save size={16} className="mr-2" />}
         Save Settings
       </Button>
+
+      <div className="rounded-2xl p-5 space-y-3 bg-white border border-gray-200 shadow-sm">
+        <div>
+          <p className="text-gray-700 text-sm font-medium">Purge All Content Cache</p>
+          <p className="text-gray-400 text-xs">Clears backend caches and Cloudflare edge cache for all content routes. Users will see fresh data immediately.</p>
+        </div>
+        <Button
+          onClick={async () => {
+            setPurging(true);
+            try {
+              const res = await adminPurgeAllCache(adminToken);
+              const cfStatus = res.data?.cloudflare_purged ? 'Cloudflare edge purged' : 'Cloudflare purge skipped (not configured)';
+              toast.success(`Cache purged. ${cfStatus}`);
+            } catch {
+              toast.error('Failed to purge cache');
+            } finally {
+              setPurging(false);
+            }
+          }}
+          disabled={purging}
+          variant="outline"
+          className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+        >
+          {purging ? <Loader2 size={16} className="animate-spin mr-2" /> : <Trash2 size={16} className="mr-2" />}
+          Purge All Content Cache
+        </Button>
+      </div>
+
       <AdminQuickLinks links={['apiconfig','googleauth','health','ratelimits']} onNavigate={onNavigate} />
     </div>
   );

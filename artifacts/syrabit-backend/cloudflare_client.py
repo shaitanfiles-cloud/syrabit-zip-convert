@@ -1,12 +1,13 @@
 """
 Cloudflare Analytics API client for Syrabit.
 Uses the Cloudflare GraphQL Analytics API to fetch zone-level traffic data.
+Also provides edge cache purge functionality.
 Falls back gracefully when credentials are missing/invalid.
 """
 import os
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -283,3 +284,131 @@ async def get_top_pages_cf(days: int = 30, limit: int = 20) -> Optional[list]:
     except Exception as e:
         logger.warning(f"CF top pages parsing failed: {e}")
         return None
+
+
+_CONTENT_PREFIX_TO_URLS = {
+    "boards":   ["/api/content/boards", "/api/content/library-bundle"],
+    "classes":  ["/api/content/classes", "/api/content/library-bundle"],
+    "streams":  ["/api/content/streams", "/api/content/library-bundle"],
+    "subjects": ["/api/content/subjects", "/api/content/library-bundle"],
+    "chapters": [
+        "/api/content/chapters/",
+        "/api/content/library-bundle",
+        "/api/content/chapter-by-slug/",
+        "/api/content/chunks/",
+        "/api/content/topic/",
+        "/api/content/syllabus/",
+        "/api/notes/public",
+        "/api/mcq/",
+        "/api/flashcards/",
+        "/api/pyq/",
+    ],
+}
+
+_ALL_CONTENT_URLS = list(set(
+    url for urls in _CONTENT_PREFIX_TO_URLS.values() for url in urls
+))
+
+
+def _purge_cfg():
+    return {
+        "api_token": os.getenv("CF_API_TOKEN", "").strip() or os.getenv("CF_ANALYTICS_API_TOKEN", "").strip(),
+        "zone_id": os.getenv("CF_ZONE_ID", "").strip(),
+    }
+
+
+def is_purge_configured() -> bool:
+    c = _purge_cfg()
+    return bool(c["api_token"] and c["zone_id"])
+
+
+_CF_API_DOMAIN = os.getenv("CF_API_DOMAIN", "https://api.syrabit.ai").strip().rstrip("/")
+
+
+async def _cf_purge_request(payload: dict) -> bool:
+    c = _purge_cfg()
+    try:
+        client = _get_cf_client()
+        resp = await client.post(
+            f"https://api.cloudflare.com/client/v4/zones/{c['zone_id']}/purge_cache",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {c['api_token']}",
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("success"):
+                return True
+            logger.warning(f"CF cache purge failed: {data.get('errors')}")
+            return False
+        logger.warning(f"CF cache purge HTTP {resp.status_code}: {resp.text[:200]}")
+        return False
+    except Exception as e:
+        logger.warning(f"CF cache purge error: {e}")
+        return False
+
+
+async def _purge_by_prefix(url_prefixes: List[str]) -> bool:
+    ok = await _cf_purge_request({"prefixes": url_prefixes})
+    if ok:
+        logger.info(f"CF prefix purge OK: {url_prefixes}")
+    return ok
+
+
+async def _purge_by_files(urls: List[str]) -> bool:
+    all_ok = True
+    batch_size = 30
+    for i in range(0, len(urls), batch_size):
+        batch = urls[i:i + batch_size]
+        ok = await _cf_purge_request({"files": batch})
+        if ok:
+            logger.info(f"CF file purge OK: {len(batch)} URLs")
+        else:
+            all_ok = False
+    return all_ok
+
+
+async def _purge_everything() -> bool:
+    ok = await _cf_purge_request({"purge_everything": True})
+    if ok:
+        logger.info("CF purge_everything: success")
+    return ok
+
+
+async def purge_content_prefixes(prefixes: List[str]) -> bool:
+    if not is_purge_configured():
+        return False
+    url_paths = set()
+    for prefix in prefixes:
+        cf_urls = _CONTENT_PREFIX_TO_URLS.get(prefix, [])
+        for url_path in cf_urls:
+            url_paths.add(url_path)
+    if not url_paths:
+        return False
+
+    full_prefixes = [f"{_CF_API_DOMAIN}{p}" for p in url_paths]
+    ok = await _purge_by_prefix(full_prefixes)
+    if ok:
+        return True
+    logger.info("CF prefix purge unavailable, falling back to file purge")
+
+    exact_urls = [f"{_CF_API_DOMAIN}{p}" for p in url_paths if not p.endswith("/")]
+    has_parameterized = any(p.endswith("/") for p in url_paths)
+    if exact_urls:
+        file_ok = await _purge_by_files(exact_urls)
+    else:
+        file_ok = True
+    if has_parameterized:
+        logger.info("Parameterized routes detected, using purge_everything as fallback")
+        everything_ok = await _purge_everything()
+        return file_ok and everything_ok
+    return file_ok
+
+
+async def purge_all_content_cache() -> bool:
+    if not is_purge_configured():
+        return False
+    return await _purge_everything()

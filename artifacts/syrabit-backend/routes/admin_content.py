@@ -87,6 +87,21 @@ async def admin_flush_cache(admin: dict = Depends(get_admin_user)):
         _invalidate_content_cache(prefix)
     return {"message": "All content caches flushed"}
 
+@router.post("/admin/cache/purge-all")
+async def admin_purge_all_cache(admin: dict = Depends(get_admin_user)):
+    for prefix in ("boards", "classes", "streams", "subjects", "chapters"):
+        _invalidate_content_cache(prefix)
+    cf_ok = False
+    try:
+        from cloudflare_client import purge_all_content_cache
+        cf_ok = await purge_all_content_cache()
+    except Exception:
+        pass
+    return {
+        "message": "All content caches purged (backend + Cloudflare edge)",
+        "cloudflare_purged": cf_ok,
+    }
+
 @router.post("/admin/content/boards")
 async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
     try:
