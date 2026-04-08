@@ -22,19 +22,15 @@ export default defineConfig(({ command }) => {
 
   if (isServe) {
     if (!rawPort) {
-      throw new Error(
-        "PORT environment variable is required but was not provided.",
-      );
+      console.warn("PORT not set, defaulting to 5173");
     }
 
-    if (Number.isNaN(port) || port <= 0) {
+    if (rawPort && (Number.isNaN(port) || port <= 0)) {
       throw new Error(`Invalid PORT value: "${rawPort}"`);
     }
 
     if (!process.env.BASE_PATH) {
-      throw new Error(
-        "BASE_PATH environment variable is required but was not provided.",
-      );
+      process.env.BASE_PATH = "/";
     }
   }
 
