@@ -3566,10 +3566,9 @@ async def get_sitemap_entries():
 BASE_URL = "https://syrabit.ai"
 
 STATIC_PAGES = [
-    ("/", "weekly", "1.0"),
+    ("/home", "weekly", "1.0"),
     ("/about", "monthly", "0.9"),
     ("/pricing", "monthly", "0.8"),
-    ("/signup", "monthly", "0.9"),
     ("/library", "weekly", "0.9"),
     ("/curriculum", "weekly", "0.8"),
     ("/exam-routine", "weekly", "0.8"),
@@ -3612,10 +3611,35 @@ async def _fetch_published_pages() -> list[dict]:
     except Exception:
         return []
 
-def _page_to_entry(p: dict, today: str) -> dict | None:
+async def _build_valid_slug_chains() -> set[tuple[str, str, str]]:
+    try:
+        lib_subjects = await _db.subjects.find({"status": "published"}, {"_id": 0, "slug": 1, "stream_id": 1}).to_list(500)
+        lib_streams = {s["id"]: s for s in await _db.streams.find({}, {"_id": 0, "id": 1, "class_id": 1}).to_list(500)}
+        lib_classes = {c["id"]: c for c in await _db.classes.find({}, {"_id": 0, "id": 1, "slug": 1, "board_id": 1}).to_list(500)}
+        lib_boards = {b["id"]: b for b in await _db.boards.find({}, {"_id": 0, "id": 1, "slug": 1}).to_list(500)}
+        valid = set()
+        for sub in lib_subjects:
+            stream = lib_streams.get(sub.get("stream_id", ""))
+            cls = lib_classes.get(stream.get("class_id", "")) if stream else None
+            board = lib_boards.get(cls.get("board_id", "")) if cls else None
+            if board and cls and sub.get("slug"):
+                b_slug = board.get("slug", "")
+                c_slug = cls.get("slug", "")
+                if b_slug and c_slug:
+                    valid.add((b_slug, c_slug, sub["slug"]))
+        return valid
+    except Exception:
+        return set()
+
+
+def _page_to_entry(p: dict, today: str, valid_chains: set[tuple[str, str, str]] | None = None) -> dict | None:
     bs, cs, ss, ts = p.get("board_slug"), p.get("class_slug"), p.get("subject_slug"), p.get("topic_slug")
     pt = p.get("page_type", "notes")
     if not all([bs, cs, ss, ts]):
+        return None
+    if pt not in _SITEMAP_TYPES:
+        return None
+    if valid_chains is not None and (bs, cs, ss) not in valid_chains:
         return None
     base_path = f"/{bs}/{cs}/{ss}/{ts}"
     path = base_path if pt == "notes" else f"{base_path}/{pt}"
@@ -3685,7 +3709,7 @@ async def get_sitemap_pages():
 @router.get("/sitemap-subjects.xml", response_class=Response)
 async def get_sitemap_subjects():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    lib_subjects = await _db.subjects.find({}, {"_id": 0}).to_list(500)
+    lib_subjects = await _db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500)
     lib_streams = {s["id"]: s for s in await _db.streams.find({}, {"_id": 0}).to_list(500)}
     lib_classes = {c["id"]: c for c in await _db.classes.find({}, {"_id": 0}).to_list(500)}
     lib_boards = {b["id"]: b for b in await _db.boards.find({}, {"_id": 0}).to_list(500)}
@@ -3695,21 +3719,26 @@ async def get_sitemap_subjects():
         stream = lib_streams.get(sub.get("stream_id", ""))
         cls = lib_classes.get(stream.get("class_id", "")) if stream else None
         board = lib_boards.get(cls.get("board_id", "")) if cls else None
-        if board and cls and sub.get("slug"):
-            key = (board.get("slug", ""), cls.get("slug", ""), sub["slug"])
-            if key not in seen_keys:
-                seen_keys.add(key)
-                entries.append({
-                    "loc": f"{BASE_URL}/{key[0]}/{key[1]}/{key[2]}",
-                    "lastmod": today, "pri": "0.7", "freq": "weekly",
-                })
+        if not (board and cls and sub.get("slug")):
+            continue
+        b_slug = board.get("slug", "")
+        c_slug = cls.get("slug", "")
+        if not b_slug or not c_slug:
+            continue
+        key = (b_slug, c_slug, sub["slug"])
+        if key not in seen_keys:
+            seen_keys.add(key)
+            entries.append({
+                "loc": f"{BASE_URL}/{key[0]}/{key[1]}/{key[2]}",
+                "lastmod": today, "pri": "0.7", "freq": "weekly",
+            })
     return _xml_response(_build_urlset(entries))
 
 
 @router.get("/sitemap-chapters.xml", response_class=Response)
 async def get_sitemap_chapters():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    lib_subjects = await _db.subjects.find({}, {"_id": 0}).to_list(500)
+    lib_subjects = await _db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500)
     lib_streams = {s["id"]: s for s in await _db.streams.find({}, {"_id": 0}).to_list(500)}
     lib_classes = {c["id"]: c for c in await _db.classes.find({}, {"_id": 0}).to_list(500)}
     lib_boards = {b["id"]: b for b in await _db.boards.find({}, {"_id": 0}).to_list(500)}
@@ -3725,13 +3754,17 @@ async def get_sitemap_chapters():
         board = lib_boards.get(cls.get("board_id", "")) if cls else None
         if not board or not cls or not sub.get("slug"):
             continue
+        b_slug = board.get("slug", "")
+        c_slug = cls.get("slug", "")
+        if not b_slug or not c_slug:
+            continue
         ch_slug = ch.get("slug") or re.sub(r'[^a-z0-9]+', '-', (ch.get("title") or "").lower()).strip('-')
         if not ch_slug:
             continue
         raw = ch.get("updated_at", "") or ch.get("created_at", "")
         lastmod = raw[:10] if raw else today
         entries.append({
-            "loc": f"{BASE_URL}/{board.get('slug', '')}/{cls.get('slug', '')}/{sub['slug']}/{ch_slug}",
+            "loc": f"{BASE_URL}/{b_slug}/{c_slug}/{sub['slug']}/{ch_slug}",
             "lastmod": lastmod, "pri": "0.8", "freq": "monthly",
         })
     return _xml_response(_build_urlset(entries))
@@ -3772,7 +3805,8 @@ async def get_sitemap_learn():
 async def get_sitemap_notes():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pages = await _fetch_published_pages()
-    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "notes"]
+    valid_chains = await _build_valid_slug_chains()
+    entries = [e for p in pages if (e := _page_to_entry(p, today, valid_chains)) and e["page_type"] == "notes"]
     return _xml_response(_build_urlset(entries))
 
 
@@ -3780,7 +3814,8 @@ async def get_sitemap_notes():
 async def get_sitemap_mcqs():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pages = await _fetch_published_pages()
-    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "mcqs"]
+    valid_chains = await _build_valid_slug_chains()
+    entries = [e for p in pages if (e := _page_to_entry(p, today, valid_chains)) and e["page_type"] == "mcqs"]
     return _xml_response(_build_urlset(entries))
 
 
@@ -3788,7 +3823,8 @@ async def get_sitemap_mcqs():
 async def get_sitemap_pyqs():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pages = await _fetch_published_pages()
-    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "important-questions"]
+    valid_chains = await _build_valid_slug_chains()
+    entries = [e for p in pages if (e := _page_to_entry(p, today, valid_chains)) and e["page_type"] == "important-questions"]
     return _xml_response(_build_urlset(entries))
 
 
@@ -3796,7 +3832,8 @@ async def get_sitemap_pyqs():
 async def get_sitemap_examples():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pages = await _fetch_published_pages()
-    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "examples"]
+    valid_chains = await _build_valid_slug_chains()
+    entries = [e for p in pages if (e := _page_to_entry(p, today, valid_chains)) and e["page_type"] == "examples"]
     return _xml_response(_build_urlset(entries))
 
 
@@ -3804,7 +3841,8 @@ async def get_sitemap_examples():
 async def get_sitemap_definitions():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pages = await _fetch_published_pages()
-    entries = [e for p in pages if (e := _page_to_entry(p, today)) and e["page_type"] == "definition"]
+    valid_chains = await _build_valid_slug_chains()
+    entries = [e for p in pages if (e := _page_to_entry(p, today, valid_chains)) and e["page_type"] == "definition"]
     return _xml_response(_build_urlset(entries))
 
 
@@ -3815,8 +3853,9 @@ async def get_dynamic_sitemap():
     entries = [{"loc": f"{BASE_URL}{path}", "lastmod": today, "pri": pri, "freq": freq}
                for path, freq, pri in STATIC_PAGES]
     pages = await _fetch_published_pages()
+    valid_chains = await _build_valid_slug_chains()
     for p in pages:
-        e = _page_to_entry(p, today)
+        e = _page_to_entry(p, today, valid_chains)
         if e:
             entries.append(e)
     learn_entries = await _fetch_learn_entries(today)

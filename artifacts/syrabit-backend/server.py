@@ -802,7 +802,25 @@ async def serve_ads_txt():
     return Response(content=txt, media_type="text/plain")
 
 @app.get("/", include_in_schema=False)
-async def root_redirect():
+async def root_redirect(request: Request):
+    import re as _rr_re
+    _ROOT_BOT_RE = _rr_re.compile(
+        r"googlebot|bingbot|yandexbot|slurp|duckduckbot|baiduspider|"
+        r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|applebot|"
+        r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot",
+        _rr_re.IGNORECASE,
+    )
+    ua = request.headers.get("user-agent", "")
+    if _ROOT_BOT_RE.search(ua):
+        try:
+            _seo_port = int(os.environ.get("PORT", "8000"))
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"http://localhost:{_seo_port}/api/seo/html/homepage")
+            if resp.status_code == 200 and "text/html" in resp.headers.get("content-type", ""):
+                return Response(content=resp.text, media_type="text/html; charset=utf-8")
+        except Exception as _root_err:
+            logger.warning(f"root_redirect bot render failed: {_root_err}")
     from starlette.responses import RedirectResponse
     return RedirectResponse(url="/chat", status_code=302)
 
@@ -866,6 +884,73 @@ if FRONTEND_BUILD.is_dir():
     _CHAPTER_PATH_RE = _spa_re.compile(
         r"^(?P<board>[^/]+)/(?P<class>[^/]+)/(?P<subject>[^/]+)/(?P<chapter>[^/]+)/?$"
     )
+    _SEO_BOT_RE = _spa_re.compile(
+        r"googlebot|bingbot|yandexbot|slurp|duckduckbot|baiduspider|"
+        r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|applebot|"
+        r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot",
+        _spa_re.IGNORECASE,
+    )
+    _VALID_SEO_PAGE_TYPES = {"mcqs", "important-questions", "examples", "definition"}
+    _KNOWN_FIRST_SEGMENTS = {
+        "api", "docs", "openapi.json", "health", "static",
+        "home", "about", "pricing", "signup", "login", "reset-password",
+        "library", "curriculum", "chat", "history", "profile", "admin",
+        "onboarding", "terms", "privacy", "status", "exam-routine",
+        "learn", "pyq", "subject", "subscribe", "payment", "cms",
+    }
+
+    async def _check_seo_content_exists(full_path: str) -> bool | None:
+        parts = [p for p in full_path.split("/") if p]
+        n = len(parts)
+        if n < 3 or n > 5:
+            return None
+        if parts[0] in _KNOWN_FIRST_SEGMENTS:
+            return None
+        if n == 5 and parts[4] not in _VALID_SEO_PAGE_TYPES:
+            return False
+        try:
+            from deps import db
+            if not db:
+                return None
+            board = await db.boards.find_one({"slug": parts[0]}, {"_id": 0, "id": 1})
+            if not board:
+                return False
+            cls = await db.classes.find_one({"slug": parts[1], "board_id": board["id"]}, {"_id": 0, "id": 1})
+            if not cls:
+                return False
+            streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0, "id": 1}).to_list(100)
+            stream_ids = [s["id"] for s in streams]
+            if not stream_ids:
+                return None
+            subj = await db.subjects.find_one(
+                {"slug": parts[2], "stream_id": {"$in": stream_ids}, "status": "published"},
+                {"_id": 0, "id": 1},
+            )
+            if not subj:
+                subj_any = await db.subjects.find_one(
+                    {"slug": parts[2], "stream_id": {"$in": stream_ids}},
+                    {"_id": 0, "id": 1},
+                )
+                if subj_any:
+                    return None
+                return False
+            if n == 3:
+                return True
+            chapter = await db.chapters.find_one(
+                {"slug": parts[3], "subject_id": subj["id"]},
+                {"_id": 0, "id": 1},
+            )
+            if chapter:
+                return True
+            import re as _re_chk
+            all_chapters = await db.chapters.find({"subject_id": subj["id"]}, {"_id": 0, "title": 1}).to_list(200)
+            for c in all_chapters:
+                auto_slug = _re_chk.sub(r'[^a-z0-9]+', '-', c.get("title", "").lower()).strip('-')
+                if auto_slug == parts[3]:
+                    return True
+            return False
+        except Exception:
+            return None
 
     def _build_og_html(title: str, desc: str, page_url: str, og_image: str) -> str:
         from html import escape
@@ -1001,6 +1086,11 @@ if FRONTEND_BUILD.is_dir():
             og_html = await _og_html_for_chapter(full_path) or await _og_html_for_subject(full_path)
             if og_html:
                 return Response(content=og_html, media_type="text/html")
+
+        if _SEO_BOT_RE.search(ua) and full_path:
+            exists = await _check_seo_content_exists(full_path)
+            if exists is False:
+                return JSONResponse(status_code=404, content={"detail": "Not found"})
 
         index_file = FRONTEND_BUILD / "index.html"
         if index_file.exists():

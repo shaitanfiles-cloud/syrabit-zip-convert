@@ -2103,11 +2103,17 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             if html_resp.status_code != 200:
                 _bot_render_fallback_count += 1
                 logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: {api_url} returned {html_resp.status_code} for path={path}")
+                if n in (3, 4, 5):
+                    from starlette.responses import Response as StarletteResponse
+                    return StarletteResponse(content="Not Found", status_code=404, media_type="text/plain")
                 return await self._safe_call_next(request, call_next)
             ct = html_resp.headers.get("content-type", "")
             if "text/html" not in ct and "text/xml" not in ct:
                 _bot_render_fallback_count += 1
                 logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: unexpected content-type '{ct}' from {api_url} for path={path}")
+                if n in (3, 4, 5):
+                    from starlette.responses import Response as StarletteResponse
+                    return StarletteResponse(content="Not Found", status_code=404, media_type="text/plain")
                 return await self._safe_call_next(request, call_next)
             html_content = html_resp.text
             _bot_html_cache[cache_key] = html_content
@@ -2116,6 +2122,9 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
         except Exception as _bot_err:
             _bot_render_fallback_count += 1
             logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: {_bot_err} for path={path}")
+            if n in (3, 4, 5):
+                from starlette.responses import Response as StarletteResponse
+                return StarletteResponse(content="Not Found", status_code=404, media_type="text/plain")
             return await self._safe_call_next(request, call_next)
 
 
