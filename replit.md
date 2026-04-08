@@ -67,5 +67,5 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm.
 - **Containerization:** Docker.
-- **Production Deployment:** Hybrid architecture with FastAPI backend on Render, Cloudflare Worker edge proxy (`api.syrabit.ai`), and frontend on Cloudflare Pages (`syrabit.ai`).
-- **Edge Caching Strategy:** Cloudflare Worker caches 20+ public/read-only GET routes (content, notes, MCQs, flashcards, CMS articles, sitemaps) with tiered TTLs (15min–24hr) and stale-while-revalidate. Dynamic routes (`/api/ai/chat/*`, `/api/webhooks/*`, `/api/auth/*`) and all non-GET methods bypass cache and proxy directly to Render. SSE streaming for AI chat passes through untouched.
+- **Production Deployment:** Hybrid architecture with FastAPI backend on Railway, Cloudflare Worker edge proxy (`api.syrabit.ai`), and frontend on Cloudflare Pages (`syrabit.ai`). Configuration in `artifacts/syrabit-backend/railway.json`.
+- **Edge Caching Strategy:** Cloudflare Worker caches 20+ public/read-only GET routes (content, notes, MCQs, flashcards, CMS articles, sitemaps) with tiered TTLs (15min–24hr) and stale-while-revalidate. Dynamic routes (`/api/ai/chat/*`, `/api/webhooks/*`, `/api/auth/*`) and all non-GET methods bypass cache and proxy directly to Railway. SSE streaming for AI chat passes through untouched.

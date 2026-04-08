@@ -15,8 +15,8 @@ Users
                                   • Edge caching for content/SEO routes
                                   • CORS enforcement
                                   │
-                                  └──► Render (FastAPI backend)
-                                        • https://syrabit-api.onrender.com
+                                  └──► Railway (FastAPI backend)
+                                        • https://syrabit-api.up.railway.app
                                         • MongoDB, PostgreSQL, Redis
                                         • AI chat, auth, payments, admin
 ```
@@ -63,29 +63,55 @@ wrangler deploy
 
 ### Environment Variables (Worker)
 
-| Variable      | Value                                  |
-| ------------- | -------------------------------------- |
-| `BACKEND_URL` | `https://syrabit-api.onrender.com`     |
+| Variable      | Value                                    |
+| ------------- | ---------------------------------------- |
+| `BACKEND_URL` | `https://syrabit-api.up.railway.app`     |
 
 The `RATE_LIMIT` KV binding handles distributed rate limiting at the edge.
 
-## Backend — Render (FastAPI)
+## Backend — Railway (FastAPI)
 
-The backend runs on Render (Starter plan, Singapore region). Configuration is in `artifacts/syrabit-backend/render.yaml`.
+The backend runs on Railway. Configuration is in `artifacts/syrabit-backend/railway.json`.
 
-### Key Environment Variables (Render)
+### Railway Project Setup
+
+1. Create a new Railway project and link the GitHub repo.
+2. Set the root directory to `artifacts/syrabit-backend`.
+3. Railway auto-detects `requirements.txt` and uses Nixpacks to build.
+4. The start command is defined in `railway.json`: `gunicorn server:app -c gunicorn.conf.py`.
+5. Health check endpoint: `/api/health`.
+
+### Key Environment Variables (Railway)
 
 | Variable              | Value                                                               |
 | --------------------- | ------------------------------------------------------------------- |
+| `PORT`                | Railway assigns automatically                                       |
 | `CORS_ORIGINS`        | `https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai` |
 | `PRODUCTION_ORIGINS`  | `https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai` |
 | `FRONTEND_URL`        | `https://syrabit.ai`                                                |
 | `SECURE_COOKIES`      | `true`                                                              |
 | `COOKIE_DOMAIN`       | `.syrabit.ai`                                                       |
+| `MONGO_URL`           | (your MongoDB connection string)                                    |
+| `DB_NAME`             | (your MongoDB database name)                                        |
+| `JWT_SECRET`          | (your JWT secret)                                                   |
+| `ADMIN_JWT_SECRET`    | (your admin JWT secret)                                             |
+| `PG_URL`              | (your PostgreSQL connection string)                                 |
+| `UPSTASH_REDIS_URL`   | (your Upstash Redis URL)                                            |
+| `UPSTASH_REDIS_TOKEN` | (your Upstash Redis token)                                          |
+
+Plus all LLM provider API keys (GROQ, GEMINI, CEREBRAS, OPENROUTER, FIREWORKS, SARVAM, VOYAGE, EMERGENT, XAI) and payment keys (RAZORPAY, STRIPE, RESEND).
+
+### Custom Domain (Optional)
+
+To use a custom domain like `api-backend.syrabit.ai` directly on Railway:
+1. Go to Railway project → Settings → Networking → Custom Domain.
+2. Add your domain and configure the CNAME in Cloudflare DNS.
+
+Note: The Cloudflare Worker already proxies `api.syrabit.ai` to the Railway backend, so a custom Railway domain is optional.
 
 ### Redeploy Backend
 
-Push to GitHub and trigger a manual deploy in the Render dashboard (auto-deploy is disabled).
+Push to GitHub. Railway auto-deploys on push (can be toggled in project settings).
 
 ## DNS — Cloudflare
 
