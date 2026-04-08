@@ -2,6 +2,14 @@
 import os, re, json, asyncio, uuid, time, logging, httpx, hashlib
 import openai as _oai
 
+
+class LlmResult(str):
+    """String subclass that carries the provider name that produced the result."""
+    def __new__(cls, text, provider="unknown"):
+        obj = str.__new__(cls, text)
+        obj.provider = provider
+        return obj
+
 _MODEL_MAX_OUTPUT_TOKENS = {
     "llama-3.1-8b-instant": 8192,
     "gemini-2.5-flash": 65536,
@@ -650,7 +658,7 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
         tok = len(result.split())
         _record_llm_call(provider, try_model, _dur, True, tok, False)
         logger.info(f"llm_call provider={provider} model={try_model} duration_ms={_dur} tokens_approx={tok}")
-        return result
+        return LlmResult(result, provider=provider)
     except asyncio.TimeoutError:
         _dur = int((_t.perf_counter() - _t0) * 1000)
         _record_llm_call(provider, try_model, _dur, False, 0, False, "Timeout")
@@ -678,7 +686,7 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
             tok = len(result.split())
             _record_llm_call(fallback["provider"], fb_model, _dur, True, tok, True)
             logger.info(f"llm_call provider={fallback['provider']} model={fb_model} duration_ms={_dur} tokens_approx={tok} fallback=true")
-            return result
+            return LlmResult(result, provider=fallback["provider"])
         except asyncio.TimeoutError:
             _dur = int((_t.perf_counter() - _t0) * 1000)
             _record_llm_call(fallback["provider"], fb_model, _dur, False, 0, True, "Timeout")
@@ -1249,6 +1257,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                             await producer_task
                         except (asyncio.CancelledError, Exception):
                             pass
+                yield f"data: {json.dumps({'__provider': p_name})}\n\n"
                 return
             except asyncio.TimeoutError:
                 _slm_pool.mark_err(slot)
@@ -1274,6 +1283,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     try:
         async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
             yield chunk
+        yield f"data: {json.dumps({'__provider': provider})}\n\n"
     except HTTPException as http_err:
         yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
     except Exception as e:

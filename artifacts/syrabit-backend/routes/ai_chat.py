@@ -479,12 +479,15 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
     _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
     answer = None
+    _ns_cache_hit = False
 
     answer = _redis_get_ai_cache(cache_key)
     if answer:
+        _ns_cache_hit = True
         logger.info(f"Redis cache HIT: {cache_key}")
     elif cache_key in _ai_response_cache:
         answer = _ai_response_cache[cache_key]
+        _ns_cache_hit = True
         logger.info(f"Memory cache HIT: {cache_key}")
 
     if answer is None:
@@ -651,11 +654,12 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     try:
         _prompt_chars = sum(len(m.get("content", "")) for m in messages)
         _compl_chars  = len(answer) if answer else 0
+        _actual_provider = "cache" if _ns_cache_hit else getattr(answer, "provider", "unknown")
         _record_llm_cost(
             model=msg.model or LLM_MODEL,
             prompt_tokens=max(1, _prompt_chars // 4),
             completion_tokens=max(1, _compl_chars // 4),
-            provider="gemini",
+            provider=_actual_provider,
             user_id=str(user_id) if user_id else "anonymous",
         )
     except Exception:
@@ -1347,6 +1351,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             yield f"data: {json.dumps(_meta_event)}\n\n"
 
             cached_answer = _cached_answer
+            _stream_provider = "unknown"
 
             if cached_answer:
                 logger.info(f"[STREAM][TIMING] TTFT (cache hit): {_time_mod.time() - _stream_t0:.3f}s")
@@ -1430,6 +1435,14 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _active_stream = _resilient_pipeline_stream() if _pipeline_stream else _slm_fallback_stream()
 
                 async for chunk in _active_stream:
+                    if '"__provider"' in chunk and chunk.startswith("data: "):
+                        try:
+                            _pdata = json.loads(chunk[6:])
+                            if isinstance(_pdata, dict) and "__provider" in _pdata and len(_pdata) == 1:
+                                _stream_provider = _pdata["__provider"]
+                                continue
+                        except Exception:
+                            pass
                     if '"content"' in chunk:
                         if not _first_token_logged:
                             logger.info(f"[STREAM][TIMING] TTFT (first LLM token): {_time_mod.time() - _stream_t0:.3f}s")
@@ -1550,7 +1563,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     model=msg.model or LLM_MODEL,
                     prompt_tokens=max(1, _pc // 4),
                     completion_tokens=max(1, len(answer) // 4) if answer else 1,
-                    provider="gemini",
+                    provider=_stream_provider if not cached_answer else "cache",
                     user_id=str(user_id) if user_id else "anonymous",
                 )
             except Exception:
