@@ -17,9 +17,6 @@ export default function PYQReplicaPage() {
     share(pyqTitle, `/pyq/${slug}`);
   }, [slug, title, share]);
 
-  const handlePrint = useCallback(() => {
-    window.print();
-  }, []);
 
   useEffect(() => {
     if (!slug) return;
@@ -105,31 +102,18 @@ export default function PYQReplicaPage() {
         >
           ← Back
         </button>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          <button
-            onClick={handlePrint}
-            style={{
-              background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: '8px',
-              padding: '6px 14px', fontSize: '13px', fontWeight: 500,
-              cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
-              display: 'flex', alignItems: 'center', gap: '4px',
-            }}
-          >
-            🖨️ Print / Save PDF
-          </button>
-          <button
-            onClick={handleShare}
-            disabled={sharing}
-            style={{
-              background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px',
-              padding: '6px 14px', fontSize: '13px', fontWeight: 500,
-              cursor: sharing ? 'wait' : 'pointer', fontFamily: 'system-ui, sans-serif',
-              opacity: sharing ? 0.7 : 1,
-            }}
-          >
-            📤 {sharing ? 'Sharing…' : 'Share'}
-          </button>
-        </div>
+        <button
+          onClick={handleShare}
+          disabled={sharing}
+          style={{
+            background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px',
+            padding: '6px 14px', fontSize: '13px', fontWeight: 500,
+            cursor: sharing ? 'wait' : 'pointer', fontFamily: 'system-ui, sans-serif',
+            opacity: sharing ? 0.7 : 1,
+          }}
+        >
+          📤 {sharing ? 'Sharing…' : 'Share'}
+        </button>
       </div>
 
       <div className="pyq-content" style={{ paddingTop: '52px' }} dangerouslySetInnerHTML={{ __html: html }} />
