@@ -645,6 +645,60 @@ async def list_cms_posts(
         return JSONResponse(content={"items": [], "total": 0})
 
 
+async def _merge_subject_html(subject_id: str) -> str:
+    """Build merged HTML from per-chapter content_html fields (set by Format Notes).
+    Returns empty string if no chapters have content_html."""
+    try:
+        from seo_engine import _format_content_html
+        chapters = await db.chapters.find(
+            {"subject_id": subject_id}, {"_id": 0}
+        ).sort("chapter_number", 1).to_list(100)
+        if not chapters:
+            return ""
+
+        has_any_html = any(ch.get("content_html") for ch in chapters)
+        if not has_any_html:
+            has_raw = any((ch.get("content") or "").strip() for ch in chapters)
+            if not has_raw:
+                return ""
+            parts = []
+            subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+            subj_name = (subject or {}).get("name", "Subject")
+            parts.append(f"<h1>{subj_name}</h1>")
+            for ch in chapters:
+                raw = (ch.get("content") or "").strip()
+                if not raw:
+                    continue
+                num = ch.get("chapter_number", "")
+                title = ch.get("title", "")
+                heading = f"Chapter {num}: {title}" if num else title
+                parts.append(f"<h2>{heading}</h2>")
+                formatted = _format_content_html(raw)
+                if formatted:
+                    parts.append(formatted)
+            return "\n".join(parts) if len(parts) > 1 else ""
+
+        parts = []
+        subject = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
+        subj_name = (subject or {}).get("name", "Subject")
+        parts.append(f"<h1>{subj_name}</h1>")
+        for ch in chapters:
+            num = ch.get("chapter_number", "")
+            title = ch.get("title", "")
+            heading = f"Chapter {num}: {title}" if num else title
+            parts.append(f"<h2>{heading}</h2>")
+            ch_html = (ch.get("content_html") or "").strip()
+            if ch_html:
+                parts.append(ch_html)
+            elif (ch.get("content") or "").strip():
+                formatted = _format_content_html(ch["content"])
+                parts.append(formatted if formatted else f"<p>{ch['content'][:500]}</p>")
+        return "\n".join(parts)
+    except Exception as exc:
+        logger.warning(f"_merge_subject_html({subject_id}): {exc}")
+        return ""
+
+
 @router.get("/cms/post/{subject_id}")
 async def get_cms_post_by_subject(subject_id: str):
     """Get merged blog post for a subject (public). Returns cache or generates on-the-fly."""
@@ -665,11 +719,13 @@ async def get_cms_post_by_subject(subject_id: str):
                 "status":     "published",
                 "seo_slug":   doc.get("seo_slug", ""),
             }
-        merged_md = await merge_subject_content(subject_id)
-        if not merged_md:
-            raise HTTPException(status_code=404, detail="Subject not found or empty")
-        content_html = _blog_md_to_html(merged_md)
-        headings     = _extract_headings_json(merged_md)
+        content_html = await _merge_subject_html(subject_id)
+        if not content_html:
+            merged_md = await merge_subject_content(subject_id)
+            if not merged_md:
+                raise HTTPException(status_code=404, detail="Subject not found or empty")
+            content_html = _blog_md_to_html(merged_md)
+        headings     = "[]"
         word_count   = len(re.sub(r'<[^>]+>', '', content_html).split())
         subject      = await db.subjects.find_one({"id": subject_id}, {"_id": 0})
         return {
