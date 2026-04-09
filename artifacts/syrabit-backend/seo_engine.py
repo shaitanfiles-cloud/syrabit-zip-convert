@@ -1936,13 +1936,92 @@ def _md_to_html(text: str) -> str:
     return f"<p>{h}</p>"
 
 
+_ASSAMESE_RE = re.compile(r'[\u0980-\u09FF]')
+
+
+def _has_assamese(text: str) -> bool:
+    return bool(_ASSAMESE_RE.search(text))
+
+
+def _is_question_numbered(line: str) -> bool:
+    return bool(
+        re.match(r'^\s*(\d+)\s*[.)]\s', line)
+        or re.match(r'^\s*\(([ivxlc]+)\)\s', line, re.IGNORECASE)
+        or re.match(r'^\s*([ivxlc]+)\s*[.)]\s', line, re.IGNORECASE)
+        or re.match(r'^\s*\([a-z]\)\s', line, re.IGNORECASE)
+        or re.match(r'^\s*[a-z]\s*[.)]\s', line)
+    )
+
+
+def _looks_like_pyq(text: str) -> bool:
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    if len(lines) < 3:
+        return False
+    numbered = sum(1 for l in lines if _is_question_numbered(l))
+    has_asm = _has_assamese(text)
+    return has_asm and numbered >= 3 and (numbered / len(lines)) >= 0.15
+
+
+def _format_bilingual_block(lines: list) -> str:
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        if not line.strip():
+            i += 1
+            continue
+
+        is_q_num = _is_question_numbered(line)
+        has_asm = _has_assamese(line)
+
+        if is_q_num and not has_asm:
+            block = f'<div class="pyq-q">{html_mod.escape(line)}'
+            if i + 1 < len(lines) and _has_assamese(lines[i + 1]) and not _is_question_numbered(lines[i + 1]):
+                i += 1
+                block += f'<span class="asm">{html_mod.escape(lines[i].strip())}</span>'
+            block += '</div>'
+            out.append(block)
+        elif has_asm and not _is_question_numbered(line):
+            out.append(f'<div class="pyq-q"><span class="asm">{html_mod.escape(line.strip())}</span></div>')
+        elif _is_question_numbered(line) and has_asm:
+            asm_chars = _ASSAMESE_RE.findall(line)
+            asm_start = line.index(asm_chars[0]) if asm_chars else len(line)
+            if asm_start == 0:
+                out.append(f'<div class="pyq-q"><span class="asm">{html_mod.escape(line.strip())}</span></div>')
+            else:
+                eng_text = line[:asm_start].rstrip()
+                asm_text = line[asm_start:].strip()
+                block = f'<div class="pyq-q">{html_mod.escape(eng_text)}'
+                if asm_text:
+                    block += f'<span class="asm">{html_mod.escape(asm_text)}</span>'
+                block += '</div>'
+                out.append(block)
+        else:
+            next_is_asm = (i + 1 < len(lines) and _has_assamese(lines[i + 1]) and not _is_question_numbered(lines[i + 1]))
+            block = f'<div class="pyq-q">{html_mod.escape(line.strip())}'
+            if next_is_asm:
+                i += 1
+                block += f'<span class="asm">{html_mod.escape(lines[i].strip())}</span>'
+            block += '</div>'
+            out.append(block)
+        i += 1
+    return '\n'.join(out)
+
+
 def _format_content_html(raw_md: str) -> str:
     """Convert raw markdown to well-structured, textbook-style HTML.
-    Handles proper list wrapping, tables, code blocks, and semantic structure."""
+    Handles proper list wrapping, tables, code blocks, and semantic structure.
+    If content contains Assamese script (PYQ-style bilingual text), uses
+    exam-paper formatting: Assamese on next line, no gap, small text."""
     if not raw_md:
         return ""
 
     md = raw_md.replace('\r\n', '\n').replace('\r', '\n')
+
+    if _looks_like_pyq(md):
+        lines = md.split('\n')
+        bilingual_html = _format_bilingual_block(lines)
+        return f'<div class="pyq-paper">{bilingual_html}</div>'
 
     html = _md_to_html(md)
     if not html:

@@ -219,3 +219,34 @@
 .cms-editor-content th { background: rgba(0,0,0,0.04); font-weight: 600; padding: 0.45rem 0.7rem; border: 1px solid rgba(0,0,0,0.09); color: #111827 !important; }
 .cms-editor-content td { padding: 0.4rem 0.7rem; border: 1px solid rgba(0,0,0,0.07); color: #374151 !important; }
 
+.learn-article .pyq-paper {
+  font-family: "Times New Roman", Times, "Noto Serif Bengali", serif;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1a1a1a;
+}
+.blog-view-tab .learn-article .pyq-paper {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #1a1a1a !important;
+}
+.learn-article .pyq-paper .pyq-q {
+  margin-bottom: 0.15em;
+  padding-left: 0;
+  text-indent: 0;
+}
+.learn-article .pyq-paper .pyq-q .asm {
+  display: block;
+  margin: 0;
+  padding: 0;
+  padding-left: 1.5em;
+  line-height: 1.4;
+  font-size: 0.97em;
+}
+.blog-view-tab .learn-article .pyq-paper .pyq-q {
+  color: #1a1a1a !important;
+}
+.blog-view-tab .learn-article .pyq-paper .pyq-q .asm {
+  color: #1a1a1a !important;
+}
+

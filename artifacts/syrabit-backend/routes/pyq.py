@@ -699,30 +699,69 @@ def _build_pyq_html(
         for g in geo_tags
     )
 
+    _ASM_RE = re.compile(r'[\u0980-\u09FF]')
+
+    def _split_bilingual(txt):
+        chars = list(txt)
+        asm_idx = -1
+        for ci, c in enumerate(chars):
+            if _ASM_RE.match(c):
+                asm_idx = ci
+                break
+        if asm_idx < 0:
+            return txt, ""
+        if asm_idx == 0:
+            return "", txt.strip()
+        return txt[:asm_idx].rstrip(), txt[asm_idx:].strip()
+
     question_rows = ""
     if questions:
         for q in questions:
             num   = _html.escape(str(q.get("number") or q.get("question_number") or ""))
-            text  = _html.escape(str(q.get("text") or q.get("question_text") or q.get("q") or ""))
+            text  = str(q.get("text") or q.get("question_text") or q.get("q") or "")
             marks = _html.escape(str(q.get("marks") or ""))
             sub_parts = q.get("sub_parts") or []
 
-            marks_html = f'<span class="marks">[{marks} marks]</span>' if marks else ""
+            marks_html = f'<span class="marks">{marks}</span>' if marks else ""
+
+            eng_text, asm_text = _split_bilingual(text)
+            eng_escaped = _html.escape(eng_text)
+            asm_html = ""
+            if asm_text:
+                asm_html = f'<span class="asm">{_html.escape(asm_text)}</span>'
+
             sp_html = ""
             if sub_parts:
-                sp_html = "<ol class='sub-parts'>" + "".join(
-                    f"<li>{_html.escape(sp.get('text', str(sp)) if isinstance(sp, dict) else str(sp))}</li>" for sp in sub_parts
-                ) + "</ol>"
+                sp_items = ""
+                for sp in sub_parts:
+                    sp_text = sp.get('text', str(sp)) if isinstance(sp, dict) else str(sp)
+                    sp_eng, sp_asm = _split_bilingual(sp_text)
+                    sp_label = sp.get('label', '') if isinstance(sp, dict) else ''
+                    label_prefix = f"({sp_label})&ensp;" if sp_label else ""
+                    sp_line = f'<div class="sp">{label_prefix}{_html.escape(sp_eng)}'
+                    if sp_asm:
+                        sp_line += f'<span class="asm">{_html.escape(sp_asm)}</span>'
+                    sp_line += '</div>'
+                    sp_items += sp_line
+                sp_html = f'<div class="sub-parts">{sp_items}</div>'
 
             question_rows += f"""
-        <div class="question">
-          <p><strong>{num}.</strong> {text} {marks_html}</p>
+        <div class="q">
+          <div class="q-head"><span class="q-num">{num}.</span><span class="q-text">{eng_escaped}{asm_html}</span>{marks_html}</div>
           {sp_html}
         </div>"""
-    else:
-        # Fallback: render raw OCR text verbatim
-        escaped = _html.escape(raw_text or "")
-        question_rows = f'<pre class="raw-text">{escaped}</pre>'
+    elif raw_text:
+        lines = (raw_text or "").strip().split('\n')
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            eng, asm = _split_bilingual(line)
+            row = f'<div class="q-line">{_html.escape(eng)}'
+            if asm:
+                row += f'<span class="asm">{_html.escape(asm)}</span>'
+            row += '</div>'
+            question_rows += row
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -741,48 +780,95 @@ def _build_pyq_html(
     body {{
       background: #fff;
       color: #000;
-      font-family: "Times New Roman", Times, serif;
-      font-size: 14px;
-      line-height: 1.7;
+      font-family: "Times New Roman", Times, "Noto Serif Bengali", serif;
+      font-size: 13px;
+      line-height: 1.45;
     }}
     .page-wrapper {{
-      max-width: 860px;
+      max-width: 700px;
       margin: 0 auto;
-      padding: 2in 1.5in;
+      padding: 1.5in 1in;
     }}
     @media (max-width: 700px) {{
-      .page-wrapper {{ padding: 24px 16px; }}
+      .page-wrapper {{ padding: 20px 14px; }}
+      body {{ font-size: 12.5px; }}
     }}
     .page-header {{
       text-align: center;
-      margin-bottom: 2em;
-      border-bottom: 2px solid #000;
-      padding-bottom: 0.8em;
+      margin-bottom: 1.5em;
+      border-bottom: 1.5px solid #000;
+      padding-bottom: 0.6em;
     }}
-    .page-header h1 {{ font-size: 1.3em; font-weight: bold; }}
-    .page-header p  {{ font-size: 0.95em; margin-top: 0.3em; }}
-    .questions {{ margin-top: 1.5em; }}
-    .question  {{ margin-bottom: 1.2em; }}
-    .question p {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }}
-    .marks {{ flex-shrink: 0; font-style: italic; }}
-    .sub-parts {{ margin-left: 2em; margin-top: 0.4em; }}
-    .sub-parts li {{ margin-bottom: 0.4em; }}
-    .raw-text {{ white-space: pre-wrap; font-family: inherit; font-size: 13px; }}
-    .geo-footer {{ margin-top: 3em; font-size: 11px; color: #666; border-top: 1px solid #ccc; padding-top: 0.6em; }}
+    .page-header h1 {{ font-size: 1.1em; font-weight: bold; letter-spacing: 0.02em; }}
+    .page-header .meta {{ font-size: 0.9em; margin-top: 0.2em; }}
+    .page-header .meta-sub {{ font-size: 0.8em; color: #444; margin-top: 0.15em; }}
+    .questions {{ margin-top: 1em; }}
+    .q {{ margin-bottom: 0.6em; }}
+    .q-head {{
+      display: flex;
+      align-items: flex-start;
+      gap: 0.4em;
+    }}
+    .q-num {{
+      flex-shrink: 0;
+      font-weight: bold;
+      min-width: 1.5em;
+    }}
+    .q-text {{
+      flex: 1;
+    }}
+    .marks {{
+      flex-shrink: 0;
+      font-style: italic;
+      font-size: 0.9em;
+      white-space: nowrap;
+      margin-left: 0.5em;
+    }}
+    .asm {{
+      display: block;
+      margin: 0;
+      padding: 0;
+      padding-left: 1.8em;
+      line-height: 1.35;
+    }}
+    .sub-parts {{
+      padding-left: 2.2em;
+      margin-top: 0.15em;
+    }}
+    .sub-parts .sp {{
+      margin-bottom: 0.15em;
+    }}
+    .sub-parts .sp .asm {{
+      padding-left: 1.5em;
+    }}
+    .q-line {{
+      margin-bottom: 0.1em;
+    }}
+    .q-line .asm {{
+      padding-left: 1.5em;
+    }}
+    .geo-footer {{
+      margin-top: 2em;
+      font-size: 10px;
+      color: #888;
+      border-top: 1px solid #ccc;
+      padding-top: 0.5em;
+      text-align: center;
+    }}
   </style>
 </head>
 <body>
   <div class="page-wrapper">
     <div class="page-header">
-      <h1>{_html.escape(seo_title)}</h1>
-      <p>{_html.escape(board_name)} · {_html.escape(subject_name)} · {_html.escape(paper_type.upper())} · {exam_year}</p>
+      <h1>{_html.escape(board_name)}</h1>
+      <p class="meta">({_html.escape(subject_name)})</p>
+      <p class="meta-sub">{_html.escape(paper_type.upper())} — {exam_year} &nbsp;|&nbsp; Full Marks · Time</p>
     </div>
     <div class="questions">
 {question_rows}
     </div>
     <p class="geo-footer">
-      Serving students in {", ".join(_html.escape(g) for g in geo_tags)}.
-      Study resources for {_html.escape(board_name)} exams at Syrabit.ai
+      Serving students in {", ".join(_html.escape(g) for g in geo_tags)} &middot; Syrabit.ai
     </p>
   </div>
 </body>
