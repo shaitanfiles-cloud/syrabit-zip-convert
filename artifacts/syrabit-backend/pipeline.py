@@ -85,11 +85,15 @@ _STAGE2_PROMPT_TEMPLATE = """You are a factual synthesizer. Your job is to read 
 RULES:
 1. ONLY use information from the provided chunks. Do NOT add facts from your own knowledge.
 2. Discard chunks that are irrelevant to the question.
-3. Synthesize a complete but unpolished factual answer.
-4. Include all relevant details, definitions, formulas, and examples found in the chunks.
-5. Do NOT format for presentation — no fancy headings or bullet points needed. Just accurate facts.
-6. If the chunks don't contain enough information to answer, say so explicitly.
-7. Preserve technical terms, formulas, and specific data exactly as they appear in the chunks.
+3. CROSS-DOMAIN CHECK: Compare each chunk's academic subject against the student's question domain.
+   - If the student asks about a biology/science concept (e.g., "ecosystem", "photosynthesis") but a chunk discusses business, finance, or commerce topics, DISCARD that chunk entirely.
+   - If the student asks about a commerce/business concept but a chunk discusses science topics, DISCARD that chunk.
+   - Only use chunks whose academic domain matches the question's domain.
+4. Synthesize a complete but unpolished factual answer from the remaining relevant chunks.
+5. Include all relevant details, definitions, formulas, and examples found in the on-domain chunks.
+6. Do NOT format for presentation — no fancy headings or bullet points needed. Just accurate facts.
+7. If after discarding off-domain chunks there is not enough information to answer, say "NO_RELEVANT_CONTENT" — do not fabricate an answer from unrelated chunks.
+8. Preserve technical terms, formulas, and specific data exactly as they appear in the chunks.
 
 STUDENT'S QUESTION: {query}
 
@@ -98,7 +102,7 @@ STUDENT'S QUESTION: {query}
 RETRIEVED CONTENT:
 {rag_content}
 
-Produce a factual synthesis based ONLY on the above content."""
+Produce a factual synthesis based ONLY on the above on-domain content. If all chunks are from unrelated subjects, respond with "NO_RELEVANT_CONTENT"."""
 
 _STAGE3_PROMPT_TEMPLATE = """You are Syra, a friendly AI study mentor for students of {board_desc} in Assam, India.
 

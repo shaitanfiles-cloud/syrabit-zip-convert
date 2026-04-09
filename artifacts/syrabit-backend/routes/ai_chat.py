@@ -417,6 +417,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             intent=_detected_intent,
             db_category=_detected_db_category,
             pre_syl_match=_ns_pre_syl,
+            topic_metadata=_topic_metadata,
         ))
         _ns_web_task = asyncio.create_task(_safe_web_search(
             query=_rag_query, num_results=5,
@@ -464,8 +465,12 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             logger.info(f"[NON-STREAM] RAG quality=high → discarding {len(web_results)} web results (RAG is sufficient)")
             web_results = []
         if _ns_rag_quality == "none":
+            _ns_preserve = {}
+            for _pk in ("_general_knowledge_fallback", "_cross_domain_mismatch", "_stage1_subject"):
+                if rag_ctx.get(_pk):
+                    _ns_preserve[_pk] = rag_ctx[_pk]
             rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                       "vector_hits": [], "source": "none", "quality": "none"}
+                       "vector_hits": [], "source": "none", "quality": "none", **_ns_preserve}
             if web_results:
                 rag_ctx["source"] = "web"
                 rag_ctx["quality"] = "web"
@@ -1077,6 +1082,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             intent=_stream_intent,
             db_category=_stream_db_category,
             pre_syl_match=_pre_syl,
+            topic_metadata=_s_topic_meta,
         ))
         _history_ready = _prefetched_conv
 
@@ -1153,8 +1159,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.info(f"[STREAM] RAG quality=high → discarding {len(web_results)} web results (RAG is sufficient)")
             web_results = []
         if _rag_quality == "none":
+            _s_preserve = {}
+            for _pk in ("_general_knowledge_fallback", "_cross_domain_mismatch", "_stage1_subject"):
+                if rag_ctx.get(_pk):
+                    _s_preserve[_pk] = rag_ctx[_pk]
             rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                       "vector_hits": [], "source": "none", "quality": "none"}
+                       "vector_hits": [], "source": "none", "quality": "none", **_s_preserve}
             if web_results:
                 rag_ctx["source"] = "web"
                 rag_ctx["quality"] = "web"

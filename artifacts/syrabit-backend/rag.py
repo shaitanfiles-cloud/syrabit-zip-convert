@@ -1617,6 +1617,7 @@ async def resolve_rag_context(
     intent: Optional[str] = None,
     db_category: Optional[str] = None,
     pre_syl_match=None,
+    topic_metadata: Optional[dict] = None,
 ) -> dict:
     """
     Master RAG resolver — 4-tier priority chain:
@@ -1677,6 +1678,53 @@ async def resolve_rag_context(
     _resolved_intent = intent or "notes"
     _db_category = db_category or INTENT_TO_DB_CATEGORY.get(_resolved_intent)
     _want_enrichment = _resolved_intent in ENRICHMENT_INTENTS
+
+    _stage1_subject_str = ""
+    _stage1_confidence = ""
+    _stage1_resolved_subject_id = None
+    _frontend_subject_id = subject_id
+    if topic_metadata and isinstance(topic_metadata, dict):
+        _stage1_subject_str = (topic_metadata.get("subject") or "").strip()
+        _stage1_confidence = (topic_metadata.get("confidence") or "").strip().lower()
+
+    if not subject_id and _stage1_subject_str:
+        try:
+            import re as _re_mod
+            _s1_pattern = _re_mod.escape(_stage1_subject_str)
+            _s1_match_doc = await db.subjects.find_one(
+                {"name": {"$regex": f"^{_s1_pattern}$", "$options": "i"}, "status": "published"},
+                {"_id": 0, "id": 1, "name": 1}
+            )
+            if _s1_match_doc:
+                _stage1_resolved_subject_id = _s1_match_doc["id"]
+                subject_id = _stage1_resolved_subject_id
+                if not subject_name:
+                    subject_name = _s1_match_doc.get("name", _stage1_subject_str)
+                logger.info(
+                    f"RAG resolve: Stage 1 subject '{_stage1_subject_str}' → "
+                    f"subject_id={subject_id}, name={subject_name}"
+                )
+            else:
+                _s1_partial_docs = await db.subjects.find(
+                    {"name": {"$regex": _s1_pattern, "$options": "i"}, "status": "published"},
+                    {"_id": 0, "id": 1, "name": 1}
+                ).limit(3).to_list(3)
+                if _s1_partial_docs:
+                    _stage1_resolved_subject_id = _s1_partial_docs[0]["id"]
+                    subject_id = _stage1_resolved_subject_id
+                    if not subject_name:
+                        subject_name = _s1_partial_docs[0].get("name", _stage1_subject_str)
+                    logger.info(
+                        f"RAG resolve: Stage 1 subject '{_stage1_subject_str}' partial match → "
+                        f"subject_id={subject_id}, name={subject_name}"
+                    )
+                else:
+                    logger.info(
+                        f"RAG resolve: Stage 1 subject '{_stage1_subject_str}' — "
+                        f"no matching subject in DB, proceeding unscoped"
+                    )
+        except Exception as _s1_err:
+            logger.warning(f"RAG resolve: Stage 1 subject lookup failed: {_s1_err}")
 
     _syllabus_sim = 0.0
     _syllabus_chapter_title = ""
@@ -1753,10 +1801,19 @@ async def resolve_rag_context(
                 _record_rag_event("none", 0, query, intent=_resolved_intent)
             except Exception:
                 pass
-            return {
+            _early_return = {
                 "chunks": [], "chapters": [], "subjects": [], "vector_hits": [],
                 "source": "none", "quality": "none", "intent": _resolved_intent,
             }
+            if not _frontend_subject_id and (_resolved_intent == "notes" or _stage1_confidence == "low"):
+                _early_return["_general_knowledge_fallback"] = True
+                if _stage1_subject_str:
+                    _early_return["_stage1_subject"] = _stage1_subject_str
+                logger.info(
+                    f"RAG resolve: early gate skip + no frontend subject → "
+                    f"general knowledge fallback (stage1_subject={_stage1_subject_str})"
+                )
+            return _early_return
 
         _vec_high_conf = (
             _best_vec_sim >= HIGH_CONFIDENCE_THRESHOLD
@@ -1874,6 +1931,43 @@ async def resolve_rag_context(
             rag_ctx["source"] = "none"
             logger.info(f"RAG resolve: quality downgraded to NONE after category filtering — intent={_resolved_intent}")
 
+    if (
+        _stage1_subject_str
+        and not _frontend_subject_id
+        and rag_ctx.get("quality") in ("high", "medium")
+        and rag_ctx.get("subjects")
+    ):
+        _rag_subject_names = [
+            (s.get("name") or "").lower() for s in rag_ctx.get("subjects", []) if s.get("name")
+        ]
+        _s1_lower = _stage1_subject_str.lower()
+        _domain_match = any(_s1_lower in rn or rn in _s1_lower for rn in _rag_subject_names)
+        if not _domain_match and _rag_subject_names:
+            logger.info(
+                f"RAG resolve: CROSS-DOMAIN MISMATCH — Stage 1 subject='{_stage1_subject_str}' "
+                f"vs RAG subjects={_rag_subject_names} — forcing general knowledge fallback"
+            )
+            rag_ctx = {
+                "chunks": [], "chapters": [], "subjects": [], "vector_hits": [],
+                "source": "none", "quality": "none", "intent": _resolved_intent,
+                "_cross_domain_mismatch": True,
+                "_general_knowledge_fallback": True,
+                "_stage1_subject": _stage1_subject_str,
+            }
+
+    if (
+        not _frontend_subject_id
+        and rag_ctx.get("quality") in ("none",)
+        and (_resolved_intent == "notes" or _stage1_confidence == "low")
+    ):
+        rag_ctx["_general_knowledge_fallback"] = True
+        if _stage1_subject_str:
+            rag_ctx["_stage1_subject"] = _stage1_subject_str
+        logger.info(
+            f"RAG resolve: no frontend subject_id, "
+            f"no RAG results (confidence={_stage1_confidence}) → general knowledge fallback"
+        )
+
     _final_quality = rag_ctx["quality"]
     rag_ctx["intent"] = _resolved_intent
     rag_ctx["db_category"] = _db_category
@@ -1885,7 +1979,14 @@ async def resolve_rag_context(
         logger.info(f"RAG resolve: MEDIUM metadata only | intent: {_resolved_intent} | query: {query[:50]}")
     else:
         logger.info(f"RAG resolve: NO CONTEXT — AI uses training knowledge | intent: {_resolved_intent} | query: {query[:50]}")
-        rag_ctx = {"chunks": [], "chapters": [], "subjects": [], "vector_hits": [], "source": "none", "quality": "none", "intent": _resolved_intent}
+        _preserve_keys = {}
+        if rag_ctx.get("_general_knowledge_fallback"):
+            _preserve_keys["_general_knowledge_fallback"] = True
+        if rag_ctx.get("_stage1_subject"):
+            _preserve_keys["_stage1_subject"] = rag_ctx["_stage1_subject"]
+        if rag_ctx.get("_cross_domain_mismatch"):
+            _preserve_keys["_cross_domain_mismatch"] = True
+        rag_ctx = {"chunks": [], "chapters": [], "subjects": [], "vector_hits": [], "source": "none", "quality": "none", "intent": _resolved_intent, **_preserve_keys}
 
     try:
         _record_rag_event(_final_quality, 0, query, intent=_resolved_intent)
@@ -2271,7 +2372,34 @@ def build_rag_system_prompt(
         )
         return base_prompt + grounding
 
+    _is_cross_domain = rag_context.get("_cross_domain_mismatch", False)
+    _general_fallback = rag_context.get("_general_knowledge_fallback", False)
+    _s1_subject_hint = rag_context.get("_stage1_subject", "")
+
+    if _general_fallback or (_is_cross_domain and quality != "high"):
+        from prompts import _prompt_general
+        _gk_prompt = _prompt_general(user_info or {}, context or {})
+        if _s1_subject_hint:
+            _gk_prompt += (
+                f"\n\nThe student appears to be asking about {_s1_subject_hint}. "
+                f"Answer from your general knowledge about this subject. "
+                f"Be accurate, educational, and helpful."
+            )
+        logger.info(
+            f"RAG prompt: general knowledge fallback (cross_domain={_is_cross_domain}, "
+            f"stage1_subject={_s1_subject_hint}) | query: {query[:50]}"
+        )
+        return _gk_prompt + grounding
+
     content_card = rag_context.get("content_card", "")
+
+    if _is_cross_domain and source == "rag":
+        base_prompt += (
+            "\n\nIMPORTANT: The retrieved grounding content below may be from a different academic subject "
+            "than what the student is asking about. If the grounding content does NOT match the student's "
+            "question domain, IGNORE the grounding entirely and answer from your general knowledge instead. "
+            f"The student appears to be asking about: {_s1_subject_hint}."
+        )
 
     # ── Tier 1/2: Curriculum DB context (including vector hits) ─────────────
     if source == "rag" and (chunks or subjects or chapters or content_card or vector_hits):
