@@ -1,4 +1,4 @@
-modules = ["nodejs-24", "python-3.11", "python3", "postgresql-16"]
+modules = ["nodejs-24", "postgresql-16", "python-3.11"]
 
 [[artifacts]]
 id = "artifacts/mockup-sandbox"
@@ -42,7 +42,5 @@ VITE_SITE_URL = "https://syrabit.ai"
 TRUSTPILOT_BUSINESS_UNIT_ID = "6831bda2e0dd12f40d94de6c"
 
 [userenv.development]
-UV_PROJECT_ENVIRONMENT = "/home/runner/workspace/.pythonlibs"
 
 [userenv.production]
-UV_PROJECT_ENVIRONMENT = "/home/runner/workspace/.venv-prod"
