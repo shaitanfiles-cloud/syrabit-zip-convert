@@ -172,6 +172,209 @@ async def admin_pyq_upload(
             "storage": "supabase" if use_supabase else "base64"}
 
 
+class _PYQTextUploadRequest(BaseModel):
+    text:       str
+    paper_type: str = "major"
+    exam_year:  int
+    exam_title: str = ""
+    board_id:   str = ""
+    class_id:   str = ""
+    stream_id:  str = ""
+    subject_id: str = ""
+    chapter_id: str = ""
+
+
+@router.post("/api/admin/pyq/upload-text")
+async def admin_pyq_upload_text(
+    payload: _PYQTextUploadRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    raw_text = (payload.text or "").strip()
+    if not raw_text:
+        raise HTTPException(400, "Text content is empty")
+
+    _db = _get_db()
+    subject_name = board_name = class_name = stream_name = ""
+    try:
+        if payload.subject_id:
+            s = await _db["subjects"].find_one({"id": payload.subject_id}) or await _db["subjects"].find_one({"_id": payload.subject_id})
+            subject_name = (s or {}).get("name") or (s or {}).get("title") or ""
+        if payload.board_id:
+            b = await _db["boards"].find_one({"id": payload.board_id}) or await _db["boards"].find_one({"_id": payload.board_id})
+            board_name = (b or {}).get("name") or ""
+        if payload.class_id:
+            c = await _db["classes"].find_one({"id": payload.class_id}) or await _db["classes"].find_one({"_id": payload.class_id})
+            class_name = (c or {}).get("name") or ""
+        if payload.stream_id:
+            st = await _db["streams"].find_one({"id": payload.stream_id}) or await _db["streams"].find_one({"_id": payload.stream_id})
+            stream_name = (st or {}).get("name") or ""
+    except Exception:
+        pass
+
+    doc_id = str(uuid.uuid4())
+    raw_bytes = raw_text.encode("utf-8")
+    safe_name = f"pyq-text-{payload.exam_year}-{doc_id[:8]}.txt"
+    storage_path = f"{_PYQ_PREFIX}/{doc_id}/{safe_name}"
+
+    file_url = ""
+    use_supabase = bool(supa)
+    if use_supabase:
+        try:
+            file_url = await asyncio.get_event_loop().run_in_executor(
+                _THREAD_POOL,
+                lambda p=storage_path, r=raw_bytes: _pyq_supabase_upload(r, p, "text/plain"),
+            )
+            logger.info(f"PYQ text uploaded to Supabase: {storage_path}")
+        except Exception as e:
+            logger.warning(f"Supabase PYQ text upload failed: {e}")
+            file_url = ""
+
+    exam_title = payload.exam_title or f"{payload.paper_type.upper()} {payload.exam_year}"
+    doc = {
+        "id":            doc_id,
+        "filename":      safe_name,
+        "mime_type":     "text/plain",
+        "exam_title":    exam_title,
+        "exam_year":     payload.exam_year,
+        "paper_type":    payload.paper_type,
+        "board_id":      payload.board_id,
+        "board_name":    board_name,
+        "class_id":      payload.class_id,
+        "class_name":    class_name,
+        "stream_id":     payload.stream_id,
+        "stream_name":   stream_name,
+        "subject_id":    payload.subject_id,
+        "subject_name":  subject_name,
+        "chapter_id":    payload.chapter_id,
+        "file_url":      file_url,
+        "storage_path":  storage_path if file_url else "",
+        "storage":       "supabase" if file_url else "inline",
+        "is_image":      False,
+        "is_pdf":        False,
+        "is_text":       True,
+        "pages":         [],
+        "status":            "uploaded",
+        "processing_status": "uploaded",
+        "raw_text":          raw_text[:10000],
+        "created_at":        datetime.utcnow().isoformat(),
+        "created_by":        admin.get("username", "admin"),
+    }
+    await _db["pyq_uploads"].insert_one(doc)
+
+    geo_tags  = ["Dhemaji", "Jorhat", "Guwahati", "Assam"]
+    slug      = _pyq_html_slug(board_name, subject_name, payload.exam_year, payload.paper_type)
+    seo_title = (
+        f"{board_name} {subject_name} Previous Year Question Paper {payload.exam_year} "
+        f"({payload.paper_type.upper()}) — Dhemaji, Assam"
+    ).strip()
+    seo_desc = (
+        f"Download and study the {board_name} {subject_name} {payload.paper_type.upper()} "
+        f"question paper from {payload.exam_year}. Serving students in Dhemaji, Jorhat, "
+        f"Guwahati and across Assam."
+    )
+    schema_json = json.dumps({
+        "@context": "https://schema.org", "@type": "ExamPaper",
+        "name": seo_title, "description": seo_desc,
+        "about": {"@type": "Thing", "name": subject_name},
+        "educationalLevel": class_name or "Higher Secondary",
+        "provider": {"@type": "Organization", "name": board_name},
+        "dateCreated": str(payload.exam_year),
+        "contentLocation": {
+            "@type": "Place", "name": "Assam, India",
+            "containedInPlace": [{"@type": "Place", "name": g} for g in geo_tags],
+        },
+    }, ensure_ascii=False)
+
+    questions = _parse_questions_from_text(raw_text)
+
+    html_content = _build_pyq_html(
+        questions=questions, raw_text=raw_text, seo_title=seo_title, seo_desc=seo_desc,
+        schema_json=schema_json, geo_tags=geo_tags, board_name=board_name,
+        subject_name=subject_name, exam_year=payload.exam_year, paper_type=payload.paper_type,
+    )
+
+    now = datetime.utcnow().isoformat()
+    page_doc = {
+        "slug": slug, "html_content": html_content, "seo_title": seo_title,
+        "seo_description": seo_desc, "geo_tags": geo_tags, "schema_json": schema_json,
+        "subject_id": payload.subject_id, "subject_name": subject_name,
+        "board_id": payload.board_id, "board_name": board_name,
+        "class_id": payload.class_id, "class_name": class_name,
+        "stream_id": payload.stream_id, "stream_name": stream_name,
+        "exam_year": payload.exam_year, "paper_type": payload.paper_type,
+        "question_count": len(questions), "questions": questions,
+        "raw_text": raw_text[:5000],
+        "created_at": now, "updated_at": now,
+        "created_by": admin.get("username", "admin"),
+    }
+    if db is not None:
+        await db.pyq_html_pages.update_one({"slug": slug}, {"$set": page_doc}, upsert=True)
+
+    if raw_text.strip():
+        asyncio.create_task(_index_pyq_rag_chunks(
+            raw_text=raw_text, questions=questions, subject_id=payload.subject_id,
+            board_id=payload.board_id, exam_year=payload.exam_year,
+            paper_type=payload.paper_type, slug=slug,
+        ))
+
+    await _db["pyq_uploads"].update_one(
+        {"id": doc_id},
+        {"$set": {
+            "processing_status": "ocr_done",
+            "seo_url":           f"/pyq/{slug}",
+            "pyq_html_slug":     slug,
+            "question_count":    len(questions),
+            "updated_at":        now,
+        }},
+    )
+
+    logger.info(f"PYQ text upload processed: {doc_id} → {slug} ({len(questions)} questions, {len(raw_text)} chars)")
+
+    return {
+        "status":    "ok",
+        "id":        doc_id,
+        "slug":      slug,
+        "seo_url":   f"/pyq/{slug}",
+        "questions": len(questions),
+        "storage":   "supabase" if file_url else "inline",
+    }
+
+
+def _parse_questions_from_text(raw_text: str) -> list:
+    lines = raw_text.strip().split("\n")
+    questions = []
+    current_q = None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r'^(\d+)\s*[.)]\s*(.+)', line)
+        if m:
+            if current_q:
+                questions.append(current_q)
+            current_q = {
+                "number": m.group(1),
+                "text": m.group(2).strip(),
+                "marks": "",
+                "sub_parts": [],
+            }
+            marks_m = re.search(r'\[(\d+)\]|\((\d+)\s*marks?\)', current_q["text"], re.IGNORECASE)
+            if marks_m:
+                current_q["marks"] = marks_m.group(1) or marks_m.group(2) or ""
+        elif current_q:
+            sub_m = re.match(r'^([a-z])\s*[.)]\s*(.+)', line, re.IGNORECASE)
+            if sub_m:
+                current_q["sub_parts"].append({
+                    "label": sub_m.group(1),
+                    "text": sub_m.group(2).strip(),
+                })
+            else:
+                current_q["text"] += " " + line
+    if current_q:
+        questions.append(current_q)
+    return questions
+
+
 @router.get("/api/admin/pyq/list")
 async def admin_pyq_list(
     subject_id: str = "",
@@ -508,7 +711,7 @@ def _build_pyq_html(
             sp_html = ""
             if sub_parts:
                 sp_html = "<ol class='sub-parts'>" + "".join(
-                    f"<li>{_html.escape(str(sp))}</li>" for sp in sub_parts
+                    f"<li>{_html.escape(sp.get('text', str(sp)) if isinstance(sp, dict) else str(sp))}</li>" for sp in sub_parts
                 ) + "</ol>"
 
             question_rows += f"""
@@ -780,7 +983,7 @@ async def _index_pyq_rag_chunks(
         if questions:
             for q in questions:
                 q_text = str(q.get("text") or q.get("question_text") or "").strip()
-                sub    = " ".join(str(s) for s in (q.get("sub_parts") or []) if s)
+                sub    = " ".join((s.get('text', str(s)) if isinstance(s, dict) else str(s)) for s in (q.get("sub_parts") or []) if s)
                 full   = f"{q_text} {sub}".strip()
                 if len(full) >= 30:
                     chunks_to_index.append(full)

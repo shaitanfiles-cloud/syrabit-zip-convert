@@ -2,6 +2,7 @@ import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Upload, FileText, Loader2, Trash2, Play, CheckCircle,
   AlertCircle, Download, ExternalLink, ChevronDown, ChevronUp,
+  Type,
 } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -26,6 +27,9 @@ export default function PYQUploadPanel({
   const [examYear, setExamYear] = useState(defaultYear || new Date().getFullYear());
   const [dragging, setDragging] = useState(false);
   const [expanded, setExpanded] = useState(true);
+  const [showTextInput, setShowTextInput] = useState(false);
+  const [textContent, setTextContent] = useState('');
+  const [submittingText, setSubmittingText] = useState(false);
   const fileInputRef = useRef(null);
   const dropRef = useRef(null);
 
@@ -144,6 +148,34 @@ export default function PYQUploadPanel({
     }
   }, [adminToken]);
 
+  const submitText = useCallback(async () => {
+    if (!textContent.trim()) {
+      toast.error('Please paste some question paper text');
+      return;
+    }
+    setSubmittingText(true);
+    try {
+      await axios.post(`${API}/admin/pyq/upload-text`, {
+        text: textContent.trim(),
+        exam_year: examYear,
+        paper_type: 'major',
+        subject_id: subjectId || '',
+        board_id: boardId || '',
+        class_id: classId || '',
+        stream_id: streamId || '',
+        chapter_id: chapterId || '',
+      }, authHeaders(adminToken));
+      toast.success('Text PYQ uploaded & processed');
+      setTextContent('');
+      setShowTextInput(false);
+      await loadPyqs();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Text upload failed');
+    } finally {
+      setSubmittingText(false);
+    }
+  }, [textContent, examYear, subjectId, boardId, classId, streamId, chapterId, adminToken, loadPyqs]);
+
   const pendingCount = pyqs.filter(p => p.processing_status === 'uploaded' && p.is_pdf).length;
   const currentYear = new Date().getFullYear();
 
@@ -228,6 +260,41 @@ export default function PYQUploadPanel({
             )}
           </div>
 
+          <div className="flex items-center justify-center">
+            <button
+              onClick={() => setShowTextInput(v => !v)}
+              className="flex items-center gap-1.5 text-xs text-amber-600 hover:text-amber-700 font-medium transition-colors"
+            >
+              <Type size={12} />
+              {showTextInput ? 'Hide text input' : 'Or paste question text directly'}
+            </button>
+          </div>
+
+          {showTextInput && (
+            <div className="space-y-2">
+              <textarea
+                value={textContent}
+                onChange={(e) => setTextContent(e.target.value)}
+                placeholder={"Paste question paper text here...\n\nExample:\n1. What is photosynthesis? [5]\n2. Explain Newton's third law. [3]\na) Give an example.\nb) State the formula."}
+                rows={8}
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 bg-white text-sm text-gray-900 placeholder:text-gray-400 outline-none focus:border-amber-500 resize-y"
+              />
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-gray-400">
+                  {textContent.trim() ? `${textContent.trim().split('\n').length} lines` : 'No text entered'}
+                </span>
+                <button
+                  onClick={submitText}
+                  disabled={submittingText || !textContent.trim()}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                >
+                  {submittingText ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                  Upload Text PYQ
+                </button>
+              </div>
+            </div>
+          )}
+
           {loading && (
             <div className="flex items-center justify-center py-4">
               <Loader2 size={16} className="text-gray-400 animate-spin" />
@@ -241,9 +308,13 @@ export default function PYQUploadPanel({
                 const isProcessing = processing.has(pyq.id) || pyq.processing_status === 'ocr_running';
                 return (
                   <div key={pyq.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-100 group">
-                    <FileText size={14} className="text-gray-400 flex-shrink-0" />
+                    {pyq.is_text ? (
+                      <Type size={14} className="text-amber-500 flex-shrink-0" />
+                    ) : (
+                      <FileText size={14} className="text-gray-400 flex-shrink-0" />
+                    )}
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-gray-900 truncate">{pyq.filename}</p>
+                      <p className="text-xs font-medium text-gray-900 truncate">{pyq.is_text ? 'Text PYQ' : pyq.filename}</p>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${st.bg} ${st.color} font-medium`}>
                           {st.label}
