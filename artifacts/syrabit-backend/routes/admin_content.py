@@ -39,6 +39,34 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+_D1_TABLE_MAP = {
+    "boards": ["boards"],
+    "classes": ["classes"],
+    "streams": ["streams"],
+    "subjects": ["subjects", "seo_pages"],
+    "chapters": ["chapters", "topics", "seo_pages"],
+    "topics": ["topics", "seo_pages"],
+    "seo_pages": ["seo_pages"],
+}
+
+async def _trigger_d1_sync_bg(tables: list):
+    try:
+        from d1_sync import is_d1_configured, sync_tables
+        if is_d1_configured():
+            await sync_tables(db, tables)
+    except Exception as e:
+        logger.warning(f"Background D1 sync failed for {tables}: {e}")
+
+def _schedule_d1_sync_fire(*prefixes):
+    tables = set()
+    for p in prefixes:
+        tables.update(_D1_TABLE_MAP.get(p, []))
+    if tables:
+        try:
+            asyncio.create_task(_trigger_d1_sync_bg(list(tables)))
+        except RuntimeError:
+            pass
+
 async def _cascade_delete_subject_assets(subject_id: str):
     await db.chapters.delete_many({"subject_id": subject_id})
     for coll_name in ["syllabus_embeddings", "ai_pyq_collections", "flashcard_collections", "seo_topics", "chunks", "seo_pages", "cms_posts"]:
@@ -88,7 +116,7 @@ async def admin_flush_cache(admin: dict = Depends(get_admin_user)):
     return {"message": "All content caches flushed"}
 
 @router.post("/admin/cache/purge-all")
-async def admin_purge_all_cache(admin: dict = Depends(get_admin_user)):
+async def admin_purge_all_cache(admin: dict = Depends(get_admin_user), background_tasks: BackgroundTasks = None):
     for prefix in ("boards", "classes", "streams", "subjects", "chapters"):
         _invalidate_content_cache(prefix)
     cf_ok = False
@@ -97,10 +125,45 @@ async def admin_purge_all_cache(admin: dict = Depends(get_admin_user)):
         cf_ok = await purge_all_content_cache()
     except Exception:
         pass
+    d1_ok = False
+    try:
+        from d1_sync import is_d1_configured, sync_full
+        if is_d1_configured() and background_tasks:
+            background_tasks.add_task(sync_full, db)
+            d1_ok = True
+    except Exception:
+        pass
     return {
-        "message": "All content caches purged (backend + Cloudflare edge)",
+        "message": "All content caches purged (backend + Cloudflare edge + D1)",
         "cloudflare_purged": cf_ok,
+        "d1_sync_queued": d1_ok,
     }
+
+@router.post("/admin/d1-sync")
+async def admin_trigger_d1_sync(admin: dict = Depends(get_admin_user), tables: Optional[str] = Query(None)):
+    from d1_sync import is_d1_configured, sync_full, sync_tables
+    if not is_d1_configured():
+        raise HTTPException(status_code=503, detail="D1 sync not configured — set D1_SYNC_SECRET and EDGE_WORKER_URL env vars")
+    if tables:
+        table_list = [t.strip() for t in tables.split(",") if t.strip()]
+        result = await sync_tables(db, table_list)
+    else:
+        result = await sync_full(db)
+    return result
+
+@router.get("/admin/d1-export")
+async def admin_d1_export(request: Request):
+    auth_header = request.headers.get("Authorization", "")
+    from d1_sync import D1_SYNC_SECRET
+    if not D1_SYNC_SECRET or D1_SYNC_SECRET == "REPLACE_WITH_SECURE_RANDOM_SECRET":
+        raise HTTPException(status_code=503, detail="D1 sync secret not configured")
+    if auth_header != f"Bearer {D1_SYNC_SECRET}":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    from d1_sync import export_content_catalog
+    payload = await export_content_catalog(db)
+    if not payload:
+        raise HTTPException(status_code=500, detail="Export returned empty")
+    return payload
 
 @router.post("/admin/content/boards")
 async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
@@ -120,6 +183,7 @@ async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
         }
         await db.boards.insert_one(board)
         _invalidate_content_cache("boards")
+        _schedule_d1_sync_fire("boards")
         return {k: v for k, v in board.items() if k != "_id"}
     except HTTPException:
         raise
@@ -135,6 +199,7 @@ async def admin_update_board(board_id: str, data: dict, admin: dict = Depends(ge
     if allowed:
         await db.boards.update_one({"id": board_id}, {"$set": allowed})
         _invalidate_content_cache("boards")
+        _schedule_d1_sync_fire("boards")
     return {"message": "Board updated"}
 
 @router.delete("/admin/content/boards/{board_id}")
@@ -155,6 +220,7 @@ async def admin_delete_board(board_id: str, admin: dict = Depends(get_admin_user
     _invalidate_content_cache("streams")
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
+    _schedule_d1_sync_fire("boards", "classes", "streams", "subjects", "chapters")
     return {"message": "Board and all children deleted"}
 
 @router.post("/admin/content/classes")
@@ -173,6 +239,7 @@ async def admin_create_class(data: dict, admin: dict = Depends(get_admin_user)):
         }
         await db.classes.insert_one(cls)
         _invalidate_content_cache("classes")
+        _schedule_d1_sync_fire("classes")
         return {k: v for k, v in cls.items() if k != "_id"}
     except HTTPException:
         raise
@@ -188,6 +255,7 @@ async def admin_update_class(class_id: str, data: dict, admin: dict = Depends(ge
     if allowed:
         await db.classes.update_one({"id": class_id}, {"$set": allowed})
         _invalidate_content_cache("classes")
+        _schedule_d1_sync_fire("classes")
     return {"message": "Class updated"}
 
 @router.delete("/admin/content/classes/{class_id}")
@@ -204,6 +272,7 @@ async def admin_delete_class(class_id: str, admin: dict = Depends(get_admin_user
     _invalidate_content_cache("streams")
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
+    _schedule_d1_sync_fire("classes", "streams", "subjects", "chapters")
     return {"message": "Class and all children deleted"}
 
 @router.post("/admin/content/streams")
@@ -223,6 +292,7 @@ async def admin_create_stream(data: dict, admin: dict = Depends(get_admin_user))
         }
         await db.streams.insert_one(stream)
         _invalidate_content_cache("streams")
+        _schedule_d1_sync_fire("streams")
         return {k: v for k, v in stream.items() if k != "_id"}
     except HTTPException:
         raise
@@ -238,6 +308,7 @@ async def admin_update_stream(stream_id: str, data: dict, admin: dict = Depends(
     if allowed:
         await db.streams.update_one({"id": stream_id}, {"$set": allowed})
         _invalidate_content_cache("streams")
+        _schedule_d1_sync_fire("streams")
     return {"message": "Stream updated"}
 
 @router.delete("/admin/content/streams/{stream_id}")
@@ -250,6 +321,7 @@ async def admin_delete_stream(stream_id: str, admin: dict = Depends(get_admin_us
     _invalidate_content_cache("streams")
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("chapters")
+    _schedule_d1_sync_fire("streams", "subjects", "chapters")
     return {"message": "Stream and all children deleted"}
 
 
@@ -399,6 +471,7 @@ async def admin_create_subject(data: SubjectCreate, admin: dict = Depends(get_ad
         }
         await db.subjects.insert_one(subj)
         _invalidate_content_cache("subjects")
+        _schedule_d1_sync_fire("subjects")
         return {k: v for k, v in subj.items() if k != "_id"}
     except HTTPException:
         raise
@@ -416,6 +489,7 @@ async def admin_update_subject(subject_id: str, data: dict, admin: dict = Depend
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Subject not found")
     _invalidate_content_cache("subjects")
+    _schedule_d1_sync_fire("subjects")
     return {"message": "Updated"}
 
 @router.patch("/admin/content/subjects/{subject_id}")
@@ -429,6 +503,7 @@ async def admin_patch_subject(subject_id: str, data: dict, admin: dict = Depends
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Subject not found")
     _invalidate_content_cache("subjects")
+    _schedule_d1_sync_fire("subjects")
     return {"message": "Subject updated"}
 
 
@@ -1110,6 +1185,7 @@ async def admin_delete_subject(subject_id: str, admin: dict = Depends(get_admin_
     _invalidate_content_cache("subjects")
     _invalidate_content_cache("subjects_by_course_type")
     _invalidate_content_cache("chapters")
+    _schedule_d1_sync_fire("subjects", "chapters")
     return {"message": "Deleted"}
 
 @router.delete("/admin/content/seo-pages/rejected")
@@ -1193,6 +1269,7 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
     result["chunks_created"] = len(chunks_created)
     _invalidate_content_cache("chapters")
     _invalidate_content_cache("subjects")
+    _schedule_d1_sync_fire("chapters", "subjects")
     return result
 
 @router.post("/admin/content/chunks")
@@ -1594,5 +1671,6 @@ async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depend
     
     _invalidate_content_cache("chapters")
     _invalidate_content_cache("subjects")
+    _schedule_d1_sync_fire("chapters", "subjects")
     return {"message": "Chapter updated", **chunks_info}
 
