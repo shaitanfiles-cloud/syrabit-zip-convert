@@ -15,8 +15,8 @@ Users
                                   • Edge caching for content/SEO routes
                                   • CORS enforcement
                                   │
-                                  └──► Railway (FastAPI backend)
-                                        • Docker-based deploy
+                                  └──► Replit (FastAPI backend)
+                                        • Replit Deployments
                                         • MongoDB, PostgreSQL, Redis
                                         • AI chat, auth, payments, admin
 ```
@@ -65,27 +65,26 @@ wrangler deploy
 
 | Variable      | Value                                    |
 | ------------- | ---------------------------------------- |
-| `BACKEND_URL` | `https://syrabit-api.up.railway.app`     |
+| `BACKEND_URL` | `https://<your-repl-slug>.<your-username>.replit.app` (Replit deployment URL) |
 
 The `RATE_LIMIT` KV binding handles distributed rate limiting at the edge.
 
-## Backend — Railway (Docker)
+## Backend — Replit Deployments
 
-The backend deploys to Railway using a Dockerfile. Configuration is in `artifacts/syrabit-backend/railway.json`.
+The backend is hosted on Replit. Use Replit's built-in Deployments feature to publish the FastAPI backend.
 
-### Railway Project Setup
+### Replit Project Setup
 
-1. Create a new Railway project and link the GitHub repo.
-2. **Set the root directory** to `artifacts/syrabit-backend`.
-3. Railway auto-detects `Dockerfile` and builds the image.
-4. The start command (`railway.json`): `gunicorn server:app -c gunicorn.conf.py`.
-5. Health check endpoint: `GET /api/health` (120s timeout).
+1. The backend lives in `artifacts/syrabit-backend`.
+2. Configure the run command to start gunicorn/uvicorn.
+3. Use Replit Deployments to publish the backend.
+4. Health check endpoint: `GET /api/health`.
 
-### Required Environment Variables (Railway)
+### Required Environment Variables (Replit)
 
 | Variable              | Description                                                         |
 | --------------------- | ------------------------------------------------------------------- |
-| `PORT`                | Railway assigns automatically                                       |
+| `PORT`                | Replit assigns automatically                                        |
 | `MONGO_URL`           | MongoDB Atlas connection string                                     |
 | `DB_NAME`             | MongoDB database name (e.g. `syrabit_prod`)                         |
 | `JWT_SECRET`          | Random 96-char hex (`python3 -c "import secrets; print(secrets.token_hex(48))"`) |
@@ -112,7 +111,7 @@ The backend deploys to Railway using a Dockerfile. Configuration is in `artifact
 | `GUNICORN_THREADS`    | Number of threads per worker (default: 4)                           |
 | `LOG_LEVEL`           | Gunicorn log level (default: `warning`)                             |
 
-### API Keys (Railway)
+### API Keys (Replit Secrets)
 
 | Variable              | Provider               |
 | --------------------- | ---------------------- |
@@ -137,15 +136,11 @@ The backend deploys to Railway using a Dockerfile. Configuration is in `artifact
 
 ### Custom Domain (Optional)
 
-To use a custom domain like `api-backend.syrabit.ai` directly on Railway:
-1. Go to Railway project > Settings > Networking > Custom Domain.
-2. Add your domain and configure the CNAME in Cloudflare DNS.
-
-Note: The Cloudflare Worker already proxies `api.syrabit.ai` to the Railway backend, so a custom Railway domain is optional.
+The Cloudflare Worker proxies `api.syrabit.ai` to the Replit backend, so a custom domain on Replit is optional. If needed, configure a custom domain in Replit Deployments settings and add the CNAME in Cloudflare DNS.
 
 ### Redeploy Backend
 
-Push to GitHub. Railway auto-deploys on push (can be toggled in project settings).
+Use Replit's Deployments feature to redeploy the backend after changes.
 
 ## DNS — Cloudflare
 

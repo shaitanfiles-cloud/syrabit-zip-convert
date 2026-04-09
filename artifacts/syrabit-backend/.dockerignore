@@ -14,4 +14,3 @@ docker-compose.yml
 .idea
 tests
 .gitignore
-railway.json

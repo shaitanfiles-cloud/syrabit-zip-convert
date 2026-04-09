@@ -134,7 +134,7 @@ The application serves as a comprehensive study companion for Assam Board studen
 |---|---|
 | Cloudflare Pages | Frontend hosting |
 | Cloudflare AI Gateway | LLM request routing, caching, fallback |
-| Railway | Backend hosting |
+| Replit | Backend hosting |
 
 ---
 
@@ -2578,11 +2578,11 @@ There is **no GitHub Actions, Jenkins, or automated CI/CD pipeline** currently c
 3. The `dist/` output is served as a static site with Cloudflare's CDN.
 4. Custom domain `syrabit.ai` is configured in Cloudflare DNS.
 
-### Backend Deployment: Railway
+### Backend Deployment: Replit
 
 | Setting | Value |
 |---|---|
-| **Platform** | Railway |
+| **Platform** | Replit |
 | **Runtime** | Python 3.10+ |
 | **Start Command** | `gunicorn server:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --workers 4 --timeout 120` |
 | **Web Server** | Gunicorn with Uvicorn workers (ASGI) |
@@ -2590,10 +2590,10 @@ There is **no GitHub Actions, Jenkins, or automated CI/CD pipeline** currently c
 | **Timeout** | 120 seconds |
 
 **Deployment workflow:**
-1. Push code to the Git repository.
-2. Railway detects the Python project and installs dependencies from `requirements.txt`.
-3. Railway runs the start command to launch the FastAPI application.
-4. Environment variables are configured in Railway's dashboard.
+1. Use Replit's built-in Deployments feature to publish the backend.
+2. Replit installs dependencies from `requirements.txt`.
+3. Replit runs the start command to launch the FastAPI application.
+4. Environment variables are configured in Replit Secrets.
 
 ### Python Dependencies (`requirements.txt`)
 
@@ -2615,10 +2615,10 @@ There is **no GitHub Actions, Jenkins, or automated CI/CD pipeline** currently c
 
 ### Manual Deployment Checklist
 
-1. Ensure all environment variables are set in Railway dashboard (see Section 19).
+1. Ensure all environment variables are set in Replit Secrets (see Section 19).
 2. Verify `requirements.txt` is up to date with any new dependencies.
-3. Push to the deployment branch.
-4. Monitor Railway logs for startup errors.
+3. Deploy via Replit Deployments.
+4. Monitor Replit deployment logs for startup errors.
 5. Verify worker leader election (`/tmp/.syrabit_startup.lock`) runs migrations on first worker only.
 6. Check `/api/health` endpoint for database and LLM connectivity.
 7. For frontend: verify Cloudflare Pages build completes and the site is accessible.

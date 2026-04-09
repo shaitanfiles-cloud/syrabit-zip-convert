@@ -7,7 +7,9 @@ routes = [
 ]
 
 [vars]
-BACKEND_URL = "https://syrabit-api.up.railway.app"
+# After deploying the Replit backend, replace this with your Replit deployment URL
+# (e.g. "https://<your-repl-slug>.<your-username>.replit.app")
+BACKEND_URL = "https://REPLIT_DEPLOY_URL"
 
 # Create KV namespaces before deploying:
 #   wrangler kv:namespace create RATE_LIMIT
