@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { WORKER_API } from '../utils/api';
 import { useShare } from '../hooks/useShare';
 
 export default function PYQReplicaPage() {
   const { slug } = useParams();
+  const navigate = useNavigate();
   const [html, setHtml]         = useState('');
   const [title, setTitle]       = useState('');
   const [loading, setLoading]   = useState(true);
@@ -15,6 +16,10 @@ export default function PYQReplicaPage() {
     const pyqTitle = title || `PYQ — ${slug}`;
     share(pyqTitle, `/pyq/${slug}`);
   }, [slug, title, share]);
+
+  const handlePrint = useCallback(() => {
+    window.print();
+  }, []);
 
   useEffect(() => {
     if (!slug) return;
@@ -52,7 +57,11 @@ export default function PYQReplicaPage() {
         justifyContent: 'center', background: '#fff', color: '#333',
         fontFamily: '"Times New Roman", Times, serif',
       }}>
-        <p>Loading question paper…</p>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ width: 32, height: 32, border: '3px solid #e5e7eb', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px' }} />
+          <p>Loading question paper…</p>
+        </div>
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
       </div>
     );
   }
@@ -63,34 +72,74 @@ export default function PYQReplicaPage() {
         minHeight: '100vh', display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center', background: '#fff',
         color: '#333', fontFamily: '"Times New Roman", Times, serif',
-        gap: '12px',
+        gap: '12px', padding: '20px',
       }}>
         <h1 style={{ fontSize: '1.4em' }}>Question Paper Not Found</h1>
-        <p style={{ fontSize: '0.95em', color: '#666' }}>
+        <p style={{ fontSize: '0.95em', color: '#666', textAlign: 'center' }}>
           The page <code>/pyq/{slug}</code> does not exist.
         </p>
-        <a href="/" style={{ color: '#1a56db', fontSize: '0.9em' }}>← Back to Syrabit.ai</a>
+        <a href="/" style={{ color: '#6366f1', fontSize: '0.9em', textDecoration: 'none' }}>← Back to Syrabit.ai</a>
       </div>
     );
   }
 
   return (
     <div style={{ background: '#fff', minHeight: '100vh', position: 'relative' }}>
-      <button
-        onClick={handleShare}
-        disabled={sharing}
+      <div
+        className="pyq-toolbar"
         style={{
-          position: 'fixed', bottom: '20px', right: '20px', zIndex: 1000,
-          background: '#3b82f6', color: '#fff', border: 'none', borderRadius: '50px',
-          padding: '10px 18px', fontSize: '14px', fontWeight: 600,
-          cursor: sharing ? 'wait' : 'pointer', boxShadow: '0 2px 10px rgba(0,0,0,0.15)',
-          display: 'flex', alignItems: 'center', gap: '6px',
-          opacity: sharing ? 0.7 : 1,
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 1000,
+          background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(8px)',
+          borderBottom: '1px solid #e5e7eb', padding: '8px 16px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         }}
       >
-        📤 {sharing ? 'Sharing…' : 'Share'}
-      </button>
-      <div dangerouslySetInnerHTML={{ __html: html }} />
+        <button
+          onClick={() => navigate(-1)}
+          style={{
+            background: 'none', border: 'none', color: '#6366f1',
+            fontSize: '14px', fontWeight: 500, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: '4px',
+            fontFamily: 'system-ui, sans-serif',
+          }}
+        >
+          ← Back
+        </button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <button
+            onClick={handlePrint}
+            style={{
+              background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: '8px',
+              padding: '6px 14px', fontSize: '13px', fontWeight: 500,
+              cursor: 'pointer', fontFamily: 'system-ui, sans-serif',
+              display: 'flex', alignItems: 'center', gap: '4px',
+            }}
+          >
+            🖨️ Print / Save PDF
+          </button>
+          <button
+            onClick={handleShare}
+            disabled={sharing}
+            style={{
+              background: '#6366f1', color: '#fff', border: 'none', borderRadius: '8px',
+              padding: '6px 14px', fontSize: '13px', fontWeight: 500,
+              cursor: sharing ? 'wait' : 'pointer', fontFamily: 'system-ui, sans-serif',
+              opacity: sharing ? 0.7 : 1,
+            }}
+          >
+            📤 {sharing ? 'Sharing…' : 'Share'}
+          </button>
+        </div>
+      </div>
+
+      <div className="pyq-content" style={{ paddingTop: '52px' }} dangerouslySetInnerHTML={{ __html: html }} />
+
+      <style>{`
+        @media print {
+          .pyq-toolbar { display: none !important; }
+          .pyq-content { padding-top: 0 !important; }
+        }
+      `}</style>
     </div>
   );
 }

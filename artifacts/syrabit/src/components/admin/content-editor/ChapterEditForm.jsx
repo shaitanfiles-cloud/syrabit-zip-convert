@@ -8,6 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { TEMPLATES } from '@/utils/editorTemplates';
 import { autoSlug } from '@/utils/adminHelpers';
+import PYQUploadPanel from './PYQUploadPanel';
 import {
   MDXEditor,
   headingsPlugin, listsPlugin, quotePlugin, thematicBreakPlugin,
@@ -36,6 +37,7 @@ export default function ChapterEditForm({
   editorRef, editorKey, setEditorKey,
   showPreview, setShowPreview,
   fileInputRef,
+  adminToken, boardId, classId, streamId,
 }) {
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -127,6 +129,19 @@ export default function ChapterEditForm({
               <div className="flex items-center gap-1 text-blue-400"><Paperclip size={11} />{chapterStats.attached_files.length} files</div>
             )}
             <button onClick={() => onLoadChapterStats(editTarget?.id)} className="ml-auto text-gray-400 hover:text-gray-900 p-1"><RefreshCw size={11} /></button>
+          </div>
+        )}
+
+        {editView === 'edit-chapter' && editTarget?.id && (
+          <div className="flex-shrink-0">
+            <PYQUploadPanel
+              adminToken={adminToken}
+              chapterId={editTarget.id}
+              subjectId={subjectData?.id || ''}
+              boardId={boardId || ''}
+              classId={classId || ''}
+              streamId={streamId || ''}
+            />
           </div>
         )}
         <div className="flex-1 flex flex-col min-h-0">

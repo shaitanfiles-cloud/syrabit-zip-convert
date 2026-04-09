@@ -42,6 +42,9 @@ router = APIRouter()
 #  PYQ — Previous Year Questions Upload & Management
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _get_db():
+    return db
+
 _PYQ_BUCKET   = "study-materials"
 _PYQ_PREFIX   = "pyqs"
 _PYQ_MAX_MB   = 50  # MB per file — stored in Supabase, not MongoDB
@@ -67,6 +70,7 @@ async def admin_pyq_upload(
     class_id:    str = Form(""),
     stream_id:   str = Form(""),
     subject_id:  str = Form(""),
+    chapter_id:  str = Form(""),
     admin: dict = Depends(get_admin_user),
 ):
     """Upload PYQ files to Supabase Storage; store only metadata + URL in MongoDB."""
@@ -77,19 +81,19 @@ async def admin_pyq_upload(
 
     # Resolve display names from MongoDB
     subject_name = board_name = class_name = stream_name = ""
-    db = _get_db()
+    _db = _get_db()
     try:
         if subject_id:
-            s = db["subjects"].find_one({"id": subject_id}) or db["subjects"].find_one({"_id": subject_id})
+            s = await _db["subjects"].find_one({"id": subject_id}) or await _db["subjects"].find_one({"_id": subject_id})
             subject_name = (s or {}).get("name") or (s or {}).get("title") or ""
         if board_id:
-            b = db["boards"].find_one({"id": board_id}) or db["boards"].find_one({"_id": board_id})
+            b = await _db["boards"].find_one({"id": board_id}) or await _db["boards"].find_one({"_id": board_id})
             board_name = (b or {}).get("name") or ""
         if class_id:
-            c = db["classes"].find_one({"id": class_id}) or db["classes"].find_one({"_id": class_id})
+            c = await _db["classes"].find_one({"id": class_id}) or await _db["classes"].find_one({"_id": class_id})
             class_name = (c or {}).get("name") or ""
         if stream_id:
-            st = db["streams"].find_one({"id": stream_id}) or db["streams"].find_one({"_id": stream_id})
+            st = await _db["streams"].find_one({"id": stream_id}) or await _db["streams"].find_one({"_id": stream_id})
             stream_name = (st or {}).get("name") or ""
     except Exception:
         pass
@@ -148,6 +152,7 @@ async def admin_pyq_upload(
             "stream_name":   stream_name,
             "subject_id":    subject_id,
             "subject_name":  subject_name,
+            "chapter_id":    chapter_id,
             "file_url":      file_url,          # Supabase public URL or data-URL for images
             "storage_path":  storage_path if use_supabase and file_url and not file_url.startswith("data:") else "",
             "storage":       "supabase" if (use_supabase and file_url and not file_url.startswith("data:")) else "base64",
@@ -160,7 +165,7 @@ async def admin_pyq_upload(
             "created_at":        datetime.utcnow().isoformat(),
             "created_by":        admin.get("username", "admin"),
         }
-        db["pyq_uploads"].insert_one(doc)
+        await _db["pyq_uploads"].insert_one(doc)
         saved_ids.append(doc_id)
 
     return {"status": "ok", "uploaded": len(saved_ids), "ids": saved_ids,
@@ -174,24 +179,74 @@ async def admin_pyq_list(
     exam_year:  int = 0,
     admin: dict = Depends(get_admin_user),
 ):
-    db = _get_db()
+    _db = _get_db()
     filt: dict = {}
     if subject_id: filt["subject_id"] = subject_id
     if board_id:   filt["board_id"]   = board_id
     if exam_year:  filt["exam_year"]  = exam_year
 
-    docs = list(db["pyq_uploads"].find(filt, {"_id": 0}).sort("created_at", -1).limit(200))
+    docs = await _db["pyq_uploads"].find(filt, {"_id": 0}).sort("created_at", -1).to_list(200)
     return {"pyqs": docs}
+
+
+@router.get("/api/admin/pyq/by-chapter/{chapter_id}")
+async def admin_pyq_by_chapter(chapter_id: str, admin: dict = Depends(get_admin_user)):
+    _db = _get_db()
+    docs = await _db["pyq_uploads"].find(
+        {"chapter_id": chapter_id},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(100)
+    return {"pyqs": docs}
+
+
+class _BatchProcessRequest(BaseModel):
+    pyq_ids: List[str]
+
+
+@router.post("/api/admin/pyq/batch-process")
+async def admin_pyq_batch_process(
+    payload: _BatchProcessRequest,
+    admin: dict = Depends(get_admin_user),
+):
+    results = []
+    for pyq_id in payload.pyq_ids:
+        try:
+            result = await admin_pyq_agentic_process(
+                _PYQAgenticRequest(pyq_id=pyq_id), admin=admin
+            )
+            results.append({"pyq_id": pyq_id, "status": "ok", **result})
+        except HTTPException as e:
+            results.append({"pyq_id": pyq_id, "status": "error", "detail": e.detail})
+        except Exception as e:
+            results.append({"pyq_id": pyq_id, "status": "error", "detail": str(e)})
+    succeeded = sum(1 for r in results if r["status"] == "ok")
+    return {"results": results, "total": len(results), "succeeded": succeeded}
+
+
+@router.get("/api/pyq/download-url/{pyq_id}")
+async def public_pyq_download_url(pyq_id: str):
+    _db = _get_db()
+    doc = await _db["pyq_uploads"].find_one(
+        {"id": pyq_id},
+        {"_id": 0, "file_url": 1, "filename": 1, "subject_name": 1, "exam_year": 1}
+    )
+    if not doc or not doc.get("file_url"):
+        raise HTTPException(404, "PYQ file not found")
+    return {
+        "url": doc["file_url"],
+        "filename": doc.get("filename", "pyq.pdf"),
+        "subject": doc.get("subject_name", ""),
+        "year": doc.get("exam_year", 0),
+    }
 
 
 @router.delete("/api/admin/pyq/{pyq_id}")
 async def admin_pyq_delete(pyq_id: str, admin: dict = Depends(get_admin_user)):
-    db = _get_db()
-    doc = db["pyq_uploads"].find_one({"id": pyq_id}, {"_id": 0, "storage_path": 1, "storage": 1})
+    _db = _get_db()
+    doc = await _db["pyq_uploads"].find_one({"id": pyq_id}, {"_id": 0, "storage_path": 1, "storage": 1})
     if not doc:
         raise HTTPException(404, "PYQ not found")
 
-    # Delete from Supabase storage if applicable
     if supa and doc.get("storage") == "supabase" and doc.get("storage_path"):
         try:
             await asyncio.get_event_loop().run_in_executor(
@@ -201,7 +256,7 @@ async def admin_pyq_delete(pyq_id: str, admin: dict = Depends(get_admin_user)):
         except Exception as e:
             logger.warning(f"Supabase PYQ delete failed (continuing): {e}")
 
-    db["pyq_uploads"].delete_one({"id": pyq_id})
+    await _db["pyq_uploads"].delete_one({"id": pyq_id})
     return {"status": "deleted", "id": pyq_id}
 
 
@@ -229,7 +284,7 @@ async def admin_pyq_agentic_process(
     """
     pyq_id = payload.pyq_id
     _db = _get_db()
-    pyq = _db["pyq_uploads"].find_one({"id": pyq_id}, {"_id": 0})
+    pyq = await _db["pyq_uploads"].find_one({"id": pyq_id}, {"_id": 0})
     if not pyq:
         raise HTTPException(404, "PYQ not found")
 
@@ -240,8 +295,7 @@ async def admin_pyq_agentic_process(
     if not file_url or file_url.startswith("data:"):
         raise HTTPException(400, "PDF not stored in Supabase — re-upload the file")
 
-    # Mark OCR as running
-    _db["pyq_uploads"].update_one(
+    await _db["pyq_uploads"].update_one(
         {"id": pyq_id},
         {"$set": {"processing_status": "ocr_running", "updated_at": datetime.utcnow().isoformat()}},
     )
@@ -253,7 +307,7 @@ async def admin_pyq_agentic_process(
             resp.raise_for_status()
             raw = resp.content
     except Exception as e:
-        _db["pyq_uploads"].update_one(
+        await _db["pyq_uploads"].update_one(
             {"id": pyq_id},
             {"$set": {"processing_status": "fetch_error", "error_msg": str(e)}},
         )
@@ -291,13 +345,13 @@ async def admin_pyq_agentic_process(
             raw, mime_type="application/pdf", prompt=ocr_prompt, max_output_tokens=8192
         )
     except Exception as e:
-        _db["pyq_uploads"].update_one(
+        await _db["pyq_uploads"].update_one(
             {"id": pyq_id}, {"$set": {"processing_status": "ocr_error", "error_msg": str(e)}}
         )
         raise HTTPException(502, f"Gemini OCR failed: {e}")
 
     if not ocr_result_raw:
-        _db["pyq_uploads"].update_one({"id": pyq_id}, {"$set": {"processing_status": "ocr_error"}})
+        await _db["pyq_uploads"].update_one({"id": pyq_id}, {"$set": {"processing_status": "ocr_error"}})
         raise HTTPException(502, "Gemini OCR returned empty response — check GEMINI_API_KEY")
 
     # Parse OCR JSON
@@ -367,8 +421,7 @@ async def admin_pyq_agentic_process(
             board_id=board_id, exam_year=exam_year, paper_type=paper_type, slug=slug,
         ))
 
-    # Update pyq_uploads status to ocr_done
-    _db["pyq_uploads"].update_one(
+    await _db["pyq_uploads"].update_one(
         {"id": pyq_id},
         {"$set": {
             "processing_status": "ocr_done",
@@ -392,7 +445,7 @@ async def admin_pyq_agentic_process(
 async def admin_pyq_get_status(pyq_id: str, admin: dict = Depends(get_admin_user)):
     """Lightweight status polling for the agentic pipeline."""
     _db = _get_db()
-    doc = _db["pyq_uploads"].find_one(
+    doc = await _db["pyq_uploads"].find_one(
         {"id": pyq_id},
         {"_id": 0, "processing_status": 1, "seo_url": 1, "question_count": 1,
          "subject_id": 1, "pyq_html_slug": 1, "error_msg": 1},

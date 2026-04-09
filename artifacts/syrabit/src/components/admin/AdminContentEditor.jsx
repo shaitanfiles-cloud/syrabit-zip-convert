@@ -338,6 +338,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
             editorRef={editorRef} editorKey={editorKey} setEditorKey={setEditorKey}
             showPreview={showPreview} setShowPreview={setShowPreview}
             fileInputRef={fileInputRef}
+            adminToken={adminToken} boardId={selBoard} classId={selClass} streamId={selStream}
           />
         ) : (
           <div className="flex-1 flex overflow-hidden">
