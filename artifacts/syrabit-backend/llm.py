@@ -641,7 +641,8 @@ async def _call_llm_raw(messages: list, model: str = None, max_tokens: int = 102
     last_err = None
 
     _is_content = provider_list is _LLM_PROVIDERS_CONTENT
-    _PROVIDER_TIMEOUT = 30.0 if _is_content else 6.0
+    _is_chat = provider_list is _LLM_PROVIDERS_CHAT
+    _PROVIDER_TIMEOUT = 30.0 if _is_content else (4.0 if _is_chat else 6.0)
 
     provider, key = primary_provider, primary_key
     try_model = _safe_model_for_provider(use_model, provider, providers)

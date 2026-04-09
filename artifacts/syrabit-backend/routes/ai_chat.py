@@ -157,27 +157,115 @@ async def _resolve_semester_class_id(query: str, ctx_board_id: str) -> str | Non
 async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_optional)):
     _chat_t0 = _time_mod.time()
     is_anon = user is None
+
+    plan = user.get("plan", "free") if user else "free"
+    max_tokens = PLAN_LIMITS[plan]["max_tokens"]
+    conv_id = msg.conversation_id
+    user_id = user["id"] if user else None
+
+    _detected_intent, _detected_db_category = classify_intent(msg.message)
+
+    _instant = get_instant_response(msg.message) if _detected_intent == "casual" else None
+    if _instant:
+        credits_info = None
+        if not is_anon:
+            credits_info = await get_user_credits(user)
+            if credits_info["remaining"] <= 0:
+                raise HTTPException(status_code=402, detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.")
+        logger.info(f"[NON-STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant)} chars (0 LLM calls)")
+        return {
+            "answer": _instant,
+            "conversation_id": conv_id,
+            "credits_remaining": credits_info["remaining"] if credits_info else None,
+            "credits_used": 0 if not is_anon else None,
+            "rag_source": "none",
+            "rag_chunks_used": 0,
+            "sources": [],
+        }
+
     if not is_anon:
         credits_info = await get_user_credits(user)
         if credits_info["remaining"] <= 0:
             raise HTTPException(status_code=402, detail=f"Daily credit limit reached ({credits_info['limit']} credits/day). Resets at midnight UTC. Upgrade your plan for more.")
 
-    plan = user.get("plan", "free") if user else "free"
-    max_tokens = PLAN_LIMITS[plan]["max_tokens"]
+    _is_card_context = bool(msg.card_context and msg.card_context.strip())
 
-    # ── Tier 0: card_context (library scrape) → document_id (PDF upload) ──────
-    document_text: Optional[str] = None
-    if msg.card_context and msg.card_context.strip():
-        document_text = msg.card_context
-        logger.info(f"Chat [NON-STREAM]: Tier 0 card_context ({len(document_text)} chars) used as grounding")
-    elif msg.document_id:
+    async def _ns_fetch_doc():
+        if _is_card_context:
+            logger.info(f"Chat [NON-STREAM]: card_context ({len(msg.card_context)} chars) used as grounding")
+            return msg.card_context
+        if not msg.document_id:
+            return None
         subj = await db.subjects.find_one({"id": msg.document_id}, {"_id": 0, "document_text": 1})
-        if subj and subj.get("document_text"):
-            document_text = subj["document_text"]
-            logger.info(f"Chat [NON-STREAM]: Tier 0 doc loaded from subject {msg.document_id}")
+        return (subj or {}).get("document_text")
 
-    # ── Resolve subject's own board/class/stream (overrides user profile) ────
-    subj_ctx = await _resolve_subject_context(msg.subject_id)
+    async def _ns_fetch_search_scope_early():
+        _hard_bypass = _detected_intent in ("syllabus", "chapter_meta")
+        if _hard_bypass and msg.subject_id:
+            return "", None
+        if msg.card_context and msg.subject_id and msg.subject_name:
+            return msg.subject_name, None
+        try:
+            return await asyncio.wait_for(build_search_scope(
+                msg.message,
+                board_name=msg.board_name or (user.get("board_name", "") if user else ""),
+                class_name=msg.class_name or (user.get("class_name", "") if user else ""),
+                subject_name=msg.subject_name or "",
+                embedder=_get_syllabus_embedder(),
+            ), timeout=0.8)
+        except asyncio.TimeoutError:
+            logger.info("[NON-STREAM] search_scope timed out at 0.8s — proceeding without route")
+            return "", None
+
+    async def _ns_fetch_stage1_early():
+        if not should_use_pipeline(_detected_intent, msg.message):
+            return None
+        result = await stage1_resolve_topic(msg.message)
+        return result if result else {}
+
+    async def _ns_fetch_followup():
+        if not (conv_id and user_id):
+            return None
+        try:
+            _conv_for_followup = await supa_get_conversation(conv_id, user_id)
+            if _conv_for_followup:
+                _conv_meta = _safe_metadata(_conv_for_followup.get("metadata"))
+                return detect_followup(msg.message, _conv_meta)
+        except Exception as _fu_err:
+            logger.warning(f"Follow-up detection failed: {_fu_err}")
+        return None
+
+    async def _ns_prefetch_history():
+        if not conv_id:
+            return None
+        if user_id:
+            return await supa_get_conversation(conv_id, user_id)
+        return None
+
+    _t_phase0 = _time_mod.time()
+    _phase0_results = await asyncio.gather(
+        _resolve_subject_context(msg.subject_id),
+        _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
+        _ns_fetch_doc(),
+        _ns_fetch_search_scope_early(),
+        _ns_fetch_stage1_early(),
+        _ns_fetch_followup(),
+        _ns_prefetch_history(),
+        return_exceptions=True,
+    )
+    _subj_ctx_result = _phase0_results[0] if not isinstance(_phase0_results[0], BaseException) else {}
+    _sem_class_result = _phase0_results[1] if not isinstance(_phase0_results[1], BaseException) else None
+    document_text = _phase0_results[2] if not isinstance(_phase0_results[2], BaseException) else None
+    _scope_result = _phase0_results[3] if not isinstance(_phase0_results[3], BaseException) else ("", None)
+    _ns_scoped_query, _ns_route = _scope_result if isinstance(_scope_result, tuple) else ("", None)
+    _topic_metadata = _phase0_results[4] if not isinstance(_phase0_results[4], BaseException) else None
+    _followup_info = _phase0_results[5] if not isinstance(_phase0_results[5], BaseException) else None
+    _prefetched_conv = _phase0_results[6] if not isinstance(_phase0_results[6], BaseException) else None
+    for _i, _r in enumerate(_phase0_results):
+        if isinstance(_r, BaseException):
+            logger.warning(f"[NON-STREAM] Phase 0 task {_i} failed (degrading gracefully): {_r}")
+
+    subj_ctx = _subj_ctx_result
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
     ctx_class_id   = subj_ctx.get("class_id")   or msg.class_id
     ctx_stream_id  = subj_ctx.get("stream_id")  or getattr(msg, 'stream_id', None)
@@ -187,103 +275,22 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     if subj_ctx:
         logger.info(f"Chat [NON-STREAM]: Subject context resolved → {ctx_board_name} / {ctx_class_name} / {ctx_stream_name}")
 
-    syllabus = None
-    _sem_class_id = await _resolve_semester_class_id(msg.message, ctx_board_id) if ctx_board_id else None
-    _syl_class_id = _sem_class_id or ctx_class_id
-    if _sem_class_id:
-        logger.info(f"Chat [NON-STREAM]: Semester override class_id={_sem_class_id} (from query)")
+    if not _sem_class_result and ctx_board_id and ctx_board_id != msg.board_id:
+        _sem_class_result = await _resolve_semester_class_id(msg.message, ctx_board_id)
 
-    async def _ns_fetch_syllabus():
-        if not (ctx_board_id and _syl_class_id):
-            return None
-        _sck = _syllabus_cache_key(ctx_board_id, _syl_class_id, ctx_stream_id, msg.subject_id)
-        if _sck in _syllabus_cache:
-            return _syllabus_cache[_sck]
-        try:
-            queries = []
-            if ctx_stream_id and msg.subject_id:
-                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0}))
-            if ctx_stream_id:
-                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id}, {"_id": 0}))
-            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": {"$exists": False}}, {"_id": 0}))
-            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id}, {"_id": 0}))
-            results = await asyncio.gather(*queries, return_exceptions=True)
-            s = None
-            for r in results:
-                if r and not isinstance(r, Exception):
-                    s = r
-                    break
-            if s:
-                _syllabus_cache[_sck] = s
-            return s
-        except Exception:
-            return None
+    _syl_class_id = _sem_class_result or ctx_class_id
+    if _sem_class_result:
+        logger.info(f"Chat [NON-STREAM]: Semester override class_id={_sem_class_result} (from query)")
 
-    _detected_intent, _detected_db_category = classify_intent(msg.message)
-
-    _instant = get_instant_response(msg.message) if _detected_intent == "casual" else None
-    if _instant:
-        logger.info(f"[NON-STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant)} chars (0 LLM calls)")
-        return {
-            "answer": _instant,
-            "conversation_id": msg.conversation_id,
-            "credits_remaining": credits_info["remaining"] if not is_anon else None,
-            "credits_used": 0 if not is_anon else None,
-            "rag_source": "none",
-            "rag_chunks_used": 0,
-            "sources": [],
-        }
-
-    conv_id = msg.conversation_id
-    user_id = user["id"] if user else None
-
-    _followup_info = None
-    if conv_id and user_id:
-        try:
-            _conv_for_followup = await supa_get_conversation(conv_id, user_id)
-            if _conv_for_followup:
-                _conv_meta = _safe_metadata(_conv_for_followup.get("metadata"))
-                _followup_info = detect_followup(msg.message, _conv_meta)
-                if _followup_info:
-                    _detected_intent = _followup_info["prev_intent"]
-                    _detected_db_category = {"notes": "notes", "important_questions": "important_questions", "pyq": "question_paper"}.get(_detected_intent)
-                    msg.message = merge_followup_into_query(
-                        msg.message, _followup_info,
-                        subject_name=msg.subject_name or "",
-                        chapter_name=msg.chapter_name or "",
-                    )
-                    logger.info(f"[NON-STREAM] Follow-up detected: intent={_detected_intent}, rewritten query='{msg.message[:60]}'")
-        except Exception as _fu_err:
-            logger.warning(f"Follow-up detection failed: {_fu_err}")
-
-    pass  # pipeline imports moved to module level
-
-    _hard_bypass = _detected_intent in ("syllabus", "chapter_meta")
-
-    async def _ns_fetch_stage1():
-        if not should_use_pipeline(_detected_intent, msg.message):
-            return None
-        result = await stage1_resolve_topic(msg.message)
-        return result if result else {}
-
-    async def _ns_fetch_search_scope():
-        if _hard_bypass and msg.subject_id:
-            return "", None
-        try:
-            return await asyncio.wait_for(build_search_scope(
-                msg.message,
-                board_name=ctx_board_name,
-                class_name=ctx_class_name,
-                subject_name=msg.subject_name or "",
-                embedder=_get_syllabus_embedder(),
-            ), timeout=0.8)
-        except asyncio.TimeoutError:
-            logger.info("[NON-STREAM] search_scope timed out at 0.8s — proceeding without route")
-            return "", None
-
-    syllabus, (_ns_scoped_query, _ns_route), _topic_metadata = await asyncio.gather(
-        _ns_fetch_syllabus(), _ns_fetch_search_scope(), _ns_fetch_stage1(),
-    )
+    if _followup_info:
+        _detected_intent = _followup_info["prev_intent"]
+        _detected_db_category = {"notes": "notes", "important_questions": "important_questions", "pyq": "question_paper"}.get(_detected_intent)
+        msg.message = merge_followup_into_query(
+            msg.message, _followup_info,
+            subject_name=msg.subject_name or "",
+            chapter_name=msg.chapter_name or "",
+        )
+        logger.info(f"[NON-STREAM] Follow-up detected: intent={_detected_intent}, rewritten query='{msg.message[:60]}'")
 
     if not _followup_info and _topic_metadata and _topic_metadata.get("intent"):
         _detected_intent, _detected_db_category = apply_stage1_to_intent(
@@ -311,6 +318,32 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         if _rag_query != msg.message:
             logger.info(f"[PIPELINE][S1] Enhanced RAG query: '{_rag_query[:80]}'")
 
+    async def _ns_fetch_syllabus():
+        if not (ctx_board_id and _syl_class_id):
+            return None
+        _sck = _syllabus_cache_key(ctx_board_id, _syl_class_id, ctx_stream_id, msg.subject_id)
+        if _sck in _syllabus_cache:
+            return _syllabus_cache[_sck]
+        try:
+            queries = []
+            if ctx_stream_id and msg.subject_id:
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id, "subject_id": msg.subject_id}, {"_id": 0}))
+            if ctx_stream_id:
+                queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": ctx_stream_id}, {"_id": 0}))
+            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id, "stream_id": {"$exists": False}}, {"_id": 0}))
+            queries.append(db.syllabi.find_one({"board_id": ctx_board_id, "class_id": _syl_class_id}, {"_id": 0}))
+            results = await asyncio.gather(*queries, return_exceptions=True)
+            s = None
+            for r in results:
+                if r and not isinstance(r, Exception):
+                    s = r
+                    break
+            if s:
+                _syllabus_cache[_sck] = s
+            return s
+        except Exception:
+            return None
+
     async def _safe_web_search(**kw):
         try:
             return await web_search_with_fallback(**kw)
@@ -319,6 +352,13 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             return []
 
     async def _ns_fetch_history():
+        if _prefetched_conv:
+            raw = [
+                {"role": m.get("role", ""), "content": m.get("content") or ""}
+                for m in _prefetched_conv.get("messages", [])
+                if m.get("role") in ("user", "assistant") and (m.get("content") or "").strip()
+            ]
+            return _trim_history(raw)
         if conv_id and user_id:
             conv = await supa_get_conversation(conv_id, user_id)
             if conv:
@@ -330,11 +370,15 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
                 return _trim_history(raw)
         return []
 
+    _t_phase0_done = _time_mod.time()
+    logger.info(f"[NON-STREAM][TIMING] Phase 0 (parallel context): {_t_phase0_done - _t_phase0:.3f}s")
+
     if _skip_rag_sync:
         web_results = []
         rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                    "vector_hits": [], "source": "none", "quality": "none"}
         history_messages = await _ns_fetch_history()
+        syllabus = await _ns_fetch_syllabus()
         _ns_resolved_syl_sid = msg.subject_id or (getattr(_ns_route, "subject_id", "") if _ns_route else "")
         if _detected_intent == "syllabus" and _ns_resolved_syl_sid:
             try:
@@ -382,9 +426,10 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             scoped_query=_ns_scoped_query,
         ))
         _ns_hist_task = asyncio.create_task(_ns_fetch_history())
+        _ns_syl_task = asyncio.create_task(_ns_fetch_syllabus())
         _NS_BUDGET = 1.5
         done, pending = await asyncio.wait(
-            [_ns_rag_task, _ns_web_task, _ns_hist_task],
+            [_ns_rag_task, _ns_web_task, _ns_hist_task, _ns_syl_task],
             timeout=_NS_BUDGET,
         )
         for t in pending:
@@ -408,6 +453,10 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         except Exception as _hist_err:
             logger.warning(f"[NON-STREAM] History task failed: {_hist_err}")
             history_messages = []
+        try:
+            syllabus = _ns_syl_task.result() if _ns_syl_task in done else None
+        except Exception:
+            syllabus = None
         if _ns_rag_task not in done:
             logger.warning(f"[NON-STREAM] RAG timed out after {_NS_BUDGET}s")
         _ns_rag_quality = rag_ctx.get("quality", "none")
@@ -491,46 +540,14 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         logger.info(f"Memory cache HIT: {cache_key}")
 
     if answer is None:
+        _t_llm_start = _time_mod.time()
         try:
-            from pipeline import run_pipeline
-            _pipeline_answer = None
-            if should_use_pipeline(_detected_intent, msg.message):
-                try:
-                    _pipeline_ctx = {
-                        "board_name": ctx_board_name,
-                        "class_name": ctx_class_name,
-                        "stream_name": ctx_stream_name,
-                        "subject_name": msg.subject_name,
-                        "chapter_name": msg.chapter_name,
-                    }
-                    _pipeline_ui = {
-                        "name": (user.get("name", "") if user else ""),
-                        "board_name": ctx_board_name or (user.get("board_name", "") if user else ""),
-                        "class_name": ctx_class_name or (user.get("class_name", "") if user else ""),
-                        "plan": (user.get("plan", "free") if user else "free"),
-                    }
-                    _pipeline_answer = await run_pipeline(
-                        query=msg.message,
-                        rag_ctx=rag_ctx,
-                        context=_pipeline_ctx,
-                        user_info=_pipeline_ui,
-                        max_tokens=max_tokens,
-                        regex_intent=_detected_intent,
-                        topic_metadata=_topic_metadata,
-                    )
-                except Exception as _pipe_err:
-                    logger.warning(f"[PIPELINE] Non-stream pipeline failed, falling back: {_pipe_err}")
-                    _pipeline_answer = None
-
-            if _pipeline_answer:
-                answer = _pipeline_answer
-                logger.info(f"[PIPELINE] Used multi-LLM pipeline for non-stream response ({len(answer)} chars)")
-            else:
-                answer = await call_llm_api_chat(messages, model=msg.model or "openai/gpt-oss-20b", max_tokens=max_tokens)
+            answer = await call_llm_api_chat(messages, model=msg.model or "meta-llama/llama-4-scout-17b-16e-instruct", max_tokens=max_tokens)
             _redis_set("ai_cache", cache_key, answer, _cache_ttl)
             if not redis_client:
                 _ai_response_cache[cache_key] = answer
-            logger.info(f"Cache MISS → stored (ttl={_cache_ttl}s): {cache_key}")
+            _t_llm_done = _time_mod.time()
+            logger.info(f"[NON-STREAM][TIMING] LLM call: {_t_llm_done - _t_llm_start:.3f}s | Cache MISS → stored (ttl={_cache_ttl}s): {cache_key}")
         except HTTPException:
             raise
         except Exception as e:

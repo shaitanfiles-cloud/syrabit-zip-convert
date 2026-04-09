@@ -31,7 +31,8 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **Optional Authentication:** Chat, History, and Profile pages are accessible to anonymous users via a `syrabit_anon_id`. Conversations are persisted in Redis and PostgreSQL.
 - **Security:** Uses ASGI-native `SecurityHeadersMiddleware` and prompt safety guardrails.
 - **Privacy:** Tracks DPDP Act consent per-user.
-- **Performance Optimizations:** Includes bounded content caching, efficient JWT decoding, thread pooling, MongoDB indexing, hierarchy caching, AsyncOpenAI client pooling, and instant fast-path responses for casual greetings.
+- **Performance Optimizations:** Includes bounded content caching, efficient JWT decoding, thread pooling, MongoDB indexing, hierarchy caching, AsyncOpenAI client pooling, instant fast-path responses for casual greetings, and fully parallelized chat pre-processing (Phase 0: subject context, stage1, search scope, followup, history all run concurrently via `asyncio.gather`).
+- **Chat Latency:** Non-streaming chat targets <4s. Default model for non-streaming chat is `meta-llama/llama-4-scout-17b-16e-instruct` (Groq, fastest provider). Chat provider timeout is 4s (content generation: 30s). Phase 0 parallel context typically completes in ~0.4-0.6s.
 - **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection, and SEO prompts generate FAQ blocks and specific citations.
 
 **Frontend Architecture:**
