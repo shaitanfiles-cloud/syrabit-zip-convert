@@ -1238,6 +1238,9 @@
 .cms-editor-content table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
 .cms-editor-content th { background: rgba(0,0,0,0.04); font-weight: 600; padding: 0.45rem 0.7rem; border: 1px solid rgba(0,0,0,0.09); color: #111827 !important; }
 .cms-editor-content td { padding: 0.4rem 0.7rem; border: 1px solid rgba(0,0,0,0.07); color: #374151 !important; }
+.cms-editor-content img { width: 100%; height: auto; border-radius: 6px; margin: 0.5rem 0; }
+.cms-editor-content [data-editor-block-type="image"] { margin: 0; }
+.cms-preview-content img { width: 100%; height: auto; border-radius: 6px; margin: 0.5rem 0; }
 
 /* ── Mobile viewport & layout helpers ─────────────────────────────────────── */
 /* AppLayout main: adds bottom clearance above the fixed BottomNav (64px) plus
