@@ -1,22 +1,26 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useCallback } from 'react';
 import {
   ArrowLeft, Save, Loader2, Eye, Link2, BarChart3,
   Sparkles, RefreshCw, Layers, LayoutTemplate, Upload,
   FileText, Globe, Paperclip, CheckCircle, Smartphone, Monitor,
+  ImagePlus,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import axios from 'axios';
+import { toast } from 'sonner';
 import { TEMPLATES } from '@/utils/editorTemplates';
-import { autoSlug } from '@/utils/adminHelpers';
+import { API, autoSlug, authHeaders } from '@/utils/adminHelpers';
 import PYQUploadPanel from './PYQUploadPanel';
 import {
   MDXEditor,
   headingsPlugin, listsPlugin, quotePlugin, thematicBreakPlugin,
   markdownShortcutPlugin, codeBlockPlugin, codeMirrorPlugin, tablePlugin,
-  linkPlugin, diffSourcePlugin, toolbarPlugin,
+  linkPlugin, diffSourcePlugin, toolbarPlugin, imagePlugin,
   UndoRedo, BoldItalicUnderlineToggles, BlockTypeSelect,
   CreateLink, CodeToggle, InsertTable, InsertThematicBreak,
   ListsToggle, Separator, DiffSourceToggleWrapper, InsertCodeBlock,
+  InsertImage,
 } from '@mdxeditor/editor';
 import '@mdxeditor/editor/style.css';
 
@@ -40,6 +44,46 @@ export default function ChapterEditForm({
   adminToken, boardId, classId, streamId,
 }) {
   const [mobilePreview, setMobilePreview] = useState(true);
+  const imgInputRef = useRef(null);
+
+  const imageUploadHandler = useCallback(async (image) => {
+    const formData = new FormData();
+    formData.append('file', image);
+    try {
+      const res = await axios.post(`${API}/admin/content/upload-image`, formData, {
+        ...authHeaders(adminToken),
+        headers: { ...authHeaders(adminToken).headers, 'Content-Type': 'multipart/form-data' },
+      });
+      return res.data.url;
+    } catch (e) {
+      toast.error('Image upload failed');
+      throw e;
+    }
+  }, [adminToken]);
+
+  const handleToolbarImageUpload = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error('Image must be under 10 MB');
+        return;
+      }
+      try {
+        const url = await imageUploadHandler(file);
+        const md = editorRef.current?.getMarkdown?.() ?? contentForm.content;
+        const imgMd = `\n![${file.name}](${url})\n`;
+        setContentForm(f => ({ ...f, content: md + imgMd }));
+        setEditorKey(k => k + 1);
+        toast.success('Image inserted');
+      } catch {}
+    };
+    input.click();
+  }, [imageUploadHandler, editorRef, contentForm, setContentForm, setEditorKey]);
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="px-8 pt-7 pb-4 flex-shrink-0">
@@ -236,6 +280,7 @@ export default function ChapterEditForm({
                   }),
                   tablePlugin(),
                   linkPlugin(),
+                  imagePlugin({ imageUploadHandler }),
                   diffSourcePlugin({ viewMode: 'rich-text', diffMarkdown: '' }),
                   toolbarPlugin({
                     toolbarContents: () => (
@@ -250,6 +295,21 @@ export default function ChapterEditForm({
                         <BlockTypeSelect />
                         <Separator />
                         <CreateLink />
+                        <InsertImage />
+                        <button
+                          type="button"
+                          onClick={handleToolbarImageUpload}
+                          title="Upload image from device"
+                          style={{
+                            display: 'flex', alignItems: 'center', gap: 4,
+                            padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+                            color: '#f59e0b', background: 'rgba(245,158,11,0.10)',
+                            border: '1px solid rgba(245,158,11,0.20)',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <ImagePlus size={12} />
+                        </button>
                         <InsertTable />
                         <InsertThematicBreak />
                         <InsertCodeBlock />

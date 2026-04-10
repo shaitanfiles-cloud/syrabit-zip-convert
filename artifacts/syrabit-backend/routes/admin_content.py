@@ -1292,6 +1292,51 @@ async def admin_create_chunk(data: ChunkCreate, admin: dict = Depends(get_admin_
     return chunk
 
 
+_CONTENT_IMG_BUCKET = "study-materials"
+_CONTENT_IMG_PREFIX = "content-images"
+_CONTENT_IMG_MAX_MB = 10
+
+def _content_img_supabase_upload(raw: bytes, storage_path: str, mime: str) -> str:
+    supa.storage.from_(_CONTENT_IMG_BUCKET).upload(
+        path=storage_path,
+        file=raw,
+        file_options={"content-type": mime, "upsert": "true"},
+    )
+    return supa.storage.from_(_CONTENT_IMG_BUCKET).get_public_url(storage_path)
+
+
+@router.post("/admin/content/upload-image")
+async def upload_content_image(
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    raw = await file.read()
+    mime = file.content_type or "image/png"
+    if not mime.startswith("image/"):
+        raise HTTPException(400, "Only image files are supported")
+    max_bytes = _CONTENT_IMG_MAX_MB * 1024 * 1024
+    if len(raw) > max_bytes:
+        raise HTTPException(413, f"Image exceeds {_CONTENT_IMG_MAX_MB} MB limit")
+
+    ext = (file.filename or "img.png").rsplit(".", 1)[-1].lower()
+    img_id = str(uuid.uuid4())
+    safe_name = f"{img_id}.{ext}"
+    storage_path = f"{_CONTENT_IMG_PREFIX}/{safe_name}"
+
+    if supa:
+        try:
+            url = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _content_img_supabase_upload(raw, storage_path, mime),
+            )
+            return {"url": url}
+        except Exception as e:
+            logger.warning(f"Content image Supabase upload failed: {e}")
+
+    b64 = base64.b64encode(raw).decode()
+    return {"url": f"data:{mime};base64,{b64}"}
+
+
 # Generic content upload endpoints
 @router.post("/admin/content/upload")
 async def upload_content_file(
