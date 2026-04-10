@@ -46,6 +46,8 @@ export default function ChapterEditForm({
   const [mobilePreview, setMobilePreview] = useState(true);
   const imgInputRef = useRef(null);
 
+  const [imgUploading, setImgUploading] = useState(false);
+
   const imageUploadHandler = useCallback(async (image) => {
     const formData = new FormData();
     formData.append('file', image);
@@ -61,25 +63,38 @@ export default function ChapterEditForm({
     }
   }, [adminToken]);
 
-  const handleToolbarImageUpload = useCallback(() => {
+  const handleAddPages = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
+    input.multiple = true;
     input.onchange = async (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      if (file.size > 10 * 1024 * 1024) {
-        toast.error('Image must be under 10 MB');
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+      const oversized = files.filter(f => f.size > 10 * 1024 * 1024);
+      if (oversized.length) {
+        toast.error(`${oversized.length} image(s) exceed 10 MB limit`);
         return;
       }
+      setImgUploading(true);
+      const toastId = toast.loading(`Uploading ${files.length} page(s)...`);
       try {
-        const url = await imageUploadHandler(file);
+        const urls = [];
+        for (let i = 0; i < files.length; i++) {
+          toast.loading(`Uploading page ${i + 1} of ${files.length}...`, { id: toastId });
+          const url = await imageUploadHandler(files[i]);
+          urls.push({ name: files[i].name, url });
+        }
         const md = editorRef.current?.getMarkdown?.() ?? contentForm.content;
-        const imgMd = `\n![${file.name}](${url})\n`;
-        setContentForm(f => ({ ...f, content: md + imgMd }));
+        const pagesMd = urls.map((u, i) => `![Page ${i + 1}](${u.url})`).join('\n\n');
+        setContentForm(f => ({ ...f, content: md + (md.trim() ? '\n\n' : '') + pagesMd + '\n' }));
         setEditorKey(k => k + 1);
-        toast.success('Image inserted');
-      } catch {}
+        toast.success(`${urls.length} page(s) added`, { id: toastId });
+      } catch {
+        toast.error('Some pages failed to upload', { id: toastId });
+      } finally {
+        setImgUploading(false);
+      }
     };
     input.click();
   }, [imageUploadHandler, editorRef, contentForm, setContentForm, setEditorKey]);
@@ -298,17 +313,22 @@ export default function ChapterEditForm({
                         <InsertImage />
                         <button
                           type="button"
-                          onClick={handleToolbarImageUpload}
-                          title="Upload image from device"
+                          onClick={handleAddPages}
+                          disabled={imgUploading}
+                          title="Add question paper pages (select multiple images)"
                           style={{
                             display: 'flex', alignItems: 'center', gap: 4,
-                            padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
+                            padding: '2px 10px', borderRadius: 4, fontSize: 11, fontWeight: 600,
                             color: '#f59e0b', background: 'rgba(245,158,11,0.10)',
                             border: '1px solid rgba(245,158,11,0.20)',
-                            cursor: 'pointer',
+                            cursor: imgUploading ? 'not-allowed' : 'pointer',
+                            opacity: imgUploading ? 0.5 : 1,
                           }}
                         >
-                          <ImagePlus size={12} />
+                          {imgUploading
+                            ? <Loader2 size={12} style={{ animation: 'spin 1s linear infinite' }} />
+                            : <ImagePlus size={12} />}
+                          Add Pages
                         </button>
                         <InsertTable />
                         <InsertThematicBreak />
