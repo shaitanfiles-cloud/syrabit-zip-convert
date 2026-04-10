@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import {
   ArrowLeft, Save, Loader2, Eye, Link2, BarChart3,
   Sparkles, RefreshCw, Layers, LayoutTemplate, Upload,
-  FileText, Globe, Paperclip, CheckCircle,
+  FileText, Globe, Paperclip, CheckCircle, Smartphone, Monitor,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -39,6 +39,7 @@ export default function ChapterEditForm({
   fileInputRef,
   adminToken, boardId, classId, streamId,
 }) {
+  const [mobilePreview, setMobilePreview] = useState(true);
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="px-8 pt-7 pb-4 flex-shrink-0">
@@ -164,6 +165,18 @@ export default function ChapterEditForm({
             <div className="ml-auto flex items-center gap-2">
               <span className="text-[10px] text-gray-300">{contentForm.content.length}ch</span>
               <button
+                onClick={() => setMobilePreview(p => !p)}
+                className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium border transition-colors ${
+                  mobilePreview
+                    ? 'bg-violet-600/25 text-violet-300 border-violet-500/30'
+                    : 'bg-gray-50 text-gray-400 border-gray-200 hover:text-gray-900'
+                }`}
+                title={mobilePreview ? 'Switch to desktop width' : 'Switch to mobile width'}
+              >
+                {mobilePreview ? <Smartphone size={10} /> : <Monitor size={10} />}
+                {mobilePreview ? 'Mobile' : 'Desktop'}
+              </button>
+              <button
                 onClick={() => setShowPreview(p => !p)}
                 className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium border transition-colors ${
                   showPreview
@@ -172,17 +185,35 @@ export default function ChapterEditForm({
                 }`}
               >
                 <Eye size={10} />
-                {showPreview ? 'Hide Blog Preview' : 'Blog Preview'}
+                {showPreview ? 'Hide Preview' : 'Preview'}
               </button>
             </div>
           </div>
 
           <div className={`flex-1 min-h-0 flex gap-3 ${showPreview ? '' : 'flex-col'}`}>
             <div
-              className="flex-1 min-h-0 rounded-xl overflow-hidden border border-black/10 cms-light-editor-wrapper flex flex-col"
+              className={`min-h-0 rounded-xl overflow-hidden border cms-light-editor-wrapper flex flex-col transition-all duration-300 ${
+                mobilePreview
+                  ? 'mx-auto border-2 border-gray-300 shadow-lg'
+                  : 'flex-1 border-black/10'
+              }`}
               data-color-mode="light"
-              style={{ backgroundColor: '#ffffff', color: '#1a1a1a' }}
+              style={{
+                backgroundColor: '#ffffff',
+                color: '#1a1a1a',
+                ...(mobilePreview ? {
+                  width: 390,
+                  maxWidth: '100%',
+                  borderRadius: 28,
+                  boxShadow: '0 0 0 3px #e5e7eb, 0 8px 32px rgba(0,0,0,0.12)',
+                } : {}),
+              }}
             >
+              {mobilePreview && (
+                <div className="flex items-center justify-center py-1.5 bg-gray-100 border-b border-gray-200">
+                  <div className="w-16 h-1 rounded-full bg-gray-300" />
+                </div>
+              )}
               <MDXEditor
                 ref={editorRef}
                 key={`${editTarget?.id ?? '__new__'}-${editorKey}`}
@@ -246,18 +277,46 @@ export default function ChapterEditForm({
                   }),
                 ]}
               />
+              {mobilePreview && (
+                <div className="flex items-center justify-center py-1 bg-gray-100 border-t border-gray-200">
+                  <div className="w-24 h-1 rounded-full bg-gray-300" />
+                </div>
+              )}
             </div>
             {showPreview && (
-              <div className="flex-1 min-h-0 overflow-y-auto rounded-xl" style={{ background: '#f0f0f1' }}>
-                <div style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '15px', lineHeight: '1.75', padding: '1.5rem 2rem', minHeight: '100%' }}>
+              <div
+                className={`min-h-0 overflow-y-auto transition-all duration-300 ${
+                  mobilePreview ? 'mx-auto border-2 border-gray-300 shadow-lg' : 'flex-1 rounded-xl'
+                }`}
+                style={{
+                  background: '#f0f0f1',
+                  ...(mobilePreview ? {
+                    width: 390,
+                    maxWidth: '100%',
+                    borderRadius: 28,
+                    boxShadow: '0 0 0 3px #e5e7eb, 0 8px 32px rgba(0,0,0,0.12)',
+                  } : {}),
+                }}
+              >
+                {mobilePreview && (
+                  <div className="flex items-center justify-center py-1.5 bg-gray-100 border-b border-gray-200" style={{ borderRadius: '28px 28px 0 0' }}>
+                    <div className="w-16 h-1 rounded-full bg-gray-300" />
+                  </div>
+                )}
+                <div style={{ background: '#ffffff', color: '#1a1a1a', fontSize: '15px', lineHeight: '1.75', padding: '1.5rem 1.25rem', minHeight: '100%' }}>
                   {contentForm.content.trim() ? (
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
                       {contentForm.content}
                     </ReactMarkdown>
                   ) : (
-                    <p style={{ color: '#aaa', fontStyle: 'italic' }}>Blog preview appears here as you type…</p>
+                    <p style={{ color: '#aaa', fontStyle: 'italic' }}>Preview appears here as you type…</p>
                   )}
                 </div>
+                {mobilePreview && (
+                  <div className="flex items-center justify-center py-1 bg-gray-100 border-t border-gray-200" style={{ borderRadius: '0 0 28px 28px' }}>
+                    <div className="w-24 h-1 rounded-full bg-gray-300" />
+                  </div>
+                )}
               </div>
             )}
           </div>

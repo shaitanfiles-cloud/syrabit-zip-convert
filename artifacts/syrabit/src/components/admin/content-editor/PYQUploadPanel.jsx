@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
-  Upload, FileText, Loader2, Trash2, Play, CheckCircle,
-  AlertCircle, Download, ExternalLink, ChevronDown, ChevronUp,
-  Type,
+  Upload, FileText, Loader2, Trash2, Play,
+  Download, ExternalLink, ChevronDown, ChevronUp,
+  Type, Image, Maximize2, Minimize2,
 } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
@@ -15,6 +15,129 @@ const STATUS_MAP = {
   ocr_error:   { label: 'Error',      color: 'text-red-500',    bg: 'bg-red-500/10' },
   fetch_error: { label: 'Fetch Error', color: 'text-red-500',   bg: 'bg-red-500/10' },
 };
+
+const SIZE_PRESETS = [
+  { label: 'S', value: 25 },
+  { label: 'M', value: 50 },
+  { label: 'L', value: 75 },
+  { label: 'Full', value: 100 },
+];
+
+function ImageCard({ pyq, onProcess, onDelete, isProcessing }) {
+  const [scale, setScale] = useState(50);
+  const [preview, setPreview] = useState(false);
+  const st = STATUS_MAP[pyq.processing_status] || STATUS_MAP.uploaded;
+  const hasImage = pyq.is_image && pyq.file_url;
+
+  return (
+    <div className="group relative rounded-xl border border-gray-200 bg-white overflow-hidden transition-shadow hover:shadow-md">
+      {hasImage ? (
+        <div className="relative bg-[#f8f8f8]" style={{ minHeight: 80 }}>
+          <div className="flex items-center justify-center p-2" style={{ maxHeight: 300, overflow: 'hidden' }}>
+            <img
+              src={pyq.file_url}
+              alt={pyq.filename}
+              className="rounded-lg object-contain transition-all duration-200"
+              style={{ width: `${scale}%`, maxHeight: 280 }}
+              onClick={() => setPreview(true)}
+            />
+          </div>
+          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-3 py-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="flex items-center gap-1.5">
+              {SIZE_PRESETS.map(p => (
+                <button
+                  key={p.label}
+                  onClick={(e) => { e.stopPropagation(); setScale(p.value); }}
+                  className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
+                    scale === p.value
+                      ? 'bg-amber-500 text-white'
+                      : 'bg-white/20 text-white hover:bg-white/40'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <input
+                type="range"
+                min={10}
+                max={100}
+                value={scale}
+                onChange={(e) => { e.stopPropagation(); setScale(Number(e.target.value)); }}
+                className="flex-1 h-1 accent-amber-500 cursor-pointer"
+                onClick={(e) => e.stopPropagation()}
+              />
+              <span className="text-[10px] text-white/80 font-mono w-8 text-right">{scale}%</span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center justify-center py-6 bg-gray-50">
+          {pyq.is_text ? (
+            <Type size={28} className="text-amber-400" />
+          ) : (
+            <FileText size={28} className="text-gray-300" />
+          )}
+        </div>
+      )}
+
+      <div className="px-3 py-2 border-t border-gray-100">
+        <div className="flex items-center gap-2">
+          <div className="flex-1 min-w-0">
+            <p className="text-[11px] font-medium text-gray-900 truncate">
+              {pyq.is_text ? 'Text PYQ' : pyq.filename}
+            </p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <span className={`text-[9px] px-1.5 py-0.5 rounded ${st.bg} ${st.color} font-medium`}>
+                {st.label}
+              </span>
+              <span className="text-[9px] text-gray-400">{pyq.exam_year}</span>
+              {pyq.question_count > 0 && (
+                <span className="text-[9px] text-gray-400">{pyq.question_count}Q</span>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-0.5">
+            {pyq.processing_status === 'uploaded' && (pyq.is_pdf || pyq.is_image) && (
+              <button
+                onClick={() => onProcess(pyq.id)}
+                disabled={isProcessing}
+                title="Process (OCR)"
+                className="p-1.5 rounded-lg hover:bg-amber-500/10 text-amber-500 disabled:opacity-50"
+              >
+                {isProcessing ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
+              </button>
+            )}
+            {pyq.seo_url && (
+              <a href={pyq.seo_url} target="_blank" rel="noopener noreferrer" title="View" className="p-1.5 rounded-lg hover:bg-blue-500/10 text-blue-500">
+                <ExternalLink size={11} />
+              </a>
+            )}
+            {pyq.file_url && !pyq.file_url.startsWith('data:') && (
+              <a href={pyq.file_url} target="_blank" rel="noopener noreferrer" title="Download" className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-emerald-500">
+                <Download size={11} />
+              </a>
+            )}
+            <button onClick={() => onDelete(pyq.id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400">
+              <Trash2 size={11} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {preview && hasImage && (
+        <div
+          className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-8 cursor-pointer"
+          onClick={() => setPreview(false)}
+        >
+          <img src={pyq.file_url} alt={pyq.filename} className="max-w-full max-h-full object-contain rounded-xl shadow-2xl" />
+          <button className="absolute top-6 right-6 p-2 rounded-full bg-white/10 text-white hover:bg-white/20">
+            <Minimize2 size={18} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function PYQUploadPanel({
   adminToken, chapterId, subjectId, boardId, classId, streamId, examYear: defaultYear,
@@ -30,6 +153,7 @@ export default function PYQUploadPanel({
   const [showTextInput, setShowTextInput] = useState(false);
   const [textContent, setTextContent] = useState('');
   const [submittingText, setSubmittingText] = useState(false);
+  const [viewMode, setViewMode] = useState('grid');
   const fileInputRef = useRef(null);
   const dropRef = useRef(null);
 
@@ -53,21 +177,22 @@ export default function PYQUploadPanel({
 
   const uploadFiles = useCallback(async (fileList) => {
     if (!fileList || fileList.length === 0) return;
-    const pdfs = Array.from(fileList).filter(
-      f => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+    const allowedExts = ['.pdf','.jpg','.jpeg','.png','.webp','.gif','.bmp','.tiff','.tif'];
+    const valid = Array.from(fileList).filter(
+      f => f.type === 'application/pdf' || f.type.startsWith('image/') || allowedExts.some(ext => f.name.toLowerCase().endsWith(ext))
     );
-    if (pdfs.length === 0) {
-      toast.error('Only PDF files are supported');
+    if (valid.length === 0) {
+      toast.error('Only PDF and image files (JPG, PNG, WebP) are supported');
       return;
     }
-    if (pdfs.some(f => f.size > 50 * 1024 * 1024)) {
+    if (valid.some(f => f.size > 50 * 1024 * 1024)) {
       toast.error('Max file size is 50 MB');
       return;
     }
     setUploading(true);
     try {
       const formData = new FormData();
-      pdfs.forEach(f => formData.append('files', f));
+      valid.forEach(f => formData.append('files', f));
       formData.append('exam_year', String(examYear));
       formData.append('paper_type', 'major');
       formData.append('subject_id', subjectId || '');
@@ -80,7 +205,12 @@ export default function PYQUploadPanel({
         ...authHeaders(adminToken),
         headers: { ...authHeaders(adminToken).headers, 'Content-Type': 'multipart/form-data' },
       });
-      toast.success(`${res.data?.uploaded || pdfs.length} PDF(s) uploaded`);
+      const imgCount = valid.filter(f => f.type.startsWith('image/')).length;
+      const pdfCount = valid.length - imgCount;
+      const parts = [];
+      if (pdfCount > 0) parts.push(`${pdfCount} PDF(s)`);
+      if (imgCount > 0) parts.push(`${imgCount} image(s)`);
+      toast.success(`${parts.join(' + ')} uploaded`);
       await loadPyqs();
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Upload failed');
@@ -117,9 +247,9 @@ export default function PYQUploadPanel({
   }, [adminToken, loadPyqs]);
 
   const processAll = useCallback(async () => {
-    const pending = pyqs.filter(p => p.processing_status === 'uploaded' && p.is_pdf);
+    const pending = pyqs.filter(p => p.processing_status === 'uploaded' && (p.is_pdf || p.is_image));
     if (pending.length === 0) {
-      toast.info('No unprocessed PDFs to process');
+      toast.info('No unprocessed files to process');
       return;
     }
     setBatchProcessing(true);
@@ -129,7 +259,7 @@ export default function PYQUploadPanel({
         { pyq_ids: pending.map(p => p.id) },
         authHeaders(adminToken)
       );
-      toast.success(`Processed ${res.data?.succeeded || 0} / ${res.data?.total || 0} PDFs`);
+      toast.success(`Processed ${res.data?.succeeded || 0} / ${res.data?.total || 0} files`);
       await loadPyqs();
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Batch processing failed');
@@ -176,7 +306,8 @@ export default function PYQUploadPanel({
     }
   }, [textContent, examYear, subjectId, boardId, classId, streamId, chapterId, adminToken, loadPyqs]);
 
-  const pendingCount = pyqs.filter(p => p.processing_status === 'uploaded' && p.is_pdf).length;
+  const pendingCount = pyqs.filter(p => p.processing_status === 'uploaded' && (p.is_pdf || p.is_image)).length;
+  const imageCount = pyqs.filter(p => p.is_image).length;
   const currentYear = new Date().getFullYear();
 
   return (
@@ -193,13 +324,18 @@ export default function PYQUploadPanel({
               {pyqs.length}
             </span>
           )}
+          {imageCount > 0 && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-500">
+              {imageCount} img
+            </span>
+          )}
         </div>
         {expanded ? <ChevronUp size={14} className="text-gray-400" /> : <ChevronDown size={14} className="text-gray-400" />}
       </button>
 
       {expanded && (
         <div className="px-4 pb-4 space-y-3">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-1.5">
               <label className="text-xs text-gray-500">Year:</label>
               <select
@@ -212,6 +348,24 @@ export default function PYQUploadPanel({
                 ))}
               </select>
             </div>
+            {pyqs.length > 0 && (
+              <div className="flex items-center gap-1 ml-auto">
+                <button
+                  onClick={() => setViewMode('grid')}
+                  className={`p-1.5 rounded-lg text-xs transition-colors ${viewMode === 'grid' ? 'bg-amber-500/15 text-amber-600' : 'text-gray-400 hover:text-gray-600'}`}
+                  title="Grid view"
+                >
+                  <Maximize2 size={12} />
+                </button>
+                <button
+                  onClick={() => setViewMode('list')}
+                  className={`p-1.5 rounded-lg text-xs transition-colors ${viewMode === 'list' ? 'bg-amber-500/15 text-amber-600' : 'text-gray-400 hover:text-gray-600'}`}
+                  title="List view"
+                >
+                  <FileText size={12} />
+                </button>
+              </div>
+            )}
             {pendingCount > 0 && (
               <button
                 onClick={processAll}
@@ -230,7 +384,7 @@ export default function PYQUploadPanel({
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onClick={() => !uploading && fileInputRef.current?.click()}
-            className={`relative flex flex-col items-center justify-center gap-2 py-6 rounded-xl border-2 border-dashed cursor-pointer transition-all ${
+            className={`relative flex flex-col items-center justify-center gap-3 py-8 rounded-xl border-2 border-dashed cursor-pointer transition-all ${
               dragging
                 ? 'border-amber-500 bg-amber-500/10'
                 : 'border-gray-200 hover:border-amber-500/50 hover:bg-amber-500/5'
@@ -239,23 +393,38 @@ export default function PYQUploadPanel({
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf"
+              accept=".pdf,.jpg,.jpeg,.png,.webp,.gif,.bmp,.tiff,.tif,image/*"
               multiple
               className="hidden"
               onChange={(e) => uploadFiles(e.target.files)}
             />
             {uploading ? (
               <>
-                <Loader2 size={24} className="text-amber-500 animate-spin" />
+                <Loader2 size={28} className="text-amber-500 animate-spin" />
                 <span className="text-sm text-gray-500">Uploading...</span>
               </>
             ) : (
               <>
-                <Upload size={24} className="text-gray-400" />
-                <span className="text-sm text-gray-600">
-                  Drop PDF files here or <span className="text-amber-600 font-medium">click to browse</span>
-                </span>
-                <span className="text-[10px] text-gray-400">Supports multiple PDFs up to 50 MB each</span>
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-400/20 to-orange-400/20 flex items-center justify-center">
+                  <div className="flex items-center gap-1">
+                    <Image size={18} className="text-amber-500" />
+                    <Upload size={14} className="text-amber-400" />
+                  </div>
+                </div>
+                <div className="text-center">
+                  <span className="text-sm font-medium text-gray-700 block">
+                    Drop images or PDFs here
+                  </span>
+                  <span className="text-xs text-gray-400 mt-0.5 block">
+                    or <span className="text-amber-600 font-medium">click to browse</span>
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 mt-1">
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">JPG</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">PNG</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">WebP</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">PDF</span>
+                </div>
               </>
             )}
           </div>
@@ -301,14 +470,30 @@ export default function PYQUploadPanel({
             </div>
           )}
 
-          {!loading && pyqs.length > 0 && (
+          {!loading && pyqs.length > 0 && viewMode === 'grid' && (
+            <div className="grid grid-cols-2 gap-2">
+              {pyqs.map(pyq => (
+                <ImageCard
+                  key={pyq.id}
+                  pyq={pyq}
+                  onProcess={processOne}
+                  onDelete={deleteOne}
+                  isProcessing={processing.has(pyq.id) || pyq.processing_status === 'ocr_running'}
+                />
+              ))}
+            </div>
+          )}
+
+          {!loading && pyqs.length > 0 && viewMode === 'list' && (
             <div className="space-y-1.5">
               {pyqs.map(pyq => {
                 const st = STATUS_MAP[pyq.processing_status] || STATUS_MAP.uploaded;
                 const isProcessing = processing.has(pyq.id) || pyq.processing_status === 'ocr_running';
                 return (
                   <div key={pyq.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white border border-gray-100 group">
-                    {pyq.is_text ? (
+                    {pyq.is_image && pyq.file_url ? (
+                      <img src={pyq.file_url} alt="" className="w-8 h-8 rounded object-cover flex-shrink-0 border border-gray-200" />
+                    ) : pyq.is_text ? (
                       <Type size={14} className="text-amber-500 flex-shrink-0" />
                     ) : (
                       <FileText size={14} className="text-gray-400 flex-shrink-0" />
@@ -326,7 +511,7 @@ export default function PYQUploadPanel({
                       </div>
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      {pyq.processing_status === 'uploaded' && pyq.is_pdf && (
+                      {pyq.processing_status === 'uploaded' && (pyq.is_pdf || pyq.is_image) && (
                         <button
                           onClick={() => processOne(pyq.id)}
                           disabled={isProcessing}
@@ -337,32 +522,16 @@ export default function PYQUploadPanel({
                         </button>
                       )}
                       {pyq.seo_url && (
-                        <a
-                          href={pyq.seo_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="View PYQ Page"
-                          className="p-1.5 rounded-lg hover:bg-blue-500/10 text-blue-500"
-                        >
+                        <a href={pyq.seo_url} target="_blank" rel="noopener noreferrer" title="View PYQ Page" className="p-1.5 rounded-lg hover:bg-blue-500/10 text-blue-500">
                           <ExternalLink size={12} />
                         </a>
                       )}
                       {pyq.file_url && !pyq.file_url.startsWith('data:') && (
-                        <a
-                          href={pyq.file_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title="Download PDF"
-                          className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-emerald-500"
-                        >
+                        <a href={pyq.file_url} target="_blank" rel="noopener noreferrer" title="Download" className="p-1.5 rounded-lg hover:bg-emerald-500/10 text-emerald-500">
                           <Download size={12} />
                         </a>
                       )}
-                      <button
-                        onClick={() => deleteOne(pyq.id)}
-                        title="Delete"
-                        className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400"
-                      >
+                      <button onClick={() => deleteOne(pyq.id)} title="Delete" className="p-1.5 rounded-lg hover:bg-red-500/10 text-red-400">
                         <Trash2 size={12} />
                       </button>
                     </div>
