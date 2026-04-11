@@ -195,7 +195,8 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
 
     _detected_intent, _detected_db_category = classify_intent(msg.message)
 
-    _instant = get_instant_response(msg.message) if _detected_intent == "casual" else None
+    _ns_resp_lang = (msg.response_lang or "").lower().strip()
+    _instant = get_instant_response(msg.message) if (_detected_intent == "casual" and _ns_resp_lang in ("", "en")) else None
     if _instant:
         credits_info = None
         if not is_anon:
@@ -843,7 +844,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
 
-    _SARVAM_LANG_MAP = {"as": "as-IN", "hi": "hi-IN", "bn": "bn-IN", "ta": "ta-IN", "te": "te-IN", "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "gu": "gu-IN", "pa": "pa-IN", "or": "or-IN"}
+    _SARVAM_LANG_MAP = {"as": "as-IN", "hi": "hi-IN"}
     _resp_lang = (msg.response_lang or "").lower().strip()
     _sarvam_target = _SARVAM_LANG_MAP.get(_resp_lang)
     _want_translate = bool(_sarvam_target and _resp_lang != "en")
@@ -1196,43 +1197,29 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _hist_len = sum(len(m.get("content", "")) for m in history_messages)
             logger.warning(f"[STREAM] History trimmed to last 4 messages ({_hist_len} chars)")
 
-    _LANG_NAME_MAP = {"as": "Assamese", "hi": "Hindi", "bn": "Bengali", "ta": "Tamil", "te": "Telugu", "kn": "Kannada", "ml": "Malayalam", "mr": "Marathi", "gu": "Gujarati", "pa": "Punjabi", "or": "Odia"}
+    _LANG_NAME_MAP = {"as": "Assamese", "hi": "Hindi"}
     _target_lang_name = _LANG_NAME_MAP.get(_resp_lang)
-    _INDIC_GREETING = {
-        "as": "তুমি Syra, অসমৰ ছাত্ৰ-ছাত্ৰীৰ বাবে এগৰাকী বন্ধুত্বপূৰ্ণ AI অধ্যয়ন পৰামৰ্শদাতা।",
-        "hi": "तुम Syra हो, असम के छात्रों के लिए एक मित्रवत AI अध्ययन सलाहकार।",
-        "bn": "তুমি Syra, আসামের শিক্ষার্থীদের জন্য একজন বন্ধুসুলভ AI অধ্যয়ন পরামর্শদাতা।",
-    }
     if _want_translate and _target_lang_name:
-        _native_greeting = _INDIC_GREETING.get(_resp_lang, "")
-        _greeting_line = f"{_native_greeting}\n" if _native_greeting else ""
         _indic_system_prompt = (
-            f"{_greeting_line}"
-            f"You are Syra, a friendly AI study mentor for students in Assam, India.\n\n"
-            f"LANGUAGE RULES:\n"
-            f"- Think and respond DIRECTLY in {_target_lang_name}. Do NOT translate from English.\n"
-            f"- Use {_target_lang_name} script for ALL explanations, headings, and transitions.\n"
-            f"- Keep technical terms, formulas, equations, and proper nouns in English.\n"
-            f"- Your tone should be warm, natural, and encouraging — like a {_target_lang_name}-speaking tutor.\n\n"
-            f"FORMATTING:\n"
-            f"- Use clear headings, bullet points, and numbered lists.\n"
-            f"- Use Markdown for math expressions.\n"
-            f"- Match depth to question type: short for definitions, detailed for explanations.\n\n"
+            f"You are Syra, AI tutor on Syrabit.ai. Respond DIRECTLY in {_target_lang_name} script. "
+            f"Keep technical terms, formulas, proper nouns in English. "
+            f"Tone: warm, encouraging. Use Markdown, bullets, numbered lists. "
+            f"Length: 30-60 words default, 200 words max. Match depth to question type.\n"
         )
         if system_prompt:
-            _rag_section = ""
-            _rag_markers = ["**GROUNDING CONTEXT", "**CURRICULUM", "**SUBJECT CHAPTERS", "REFERENCE MATERIAL:", "CONTEXT:", "RELEVANT CONTENT:"]
-            for _marker in _rag_markers:
+            _ctx_markers = ["**GROUNDING CONTEXT", "**CURRICULUM", "**SUBJECT CHAPTERS", "REFERENCE MATERIAL:", "CONTEXT:", "RELEVANT CONTENT:"]
+            _ctx_section = ""
+            for _marker in _ctx_markers:
                 _idx = system_prompt.find(_marker)
                 if _idx != -1:
-                    _rag_section = system_prompt[_idx:]
+                    _ctx_section = system_prompt[_idx:]
                     break
-            if _rag_section:
-                _indic_system_prompt += f"\n{_rag_section}"
+            if _ctx_section:
+                _indic_system_prompt += f"\n{_ctx_section}"
             else:
                 _content_lines = [l for l in system_prompt.split('\n') if l.strip() and not l.strip().startswith(('You are', 'IMPORTANT:', 'RULES:', 'Format'))]
                 if _content_lines:
-                    _indic_system_prompt += "\nCONTEXT:\n" + "\n".join(_content_lines[-20:])
+                    _indic_system_prompt += "\nCONTEXT:\n" + "\n".join(_content_lines[-15:])
 
         system_prompt = _indic_system_prompt
         logger.info(f"[STREAM] Indic-first prompt built for {_target_lang_name} ({len(system_prompt)} chars)")
@@ -1400,6 +1387,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
                 _stream_model = None if _want_translate else (msg.model or "openai/gpt-oss-20b")
                 _slm_fallback_stream = lambda: call_llm_api_stream(messages_payload, model=_stream_model, max_tokens=max_tokens, intent=_stream_intent, response_lang=_resp_lang)
+                if _want_translate:
+                    _pipeline_stream = None
 
                 def _is_sse_error(sse_chunk: str) -> bool:
                     if '"error"' in sse_chunk and sse_chunk.startswith("data: "):

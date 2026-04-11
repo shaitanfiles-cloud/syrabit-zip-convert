@@ -24,9 +24,9 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **SEO & Content Quality:** Implements prompt variants, title diversification, content-derived meta descriptions, and a quality scoring system.
 - **PYQ HTML Replica:** Processes PYQ PDFs via Gemini Vision OCR to create SEO-optimized, RAG-indexed HTML replicas.
 - **Syllabus Embedder:** Generates chapter and topic-level embeddings, enriched with context and keywords.
-- **Web Search Pipeline (RAG removed):** Uses DuckDuckGo web search with 3-layer architecture: `site:syrabit.ai` priority (3 results), scoped text search (8 results), news search (4 results). Stage 1 topic metadata (subject/chapter classification) is preserved for scoping web queries. Document uploads still use `resolve_rag_context` for document-only grounding. Library search endpoint (`/v1/search`) backed by web search.
+- **Web Search Pipeline (RAG removed):** Uses DuckDuckGo web search with 3-layer architecture: `site:syrabit.ai` priority (3 results), scoped text search (8 results), news search (4 results). Stage 1 topic metadata (subject/chapter classification) is preserved for scoping web queries. Document uploads still use `resolve_rag_context` for document-only grounding. Library search endpoint (`/v1/search`) backed by web search. Voyage AI client removed (no longer used).
 - **Subject Linking for Syllabus:** A semantic router resolves subjects for syllabus queries without a `subject_id`.
-- **Multi-LLM Pipeline:** Single-LLM with Stage 1 metadata for topic classification. Concise responses: 50-100 words default, max 300 words.
+- **Multi-LLM Pipeline:** Single-LLM with Stage 1 metadata for topic classification. Concise responses: 50-100 words default, max 300 words. Supported response languages: English, Assamese (`as`), Hindi (`hi`) only. Indic responses route through Sarvam LLM. Instant casual fast-path skipped for non-English languages to ensure proper Indic responses.
 - **Monetization:** Supports free, starter, and pro plans with credit-based usage, integrating Razorpay and Stripe.
 - **Optional Authentication:** Chat, History, and Profile pages are accessible to anonymous users via a `syrabit_anon_id`. Conversations are persisted in Redis and PostgreSQL.
 - **Security:** Uses ASGI-native `SecurityHeadersMiddleware` and prompt safety guardrails.
