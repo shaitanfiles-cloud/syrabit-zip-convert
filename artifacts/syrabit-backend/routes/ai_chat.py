@@ -859,24 +859,28 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
 
+    _SARVAM_LANG_MAP = {"as": "as-IN", "hi": "hi-IN", "bn": "bn-IN", "ta": "ta-IN", "te": "te-IN", "kn": "kn-IN", "ml": "ml-IN", "mr": "mr-IN", "gu": "gu-IN", "pa": "pa-IN", "or": "or-IN"}
+    _resp_lang = (msg.response_lang or "").lower().strip()
+    _sarvam_target = _SARVAM_LANG_MAP.get(_resp_lang)
+    _want_translate = bool(_sarvam_target and _resp_lang != "en")
+
     _instant_s = get_instant_response(msg.message) if _stream_intent == "casual" else None
     if _instant_s:
         logger.info(f"[STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant_s)} chars (0 LLM calls)")
-        _want_as_instant = (msg.response_lang or "").lower() == "as"
         async def _instant_stream():
             nonlocal _instant_s
             yield f"data: {json.dumps({'conversation_id': msg.conversation_id or '', 'rag_source': 'none', 'rag_quality': 'none', 'rag_chunks': 0})}\n\n"
-            if _want_as_instant and sarvam_client:
+            if _want_translate and sarvam_client:
                 yield f"data: {json.dumps({'translating': True})}\n\n"
                 try:
-                    _tr_payload = {"input": _instant_s, "source_language_code": "en-IN", "target_language_code": "as-IN", "speaker_gender": "Female", "mode": "formal", "model": "sarvam-translate:v1", "enable_preprocessing": False}
+                    _tr_payload = {"input": _instant_s, "source_language_code": "en-IN", "target_language_code": _sarvam_target, "speaker_gender": "Female", "mode": "formal", "model": "sarvam-translate:v1", "enable_preprocessing": False}
                     _tr_resp = await sarvam_client.post("/translate", json=_tr_payload)
                     _tr_resp.raise_for_status()
                     _tr_text = _tr_resp.json().get("translated_text", "")
                     if _tr_text:
                         _instant_s = _tr_text
                 except Exception as _tr_err:
-                    logger.warning(f"[TRANSLATE] Assamese translation failed for instant: {_tr_err}")
+                    logger.warning(f"[TRANSLATE] {_resp_lang} translation failed for instant: {_tr_err}")
             yield f"data: {json.dumps({'content': _instant_s})}\n\n"
             yield f"data: {json.dumps({'event': 'syrabit_done', 'conversation_id': msg.conversation_id or ''})}\n\n"
             yield "data: [DONE]\n\n"
@@ -1435,21 +1439,19 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
             cached_answer = _cached_answer
             _stream_provider = "unknown"
-            _want_assamese = (msg.response_lang or "").lower() == "as"
-
             if cached_answer:
                 logger.info(f"[STREAM][TIMING] TTFT (cache hit): {_time_mod.time() - _stream_t0:.3f}s")
-                if _want_assamese and sarvam_client:
+                if _want_translate and sarvam_client:
                     yield f"data: {json.dumps({'translating': True})}\n\n"
                     try:
-                        _tr_payload = {"input": cached_answer, "source_language_code": "en-IN", "target_language_code": "as-IN", "speaker_gender": "Female", "mode": "formal", "model": "sarvam-translate:v1", "enable_preprocessing": False}
+                        _tr_payload = {"input": cached_answer, "source_language_code": "en-IN", "target_language_code": _sarvam_target, "speaker_gender": "Female", "mode": "formal", "model": "sarvam-translate:v1", "enable_preprocessing": False}
                         _tr_resp = await sarvam_client.post("/translate", json=_tr_payload)
                         _tr_resp.raise_for_status()
                         _tr_text = _tr_resp.json().get("translated_text", cached_answer)
                         if _tr_text:
                             cached_answer = _tr_text
                     except Exception as _tr_err:
-                        logger.warning(f"[TRANSLATE] Assamese translation failed for cached answer: {_tr_err}")
+                        logger.warning(f"[TRANSLATE] {_resp_lang} translation failed for cached answer: {_tr_err}")
                 _CHUNK_SIZE = 120
                 for _ci in range(0, len(cached_answer), _CHUNK_SIZE):
                     yield f"data: {json.dumps({'content': cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
@@ -1561,7 +1563,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             pass
                     if _output_violation:
                         break
-                    if not (_want_assamese and sarvam_client and '"content"' in chunk):
+                    if not (_want_translate and sarvam_client and '"content"' in chunk):
                         yield chunk
                     _bp_count += 1
                     if _bp_count % 40 == 0:
@@ -1580,10 +1582,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             _ai_response_cache[_cache_key_val] = answer_str
                         logger.info(f"Cache MISS → stored (STREAM, ttl={_cache_ttl_val}s): {_cache_key_val}")
 
-                    if _want_assamese and sarvam_client and answer_str:
+                    if _want_translate and sarvam_client and answer_str:
                         yield f"data: {json.dumps({'translating': True})}\n\n"
                         try:
-                            _tr_payload = {"input": answer_str, "source_language_code": "en-IN", "target_language_code": "as-IN", "speaker_gender": "Female", "mode": "formal", "model": "sarvam-translate:v1", "enable_preprocessing": False}
+                            _tr_payload = {"input": answer_str, "source_language_code": "en-IN", "target_language_code": _sarvam_target, "speaker_gender": "Female", "mode": "formal", "model": "sarvam-translate:v1", "enable_preprocessing": False}
                             _tr_resp = await sarvam_client.post("/translate", json=_tr_payload)
                             _tr_resp.raise_for_status()
                             _tr_text = _tr_resp.json().get("translated_text", "")
@@ -1598,7 +1600,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                                 for _tci in range(0, len(answer_str), _TR_CHUNK):
                                     yield f"data: {json.dumps({'content': answer_str[_tci:_tci + _TR_CHUNK]})}\n\n"
                         except Exception as _tr_err:
-                            logger.warning(f"[TRANSLATE] Assamese translation failed: {_tr_err}")
+                            logger.warning(f"[TRANSLATE] {_resp_lang} translation failed: {_tr_err}")
                             _TR_CHUNK = 120
                             for _tci in range(0, len(answer_str), _TR_CHUNK):
                                 yield f"data: {json.dumps({'content': answer_str[_tci:_tci + _TR_CHUNK]})}\n\n"
