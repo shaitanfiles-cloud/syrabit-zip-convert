@@ -6,7 +6,7 @@
  */
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Languages } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { getConversation, getAnonConversation, getSubject, getChapters, API_BASE, apiClient, getAnonId } from '@/utils/api';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -372,33 +372,12 @@ export default function ChatPage() {
 
   return (
     <AppLayout pageTitle={
-      <div className="flex items-center gap-2">
-        <ModelSelector
-          model={model} setModel={setModel}
-          showModelMenu={showModelMenu} setShowModelMenu={setShowModelMenu}
-          modelMenuRef={modelMenuRef} handleNewChat={handleNewChat}
-        />
-        <button
-          type="button"
-          onClick={() => {
-            const next = responseLang === 'as' ? 'en' : 'as';
-            setResponseLang(next);
-            localStorage.setItem('syrabit_response_lang', next);
-          }}
-          className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all border"
-          style={
-            responseLang === 'as'
-              ? { background: 'rgba(139,92,246,0.12)', borderColor: 'rgba(139,92,246,0.30)', color: '#8b5cf6' }
-              : { background: 'transparent', borderColor: 'hsl(var(--border) / 0.5)', color: 'hsl(var(--muted-foreground))' }
-          }
-          aria-label={responseLang === 'as' ? 'Switch to English' : 'Switch to Assamese'}
-          title={responseLang === 'as' ? 'Responding in Assamese — click for English' : 'Responding in English — click for Assamese'}
-          data-testid="lang-toggle"
-        >
-          <Languages size={13} />
-          <span>{responseLang === 'as' ? 'অসমীয়া' : 'EN'}</span>
-        </button>
-      </div>
+      <ModelSelector
+        model={model} setModel={setModel}
+        showModelMenu={showModelMenu} setShowModelMenu={setShowModelMenu}
+        modelMenuRef={modelMenuRef} handleNewChat={handleNewChat}
+        responseLang={responseLang} setResponseLang={setResponseLang}
+      />
     }>
       <div className="flex flex-col chat-viewport-height">
         {isOutOfCredits && (

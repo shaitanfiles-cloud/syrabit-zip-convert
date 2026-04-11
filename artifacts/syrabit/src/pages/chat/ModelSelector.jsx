@@ -1,13 +1,81 @@
-import { ChevronDown, Plus } from 'lucide-react';
+import { ChevronDown, Plus, Globe } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
 
 const MODELS = [
   { value: 'openai/gpt-oss-20b',  label: 'Syrabit SLM', badge: '⚡ Fast'         },
   { value: 'openai/gpt-oss-120b', label: 'Syrabit MLM', badge: '🔜 Coming Soon', disabled: true },
 ];
 
+const LANGUAGES = [
+  { code: 'en', label: 'EN',      nativeLabel: 'English' },
+  { code: 'as', label: 'অসমীয়া', nativeLabel: 'Assamese' },
+  { code: 'hi', label: 'हिन्दी',  nativeLabel: 'Hindi' },
+];
+
 export { MODELS };
 
-export function ModelSelector({ model, setModel, showModelMenu, setShowModelMenu, modelMenuRef, handleNewChat }) {
+function LanguageSelector({ responseLang, setResponseLang }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+
+  useEffect(() => {
+    function handleClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  const current = LANGUAGES.find((l) => l.code === responseLang) || LANGUAGES[0];
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all border"
+        style={
+          responseLang !== 'en'
+            ? { background: 'rgba(139,92,246,0.12)', borderColor: 'rgba(139,92,246,0.30)', color: '#8b5cf6' }
+            : { background: 'transparent', borderColor: 'hsl(var(--border) / 0.5)', color: 'hsl(var(--muted-foreground))' }
+        }
+        aria-label="Select response language"
+        title={`Responding in ${current.nativeLabel}`}
+        data-testid="lang-selector"
+      >
+        <Globe size={13} />
+        <span>{current.label}</span>
+        <ChevronDown size={10} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div
+          className="absolute top-full left-0 mt-1.5 z-50 rounded-xl border border-border/60 shadow-2xl min-w-[140px] overflow-hidden backdrop-blur-xl py-1"
+          style={{ background: 'var(--popover-glass, var(--popover))' }}
+        >
+          {LANGUAGES.map((lang) => (
+            <button
+              key={lang.code}
+              onClick={() => {
+                setResponseLang(lang.code);
+                localStorage.setItem('syrabit_response_lang', lang.code);
+                setOpen(false);
+              }}
+              className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-xs transition-colors hover:bg-accent/40 ${
+                responseLang === lang.code ? 'text-primary font-semibold bg-primary/5' : 'text-foreground'
+              }`}
+            >
+              <span>{lang.label}</span>
+              {responseLang === lang.code && <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ModelSelector({ model, setModel, showModelMenu, setShowModelMenu, modelMenuRef, handleNewChat, responseLang, setResponseLang }) {
   const modelLabel = MODELS.find((m) => m.value === model) || MODELS[0];
 
   return (
@@ -71,6 +139,8 @@ export function ModelSelector({ model, setModel, showModelMenu, setShowModelMenu
           ))}
         </div>
       )}
+
+      <LanguageSelector responseLang={responseLang} setResponseLang={setResponseLang} />
 
       <button
         onClick={handleNewChat}
