@@ -854,7 +854,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    _PRE_LLM_BUDGET = 1.5
+    _PRE_LLM_BUDGET = 2.0
 
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
@@ -902,9 +902,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 class_name=msg.class_name or (user.get("class_name", "") if user else ""),
                 subject_name=msg.subject_name or "",
                 embedder=_get_syllabus_embedder(),
-            ), timeout=0.8)
+            ), timeout=0.35)
         except asyncio.TimeoutError:
-            logger.info("[STREAM] search_scope timed out at 0.8s — proceeding without route")
+            logger.info("[STREAM] search_scope timed out at 0.35s — proceeding without route")
             return "", None
 
     async def _fetch_stage1_stream():
@@ -938,15 +938,30 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.warning(f"[STREAM] History prefetch failed (non-fatal): {_hist_err}")
         return None
 
-    _subj_ctx_result, _sem_class_result, document_text, (_sr_scoped_query, _sr_route), _s_topic_meta, _stream_followup_info, _prefetched_conv = await asyncio.gather(
+    _scope_task = asyncio.create_task(_fetch_search_scope_early())
+
+    _subj_ctx_result, _sem_class_result, document_text, _s_topic_meta, _stream_followup_info, _prefetched_conv = await asyncio.gather(
         _resolve_subject_context(msg.subject_id),
         _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
         _fetch_doc(),
-        _fetch_search_scope_early(),
         _fetch_stage1_stream(),
         _fetch_followup_info(),
         _prefetch_history(),
     )
+
+    if _scope_task.done():
+        try:
+            _sr_scoped_query, _sr_route = _scope_task.result()
+        except Exception:
+            _sr_scoped_query, _sr_route = "", None
+    else:
+        _sr_scoped_query, _sr_route = "", None
+        _scope_task.cancel()
+        try:
+            await _scope_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        logger.info("[STREAM] search_scope not ready — proceeding without route")
 
     _is_followup_s = False
     if _stream_followup_info:
@@ -1073,20 +1088,47 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 logger.warning(f"[STREAM] Syllabus chapter fetch failed: {_ch_err}")
         _rag_quality = rag_ctx.get("quality", "none")
     else:
-        _pre_syl = getattr(_sr_route, 'raw_syl_match', None) if _sr_route else None
-        if _pre_syl and msg.subject_id and getattr(_pre_syl, 'subject_id', None) != msg.subject_id:
-            _pre_syl = None
-        _rag_task = asyncio.create_task(resolve_rag_context(
-            _s_rag_query, subject_id=msg.subject_id,
-            subject_name=msg.subject_name, document_text=document_text,
-            intent=_stream_intent,
-            db_category=_stream_db_category,
-            pre_syl_match=_pre_syl,
-            topic_metadata=_s_topic_meta,
-        ))
-        _history_ready = _prefetched_conv
+        _no_subject_ctx = not msg.subject_id and not msg.subject_name and not _is_card_context
+        _s1_subject_str = (_s_topic_meta.get("subject", "") if _s_topic_meta else "").strip()
+        _s1_has_db_subject = False
+        if _s1_subject_str and _no_subject_ctx:
+            try:
+                import re as _re_fast
+                _s1_fast_check = await db.subjects.find_one(
+                    {"name": {"$regex": f"^{_re_fast.escape(_s1_subject_str)}$", "$options": "i"}, "status": "published"},
+                    {"_id": 0, "id": 1}
+                )
+                _s1_has_db_subject = bool(_s1_fast_check)
+            except Exception:
+                pass
+        elif _s1_subject_str:
+            _s1_has_db_subject = True
+        _fast_skip_rag = _no_subject_ctx and not _s1_has_db_subject and _stream_intent in ("notes", "general")
 
-        if _stream_intent in _CONTENT_INTENTS_SET and msg.subject_id:
+        if _fast_skip_rag:
+            logger.info(f"[STREAM][FAST] Skipping RAG — no subject context, intent={_stream_intent}")
+            rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+                       "vector_hits": [], "source": "none", "quality": "none",
+                       "_general_knowledge_fallback": True}
+            raw_conv = _prefetched_conv
+            web_results = []
+            _notes_chapters = []
+            _rag_quality = "none"
+        else:
+            _pre_syl = getattr(_sr_route, 'raw_syl_match', None) if _sr_route else None
+            if _pre_syl and msg.subject_id and getattr(_pre_syl, 'subject_id', None) != msg.subject_id:
+                _pre_syl = None
+            _rag_task = asyncio.create_task(resolve_rag_context(
+                _s_rag_query, subject_id=msg.subject_id,
+                subject_name=msg.subject_name, document_text=document_text,
+                intent=_stream_intent,
+                db_category=_stream_db_category,
+                pre_syl_match=_pre_syl,
+                topic_metadata=_s_topic_meta,
+            ))
+            _history_ready = _prefetched_conv
+
+        if not _fast_skip_rag and _stream_intent in _CONTENT_INTENTS_SET and msg.subject_id:
             try:
                 _notes_chapters = await db.chapters.find(
                     {"subject_id": msg.subject_id},
@@ -1097,83 +1139,84 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         else:
             _notes_chapters = []
 
-        async def _safe_web_search_stream():
+        if not _fast_skip_rag:
+            async def _safe_web_search_stream():
+                try:
+                    return await web_search_with_fallback(
+                        _s_rag_query, num_results=5,
+                        board_name=ctx_board_name,
+                        class_name=ctx_class_name,
+                        subject_name=msg.subject_name or "",
+                        scoped_query=_sr_scoped_query,
+                    )
+                except Exception as e:
+                    logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
+                    return []
+
+            _skip_web = len(msg.message) < 100 or _is_card_context or _stream_intent in ("casual", "general")
+            if _skip_web:
+                _web_done_future = asyncio.get_event_loop().create_future()
+                _web_done_future.set_result([])
+                _web_task = asyncio.ensure_future(_web_done_future)
+            else:
+                _web_task = asyncio.create_task(_safe_web_search_stream())
+
+            _essential = {_rag_task}
+            _essential_budget = max(0.5, _deadline - _time_mod.time())
+            done, _ = await asyncio.wait(_essential, timeout=_essential_budget, return_when=asyncio.ALL_COMPLETED)
+
+            _empty_rag = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+                          "vector_hits": [], "source": "none", "quality": "none"}
+
+            if _rag_task not in done:
+                _rag_task.cancel()
+                try:
+                    await _rag_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                logger.warning("[STREAM] RAG timed out — proceeding without RAG context")
+
             try:
-                return await web_search_with_fallback(
-                    _s_rag_query, num_results=5,
-                    board_name=ctx_board_name,
-                    class_name=ctx_class_name,
-                    subject_name=msg.subject_name or "",
-                    scoped_query=_sr_scoped_query,
-                )
-            except Exception as e:
-                logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
-                return []
+                rag_ctx = _rag_task.result() if _rag_task.done() and not _rag_task.cancelled() else _empty_rag
+            except Exception as _rag_exc:
+                logger.warning(f"[STREAM] RAG task raised: {_rag_exc}")
+                rag_ctx = _empty_rag
+            raw_conv = _history_ready
 
-        _skip_web = len(msg.message) < 60 or _is_card_context
-        if _skip_web:
-            _web_done_future = asyncio.get_event_loop().create_future()
-            _web_done_future.set_result([])
-            _web_task = asyncio.ensure_future(_web_done_future)
-        else:
-            _web_task = asyncio.create_task(_safe_web_search_stream())
-
-        _essential = {_rag_task}
-        _essential_budget = max(0.5, _deadline - _time_mod.time())
-        done, _ = await asyncio.wait(_essential, timeout=_essential_budget, return_when=asyncio.ALL_COMPLETED)
-
-        _empty_rag = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                      "vector_hits": [], "source": "none", "quality": "none"}
-
-        if _rag_task not in done:
-            _rag_task.cancel()
-            try:
-                await _rag_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            logger.warning("[STREAM] RAG timed out — proceeding without RAG context")
-
-        try:
-            rag_ctx = _rag_task.result() if _rag_task.done() and not _rag_task.cancelled() else _empty_rag
-        except Exception as _rag_exc:
-            logger.warning(f"[STREAM] RAG task raised: {_rag_exc}")
-            rag_ctx = _empty_rag
-        raw_conv = _history_ready
-
-        if _web_task.done() and not _web_task.cancelled():
-            try:
-                web_results = _web_task.result()
-            except Exception:
+            if _web_task.done() and not _web_task.cancelled():
+                try:
+                    web_results = _web_task.result()
+                except Exception:
+                    web_results = []
+            else:
                 web_results = []
-        else:
-            web_results = []
-            _web_task.cancel()
-            try:
-                await _web_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            logger.info("[STREAM] Web search dropped (exceeded time budget) — proceeding with RAG only")
+                _web_task.cancel()
+                try:
+                    await _web_task
+                except (asyncio.CancelledError, Exception):
+                    pass
+                logger.info("[STREAM] Web search dropped (exceeded time budget) — proceeding with RAG only")
 
-        _rag_quality = rag_ctx.get("quality", "none")
-        if _rag_quality == "high" and web_results:
-            logger.info(f"[STREAM] RAG quality=high → discarding {len(web_results)} web results (RAG is sufficient)")
-            web_results = []
-        if _rag_quality == "none":
-            _s_preserve = {}
-            for _pk in ("_general_knowledge_fallback", "_cross_domain_mismatch", "_stage1_subject"):
-                if rag_ctx.get(_pk):
-                    _s_preserve[_pk] = rag_ctx[_pk]
-            rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                       "vector_hits": [], "source": "none", "quality": "none", **_s_preserve}
-            if web_results:
-                rag_ctx["source"] = "web"
-                rag_ctx["quality"] = "web"
-            logger.info(f"[STREAM] No embeddings match (outside syllabus) → RAG skipped | web={len(web_results)} (web+LLM mode)")
-        else:
-            logger.info(f"[STREAM] RAG quality={_rag_quality} | web={len(web_results)} (RAG=base, web=polish)")
+            _rag_quality = rag_ctx.get("quality", "none")
+            if _rag_quality == "high" and web_results:
+                logger.info(f"[STREAM] RAG quality=high → discarding {len(web_results)} web results (RAG is sufficient)")
+                web_results = []
+            if _rag_quality == "none":
+                _s_preserve = {}
+                for _pk in ("_general_knowledge_fallback", "_cross_domain_mismatch", "_stage1_subject"):
+                    if rag_ctx.get(_pk):
+                        _s_preserve[_pk] = rag_ctx[_pk]
+                rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+                           "vector_hits": [], "source": "none", "quality": "none", **_s_preserve}
+                if web_results:
+                    rag_ctx["source"] = "web"
+                    rag_ctx["quality"] = "web"
+                logger.info(f"[STREAM] No embeddings match (outside syllabus) → RAG skipped | web={len(web_results)} (web+LLM mode)")
+            else:
+                logger.info(f"[STREAM] RAG quality={_rag_quality} | web={len(web_results)} (RAG=base, web=polish)")
 
-        if _notes_chapters:
-            rag_ctx["_chapter_topics"] = _notes_chapters
+            if _notes_chapters:
+                rag_ctx["_chapter_topics"] = _notes_chapters
             logger.info(f"[STREAM] Injected {len(_notes_chapters)} chapter topic lists for notes context")
 
     _t_phase2_done = _time_mod.time()

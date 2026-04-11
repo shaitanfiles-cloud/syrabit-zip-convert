@@ -265,7 +265,7 @@ async def stage1_resolve_topic(query: str, context: dict = None) -> Optional[dic
     try:
         raw = await asyncio.wait_for(
             _call_llm_raw(messages, model=model_name, max_tokens=256, provider_list=providers),
-            timeout=1.5,
+            timeout=0.8,
         )
         dur = (time.perf_counter() - t0) * 1000
 

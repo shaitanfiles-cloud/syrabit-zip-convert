@@ -31,8 +31,8 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **Optional Authentication:** Chat, History, and Profile pages are accessible to anonymous users via a `syrabit_anon_id`. Conversations are persisted in Redis and PostgreSQL.
 - **Security:** Uses ASGI-native `SecurityHeadersMiddleware` and prompt safety guardrails.
 - **Privacy:** Tracks DPDP Act consent per-user.
-- **Performance Optimizations:** Includes bounded content caching, efficient JWT decoding, thread pooling, MongoDB indexing, hierarchy caching, AsyncOpenAI client pooling, instant fast-path responses for casual greetings, and fully parallelized chat pre-processing (Phase 0: subject context, stage1, search scope, followup, history all run concurrently via `asyncio.gather`).
-- **Chat Latency:** Non-streaming chat targets <4s. Default model for non-streaming chat is `meta-llama/llama-4-scout-17b-16e-instruct` (Groq, fastest provider). Chat provider timeout is 4s (content generation: 30s). Phase 0 parallel context typically completes in ~0.4-0.6s.
+- **Performance Optimizations:** Includes bounded content caching, efficient JWT decoding, thread pooling, MongoDB indexing, hierarchy caching, AsyncOpenAI client pooling, instant fast-path responses for casual greetings, and fully parallelized chat pre-processing (Phase 0: subject context, stage1, followup, history all run concurrently via `asyncio.gather`; search_scope fires in parallel but is non-blocking — used if ready, dropped if not). RAG fast-skip: when no subject_id/subject_name and Stage 1's subject doesn't exist in DB, skips entire RAG pipeline (~0.8s saving).
+- **Chat Latency:** Streaming TTFT ~0.7s, total ~1.8s cold / ~1.2s warm. SLM pool TTFT timeout: 1.0s. Stage 1 timeout: 0.8s. Search scope timeout: 0.35s (fire-and-forget). Pre-LLM budget: 2.0s. Default model: `meta-llama/llama-4-scout-17b-16e-instruct` (Groq). Web search skipped for queries <100 chars or casual/general intent.
 - **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection, and SEO prompts generate FAQ blocks and specific citations.
 
 **Frontend Architecture:**
