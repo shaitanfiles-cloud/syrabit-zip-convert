@@ -801,13 +801,15 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
     Falls back to direct client if CF gateway connection fails.
     """
     _indic = _is_indic_lang(response_lang)
+    _SARVAM_THINK_OVERHEAD = 200
     if _indic:
-        api_max = max_tokens
+        api_max = max_tokens + _SARVAM_THINK_OVERHEAD
         patched = messages
-        logger.info(f"[SARVAM-INDIC] Skipping think budget for {response_lang} — model={model}, max_tokens={api_max}")
+        logger.info(f"[SARVAM-INDIC] Think overhead +{_SARVAM_THINK_OVERHEAD} for {response_lang} — model={model}, api_max={api_max}")
     else:
         api_max = max_tokens + SARVAM_THINK_BUFFER
         patched = _inject_think_budget(messages)
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN", "hi": "hi-IN"}
     payload = {
         "model": model,
         "messages": patched,
@@ -818,6 +820,8 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         "presence_penalty": 0,
         "stream": True,
     }
+    if _indic and response_lang in _SARVAM_LANG_CODE_MAP:
+        payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
     client = sarvam_llm_client
     if client is None:
         raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")

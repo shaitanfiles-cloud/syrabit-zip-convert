@@ -1200,9 +1200,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _LANG_NAME_MAP = {"as": "Assamese", "hi": "Hindi"}
     _target_lang_name = _LANG_NAME_MAP.get(_resp_lang)
     if _want_translate and _target_lang_name:
+        _script_map = {"Assamese": "অসমীয়া", "Hindi": "हिन्दी"}
+        _script_name = _script_map.get(_target_lang_name, _target_lang_name)
         _indic_system_prompt = (
-            f"You are Syra, AI tutor on Syrabit.ai. Respond DIRECTLY in {_target_lang_name} script. "
-            f"Keep technical terms, formulas, proper nouns in English. "
+            f"You are Syra, AI tutor on Syrabit.ai. "
+            f"MANDATORY: Your ENTIRE response must be in {_target_lang_name} ({_script_name}) script. "
+            f"Never respond in English. Only keep technical terms, formulas, proper nouns in English. "
             f"Tone: warm, encouraging. Use Markdown, bullets, numbered lists. "
             f"Length: 30-60 words default, 200 words max. Match depth to question type.\n"
         )
