@@ -310,13 +310,13 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         logger.info(f"[NON-STREAM] Intent upgrade: syllabus → notes (Stage 1 has search_keywords, query is content-seeking)")
 
     _is_casual_sync = _detected_intent in ("casual", "general")
-    _skip_rag_sync = _detected_intent in ("casual", "general", "syllabus")
+    _skip_web_sync = _detected_intent in ("casual",)
 
     _rag_query = msg.message
-    if _topic_metadata and _topic_metadata.get("search_keywords") and not _skip_rag_sync:
+    if _topic_metadata and _topic_metadata.get("search_keywords"):
         _rag_query = build_enhanced_query(msg.message, _topic_metadata)
         if _rag_query != msg.message:
-            logger.info(f"[PIPELINE][S1] Enhanced RAG query: '{_rag_query[:80]}'")
+            logger.info(f"[PIPELINE][S1] Enhanced search query: '{_rag_query[:80]}'")
 
     async def _ns_fetch_syllabus():
         if not (ctx_board_id and _syl_class_id):
@@ -373,77 +373,41 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     _t_phase0_done = _time_mod.time()
     logger.info(f"[NON-STREAM][TIMING] Phase 0 (parallel context): {_t_phase0_done - _t_phase0:.3f}s")
 
-    if _skip_rag_sync:
+    rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+               "vector_hits": [], "source": "none", "quality": "none",
+               "_general_knowledge_fallback": True}
+    _s1_subject_str = (_topic_metadata.get("subject", "") if _topic_metadata else "").strip()
+    if _s1_subject_str:
+        rag_ctx["_stage1_subject"] = _s1_subject_str
+
+    if document_text:
+        rag_ctx = await resolve_rag_context(
+            _rag_query, subject_id=msg.subject_id, subject_name=msg.subject_name,
+            document_text=document_text, intent=_detected_intent,
+        )
+
+    if _skip_web_sync:
         web_results = []
-        rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                   "vector_hits": [], "source": "none", "quality": "none"}
         history_messages = await _ns_fetch_history()
         syllabus = await _ns_fetch_syllabus()
-        _ns_resolved_syl_sid = msg.subject_id or (getattr(_ns_route, "subject_id", "") if _ns_route else "")
-        if _detected_intent == "syllabus" and _ns_resolved_syl_sid:
-            try:
-                _ns_syl_chapters = await db.chapters.find(
-                    {"subject_id": _ns_resolved_syl_sid},
-                    {"_id": 0, "title": 1, "description": 1, "order_index": 1}
-                ).sort("order_index", 1).to_list(100)
-                if _ns_syl_chapters:
-                    rag_ctx["_syllabus_chapters"] = _ns_syl_chapters
-                    rag_ctx["source"] = "rag"
-                    rag_ctx["quality"] = "high"
-                    _ns_syl_subj_name = msg.subject_name or getattr(_ns_route, "subject_name", "") or getattr(_ns_route, "subject", "") or ""
-                    rag_ctx["subjects"] = [{"id": _ns_resolved_syl_sid, "name": _ns_syl_subj_name}]
-                    _ns_syl_subj_doc = await db.subjects.find_one({"id": _ns_resolved_syl_sid}, {"_id": 0, "name": 1, "icon": 1, "gradient": 1, "board_name": 1, "class_name": 1, "stream_name": 1})
-                    if _ns_syl_subj_doc:
-                        rag_ctx["subjects"] = [{"id": _ns_resolved_syl_sid, "name": _ns_syl_subj_doc.get("name", _ns_syl_subj_name), "icon": _ns_syl_subj_doc.get("icon", ""), "gradient": _ns_syl_subj_doc.get("gradient", "")}]
-                        rag_ctx["content_card_meta"] = {
-                            "card_name": "Syllabus",
-                            "lesson_name": _ns_syl_subj_doc.get("name", _ns_syl_subj_name),
-                            "subject_name": _ns_syl_subj_doc.get("name", _ns_syl_subj_name),
-                            "board_name": _ns_syl_subj_doc.get("board_name", ""),
-                            "class_name": _ns_syl_subj_doc.get("class_name", ""),
-                        }
-                    logger.info(f"[NON-STREAM] Syllabus intent: fetched {len(_ns_syl_chapters)} chapters for subject {_ns_resolved_syl_sid}")
-            except Exception as _ns_ch_err:
-                logger.warning(f"[NON-STREAM] Syllabus chapter fetch failed: {_ns_ch_err}")
     else:
-        _ns_pre_syl = getattr(_ns_route, 'raw_syl_match', None) if _ns_route else None
-        if _ns_pre_syl and msg.subject_id and getattr(_ns_pre_syl, 'subject_id', None) != msg.subject_id:
-            _ns_pre_syl = None
-        _ns_rag_task = asyncio.create_task(resolve_rag_context(
-            _rag_query,
-            subject_id=msg.subject_id,
-            subject_name=msg.subject_name,
-            document_text=document_text,
-            intent=_detected_intent,
-            db_category=_detected_db_category,
-            pre_syl_match=_ns_pre_syl,
-            topic_metadata=_topic_metadata,
-        ))
         _ns_web_task = asyncio.create_task(_safe_web_search(
-            query=_rag_query, num_results=5,
+            query=_rag_query, num_results=8,
             board_name=ctx_board_name,
             class_name=ctx_class_name,
             subject_name=msg.subject_name or "",
             scoped_query=_ns_scoped_query,
+            topic_metadata=_topic_metadata,
         ))
         _ns_hist_task = asyncio.create_task(_ns_fetch_history())
         _ns_syl_task = asyncio.create_task(_ns_fetch_syllabus())
         _NS_BUDGET = 1.5
         done, pending = await asyncio.wait(
-            [_ns_rag_task, _ns_web_task, _ns_hist_task, _ns_syl_task],
+            [_ns_web_task, _ns_hist_task, _ns_syl_task],
             timeout=_NS_BUDGET,
         )
         for t in pending:
             t.cancel()
-        _empty_rag = {
-            "chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-            "vector_hits": [], "source": "none", "quality": "none",
-        }
-        try:
-            rag_ctx = _ns_rag_task.result() if _ns_rag_task in done else _empty_rag
-        except Exception as _rag_err:
-            logger.warning(f"[NON-STREAM] RAG task failed: {_rag_err}")
-            rag_ctx = _empty_rag
         try:
             web_results = _ns_web_task.result() if _ns_web_task in done else []
         except Exception as _web_err:
@@ -458,25 +422,10 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             syllabus = _ns_syl_task.result() if _ns_syl_task in done else None
         except Exception:
             syllabus = None
-        if _ns_rag_task not in done:
-            logger.warning(f"[NON-STREAM] RAG timed out after {_NS_BUDGET}s")
-        _ns_rag_quality = rag_ctx.get("quality", "none")
-        if _ns_rag_quality == "high" and web_results:
-            logger.info(f"[NON-STREAM] RAG quality=high → discarding {len(web_results)} web results (RAG is sufficient)")
-            web_results = []
-        if _ns_rag_quality == "none":
-            _ns_preserve = {}
-            for _pk in ("_general_knowledge_fallback", "_cross_domain_mismatch", "_stage1_subject"):
-                if rag_ctx.get(_pk):
-                    _ns_preserve[_pk] = rag_ctx[_pk]
-            rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                       "vector_hits": [], "source": "none", "quality": "none", **_ns_preserve}
-            if web_results:
-                rag_ctx["source"] = "web"
-                rag_ctx["quality"] = "web"
-            logger.info(f"[NON-STREAM] No embeddings match (outside syllabus) → RAG skipped | web={len(web_results)} (web+LLM mode)")
-        else:
-            logger.info(f"[NON-STREAM] RAG quality={_ns_rag_quality} | web={len(web_results)} (RAG=base, web=polish)")
+        if web_results and rag_ctx.get("source") != "document":
+            rag_ctx["source"] = "web"
+            rag_ctx["quality"] = "web"
+        logger.info(f"[NON-STREAM] Web search: {len(web_results)} results | intent={_detected_intent} | source={rag_ctx.get('source')}")
 
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -854,8 +803,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
 
-    _PRE_LLM_BUDGET = 2.0
-
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
 
@@ -999,7 +946,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         logger.info(f"[STREAM] Intent upgrade: syllabus → notes (Stage 1 has search_keywords, query is content-seeking)")
 
     _is_casual = _stream_intent in ("casual", "general")
-    _skip_rag_stream = _stream_intent in ("casual", "general", "syllabus")
+    _skip_web_stream = _stream_intent in ("casual",)
 
     subj_ctx = _subj_ctx_result
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
@@ -1046,187 +993,77 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_phase1_done = _time_mod.time()
     logger.info(f"[STREAM][TIMING] Phase 0+1 (context+doc+scope): {_t_phase1_done - _t_phase0:.3f}s")
 
-    # ── Phase 2: RAG + history + syllabus (all parallel, gate LLM), web search (best-effort, never blocks LLM) ──
+    # ── Phase 2: Web search + history + syllabus (all parallel) ──
     _t_phase2 = _time_mod.time()
-    _deadline = _stream_t0 + _PRE_LLM_BUDGET
 
     _s_rag_query = msg.message
-    if _s_topic_meta and _s_topic_meta.get("search_keywords") and not _skip_rag_stream:
+    if _s_topic_meta and _s_topic_meta.get("search_keywords"):
         _s_rag_query = _s_enhance_q(msg.message, _s_topic_meta)
         if _s_rag_query != msg.message:
-            logger.info(f"[PIPELINE][S1][STREAM] Enhanced RAG query: '{_s_rag_query[:80]}'")
+            logger.info(f"[PIPELINE][S1][STREAM] Enhanced search query: '{_s_rag_query[:80]}'")
 
     _rag_quality = "none"
     try:
         syllabus = await _syllabus_task
     except Exception:
         syllabus = None
-    if _skip_rag_stream:
+
+    rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
+               "vector_hits": [], "source": "none", "quality": "none",
+               "_general_knowledge_fallback": True}
+    _s1_subject_str = (_s_topic_meta.get("subject", "") if _s_topic_meta else "").strip()
+    if _s1_subject_str:
+        rag_ctx["_stage1_subject"] = _s1_subject_str
+    raw_conv = _prefetched_conv
+
+    if document_text:
+        rag_ctx = await resolve_rag_context(
+            _s_rag_query, subject_id=msg.subject_id, subject_name=msg.subject_name,
+            document_text=document_text, intent=_stream_intent,
+        )
+
+    if _skip_web_stream:
         web_results = []
-        raw_conv = _prefetched_conv
-        rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                   "vector_hits": [], "source": "none", "quality": "none"}
-        _resolved_syl_sid = msg.subject_id or (getattr(_sr_route, "subject_id", "") if _sr_route else "")
-        if _stream_intent == "syllabus" and _resolved_syl_sid:
-            try:
-                _syl_chapters = await db.chapters.find(
-                    {"subject_id": _resolved_syl_sid},
-                    {"_id": 0, "title": 1, "description": 1, "order_index": 1}
-                ).sort("order_index", 1).to_list(100)
-                if _syl_chapters:
-                    rag_ctx["_syllabus_chapters"] = _syl_chapters
-                    rag_ctx["source"] = "rag"
-                    rag_ctx["quality"] = "high"
-                    _syl_subj_name = msg.subject_name or getattr(_sr_route, "subject_name", "") or getattr(_sr_route, "subject", "") or ""
-                    rag_ctx["subjects"] = [{"id": _resolved_syl_sid, "name": _syl_subj_name}]
-                    _syl_subj_doc = await db.subjects.find_one({"id": _resolved_syl_sid}, {"_id": 0, "name": 1, "icon": 1, "gradient": 1, "board_name": 1, "class_name": 1, "stream_name": 1})
-                    if _syl_subj_doc:
-                        rag_ctx["subjects"] = [{"id": _resolved_syl_sid, "name": _syl_subj_doc.get("name", _syl_subj_name), "icon": _syl_subj_doc.get("icon", ""), "gradient": _syl_subj_doc.get("gradient", "")}]
-                        rag_ctx["content_card_meta"] = {
-                            "card_name": "Syllabus",
-                            "lesson_name": _syl_subj_doc.get("name", _syl_subj_name),
-                            "subject_name": _syl_subj_doc.get("name", _syl_subj_name),
-                            "board_name": _syl_subj_doc.get("board_name", ""),
-                            "class_name": _syl_subj_doc.get("class_name", ""),
-                        }
-                    logger.info(f"[STREAM] Syllabus intent: fetched {len(_syl_chapters)} chapters for subject {_resolved_syl_sid}")
-            except Exception as _ch_err:
-                logger.warning(f"[STREAM] Syllabus chapter fetch failed: {_ch_err}")
-        _rag_quality = rag_ctx.get("quality", "none")
     else:
-        _no_subject_ctx = not msg.subject_id and not msg.subject_name and not _is_card_context
-        _s1_subject_str = (_s_topic_meta.get("subject", "") if _s_topic_meta else "").strip()
-        _s1_has_db_subject = False
-        if _s1_subject_str and _no_subject_ctx:
+        async def _safe_web_search_stream():
             try:
-                import re as _re_fast
-                _s1_fast_check = await db.subjects.find_one(
-                    {"name": {"$regex": f"^{_re_fast.escape(_s1_subject_str)}$", "$options": "i"}, "status": "published"},
-                    {"_id": 0, "id": 1}
+                return await web_search_with_fallback(
+                    _s_rag_query, num_results=8,
+                    board_name=ctx_board_name,
+                    class_name=ctx_class_name,
+                    subject_name=msg.subject_name or "",
+                    scoped_query=_sr_scoped_query,
+                    topic_metadata=_s_topic_meta,
                 )
-                _s1_has_db_subject = bool(_s1_fast_check)
-            except Exception:
-                pass
-        elif _s1_subject_str:
-            _s1_has_db_subject = True
-        _fast_skip_rag = _no_subject_ctx and not _s1_has_db_subject and _stream_intent in ("notes", "general")
+            except Exception as e:
+                logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
+                return []
 
-        if _fast_skip_rag:
-            logger.info(f"[STREAM][FAST] Skipping RAG — no subject context, intent={_stream_intent}")
-            rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                       "vector_hits": [], "source": "none", "quality": "none",
-                       "_general_knowledge_fallback": True}
-            raw_conv = _prefetched_conv
+        _web_task = asyncio.create_task(_safe_web_search_stream())
+        _WEB_BUDGET = 1.5
+        done, _ = await asyncio.wait({_web_task}, timeout=_WEB_BUDGET, return_when=asyncio.ALL_COMPLETED)
+
+        if _web_task in done:
+            try:
+                web_results = _web_task.result()
+            except Exception:
+                web_results = []
+        else:
             web_results = []
-            _notes_chapters = []
-            _rag_quality = "none"
-        else:
-            _pre_syl = getattr(_sr_route, 'raw_syl_match', None) if _sr_route else None
-            if _pre_syl and msg.subject_id and getattr(_pre_syl, 'subject_id', None) != msg.subject_id:
-                _pre_syl = None
-            _rag_task = asyncio.create_task(resolve_rag_context(
-                _s_rag_query, subject_id=msg.subject_id,
-                subject_name=msg.subject_name, document_text=document_text,
-                intent=_stream_intent,
-                db_category=_stream_db_category,
-                pre_syl_match=_pre_syl,
-                topic_metadata=_s_topic_meta,
-            ))
-            _history_ready = _prefetched_conv
-
-        if not _fast_skip_rag and _stream_intent in _CONTENT_INTENTS_SET and msg.subject_id:
+            _web_task.cancel()
             try:
-                _notes_chapters = await db.chapters.find(
-                    {"subject_id": msg.subject_id},
-                    {"_id": 0, "title": 1, "description": 1, "order_index": 1}
-                ).sort("order_index", 1).to_list(50)
-            except Exception:
-                _notes_chapters = []
-        else:
-            _notes_chapters = []
+                await _web_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            logger.warning("[STREAM] Web search timed out — proceeding without web context")
 
-        if not _fast_skip_rag:
-            async def _safe_web_search_stream():
-                try:
-                    return await web_search_with_fallback(
-                        _s_rag_query, num_results=5,
-                        board_name=ctx_board_name,
-                        class_name=ctx_class_name,
-                        subject_name=msg.subject_name or "",
-                        scoped_query=_sr_scoped_query,
-                    )
-                except Exception as e:
-                    logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
-                    return []
-
-            _skip_web = len(msg.message) < 100 or _is_card_context or _stream_intent in ("casual", "general")
-            if _skip_web:
-                _web_done_future = asyncio.get_event_loop().create_future()
-                _web_done_future.set_result([])
-                _web_task = asyncio.ensure_future(_web_done_future)
-            else:
-                _web_task = asyncio.create_task(_safe_web_search_stream())
-
-            _essential = {_rag_task}
-            _essential_budget = max(0.5, _deadline - _time_mod.time())
-            done, _ = await asyncio.wait(_essential, timeout=_essential_budget, return_when=asyncio.ALL_COMPLETED)
-
-            _empty_rag = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                          "vector_hits": [], "source": "none", "quality": "none"}
-
-            if _rag_task not in done:
-                _rag_task.cancel()
-                try:
-                    await _rag_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                logger.warning("[STREAM] RAG timed out — proceeding without RAG context")
-
-            try:
-                rag_ctx = _rag_task.result() if _rag_task.done() and not _rag_task.cancelled() else _empty_rag
-            except Exception as _rag_exc:
-                logger.warning(f"[STREAM] RAG task raised: {_rag_exc}")
-                rag_ctx = _empty_rag
-            raw_conv = _history_ready
-
-            if _web_task.done() and not _web_task.cancelled():
-                try:
-                    web_results = _web_task.result()
-                except Exception:
-                    web_results = []
-            else:
-                web_results = []
-                _web_task.cancel()
-                try:
-                    await _web_task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                logger.info("[STREAM] Web search dropped (exceeded time budget) — proceeding with RAG only")
-
-            _rag_quality = rag_ctx.get("quality", "none")
-            if _rag_quality == "high" and web_results:
-                logger.info(f"[STREAM] RAG quality=high → discarding {len(web_results)} web results (RAG is sufficient)")
-                web_results = []
-            if _rag_quality == "none":
-                _s_preserve = {}
-                for _pk in ("_general_knowledge_fallback", "_cross_domain_mismatch", "_stage1_subject"):
-                    if rag_ctx.get(_pk):
-                        _s_preserve[_pk] = rag_ctx[_pk]
-                rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
-                           "vector_hits": [], "source": "none", "quality": "none", **_s_preserve}
-                if web_results:
-                    rag_ctx["source"] = "web"
-                    rag_ctx["quality"] = "web"
-                logger.info(f"[STREAM] No embeddings match (outside syllabus) → RAG skipped | web={len(web_results)} (web+LLM mode)")
-            else:
-                logger.info(f"[STREAM] RAG quality={_rag_quality} | web={len(web_results)} (RAG=base, web=polish)")
-
-            if _notes_chapters:
-                rag_ctx["_chapter_topics"] = _notes_chapters
-            logger.info(f"[STREAM] Injected {len(_notes_chapters)} chapter topic lists for notes context")
+        if web_results and rag_ctx.get("source") != "document":
+            rag_ctx["source"] = "web"
+            rag_ctx["quality"] = "web"
+        logger.info(f"[STREAM] Web search: {len(web_results)} results | intent={_stream_intent} | source={rag_ctx.get('source')}")
 
     _t_phase2_done = _time_mod.time()
-    logger.info(f"[STREAM][TIMING] Phase 2 (RAG+web+history): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
+    logger.info(f"[STREAM][TIMING] Phase 2 (web+history): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(

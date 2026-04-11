@@ -405,7 +405,7 @@ export default function ChatPage() {
                 for (let j = messages.length - 1; j >= 0; j--) { if (messages[j].role === 'user') { lastUIdx = j; break; } }
                 return messages.map((msg, i) => (
                   <div key={msg.id || i} ref={i === lastUIdx ? lastUserMsgRef : undefined}>
-                    <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} />
+                    <MessageBubble msg={msg} isLast={i === messages.length - 1} onCopy={handleCopy} onRegenerate={msg.role === 'assistant' && i === messages.length - 1 ? handleRegenerate : null} messageIndex={i} conversationId={conversationId} responseLang={responseLang} />
                   </div>
                 ));
               })()}
