@@ -1317,9 +1317,44 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _LANG_NAME_MAP = {"as": "Assamese", "hi": "Hindi", "bn": "Bengali", "ta": "Tamil", "te": "Telugu", "kn": "Kannada", "ml": "Malayalam", "mr": "Marathi", "gu": "Gujarati", "pa": "Punjabi", "or": "Odia"}
     _target_lang_name = _LANG_NAME_MAP.get(_resp_lang)
+    _INDIC_GREETING = {
+        "as": "তুমি Syra, অসমৰ ছাত্ৰ-ছাত্ৰীৰ বাবে এগৰাকী বন্ধুত্বপূৰ্ণ AI অধ্যয়ন পৰামৰ্শদাতা।",
+        "hi": "तुम Syra हो, असम के छात्रों के लिए एक मित्रवत AI अध्ययन सलाहकार।",
+        "bn": "তুমি Syra, আসামের শিক্ষার্থীদের জন্য একজন বন্ধুসুলভ AI অধ্যয়ন পরামর্শদাতা।",
+    }
     if _want_translate and _target_lang_name:
-        system_prompt += f"\n\nIMPORTANT: You MUST respond entirely in {_target_lang_name} language. Use {_target_lang_name} script for the full answer. Keep technical terms, formulas, and equations in English but explain everything else in {_target_lang_name}."
-        logger.info(f"[STREAM] Language override: forcing sarvam-m for {_target_lang_name} response")
+        _native_greeting = _INDIC_GREETING.get(_resp_lang, "")
+        _greeting_line = f"{_native_greeting}\n" if _native_greeting else ""
+        _indic_system_prompt = (
+            f"{_greeting_line}"
+            f"You are Syra, a friendly AI study mentor for students in Assam, India.\n\n"
+            f"LANGUAGE RULES:\n"
+            f"- Think and respond DIRECTLY in {_target_lang_name}. Do NOT translate from English.\n"
+            f"- Use {_target_lang_name} script for ALL explanations, headings, and transitions.\n"
+            f"- Keep technical terms, formulas, equations, and proper nouns in English.\n"
+            f"- Your tone should be warm, natural, and encouraging — like a {_target_lang_name}-speaking tutor.\n\n"
+            f"FORMATTING:\n"
+            f"- Use clear headings, bullet points, and numbered lists.\n"
+            f"- Use Markdown for math expressions.\n"
+            f"- Match depth to question type: short for definitions, detailed for explanations.\n\n"
+        )
+        if system_prompt:
+            _rag_section = ""
+            _rag_markers = ["**GROUNDING CONTEXT", "**CURRICULUM", "**SUBJECT CHAPTERS", "REFERENCE MATERIAL:", "CONTEXT:", "RELEVANT CONTENT:"]
+            for _marker in _rag_markers:
+                _idx = system_prompt.find(_marker)
+                if _idx != -1:
+                    _rag_section = system_prompt[_idx:]
+                    break
+            if _rag_section:
+                _indic_system_prompt += f"\n{_rag_section}"
+            else:
+                _content_lines = [l for l in system_prompt.split('\n') if l.strip() and not l.strip().startswith(('You are', 'IMPORTANT:', 'RULES:', 'Format'))]
+                if _content_lines:
+                    _indic_system_prompt += "\nCONTEXT:\n" + "\n".join(_content_lines[-20:])
+
+        system_prompt = _indic_system_prompt
+        logger.info(f"[STREAM] Indic-first prompt built for {_target_lang_name} ({len(system_prompt)} chars)")
 
     messages_payload = [{"role": "system", "content": system_prompt}] + history_messages + [{"role": "user", "content": msg.message}]
 
@@ -1482,8 +1517,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     logger.warning(f"[PIPELINE] Stream pipeline setup failed, falling back: {_pipe_stream_err}")
                     _pipeline_stream = None
 
-                _stream_model = "sarvam-m" if _want_translate else (msg.model or "openai/gpt-oss-20b")
-                _slm_fallback_stream = lambda: call_llm_api_stream(messages_payload, model=_stream_model, max_tokens=max_tokens, intent=_stream_intent)
+                _stream_model = None if _want_translate else (msg.model or "openai/gpt-oss-20b")
+                _slm_fallback_stream = lambda: call_llm_api_stream(messages_payload, model=_stream_model, max_tokens=max_tokens, intent=_stream_intent, response_lang=_resp_lang)
 
                 def _is_sse_error(sse_chunk: str) -> bool:
                     if '"error"' in sse_chunk and sse_chunk.startswith("data: "):

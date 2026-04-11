@@ -2,6 +2,13 @@
 import os, re, json, asyncio, uuid, time, logging, httpx, hashlib
 import openai as _oai
 
+_INDIC_LANG_CODES = frozenset({"as", "hi", "bn", "ta", "te", "kn", "ml", "mr", "gu", "pa", "or"})
+
+def _is_indic_lang(lang: str | None) -> bool:
+    return bool(lang and lang.lower().strip() in _INDIC_LANG_CODES)
+
+_SARVAM_INDIC_MODEL_PREFERENCE = ["sarvam-30b", "sarvam-m", "sarvam-105b"]
+
 
 class LlmResult(str):
     """String subclass that carries the provider name that produced the result."""
@@ -787,18 +794,20 @@ def _inject_think_budget(messages: list) -> list:
         out.insert(0, {"role": "system", "content": _THINK_BUDGET_HINT})
     return out
 
-async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int):
+async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: int, *, response_lang: str = ""):
     """Token-by-token SSE streaming from Sarvam — reuses persistent sarvam_llm_client (zero TCP overhead).
-    Adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the user's answer budget.
+    For Indic languages: skips think budget injection and think buffer to reduce TTFT.
+    For English: adds SARVAM_THINK_BUFFER so <think> reasoning never crowds out the answer budget.
     Falls back to direct client if CF gateway connection fails.
-
-    Speed knobs applied:
-      • temperature=0.1
-      • top_p/freq/pres penalties all zeroed for minimal compute
-      • _inject_think_budget — caps reasoning tokens at the prompt level
     """
-    api_max = max_tokens + SARVAM_THINK_BUFFER
-    patched = _inject_think_budget(messages)
+    _indic = _is_indic_lang(response_lang)
+    if _indic:
+        api_max = max_tokens
+        patched = messages
+        logger.info(f"[SARVAM-INDIC] Skipping think budget for {response_lang} — model={model}, max_tokens={api_max}")
+    else:
+        api_max = max_tokens + SARVAM_THINK_BUFFER
+        patched = _inject_think_budget(messages)
     payload = {
         "model": model,
         "messages": patched,
@@ -982,19 +991,37 @@ async def _stream_bedrock(messages: list, model: str, max_tokens: int):
         yield item
 
 
-async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = ""):
+async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int = 2048, intent: str = "", response_lang: str = ""):
     """
     Real token-by-token streaming from the LLM provider.
     Uses native streaming APIs for instant first-token delivery.
     Supports: Sarvam, Groq, Fireworks, Gemini, Cerebras, xAI, Bedrock.
     'openai/gpt-oss-20b' triggers the smart SLM pool (Fireworks/Groq/Cerebras/Gemini).
+    When response_lang is an Indic code (as/hi/etc), optimized Sarvam routing is applied.
     """
+    _indic_mode = _is_indic_lang(response_lang)
+    _stream_t0 = time.monotonic()
+
+    if _indic_mode:
+        _resolved_indic_model = None
+        for _pref_model in _SARVAM_INDIC_MODEL_PREFERENCE:
+            _prov, _pkey = _resolve_provider_for_model(_pref_model, _LLM_PROVIDERS)
+            if _prov == "sarvam" and _pkey:
+                _resolved_indic_model = _pref_model
+                break
+        if _resolved_indic_model:
+            model = _resolved_indic_model
+            logger.info(f"[INDIC] Auto-selected Sarvam model '{model}' for {response_lang} response")
+        else:
+            logger.warning(f"[INDIC] No Sarvam model available from preference chain, using default")
+
     use_model_raw = model or LLM_MODEL
     use_model_resolved = _MODEL_ALIAS_MAP.get(use_model_raw, use_model_raw)
-    provider, key = _resolve_provider_for_model(use_model_resolved, _LLM_PROVIDERS_CHAT)
+    _prov_list = _LLM_PROVIDERS if _indic_mode else _LLM_PROVIDERS_CHAT
+    provider, key = _resolve_provider_for_model(use_model_resolved, _prov_list)
     if use_model_raw != use_model_resolved:
         logger.info(f"Model alias '{use_model_raw}' → '{use_model_resolved}' ({provider})")
-    use_model = _safe_model_for_provider(use_model_resolved, provider, _LLM_PROVIDERS_CHAT)
+    use_model = _safe_model_for_provider(use_model_resolved, provider, _prov_list)
     if use_model != use_model_resolved:
         logger.info(f"Model '{use_model_resolved}' not compatible with {provider} → using '{use_model}'")
 
@@ -1112,9 +1139,10 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         _mt = _clamp_max_tokens(p_model, max_tokens)
         if p_name == "sarvam":
             _input_est = sum(len(m.get("content", "")) for m in messages) // 4
-            _sarvam_cap = max(256, 7192 - _input_est - SARVAM_THINK_BUFFER - 100)
+            _think_overhead = 0 if _indic_mode else SARVAM_THINK_BUFFER
+            _sarvam_cap = max(256, 7192 - _input_est - _think_overhead - 100)
             _mt = min(_mt, _sarvam_cap)
-            async for token in _stream_sarvam(messages, p_key, p_model, _mt):
+            async for token in _stream_sarvam(messages, p_key, p_model, _mt, response_lang=response_lang):
                 yield token
         elif p_name == "gemini":
             logger.info(f"LLM stream: provider=gemini, model={p_model}")
@@ -1277,10 +1305,43 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
 
+    # ── Indic Sarvam with runtime model fallback ─────────────────────────────────
+    if _indic_mode and provider == "sarvam":
+        _indic_success = False
+        _fallback_chain = [use_model] + [m for m in _SARVAM_INDIC_MODEL_PREFERENCE if m != use_model]
+        for _try_model in _fallback_chain:
+            try:
+                _chunk_n = 0
+                _try_t0 = time.monotonic()
+                async for chunk in _emit_tokens(_stream_from_provider(provider, key, _try_model)):
+                    if _chunk_n == 0:
+                        _ttft_ms = (time.monotonic() - _try_t0) * 1000
+                        logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} model={_try_model} provider={provider}")
+                    _chunk_n += 1
+                    yield chunk
+                _total_ms = (time.monotonic() - _try_t0) * 1000
+                logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} lang={response_lang} model={_try_model} provider={provider}")
+                yield f"data: {json.dumps({'__provider': provider})}\n\n"
+                _indic_success = True
+                break
+            except Exception as _fb_err:
+                logger.warning(f"[INDIC] Sarvam model '{_try_model}' failed ({type(_fb_err).__name__}: {str(_fb_err)[:120]}) — trying next in chain")
+                continue
+        if not _indic_success:
+            yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
+        return
+
     # ── All other models: single provider ───────────────────────────────────────
     try:
+        _chunk_n = 0
         async for chunk in _emit_tokens(_stream_from_provider(provider, key, use_model)):
+            if _chunk_n == 0:
+                _ttft_ms = (time.monotonic() - _stream_t0) * 1000
+                logger.info(f"[EN-PERF] TTFT={_ttft_ms:.0f}ms model={use_model} provider={provider}")
+            _chunk_n += 1
             yield chunk
+        _total_ms = (time.monotonic() - _stream_t0) * 1000
+        logger.info(f"[EN-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} model={use_model} provider={provider}")
         yield f"data: {json.dumps({'__provider': provider})}\n\n"
     except HTTPException as http_err:
         yield f"data: {json.dumps({'error': str(http_err.detail)})}\n\n"
