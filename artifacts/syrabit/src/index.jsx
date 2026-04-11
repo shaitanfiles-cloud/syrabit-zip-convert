@@ -19,12 +19,19 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
         reg.update();
         setInterval(() => reg.update(), 60 * 60 * 1000);
 
+        if (navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage("precacheApi");
+        }
+
         reg.addEventListener("updatefound", () => {
           const worker = reg.installing;
           if (worker) {
             worker.addEventListener("statechange", () => {
               if (worker.state === "installed" && navigator.serviceWorker.controller) {
                 worker.postMessage("skipWaiting");
+              }
+              if (worker.state === "activated") {
+                worker.postMessage("precacheApi");
               }
             });
           }

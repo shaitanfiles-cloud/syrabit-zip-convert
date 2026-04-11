@@ -148,8 +148,8 @@
 
     <script>
       (function(){
-        var V='8';
-        var keep=new Set(['syrabit-static-v'+V,'syrabit-runtime-v'+V]);
+        var V='9';
+        var keep=new Set(['syrabit-static-v'+V,'syrabit-runtime-v'+V,'syrabit-api-v'+V]);
         if('caches' in window){
           caches.keys().then(function(names){
             names.forEach(function(name){
