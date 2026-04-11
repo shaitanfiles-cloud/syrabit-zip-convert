@@ -345,7 +345,11 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         _needs_web = _coerce_needs_web(_topic_metadata["needs_web_search"])
     else:
         _needs_web = _heuristic_needs_web(msg.message)
-    _skip_web_sync = _detected_intent in ("casual",) or (not _needs_web and _detected_intent not in ("pyq", "important_questions", "syllabus", "chapter_meta"))
+    _skip_web_sync = (
+        _detected_intent in ("casual",)
+        or _want_translate
+        or (not _needs_web and _detected_intent not in ("pyq", "important_questions", "syllabus", "chapter_meta"))
+    )
 
     _rag_query = msg.message
     if _topic_metadata and _topic_metadata.get("search_keywords"):
@@ -901,6 +905,13 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     async def _fetch_stage1_stream():
         if not _s_should_pipeline(_stream_intent, msg.message):
             return None
+        if _want_translate:
+            try:
+                result = await asyncio.wait_for(_s_stage1(msg.message), timeout=0.4)
+                return result if result else {}
+            except asyncio.TimeoutError:
+                logger.info("[STREAM] Stage 1 fast-timeout for Indic (0.4s) — proceeding without")
+                return {}
         result = await _s_stage1(msg.message)
         return result if result else {}
 
@@ -988,7 +999,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _needs_web_s = _coerce_needs_web(_s_topic_meta["needs_web_search"])
     else:
         _needs_web_s = _heuristic_needs_web(msg.message)
-    _skip_web_stream = _stream_intent in ("casual",) or (not _needs_web_s and _stream_intent not in ("pyq", "important_questions", "syllabus", "chapter_meta"))
+    _skip_web_stream = (
+        _stream_intent in ("casual",)
+        or _want_translate
+        or (not _needs_web_s and _stream_intent not in ("pyq", "important_questions", "syllabus", "chapter_meta"))
+    )
 
     subj_ctx = _subj_ctx_result
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
@@ -1085,7 +1100,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 return []
 
         _web_task = asyncio.create_task(_safe_web_search_stream())
-        _WEB_BUDGET = 1.2
+        _WEB_BUDGET = 0.8
         done, _ = await asyncio.wait({_web_task}, timeout=_WEB_BUDGET, return_when=asyncio.ALL_COMPLETED)
 
         if _web_task in done:
