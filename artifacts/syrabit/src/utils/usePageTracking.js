@@ -192,11 +192,6 @@ export function usePageTracking() {
     ).catch(() => {});
 
     Analytics.pageView(path, document.title);
-
-    // GA4 page_view — only when initialized
-    if (import.meta.env.VITE_GA_MEASUREMENT_ID) {
-      if (window.gtag) window.gtag('event', 'page_view', { page_path: path, page_title: document.title });
-    }
   }, [location.pathname]);
 }
 

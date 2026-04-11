@@ -317,15 +317,13 @@ async def track_page_view(
         logger.debug(f"page_view tracking failed: {e}")
 
 
-async def get_visitor_stats() -> dict:
+async def get_visitor_stats(days: int = 7) -> dict:
     """Return aggregated visitor stats for the admin dashboard."""
     if not await is_mongo_available():
         return {"total_visitors": 0, "visitors_today": 0, "page_views_today": 0, "daily_visitors": []}
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        # Headline metrics exclude bots AND 404/empty-content pages
         base_filter = {"is_bot": {"$ne": True}, "is_404": {"$ne": True}}
-        # All-inclusive filter (excludes only bots) for new/returning calc
         all_valid_filter = {"is_bot": {"$ne": True}}
 
         total_visitors = await db.page_views.distinct("visitor_id", base_filter)
@@ -341,10 +339,9 @@ async def get_visitor_stats() -> dict:
         not_found_today = await db.page_views.count_documents({"is_bot": {"$ne": True}, "is_404": True, "date": today})
         not_found_total = await db.page_views.count_documents({"is_bot": {"$ne": True}, "is_404": True})
 
-        # Daily visitors last 7 days (headline: no bots, no 404)
         daily_visitors = []
-        for i in range(7):
-            day = (datetime.now(timezone.utc) - timedelta(days=6 - i)).strftime("%Y-%m-%d")
+        for i in range(days):
+            day = (datetime.now(timezone.utc) - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
             unique = await db.page_views.distinct("visitor_id", {**base_filter, "date": day})
             pv = await db.page_views.count_documents({**base_filter, "date": day})
             daily_visitors.append({"date": day, "visitors": len(unique), "page_views": pv})
@@ -472,8 +469,8 @@ async def get_visitor_stats() -> dict:
             ss_bot_unique_all = await db.server_hits.distinct("ip_hash_stable", {"is_bot": True})
             ss_bot_unique_total = len(ss_bot_unique_all)
 
-            for i in range(7):
-                day = (datetime.now(timezone.utc) - timedelta(days=6 - i)).strftime("%Y-%m-%d")
+            for i in range(days):
+                day = (datetime.now(timezone.utc) - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d")
                 day_unique = await db.server_hits.distinct("ip_hash", {**human_filter_ss, "date": day})
                 day_hits = await db.server_hits.count_documents({**human_filter_ss, "date": day})
                 day_bot_hits = await db.server_hits.count_documents({"is_bot": True, "date": day})

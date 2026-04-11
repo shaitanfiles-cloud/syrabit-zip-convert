@@ -68,27 +68,31 @@ def _merge_daily_sources(*daily_lists):
                 }
     for d, row in by_date.items():
         sources = row["sources"]
-        for src in _SOURCE_PRIORITY:
-            if src in sources and sources[src]["visitors"] > 0:
-                row["visitors"] = sources[src]["visitors"]
-                row["best_visitor_source"] = src
-                break
-        for src in _SOURCE_PRIORITY:
-            if src in sources and sources[src]["page_views"] > 0:
-                row["page_views"] = sources[src]["page_views"]
-                row["best_pv_source"] = src
-                break
+        best_v, best_v_src = 0, "none"
+        best_pv, best_pv_src = 0, "none"
+        for src, vals in sources.items():
+            if vals["visitors"] > best_v:
+                best_v = vals["visitors"]
+                best_v_src = src
+            if vals["page_views"] > best_pv:
+                best_pv = vals["page_views"]
+                best_pv_src = src
+        row["visitors"] = best_v
+        row["best_visitor_source"] = best_v_src
+        row["page_views"] = best_pv
+        row["best_pv_source"] = best_pv_src
     return sorted(by_date.values(), key=lambda x: x["date"])
 
 
 _SOURCE_PRIORITY = ["cloudflare", "ga4", "server", "js-tracked"]
 
 def _best_metric(*values_with_sources):
-    for priority_src in _SOURCE_PRIORITY:
-        for val, src in values_with_sources:
-            if src == priority_src and val and val > 0:
-                return val, src
-    return 0, "none"
+    best_val, best_src = 0, "none"
+    for val, src in values_with_sources:
+        if val and val > best_val:
+            best_val = val
+            best_src = src
+    return best_val, best_src
 
 
 @router.get("/admin/analytics")
@@ -106,13 +110,14 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
         p = u.get("plan", "free")
         plan_usage[p] = plan_usage.get(p, 0) + u.get("credits_used", 0)
 
+    fetch_days = min(days, 90)
     cf_vs, ga4_vs, ga4_pages, ga4_refs, library_stats, mongo_vs = await asyncio.gather(
-        cloudflare_client.get_visitor_stats_cf(days=7),
-        ga4_client.get_visitor_stats_ga4(days=7),
+        cloudflare_client.get_visitor_stats_cf(days=fetch_days),
+        ga4_client.get_visitor_stats_ga4(days=fetch_days),
         ga4_client.get_top_pages_ga4(limit=20),
         ga4_client.get_top_referrers_ga4(limit=15),
         get_library_analytics(days=days),
-        get_visitor_stats(),
+        get_visitor_stats(days=fetch_days),
         return_exceptions=True,
     )
 
@@ -157,7 +162,7 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
     if js_daily:
         js_daily = [dict(d, source="js-tracked") for d in js_daily]
 
-    backfill_daily = await _load_backfill_daily(days=7)
+    backfill_daily = await _load_backfill_daily(days=fetch_days)
 
     merged_daily = _merge_daily_sources(cf_daily, ga4_daily, ss_daily, js_daily, backfill_daily)
 

@@ -65,5 +65,5 @@ export function loadRazorpay() {
 }
 
 export const ga4Track = (name, params = {}) => {
-  if (import.meta.env.VITE_GA4_ID && window.gtag) window.gtag('event', name, params);
+  if ((import.meta.env.VITE_GA4_ID || import.meta.env.VITE_GA_MEASUREMENT_ID) && window.gtag) window.gtag('event', name, params);
 };

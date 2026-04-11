@@ -8,7 +8,7 @@
  * Usage: import Analytics from '@/utils/analytics'; Analytics.signup(email);
  */
 
-const GA_ID = import.meta.env.VITE_GA_MEASUREMENT_ID;
+const GA_ID = import.meta.env.VITE_GA_MEASUREMENT_ID || import.meta.env.VITE_GA4_ID;
 
 // ── GA4 initialiser ─────────────────────────────────────────────────────────
 
