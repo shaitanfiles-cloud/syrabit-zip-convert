@@ -70,7 +70,8 @@ Given a student's question, extract structured topic metadata. Return ONLY valid
   "topic": "the specific topic being asked about, or empty string",
   "intent": "one of: notes, important_questions, pyq, syllabus, chapter_meta, casual, general",
   "search_keywords": ["list", "of", "3-5", "keywords", "for", "RAG", "search"],
-  "confidence": "high or low"
+  "confidence": "high or low",
+  "needs_web_search": true or false
 }
 
 Rules:
@@ -78,6 +79,7 @@ Rules:
 - If the query is clearly casual (greeting, small talk), set intent to "casual".
 - If the query is a general knowledge question not related to academics (e.g., "who is the president of India?", "tell me a joke", "what's the weather like?", "explain quantum computing"), set intent to "general".
 - search_keywords should include alternate spellings, synonyms, and key terms for retrieval.
+- needs_web_search: set to true ONLY when the answer requires current/specific data the LLM may not know reliably. Examples that NEED web search: PYQ papers, exam dates, specific syllabus PDFs, latest notifications, current affairs, recent events, Assam board specific data. Examples that do NOT need web search: "what is friction?", "explain photosynthesis", "define osmosis", "Newton's laws", basic concept definitions, formulas, theorems — the LLM already knows these well.
 - Be concise. Return ONLY the JSON object, no explanation."""
 
 _STAGE2_PROMPT_TEMPLATE = """You are a factual synthesizer. Your job is to read the retrieved content chunks below and produce a strictly-grounded factual answer to the student's question.
@@ -284,6 +286,7 @@ async def stage1_resolve_topic(query: str, context: dict = None) -> Optional[dic
             f"[PIPELINE][S1] Topic resolved in {dur:.0f}ms: "
             f"subject={result.get('subject','?')}, chapter={result.get('chapter','?')}, "
             f"intent={result.get('intent','?')}, keywords={result.get('search_keywords',[])} "
+            f"needs_web={result.get('needs_web_search', True)} "
             f"| provider={provider_name}/{model_name}"
         )
         if len(_stage1_cache) >= _STAGE1_CACHE_MAX:

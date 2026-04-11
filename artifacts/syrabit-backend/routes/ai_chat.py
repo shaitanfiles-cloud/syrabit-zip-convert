@@ -1,5 +1,35 @@
 """Syrabit.ai — AI chat & search routes"""
 import re, json, asyncio, time, time as _time_mod, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+
+_SIMPLE_Q_RE = re.compile(
+    r"^(what\s+is|what\s+are|define|explain|describe|meaning\s+of|who\s+is|who\s+was|"
+    r"state\s+the|write\s+the\s+definition|differentiate\s+between|difference\s+between|"
+    r"what\s+do\s+you\s+mean\s+by|ki\s+hoi|mane\s+ki|kya\s+hai|kya\s+hota\s+hai|"
+    r"kisne\s+banaya|kise\s+kahte|kis\s+ko\s+kehte)\b",
+    re.IGNORECASE,
+)
+_WEB_NEEDED_RE = re.compile(
+    r"(pyq|previous\s+year|exam\s+date|result\s+date|notification|admit\s+card|"
+    r"latest|current|recent|202[3-9]|2030|news|update|schedule|routine|"
+    r"mark\s+sheet|seat\s+allotment|cut\s*off|merit\s+list|how\s+to\s+apply|"
+    r"download|pdf|website|link|official|ahsec\s+result|seba\s+result)",
+    re.IGNORECASE,
+)
+
+def _heuristic_needs_web(query: str) -> bool:
+    if _WEB_NEEDED_RE.search(query):
+        return True
+    if _SIMPLE_Q_RE.match(query.strip()):
+        return False
+    return True
+
+
+def _coerce_needs_web(val) -> bool:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() not in ("false", "no", "0")
+    return True
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -310,7 +340,11 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         logger.info(f"[NON-STREAM] Intent upgrade: syllabus → notes (Stage 1 has search_keywords, query is content-seeking)")
 
     _is_casual_sync = _detected_intent in ("casual", "general")
-    _skip_web_sync = _detected_intent in ("casual",)
+    if _topic_metadata and "needs_web_search" in _topic_metadata:
+        _needs_web = _coerce_needs_web(_topic_metadata["needs_web_search"])
+    else:
+        _needs_web = _heuristic_needs_web(msg.message)
+    _skip_web_sync = _detected_intent in ("casual",) or (not _needs_web and _detected_intent not in ("pyq", "important_questions", "syllabus", "chapter_meta"))
 
     _rag_query = msg.message
     if _topic_metadata and _topic_metadata.get("search_keywords"):
@@ -387,6 +421,9 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         )
 
     if _skip_web_sync:
+        _skip_src = "stage1" if (_topic_metadata and "needs_web_search" in _topic_metadata) else "heuristic"
+        _skip_reason = "casual" if _detected_intent in ("casual",) else f"LLM-knowledge ({_skip_src})"
+        logger.info(f"[NON-STREAM] Web search SKIPPED: {_skip_reason} | intent={_detected_intent}")
         web_results = []
         history_messages = await _ns_fetch_history()
         syllabus = await _ns_fetch_syllabus()
@@ -946,7 +983,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         logger.info(f"[STREAM] Intent upgrade: syllabus → notes (Stage 1 has search_keywords, query is content-seeking)")
 
     _is_casual = _stream_intent in ("casual", "general")
-    _skip_web_stream = _stream_intent in ("casual",)
+    if _s_topic_meta and "needs_web_search" in _s_topic_meta:
+        _needs_web_s = _coerce_needs_web(_s_topic_meta["needs_web_search"])
+    else:
+        _needs_web_s = _heuristic_needs_web(msg.message)
+    _skip_web_stream = _stream_intent in ("casual",) or (not _needs_web_s and _stream_intent not in ("pyq", "important_questions", "syllabus", "chapter_meta"))
 
     subj_ctx = _subj_ctx_result
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
@@ -1023,6 +1064,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         )
 
     if _skip_web_stream:
+        _skip_src_s = "stage1" if (_s_topic_meta and "needs_web_search" in _s_topic_meta) else "heuristic"
+        _skip_reason_s = "casual" if _stream_intent in ("casual",) else f"LLM-knowledge ({_skip_src_s})"
+        logger.info(f"[STREAM] Web search SKIPPED: {_skip_reason_s} | intent={_stream_intent}")
         web_results = []
     else:
         async def _safe_web_search_stream():
