@@ -6,7 +6,7 @@
  */
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Languages } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { getConversation, getAnonConversation, getSubject, getChapters, API_BASE, apiClient, getAnonId } from '@/utils/api';
 import { AppLayout } from '@/components/layout/AppLayout';
@@ -40,6 +40,7 @@ export default function ChatPage() {
   const [syncState, setSyncState]         = useState('idle');
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
+  const [responseLang, setResponseLang]   = useState(() => localStorage.getItem('syrabit_response_lang') || 'en');
   const handleCopy = useCallback((msgId) => setCopiedMsgId(msgId), []);
 
 
@@ -217,6 +218,7 @@ export default function ChatPage() {
       class_id: user?.class_id || null, class_name: user?.class_name || null,
       stream_name: user?.stream_name || null, model,
       card_context: cardContext || null, document_id: documentId || null,
+      response_lang: responseLang !== 'en' ? responseLang : undefined,
     };
     try {
       const fetchHeaders = { 'Content-Type': 'application/json' };
@@ -260,7 +262,7 @@ export default function ChatPage() {
           const last = prev[prev.length - 1];
           if (last && last.id === aiMsgId) {
             const updated = prev.slice();
-            updated[updated.length - 1] = { ...last, content: snapshot };
+            updated[updated.length - 1] = { ...last, content: snapshot, translating: false };
             return updated;
           }
           return prev;
@@ -300,6 +302,10 @@ export default function ChatPage() {
           if (parsed.content_card_board && !meta.ragBoardName) meta.ragBoardName = parsed.content_card_board;
           if (parsed.content_card_class && !meta.ragClassName) meta.ragClassName = parsed.content_card_class;
           if (parsed.content_card_subject && !meta.ragSubjectName) meta.ragSubjectName = parsed.content_card_subject;
+          if (parsed.translating) {
+            setMessages((prev) => prev.map((m) => m.id === aiMsgId ? { ...m, content: '', translating: true } : m));
+            continue;
+          }
           if (parsed.error) {
             meta.hasError = true;
             toast.error(parsed.error || 'AI service error — please try again.');
@@ -366,11 +372,33 @@ export default function ChatPage() {
 
   return (
     <AppLayout pageTitle={
-      <ModelSelector
-        model={model} setModel={setModel}
-        showModelMenu={showModelMenu} setShowModelMenu={setShowModelMenu}
-        modelMenuRef={modelMenuRef} handleNewChat={handleNewChat}
-      />
+      <div className="flex items-center gap-2">
+        <ModelSelector
+          model={model} setModel={setModel}
+          showModelMenu={showModelMenu} setShowModelMenu={setShowModelMenu}
+          modelMenuRef={modelMenuRef} handleNewChat={handleNewChat}
+        />
+        <button
+          type="button"
+          onClick={() => {
+            const next = responseLang === 'as' ? 'en' : 'as';
+            setResponseLang(next);
+            localStorage.setItem('syrabit_response_lang', next);
+          }}
+          className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[11px] font-medium transition-all border"
+          style={
+            responseLang === 'as'
+              ? { background: 'rgba(139,92,246,0.12)', borderColor: 'rgba(139,92,246,0.30)', color: '#8b5cf6' }
+              : { background: 'transparent', borderColor: 'hsl(var(--border) / 0.5)', color: 'hsl(var(--muted-foreground))' }
+          }
+          aria-label={responseLang === 'as' ? 'Switch to English' : 'Switch to Assamese'}
+          title={responseLang === 'as' ? 'Responding in Assamese — click for English' : 'Responding in English — click for Assamese'}
+          data-testid="lang-toggle"
+        >
+          <Languages size={13} />
+          <span>{responseLang === 'as' ? 'অসমীয়া' : 'EN'}</span>
+        </button>
+      </div>
     }>
       <div className="flex flex-col chat-viewport-height">
         {isOutOfCredits && (

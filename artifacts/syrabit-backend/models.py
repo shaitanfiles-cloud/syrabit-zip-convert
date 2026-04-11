@@ -72,6 +72,7 @@ class ChatMessage(BaseModel):
     model: Optional[str] = None
     document_id: Optional[str] = None
     card_context: Optional[str] = None   # Tier 0 — card content scraped from library page
+    response_lang: Optional[str] = None
 
 
 class ConversationCreate(BaseModel):
