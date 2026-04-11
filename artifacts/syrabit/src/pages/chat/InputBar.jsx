@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Send, Database, AlertTriangle, Square,
+  Send, AlertTriangle, Square,
 } from 'lucide-react';
 
 export function InputBar({
@@ -36,13 +36,6 @@ export function InputBar({
       data-testid="chat-input"
     >
       <div className="max-w-3xl mx-auto">
-        {subject && messages.length === 0 && scopedChapters.length > 0 && (
-          <div className="flex items-center gap-2 mb-2 px-1 text-xs text-muted-foreground">
-            <Database size={12} style={{ color: 'hsl(var(--primary) / 0.6)' }} />
-            <span>RAG: {scopedChapters.length} chapters from {subject.name}</span>
-          </div>
-        )}
-
         <div
           className="flex items-end gap-3 p-3 rounded-2xl border transition-all duration-200"
           style={

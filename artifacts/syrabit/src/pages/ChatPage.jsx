@@ -2,7 +2,7 @@
  * ChatPage — /chat
  * Full spec rebuild: 5-element animated empty state, typed bubbles,
  * actions bar (copy / regenerate / timestamp / credit badge),
- * credit progress bar, sync indicator, RAG source badge.
+ * credit progress bar, sync indicator, source badge.
  */
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -397,7 +397,7 @@ export default function ChatPage() {
           <div className="max-w-3xl mx-auto px-4 md:px-6 py-4">
             {messages.length === 0 && (
               <Suspense fallback={<div className="flex-1" />}>
-                <EmptyState subject={subject} scopedChapters={scopedChapters} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
+                <EmptyState subject={subject} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
               </Suspense>
             )}
               {(() => {

@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react';
 
 const THINKING_STEPS = [
-  'Searching in AssamBoard Syllabus…',
-  'Reading relevant chapters…',
-  'Cross-referencing chapter content…',
+  'Searching syllabus-aligned sources…',
+  'Checking Syrabit knowledge base…',
   'Verifying accuracy for board exams…',
   'Composing your answer…',
 ];

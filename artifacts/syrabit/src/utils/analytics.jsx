@@ -147,9 +147,9 @@ export const Analytics = {
     trackGA4('select_content', { content_type: 'chat', content_id: subjectId, item_name: subjectName });
   },
 
-  chatMessage: (ragSource, creditsRemaining, model) => {
-    track('chat_message_sent', { rag_source: ragSource, credits_remaining: creditsRemaining, model });
-    trackGA4('chat_message_sent', { rag_source: ragSource, model, credits_remaining: creditsRemaining });
+  chatMessage: (source, creditsRemaining, model) => {
+    track('chat_message_sent', { source, credits_remaining: creditsRemaining, model });
+    trackGA4('chat_message_sent', { source, model, credits_remaining: creditsRemaining });
   },
 
   chatCreditsExhausted: () => {

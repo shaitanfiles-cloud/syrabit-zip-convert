@@ -1,6 +1,6 @@
 import { useState, useMemo, memo, lazy, Suspense } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { RefreshCw, Copy, Check, FileText, Globe, BookOpen, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send } from 'lucide-react';
+import { RefreshCw, Copy, Check, FileText, Globe, ThumbsUp, ThumbsDown, MessageSquare, Share2, Send } from 'lucide-react';
 import { useShare } from '@/hooks/useShare';
 import { postChatFeedback } from '@/utils/api';
 import { log } from '@/utils/logger';
@@ -138,7 +138,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
 
             {!msg.streaming && msg.content && (() => {
               const subjectLabel = msg.rag_subject_name || msg.ctx_subject_name || null;
-              const courseLabel = msg.rag_stream_name || null;
               const boardLabel = msg.rag_board_name || null;
               const classLabel = msg.rag_class_name || null;
               const chapterLabel = msg.rag_chapter_name || null;
@@ -148,91 +147,73 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
               const chapterUrl = (basePath && chapterSlug) ? `${basePath}/${chapterSlug}` : null;
               const subjectUrl = chapterUrl || basePath || (msg.rag_subject_id ? `/subject/${msg.rag_subject_id}` : null);
               const isDocument = msg.rag_source === 'document';
-              const isLibrary = msg.rag_source === 'library';
               const isWeb = msg.rag_source === 'web';
-              const hasContext = boardLabel || subjectLabel || courseLabel || (msg.rag_source && msg.rag_source !== 'none');
+              const hasContext = boardLabel || subjectLabel || (msg.rag_source && msg.rag_source !== 'none');
 
               const hasAnything = hasContext || sourceLine;
               if (!hasAnything) return null;
 
-              const sourceIcon = isDocument ? FileText : isWeb ? Globe : BookOpen;
-              const SourceIcon = sourceIcon;
-
-              const lessonLabel = chapterLabel || null;
-
               return (
                 <>
-                  {(isLibrary || (!isDocument && !isWeb)) && subjectLabel && (
+                  {isWeb && subjectUrl && subjectLabel && (
                     <div
-                      onClick={subjectUrl ? () => {
+                      onClick={() => {
                         if (chapterUrl) {
                           const topicText = msg.rag_topic_name || chapterLabel || '';
                           const params = new URLSearchParams();
                           params.set('topic', topicText);
-                          const ragSnippet = (msg.rag_chunk_snippet || '').slice(0, 300);
-                          if (ragSnippet) {
-                            params.set('chunk', ragSnippet);
-                          }
                           const rawContent = (msg.content || '').replace(/[#*_`>\[\]()]/g, '').replace(/\s+/g, ' ').trim();
                           const sentences = rawContent.split(/(?<=[.!?])\s+/).filter(s => s.length > 20);
                           const coreSnippet = sentences.length > 1 ? sentences.slice(1, 4).join(' ') : rawContent;
                           const responseSnippet = coreSnippet.slice(0, 300);
-                          if (responseSnippet) {
-                            params.set('rchunk', responseSnippet);
-                          }
+                          if (responseSnippet) params.set('rchunk', responseSnippet);
                           navigate(`${chapterUrl}?${params.toString()}`);
                         } else {
                           navigate(subjectUrl);
                         }
-                      } : undefined}
-                      className={`source-card-container mt-3 rounded-xl overflow-hidden ${subjectUrl ? 'cursor-pointer active:scale-[0.98]' : ''}`}
-                      role={subjectUrl ? 'button' : undefined}
-                      tabIndex={subjectUrl ? 0 : undefined}
-                      onKeyDown={subjectUrl ? (e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); } : undefined}
-                      aria-label={subjectUrl ? `Open ${lessonLabel || subjectLabel} in Syrabit Browser` : undefined}
+                      }}
+                      className="source-card-container mt-3 rounded-xl overflow-hidden cursor-pointer active:scale-[0.98]"
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); }}
+                      aria-label={`Open ${chapterLabel || subjectLabel} in Syrabit Browser`}
                     >
                       <div className="px-3 py-2.5">
                         <div className="flex items-center gap-1.5 mb-1">
-                          <BookOpen size={11} className="source-card-icon" />
+                          <Globe size={11} className="source-card-icon" />
                           <span className="source-card-label text-[10px] font-semibold uppercase tracking-wider">Source</span>
                           <span className="text-[10px] text-muted-foreground/30">·</span>
-                          <span className="source-card-browser text-[10.5px] font-medium">Syrabit Browser</span>
+                          <span className="source-card-browser text-[10.5px] font-medium">Web Search</span>
                         </div>
-                        {lessonLabel && (
+                        {chapterLabel && (
                           <h4 className="source-card-title font-semibold leading-tight truncate" style={{ fontSize: '0.85rem', letterSpacing: '0.01em' }}>
-                            {lessonLabel}
+                            {chapterLabel}
                           </h4>
                         )}
                         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 mt-1.5">
                           {boardLabel && (
                             <>
-                              <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">
-                                {boardLabel}
-                              </span>
+                              <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">{boardLabel}</span>
                               <span className="text-[11px] text-muted-foreground/40">·</span>
                             </>
                           )}
                           {classLabel && (
                             <>
-                              <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">
-                                {classLabel}
-                              </span>
+                              <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">{classLabel}</span>
                               <span className="text-[11px] text-muted-foreground/40">·</span>
                             </>
                           )}
-                          {courseLabel && (
-                            <>
-                              <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">
-                                {courseLabel}
-                              </span>
-                              <span className="text-[11px] text-muted-foreground/40">·</span>
-                            </>
-                          )}
-                          <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">
-                            {subjectLabel}
-                          </span>
+                          <span className="source-card-badge text-[11px] font-medium px-1.5 py-0.5 rounded">{subjectLabel}</span>
                         </div>
                       </div>
+                    </div>
+                  )}
+                  {isWeb && !subjectUrl && (
+                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.18)', maxWidth: 'fit-content' }}>
+                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(56,189,248,0.15)' }}>
+                        <Globe size={16} style={{ color: '#38bdf8' }} />
+                      </div>
+                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
                     </div>
                   )}
                   {isDocument && (
@@ -241,14 +222,6 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
                         <FileText size={16} style={{ color: '#a78bfa' }} />
                       </div>
                       <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Uploaded Document</span>
-                    </div>
-                  )}
-                  {isWeb && (
-                    <div className="flex items-center gap-2.5 mt-3 px-3 py-2 rounded-xl" style={{ background: 'rgba(56,189,248,0.08)', border: '1px solid rgba(56,189,248,0.18)', maxWidth: 'fit-content' }}>
-                      <div className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: 'rgba(56,189,248,0.15)' }}>
-                        <Globe size={16} style={{ color: '#38bdf8' }} />
-                      </div>
-                      <span className="text-[13px] font-bold text-foreground" style={{ textTransform: 'uppercase', letterSpacing: '0.03em' }}>Web Search</span>
                     </div>
                   )}
                   <div className={`flex items-center gap-1.5 mt-1 transition-opacity ${responseLang && responseLang !== 'en' ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>

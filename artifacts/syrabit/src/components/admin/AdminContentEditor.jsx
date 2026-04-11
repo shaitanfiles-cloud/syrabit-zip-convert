@@ -197,7 +197,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const slug = contentForm.slug || autoSlug(contentForm.title);
       const topics = (contentForm.topics || []).filter(Boolean);
       await axios.post(`${API}/admin/content/chapters`, { subject_id: selSubject, title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, status: 'published', topics }, authHeaders(adminToken));
-      toast.success('Chapter created — embedding in background'); setEditView(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [] }); setChapterStats(null); refreshChapters(selSubject);
+      toast.success('Chapter created successfully'); setEditView(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [] }); setChapterStats(null); refreshChapters(selSubject);
     } catch { toast.error('Failed to create chapter'); }
     finally { setSaving(false); }
   };
@@ -209,7 +209,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const slug = contentForm.slug || autoSlug(contentForm.title);
       const topics = (contentForm.topics || []).filter(Boolean);
       await axios.patch(`${API}/admin/content/chapters/${editTarget.id}`, { title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, topics }, authHeaders(adminToken));
-      toast.success('Chapter updated — embedding in background'); setEditView(null); setEditTarget(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [] }); setChapterStats(null); refreshChapters(selSubject);
+      toast.success('Chapter updated successfully'); setEditView(null); setEditTarget(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [] }); setChapterStats(null); refreshChapters(selSubject);
     } catch { toast.error('Failed to update'); }
     finally { setSaving(false); }
   };
@@ -218,7 +218,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     setConfirmDialog({
       open: true,
       title: 'Delete chapter?',
-      message: 'This will permanently delete this chapter and all its content, embeddings, and associated data.',
+      message: 'This will permanently delete this chapter and all its associated data.',
       onConfirm: async () => {
         setConfirmDialog(d => ({ ...d, open: false }));
         try { await axios.delete(`${API}/admin/content/chapters/${id}`, authHeaders(adminToken)); setChapters(p => p.filter(c => c.id !== id)); toast.success('Chapter deleted'); } catch { toast.error('Failed to delete'); }

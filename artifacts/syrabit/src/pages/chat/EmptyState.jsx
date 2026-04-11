@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { BookOpen } from 'lucide-react';
 
-export function EmptyState({ subject, scopedChapters, documentId, defaultPrompts, setInput, textareaRef }) {
+export function EmptyState({ subject, documentId, defaultPrompts, setInput, textareaRef }) {
   const navigate = useNavigate();
 
   return (
@@ -29,7 +29,7 @@ export function EmptyState({ subject, scopedChapters, documentId, defaultPrompts
           {documentId
             ? 'Document loaded as primary source. Ask any question.'
             : subject
-            ? `${scopedChapters.length} chapters loaded — syllabus-first answers.`
+            ? 'Syllabus-first answers powered by web search.'
             : ''
           }
         </p>
