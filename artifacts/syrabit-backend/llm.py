@@ -7,7 +7,7 @@ _INDIC_LANG_CODES = frozenset({"as", "hi"})
 def _is_indic_lang(lang: str | None) -> bool:
     return bool(lang and lang.lower().strip() in _INDIC_LANG_CODES)
 
-_SARVAM_INDIC_MODEL_PREFERENCE = ["sarvam-30b", "sarvam-m", "sarvam-105b"]
+_SARVAM_INDIC_MODEL_PREFERENCE = ["sarvam-m", "sarvam-30b", "sarvam-105b"]
 
 
 class LlmResult(str):
@@ -836,7 +836,10 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
                     break
                 try:
                     chunk = json.loads(raw)
-                    delta = chunk["choices"][0]["delta"]
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
                     token = delta.get("content") or ""
                     if token:
                         yield token
@@ -1321,11 +1324,18 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     yield chunk
                 _total_ms = (time.monotonic() - _try_t0) * 1000
                 logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} lang={response_lang} model={_try_model} provider={provider}")
+                if _chunk_n == 0:
+                    logger.warning(f"[INDIC] Sarvam model '{_try_model}' returned 0 chunks — trying next in chain")
+                    in_think = False
+                    buf = ""
+                    continue
                 yield f"data: {json.dumps({'__provider': provider})}\n\n"
                 _indic_success = True
                 break
             except Exception as _fb_err:
                 logger.warning(f"[INDIC] Sarvam model '{_try_model}' failed ({type(_fb_err).__name__}: {str(_fb_err)[:120]}) — trying next in chain")
+                in_think = False
+                buf = ""
                 continue
         if not _indic_success:
             yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
