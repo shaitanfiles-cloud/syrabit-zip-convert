@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 __all__ = [
     "db", "redis_client", "supa", "pg_pool", "pwd_ctx", "security",
-    "sarvam_client", "sarvam_llm_client",
+    "sarvam_client", "sarvam_translate_client", "sarvam_llm_client",
     "sarvam_client_direct", "sarvam_llm_client_direct",
     "voyage_client", "logger",
     "is_mongo_available", "mark_mongo_down",
@@ -29,7 +29,7 @@ from passlib.context import CryptContext
 from fastapi.security import HTTPBearer
 from motor.motor_asyncio import AsyncIOMotorClient
 from config import (
-    MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_BASE_URL,
+    MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_TRANSLATE_KEY, SARVAM_BASE_URL,
     REDIS_URL, REDIS_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _PG_DSN, VOYAGE_API_KEY,
     CF_GATEWAY_ENABLED, get_provider_base_url,
@@ -261,12 +261,27 @@ _sarvam_headers = {
     'api-subscription-key': SARVAM_API_KEY,
     'Content-Type': 'application/json',
 }
+_sarvam_translate_headers = {
+    'api-subscription-key': SARVAM_TRANSLATE_KEY,
+    'Content-Type': 'application/json',
+}
 _sarvam_gw_base = get_provider_base_url("sarvam") if CF_GATEWAY_ENABLED else None
 _sarvam_effective_base = _sarvam_gw_base or SARVAM_BASE_URL
 sarvam_client: Optional[httpx.AsyncClient] = None
+sarvam_translate_client: Optional[httpx.AsyncClient] = None
 sarvam_llm_client: Optional[httpx.AsyncClient] = None
 sarvam_client_direct: Optional[httpx.AsyncClient] = None
 sarvam_llm_client_direct: Optional[httpx.AsyncClient] = None
+if SARVAM_TRANSLATE_KEY:
+    sarvam_translate_client = httpx.AsyncClient(
+        base_url=SARVAM_BASE_URL,
+        headers=_sarvam_translate_headers,
+        limits=_sarvam_pool_limits,
+        timeout=_sarvam_timeout,
+        http2=True,
+        verify=True,
+    )
+    logging.getLogger(__name__).info("Sarvam AI translation client ready (priority key)")
 if SARVAM_API_KEY:
     sarvam_client = httpx.AsyncClient(
         base_url=_sarvam_effective_base,

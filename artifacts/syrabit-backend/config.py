@@ -177,7 +177,9 @@ else:
 OPENAI_API_KEY = LLM_API_KEY
 
 # ── Sarvam AI Configuration ──────────────────────────────────────────────────
-SARVAM_API_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
+SARVAM_API_KEY_3 = os.environ.get('SARVAM_API_KEY_3', '').strip()
+SARVAM_API_KEY = SARVAM_API_KEY_3 or os.environ.get('SARVAM_API_KEY', '').strip()
+SARVAM_TRANSLATE_KEY = SARVAM_API_KEY_3 or os.environ.get('SARVAM_API_KEY', '').strip()
 SARVAM_BASE_URL = 'https://api.sarvam.ai'
 
 # ── Redis (Upstash) ──────────────────────────────────────────────────────────

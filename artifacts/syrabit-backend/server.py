@@ -111,7 +111,7 @@ _validate_env()
 from config import ROOT_DIR, CORS_ORIGINS, _CORS_ALLOW_CREDENTIALS
 import deps
 from deps import (
-    db, supa, sarvam_client, sarvam_llm_client,
+    db, supa, sarvam_client, sarvam_translate_client, sarvam_llm_client,
     sarvam_client_direct, sarvam_llm_client_direct,
     mongo_client, logger, _rate_cleanup_task, _init_pg_pool,
     is_mongo_available,

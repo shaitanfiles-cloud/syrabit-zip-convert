@@ -48,6 +48,7 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **Content Display:** Library page features subject cards; lesson pages have a blog-style layout with reading progress and sticky TOC.
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.
 - **Chat Interface:** Uses a standardized 0.1 temperature for LLMs and increased RAG chunk size for academic concepts.
+- **Multi-Language Responses:** When Hindi or Assamese is selected, Sarvam LLM (sarvam-m) generates the response directly in the target language — single LLM call, no separate translation step. Language instruction is injected into the system prompt. Cache keys are language-aware (`msg::lang=hi`). Instant casual fast-path is skipped for non-English languages. `SARVAM_API_KEY_3` is the priority key for translation/Sarvam services.
 
 ## External Dependencies
 
