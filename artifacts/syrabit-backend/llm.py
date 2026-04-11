@@ -32,7 +32,7 @@ from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
     _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
-    _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _CEREBRAS_KEY, _EMERGENT_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _SARVAM_LLM_KEY_3, _CEREBRAS_KEY, _EMERGENT_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
     CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
 )
 from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
@@ -178,10 +178,12 @@ _llm_batcher = _LlmBatcher(batch_window_ms=_LLM_BATCH_WINDOW_MS)
 _content_batcher = _LlmBatcher(batch_window_ms=_CONTENT_BATCH_WINDOW_MS)
 
 _LLM_PROVIDERS = []
-if _SARVAM_LLM_KEY:
-    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
-if _SARVAM_LLM_KEY_2 and _SARVAM_LLM_KEY_2 != _SARVAM_LLM_KEY:
+if _SARVAM_LLM_KEY_3:
+    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_3, "default_model": "sarvam-m"})
+if _SARVAM_LLM_KEY_2 and _SARVAM_LLM_KEY_2 != _SARVAM_LLM_KEY_3:
     _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY_2, "default_model": "sarvam-m"})
+if _SARVAM_LLM_KEY and _SARVAM_LLM_KEY not in (_SARVAM_LLM_KEY_3, _SARVAM_LLM_KEY_2):
+    _LLM_PROVIDERS.append({"provider": "sarvam",      "key": _SARVAM_LLM_KEY, "default_model": "sarvam-m"})
 if _GROQ_KEY:
     _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY,       "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
@@ -1313,35 +1315,44 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
 
-    # ── Indic Sarvam with runtime model fallback ─────────────────────────────────
+    # ── Indic Sarvam with key + model fallback ──────────────────────────────────
     if _indic_mode and provider == "sarvam":
         _indic_success = False
-        _fallback_chain = [use_model] + [m for m in _SARVAM_INDIC_MODEL_PREFERENCE if m != use_model]
-        for _try_model in _fallback_chain:
-            try:
-                _chunk_n = 0
-                _try_t0 = time.monotonic()
-                async for chunk in _emit_tokens(_stream_from_provider(provider, key, _try_model)):
+        _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
+        if key not in _sarvam_keys:
+            _sarvam_keys.insert(0, key)
+        _model_chain = [use_model] + [m for m in _SARVAM_INDIC_MODEL_PREFERENCE if m != use_model]
+        for _try_key_idx, _try_key in enumerate(_sarvam_keys):
+            for _try_model in _model_chain:
+                try:
+                    _chunk_n = 0
+                    _try_t0 = time.monotonic()
+                    async for chunk in _emit_tokens(_stream_from_provider(provider, _try_key, _try_model)):
+                        if _chunk_n == 0:
+                            _ttft_ms = (time.monotonic() - _try_t0) * 1000
+                            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} model={_try_model} key_idx={_try_key_idx}")
+                        _chunk_n += 1
+                        yield chunk
+                    _total_ms = (time.monotonic() - _try_t0) * 1000
+                    logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} lang={response_lang} model={_try_model} key_idx={_try_key_idx}")
                     if _chunk_n == 0:
-                        _ttft_ms = (time.monotonic() - _try_t0) * 1000
-                        logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} model={_try_model} provider={provider}")
-                    _chunk_n += 1
-                    yield chunk
-                _total_ms = (time.monotonic() - _try_t0) * 1000
-                logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} lang={response_lang} model={_try_model} provider={provider}")
-                if _chunk_n == 0:
-                    logger.warning(f"[INDIC] Sarvam model '{_try_model}' returned 0 chunks — trying next in chain")
+                        logger.warning(f"[INDIC] Sarvam key_idx={_try_key_idx} model='{_try_model}' returned 0 chunks — trying next")
+                        in_think = False
+                        buf = ""
+                        continue
+                    yield f"data: {json.dumps({'__provider': provider})}\n\n"
+                    _indic_success = True
+                    break
+                except Exception as _fb_err:
+                    _is_rate = any(s in str(_fb_err).lower() for s in ("429", "rate", "quota", "throttl"))
+                    logger.warning(f"[INDIC] Sarvam key_idx={_try_key_idx} model='{_try_model}' failed ({type(_fb_err).__name__}: {str(_fb_err)[:120]}) rate_limit={_is_rate}")
                     in_think = False
                     buf = ""
+                    if _is_rate:
+                        break
                     continue
-                yield f"data: {json.dumps({'__provider': provider})}\n\n"
-                _indic_success = True
+            if _indic_success:
                 break
-            except Exception as _fb_err:
-                logger.warning(f"[INDIC] Sarvam model '{_try_model}' failed ({type(_fb_err).__name__}: {str(_fb_err)[:120]}) — trying next in chain")
-                in_think = False
-                buf = ""
-                continue
         if not _indic_success:
             yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
         return
