@@ -416,6 +416,8 @@ async def lifespan(app):
         _deps_mod._rate_cleanup_task.cancel()
     if sarvam_client:
         await sarvam_client.aclose()
+    if sarvam_translate_client:
+        await sarvam_translate_client.aclose()
     if sarvam_llm_client:
         await sarvam_llm_client.aclose()
     if sarvam_client_direct:
