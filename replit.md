@@ -26,7 +26,7 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **Syllabus Embedder:** Generates chapter and topic-level embeddings, enriched with context and keywords.
 - **Web Search Pipeline (RAG removed):** Uses DuckDuckGo web search with 3-layer architecture: `site:syrabit.ai` priority (3 results), scoped text search (8 results), news search (4 results). Stage 1 topic metadata (subject/chapter classification) is preserved for scoping web queries. Document uploads still use `resolve_rag_context` for document-only grounding. Library search endpoint (`/v1/search`) backed by web search. Voyage AI client removed (no longer used).
 - **Subject Linking for Syllabus:** A semantic router resolves subjects for syllabus queries without a `subject_id`.
-- **Multi-LLM Pipeline:** Single-LLM with Stage 1 metadata for topic classification. Concise responses: 50-100 words default, max 300 words. Supported response languages: English, Assamese (`as`), Hindi (`hi`) only. Indic responses route through Sarvam LLM. Instant casual fast-path skipped for non-English languages to ensure proper Indic responses.
+- **Multi-LLM Pipeline:** Single-LLM with Stage 1 metadata for topic classification. Concise responses: 50-100 words default, max 300 words. Supported response languages: English and Assamese (`as`) only. Hindi removed. Assamese routes through Sarvam LLM (`sarvam-m` preferred, `sarvam-105b` fallback). English uses SLM pool (Groq/Cerebras). Instant casual fast-path skipped for Assamese to ensure proper Indic responses.
 - **Monetization:** Supports free, starter, and pro plans with credit-based usage, integrating Razorpay and Stripe.
 - **Optional Authentication:** Chat, History, and Profile pages are accessible to anonymous users via a `syrabit_anon_id`. Conversations are persisted in Redis and PostgreSQL.
 - **Security:** Uses ASGI-native `SecurityHeadersMiddleware` and prompt safety guardrails.
@@ -50,7 +50,7 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **Content Display:** Library page features subject cards; lesson pages have a blog-style layout with reading progress and sticky TOC.
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.
 - **Chat Interface:** Uses a standardized 0.1 temperature for LLMs and increased RAG chunk size for academic concepts.
-- **Multi-Language Responses:** When an Indic language (Hindi, Assamese, etc.) is selected, optimized Sarvam routing is applied: model preference chain (sarvam-30b → sarvam-m) picks the fastest available model, a dedicated Indic-first bilingual system prompt replaces the English prompt, think budget injection and SARVAM_THINK_BUFFER are skipped to reduce TTFT, and `response_lang` is passed through to `call_llm_api_stream` for automatic Sarvam optimization. RAG context is preserved in the Indic prompt. Latency is logged with `[INDIC-PERF]` tags (TTFT + total time). Cache keys are language-aware (`msg::lang=hi`). Instant casual fast-path is skipped for non-English languages. `SARVAM_API_KEY_3` is the priority key for translation/Sarvam services.
+- **Assamese Language Responses:** When Assamese is selected, Sarvam routing is applied: model preference chain (`sarvam-m` → `sarvam-105b`) picks the fastest available model, a dedicated Assamese system prompt replaces the English prompt (অসমীয়া script enforced), think budget injection is skipped to reduce TTFT, and `response_language: as-IN` is passed to Sarvam. Latency is logged with `[INDIC-PERF]` tags. Cache keys are language-aware. Instant casual fast-path is skipped for Assamese. `SARVAM_API_KEY_3` is the priority key.
 
 ## External Dependencies
 
@@ -61,7 +61,6 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
     - **Chat:** Groq, Cerebras, OpenRouter, Fireworks (SLM pool).
     - **Content Generation:** Cerebras (primary), Sarvam (fallback), Gemini 2.5-flash (last resort). Gemini Vision and gemini-embedding-001.
 - **Cloudflare AI Gateway:** Routes LLM traffic, provides caching, analytics, and graceful degradation.
-- **Voyage AI Rerank:** `rerank-2` model for re-scoring vector search results.
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).
 - **Email Service:** Resend API.
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.

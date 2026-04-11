@@ -844,7 +844,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_auth_done = _time_mod.time()
     _auth_elapsed = _t_auth_done - _stream_t0
 
-    _SARVAM_LANG_MAP = {"as": "as-IN", "hi": "hi-IN"}
+    _SARVAM_LANG_MAP = {"as": "as-IN"}
     _resp_lang = (msg.response_lang or "").lower().strip()
     _sarvam_target = _SARVAM_LANG_MAP.get(_resp_lang)
     _want_translate = bool(_sarvam_target and _resp_lang != "en")
@@ -1197,17 +1197,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _hist_len = sum(len(m.get("content", "")) for m in history_messages)
             logger.warning(f"[STREAM] History trimmed to last 4 messages ({_hist_len} chars)")
 
-    _LANG_NAME_MAP = {"as": "Assamese", "hi": "Hindi"}
+    _LANG_NAME_MAP = {"as": "Assamese"}
     _target_lang_name = _LANG_NAME_MAP.get(_resp_lang)
     if _want_translate and _target_lang_name:
-        _script_map = {"Assamese": "অসমীয়া", "Hindi": "हिन्दी"}
-        _script_name = _script_map.get(_target_lang_name, _target_lang_name)
         _indic_system_prompt = (
-            f"You are Syra, AI tutor on Syrabit.ai. "
-            f"MANDATORY: Your ENTIRE response must be in {_target_lang_name} ({_script_name}) script. "
-            f"Never respond in English. Only keep technical terms, formulas, proper nouns in English. "
-            f"Tone: warm, encouraging. Use Markdown, bullets, numbered lists. "
-            f"Length: 30-60 words default, 200 words max. Match depth to question type.\n"
+            "You are Syra, AI tutor. Reply ONLY in Assamese (অসমীয়া). "
+            "Technical terms/formulas in English OK. Be concise: 30-60 words, max 200.\n"
         )
         if system_prompt:
             _ctx_markers = ["**GROUNDING CONTEXT", "**CURRICULUM", "**SUBJECT CHAPTERS", "REFERENCE MATERIAL:", "CONTEXT:", "RELEVANT CONTENT:"]

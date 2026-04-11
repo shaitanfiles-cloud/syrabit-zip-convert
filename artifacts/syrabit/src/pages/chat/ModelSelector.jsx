@@ -9,7 +9,6 @@ const MODELS = [
 const LANGUAGES = [
   { code: 'en', label: 'EN',      nativeLabel: 'English' },
   { code: 'as', label: 'অসমীয়া', nativeLabel: 'Assamese' },
-  { code: 'hi', label: 'हिन्दी',  nativeLabel: 'Hindi' },
 ];
 
 export { MODELS };

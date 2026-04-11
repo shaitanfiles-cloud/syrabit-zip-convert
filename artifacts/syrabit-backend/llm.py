@@ -2,12 +2,12 @@
 import os, re, json, asyncio, uuid, time, logging, httpx, hashlib
 import openai as _oai
 
-_INDIC_LANG_CODES = frozenset({"as", "hi"})
+_INDIC_LANG_CODES = frozenset({"as"})
 
 def _is_indic_lang(lang: str | None) -> bool:
     return bool(lang and lang.lower().strip() in _INDIC_LANG_CODES)
 
-_SARVAM_INDIC_MODEL_PREFERENCE = ["sarvam-m", "sarvam-30b", "sarvam-105b"]
+_SARVAM_INDIC_MODEL_PREFERENCE = ["sarvam-m", "sarvam-105b"]
 
 
 class LlmResult(str):
@@ -801,15 +801,16 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
     Falls back to direct client if CF gateway connection fails.
     """
     _indic = _is_indic_lang(response_lang)
-    _SARVAM_THINK_OVERHEAD = 200
     if _indic:
-        api_max = max_tokens + _SARVAM_THINK_OVERHEAD
-        patched = messages
-        logger.info(f"[SARVAM-INDIC] Think overhead +{_SARVAM_THINK_OVERHEAD} for {response_lang} — model={model}, api_max={api_max}")
+        api_max = max_tokens + 100
+        patched = [dict(m) for m in messages]
+        if patched and patched[0].get("role") == "system":
+            patched[0]["content"] = "Do not use <think> tags. Respond directly.\n" + patched[0]["content"]
+        logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
     else:
         api_max = max_tokens + SARVAM_THINK_BUFFER
         patched = _inject_think_budget(messages)
-    _SARVAM_LANG_CODE_MAP = {"as": "as-IN", "hi": "hi-IN"}
+    _SARVAM_LANG_CODE_MAP = {"as": "as-IN"}
     payload = {
         "model": model,
         "messages": patched,
