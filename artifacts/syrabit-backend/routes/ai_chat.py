@@ -438,7 +438,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         ))
         _ns_hist_task = asyncio.create_task(_ns_fetch_history())
         _ns_syl_task = asyncio.create_task(_ns_fetch_syllabus())
-        _NS_BUDGET = 1.5
+        _NS_BUDGET = 1.2
         done, pending = await asyncio.wait(
             [_ns_web_task, _ns_hist_task, _ns_syl_task],
             timeout=_NS_BUDGET,
@@ -1084,7 +1084,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 return []
 
         _web_task = asyncio.create_task(_safe_web_search_stream())
-        _WEB_BUDGET = 1.5
+        _WEB_BUDGET = 1.2
         done, _ = await asyncio.wait({_web_task}, timeout=_WEB_BUDGET, return_when=asyncio.ALL_COMPLETED)
 
         if _web_task in done:

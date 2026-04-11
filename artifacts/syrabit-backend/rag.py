@@ -197,7 +197,7 @@ async def _ddg_text_search(query: str, num_results: int) -> list:
         return results
     try:
         loop = asyncio.get_running_loop()
-        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=1.2)
+        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=1.0)
         logger.info(f"DDG text search: {len(results)} results | query: {query[:60]}")
         return results
     except Exception as exc:
@@ -219,7 +219,7 @@ async def _ddg_news_search(query: str, num_results: int) -> list:
         return results
     try:
         loop = asyncio.get_running_loop()
-        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=1.2)
+        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=1.0)
         logger.info(f"DDG news search: {len(results)} results | query: {query[:60]}")
         return results
     except Exception as exc:

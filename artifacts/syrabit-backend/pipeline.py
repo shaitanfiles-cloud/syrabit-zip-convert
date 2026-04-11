@@ -61,26 +61,10 @@ def get_pipeline_stats(window_seconds: int = 3600) -> dict:
 
 _HARD_BYPASS_INTENTS = {"syllabus", "chapter_meta"}
 
-_STAGE1_PROMPT = """You are a topic classifier for an Indian education platform (Assam board — AHSEC, SEBA, DEGREE).
+_STAGE1_PROMPT = """Topic classifier for Assam board education (AHSEC/SEBA/DEGREE). Return ONLY JSON:
+{"subject":"","chapter":"","topic":"","intent":"notes|important_questions|pyq|syllabus|chapter_meta|casual|general","search_keywords":["3-5 terms"],"confidence":"high|low","needs_web_search":true/false}
 
-Given a student's question, extract structured topic metadata. Return ONLY valid JSON with these fields:
-{
-  "subject": "the academic subject (e.g. Physics, Chemistry, History, Economics)",
-  "chapter": "the chapter or unit name if identifiable, or empty string",
-  "topic": "the specific topic being asked about, or empty string",
-  "intent": "one of: notes, important_questions, pyq, syllabus, chapter_meta, casual, general",
-  "search_keywords": ["list", "of", "3-5", "keywords", "for", "RAG", "search"],
-  "confidence": "high or low",
-  "needs_web_search": true or false
-}
-
-Rules:
-- For misspelled or vague queries, infer the most likely academic topic.
-- If the query is clearly casual (greeting, small talk), set intent to "casual".
-- If the query is a general knowledge question not related to academics (e.g., "who is the president of India?", "tell me a joke", "what's the weather like?", "explain quantum computing"), set intent to "general".
-- search_keywords should include alternate spellings, synonyms, and key terms for retrieval.
-- needs_web_search: set to true ONLY when the answer requires current/specific data the LLM may not know reliably. Examples that NEED web search: PYQ papers, exam dates, specific syllabus PDFs, latest notifications, current affairs, recent events, Assam board specific data. Examples that do NOT need web search: "what is friction?", "explain photosynthesis", "define osmosis", "Newton's laws", basic concept definitions, formulas, theorems — the LLM already knows these well.
-- Be concise. Return ONLY the JSON object, no explanation."""
+Rules: casual=greetings/small talk. general=non-academic. needs_web_search=true ONLY for PYQ/exam dates/notifications/current affairs/Assam board data. false for concept definitions/formulas/theorems. JSON only, no explanation."""
 
 _STAGE2_PROMPT_TEMPLATE = """You are a factual synthesizer. Your job is to read the retrieved content chunks below and produce a strictly-grounded factual answer to the student's question.
 
@@ -266,7 +250,7 @@ async def stage1_resolve_topic(query: str, context: dict = None) -> Optional[dic
 
     try:
         raw = await asyncio.wait_for(
-            _call_llm_raw(messages, model=model_name, max_tokens=256, provider_list=providers),
+            _call_llm_raw(messages, model=model_name, max_tokens=150, provider_list=providers),
             timeout=0.8,
         )
         dur = (time.perf_counter() - t0) * 1000
