@@ -1,11 +1,12 @@
 """Syrabit.ai — Syllabus-focused web search engine (RAG removed)."""
 import os, re, asyncio, time, uuid, hashlib, logging
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from datetime import datetime, timezone
 from fastapi import HTTPException
 from deps import db, logger as _dep_logger, _assert_not_cms_context, is_mongo_available
 from cache import (
     _cache_key, _redis_get_search, _redis_cache_search,
+    _redis_get_ai_cache, _redis_set,
 )
 from utils import _extract_keywords, _slow_query
 
@@ -27,6 +28,8 @@ __all__ = [
     "syrabit_library_search",
     "_fetch_content_card", "_fetch_enrichment_blocks",
     "_embed_and_store_chapter", "_embed_and_store_page", "_embed_cms_document",
+    "web_search_with_fallback",
+    "_sources_from_web_results",
 ]
 
 
@@ -74,7 +77,6 @@ def get_pipeline_stats(window_seconds: int = 86400) -> dict:
 
 
 async def auto_chunk_content(*args, **kwargs) -> list:
-    logger.info("auto_chunk_content: RAG removed — no-op")
     return []
 
 async def rechunk_chapter(*args, **kwargs) -> dict:
@@ -88,21 +90,6 @@ async def vector_rag_search(*args, **kwargs) -> list:
 
 async def rag_search(*args, **kwargs) -> dict:
     return {"chunks": [], "chapters": [], "subjects": [], "source": "none", "quality": "none"}
-
-async def syrabit_library_search(query: str, *, board_name: str = "", class_name: str = "", subject_name: str = "", limit: int = 10, **kwargs) -> list:
-    try:
-        results = await web_search_with_fallback(
-            query, num_results=limit,
-            board_name=board_name, class_name=class_name,
-            subject_name=subject_name,
-        )
-        return [
-            {"title": r.get("title", ""), "snippet": r.get("body", r.get("snippet", "")), "url": r.get("href", r.get("url", "")), "source": r.get("_layer", "web")}
-            for r in results
-        ]
-    except Exception as e:
-        logger.warning(f"syrabit_library_search web fallback failed: {e}")
-        return []
 
 async def _fetch_content_card(*args, **kwargs):
     return None
@@ -118,6 +105,241 @@ async def _embed_and_store_page(*args, **kwargs):
 
 async def _embed_cms_document(*args, **kwargs):
     return {}
+
+
+_WEB_SEARCH_CACHE: dict[str, tuple[float, list]] = {}
+_WEB_SEARCH_CACHE_TTL = 300
+_WEB_SEARCH_CACHE_MAX = 256
+
+_SYRABIT_DOMAINS = {"syrabit.ai", "www.syrabit.ai"}
+
+_EDUCATIONAL_DOMAINS = {
+    "ncert.nic.in", "byjus.com", "vedantu.com", "toppr.com",
+    "learncbse.in", "geeksforgeeks.org", "shaalaa.com",
+    "doubtnut.com", "askiitians.com", "meritnation.com",
+    "brainly.in", "javatpoint.com", "studiestoday.com",
+    "tutorialspoint.com", "mathsisfun.com", "khanacademy.org",
+    "wikipedia.org", "brilliant.org", "unacademy.com",
+}
+
+
+def _build_search_query(
+    query: str,
+    board_name: str = "",
+    class_name: str = "",
+    subject_name: str = "",
+    chapter_name: str = "",
+) -> str:
+    parts = [query]
+    if board_name:
+        b = board_name.strip().upper()
+        if b in ("AHSEC", "SEBA", "DEGREE"):
+            parts.append(b)
+        else:
+            parts.append(board_name.strip())
+    if class_name:
+        parts.append(class_name.strip())
+    if subject_name and subject_name.lower() not in query.lower():
+        parts.append(subject_name.strip())
+    if chapter_name and chapter_name.lower() not in query.lower():
+        parts.append(chapter_name.strip())
+    return " ".join(parts)
+
+
+async def _ddg_search(query: str, max_results: int = 5) -> list:
+    try:
+        from ddgs import DDGS
+        def _do_search():
+            with DDGS() as ddgs:
+                return list(ddgs.text(query, max_results=max_results, region="in-en"))
+        results = await asyncio.wait_for(
+            asyncio.to_thread(_do_search),
+            timeout=3.0,
+        )
+        return results or []
+    except asyncio.TimeoutError:
+        logger.warning(f"[WEB_SEARCH] DDG search timed out for: {query[:60]}")
+        return []
+    except Exception as e:
+        logger.warning(f"[WEB_SEARCH] DDG search failed: {e}")
+        return []
+
+
+def _is_safe_url(url: str) -> bool:
+    try:
+        from urllib.parse import urlparse
+        import ipaddress
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = parsed.hostname or ""
+        if not host:
+            return False
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return False
+        except ValueError:
+            if host in ("localhost", "127.0.0.1", "0.0.0.0", "::1"):
+                return False
+            if host.endswith(".local") or host.endswith(".internal"):
+                return False
+        return True
+    except Exception:
+        return False
+
+_httpx_client = None
+
+def _get_httpx_client():
+    global _httpx_client
+    if _httpx_client is None:
+        import httpx
+        _httpx_client = httpx.AsyncClient(
+            timeout=3.0,
+            follow_redirects=True,
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+    return _httpx_client
+
+async def _fetch_page_content(url: str, max_chars: int = 3000) -> str:
+    if not url or not _is_safe_url(url):
+        return ""
+    try:
+        client = _get_httpx_client()
+        resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 SyrabitBot/1.0"})
+        final_url = str(resp.url)
+        if not _is_safe_url(final_url):
+            return ""
+        if resp.status_code != 200:
+            return ""
+        html = resp.text
+        text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<nav[^>]*>.*?</nav>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<footer[^>]*>.*?</footer>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<header[^>]*>.*?</header>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'&[a-zA-Z]+;', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        if len(text) < 50:
+            return ""
+        return text[:max_chars]
+    except Exception:
+        return ""
+
+
+async def web_search_with_fallback(
+    query: str,
+    *,
+    num_results: int = 8,
+    board_name: str = "",
+    class_name: str = "",
+    subject_name: str = "",
+    chapter_name: str = "",
+    enrich_top_n: int = 2,
+) -> list:
+    cache_key = hashlib.md5(f"{query}:{board_name}:{class_name}:{subject_name}:{chapter_name}".lower().encode()).hexdigest()
+    cached = _WEB_SEARCH_CACHE.get(cache_key)
+    if cached:
+        ts, results = cached
+        if time.time() - ts < _WEB_SEARCH_CACHE_TTL:
+            logger.info(f"[WEB_SEARCH] Cache HIT for '{query[:40]}' ({len(results)} results)")
+            return results
+
+    t0 = time.perf_counter()
+    all_results: list = []
+    seen_urls: set = set()
+
+    scoped_query = _build_search_query(query, board_name, class_name, subject_name, chapter_name)
+
+    syrabit_task = _ddg_search(f"site:syrabit.ai {scoped_query}", max_results=3)
+    web_task = _ddg_search(scoped_query, max_results=num_results)
+    syrabit_raw, web_raw = await asyncio.gather(syrabit_task, web_task, return_exceptions=True)
+
+    if isinstance(syrabit_raw, list):
+        for r in syrabit_raw:
+            url = r.get("href", r.get("url", ""))
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                all_results.append({
+                    "title": r.get("title", ""),
+                    "snippet": r.get("body", r.get("snippet", "")),
+                    "url": url,
+                    "_layer": "syrabit",
+                })
+    else:
+        logger.warning(f"[WEB_SEARCH] Syrabit layer failed: {syrabit_raw}")
+
+    if isinstance(web_raw, list):
+        edu_results = []
+        other_results = []
+        for r in web_raw:
+            url = r.get("href", r.get("url", ""))
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                entry = {
+                    "title": r.get("title", ""),
+                    "snippet": r.get("body", r.get("snippet", "")),
+                    "url": url,
+                    "_layer": "base",
+                }
+                try:
+                    from urllib.parse import urlparse
+                    domain = urlparse(url).netloc.lower().lstrip("www.")
+                    if domain in _EDUCATIONAL_DOMAINS:
+                        edu_results.append(entry)
+                    else:
+                        other_results.append(entry)
+                except Exception:
+                    other_results.append(entry)
+        all_results.extend(edu_results)
+        all_results.extend(other_results)
+    else:
+        logger.warning(f"[WEB_SEARCH] Web layer failed: {web_raw}")
+
+    if not all_results:
+        logger.warning(f"[WEB_SEARCH] No results for: {query[:60]}")
+        return []
+
+    if enrich_top_n > 0 and all_results:
+        to_enrich = all_results[:enrich_top_n]
+        enrichment_tasks = [_fetch_page_content(r["url"]) for r in to_enrich]
+        enriched = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
+        for i, content in enumerate(enriched):
+            if isinstance(content, str) and content.strip():
+                to_enrich[i]["full_content"] = content
+                to_enrich[i]["_enriched"] = True
+
+    dur_ms = (time.perf_counter() - t0) * 1000
+    logger.info(
+        f"[WEB_SEARCH] '{query[:50]}' → {len(all_results)} results "
+        f"(syrabit={sum(1 for r in all_results if r.get('_layer')=='syrabit')}, "
+        f"edu={sum(1 for r in all_results if r.get('_layer')=='base')}) "
+        f"in {dur_ms:.0f}ms"
+    )
+
+    if len(_WEB_SEARCH_CACHE) >= _WEB_SEARCH_CACHE_MAX:
+        oldest = min(_WEB_SEARCH_CACHE, key=lambda k: _WEB_SEARCH_CACHE[k][0])
+        del _WEB_SEARCH_CACHE[oldest]
+    _WEB_SEARCH_CACHE[cache_key] = (time.time(), all_results)
+
+    return all_results
+
+
+async def syrabit_library_search(query: str, *, board_name: str = "", class_name: str = "", subject_name: str = "", limit: int = 10, **kwargs) -> list:
+    try:
+        results = await web_search_with_fallback(
+            query, num_results=limit,
+            board_name=board_name, class_name=class_name,
+            subject_name=subject_name,
+        )
+        return [
+            {"title": r.get("title", ""), "snippet": r.get("snippet", ""), "url": r.get("url", ""), "source": r.get("_layer", "web")}
+            for r in results
+        ]
+    except Exception as e:
+        logger.warning(f"syrabit_library_search web fallback failed: {e}")
+        return []
 
 
 def _extract_relevant_sections(document_text: str, query: str, char_limit: int = 3000) -> str:
@@ -150,23 +372,7 @@ async def resolve_rag_context(
     topic_metadata: Optional[dict] = None,
 ) -> dict:
     if document_text and document_text.strip():
-        keywords = _extract_keywords(query)
-        lines = [l.strip() for l in document_text.split('\n') if l.strip()]
-        scored = []
-        for i, line in enumerate(lines):
-            score = sum(1 for kw in keywords if kw in line.lower())
-            scored.append((score, i, line))
-        scored.sort(key=lambda x: -x[0])
-        selected_indices = set()
-        for score, idx, _ in scored[:8]:
-            if score > 0:
-                for j in range(max(0, idx - 1), min(len(lines), idx + 3)):
-                    selected_indices.add(j)
-        if selected_indices:
-            relevant = "\n".join(lines[i] for i in sorted(selected_indices))
-            relevant = relevant[:3000]
-        else:
-            relevant = document_text[:3000]
+        relevant = _extract_relevant_sections(document_text, query)
         return {
             "chunks": [], "chapters": [], "subjects": [],
             "document_text": relevant,
@@ -223,6 +429,22 @@ def _sources_from_rag_ctx(rag_ctx: dict) -> list:
             sources.append({"slug": slug, "title": subj.get("name", ""), "url": subj.get("url", "")})
 
     return sources
+
+
+def _sources_from_web_results(web_results: list) -> list:
+    sources = []
+    seen = set()
+    for r in (web_results or []):
+        url = r.get("url", "")
+        if url and url not in seen:
+            seen.add(url)
+            sources.append({
+                "type": "web",
+                "title": r.get("title", ""),
+                "url": url,
+                "layer": r.get("_layer", "web"),
+            })
+    return sources[:6]
 
 
 def build_rag_system_prompt(
@@ -346,6 +568,10 @@ def build_rag_system_prompt(
                 "---\n"
             )
             return base_prompt + grounding
+
+    _extraction_rules = get_intent_extraction_rules(_intent)
+    if _extraction_rules and not _is_casual:
+        base_prompt += f"\n\n{_extraction_rules}"
 
     if web_results:
         syrabit_results = [r for r in web_results if r.get("_layer") == "syrabit"]

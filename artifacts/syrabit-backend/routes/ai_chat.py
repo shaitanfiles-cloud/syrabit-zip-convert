@@ -349,11 +349,36 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             document_text=document_text, intent=_detected_intent,
         )
 
-    web_results = []
-    history_messages = await _ns_fetch_history()
-    syllabus = await _ns_fetch_syllabus()
+    async def _ns_fetch_web():
+        if _is_casual_sync or document_text:
+            return []
+        try:
+            return await web_search_with_fallback(
+                _rag_query,
+                board_name=ctx_board_name or "",
+                class_name=ctx_class_name or "",
+                subject_name=msg.subject_name or "",
+                chapter_name=msg.chapter_name or "",
+                enrich_top_n=2,
+            )
+        except Exception as _ws_err:
+            logger.warning(f"[NON-STREAM] Web search failed (non-fatal): {_ws_err}")
+            return []
 
-    # ── Build RAG-enriched system prompt ─────────────────────────────────────
+    _ns_phase2 = await asyncio.gather(
+        _ns_fetch_history(),
+        _ns_fetch_syllabus(),
+        _ns_fetch_web(),
+        return_exceptions=True,
+    )
+    history_messages = _ns_phase2[0] if not isinstance(_ns_phase2[0], BaseException) else []
+    syllabus = _ns_phase2[1] if not isinstance(_ns_phase2[1], BaseException) else None
+    web_results = _ns_phase2[2] if not isinstance(_ns_phase2[2], BaseException) else []
+    for _pi, _pr in enumerate(_ns_phase2):
+        if isinstance(_pr, BaseException):
+            logger.warning(f"[NON-STREAM] Phase 2 task {_pi} failed: {_pr}")
+
+    # ── Build system prompt with web search context ───────────────────────────
     system_prompt = build_rag_system_prompt(
         {
             "board_name":  ctx_board_name,
@@ -434,8 +459,9 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             logger.error(f"AI chat error: {e}")
             raise HTTPException(status_code=503, detail="AI service temporarily unavailable")
 
-    # Derive sources from the same RAG context sent to the LLM (no mismatch)
     lib_sources = _sources_from_rag_ctx(rag_ctx)
+    if web_results:
+        lib_sources.extend(_sources_from_web_results(web_results))
 
     now = datetime.now(timezone.utc).isoformat()
     _rag_subject_ids = list({s["id"] for s in rag_ctx.get("subjects", []) if s.get("id")})
@@ -897,10 +923,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.info(f"[PIPELINE][S1][STREAM] Enhanced search query: '{_s_rag_query[:80]}'")
 
     _rag_quality = "none"
-    try:
-        syllabus = await _syllabus_task
-    except Exception:
-        syllabus = None
 
     rag_ctx = {"chunks": [], "chapters": [], "chunk_chapters": [], "subjects": [],
                "vector_hits": [], "source": "none", "quality": "none",
@@ -916,10 +938,32 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             document_text=document_text, intent=_stream_intent,
         )
 
-    web_results = []
+    async def _fetch_web_search():
+        if _is_casual or document_text:
+            return []
+        try:
+            return await web_search_with_fallback(
+                _s_rag_query,
+                board_name=ctx_board_name or "",
+                class_name=ctx_class_name or "",
+                subject_name=msg.subject_name or "",
+                chapter_name=msg.chapter_name or "",
+                enrich_top_n=2,
+            )
+        except Exception as _ws_err:
+            logger.warning(f"[STREAM] Web search failed (non-fatal): {_ws_err}")
+            return []
+
+    _phase2_results = await asyncio.gather(
+        _syllabus_task,
+        _fetch_web_search(),
+        return_exceptions=True,
+    )
+    syllabus = _phase2_results[0] if not isinstance(_phase2_results[0], BaseException) else None
+    web_results = _phase2_results[1] if not isinstance(_phase2_results[1], BaseException) else []
 
     _t_phase2_done = _time_mod.time()
-    logger.info(f"[STREAM][TIMING] Phase 2 (web+history): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
+    logger.info(f"[STREAM][TIMING] Phase 2 (web+syllabus): {_t_phase2_done - _t_phase2:.3f}s | web_results={len(web_results)} | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -1122,6 +1166,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _src_ctx_task = asyncio.create_task(_resolve_source_ctx_bg())
 
     rag_sources = _sources_from_rag_ctx(rag_ctx)
+    if web_results:
+        rag_sources.extend(_sources_from_web_results(web_results))
 
     _cache_is_casual = _stream_intent in ("casual", "general")
     _cache_msg_key = f"{msg.message}::lang={_resp_lang}" if _want_translate else msg.message

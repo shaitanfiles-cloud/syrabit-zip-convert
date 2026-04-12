@@ -72,17 +72,19 @@ except Exception as _mongo_init_err:
 
 _mongo_available = None
 _mongo_last_check = 0.0
-_MONGO_CHECK_COOLDOWN = 60
+_MONGO_CHECK_COOLDOWN = 15
+_MONGO_DOWN_COOLDOWN = 10
 
 async def is_mongo_available():
     global _mongo_available, _mongo_last_check
     if db is None:
         return False
     now = _time_mod.time()
-    if _mongo_available is not None and (now - _mongo_last_check) < _MONGO_CHECK_COOLDOWN:
+    cooldown = _MONGO_DOWN_COOLDOWN if _mongo_available is False else _MONGO_CHECK_COOLDOWN
+    if _mongo_available is not None and (now - _mongo_last_check) < cooldown:
         return _mongo_available
     try:
-        await db.command("ping")
+        await asyncio.wait_for(db.command("ping"), timeout=3.0)
         _mongo_available = True
     except Exception:
         _mongo_available = False

@@ -169,7 +169,7 @@ async def admin_d1_export(request: Request):
 async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
     try:
         if not await is_mongo_available():
-            raise HTTPException(status_code=503, detail="MongoDB unavailable - cannot create content")
+            raise HTTPException(status_code=503, detail="MongoDB unavailable - please retry in a few seconds")
         name = (data.get("name") or "").strip()
         if not name:
             raise HTTPException(status_code=422, detail="Board name is required")
@@ -181,15 +181,18 @@ async def admin_create_board(data: dict, admin: dict = Depends(get_admin_user)):
             "description": data.get("description", ""),
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
-        await db.boards.insert_one(board)
+        await asyncio.wait_for(db.boards.insert_one(board), timeout=8.0)
         _invalidate_content_cache("boards")
         _schedule_d1_sync_fire("boards")
         return {k: v for k, v in board.items() if k != "_id"}
     except HTTPException:
         raise
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Database timeout - please retry")
     except Exception as e:
+        logger.error(f"Board creation failed: {e}")
         mark_mongo_down()
-        raise HTTPException(status_code=503, detail="Database error")
+        raise HTTPException(status_code=503, detail="Database error - please retry")
 
 @router.patch("/admin/content/boards/{board_id}")
 async def admin_update_board(board_id: str, data: dict, admin: dict = Depends(get_admin_user)):
@@ -427,57 +430,84 @@ async def admin_fyugp_auto_assign(admin: dict = Depends(get_admin_user)):
 async def admin_create_subject(data: SubjectCreate, admin: dict = Depends(get_admin_user)):
     try:
         if not await is_mongo_available():
-            raise HTTPException(status_code=503, detail="MongoDB unavailable - cannot create content")
+            raise HTTPException(status_code=503, detail="MongoDB unavailable - please retry in a few seconds")
         
         stream_name_val = ""
         board_id_val = ""
         board_name_val = ""
+        board_slug_val = ""
         class_name_val = ""
+        class_slug_val = ""
+        stream_slug_val = ""
         stream_id_val = data.stream_id or ""
 
         if data.stream_id:
-            stream = await db.streams.find_one({"id": data.stream_id}, {"_id": 0})
+            stream = await asyncio.wait_for(
+                db.streams.find_one({"id": data.stream_id}, {"_id": 0}), timeout=5.0
+            )
             if not stream:
                 raise HTTPException(status_code=404, detail="Stream not found")
             stream_name_val = stream.get("name", "")
-            class_obj = await db.classes.find_one({"id": stream.get("class_id")}, {"_id": 0})
-            board = await db.boards.find_one({"id": class_obj.get("board_id") if class_obj else None}, {"_id": 0})
+            stream_slug_val = stream.get("slug", "")
+            class_obj = await asyncio.wait_for(
+                db.classes.find_one({"id": stream.get("class_id")}, {"_id": 0}), timeout=5.0
+            )
+            board = await asyncio.wait_for(
+                db.boards.find_one({"id": class_obj.get("board_id") if class_obj else None}, {"_id": 0}), timeout=5.0
+            )
             board_id_val = board.get("id", "") if board else ""
             board_name_val = board.get("name", "") if board else ""
+            board_slug_val = board.get("slug", "") if board else ""
             class_name_val = class_obj.get("name", "") if class_obj else ""
+            class_slug_val = class_obj.get("slug", "") if class_obj else ""
         elif data.stream_name:
             stream_name_val = data.stream_name.strip()
         else:
             raise HTTPException(status_code=400, detail="Stream selection or custom stream name is required")
         
+        tags_val = data.tags
+        if isinstance(tags_val, str):
+            tags_val = [t.strip() for t in tags_val.split(",") if t.strip()] if tags_val else []
+
         subject_id = str(uuid.uuid4())
         subj = {
             "id": subject_id,
             "name": data.name,
             "stream_id": stream_id_val,
+            "stream_slug": stream_slug_val,
             "streamName": stream_name_val,
+            "board_id": board_id_val,
             "boardId": board_id_val,
             "boardName": board_name_val,
+            "board_slug": board_slug_val,
+            "class_id": (class_obj.get("id", "") if class_obj else "") if data.stream_id else "",
             "className": class_name_val,
-            "description": data.description,
-            "tags": data.tags,
-            "thumbnailUrl": data.thumbnail_url,
-            "status": data.status,
-            "slug": data.name.lower().replace(" ", "-"),
+            "class_slug": class_slug_val,
+            "description": data.description or "",
+            "tags": tags_val,
+            "thumbnailUrl": data.thumbnail_url or "",
+            "status": data.status or "published",
+            "slug": re.sub(r'-+', '-', re.sub(r'[^\w\s-]', '', data.name.lower().strip()).replace(' ', '-')).strip('-'),
             "chapter_count": 0,
             "gradient": "math",
+            "icon": "📄",
             "created_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
-        await db.subjects.insert_one(subj)
+        await asyncio.wait_for(db.subjects.insert_one(subj), timeout=8.0)
         _invalidate_content_cache("subjects")
         _schedule_d1_sync_fire("subjects")
+        logger.info(f"Subject created: {data.name} (id={subject_id}, stream={stream_id_val})")
         return {k: v for k, v in subj.items() if k != "_id"}
     except HTTPException:
         raise
-    except Exception:
+    except asyncio.TimeoutError:
+        logger.error(f"Subject creation timed out for: {data.name}")
+        raise HTTPException(status_code=504, detail="Database timeout - please retry")
+    except Exception as exc:
+        logger.error(f"Subject creation failed for {data.name}: {exc}")
         mark_mongo_down()
-        raise HTTPException(status_code=503, detail="Database error")
+        raise HTTPException(status_code=503, detail="Database error - please retry")
 
 @router.put("/admin/content/subjects/{subject_id}")
 async def admin_update_subject(subject_id: str, data: dict, admin: dict = Depends(get_admin_user)):

@@ -64,7 +64,7 @@ _HARD_BYPASS_INTENTS = {"syllabus", "chapter_meta"}
 _STAGE1_PROMPT = """Topic classifier for Assam board education (AHSEC/SEBA/DEGREE). Return ONLY JSON:
 {"subject":"","chapter":"","topic":"","intent":"notes|important_questions|pyq|syllabus|chapter_meta|casual|general","search_keywords":["3-5 terms"],"confidence":"high|low","needs_web_search":true/false}
 
-Rules: casual=greetings/small talk. general=non-academic. needs_web_search=true ONLY for PYQ/exam dates/notifications/current affairs/Assam board data. false for concept definitions/formulas/theorems. JSON only, no explanation."""
+Rules: casual=greetings/small talk. general=non-academic. needs_web_search=true for ALL academic/content queries (notes, PYQ, important questions, syllabus). false only for casual/general. search_keywords should be syllabus-aligned terms that help find relevant content. JSON only, no explanation."""
 
 _STAGE2_PROMPT_TEMPLATE = """You are a factual synthesizer. Your job is to read the retrieved content chunks below and produce a strictly-grounded factual answer to the student's question.
 

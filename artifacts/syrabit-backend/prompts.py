@@ -1,19 +1,19 @@
 """
 Syrabit.ai — Adaptive system prompt builder.
 
-Intent-based classification (6 intents) with category-gated RAG and
-intent-specific formatting rules.
+Intent-based classification (6 intents) with syllabus-focused web search
+and intent-specific formatting rules.
 
 Intents:
-  casual        — greetings, small talk, motivational → no RAG
-  syllabus      — syllabus/topic list queries → no RAG (uses Tier -1)
-  chapter_meta  — chapter info, exam pattern, overview → no RAG
-  notes         — study material, definitions, explanations → RAG (category=notes)
-  important_questions — imp questions, repeated questions → RAG (category=important_questions)
-  pyq           — previous year question papers → RAG (category=question_paper)
+  casual        — greetings, small talk, motivational → no web search
+  syllabus      — syllabus/topic list queries → syllabus DB + web search
+  chapter_meta  — chapter info, exam pattern, overview → web search
+  notes         — study material, definitions, explanations → web search
+  important_questions — imp questions, repeated questions → web search
+  pyq           — previous year question papers → web search
 
-Each intent maps to a db_category used to filter RAG chunks before they reach
-the LLM, eliminating cross-category noise.
+Pipeline: Stage 1 (topic classify) → web search → LLM
+Web search prioritizes Syrabit browser pages and educational domains.
 """
 import re
 import logging
@@ -426,50 +426,43 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
         "CONTENT EXTRACTION RULES:\n"
         "- Look for the SUBJECT CHAPTERS block — it contains the EXACT chapter list from the database.\n"
         "- Use chapter titles and descriptions EXACTLY as written. Do NOT rename, split, or merge chapters.\n"
-        "- If no SUBJECT CHAPTERS block exists, fall back to the CURRICULUM block.\n"
+        "- If no SUBJECT CHAPTERS block exists, use the CURRICULUM block or web search results.\n"
         "- Do NOT extract individual topics, sub-topics, or marks breakdowns within each chapter.\n"
-        "- Ignore question-type blocks.\n"
         "SEMESTER HANDLING:\n"
-        "- If the student asks for a specific semester (e.g. '4th semester syllabus'), filter and present ONLY the chapters for that semester.\n"
+        "- If the student asks for a specific semester, filter and present ONLY the chapters for that semester.\n"
         "- Always present the COMPLETE list of chapters for the requested scope — never truncate.\n"
-        "RESPONSE FORMAT: List each chapter with its exact title and description. No sub-topics, no marks per topic — just chapter names and descriptions as stored."
+        "RESPONSE FORMAT: List each chapter with its exact title and description."
     ),
     "pyq": (
         "CONTENT EXTRACTION RULES:\n"
-        "- Prioritize `[PYQ PAPER: ...]` blocks — extract all questions preserving number, marks, and sub-parts.\n"
-        "- Also check `[Content: ... | type=important-questions]` blocks for additional exam questions.\n"
-        "- If a `[PAGE: ... | type=important-questions]` vector hit exists, use it.\n"
-        "- Ignore `type=notes` and `type=definition` blocks.\n"
+        "- Extract questions from web search results preserving question numbers, marks, and sub-parts.\n"
+        "- Look for actual question paper content in the search results.\n"
+        "- Prioritize Syrabit results as they contain curriculum-aligned content.\n"
         "RESPONSE FORMAT: Organize by section (1-mark, 2-mark, 5-mark, 10-mark). Never solve — just present."
     ),
     "notes": (
         "CONTENT EXTRACTION RULES:\n"
-        "- Use `type=notes` and `type=definition` blocks. Ignore `type=important-questions`, `type=mcqs`.\n"
-        "RESPONSE FORMAT: Answer ONLY the question asked. 'what is X?' → 2-3 sentences. 'explain X' → 3-5 sentences. No tangents. No invented examples."
+        "- Use web search results and your knowledge to answer the question.\n"
+        "- Prioritize Syrabit results for curriculum-aligned content.\n"
+        "RESPONSE FORMAT: Answer ONLY the question asked. 'what is X?' → 2-3 sentences. 'explain X' → 3-5 sentences. No tangents."
     ),
     "important_questions": (
         "CONTENT EXTRACTION RULES:\n"
-        "- Prioritize `[CHAPTER QUESTIONS: ...]` blocks — these contain `mark_wise_questions` and `important_questions` from the curriculum database.\n"
-        "- Also use `[Content: ... | type=important-questions]` blocks.\n"
-        "- From `[PYQ PAPER: ...]` blocks, count question repetition across years.\n"
-        "- Cross-reference to determine frequency. Ignore `type=notes` and `type=definition` blocks.\n"
+        "- Extract important questions from web search results.\n"
+        "- Cross-reference to determine frequency and importance.\n"
         "CHAPTER-WISE CHUNKING (MANDATORY):\n"
-        "- If grounding contains questions from MULTIPLE chapters/units, show ONLY the FIRST chapter/unit.\n"
+        "- If results contain questions from MULTIPLE chapters/units, show ONLY the FIRST chapter/unit.\n"
         "- At the end, ask: 'Would you like to see important questions for [next chapter/unit name]?'\n"
         "- NEVER dump all chapters in one response.\n"
         "RESPONSE FORMAT — STRICT RULES:\n"
-        "1. Do NOT echo internal block labels like '[CHAPTER QUESTIONS: ...]' in your response.\n"
-        "2. Start with the chapter/unit name as a heading.\n"
-        "3. MERGE ALL questions into ONE unified mark-wise list. Do NOT create separate sections.\n"
-        "   There must be NO separate 'Important Questions' section — every question goes under its mark category.\n"
-        "4. Mark categories MUST be in STRICTLY ASCENDING numeric order: 1-Mark → 2-Mark → 3-Mark → 5-Mark → 10-Mark.\n"
-        "   WRONG order: 1-Mark, 10-Mark, 2-Mark. CORRECT order: 1-Mark, 2-Mark, 3-Mark, 5-Mark, 10-Mark.\n"
-        "5. Under each mark heading, number the questions. Tag PYQ repeats with years.\n"
-        "6. Format example:\n"
+        "1. Start with the chapter/unit name as a heading.\n"
+        "2. MERGE ALL questions into ONE unified mark-wise list.\n"
+        "3. Mark categories MUST be in STRICTLY ASCENDING order: 1-Mark → 2-Mark → 3-Mark → 5-Mark → 10-Mark.\n"
+        "4. Under each mark heading, number the questions. Tag PYQ repeats with years.\n"
+        "5. Format example:\n"
         "   ## Unit I: [Name]\n"
         "   **1-Mark Questions**\n"
         "   1. Question text (2019, 2021)\n"
-        "   2. Question text\n"
         "   **2-Mark Questions**\n"
         "   1. Question text\n"
         "   **5-Mark Questions**\n"
@@ -479,9 +472,8 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
     ),
     "chapter_meta": (
         "CONTENT EXTRACTION RULES:\n"
-        "- Use the CURRICULUM block for official guidelines and structure.\n"
-        "- Analyze `[PYQ PAPER: ...]` blocks across years to infer section breakdown (count of questions per mark category).\n"
-        "- Use `[Content: ... | type=notes]` blocks if they contain exam structure information.\n"
+        "- Use the CURRICULUM block and web search results for exam structure information.\n"
+        "- Prioritize Syrabit and official board sources.\n"
         "RESPONSE FORMAT: Table with Section, Question Type, Marks, Count, Total. Include time, pass marks, choice rules."
     ),
 }
