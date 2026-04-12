@@ -122,7 +122,6 @@ from db_ops import _supa, supa_insert_activity_log
 from metrics import _bg_health_loop, _alerting_loop
 
 from prompts import build_system_prompt, _classify_question
-from subject_router import build_search_scope
 from syllabus_embedder import SyllabusEmbedder
 
 _syllabus_embedder: Optional[SyllabusEmbedder] = None

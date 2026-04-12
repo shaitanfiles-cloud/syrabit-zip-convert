@@ -14,12 +14,11 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "_HISTORY_MAX_TURNS", "_HISTORY_TOKEN_BUDGET",
     "_LATENCY_MAX", "_RAG_TELEM_MAX",
-    "_chat_latencies", "_ddg_news_search", "_ddg_text_search",
+    "_chat_latencies",
     "_extract_relevant_sections",
     "_rag_telemetry", "_record_chat_latency",
     "_record_rag_event", "_sources_from_rag_ctx", "_trim_history",
     "build_rag_system_prompt",
-    "web_search_with_fallback",
     "get_vector_search_stats", "get_pipeline_stats", "record_pipeline_run",
     "_record_vector_search",
     "resolve_rag_context",
@@ -181,127 +180,6 @@ async def resolve_rag_context(
         "intent": intent or "general",
         "_general_knowledge_fallback": True,
     }
-
-
-async def _ddg_text_search(query: str, num_results: int) -> list:
-    def _run():
-        from ddgs import DDGS
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=num_results):
-                results.append({
-                    "title":   r.get("title", ""),
-                    "url":     r.get("href", ""),
-                    "snippet": r.get("body", ""),
-                })
-        return results
-    try:
-        loop = asyncio.get_running_loop()
-        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=1.0)
-        logger.info(f"DDG text search: {len(results)} results | query: {query[:60]}")
-        return results
-    except Exception as exc:
-        logger.warning(f"DDG text search failed: {exc}")
-        return []
-
-
-async def _ddg_news_search(query: str, num_results: int) -> list:
-    def _run():
-        from ddgs import DDGS
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.news(query, max_results=num_results):
-                results.append({
-                    "title":   r.get("title", ""),
-                    "url":     r.get("url", r.get("href", "")),
-                    "snippet": r.get("body", r.get("excerpt", "")),
-                })
-        return results
-    try:
-        loop = asyncio.get_running_loop()
-        results = await asyncio.wait_for(loop.run_in_executor(None, _run), timeout=1.0)
-        logger.info(f"DDG news search: {len(results)} results | query: {query[:60]}")
-        return results
-    except Exception as exc:
-        logger.warning(f"DDG news search failed: {exc}")
-        return []
-
-
-_SYRABIT_SITE = "syrabit.ai"
-
-async def web_search_with_fallback(
-    query: str,
-    num_results: int = 8,
-    board_name: str = "",
-    class_name: str = "",
-    subject_name: str = "",
-    scoped_query: str = "",
-    topic_metadata: dict = None,
-) -> list:
-    _assert_not_cms_context("web search")
-
-    _s1_subject = ""
-    _s1_chapter = ""
-    if topic_metadata:
-        _s1_subject = (topic_metadata.get("subject", "") or "").strip()
-        _s1_chapter = (topic_metadata.get("chapter", "") or "").strip()
-
-    _short_query = query[:120]
-
-    if scoped_query:
-        curriculum_query = scoped_query[:150]
-    else:
-        _ctx_parts = [p.strip() for p in [_s1_subject or subject_name] if p]
-        if _s1_chapter:
-            _ctx_parts.append(_s1_chapter)
-        curriculum_query = " ".join(_ctx_parts + [_short_query]) if _ctx_parts else _short_query
-
-    syrabit_query = f"site:{_SYRABIT_SITE} {_s1_subject or subject_name or ''} {_short_query}".strip()
-
-    syrabit_results, text_results, news_results = await asyncio.gather(
-        _ddg_text_search(syrabit_query, 3),
-        _ddg_text_search(curriculum_query, num_results),
-        _ddg_news_search(_short_query, 4),
-    )
-
-    for r in syrabit_results:
-        r["_layer"] = "syrabit"
-        r["_priority"] = True
-    for r in text_results:
-        r["_layer"] = "base"
-    for r in news_results:
-        r["_layer"] = "polish"
-
-    seen_urls = set()
-    combined = []
-    for r in syrabit_results:
-        url = r.get("url", "")
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            combined.append(r)
-    for r in text_results:
-        url = r.get("url", "")
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            combined.append(r)
-    for r in news_results:
-        url = r.get("url", "")
-        if url and url not in seen_urls:
-            seen_urls.add(url)
-            combined.append(r)
-
-    logger.info(
-        f"Web search: {len(syrabit_results)} syrabit + {len(text_results)} base (scoped: {curriculum_query[:60]!r}) + "
-        f"{len(news_results)} polish | raw: {query[:50]}"
-    )
-
-    try:
-        from web_content import enrich_search_results
-        combined = await enrich_search_results(combined)
-    except Exception as e:
-        logger.warning(f"Web content enrichment failed (using snippets only): {e}")
-
-    return combined
 
 
 _HISTORY_TOKEN_BUDGET = 1500

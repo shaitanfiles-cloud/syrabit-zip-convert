@@ -1509,25 +1509,8 @@ Write **exam-focused, topic-wise summary notes** for the chapter below. These ar
 
 
 async def _pipeline_web_search_pyqs(subject_name: str, chapter_title: str, class_name: str) -> str:
-    """Search the web for real PYQs and important questions related to this chapter."""
-    try:
-        from rag import _ddg_text_search
-        queries = [
-            f"{chapter_title} {subject_name} AHSEC previous year questions",
-            f"{chapter_title} {subject_name} {class_name} important questions marks",
-        ]
-        all_snippets = []
-        for q in queries:
-            results = await _ddg_text_search(q, 5)
-            for r in results:
-                snippet = (r.get("body") or r.get("snippet") or "").strip()
-                if snippet and len(snippet) > 30:
-                    all_snippets.append(snippet[:400])
-        combined = "\n---\n".join(all_snippets[:8])
-        return combined[:3000] if combined else ""
-    except Exception as e:
-        logger.warning(f"Web PYQ search failed for '{chapter_title}': {e}")
-        return ""
+    """Web search for PYQs removed — returns empty string."""
+    return ""
 
 
 async def _pipeline_generate_mark_wise_pyq(

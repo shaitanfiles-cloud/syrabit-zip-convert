@@ -1,35 +1,6 @@
 """Syrabit.ai — AI chat & search routes"""
 import re, json, asyncio, time, time as _time_mod, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
 
-_SIMPLE_Q_RE = re.compile(
-    r"^(what\s+is|what\s+are|define|explain|describe|meaning\s+of|who\s+is|who\s+was|"
-    r"state\s+the|write\s+the\s+definition|differentiate\s+between|difference\s+between|"
-    r"what\s+do\s+you\s+mean\s+by|ki\s+hoi|mane\s+ki|kya\s+hai|kya\s+hota\s+hai|"
-    r"kisne\s+banaya|kise\s+kahte|kis\s+ko\s+kehte)\b",
-    re.IGNORECASE,
-)
-_WEB_NEEDED_RE = re.compile(
-    r"(pyq|previous\s+year|exam\s+date|result\s+date|notification|admit\s+card|"
-    r"latest|current|recent|202[3-9]|2030|news|update|schedule|routine|"
-    r"mark\s+sheet|seat\s+allotment|cut\s*off|merit\s+list|how\s+to\s+apply|"
-    r"download|pdf|website|link|official|ahsec\s+result|seba\s+result)",
-    re.IGNORECASE,
-)
-
-def _heuristic_needs_web(query: str) -> bool:
-    if _WEB_NEEDED_RE.search(query):
-        return True
-    if _SIMPLE_Q_RE.match(query.strip()):
-        return False
-    return True
-
-
-def _coerce_needs_web(val) -> bool:
-    if isinstance(val, bool):
-        return val
-    if isinstance(val, str):
-        return val.lower() not in ("false", "no", "0")
-    return True
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -65,7 +36,6 @@ from rag import *
 from utils import *
 from analytics_helpers import *
 from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
-from subject_router import build_search_scope
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
 from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, run_pipeline_stream, get_instant_response
 
@@ -97,10 +67,6 @@ from qa_engine import log_chat_message as _log_chat_message
 from guardrails.prompt_safety import evaluate_prompt_safety, validate_llm_output
 
 logger = logging.getLogger(__name__)
-
-def _get_syllabus_embedder():
-    import server as _s
-    return _s._syllabus_embedder
 
 def _record_llm_cost(model, prompt_tokens, completion_tokens, provider="gemini", user_id=""):
     from routes.admin_advanced import record_llm_cost
@@ -230,24 +196,6 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         subj = await db.subjects.find_one({"id": msg.document_id}, {"_id": 0, "document_text": 1})
         return (subj or {}).get("document_text")
 
-    async def _ns_fetch_search_scope_early():
-        _hard_bypass = _detected_intent in ("syllabus", "chapter_meta")
-        if _hard_bypass and msg.subject_id:
-            return "", None
-        if msg.card_context and msg.subject_id and msg.subject_name:
-            return msg.subject_name, None
-        try:
-            return await asyncio.wait_for(build_search_scope(
-                msg.message,
-                board_name=msg.board_name or (user.get("board_name", "") if user else ""),
-                class_name=msg.class_name or (user.get("class_name", "") if user else ""),
-                subject_name=msg.subject_name or "",
-                embedder=_get_syllabus_embedder(),
-            ), timeout=0.8)
-        except asyncio.TimeoutError:
-            logger.info("[NON-STREAM] search_scope timed out at 0.8s — proceeding without route")
-            return "", None
-
     async def _ns_fetch_stage1_early():
         if not should_use_pipeline(_detected_intent, msg.message):
             return None
@@ -278,7 +226,6 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         _resolve_subject_context(msg.subject_id),
         _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
         _ns_fetch_doc(),
-        _ns_fetch_search_scope_early(),
         _ns_fetch_stage1_early(),
         _ns_fetch_followup(),
         _ns_prefetch_history(),
@@ -287,11 +234,9 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
     _subj_ctx_result = _phase0_results[0] if not isinstance(_phase0_results[0], BaseException) else {}
     _sem_class_result = _phase0_results[1] if not isinstance(_phase0_results[1], BaseException) else None
     document_text = _phase0_results[2] if not isinstance(_phase0_results[2], BaseException) else None
-    _scope_result = _phase0_results[3] if not isinstance(_phase0_results[3], BaseException) else ("", None)
-    _ns_scoped_query, _ns_route = _scope_result if isinstance(_scope_result, tuple) else ("", None)
-    _topic_metadata = _phase0_results[4] if not isinstance(_phase0_results[4], BaseException) else None
-    _followup_info = _phase0_results[5] if not isinstance(_phase0_results[5], BaseException) else None
-    _prefetched_conv = _phase0_results[6] if not isinstance(_phase0_results[6], BaseException) else None
+    _topic_metadata = _phase0_results[3] if not isinstance(_phase0_results[3], BaseException) else None
+    _followup_info = _phase0_results[4] if not isinstance(_phase0_results[4], BaseException) else None
+    _prefetched_conv = _phase0_results[5] if not isinstance(_phase0_results[5], BaseException) else None
     for _i, _r in enumerate(_phase0_results):
         if isinstance(_r, BaseException):
             logger.warning(f"[NON-STREAM] Phase 0 task {_i} failed (degrading gracefully): {_r}")
@@ -341,15 +286,6 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         logger.info(f"[NON-STREAM] Intent upgrade: syllabus → notes (Stage 1 has search_keywords, query is content-seeking)")
 
     _is_casual_sync = _detected_intent in ("casual", "general")
-    if _topic_metadata and "needs_web_search" in _topic_metadata:
-        _needs_web = _coerce_needs_web(_topic_metadata["needs_web_search"])
-    else:
-        _needs_web = _heuristic_needs_web(msg.message)
-    _skip_web_sync = (
-        _detected_intent in ("casual",)
-        or _want_translate
-        or (not _needs_web and _detected_intent not in ("pyq", "important_questions", "syllabus", "chapter_meta"))
-    )
 
     _rag_query = msg.message
     if _topic_metadata and _topic_metadata.get("search_keywords"):
@@ -382,13 +318,6 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             return s
         except Exception:
             return None
-
-    async def _safe_web_search(**kw):
-        try:
-            return await web_search_with_fallback(**kw)
-        except Exception as e:
-            logger.warning(f"[NON-STREAM] Web search failed (degrading gracefully): {e}")
-            return []
 
     async def _ns_fetch_history():
         if _prefetched_conv:
@@ -425,49 +354,9 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
             document_text=document_text, intent=_detected_intent,
         )
 
-    if _skip_web_sync:
-        _skip_src = "stage1" if (_topic_metadata and "needs_web_search" in _topic_metadata) else "heuristic"
-        _skip_reason = "casual" if _detected_intent in ("casual",) else f"LLM-knowledge ({_skip_src})"
-        logger.info(f"[NON-STREAM] Web search SKIPPED: {_skip_reason} | intent={_detected_intent}")
-        web_results = []
-        history_messages = await _ns_fetch_history()
-        syllabus = await _ns_fetch_syllabus()
-    else:
-        _ns_web_task = asyncio.create_task(_safe_web_search(
-            query=_rag_query, num_results=8,
-            board_name=ctx_board_name,
-            class_name=ctx_class_name,
-            subject_name=msg.subject_name or "",
-            scoped_query=_ns_scoped_query,
-            topic_metadata=_topic_metadata,
-        ))
-        _ns_hist_task = asyncio.create_task(_ns_fetch_history())
-        _ns_syl_task = asyncio.create_task(_ns_fetch_syllabus())
-        _NS_BUDGET = 1.2
-        done, pending = await asyncio.wait(
-            [_ns_web_task, _ns_hist_task, _ns_syl_task],
-            timeout=_NS_BUDGET,
-        )
-        for t in pending:
-            t.cancel()
-        try:
-            web_results = _ns_web_task.result() if _ns_web_task in done else []
-        except Exception as _web_err:
-            logger.warning(f"[NON-STREAM] Web search task failed: {_web_err}")
-            web_results = []
-        try:
-            history_messages = _ns_hist_task.result() if _ns_hist_task in done else []
-        except Exception as _hist_err:
-            logger.warning(f"[NON-STREAM] History task failed: {_hist_err}")
-            history_messages = []
-        try:
-            syllabus = _ns_syl_task.result() if _ns_syl_task in done else None
-        except Exception:
-            syllabus = None
-        if web_results and rag_ctx.get("source") != "document":
-            rag_ctx["source"] = "web"
-            rag_ctx["quality"] = "web"
-        logger.info(f"[NON-STREAM] Web search: {len(web_results)} results | intent={_detected_intent} | source={rag_ctx.get('source')}")
+    web_results = []
+    history_messages = await _ns_fetch_history()
+    syllabus = await _ns_fetch_syllabus()
 
     # ── Build RAG-enriched system prompt ─────────────────────────────────────
     system_prompt = build_rag_system_prompt(
@@ -869,7 +758,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _s_should_pipeline, _s_stage1, _s_apply_s1, _s_enhance_q = should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query
 
-    _s_hard_bypass = _stream_intent in ("syllabus", "chapter_meta")
+
 
     # ── Phase 0+1 fully parallel: context, semester, doc, search scope, Stage 1, follow-up all at once ──
     _t_phase0 = _time_mod.time()
@@ -884,23 +773,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             return None
         subj = await db.subjects.find_one({"id": msg.document_id}, {"_id": 0, "document_text": 1})
         return (subj or {}).get("document_text")
-
-    async def _fetch_search_scope_early():
-        if _s_hard_bypass and msg.subject_id:
-            return "", None
-        if msg.card_context and msg.subject_id and msg.subject_name:
-            return msg.subject_name, None
-        try:
-            return await asyncio.wait_for(build_search_scope(
-                msg.message,
-                board_name=msg.board_name or (user.get("board_name", "") if user else ""),
-                class_name=msg.class_name or (user.get("class_name", "") if user else ""),
-                subject_name=msg.subject_name or "",
-                embedder=_get_syllabus_embedder(),
-            ), timeout=0.35)
-        except asyncio.TimeoutError:
-            logger.info("[STREAM] search_scope timed out at 0.35s — proceeding without route")
-            return "", None
 
     async def _fetch_stage1_stream():
         if not _s_should_pipeline(_stream_intent, msg.message):
@@ -940,8 +812,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.warning(f"[STREAM] History prefetch failed (non-fatal): {_hist_err}")
         return None
 
-    _scope_task = asyncio.create_task(_fetch_search_scope_early())
-
     _subj_ctx_result, _sem_class_result, document_text, _s_topic_meta, _stream_followup_info, _prefetched_conv = await asyncio.gather(
         _resolve_subject_context(msg.subject_id),
         _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
@@ -950,20 +820,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _fetch_followup_info(),
         _prefetch_history(),
     )
-
-    if _scope_task.done():
-        try:
-            _sr_scoped_query, _sr_route = _scope_task.result()
-        except Exception:
-            _sr_scoped_query, _sr_route = "", None
-    else:
-        _sr_scoped_query, _sr_route = "", None
-        _scope_task.cancel()
-        try:
-            await _scope_task
-        except (asyncio.CancelledError, Exception):
-            pass
-        logger.info("[STREAM] search_scope not ready — proceeding without route")
 
     _is_followup_s = False
     if _stream_followup_info:
@@ -995,15 +851,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         logger.info(f"[STREAM] Intent upgrade: syllabus → notes (Stage 1 has search_keywords, query is content-seeking)")
 
     _is_casual = _stream_intent in ("casual", "general")
-    if _s_topic_meta and "needs_web_search" in _s_topic_meta:
-        _needs_web_s = _coerce_needs_web(_s_topic_meta["needs_web_search"])
-    else:
-        _needs_web_s = _heuristic_needs_web(msg.message)
-    _skip_web_stream = (
-        _stream_intent in ("casual",)
-        or _want_translate
-        or (not _needs_web_s and _stream_intent not in ("pyq", "important_questions", "syllabus", "chapter_meta"))
-    )
 
     subj_ctx = _subj_ctx_result
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
@@ -1079,48 +926,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             document_text=document_text, intent=_stream_intent,
         )
 
-    if _skip_web_stream:
-        _skip_src_s = "stage1" if (_s_topic_meta and "needs_web_search" in _s_topic_meta) else "heuristic"
-        _skip_reason_s = "casual" if _stream_intent in ("casual",) else f"LLM-knowledge ({_skip_src_s})"
-        logger.info(f"[STREAM] Web search SKIPPED: {_skip_reason_s} | intent={_stream_intent}")
-        web_results = []
-    else:
-        async def _safe_web_search_stream():
-            try:
-                return await web_search_with_fallback(
-                    _s_rag_query, num_results=8,
-                    board_name=ctx_board_name,
-                    class_name=ctx_class_name,
-                    subject_name=msg.subject_name or "",
-                    scoped_query=_sr_scoped_query,
-                    topic_metadata=_s_topic_meta,
-                )
-            except Exception as e:
-                logger.warning(f"[STREAM] Web search failed (degrading gracefully): {e}")
-                return []
-
-        _web_task = asyncio.create_task(_safe_web_search_stream())
-        _WEB_BUDGET = 0.8
-        done, _ = await asyncio.wait({_web_task}, timeout=_WEB_BUDGET, return_when=asyncio.ALL_COMPLETED)
-
-        if _web_task in done:
-            try:
-                web_results = _web_task.result()
-            except Exception:
-                web_results = []
-        else:
-            web_results = []
-            _web_task.cancel()
-            try:
-                await _web_task
-            except (asyncio.CancelledError, Exception):
-                pass
-            logger.warning("[STREAM] Web search timed out — proceeding without web context")
-
-        if web_results and rag_ctx.get("source") != "document":
-            rag_ctx["source"] = "web"
-            rag_ctx["quality"] = "web"
-        logger.info(f"[STREAM] Web search: {len(web_results)} results | intent={_stream_intent} | source={rag_ctx.get('source')}")
+    web_results = []
 
     _t_phase2_done = _time_mod.time()
     logger.info(f"[STREAM][TIMING] Phase 2 (web+history): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
