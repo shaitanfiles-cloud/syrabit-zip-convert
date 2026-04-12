@@ -3,7 +3,7 @@ import {
   ArrowLeft, Save, Loader2, Eye, Link2, BarChart3,
   Sparkles, RefreshCw, Layers, LayoutTemplate, Upload,
   FileText, Globe, Paperclip, CheckCircle, Smartphone, Monitor,
-  ImagePlus,
+  ImagePlus, Languages,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -46,6 +46,37 @@ export default function ChapterEditForm({
   const [mobilePreview, setMobilePreview] = useState(true);
   const [imgUploading, setImgUploading] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [editorLang, setEditorLang] = useState('en');
+  const [translating, setTranslating] = useState(false);
+
+  const handleTranslateToAssamese = useCallback(async () => {
+    if (!editTarget?.id) return;
+    setTranslating(true);
+    const tid = toast.loading('Translating to Assamese…');
+    try {
+      const res = await axios.post(
+        `${API}/admin/content/chapters/${editTarget.id}/translate`,
+        { target_lang: 'as-IN' },
+        authHeaders(adminToken)
+      );
+      setContentForm(f => ({ ...f, content_as: res.data.translated_text || '' }));
+      setEditorKey(k => k + 1);
+      toast.success(`Translated — ${res.data.word_count} words`, { id: tid });
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Translation failed', { id: tid });
+    } finally {
+      setTranslating(false);
+    }
+  }, [editTarget?.id, adminToken, setContentForm]);
+
+  const activeContent = editorLang === 'as' ? (contentForm.content_as || '') : contentForm.content;
+  const handleContentChange = useCallback((md) => {
+    if (editorLang === 'as') {
+      setContentForm(f => ({ ...f, content_as: md }));
+    } else {
+      setContentForm(f => ({ ...f, content: md }));
+    }
+  }, [editorLang, setContentForm]);
 
   const imageUploadHandler = useCallback(async (image) => {
     const formData = new FormData();
@@ -77,9 +108,10 @@ export default function ChapterEditForm({
           toast.loading(`Page ${i + 1}/${files.length}…`, { id: tid });
           urls.push(await imageUploadHandler(files[i]));
         }
-        const md = editorRef.current?.getMarkdown?.() ?? contentForm.content;
+        const md = editorRef.current?.getMarkdown?.() ?? activeContent;
         const pagesMd = urls.map((u, i) => `![Page ${i + 1}](${u})`).join('\n\n');
-        setContentForm(f => ({ ...f, content: md + (md.trim() ? '\n\n' : '') + pagesMd + '\n' }));
+        const field = editorLang === 'as' ? 'content_as' : 'content';
+        setContentForm(f => ({ ...f, [field]: md + (md.trim() ? '\n\n' : '') + pagesMd + '\n' }));
         setEditorKey(k => k + 1);
         toast.success(`${urls.length} page(s) added`, { id: tid });
       } catch {
@@ -89,7 +121,7 @@ export default function ChapterEditForm({
       }
     };
     input.click();
-  }, [imageUploadHandler, editorRef, contentForm, setContentForm, setEditorKey]);
+  }, [imageUploadHandler, editorRef, activeContent, editorLang, setContentForm, setEditorKey]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -170,6 +202,53 @@ export default function ChapterEditForm({
         )}
 
         {editView === 'edit-chapter' && editTarget?.id && (
+          <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-50/50 border border-violet-200/50">
+            <Languages size={14} className="text-violet-500 shrink-0" />
+            <div className="flex items-center gap-0.5 rounded-md p-0.5" style={{ background: 'rgba(139,92,246,0.1)' }}>
+              <button
+                onClick={() => { setEditorLang('en'); setEditorKey(k => k + 1); }}
+                className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-all ${editorLang === 'en' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-100'}`}
+              >
+                English
+              </button>
+              <button
+                onClick={() => { setEditorLang('as'); setEditorKey(k => k + 1); }}
+                className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-all ${editorLang === 'as' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-100'}`}
+              >
+                অসমীয়া
+              </button>
+            </div>
+            {editorLang === 'as' && (
+              contentForm.content_as ? (
+                <span className="text-[10px] text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded-full border border-emerald-200">{contentForm.content_as.split(/\s+/).length} words</span>
+              ) : (
+                <span className="text-[10px] text-gray-400">No Assamese content</span>
+              )
+            )}
+            {!contentForm.content_as && (
+              <button
+                onClick={handleTranslateToAssamese}
+                disabled={translating || !contentForm.content?.trim()}
+                className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold bg-violet-500 text-white hover:bg-violet-600 disabled:opacity-50 transition-all shadow-sm"
+              >
+                {translating ? <Loader2 size={12} className="animate-spin" /> : <Languages size={12} />}
+                {translating ? 'Translating…' : 'Translate to অসমীয়া'}
+              </button>
+            )}
+            {contentForm.content_as && (
+              <button
+                onClick={handleTranslateToAssamese}
+                disabled={translating || !contentForm.content?.trim()}
+                className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-medium text-violet-500 hover:bg-violet-100 disabled:opacity-50 transition-all border border-violet-200"
+              >
+                {translating ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
+                {translating ? 'Translating…' : 'Re-translate'}
+              </button>
+            )}
+          </div>
+        )}
+
+        {editView === 'edit-chapter' && editTarget?.id && (
           <div className="flex-shrink-0">
             <PYQUploadPanel
               adminToken={adminToken}
@@ -202,7 +281,7 @@ export default function ChapterEditForm({
               </button>
             </div>
             <div className="ml-auto flex items-center gap-1.5">
-              <span className="text-[10px] text-gray-300 font-mono">{contentForm.content.length}</span>
+              <span className="text-[10px] text-gray-300 font-mono">{activeContent.length}</span>
               <button
                 onClick={() => setMobilePreview(p => !p)}
                 className={`p-1.5 rounded-lg text-[10px] border transition-all ${mobilePreview ? 'bg-violet-50 text-violet-500 border-violet-200' : 'bg-gray-50 text-gray-400 border-gray-200 hover:text-gray-600'}`}
@@ -226,8 +305,9 @@ export default function ChapterEditForm({
                 <button
                   key={t.label}
                   onClick={() => {
-                    const current = editorRef.current?.getMarkdown?.() ?? contentForm.content;
-                    setContentForm(f => ({ ...f, content: current + t.shortcode }));
+                    const current = editorRef.current?.getMarkdown?.() ?? activeContent;
+                    const field = editorLang === 'as' ? 'content_as' : 'content';
+                    setContentForm(f => ({ ...f, [field]: current + t.shortcode }));
                     setEditorKey(k => k + 1);
                   }}
                   className="px-2 py-0.5 rounded text-[10px] border border-gray-200 bg-white text-gray-500 hover:text-violet-500 hover:border-violet-300 transition-colors"
@@ -262,9 +342,9 @@ export default function ChapterEditForm({
               <div className="flex-1 min-h-0 overflow-hidden" style={{ background: '#fff' }}>
                 <MDXEditor
                   ref={editorRef}
-                  key={`${editTarget?.id ?? '__new__'}-${editorKey}`}
-                  markdown={contentForm.content}
-                  onChange={md => setContentForm(f => ({ ...f, content: md }))}
+                  key={`${editTarget?.id ?? '__new__'}-${editorKey}-${editorLang}`}
+                  markdown={activeContent}
+                  onChange={handleContentChange}
                   className="mdx-editor-light h-full"
                   contentEditableClassName="cms-editor-content"
                   plugins={[
@@ -349,9 +429,9 @@ export default function ChapterEditForm({
                   </div>
                 )}
                 <div className="cms-preview-content" style={{ padding: mobilePreview ? '1rem 1.25rem' : '1.5rem 2rem', fontSize: '15px', lineHeight: '1.75', color: '#1a1a1a', minHeight: 200 }}>
-                  {contentForm.content.trim() ? (
+                  {activeContent.trim() ? (
                     <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {contentForm.content}
+                      {activeContent}
                     </ReactMarkdown>
                   ) : (
                     <p style={{ color: '#bbb', fontStyle: 'italic', fontSize: 13 }}>Preview appears here…</p>

@@ -45,6 +45,7 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **SEO Chapter Pages:** Chapter pages serve as single SEO landing pages with clean URLs, SERP preview modals, and deduplicated heading IDs.
 - **Analytics:** Multi-source analytics merging Cloudflare Analytics API, GA4, server-side tracking, and JS-tracked data, with an admin dashboard picking the highest-confidence metric.
 - **SEO Coverage:** All pages include `PageMeta` for title, description, OG, Twitter, canonical, and geo targeting, using JSON-LD structured data and a programmatic SEO engine.
+- **Bilingual Content (EN/AS):** `LanguageContext` stores user's content language preference (EN/AS) in localStorage. Library and Chapter pages have an EN/অসমীয়া toggle. Chapters store `content_as` field independently alongside English `content`. When "Generate Notes" runs, Sarvam auto-translates to Assamese. Admin editor has EN/AS tabs for independent editing of both languages. Subject/class/board names remain English in all modes. Chapter API returns `content_as` and `has_assamese` flag; frontend falls back to English when Assamese is unavailable.
 - **Content Display:** Library page features subject cards; lesson pages have a blog-style layout with reading progress and sticky TOC.
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.
 - **Chat Interface:** Uses a standardized 0.1 temperature for LLMs and increased RAG chunk size for academic concepts.

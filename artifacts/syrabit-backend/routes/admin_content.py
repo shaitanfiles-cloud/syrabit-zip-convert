@@ -1698,7 +1698,7 @@ async def delete_content_upload(content_id: str, admin: dict = Depends(get_admin
 
 @router.patch("/admin/content/chapters/{chapter_id}")
 async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depends(get_admin_user)):
-    allowed = {k: v for k, v in data.items() if k in ["title", "slug", "description", "content", "content_type", "order", "status", "attached_files", "topics"]}
+    allowed = {k: v for k, v in data.items() if k in ["title", "slug", "description", "content", "content_as", "content_type", "order", "status", "attached_files", "topics"]}
     if "slug" in allowed:
         allowed["slug"] = re.sub(r'[^a-z0-9]+', '-', (allowed["slug"] or "").lower()).strip('-')
     if "title" in allowed and not allowed.get("slug"):

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } fro
 import { useNavigate, Link } from 'react-router-dom';
 import {
   Search, Bookmark,
-  BookOpen, RefreshCw,
+  BookOpen, Globe, Languages,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -10,6 +10,7 @@ import PageMeta from '@/components/seo/PageMeta';
 import { Analytics } from '@/utils/analytics';
 import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/context/AuthContext';
+import { useContentLang } from '@/context/LanguageContext';
 import {
   useLibraryBundle, useSavedSubjects,
 } from '@/hooks/useContent';
@@ -61,6 +62,7 @@ function getOnboardingProfile() {
 export default function LibraryPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { contentLang, switchLang } = useContentLang();
 
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
@@ -233,8 +235,6 @@ export default function LibraryPage() {
 
   const handleResetFilters = useCallback(() => { setSearchQuery(''); setActiveFilter('all'); }, []);
 
-  const handleRefetchSubjects = useCallback(async () => { await refetchBundle(); toast.success('Browser refreshed'); }, [refetchBundle]);
-
   const searchTimerRef = useRef(null);
   const handleSearchChange = useCallback((e) => {
     const val = e.target.value;
@@ -289,7 +289,7 @@ export default function LibraryPage() {
             onClick={() => refetchBundle()}
             className="h-11 px-5 rounded-xl text-sm font-medium text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center gap-2 active:scale-95"
           >
-            <RefreshCw size={14} /> Try Again
+            Try Again
           </button>
         </div>
       </AppLayout>
@@ -328,14 +328,28 @@ export default function LibraryPage() {
                   Browse {subjects.length} subjects · {allChapters.length} chapters
                 </p>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-1 shrink-0 rounded-xl p-0.5" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
                 <button
-                  onClick={handleRefetchSubjects}
-                  disabled={isFetching}
-                  className="h-11 px-3.5 rounded-xl text-xs font-medium text-white bg-violet-600 hover:bg-violet-500 disabled:opacity-60 transition-all flex items-center gap-1.5 active:scale-95"
+                  onClick={() => switchLang('en')}
+                  className={`h-9 px-3 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    contentLang === 'en'
+                      ? 'text-white bg-violet-600 shadow-sm'
+                      : 'text-violet-600 hover:bg-violet-50'
+                  }`}
+                  aria-label="Switch to English"
                 >
-                  <RefreshCw size={13} className={isFetching ? 'animate-spin' : ''} />
-                  {isFetching ? 'Updating…' : 'Refresh'}
+                  EN
+                </button>
+                <button
+                  onClick={() => switchLang('as')}
+                  className={`h-9 px-3 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                    contentLang === 'as'
+                      ? 'text-white bg-violet-600 shadow-sm'
+                      : 'text-violet-600 hover:bg-violet-50'
+                  }`}
+                  aria-label="Switch to Assamese"
+                >
+                  অসমীয়া
                 </button>
               </div>
             </div>

@@ -11,6 +11,7 @@ const MarkdownRenderer = lazy(() => import('@/components/MarkdownRenderer'));
 import { apiClient } from '@/utils/api';
 import { useShare, SerpPreviewModal } from '@/hooks/useShare';
 import Analytics from '@/utils/analytics';
+import { useContentLang } from '@/context/LanguageContext';
 
 function ChapterJsonLd({ data, url, basePath }) {
   useEffect(() => {
@@ -211,6 +212,7 @@ export default function ChapterPage() {
   const articleRef = useRef(null);
   const [activeId, setActiveId] = useState('');
   const { sharing, share, serpPreview, confirmShare, dismissPreview } = useShare();
+  const { contentLang, switchLang } = useContentLang();
 
   useEffect(() => {
     if (!board || !classSlug || !subjectSlug || !chapterSlug) return;
@@ -273,8 +275,8 @@ export default function ChapterPage() {
   }, [data?.chapter_id]);
 
   const headings = useMemo(() => {
-    if (!data?.content) return [];
-    const lines = data.content.split('\n');
+    if (!displayContent) return [];
+    const lines = displayContent.split('\n');
     const result = [];
     const idCounts = {};
     for (const line of lines) {
@@ -290,7 +292,7 @@ export default function ChapterPage() {
       }
     }
     return result;
-  }, [data?.content]);
+  }, [displayContent]);
 
   useEffect(() => {
     if (!articleRef.current || headings.length === 0) return;
@@ -556,7 +558,7 @@ export default function ChapterPage() {
       h2: ({ children, ...props }) => <h2 id={toId(children)} className="scroll-mt-20" {...props}>{children}</h2>,
       h3: ({ children, ...props }) => <h3 id={toId(children)} className="scroll-mt-20" {...props}>{children}</h3>,
     };
-  }, [data?.content]);
+  }, [displayContent]);
 
   if (loading) {
     return (
@@ -613,6 +615,8 @@ export default function ChapterPage() {
   const boardName = data.board_name || board;
   const className = data.class_name || classSlug;
   const streamName = data.stream_name || '';
+  const hasAssamese = data.has_assamese || false;
+  const displayContent = (contentLang === 'as' && hasAssamese) ? data.content_as : data.content;
 
   const seoTitle = `${chapterTitle} — ${subjectName} | ${boardName} ${className} Notes`;
   const seoDesc = data.meta_description || `${chapterTitle} notes for ${subjectName}. Complete study material for ${boardName} ${className} students.`;
@@ -671,7 +675,7 @@ export default function ChapterPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 mt-4">
+          <div className="flex items-center gap-2 mt-4 flex-wrap">
             <Link
               to={`/chat?subject=${subjectSlug}`}
               onClick={() => Analytics.chapterAskAi(subjectSlug, data?.topic_title || data?.chapter_title || chapterSlug)}
@@ -688,7 +692,30 @@ export default function ChapterPage() {
             >
               {sharing ? <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> : <Share2 size={14} />} Share
             </button>
+            <div className="flex items-center gap-0.5 rounded-lg p-0.5 ml-auto" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
+              <button
+                onClick={() => switchLang('en')}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                  contentLang === 'en' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-50'
+                }`}
+              >
+                EN
+              </button>
+              <button
+                onClick={() => switchLang('as')}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                  contentLang === 'as' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-50'
+                }`}
+              >
+                অসমীয়া
+              </button>
+            </div>
           </div>
+          {contentLang === 'as' && !hasAssamese && (
+            <p className="mt-2 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+              Assamese translation is not yet available for this chapter. Showing English content.
+            </p>
+          )}
         </div>
       </header>
 
@@ -712,7 +739,7 @@ export default function ChapterPage() {
                 </div>
               }>
                 <MarkdownRenderer components={markdownComponents}>
-                  {data.content}
+                  {displayContent}
                 </MarkdownRenderer>
               </Suspense>
             </div>

@@ -674,12 +674,148 @@ IMPORTANT: Key Facts MUST be ### (H3) sub-headings under the topic's ## heading 
     except Exception:
         pass
 
+    content_as_words = 0
+    if sarvam_client:
+        try:
+            translated = await _translate_text_sarvam(notes_text, "en-IN", "as-IN")
+            if translated and len(translated.strip()) >= 50:
+                await db.chapters.update_one(
+                    {"id": chapter_id},
+                    {"$set": {
+                        "content_as": translated,
+                        "content_as_generated_at": datetime.now(timezone.utc).isoformat(),
+                    }}
+                )
+                content_as_words = len(translated.split())
+                logger.info(f"Auto-translated chapter {chapter_id} to Assamese ({content_as_words} words)")
+        except Exception as e:
+            logger.warning(f"Auto-translate to Assamese failed for {chapter_id}: {e}")
+
     return {
         "chapter_id": chapter_id,
         "title": title,
         "content": notes_text,
         "word_count": len(notes_text.split()),
+        "content_as_words": content_as_words,
         "message": "Notes generated successfully",
+    }
+
+
+async def _translate_text_sarvam(text: str, source_lang: str = "en-IN", target_lang: str = "as-IN") -> str:
+    if not sarvam_client:
+        raise HTTPException(status_code=503, detail="Sarvam AI not configured")
+    if not text or not text.strip():
+        return ""
+    MAX_CHUNK = 4000
+    chunks = []
+    current = ""
+    for line in text.split("\n"):
+        if len(current) + len(line) + 1 > MAX_CHUNK and current:
+            chunks.append(current)
+            current = line
+        else:
+            current = current + "\n" + line if current else line
+    if current:
+        chunks.append(current)
+
+    translated_parts = []
+    for chunk in chunks:
+        payload = {
+            "input": chunk,
+            "source_language_code": source_lang,
+            "target_language_code": target_lang,
+            "speaker_gender": "Female",
+            "mode": "formal",
+            "model": "sarvam-translate:v1",
+            "enable_preprocessing": False,
+        }
+        try:
+            resp = await sarvam_client.post("/translate", json=payload)
+            resp.raise_for_status()
+            result = resp.json()
+            translated_parts.append(result.get("translated_text", ""))
+        except Exception as e:
+            logger.warning(f"Sarvam translate chunk failed: {e}")
+            translated_parts.append(chunk)
+    return "\n".join(translated_parts)
+
+
+@router.post("/admin/content/chapters/{chapter_id}/translate")
+async def admin_translate_chapter(chapter_id: str, data: dict = Body(default={}), admin: dict = Depends(get_admin_user)):
+    chapter = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
+    if not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    target_lang = (data.get("target_lang") or "as-IN").strip()
+    source_content = chapter.get("content", "")
+    if not source_content or not source_content.strip():
+        raise HTTPException(status_code=400, detail="No English content to translate. Generate notes first.")
+
+    translated = await _translate_text_sarvam(source_content, "en-IN", target_lang)
+    if not translated or len(translated.strip()) < 50:
+        raise HTTPException(status_code=502, detail="Translation returned empty or too short")
+
+    field_name = "content_as" if "as" in target_lang else f"content_{target_lang.split('-')[0]}"
+    await db.chapters.update_one(
+        {"id": chapter_id},
+        {"$set": {
+            field_name: translated,
+            f"{field_name}_generated_at": datetime.now(timezone.utc).isoformat(),
+        }}
+    )
+    _invalidate_content_cache("chapters")
+
+    return {
+        "chapter_id": chapter_id,
+        "field": field_name,
+        "word_count": len(translated.split()),
+        "translated_text": translated,
+        "message": f"Translated to {target_lang} successfully",
+    }
+
+
+@router.post("/admin/content/bulk-translate-subject")
+async def admin_bulk_translate_subject(data: dict = Body(...), admin: dict = Depends(get_admin_user)):
+    subject_id = data.get("subject_id")
+    if not subject_id:
+        raise HTTPException(status_code=400, detail="subject_id required")
+    target_lang = data.get("target_lang", "as-IN")
+
+    chapters = await db.chapters.find(
+        {"subject_id": subject_id, "content": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "id": 1, "title": 1, "content": 1, "content_as": 1}
+    ).to_list(200)
+
+    results = []
+    for ch in chapters:
+        if ch.get("content_as") and not data.get("force"):
+            results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "skipped", "reason": "already translated"})
+            continue
+        try:
+            translated = await _translate_text_sarvam(ch["content"], "en-IN", target_lang)
+            if translated and len(translated.strip()) >= 50:
+                field_name = "content_as"
+                await db.chapters.update_one(
+                    {"id": ch["id"]},
+                    {"$set": {
+                        field_name: translated,
+                        f"{field_name}_generated_at": datetime.now(timezone.utc).isoformat(),
+                    }}
+                )
+                results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "translated", "words": len(translated.split())})
+            else:
+                results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "failed", "reason": "empty translation"})
+        except Exception as e:
+            results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "failed", "reason": str(e)[:100]})
+
+    _invalidate_content_cache("chapters")
+    return {
+        "subject_id": subject_id,
+        "total": len(chapters),
+        "translated": sum(1 for r in results if r["status"] == "translated"),
+        "skipped": sum(1 for r in results if r["status"] == "skipped"),
+        "failed": sum(1 for r in results if r["status"] == "failed"),
+        "results": results,
     }
 
 

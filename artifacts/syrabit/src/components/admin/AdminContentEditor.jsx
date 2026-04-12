@@ -29,7 +29,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [viewerItem, setViewerItem] = useState(null);
 
   const [editView, setEditView] = useState(null);
-  const [contentForm, setContentForm] = useState({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [] });
+  const [contentForm, setContentForm] = useState({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [], content_as: '' });
   const [editTarget, setEditTarget] = useState(null);
   const [saving, setSaving] = useState(false);
   const [chapterStats, setChapterStats] = useState(null);
@@ -197,7 +197,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const slug = contentForm.slug || autoSlug(contentForm.title);
       const topics = (contentForm.topics || []).filter(Boolean);
       await axios.post(`${API}/admin/content/chapters`, { subject_id: selSubject, title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, status: 'published', topics }, authHeaders(adminToken));
-      toast.success('Chapter created successfully'); setEditView(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [] }); setChapterStats(null); refreshChapters(selSubject);
+      toast.success('Chapter created successfully'); setEditView(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [], content_as: '' }); setChapterStats(null); refreshChapters(selSubject);
     } catch { toast.error('Failed to create chapter'); }
     finally { setSaving(false); }
   };
@@ -208,8 +208,10 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const slug = contentForm.slug || autoSlug(contentForm.title);
       const topics = (contentForm.topics || []).filter(Boolean);
-      await axios.patch(`${API}/admin/content/chapters/${editTarget.id}`, { title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, topics }, authHeaders(adminToken));
-      toast.success('Chapter updated successfully'); setEditView(null); setEditTarget(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [] }); setChapterStats(null); refreshChapters(selSubject);
+      const updatePayload = { title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, topics };
+      if (contentForm.content_as !== undefined) updatePayload.content_as = contentForm.content_as;
+      await axios.patch(`${API}/admin/content/chapters/${editTarget.id}`, updatePayload, authHeaders(adminToken));
+      toast.success('Chapter updated successfully'); setEditView(null); setEditTarget(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [], content_as: '' }); setChapterStats(null); refreshChapters(selSubject);
     } catch { toast.error('Failed to update'); }
     finally { setSaving(false); }
   };
@@ -440,9 +442,9 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     generatingNotes={generatingNotes}
                     onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
                     onViewChapter={(ch) => setViewerItem(ch)}
-                    onEditChapter={(ch) => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1, topics: ch.topics || [] }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
+                    onEditChapter={(ch) => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1, topics: ch.topics || [], content_as: ch.content_as || '' }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
                     selSubject={selSubject} subjectData={subjectData}
-                    onCreateNew={() => { setEditView('new-chapter'); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: chapters.length + 1, topics: [] }); setChapterStats(null); }}
+                    onCreateNew={() => { setEditView('new-chapter'); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: chapters.length + 1, topics: [], content_as: '' }); setChapterStats(null); }}
                   />
                 </div>
               ) : null}

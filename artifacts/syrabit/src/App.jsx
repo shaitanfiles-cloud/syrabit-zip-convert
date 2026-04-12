@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
 import { initGA4 } from "@/utils/analytics";
 import { AuthProvider } from "@/context/AuthContext";
+import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthGuard } from "@/components/AuthGuard";
 import { AdminGuard } from "@/components/AdminGuard";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -186,6 +187,7 @@ function App() {
     <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
+          <LanguageProvider>
             <BrowserRouter>
               <PageTracker />
               <Suspense fallback={null}><LazyToaster richColors position="top-center" closeButton /></Suspense>
@@ -248,6 +250,7 @@ function App() {
               </Suspense>
             </BrowserRouter>
             <Suspense fallback={null}><SignupEncouragementPopup /></Suspense>
+          </LanguageProvider>
           </AuthProvider>
           <Suspense fallback={null}><PWAInstallPrompt /></Suspense>
         </QueryClientProvider>

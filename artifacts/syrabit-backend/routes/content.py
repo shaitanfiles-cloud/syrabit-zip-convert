@@ -599,6 +599,7 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
         chunks = await db.chunks.find({"chapter_id": chapter["id"]}, {"_id": 0}).sort("order_index", 1).to_list(200)
         content_parts = [c["content"] for c in chunks if c.get("content")]
         content = "\n\n".join(content_parts)
+    content_as = chapter.get("content_as", "")
     word_count = len(content.split()) if content else 0
     stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
     result = {
@@ -606,6 +607,8 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
         "topic_title": chapter.get("title", chapter_slug),
         "chapter_id": chapter.get("id", ""),
         "content": content or f"# {chapter.get('title', chapter_slug)}\n\nContent for this chapter is being prepared. Check back soon!",
+        "content_as": content_as or "",
+        "has_assamese": bool(content_as and content_as.strip()),
         "meta_description": chapter.get("description", f"{chapter.get('title', '')} notes for {subj['name']}"),
         "board_name": board.get("name", ""), "class_name": cls.get("name", ""),
         "subject_name": subj.get("name", ""), "chapter_title": chapter.get("title", ""),
