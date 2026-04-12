@@ -274,11 +274,6 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
         )
         logger.info(f"[PIPELINE][S1] Intent resolved: {_detected_intent} (Stage 1 primary)")
 
-    if _detected_intent == "general" and _ns_route is not None:
-        _detected_intent = "notes"
-        _detected_db_category = "notes"
-        logger.info(f"[NON-STREAM] Intent upgrade: general → notes (syllabus embedder matched: {getattr(_ns_route, 'subject', '')} / {getattr(_ns_route, 'chapter_hint', '')})")
-
     _q_lower_ns = msg.message.lower()
     if _detected_intent == "syllabus" and _topic_metadata and _topic_metadata.get("search_keywords") and "syllabus" not in _q_lower_ns and "curriculum" not in _q_lower_ns and "subject list" not in _q_lower_ns:
         _detected_intent = "notes"
@@ -839,11 +834,6 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         )
         logger.info(f"[PIPELINE][S1][STREAM] Intent resolved: {_stream_intent} (Stage 1 primary)")
 
-    if _stream_intent == "general" and _sr_route is not None:
-        _stream_intent = "notes"
-        _stream_db_category = "notes"
-        logger.info(f"[STREAM] Intent upgrade: general → notes (syllabus embedder matched: {getattr(_sr_route, 'subject', '')} / {getattr(_sr_route, 'chapter_hint', '')})")
-
     _q_lower_s = msg.message.lower()
     if _stream_intent == "syllabus" and _s_topic_meta and _s_topic_meta.get("search_keywords") and "syllabus" not in _q_lower_s and "curriculum" not in _q_lower_s and "subject list" not in _q_lower_s:
         _stream_intent = "notes"
@@ -1086,10 +1076,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _snippet = _snippet[:250]
         rag_chunk_snippet = _snippet
 
-    _router_subject = getattr(_sr_route, "subject_name", None) or getattr(_sr_route, "subject", None) if _sr_route else None
-    _router_chapter = getattr(_sr_route, "chapter_title", None) or getattr(_sr_route, "chapter_hint", None) if _sr_route else None
-    _router_board   = getattr(_sr_route, "board", None) if _sr_route else None
-    _router_subject_id = getattr(_sr_route, "subject_id", None) if _sr_route else None
+    _router_subject = None
+    _router_chapter = None
+    _router_board   = None
+    _router_subject_id = None
     if _router_chapter and not rag_chapter_name:
         rag_chapter_name = _router_chapter
     if _router_subject and not rag_subject_name:
@@ -1097,8 +1087,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     if _router_subject_id and not rag_subject_id:
         rag_subject_id = _router_subject_id
 
-    _syl_topic_name = getattr(_sr_route, "topic", None) if _sr_route else None
-    _syl_level      = getattr(_sr_route, "level", "chapter") if _sr_route else "chapter"
+    _syl_topic_name = None
+    _syl_level      = "chapter"
     if _syl_topic_name and _syl_level == "topic":
         rag_topic_name = _syl_topic_name
     elif _chunk_topic_name:
