@@ -274,6 +274,12 @@ export default function ChapterPage() {
     return () => { cancelled = true; };
   }, [data?.chapter_id]);
 
+  const hasAssamese = data?.has_assamese || false;
+  const displayContent = useMemo(() => {
+    if (!data) return '';
+    return (contentLang === 'as' && hasAssamese) ? (data.content_as || data.content) : data.content;
+  }, [data, contentLang, hasAssamese]);
+
   const headings = useMemo(() => {
     if (!displayContent) return [];
     const lines = displayContent.split('\n');
@@ -615,8 +621,6 @@ export default function ChapterPage() {
   const boardName = data.board_name || board;
   const className = data.class_name || classSlug;
   const streamName = data.stream_name || '';
-  const hasAssamese = data.has_assamese || false;
-  const displayContent = (contentLang === 'as' && hasAssamese) ? data.content_as : data.content;
 
   const seoTitle = `${chapterTitle} — ${subjectName} | ${boardName} ${className} Notes`;
   const seoDesc = data.meta_description || `${chapterTitle} notes for ${subjectName}. Complete study material for ${boardName} ${className} students.`;

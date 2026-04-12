@@ -675,7 +675,7 @@ IMPORTANT: Key Facts MUST be ### (H3) sub-headings under the topic's ## heading 
         pass
 
     content_as_words = 0
-    if sarvam_client:
+    if sarvam_translate_client or sarvam_client:
         try:
             translated = await _translate_text_sarvam(notes_text, "en-IN", "as-IN")
             if translated and len(translated.strip()) >= 50:
@@ -702,15 +702,22 @@ IMPORTANT: Key Facts MUST be ### (H3) sub-headings under the topic's ## heading 
 
 
 async def _translate_text_sarvam(text: str, source_lang: str = "en-IN", target_lang: str = "as-IN") -> str:
-    if not sarvam_client:
+    _client = sarvam_translate_client or sarvam_client
+    if not _client:
         raise HTTPException(status_code=503, detail="Sarvam AI not configured")
     if not text or not text.strip():
         return ""
-    MAX_CHUNK = 4000
+    MAX_CHUNK = 1800
     chunks = []
     current = ""
     for line in text.split("\n"):
-        if len(current) + len(line) + 1 > MAX_CHUNK and current:
+        if len(line) > MAX_CHUNK:
+            if current:
+                chunks.append(current)
+                current = ""
+            for j in range(0, len(line), MAX_CHUNK):
+                chunks.append(line[j:j + MAX_CHUNK])
+        elif len(current) + len(line) + 1 > MAX_CHUNK and current:
             chunks.append(current)
             current = line
         else:
@@ -721,7 +728,7 @@ async def _translate_text_sarvam(text: str, source_lang: str = "en-IN", target_l
     translated_parts = []
     for chunk in chunks:
         payload = {
-            "input": chunk,
+            "input": chunk[:1950],
             "source_language_code": source_lang,
             "target_language_code": target_lang,
             "speaker_gender": "Female",
@@ -730,13 +737,13 @@ async def _translate_text_sarvam(text: str, source_lang: str = "en-IN", target_l
             "enable_preprocessing": False,
         }
         try:
-            resp = await sarvam_client.post("/translate", json=payload)
+            resp = await _client.post("/translate", json=payload)
             resp.raise_for_status()
             result = resp.json()
             translated_parts.append(result.get("translated_text", ""))
         except Exception as e:
             logger.warning(f"Sarvam translate chunk failed: {e}")
-            translated_parts.append(chunk)
+            raise
     return "\n".join(translated_parts)
 
 
@@ -811,6 +818,61 @@ async def admin_bulk_translate_subject(data: dict = Body(...), admin: dict = Dep
     _invalidate_content_cache("chapters")
     return {
         "subject_id": subject_id,
+        "total": len(chapters),
+        "translated": sum(1 for r in results if r["status"] == "translated"),
+        "skipped": sum(1 for r in results if r["status"] == "skipped"),
+        "failed": sum(1 for r in results if r["status"] == "failed"),
+        "results": results,
+    }
+
+
+@router.post("/admin/content/bulk-translate-all")
+async def admin_bulk_translate_all(data: dict = Body(default={}), admin: dict = Depends(get_admin_user)):
+    """Translate ALL chapters with English content to Assamese. Skips PYQ-only chapters."""
+    target_lang = data.get("target_lang", "as-IN")
+    force = data.get("force", False)
+
+    query = {"content": {"$exists": True, "$ne": ""}}
+    if not force:
+        query["$or"] = [
+            {"content_as": {"$exists": False}},
+            {"content_as": ""},
+            {"content_as": None},
+        ]
+
+    chapters = await db.chapters.find(
+        query,
+        {"_id": 0, "id": 1, "title": 1, "content": 1, "subject_id": 1}
+    ).to_list(500)
+
+    logger.info(f"Bulk translate all: {len(chapters)} chapters to translate")
+
+    results = []
+    for i, ch in enumerate(chapters):
+        content = ch.get("content", "")
+        if not content or len(content.strip()) < 100:
+            results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "skipped", "reason": "content too short"})
+            continue
+        try:
+            translated = await _translate_text_sarvam(content, "en-IN", target_lang)
+            if translated and len(translated.strip()) >= 50:
+                await db.chapters.update_one(
+                    {"id": ch["id"]},
+                    {"$set": {
+                        "content_as": translated,
+                        "content_as_generated_at": datetime.now(timezone.utc).isoformat(),
+                    }}
+                )
+                results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "translated", "words": len(translated.split())})
+                logger.info(f"Translated {i+1}/{len(chapters)}: {ch.get('title', '')[:40]} ({len(translated.split())} words)")
+            else:
+                results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "failed", "reason": "empty translation"})
+        except Exception as e:
+            logger.warning(f"Translate failed for {ch['id']}: {e}")
+            results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "failed", "reason": str(e)[:100]})
+
+    _invalidate_content_cache("chapters")
+    return {
         "total": len(chapters),
         "translated": sum(1 for r in results if r["status"] == "translated"),
         "skipped": sum(1 for r in results if r["status"] == "skipped"),
