@@ -699,7 +699,7 @@ export default function ChapterPage() {
                   contentLang === 'en' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-50'
                 }`}
               >
-                EN
+                English
               </button>
               <button
                 onClick={() => switchLang('as')}

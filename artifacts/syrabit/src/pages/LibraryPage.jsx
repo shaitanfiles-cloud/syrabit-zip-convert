@@ -338,7 +338,7 @@ export default function LibraryPage() {
                   }`}
                   aria-label="Switch to English"
                 >
-                  EN
+                  English
                 </button>
                 <button
                   onClick={() => switchLang('as')}
