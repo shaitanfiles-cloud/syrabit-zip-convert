@@ -23,6 +23,49 @@ import ScrollableFilterRow from './library/ScrollableFilterRow';
 const LazyCmsDocsSection = lazy(() => import('./library/CmsDocsSection'));
 const LazyCmsPostsGrid = lazy(() => import('./library/CmsPostsGrid'));
 
+const _t = {
+  en: {
+    heading: 'Educational Browser',
+    subheading: 'For Assam Board Students',
+    browse: (s, c) => `Browse ${s} subjects · ${c} chapters`,
+    searchPlaceholder: 'Search subjects, topics, chapters...',
+    clear: 'Clear',
+    all: 'All',
+    saved: 'Saved',
+    pyq: 'Previous Year Question Papers',
+    noResultsTitle: 'No subjects found',
+    noResultsDesc: 'Try a different search term or filter',
+    savedSignIn: 'Sign in to see saved subjects',
+    savedSignInDesc: 'Create a free account to bookmark subjects and track your progress',
+    signUpFree: 'Sign Up Free',
+    noSaved: 'No saved subjects yet',
+    noSavedDesc: 'Tap the bookmark icon on any subject to save it here',
+    browseAll: 'Browse all subjects',
+    lessons: 'LESSONS',
+    notes: 'notes',
+  },
+  as: {
+    heading: 'শৈক্ষিক ব্ৰাউজাৰ',
+    subheading: 'অসম বোৰ্ডৰ ছাত্ৰ-ছাত্ৰীৰ বাবে',
+    browse: (s, c) => `${s} টা বিষয় · ${c} টা অধ্যায় চাওক`,
+    searchPlaceholder: 'বিষয়, বিষয়বস্তু, অধ্যায় সন্ধান কৰক...',
+    clear: 'মচক',
+    all: 'সকলো',
+    saved: 'সংৰক্ষিত',
+    pyq: 'পূৰ্বৰ বছৰৰ প্ৰশ্নকাকত',
+    noResultsTitle: 'কোনো বিষয় পোৱা নগ\'ল',
+    noResultsDesc: 'এটা বেলেগ সন্ধান শব্দ বা ফিল্টাৰ চেষ্টা কৰক',
+    savedSignIn: 'সংৰক্ষিত বিষয় চাবলৈ চাইন ইন কৰক',
+    savedSignInDesc: 'বিষয় বুকমাৰ্ক কৰিবলৈ বিনামূলীয়া একাউণ্ট তৈয়াৰ কৰক',
+    signUpFree: 'বিনামূলীয়া চাইন আপ',
+    noSaved: 'এতিয়াও কোনো সংৰক্ষিত বিষয় নাই',
+    noSavedDesc: 'ইয়াত সংৰক্ষণ কৰিবলৈ যিকোনো বিষয়ত বুকমাৰ্ক আইকন টিপক',
+    browseAll: 'সকলো বিষয় চাওক',
+    lessons: 'পাঠ',
+    notes: 'টোকা',
+  },
+};
+
 function LazyOnVisible({ children }) {
   const [visible, setVisible] = useState(false);
   const ref = useRef(null);
@@ -50,9 +93,13 @@ function LazyOnVisible({ children }) {
   );
 }
 
-const STREAM_CHIPS = [
+const STREAM_CHIPS_EN = [
   { id: 'all', label: 'All' },
   { id: 'saved', label: '★ Saved' },
+];
+const STREAM_CHIPS_AS = [
+  { id: 'all', label: 'সকলো' },
+  { id: 'saved', label: '★ সংৰক্ষিত' },
 ];
 
 function getOnboardingProfile() {
@@ -63,6 +110,7 @@ export default function LibraryPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const { contentLang, switchLang } = useContentLang();
+  const t = _t[contentLang] || _t.en;
 
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
@@ -134,7 +182,8 @@ export default function LibraryPage() {
     return chips;
   }, [enrichedSubjects]);
 
-  const allStreamChips = useMemo(() => [...STREAM_CHIPS, ...dynamicStreamChips], [dynamicStreamChips]);
+  const baseChips = contentLang === 'as' ? STREAM_CHIPS_AS : STREAM_CHIPS_EN;
+  const allStreamChips = useMemo(() => [...baseChips, ...dynamicStreamChips], [baseChips, dynamicStreamChips]);
 
   const filteredSubjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -281,15 +330,15 @@ export default function LibraryPage() {
           <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5" style={{ background: 'rgba(239,68,68,0.1)' }}>
             <BookOpen size={28} className="text-red-400" />
           </div>
-          <h2 className="text-lg font-semibold text-foreground mb-2">Failed to load library</h2>
+          <h2 className="text-lg font-semibold text-foreground mb-2">{contentLang === 'as' ? 'লাইব্ৰেৰী ল\'ড কৰিব পৰা নগ\'ল' : 'Failed to load library'}</h2>
           <p className="text-muted-foreground text-sm mb-6 max-w-xs">
-            We couldn't reach the server. Please check your connection and try again.
+            {contentLang === 'as' ? 'ছাৰ্ভাৰৰ সৈতে সংযোগ কৰিব পৰা নগ\'ল। আপোনাৰ সংযোগ পৰীক্ষা কৰি পুনৰ চেষ্টা কৰক।' : 'We couldn\'t reach the server. Please check your connection and try again.'}
           </p>
           <button
             onClick={() => refetchBundle()}
             className="h-11 px-5 rounded-xl text-sm font-medium text-white bg-violet-600 hover:bg-violet-500 transition-all flex items-center gap-2 active:scale-95"
           >
-            Try Again
+            {contentLang === 'as' ? 'পুনৰ চেষ্টা কৰক' : 'Try Again'}
           </button>
         </div>
       </AppLayout>
@@ -322,10 +371,10 @@ export default function LibraryPage() {
                   className="text-foreground shimmer-text"
                   style={{ fontSize: 'clamp(0.95rem, 3.2vw, 1.5rem)', fontWeight: 700, lineHeight: 1.25 }}
                 >
-                  Educational Browser<br />For Assam Board Students
+                  {t.heading}<br />{t.subheading}
                 </h1>
                 <p className="text-xs sm:text-sm text-muted-foreground mt-1">
-                  Browse {subjects.length} subjects · {allChapters.length} chapters
+                  {t.browse(subjects.length, allChapters.length)}
                 </p>
               </div>
               <div className="flex items-center gap-1 shrink-0 rounded-xl p-0.5" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
@@ -364,7 +413,7 @@ export default function LibraryPage() {
                 value={searchQuery}
                 onChange={handleSearchChange}
                 aria-label="Search subjects"
-                placeholder="Search subjects, topics, chapters..."
+                placeholder={t.searchPlaceholder}
                 className="w-full h-11 pl-10 pr-4 rounded-xl text-sm text-foreground outline-none transition-all focus:ring-2 focus:ring-primary/20"
                 style={{
                   background: 'var(--card)',
@@ -380,7 +429,7 @@ export default function LibraryPage() {
                   aria-label="Clear search"
                   data-testid="library-search-clear"
                 >
-                  Clear
+                  {t.clear}
                 </button>
               )}
             </div>
@@ -423,39 +472,43 @@ export default function LibraryPage() {
 
                 {activeFilter === 'saved' && !user ? (
                   <>
-                    <h3 className="text-foreground font-semibold text-lg">Sign in to see saved subjects</h3>
+                    <h3 className="text-foreground font-semibold text-lg">{t.savedSignIn}</h3>
                     <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
-                      Create a free account to bookmark subjects and track your progress
+                      {t.savedSignInDesc}
                     </p>
                     <Link
                       to="/signup"
                       className="mt-5 px-5 py-2 rounded-xl text-sm text-white font-medium transition-all duration-200 active:scale-95"
                       style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 20px hsl(var(--primary)/0.3)' }}
                     >
-                      Sign up free
+                      {t.signUpFree}
                     </Link>
                   </>
                 ) : activeFilter === 'saved' && user ? (
                   <>
-                    <h3 className="text-foreground font-semibold text-lg">No saved subjects yet</h3>
+                    <h3 className="text-foreground font-semibold text-lg">{t.noSaved}</h3>
                     <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
-                      Tap the bookmark on any subject card to save it here for quick access
+                      {t.noSavedDesc}
                     </p>
                     <button
                       onClick={() => setActiveFilter('all')}
                       className="mt-5 px-5 py-2 rounded-xl text-sm text-white font-medium transition-all duration-200 active:scale-95"
                       style={{ background: 'hsl(var(--primary))', boxShadow: '0 0 20px hsl(var(--primary)/0.3)' }}
                     >
-                      Browse all subjects
+                      {t.browseAll}
                     </button>
                   </>
                 ) : (
                   <>
-                    <h3 className="text-foreground font-semibold text-lg">No subjects found</h3>
+                    <h3 className="text-foreground font-semibold text-lg">{t.noResultsTitle}</h3>
                     <p className="text-sm text-muted-foreground/60 mt-1.5 max-w-xs">
                       {searchQuery
-                        ? `No results for "${searchQuery}" — try a different term or clear the search`
-                        : 'Try adjusting your filters to discover more subjects'}
+                        ? (contentLang === 'as'
+                          ? `"${searchQuery}" ৰ বাবে কোনো ফলাফল নাই — অন্য শব্দ চেষ্টা কৰক বা সন্ধান মচক`
+                          : `No results for "${searchQuery}" — try a different term or clear the search`)
+                        : (contentLang === 'as'
+                          ? 'আৰু বিষয় বিচাৰিবলৈ আপোনাৰ ফিল্টাৰ সালসলনি কৰক'
+                          : 'Try adjusting your filters to discover more subjects')}
                     </p>
                     {(searchQuery || activeFilter !== 'all') && (
                       <button
@@ -464,7 +517,7 @@ export default function LibraryPage() {
                         style={{ border: '1px solid rgba(139,92,246,0.25)', background: 'rgba(139,92,246,0.06)' }}
                         data-testid="library-reset-filters-button"
                       >
-                        Reset all filters
+                        {contentLang === 'as' ? 'সকলো ফিল্টাৰ মচক' : 'Reset all filters'}
                       </button>
                     )}
                   </>

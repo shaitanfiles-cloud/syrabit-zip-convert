@@ -84,11 +84,12 @@ function filterTopicHeadings(headings) {
 
 function StickyToc({ headings, activeId }) {
   const filtered = filterTopicHeadings(headings);
+  const { contentLang } = useContentLang();
   if (filtered.length < 2) return null;
   return (
     <nav className="sticky top-20 w-56 shrink-0 hidden xl:block self-start" aria-label="Table of contents">
       <p className="text-[11px] font-semibold uppercase tracking-wider mb-3 text-muted-foreground/50">
-        On this page
+        {contentLang === 'as' ? 'এই পৃষ্ঠাত' : 'On this page'}
       </p>
       <ul className="space-y-0.5">
         {filtered.map(h => (
@@ -118,6 +119,7 @@ function StickyToc({ headings, activeId }) {
 
 function ImportantQuestions({ chapterTitle, pyqData }) {
   const [expandedMark, setExpandedMark] = useState(null);
+  const { contentLang } = useContentLang();
   if (!pyqData || pyqData.total === 0) return null;
 
   const markWise = pyqData.mark_wise || {};
@@ -131,11 +133,13 @@ function ImportantQuestions({ chapterTitle, pyqData }) {
       <div className="flex items-center gap-2 mb-4">
         <HelpCircle size={20} className="text-purple-600" />
         <h2 className="text-xl font-bold text-gray-900" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", border: 'none', margin: 0, padding: 0 }}>
-          Important Questions
+          {contentLang === 'as' ? 'গুৰুত্বপূৰ্ণ প্ৰশ্নসমূহ' : 'Important Questions'}
         </h2>
       </div>
       <p className="text-sm text-gray-500 mb-5" style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}>
-        Previous year and expected questions for {chapterTitle} ({pyqData.total} questions)
+        {contentLang === 'as'
+          ? `${chapterTitle} ৰ পূৰ্বৰ বছৰৰ আৰু প্ৰত্যাশিত প্ৰশ্ন (${pyqData.total} টা প্ৰশ্ন)`
+          : `Previous year and expected questions for ${chapterTitle} (${pyqData.total} questions)`}
       </p>
 
       {hasMW ? (
@@ -598,17 +602,17 @@ export default function ChapterPage() {
           <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-5">
             <BookOpen size={28} className="text-muted-foreground" />
           </div>
-          <h1 className="text-2xl font-bold mb-3">{error || 'Chapter not found'}</h1>
-          <p className="text-muted-foreground mb-6">This chapter may not be available yet or the URL may be incorrect.</p>
+          <h1 className="text-2xl font-bold mb-3">{error || (contentLang === 'as' ? 'অধ্যায় পোৱা নগ\'ল' : 'Chapter not found')}</h1>
+          <p className="text-muted-foreground mb-6">{contentLang === 'as' ? 'এই অধ্যায় এতিয়াও উপলব্ধ নহ\'ব পাৰে বা URL ভুল হ\'ব পাৰে।' : 'This chapter may not be available yet or the URL may be incorrect.'}</p>
           <div className="flex items-center justify-center gap-3">
             <button
               onClick={handleRetry}
               className="inline-flex items-center gap-2 px-6 py-3 bg-purple-600 hover:bg-purple-700 rounded-xl text-white font-medium transition-colors"
             >
-              <RefreshCw size={16} /> Try Again
+              <RefreshCw size={16} /> {contentLang === 'as' ? 'পুনৰ চেষ্টা কৰক' : 'Try Again'}
             </button>
             <Link to={basePath} className="inline-flex items-center gap-2 px-6 py-3 rounded-xl text-muted-foreground font-medium transition-colors hover:bg-accent/30" style={{ border: '1px solid hsl(var(--border) / 0.3)' }}>
-              <ArrowLeft size={16} /> Back to Subject
+              <ArrowLeft size={16} /> {contentLang === 'as' ? 'বিষয়লৈ উভতি যাওক' : 'Back to Subject'}
             </Link>
           </div>
         </div>
@@ -667,13 +671,13 @@ export default function ChapterPage() {
               )}
               <div className="flex items-center gap-3 mt-2.5 text-xs sm:text-sm text-muted-foreground">
                 {readMins && (
-                  <span className="flex items-center gap-1"><Clock size={12} />{readMins} min read</span>
+                  <span className="flex items-center gap-1"><Clock size={12} />{readMins} {contentLang === 'as' ? 'মিনিট পঢ়া' : 'min read'}</span>
                 )}
                 {data.word_count > 0 && (
-                  <span>{data.word_count.toLocaleString()} words</span>
+                  <span>{data.word_count.toLocaleString()} {contentLang === 'as' ? 'শব্দ' : 'words'}</span>
                 )}
                 {headings.length > 0 && (
-                  <span className="flex items-center gap-1"><Hash size={12} />{filterTopicHeadings(headings).length} topics</span>
+                  <span className="flex items-center gap-1"><Hash size={12} />{filterTopicHeadings(headings).length} {contentLang === 'as' ? 'বিষয়' : 'topics'}</span>
                 )}
               </div>
             </div>
@@ -686,7 +690,7 @@ export default function ChapterPage() {
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:opacity-90 active:scale-95"
               style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)', boxShadow: '0 2px 10px rgba(139,92,246,0.20)' }}
             >
-              <Sparkles size={14} /> Ask AI
+              <Sparkles size={14} /> {contentLang === 'as' ? 'AI সোধক' : 'Ask AI'}
             </Link>
             <button
               onClick={handleShare}
@@ -694,7 +698,7 @@ export default function ChapterPage() {
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground transition-all hover:text-foreground hover:bg-accent/30 active:scale-95 disabled:opacity-50"
               style={{ border: '1px solid hsl(var(--border) / 0.3)' }}
             >
-              {sharing ? <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> : <Share2 size={14} />} Share
+              {sharing ? <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> : <Share2 size={14} />} {contentLang === 'as' ? 'শ্বেয়াৰ' : 'Share'}
             </button>
             <div className="flex items-center gap-0.5 rounded-lg p-0.5 ml-auto" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
               <button
@@ -717,7 +721,7 @@ export default function ChapterPage() {
           </div>
           {contentLang === 'as' && !hasAssamese && (
             <p className="mt-2 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
-              Assamese translation is not yet available for this chapter. Showing English content.
+              {contentLang === 'as' ? 'এই অধ্যায়ৰ বাবে অসমীয়া অনুবাদ এতিয়াও উপলব্ধ নহয়। ইংৰাজী বিষয়বস্তু দেখুৱাই আছে।' : 'Assamese translation is not yet available for this chapter. Showing English content.'}
             </p>
           )}
         </div>
@@ -751,15 +755,19 @@ export default function ChapterPage() {
             <ImportantQuestions chapterTitle={chapterTitle} pyqData={pyqData} />
 
             <div className="mt-8 p-5 rounded-2xl bg-primary/5 border border-primary/15">
-              <p className="text-sm font-semibold text-primary mb-1">Have a question about {chapterTitle}?</p>
-              <p className="text-xs text-muted-foreground mb-3">Get {boardName}-aligned answers instantly from Syra.</p>
+              <p className="text-sm font-semibold text-primary mb-1">
+                {contentLang === 'as' ? `${chapterTitle} সম্পৰ্কে প্ৰশ্ন আছে নেকি?` : `Have a question about ${chapterTitle}?`}
+              </p>
+              <p className="text-xs text-muted-foreground mb-3">
+                {contentLang === 'as' ? `Syra ৰ পৰা ${boardName}-সংগতিপূৰ্ণ উত্তৰ তৎক্ষণাৎ পাওক।` : `Get ${boardName}-aligned answers instantly from Syra.`}
+              </p>
               <Link
                 to={`/chat?subject=${subjectSlug}`}
                 onClick={() => Analytics.chapterAskAi(subjectSlug, data?.topic_title || data?.chapter_title || chapterSlug)}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white transition-all hover:opacity-90"
                 style={{ background: 'linear-gradient(135deg, #7c3aed, #8b5cf6)' }}
               >
-                <Sparkles size={14} /> Ask Syra about this
+                <Sparkles size={14} /> {contentLang === 'as' ? 'Syra ক এই বিষয়ে সোধক' : 'Ask Syra about this'}
               </Link>
             </div>
           </article>

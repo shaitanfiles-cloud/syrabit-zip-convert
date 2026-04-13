@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useShare } from '@/hooks/useShare';
 import { prefetchSubjectData } from '@/hooks/useContent';
+import { useContentLang } from '@/context/LanguageContext';
 
 const THUMB_GRADIENTS = {
   math:      ['#4f46e5', '#7c3aed'],
@@ -21,6 +22,8 @@ const THUMB_GRADIENTS = {
 
 const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onToggleSave, onAskAI, index }) {
   const queryClient = useQueryClient();
+  const { contentLang } = useContentLang();
+  const isAs = contentLang === 'as';
   const thumbColors = useMemo(() => THUMB_GRADIENTS[sub.gradient] || THUMB_GRADIENTS.math, [sub.gradient]);
   const tags = useMemo(() => Array.isArray(sub.tags) ? sub.tags : [], [sub.tags]);
   const visibleTags = useMemo(() => tags.slice(0, 3), [tags]);
@@ -224,7 +227,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
               <div className="flex items-center gap-1.5">
                 <Layers size={11} style={{ color: hasWP ? 'rgba(255,255,255,0.70)' : undefined }} className={hasWP ? '' : 'text-purple-400/60'} />
                 <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: hasWP ? 'rgba(255,255,255,0.75)' : 'hsl(var(--muted-foreground) / 0.7)' }}>
-                  {chapterCount} Lessons
+                  {chapterCount} {isAs ? 'পাঠ' : 'LESSONS'}
                 </span>
               </div>
               {(sub.notes_count > 0 || sub.pyq_count > 0 || sub.flash_count > 0) && (
@@ -238,7 +241,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                         border: `1px solid ${sub.notes_pct >= 100 ? 'rgba(16,185,129,0.25)' : 'rgba(245,158,11,0.20)'}`,
                       }}
                     >
-                      {sub.notes_count}/{chapterCount} notes
+                      {sub.notes_count}/{chapterCount} {isAs ? 'টোকা' : 'notes'}
                     </span>
                   )}
                   {sub.pyq_count > 0 && (
@@ -246,7 +249,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                       className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
                       style={{ background: 'rgba(99,102,241,0.10)', color: '#4f46e5', border: '1px solid rgba(99,102,241,0.20)' }}
                     >
-                      {sub.pyq_count} PYQs
+                      {sub.pyq_count} {isAs ? 'পূৰ্বৰ প্ৰশ্ন' : 'PYQs'}
                     </span>
                   )}
                   {sub.flash_count > 0 && (
@@ -254,7 +257,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                       className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full"
                       style={{ background: 'rgba(139,92,246,0.10)', color: 'hsl(var(--primary))', border: '1px solid rgba(139,92,246,0.20)' }}
                     >
-                      {sub.flash_count} Flash
+                      {sub.flash_count} {isAs ? 'ফ্লেশ' : 'Flash'}
                     </span>
                   )}
                 </div>
@@ -310,7 +313,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                   color: hasWP ? 'rgba(147,197,253,0.80)' : 'rgba(167,139,250,0.70)',
                 }}
               >
-                +{moreChapters} more lessons
+                +{moreChapters} {isAs ? 'আৰু পাঠ' : 'more lessons'}
                 <ChevronDown size={11} />
               </button>
             )}
@@ -344,7 +347,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           data-testid="subject-bookmark-button"
         >
           {isSaved ? <BookmarkCheck size={12} /> : <Bookmark size={12} />}
-          {isSaved ? 'Saved' : 'Save'}
+          {isSaved ? (isAs ? 'সংৰক্ষিত' : 'Saved') : (isAs ? 'সংৰক্ষণ' : 'Save')}
         </button>
 
         <Link
@@ -359,7 +362,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           }}
         >
           <BookOpen size={12} />
-          Browse
+          {isAs ? 'চাওক' : 'Browse'}
         </Link>
 
         <button
@@ -377,7 +380,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           data-testid="subject-ask-ai-button"
         >
           <Sparkles size={12} />
-          Ask AI
+          {isAs ? 'AI সোধক' : 'Ask AI'}
         </button>
 
         <button
@@ -394,7 +397,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
           data-testid="subject-share"
         >
           {sharing ? <Loader2 size={12} className="animate-spin" /> : <Share2 size={12} />}
-          Share
+          {isAs ? 'শ্বেয়াৰ' : 'Share'}
         </button>
       </div>
     </div>
