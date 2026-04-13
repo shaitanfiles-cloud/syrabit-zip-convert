@@ -72,8 +72,8 @@ except Exception as _mongo_init_err:
 
 _mongo_available = None
 _mongo_last_check = 0.0
-_MONGO_CHECK_COOLDOWN = 15
-_MONGO_DOWN_COOLDOWN = 10
+_MONGO_CHECK_COOLDOWN = 60
+_MONGO_DOWN_COOLDOWN = 30
 
 async def is_mongo_available():
     global _mongo_available, _mongo_last_check

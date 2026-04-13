@@ -182,8 +182,8 @@ def get_hierarchy_cache(stream_id: str):
 def set_hierarchy_cache(stream_id: str, data: dict):
     _hierarchy_cache[stream_id] = data
 
-_content_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=900)
-CONTENT_CACHE_SECONDS = 600
+_content_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=1024, ttl=1800)
+CONTENT_CACHE_SECONDS = 1800
 REDIS_CONTENT_PREFIX = "content:"
 
 def _get_content_cache(key: str):
@@ -203,14 +203,15 @@ def _get_content_cache(key: str):
 
 def _invalidate_content_cache(prefix: str):
     _CHAPTER_PREFIXES = ("ch-slug:", "ch-topic-content:", "ch-topic-summary:", "chunks:", "topic-pyqs:", "topic-page:", "flashcards:")
+    _LIB_BUNDLE_KEYS = ("library-bundle", "library-bundle:seo")
     if prefix == "chapters":
         keys_to_del = [k for k in list(_content_cache.keys())
                        if k == prefix or k.startswith(f"{prefix}:")
-                       or k == "library-bundle"
+                       or k in _LIB_BUNDLE_KEYS
                        or any(k.startswith(p) for p in _CHAPTER_PREFIXES)]
     else:
         keys_to_del = [k for k in list(_content_cache.keys())
-                       if k == prefix or k.startswith(f"{prefix}:") or k == "library-bundle"]
+                       if k == prefix or k.startswith(f"{prefix}:") or k in _LIB_BUNDLE_KEYS]
     for k in keys_to_del:
         _content_cache.pop(k, None)
     _content_card_cache.clear()
@@ -219,7 +220,8 @@ def _invalidate_content_cache(prefix: str):
         try:
             for rk in redis_client.scan_iter(f"{REDIS_CONTENT_PREFIX}{prefix}*"):
                 redis_client.delete(rk)
-            redis_client.delete(f"{REDIS_CONTENT_PREFIX}library-bundle")
+            for lbk in _LIB_BUNDLE_KEYS:
+                redis_client.delete(f"{REDIS_CONTENT_PREFIX}{lbk}")
             if prefix == "chapters":
                 for cp in _CHAPTER_PREFIXES:
                     for rk in redis_client.scan_iter(f"{REDIS_CONTENT_PREFIX}{cp}*"):

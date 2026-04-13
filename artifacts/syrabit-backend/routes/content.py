@@ -1,5 +1,6 @@
 """Syrabit.ai — Content & library routes"""
 import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+import cachetools
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -38,9 +39,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/content/library-bundle", response_model=LibraryBundleOut)
-async def get_library_bundle(nocache: Optional[str] = None, response: Response = None):
+async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optional[str] = None, response: Response = None):
+    cache_key = "library-bundle:seo" if include_seo else "library-bundle"
     if not nocache:
-        cached = _get_content_cache("library-bundle")
+        cached = _get_content_cache(cache_key)
         if cached:
             if response:
                 response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600, stale-while-revalidate=86400"
@@ -81,69 +83,70 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
 
         all_chapter_ids = list(chapter_id_to_subject.keys())
 
-        seo_topics_data = []
-        seo_page_type_counts = []
-        try:
-            seo_topics_data = await asyncio.wait_for(
-                db.topics.find(
-                    {"chapter_id": {"$in": all_chapter_ids}, "status": "published"},
-                    {"_id": 0, "id": 1, "title": 1, "slug": 1, "chapter_id": 1, "order": 1},
-                ).sort("order", 1).to_list(10000),
-                timeout=5.0,
-            )
-            if seo_topics_data:
-                seo_topic_ids = [t["id"] for t in seo_topics_data]
-                seo_page_type_counts = await asyncio.wait_for(
-                    db.seo_pages.aggregate([
-                        {"$match": {"topic_id": {"$in": seo_topic_ids}, "status": "published"}},
-                        {"$group": {"_id": {"topic_id": "$topic_id", "page_type": "$page_type"}}},
-                    ]).to_list(5000),
+        seo_stats_by_subject: dict = {}
+        if include_seo:
+            seo_topics_data = []
+            seo_page_type_counts = []
+            try:
+                seo_topics_data = await asyncio.wait_for(
+                    db.topics.find(
+                        {"chapter_id": {"$in": all_chapter_ids}, "status": "published"},
+                        {"_id": 0, "id": 1, "title": 1, "slug": 1, "chapter_id": 1, "order": 1},
+                    ).sort("order", 1).to_list(10000),
                     timeout=5.0,
                 )
-        except asyncio.TimeoutError:
-            logger.warning("library-bundle SEO query timed out — continuing without SEO data")
-        except Exception as seo_err:
-            logger.warning(f"library-bundle SEO query error: {seo_err}")
+                if seo_topics_data:
+                    seo_topic_ids = [t["id"] for t in seo_topics_data]
+                    seo_page_type_counts = await asyncio.wait_for(
+                        db.seo_pages.aggregate([
+                            {"$match": {"topic_id": {"$in": seo_topic_ids}, "status": "published"}},
+                            {"$group": {"_id": {"topic_id": "$topic_id", "page_type": "$page_type"}}},
+                        ]).to_list(5000),
+                        timeout=5.0,
+                    )
+            except asyncio.TimeoutError:
+                logger.warning("library-bundle SEO query timed out — continuing without SEO data")
+            except Exception as seo_err:
+                logger.warning(f"library-bundle SEO query error: {seo_err}")
 
-        seo_page_types_by_topic: dict = {}
-        for doc in seo_page_type_counts:
-            tid = doc["_id"]["topic_id"]
-            pt = doc["_id"]["page_type"]
-            seo_page_types_by_topic.setdefault(tid, []).append(pt)
+            seo_page_types_by_topic: dict = {}
+            for doc in seo_page_type_counts:
+                tid = doc["_id"]["topic_id"]
+                pt = doc["_id"]["page_type"]
+                seo_page_types_by_topic.setdefault(tid, []).append(pt)
 
-        topics_by_chapter: dict = {}
-        topic_id_to_chapter: dict = {}
-        for t in seo_topics_data:
-            cid = t.get("chapter_id", "")
-            tid = t.get("id", "")
-            page_types = seo_page_types_by_topic.get(tid, [])
-            if not page_types:
-                continue
-            topic_id_to_chapter[tid] = cid
-            topics_by_chapter.setdefault(cid, []).append({
-                "id": tid,
-                "title": t.get("title", ""),
-                "slug": t.get("slug", ""),
-                "page_types": sorted(page_types),
-            })
+            topics_by_chapter: dict = {}
+            topic_id_to_chapter: dict = {}
+            for t in seo_topics_data:
+                cid = t.get("chapter_id", "")
+                tid = t.get("id", "")
+                page_types = seo_page_types_by_topic.get(tid, [])
+                if not page_types:
+                    continue
+                topic_id_to_chapter[tid] = cid
+                topics_by_chapter.setdefault(cid, []).append({
+                    "id": tid,
+                    "title": t.get("title", ""),
+                    "slug": t.get("slug", ""),
+                    "page_types": sorted(page_types),
+                })
 
-        seo_stats_by_subject: dict = {}
-        for tid, ptypes in seo_page_types_by_topic.items():
-            cid = topic_id_to_chapter.get(tid)
-            if not cid:
-                continue
-            sid = chapter_id_to_subject.get(cid)
-            if not sid:
-                continue
-            stats = seo_stats_by_subject.setdefault(sid, {"topic_count": 0, "notes": 0, "definition": 0, "important-questions": 0, "mcqs": 0, "examples": 0})
-            stats["topic_count"] += 1
-            for pt in ptypes:
-                if pt in stats:
-                    stats[pt] += 1
+            for tid, ptypes in seo_page_types_by_topic.items():
+                cid = topic_id_to_chapter.get(tid)
+                if not cid:
+                    continue
+                sid = chapter_id_to_subject.get(cid)
+                if not sid:
+                    continue
+                stats = seo_stats_by_subject.setdefault(sid, {"topic_count": 0, "notes": 0, "definition": 0, "important-questions": 0, "mcqs": 0, "examples": 0})
+                stats["topic_count"] += 1
+                for pt in ptypes:
+                    if pt in stats:
+                        stats[pt] += 1
 
-        for ch in chapters_data:
-            ch_id = ch.get("id", "")
-            ch["seo_topics"] = topics_by_chapter.get(ch_id, [])
+            for ch in chapters_data:
+                ch_id = ch.get("id", "")
+                ch["seo_topics"] = topics_by_chapter.get(ch_id, [])
 
         pyq_total_by_subject: dict = {}
         for p in pyq_data:
@@ -172,7 +175,7 @@ async def get_library_bundle(nocache: Optional[str] = None, response: Response =
             s["seo_stats"]     = seo_stats_by_subject.get(sid, {})
 
         bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data, "chapters": chapters_data}
-        _set_content_cache("library-bundle", bundle)
+        _set_content_cache(cache_key, bundle)
         if response:
             response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600, stale-while-revalidate=86400"
             response.headers["CDN-Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
@@ -564,6 +567,29 @@ async def get_chapters(subject_id: str, response: Response = None):
     except Exception:
         return []
 
+_slug_hierarchy_cache: cachetools.TTLCache = cachetools.TTLCache(maxsize=512, ttl=1800)
+
+async def _resolve_slug_hierarchy(board_slug, class_slug, subject_slug):
+    hk = f"{board_slug}:{class_slug}:{subject_slug}"
+    cached = _slug_hierarchy_cache.get(hk)
+    if cached:
+        return cached
+    board = await db.boards.find_one({"slug": board_slug}, {"_id": 0, "id": 1, "name": 1, "slug": 1})
+    if not board:
+        return None
+    cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1})
+    if not cls:
+        return None
+    streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0, "id": 1, "name": 1}).to_list(100)
+    stream_ids = [s["id"] for s in streams]
+    subj = await db.subjects.find_one({"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0})
+    if not subj:
+        return None
+    stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
+    result = {"board": board, "cls": cls, "subj": subj, "stream": stream}
+    _slug_hierarchy_cache[hk] = result
+    return result
+
 @router.get("/content/chapter-by-slug/{board_slug}/{class_slug}/{subject_slug}/{chapter_slug}")
 async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: str, chapter_slug: str, response: Response = None):
     ck = f"ch-slug:{board_slug}:{class_slug}:{subject_slug}:{chapter_slug}"
@@ -573,14 +599,10 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
         return cached
     if not await is_mongo_available():
         raise HTTPException(503, "Content database unavailable")
-    board = await db.boards.find_one({"slug": board_slug}, {"_id": 0})
-    if not board: raise HTTPException(404, "Board not found")
-    cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0})
-    if not cls: raise HTTPException(404, "Class not found")
-    streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0}).to_list(100)
-    stream_ids = [s["id"] for s in streams]
-    subj = await db.subjects.find_one({"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0})
-    if not subj: raise HTTPException(404, "Subject not found")
+    hier = await _resolve_slug_hierarchy(board_slug, class_slug, subject_slug)
+    if not hier:
+        raise HTTPException(404, "Board, class, or subject not found")
+    board, cls, subj, stream = hier["board"], hier["cls"], hier["subj"], hier["stream"]
     chapter = await db.chapters.find_one({"slug": chapter_slug, "subject_id": subj["id"]}, {"_id": 0})
     if not chapter:
         import re as _re
@@ -601,7 +623,6 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
         content = "\n\n".join(content_parts)
     content_as = chapter.get("content_as", "")
     word_count = len(content.split()) if content else 0
-    stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
     result = {
         "title": f"{chapter.get('title', chapter_slug)} — {subj['name']}",
         "topic_title": chapter.get("title", chapter_slug),

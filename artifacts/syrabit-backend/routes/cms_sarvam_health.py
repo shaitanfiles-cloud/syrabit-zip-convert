@@ -72,7 +72,7 @@ async def _bg_llm_health_probe():
             _st = "degraded"
             _lat = 0
         _llm_health_cache["data"] = {"status": _st, "latencyMs": _lat}
-        await asyncio.sleep(60)
+        await asyncio.sleep(300)
 
 def _ensure_llm_health_probe():
     global _llm_health_task

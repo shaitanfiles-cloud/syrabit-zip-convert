@@ -249,6 +249,15 @@ async def _preload_syllabus_cache():
         logger.warning(f"SyllabusEmbedder cache preload (worker) failed: {exc}")
 
 
+async def _prewarm_library_cache():
+    await asyncio.sleep(3)
+    try:
+        from routes.content import get_library_bundle
+        await get_library_bundle(nocache="1", include_seo=None, response=None)
+        logger.info("Library-bundle cache pre-warmed")
+    except Exception as e:
+        logger.warning(f"Library-bundle pre-warm failed: {e}")
+
 @asynccontextmanager
 async def lifespan(app):
     import deps as _deps_mod
@@ -268,7 +277,11 @@ async def lifespan(app):
         if _is_leader:
             await ensure_seeded()
             await db.chapters.create_index("subject_id")
+            await db.chapters.create_index([("slug", 1), ("subject_id", 1)])
             await db.subjects.create_index("stream_id")
+            await db.subjects.create_index([("slug", 1), ("stream_id", 1)])
+            await db.boards.create_index("slug")
+            await db.classes.create_index([("slug", 1), ("board_id", 1)])
             await db.streams.create_index("class_id")
             await db.classes.create_index("board_id")
             await db.chunks.create_index("chapter_id")
@@ -363,6 +376,7 @@ async def lifespan(app):
         except Exception as _mc_err:
             logger.warning(f"consent columns migration deferred: {_mc_err}")
     asyncio.create_task(_bg_health_loop())
+    asyncio.create_task(_prewarm_library_cache())
     global _syllabus_embedder
     if db is not None:
         _syllabus_embedder = SyllabusEmbedder(db)
