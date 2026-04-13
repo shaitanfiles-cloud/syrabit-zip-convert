@@ -26,16 +26,26 @@ Users
 | Setting           | Value                                        |
 | ----------------- | -------------------------------------------- |
 | Root directory    | `artifacts/syrabit`                          |
-| Build command     | `npm install && npm run build`               |
+| Build command     | `pnpm install && pnpm run build`             |
 | Output directory  | `dist`                                       |
 | Node version      | 20                                           |
 
 ### Environment Variables (Pages)
 
-| Variable           | Value                        |
-| ------------------ | ---------------------------- |
-| `VITE_BACKEND_URL` | `https://api.syrabit.ai`     |
-| `NODE_ENV`         | `production`                 |
+| Variable             | Value                        |
+| -------------------- | ---------------------------- |
+| `VITE_BACKEND_URL`   | `https://api.syrabit.ai`     |
+| `VITE_WORKER_API_URL`| (optional, leave empty if not using a separate Worker API) |
+| `VITE_GA4_ID`        | GA4 Measurement ID (optional)|
+| `NODE_ENV`           | `production`                 |
+
+See `artifacts/syrabit/.env.example` for the full list.
+
+### Notes
+
+- **Compression**: Cloudflare Pages applies brotli/gzip at the edge automatically. The build does not generate `.gz`/`.br` files.
+- **Cache headers**: `public/_headers` configures immutable caching for hashed `/assets/*` files and must-revalidate for `index.html` and `sw.js`.
+- **Replit plugin**: The `@replit/vite-plugin-runtime-error-modal` import is wrapped in a try/catch so it gracefully no-ops when the package is absent (e.g. in the CF Pages build environment).
 
 ### Redeploy Frontend
 
