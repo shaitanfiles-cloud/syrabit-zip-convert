@@ -13,7 +13,7 @@ COLLECTIONS_TO_DROP = [
     "conversations", "chat_messages",
     "seo_pages", "cms_documents", "qa_pairs", "topics",
     "pyq_uploads", "pyq_html_pages", "topic_pyq_collections", "ai_pyq_collections",
-    "flashcard_collections", "syllabus_embeddings", "content_uploads",
+    "flashcard_collections", "content_uploads",
     "payments", "refund_requests",
     "roadmap", "exam_schedule", "push_subscriptions", "alerts", "rate_policies",
 ]

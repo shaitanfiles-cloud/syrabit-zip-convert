@@ -1705,11 +1705,13 @@ async def admin_delete_chapter(chapter_id: str, admin: dict = Depends(get_admin_
     if not chapter:
         raise HTTPException(status_code=404, detail="Chapter not found")
     
-    await db.chapters.delete_one({"id": chapter_id})
     try:
-        await db.syllabus_embeddings.delete_many({"chapter_id": chapter_id})
+        import server as _srv
+        if _srv._syllabus_embedder:
+            await _srv._syllabus_embedder.remove_chapter_embeddings(chapter_id)
     except Exception:
         pass
+    await db.chapters.delete_one({"id": chapter_id})
     if chapter.get("subject_id"):
         await db.subjects.update_one(
             {"id": chapter["subject_id"]},

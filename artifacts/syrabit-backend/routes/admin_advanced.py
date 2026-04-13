@@ -2360,11 +2360,19 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
         actual_content = (ch_doc.get("content") or "") if ch_doc else ""
         word_count = len(actual_content.split()) if actual_content.strip() else 0
         chunk_count = await db.chunks.count_documents({"chapter_id": ch_id})
-        embed_doc = await db.syllabus_embeddings.find_one({"chapter_id": ch_id}, {"_id": 1})
+        embed_ok = False
+        try:
+            import vectorize_client
+            from syllabus_embedder import _make_vector_id
+            if vectorize_client.is_configured():
+                vecs = await vectorize_client.get_vectors_by_ids([_make_vector_id(ch_id, "chapter")])
+                embed_ok = len(vecs) > 0
+        except Exception as _embed_err:
+            logger.warning(f"Embedding check failed for {ch_id}: {_embed_err}")
+            embed_ok = False
 
         content_ok = word_count >= 500
         chunks_ok = chunk_count > 0
-        embed_ok = embed_doc is not None
 
         if not content_ok or not chunks_ok or not embed_ok:
             failed_ch_results.append({
@@ -2419,7 +2427,16 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
                 r_content = (r_ch_doc.get("content") or "") if r_ch_doc else ""
                 r_wc = len(r_content.split()) if r_content.strip() else 0
                 r_chunks = await db.chunks.count_documents({"chapter_id": ch_id})
-                r_embed = await db.syllabus_embeddings.find_one({"chapter_id": ch_id}, {"_id": 1})
+                r_embed = False
+                try:
+                    import vectorize_client
+                    from syllabus_embedder import _make_vector_id
+                    if vectorize_client.is_configured():
+                        r_vecs = await vectorize_client.get_vectors_by_ids([_make_vector_id(ch_id, "chapter")])
+                        r_embed = len(r_vecs) > 0
+                except Exception as _r_embed_err:
+                    logger.warning(f"Retry embedding check failed for {ch_id}: {_r_embed_err}")
+                    r_embed = False
 
                 if r_wc >= 500 and r_chunks > 0 and r_embed:
                     retry_successes += 1

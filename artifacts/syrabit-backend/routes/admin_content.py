@@ -68,8 +68,18 @@ def _schedule_d1_sync_fire(*prefixes):
             pass
 
 async def _cascade_delete_subject_assets(subject_id: str):
+    try:
+        import server as _srv
+        if _srv._syllabus_embedder:
+            chapters = await db.chapters.find({"subject_id": subject_id}, {"id": 1}).to_list(500)
+            for ch in chapters:
+                ch_id = ch.get("id")
+                if ch_id:
+                    await _srv._syllabus_embedder.remove_chapter_embeddings(ch_id)
+    except Exception as exc:
+        logger.warning(f"Vectorize cleanup failed for subject {subject_id}: {exc}")
     await db.chapters.delete_many({"subject_id": subject_id})
-    for coll_name in ["syllabus_embeddings", "ai_pyq_collections", "flashcard_collections", "seo_topics", "chunks", "seo_pages", "cms_posts"]:
+    for coll_name in ["ai_pyq_collections", "flashcard_collections", "seo_topics", "chunks", "seo_pages", "cms_posts"]:
         try:
             await getattr(db, coll_name).delete_many({"subject_id": subject_id})
         except Exception as exc:

@@ -72,17 +72,16 @@ async def get_syllabus_subject(board_id: str, class_id: str, stream_id: str, sub
 @router.post("/admin/syllabus/seed-embeddings")
 async def admin_seed_syllabus_embeddings(
     admin: dict = Depends(get_admin_user),
-    full: bool = Query(False, description="If true, drops all embeddings and re-embeds from scratch"),
+    full: bool = Query(False, description="If true, re-embeds everything from scratch"),
 ):
     """
-    Force re-embed of all chapters + topics into the `syllabus_embeddings`
-    collection. Use ?full=true to drop existing and rebuild from scratch
-    (required after upgrading to enriched embed text / topic-level embeddings).
+    Force re-embed of all chapters + topics into Cloudflare Vectorize.
+    Use ?full=true to rebuild from scratch.
     Without ?full, only new/missing chapters are embedded incrementally.
     """
     emb = _get_syllabus_embedder()
     if emb is None:
-        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
+        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised")
     if full:
         return await emb.full_reseed()
     return await emb.reseed()
@@ -90,19 +89,19 @@ async def admin_seed_syllabus_embeddings(
 
 @router.post("/admin/syllabus/full-reseed")
 async def admin_full_reseed_embeddings(admin: dict = Depends(get_admin_user)):
-    """Drop all syllabus embeddings and re-embed everything from scratch with enriched text."""
+    """Re-embed everything from scratch into Cloudflare Vectorize."""
     emb = _get_syllabus_embedder()
     if emb is None:
-        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
+        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised")
     return await emb.full_reseed()
 
 
 @router.get("/admin/syllabus/embedding-stats")
 async def admin_syllabus_embedding_stats(admin: dict = Depends(get_admin_user)):
-    """Return detailed stats: total/chapter/topic embeddings, thin embed text, missing topics, avg lengths."""
+    """Return Vectorize index stats: total vectors, dimensions, metric, thresholds."""
     emb = _get_syllabus_embedder()
     if emb is None:
-        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
+        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised")
     return await emb.stats()
 
 
@@ -113,13 +112,13 @@ async def admin_test_classify(
     admin: dict = Depends(get_admin_user),
 ):
     """
-    Diagnostic endpoint: test a query against the syllabus embedding space.
+    Diagnostic endpoint: test a query against the Vectorize embedding space.
     Returns top-N matches with similarity scores, embed text previews,
     and whether each would pass the classification threshold.
     """
     emb = _get_syllabus_embedder()
     if emb is None:
-        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised (MongoDB unavailable)")
+        raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised")
 
     from syllabus_embedder import SIMILARITY_THRESHOLD
 

@@ -149,9 +149,11 @@ def _headers() -> dict:
 # 1. TEXT EMBEDDINGS  (text-embedding-004)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_EMBED_DIMENSIONS = 768
+
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Optional[List[float]]:
     """Return embedding vector for text. Returns None on failure.
-    Uses gemini-embedding-001 (3072-dim) as primary model."""
+    Uses gemini-embedding-001 with outputDimensionality=768 for Vectorize compatibility."""
     if not _ok() or not text:
         return None
     try:
@@ -174,7 +176,10 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
     c = _get_embed_client()
     if _SA_CREDS is not None:
         url  = _embed_url()
-        body = {"instances": [{"content": text[:8000], "task_type": task_type}]}
+        body = {
+            "instances": [{"content": text[:8000], "task_type": task_type}],
+            "parameters": {"outputDimensionality": _EMBED_DIMENSIONS},
+        }
         try:
             r = await c.post(url, json=body, headers=headers)
             if r.status_code == 403:
@@ -194,6 +199,7 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> Option
             "model":   f"models/{model}",
             "content": {"parts": [{"text": text[:8000]}]},
             "taskType": task_type,
+            "outputDimensionality": _EMBED_DIMENSIONS,
         }
         try:
             r = await c.post(url, json=body, headers=headers)

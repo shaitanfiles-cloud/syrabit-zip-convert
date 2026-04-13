@@ -1,21 +1,20 @@
 """
 Syllabus Embedder
 =================
-Seeds chapter-level AND topic-level embeddings into the `syllabus_embeddings`
-MongoDB collection using MongoDB `chapters` data (from PDF imports) and stores
-them for fast in-process cosine-similarity classification.
+Seeds chapter-level AND topic-level embeddings into Cloudflare Vectorize
+(`syllabus-index`, 768 dimensions, cosine metric) and provides fast
+vector-based classification of user queries to syllabus chapters/topics.
 
 Features
 --------
 - Enriched embed text: title + description + full topic list + keywords (~2000 chars)
-- Topic-level embeddings: one embedding per topic (or small group) for precise matching
+- Topic-level embeddings: one embedding per topic for precise matching
 - Configurable similarity thresholds via environment variables
 - Top-3 match score logging for every classify() call
-- In-memory LRU cache of embeddings (refreshed every 6 h)
-- Async cosine-similarity search returning the best-matching chapter
+- Vectorize-native nearest-neighbor search (no in-memory cache)
 - Admin triggers: POST /admin/syllabus/seed-embeddings
 - Admin diagnostics: GET /admin/syllabus/test-classify?q=...
-- Admin stats: GET /admin/syllabus/embedding-stats (enriched)
+- Admin stats: GET /admin/syllabus/embedding-stats
 
 Usage
 -----
@@ -28,15 +27,12 @@ Usage
 import asyncio
 import logging
 import os
-import time
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger("syllabus_embedder")
 
-COLLECTION = "syllabus_embeddings"
 EMBED_TEXT_MAX_CHARS = 2000
-CACHE_TTL_SECONDS    = 6 * 3600
 
 
 def _safe_float_env(name: str, default: float) -> float:
@@ -170,16 +166,19 @@ def _build_topic_embed_text(
     return ". ".join(sections)[:EMBED_TEXT_MAX_CHARS]
 
 
+def _make_vector_id(chapter_id: str, level: str = "chapter", topic: str = "") -> str:
+    import hashlib
+    raw = f"{chapter_id}::{level}::{topic}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
 class SyllabusEmbedder:
-    """Manages chapter + topic embeddings and provides vector-based subject classification."""
+    """Manages chapter + topic embeddings via Cloudflare Vectorize."""
 
     def __init__(self, db):
-        self._db   = db
-        self._col  = db[COLLECTION] if db is not None else None
-        self._cache: list[dict] = []
-        self._cache_loaded_at: float = 0.0
+        self._db = db
         self._seed_lock = asyncio.Lock()
-        self._seeded    = False
+        self._seeded = False
 
     async def embed_chapter(
         self,
@@ -190,12 +189,19 @@ class SyllabusEmbedder:
         topics: list = None,
         content: str = "",
     ) -> int:
-        if self._col is None:
-            return 0
         try:
             from vertex_services import embed_text as _embed_fn
         except ImportError:
             logger.warning("vertex_services unavailable — skipping chapter embedding")
+            return 0
+
+        try:
+            import vectorize_client
+            if not vectorize_client.is_configured():
+                logger.warning("Vectorize not configured — skipping chapter embedding")
+                return 0
+        except ImportError:
+            logger.warning("vectorize_client unavailable — skipping chapter embedding")
             return 0
 
         db = self._db
@@ -224,58 +230,68 @@ class SyllabusEmbedder:
             logger.warning(f"Embed chapter failed for {title[:40]}: {exc}")
             vec = None
 
-        now = __import__("datetime").datetime.utcnow().isoformat()
-        doc = {
-            "chapter_id": chapter_id,
-            "subject_id": subject_id,
-            "board": board_name,
-            "class_name": class_name,
-            "stream": stream_name,
-            "subject_name": subject_name,
-            "chapter_title": title,
-            "chapter_number": 0,
-            "embed_text": embed_text_input,
-            "embedding": vec,
-            "embedding_model": _current_embed_model,
-            "level": "chapter",
-            "description": description,
-            "topics": topics or [],
-            "status": "active",
-            "source": "content_editor",
-            "created_at": now,
-        }
-        await self._col.update_one(
-            {"chapter_id": chapter_id, "level": "chapter"},
-            {"$set": doc},
-            upsert=True,
-        )
-        inserted = 1
+        if not vec:
+            return 0
 
-        await self._col.delete_many(
-            {"chapter_id": chapter_id, "level": "topic"}
-        )
-        inserted += await self._seed_topic_embeddings(
+        await self.remove_chapter_embeddings(chapter_id)
+
+        vectors_to_upsert = []
+
+        chapter_vec_id = _make_vector_id(chapter_id, "chapter")
+        vectors_to_upsert.append({
+            "id": chapter_vec_id,
+            "values": vec,
+            "metadata": {
+                "chapter_id": chapter_id,
+                "subject_id": subject_id,
+                "board": board_name,
+                "class_name": class_name,
+                "stream": stream_name,
+                "subject_name": subject_name,
+                "chapter_title": title,
+                "chapter_number": 0,
+                "level": "chapter",
+                "topic": "",
+                "embed_text": embed_text_input[:500],
+                "embedding_model": _current_embed_model,
+                "source": "content_editor",
+            },
+        })
+
+        topic_vecs = await self._build_topic_vectors(
             chapter_id, subject_id, board_name, class_name, stream_name,
             subject_name, title, 0, topics or [], _embed_fn,
-            _current_embed_model, set(), content=content,
+            _current_embed_model, content=content,
         )
+        vectors_to_upsert.extend(topic_vecs)
 
-        self._cache = []
-        self._cache_loaded_at = 0.0
-        logger.info(f"Embedded chapter '{title[:40]}' + {inserted - 1} topics on save")
+        result = await vectorize_client.upsert_vectors(vectors_to_upsert)
+        inserted = result.get("upserted", len(vectors_to_upsert))
+        logger.info(f"Embedded chapter '{title[:40]}' + {len(topic_vecs)} topics to Vectorize")
         return inserted
 
     async def remove_chapter_embeddings(self, chapter_id: str) -> int:
-        if self._col is None:
+        try:
+            import vectorize_client
+            if not vectorize_client.is_configured():
+                return 0
+        except ImportError:
             return 0
-        result = await self._col.delete_many({"chapter_id": chapter_id})
-        self._cache = []
-        self._cache_loaded_at = 0.0
-        return result.deleted_count
+
+        ids_to_delete = [_make_vector_id(chapter_id, "chapter")]
+
+        if self._db is not None:
+            chapter = await self._db.chapters.find_one({"id": chapter_id}, {"_id": 0, "topics": 1})
+            if chapter:
+                for t in (chapter.get("topics") or []):
+                    topic_str = str(t).strip()
+                    if topic_str:
+                        ids_to_delete.append(_make_vector_id(chapter_id, "topic", topic_str))
+
+        deleted = await vectorize_client.delete_vectors(ids_to_delete)
+        return deleted
 
     async def ensure_seeded(self) -> int:
-        if self._col is None:
-            return 0
         async with self._seed_lock:
             if self._seeded:
                 return 0
@@ -284,21 +300,24 @@ class SyllabusEmbedder:
             return inserted
 
     async def reseed(self) -> int:
-        if self._col is None:
-            return 0
         async with self._seed_lock:
             self._seeded = False
-            self._cache = []
-            self._cache_loaded_at = 0.0
             inserted = await self._seed_chapters()
             self._seeded = True
         return inserted
 
     async def classify(self, query: str, subject_id: Optional[str] = None) -> Optional[SyllabusMatch]:
         try:
-            from vertex_services import embed_text, cosine_similarity
+            from vertex_services import embed_text
         except ImportError:
             logger.warning("vertex_services not available — syllabus vector classify skipped")
+            return None
+
+        try:
+            import vectorize_client
+            if not vectorize_client.is_configured():
+                return None
+        except ImportError:
             return None
 
         try:
@@ -325,23 +344,35 @@ class SyllabusEmbedder:
         else:
             logger.info(f"SyllabusEmbed: reusing cached query embedding for '{query[:40]}'")
 
-        entries = await self._get_cache()
-        if not entries:
+        mf = {"subject_id": subject_id} if subject_id else None
+        matches = await vectorize_client.query_vectors(
+            vector=q_vec,
+            top_k=10,
+            metadata_filter=mf,
+            return_metadata=True,
+        )
+
+        if not matches and subject_id:
+            matches = await vectorize_client.query_vectors(
+                vector=q_vec,
+                top_k=10,
+                return_metadata=True,
+            )
+
+        if not matches:
             return None
 
         scored = []
-        for entry in entries:
-            vec = entry.get("embedding")
-            if not vec:
-                continue
-            score = cosine_similarity(q_vec, vec)
+        for m in matches:
+            meta = m.get("metadata", {})
+            score = m.get("score", 0.0)
             if subject_id:
-                entry_sid = entry.get("subject_id", "")
+                entry_sid = meta.get("subject_id", "")
                 if entry_sid == subject_id:
                     score += SUBJECT_MATCH_BONUS
                 elif entry_sid:
                     score -= SUBJECT_MISMATCH_PENALTY
-            scored.append((score, entry))
+            scored.append((score, meta))
 
         scored.sort(key=lambda x: -x[0])
 
@@ -353,9 +384,6 @@ class SyllabusEmbedder:
             for s, e in top3
         )
         logger.info(f"SyllabusEmbed top-3: [{top3_log}] | query: {query[:60]}")
-
-        if not scored:
-            return None
 
         best_score, best_entry = scored[0]
 
@@ -371,7 +399,7 @@ class SyllabusEmbedder:
                 stream         = best_entry.get("stream", ""),
                 subject_name   = best_entry.get("subject_name", ""),
                 chapter_title  = best_entry.get("chapter_title", ""),
-                chapter_number = best_entry.get("chapter_number", 0),
+                chapter_number = int(best_entry.get("chapter_number", 0)),
                 subject_id     = best_entry.get("subject_id", ""),
                 chapter_id     = best_entry.get("chapter_id", ""),
                 similarity     = round(best_score, 4),
@@ -382,7 +410,14 @@ class SyllabusEmbedder:
 
     async def classify_top_n(self, query: str, top_n: int = 5) -> list[dict]:
         try:
-            from vertex_services import embed_text, cosine_similarity
+            from vertex_services import embed_text
+        except ImportError:
+            return []
+
+        try:
+            import vectorize_client
+            if not vectorize_client.is_configured():
+                return []
         except ImportError:
             return []
 
@@ -396,137 +431,107 @@ class SyllabusEmbedder:
         except Exception:
             return []
 
-        entries = await self._get_cache()
-        if not entries:
-            return []
+        matches = await vectorize_client.query_vectors(
+            vector=q_vec,
+            top_k=top_n,
+            return_metadata=True,
+        )
 
-        scored = []
-        for entry in entries:
-            vec = entry.get("embedding")
-            if not vec:
-                continue
-            score = cosine_similarity(q_vec, vec)
-            scored.append({
-                "board": entry.get("board", ""),
-                "class_name": entry.get("class_name", ""),
-                "stream": entry.get("stream", ""),
-                "subject_name": entry.get("subject_name", ""),
-                "chapter_title": entry.get("chapter_title", ""),
-                "chapter_number": entry.get("chapter_number", 0),
-                "subject_id": entry.get("subject_id", ""),
-                "chapter_id": entry.get("chapter_id", ""),
-                "level": entry.get("level", "chapter"),
-                "topic": entry.get("topic", ""),
-                "embed_text_preview": (entry.get("embed_text", ""))[:200],
+        results = []
+        for m in matches:
+            meta = m.get("metadata", {})
+            score = m.get("score", 0.0)
+            results.append({
+                "board": meta.get("board", ""),
+                "class_name": meta.get("class_name", ""),
+                "stream": meta.get("stream", ""),
+                "subject_name": meta.get("subject_name", ""),
+                "chapter_title": meta.get("chapter_title", ""),
+                "chapter_number": int(meta.get("chapter_number", 0)),
+                "subject_id": meta.get("subject_id", ""),
+                "chapter_id": meta.get("chapter_id", ""),
+                "level": meta.get("level", "chapter"),
+                "topic": meta.get("topic", ""),
+                "embed_text_preview": (meta.get("embed_text", ""))[:200],
                 "similarity": round(score, 4),
                 "passes_threshold": score >= SIMILARITY_THRESHOLD,
             })
 
-        scored.sort(key=lambda x: -x["similarity"])
-        return scored[:top_n]
+        return results
 
     async def full_reseed(self) -> dict:
-        if self._col is None:
-            return {"error": "MongoDB not available"}
+        try:
+            import vectorize_client
+            if not vectorize_client.is_configured():
+                return {"error": "Vectorize not configured"}
+        except ImportError:
+            return {"error": "vectorize_client not available"}
+
         async with self._seed_lock:
             self._seeded = False
-            await self._col.drop()
+
+            deleted_total = 0
+            if self._db is not None:
+                all_ids = []
+                async for chapter in self._db.chapters.find({}, {"id": 1, "topics": 1}):
+                    ch_id = chapter.get("id") or str(chapter.get("_id", ""))
+                    all_ids.append(_make_vector_id(ch_id, "chapter"))
+                    for t in (chapter.get("topics") or []):
+                        topic_str = str(t).strip()
+                        if topic_str:
+                            all_ids.append(_make_vector_id(ch_id, "topic", topic_str))
+                if all_ids:
+                    deleted_total += await vectorize_client.delete_vectors(all_ids)
+                    logger.info(f"full_reseed: deleted {len(all_ids)} known vectors")
+
+            stale_rounds = 0
+            max_stale_rounds = 200
+            while stale_rounds < max_stale_rounds:
+                zero_vec = [0.0] * vectorize_client.VECTORIZE_DIMENSIONS
+                stale = await vectorize_client.query_vectors(
+                    vector=zero_vec, top_k=100, return_metadata=False, return_values=False,
+                )
+                if not stale:
+                    break
+                stale_ids = [m["id"] for m in stale]
+                await vectorize_client.delete_vectors(stale_ids)
+                deleted_total += len(stale_ids)
+                stale_rounds += 1
+                logger.info(f"full_reseed: swept {len(stale_ids)} stale vectors (round {stale_rounds})")
+            if stale_rounds >= max_stale_rounds:
+                logger.warning(
+                    f"full_reseed: hit sweep limit ({max_stale_rounds} rounds, ~{max_stale_rounds * 100} vectors). "
+                    "Some stale vectors may remain — consider recreating the index."
+                )
+
+            if deleted_total:
+                logger.info(f"full_reseed: total deleted {deleted_total} vectors before re-embedding")
+
             inserted = await self._seed_chapters()
             self._seeded = True
-            self._cache = []
-            self._cache_loaded_at = 0.0
-        return {"status": "ok", "inserted": inserted}
+        return {"status": "ok", "inserted": inserted, "deleted": deleted_total}
 
     async def stats(self) -> dict:
-        if self._col is None:
-            return {"error": "MongoDB not available"}
+        try:
+            import vectorize_client
+            if not vectorize_client.is_configured():
+                return {"error": "Vectorize not configured"}
+        except ImportError:
+            return {"error": "vectorize_client not available"}
 
-        total = await self._col.count_documents({})
-        embedded = await self._col.count_documents({"embedding": {"$exists": True}})
-        chapter_count = await self._col.count_documents({"level": {"$ne": "topic"}})
-        topic_count = await self._col.count_documents({"level": "topic"})
-
-        pipeline_thin = [
-            {"$match": {"embedding": {"$exists": True}}},
-            {"$project": {"embed_text": 1, "len": {"$strLenCP": {"$ifNull": ["$embed_text", ""]}}}},
-            {"$match": {"len": {"$lt": 100}}},
-            {"$count": "thin"},
-        ]
-        thin_result = await self._col.aggregate(pipeline_thin).to_list(1)
-        thin_count = thin_result[0]["thin"] if thin_result else 0
-
-        pipeline_no_topics = [
-            {"$match": {"level": {"$ne": "topic"}}},
-            {"$match": {"$or": [{"topics": {"$exists": False}}, {"topics": {"$size": 0}}]}},
-            {"$count": "missing"},
-        ]
-        no_topics_result = await self._col.aggregate(pipeline_no_topics).to_list(1)
-        missing_topics = no_topics_result[0]["missing"] if no_topics_result else 0
-
-        pipeline_avg = [
-            {"$match": {"embedding": {"$exists": True}}},
-            {"$project": {"len": {"$strLenCP": {"$ifNull": ["$embed_text", ""]}}}},
-            {"$group": {"_id": None, "avg_len": {"$avg": "$len"}, "max_len": {"$max": "$len"}, "min_len": {"$min": "$len"}}},
-        ]
-        avg_result = await self._col.aggregate(pipeline_avg).to_list(1)
-        avg_info = avg_result[0] if avg_result else {}
+        index_info = await vectorize_client.get_index_info()
+        index_config = await vectorize_client.get_index_config()
 
         return {
-            "total_embeddings": total,
-            "embedded": embedded,
-            "chapter_embeddings": chapter_count,
-            "topic_embeddings": topic_count,
-            "thin_embed_text_lt_100_chars": thin_count,
-            "chapters_missing_topics": missing_topics,
-            "avg_embed_text_length": round(avg_info.get("avg_len", 0), 1),
-            "max_embed_text_length": avg_info.get("max_len", 0),
-            "min_embed_text_length": avg_info.get("min_len", 0),
-            "cache_entries": len(self._cache),
+            "index_name": vectorize_client.VECTORIZE_INDEX_NAME,
+            "total_vectors": index_info.get("vector_count", 0),
+            "dimensions": index_config.get("dimensions", vectorize_client.VECTORIZE_DIMENSIONS),
+            "metric": index_config.get("metric", "cosine"),
             "similarity_threshold": SIMILARITY_THRESHOLD,
+            "subject_match_bonus": SUBJECT_MATCH_BONUS,
+            "subject_mismatch_penalty": SUBJECT_MISMATCH_PENALTY,
+            "backend": "cloudflare_vectorize",
         }
-
-    async def _get_cache(self) -> list[dict]:
-        now = time.time()
-        cache_age = now - self._cache_loaded_at
-        if self._cache and cache_age < CACHE_TTL_SECONDS:
-            if cache_age > CACHE_TTL_SECONDS * 0.8 and not getattr(self, '_bg_refresh_running', False):
-                self._bg_refresh_running = True
-                asyncio.ensure_future(self._background_refresh())
-            return self._cache
-        if self._col is None:
-            return []
-        return await self._reload_cache()
-
-    async def _reload_cache(self) -> list[dict]:
-        cursor = self._col.find(
-            {"embedding": {"$exists": True}},
-            {
-                "embedding": 1, "board": 1, "class_name": 1, "stream": 1,
-                "subject_name": 1, "chapter_title": 1, "chapter_number": 1,
-                "subject_id": 1, "chapter_id": 1, "level": 1, "topic": 1,
-                "embed_text": 1,
-            },
-        )
-        entries = await cursor.to_list(length=None)
-        was_empty = not self._cache
-        self._cache = entries
-        self._cache_loaded_at = time.time()
-        ch_count = sum(1 for e in entries if e.get("level", "chapter") != "topic")
-        tp_count = sum(1 for e in entries if e.get("level") == "topic")
-        if was_empty:
-            logger.info(f"SyllabusEmbedder cache loaded: {ch_count} chapter + {tp_count} topic embeddings")
-        else:
-            logger.debug(f"SyllabusEmbedder cache refreshed: {ch_count} chapter + {tp_count} topic embeddings")
-        return entries
-
-    async def _background_refresh(self):
-        try:
-            await self._reload_cache()
-            logger.debug("SyllabusEmbedder proactive cache refresh completed")
-        except Exception as e:
-            logger.warning(f"SyllabusEmbedder background refresh failed: {e}")
-        finally:
-            self._bg_refresh_running = False
 
     async def _seed_chapters(self) -> int:
         try:
@@ -536,335 +541,335 @@ class SyllabusEmbedder:
             logger.warning(f"Cannot seed — import error: {exc}")
             return 0
 
+        try:
+            import vectorize_client
+            if not vectorize_client.is_configured():
+                logger.warning("Vectorize not configured — skipping seed")
+                return 0
+        except ImportError:
+            logger.warning("vectorize_client not available — skipping seed")
+            return 0
+
         boards   = {b["id"]: b for b in SEED_DATA.get("boards", [])}
         classes_ = {c["id"]: c for c in SEED_DATA.get("classes", [])}
         streams  = {s["id"]: s for s in SEED_DATA.get("streams", [])}
         subjects = {s["id"]: s for s in SEED_DATA.get("subjects", [])}
-
-        existing_ids: set = set()
-        async for doc in self._col.find({}, {"chapter_id": 1, "level": 1, "topic": 1}):
-            cid = doc.get("chapter_id", "")
-            level = doc.get("level", "chapter")
-            topic = doc.get("topic", "")
-            existing_ids.add(f"{cid}::{level}::{topic}")
-
-        inserted = 0
 
         try:
             from vertex_services import _EMBED_MODEL as _current_embed_model
         except ImportError:
             _current_embed_model = "unknown"
 
+        all_candidate_ids: list[str] = []
+        chapter_entries: list[dict] = []
+
         for chapter in SEED_DATA.get("chapters", []):
-            ch_id   = chapter["id"]
+            ch_id = chapter["id"]
             subj_id = chapter["subject_id"]
-            cache_key = f"{ch_id}::chapter::"
-            if cache_key in existing_ids:
-                continue
-
-            subj   = subjects.get(subj_id, {})
+            subj = subjects.get(subj_id, {})
             stream = streams.get(subj.get("stream_id", ""), {})
-            cls    = classes_.get(stream.get("class_id", ""), {})
-            board  = boards.get(cls.get("board_id", ""), {})
+            cls = classes_.get(stream.get("class_id", ""), {})
+            board = boards.get(cls.get("board_id", ""), {})
 
-            board_name    = board.get("name", "AHSEC")
-            class_name    = cls.get("name", "")
-            stream_name   = stream.get("name", "")
-            subject_name  = subj.get("name", "")
-            chapter_title = chapter.get("title", "")
-            description   = (chapter.get("description") or "").strip()
-            topics: list  = chapter.get("topics") or []
-
-            embed_text_input = _build_rich_embed_text(
-                board_name, class_name, stream_name, subject_name,
-                chapter_title, description, topics,
-            )
-
-            try:
-                vec = await asyncio.wait_for(
-                    embed_text(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
-                    timeout=5.0,
-                )
-            except Exception as exc:
-                logger.warning(f"Embed failed for {chapter_title[:40]}: {exc}")
-                vec = None
-
-            doc = {
-                "chapter_id":     ch_id,
-                "subject_id":     subj_id,
-                "board":          board_name,
-                "class_name":     class_name,
-                "stream":         stream_name,
-                "subject_name":   subject_name,
-                "chapter_title":  chapter_title,
+            entry = {
+                "ch_id": ch_id, "subj_id": subj_id,
+                "board_name": board.get("name", "AHSEC"),
+                "class_name": cls.get("name", ""),
+                "stream_name": stream.get("name", ""),
+                "subject_name": subj.get("name", ""),
+                "chapter_title": chapter.get("title", ""),
+                "description": (chapter.get("description") or "").strip(),
+                "topic_list": chapter.get("topics") or [],
                 "chapter_number": chapter.get("chapter_number", 0),
-                "embed_text":     embed_text_input,
-                "embedding":      vec,
-                "embedding_model": _current_embed_model,
-                "level":          "chapter",
-                "topics":         topics,
-                "description":    description,
-                "status":         "active",
-                "created_at":     __import__("datetime").datetime.utcnow().isoformat(),
+                "content": (chapter.get("content") or ""),
+                "source": "seed",
             }
-            await self._col.update_one(
-                {"chapter_id": ch_id, "level": "chapter"},
-                {"$set": doc},
-                upsert=True,
-            )
-            existing_ids.add(cache_key)
-            inserted += 1
-
-            inserted += await self._seed_topic_embeddings(
-                ch_id, subj_id, board_name, class_name, stream_name,
-                subject_name, chapter_title, chapter.get("chapter_number", 0),
-                topics, embed_text, _current_embed_model, existing_ids,
-                content=(chapter.get("content") or ""),
-            )
-
-            if inserted % 20 == 0:
-                logger.info(f"SyllabusEmbedder: {inserted} embeddings so far…")
+            chapter_entries.append(entry)
+            all_candidate_ids.append(_make_vector_id(ch_id, "chapter"))
+            for t in entry["topic_list"]:
+                ts = str(t).strip()
+                if ts:
+                    all_candidate_ids.append(_make_vector_id(ch_id, "topic", ts))
 
         try:
             db = self._db
-            mongo_subjects: dict = {}
-            async for s in db.subjects.find({}, {
-                "id": 1, "title": 1, "name": 1,
-                "boardName": 1, "className": 1, "streamName": 1,
-            }):
-                sid = s.get("id") or str(s.get("_id", ""))
-                mongo_subjects[sid] = s
+            if db is not None:
+                mongo_subjects: dict = {}
+                async for s in db.subjects.find({}, {
+                    "id": 1, "title": 1, "name": 1,
+                    "boardName": 1, "className": 1, "streamName": 1,
+                }):
+                    sid = s.get("id") or str(s.get("_id", ""))
+                    mongo_subjects[sid] = s
 
-            async for chapter in db.chapters.find({}):
-                ch_id   = chapter.get("id") or str(chapter.get("_id", ""))
-                cache_key = f"{ch_id}::chapter::"
-                if cache_key in existing_ids:
-                    continue
+                async for chapter in db.chapters.find({}):
+                    ch_id = chapter.get("id") or str(chapter.get("_id", ""))
+                    subj_id = chapter.get("subject_id", "")
+                    subj = mongo_subjects.get(subj_id, {})
+                    topic_list = chapter.get("topics") or []
 
-                subj_id = chapter.get("subject_id", "")
-                subj    = mongo_subjects.get(subj_id, {})
+                    entry = {
+                        "ch_id": ch_id, "subj_id": subj_id,
+                        "board_name": subj.get("boardName", ""),
+                        "class_name": subj.get("className", ""),
+                        "stream_name": subj.get("streamName", ""),
+                        "subject_name": subj.get("title") or subj.get("name", ""),
+                        "chapter_title": chapter.get("title", ""),
+                        "description": (chapter.get("description") or "").strip(),
+                        "topic_list": topic_list,
+                        "chapter_number": chapter.get("chapter_number", 0),
+                        "content": (chapter.get("content") or "").strip(),
+                        "source": "mongo",
+                    }
+                    chapter_entries.append(entry)
+                    all_candidate_ids.append(_make_vector_id(ch_id, "chapter"))
+                    for t in topic_list:
+                        ts = str(t).strip()
+                        if ts:
+                            all_candidate_ids.append(_make_vector_id(ch_id, "topic", ts))
+        except Exception as mongo_err:
+            logger.warning(f"SyllabusEmbedder: MongoDB chapter loading failed: {mongo_err}")
 
-                board_name    = subj.get("boardName", "")
-                class_name    = subj.get("className", "")
-                stream_name   = subj.get("streamName", "")
-                subject_name  = subj.get("title") or subj.get("name", "")
-                chapter_title = chapter.get("title", "")
-                description   = (chapter.get("description") or "").strip()
-                topics: list  = chapter.get("topics") or []
-                content       = (chapter.get("content") or "").strip()
+        existing_ids: set[str] = set()
+        for i in range(0, len(all_candidate_ids), 100):
+            batch_ids = all_candidate_ids[i : i + 100]
+            try:
+                found = await vectorize_client.get_vectors_by_ids(batch_ids)
+                for v in found:
+                    vid = v.get("id") if isinstance(v, dict) else getattr(v, "id", None)
+                    if vid:
+                        existing_ids.add(vid)
+            except Exception:
+                pass
 
+        skipped = 0
+        inserted = 0
+        vectors_batch: list[dict] = []
+
+        for entry in chapter_entries:
+            ch_id = entry["ch_id"]
+            ch_vid = _make_vector_id(ch_id, "chapter")
+
+            if ch_vid not in existing_ids:
                 embed_text_input = _build_rich_embed_text(
-                    board_name, class_name, stream_name, subject_name,
-                    chapter_title, description, topics, content,
+                    entry["board_name"], entry["class_name"], entry["stream_name"],
+                    entry["subject_name"], entry["chapter_title"],
+                    entry["description"], entry["topic_list"],
+                    entry.get("content", ""),
                 )
-
                 try:
                     vec = await asyncio.wait_for(
                         embed_text(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
                         timeout=5.0,
                     )
                 except Exception as exc:
-                    logger.warning(f"Embed (mongo) failed for {chapter_title[:40]}: {exc}")
+                    logger.warning(f"Embed failed for {entry['chapter_title'][:40]}: {exc}")
                     vec = None
 
-                doc = {
-                    "chapter_id":     ch_id,
-                    "subject_id":     subj_id,
-                    "board":          board_name,
-                    "class_name":     class_name,
-                    "stream":         stream_name,
-                    "subject_name":   subject_name,
-                    "chapter_title":  chapter_title,
-                    "chapter_number": chapter.get("chapter_number", 0),
-                    "embed_text":     embed_text_input,
-                    "embedding":      vec,
-                    "embedding_model": _current_embed_model,
-                    "level":          "chapter",
-                    "description":    description,
-                    "topics":         topics,
-                    "status":         "active",
-                    "source":         "pdf_import",
-                    "created_at":     __import__("datetime").datetime.utcnow().isoformat(),
-                }
-                await self._col.update_one(
-                    {"chapter_id": ch_id, "level": "chapter"},
-                    {"$set": doc},
-                    upsert=True,
+                if vec:
+                    vectors_batch.append({
+                        "id": ch_vid,
+                        "values": vec,
+                        "metadata": {
+                            "chapter_id": ch_id,
+                            "subject_id": entry["subj_id"],
+                            "board": entry["board_name"],
+                            "class_name": entry["class_name"],
+                            "stream": entry["stream_name"],
+                            "subject_name": entry["subject_name"],
+                            "chapter_title": entry["chapter_title"],
+                            "chapter_number": entry["chapter_number"],
+                            "level": "chapter",
+                            "topic": "",
+                            "embed_text": embed_text_input[:500],
+                            "embedding_model": _current_embed_model,
+                            "source": entry["source"],
+                        },
+                    })
+            else:
+                skipped += 1
+
+            missing_topics = []
+            for t in entry["topic_list"]:
+                ts = str(t).strip()
+                if ts:
+                    t_vid = _make_vector_id(ch_id, "topic", ts)
+                    if t_vid not in existing_ids:
+                        missing_topics.append(ts)
+                    else:
+                        skipped += 1
+
+            if missing_topics:
+                topic_vecs = await self._build_topic_vectors(
+                    ch_id, entry["subj_id"], entry["board_name"],
+                    entry["class_name"], entry["stream_name"],
+                    entry["subject_name"], entry["chapter_title"],
+                    entry["chapter_number"], missing_topics,
+                    embed_text, _current_embed_model,
+                    content=entry.get("content", ""),
                 )
-                existing_ids.add(cache_key)
-                inserted += 1
+                vectors_batch.extend(topic_vecs)
 
-                inserted += await self._seed_topic_embeddings(
-                    ch_id, subj_id, board_name, class_name, stream_name,
-                    subject_name, chapter_title, chapter.get("chapter_number", 0),
-                    topics, embed_text, _current_embed_model, existing_ids,
-                    content=content,
-                )
+            if len(vectors_batch) >= 20:
+                result = await vectorize_client.upsert_vectors(vectors_batch)
+                inserted += result.get("upserted", len(vectors_batch))
+                vectors_batch = []
+                logger.info(f"SyllabusEmbedder: {inserted} new embeddings, {skipped} skipped…")
 
-                if inserted % 10 == 0:
-                    logger.info(f"SyllabusEmbedder: {inserted} embeddings so far (incl. PDF imports)…")
+        if vectors_batch:
+            result = await vectorize_client.upsert_vectors(vectors_batch)
+            inserted += result.get("upserted", len(vectors_batch))
 
-        except Exception as mongo_err:
-            logger.warning(f"SyllabusEmbedder: MongoDB chapter seeding failed: {mongo_err}")
-
-        try:
-            await self._col.create_index("subject_id")
-            await self._col.create_index("board")
-            await self._col.create_index("level")
-        except Exception as ie:
-            logger.debug(f"SyllabusEmbedder: index (non-unique) error (ignored): {ie}")
-
-        try:
-            existing_indexes = await self._col.index_information()
-            for idx_name, idx_info in existing_indexes.items():
-                key = idx_info.get("key", [])
-                if key == [("chapter_id", 1)] and idx_info.get("unique"):
-                    logger.info(f"SyllabusEmbedder: dropping legacy unique index '{idx_name}' on chapter_id")
-                    await self._col.drop_index(idx_name)
-                    break
-        except Exception as drop_err:
-            logger.warning(f"SyllabusEmbedder: legacy index drop failed (non-fatal): {drop_err}")
-
-        try:
-            await self._col.create_index(
-                [("chapter_id", 1), ("level", 1), ("topic", 1)],
-                unique=True,
-            )
-        except Exception as ie:
-            logger.warning(f"SyllabusEmbedder: compound unique index failed ({ie}); deduplicating…")
-            try:
-                pipeline = [
-                    {"$group": {
-                        "_id": {"chapter_id": "$chapter_id", "level": "$level", "topic": "$topic"},
-                        "ids": {"$push": "$_id"},
-                        "count": {"$sum": 1},
-                    }},
-                    {"$match": {"count": {"$gt": 1}}},
-                ]
-                async for group in self._col.aggregate(pipeline):
-                    to_delete = group["ids"][1:]
-                    await self._col.delete_many({"_id": {"$in": to_delete}})
-                await self._col.create_index(
-                    [("chapter_id", 1), ("level", 1), ("topic", 1)],
-                    unique=True,
-                )
-            except Exception as dedup_err:
-                logger.warning(f"SyllabusEmbedder: dedup fallback failed: {dedup_err}")
-
-        logger.info(f"SyllabusEmbedder: seeding complete — {inserted} new embeddings (chapters + topics)")
+        logger.info(
+            f"SyllabusEmbedder: seeding complete — {inserted} new embeddings, "
+            f"{skipped} already existed (skipped)"
+        )
         return inserted
 
     async def reseed_all(self, force: bool = False) -> dict:
+        if force:
+            return await self.full_reseed()
+
         try:
             from vertex_services import embed_text as _embed_fn
             from vertex_services import _EMBED_MODEL as _current_embed_model
         except ImportError as exc:
             return {"status": "error", "reason": f"import error: {exc}"}
 
-        if self._col is None:
-            return {"status": "error", "reason": "collection not ready"}
+        try:
+            import vectorize_client
+            if not vectorize_client.is_configured():
+                return {"status": "error", "reason": "Vectorize not configured"}
+        except ImportError:
+            return {"status": "error", "reason": "vectorize_client not available"}
 
         async with self._seed_lock:
             db = self._db
             mongo_subjects: dict = {}
-            async for s in db.subjects.find({}, {
-                "id": 1, "title": 1, "name": 1,
-                "boardName": 1, "className": 1, "streamName": 1,
-            }):
-                sid = s.get("id") or str(s.get("_id", ""))
-                mongo_subjects[sid] = s
+            if db is not None:
+                async for s in db.subjects.find({}, {
+                    "id": 1, "title": 1, "name": 1,
+                    "boardName": 1, "className": 1, "streamName": 1,
+                }):
+                    sid = s.get("id") or str(s.get("_id", ""))
+                    mongo_subjects[sid] = s
 
             stats = {"chapters_processed": 0, "topics_processed": 0, "embed_failures": 0, "skipped": 0}
+            vectors_batch: list[dict] = []
 
-            if force:
-                await self._col.delete_many({})
-                logger.info("reseed_all: force=True, cleared all embeddings")
+            if db is not None:
+                all_candidate_ids: list[str] = []
+                chapter_list: list[dict] = []
+                async for chapter in db.chapters.find({}):
+                    ch_id = chapter.get("id") or str(chapter.get("_id", ""))
+                    topic_list = chapter.get("topics") or []
+                    chapter_list.append(chapter)
+                    all_candidate_ids.append(_make_vector_id(ch_id, "chapter"))
+                    for t in topic_list:
+                        ts = str(t).strip()
+                        if ts:
+                            all_candidate_ids.append(_make_vector_id(ch_id, "topic", ts))
 
-            existing_ids: set = set()
-            if not force:
-                async for doc in self._col.find({}, {"chapter_id": 1, "level": 1, "topic": 1, "embedding": 1}):
-                    cid = doc.get("chapter_id", "")
-                    level = doc.get("level", "chapter")
-                    topic_name = doc.get("topic", "")
-                    has_vec = doc.get("embedding") is not None and len(doc.get("embedding", [])) > 0
-                    if has_vec:
-                        existing_ids.add(f"{cid}::{level}::{topic_name}")
-
-            async for chapter in db.chapters.find({}):
-                ch_id = chapter.get("id") or str(chapter.get("_id", ""))
-                subj_id = chapter.get("subject_id", "")
-                subj = mongo_subjects.get(subj_id, {})
-
-                board_name = subj.get("boardName", "")
-                class_name = subj.get("className", "")
-                stream_name = subj.get("streamName", "")
-                subject_name = subj.get("title") or subj.get("name", "")
-                chapter_title = chapter.get("title", "")
-                description = (chapter.get("description") or "").strip()
-                topics: list = chapter.get("topics") or []
-                content = (chapter.get("content") or "").strip()
-
-                cache_key = f"{ch_id}::chapter::"
-                if cache_key not in existing_ids:
-                    embed_text_input = _build_rich_embed_text(
-                        board_name, class_name, stream_name, subject_name,
-                        chapter_title, description, topics, content,
-                    )
+                existing_ids: set[str] = set()
+                for i in range(0, len(all_candidate_ids), 100):
+                    batch_ids = all_candidate_ids[i : i + 100]
                     try:
-                        vec = await asyncio.wait_for(
-                            _embed_fn(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
-                            timeout=8.0,
+                        found = await vectorize_client.get_vectors_by_ids(batch_ids)
+                        for v in found:
+                            vid = v.get("id") if isinstance(v, dict) else getattr(v, "id", None)
+                            if vid:
+                                existing_ids.add(vid)
+                    except Exception:
+                        pass
+
+                for chapter in chapter_list:
+                    ch_id = chapter.get("id") or str(chapter.get("_id", ""))
+                    subj_id = chapter.get("subject_id", "")
+                    subj = mongo_subjects.get(subj_id, {})
+
+                    board_name = subj.get("boardName", "")
+                    class_name = subj.get("className", "")
+                    stream_name = subj.get("streamName", "")
+                    subject_name = subj.get("title") or subj.get("name", "")
+                    chapter_title = chapter.get("title", "")
+                    description = (chapter.get("description") or "").strip()
+                    topic_list: list = chapter.get("topics") or []
+                    content = (chapter.get("content") or "").strip()
+
+                    ch_vid = _make_vector_id(ch_id, "chapter")
+                    if ch_vid not in existing_ids:
+                        embed_text_input = _build_rich_embed_text(
+                            board_name, class_name, stream_name, subject_name,
+                            chapter_title, description, topic_list, content,
                         )
-                    except Exception as exc:
-                        logger.warning(f"reseed embed failed for {chapter_title[:40]}: {exc}")
-                        vec = None
-                        stats["embed_failures"] += 1
+                        try:
+                            vec = await asyncio.wait_for(
+                                _embed_fn(embed_text_input, task_type="RETRIEVAL_DOCUMENT"),
+                                timeout=8.0,
+                            )
+                        except Exception as exc:
+                            logger.warning(f"reseed embed failed for {chapter_title[:40]}: {exc}")
+                            vec = None
+                            stats["embed_failures"] += 1
 
-                    doc_obj = {
-                        "chapter_id": ch_id,
-                        "subject_id": subj_id,
-                        "board": board_name,
-                        "class_name": class_name,
-                        "stream": stream_name,
-                        "subject_name": subject_name,
-                        "chapter_title": chapter_title,
-                        "chapter_number": chapter.get("chapter_number", 0),
-                        "embed_text": embed_text_input,
-                        "embedding": vec,
-                        "embedding_model": _current_embed_model,
-                        "level": "chapter",
-                        "description": description,
-                        "topics": topics,
-                        "status": "active",
-                        "source": "reseed",
-                        "created_at": __import__("datetime").datetime.utcnow().isoformat(),
-                    }
-                    await self._col.update_one(
-                        {"chapter_id": ch_id, "level": "chapter"},
-                        {"$set": doc_obj},
-                        upsert=True,
-                    )
-                    stats["chapters_processed"] += 1
-                else:
-                    stats["skipped"] += 1
+                        if vec:
+                            vectors_batch.append({
+                                "id": ch_vid,
+                                "values": vec,
+                                "metadata": {
+                                    "chapter_id": ch_id,
+                                    "subject_id": subj_id,
+                                    "board": board_name,
+                                    "class_name": class_name,
+                                    "stream": stream_name,
+                                    "subject_name": subject_name,
+                                    "chapter_title": chapter_title,
+                                    "chapter_number": chapter.get("chapter_number", 0),
+                                    "level": "chapter",
+                                    "topic": "",
+                                    "embed_text": embed_text_input[:500],
+                                    "embedding_model": _current_embed_model,
+                                    "source": "reseed",
+                                },
+                            })
+                            stats["chapters_processed"] += 1
+                    else:
+                        stats["skipped"] += 1
 
-                topic_count = await self._seed_topic_embeddings(
-                    ch_id, subj_id, board_name, class_name, stream_name,
-                    subject_name, chapter_title, chapter.get("chapter_number", 0),
-                    topics, _embed_fn, _current_embed_model, existing_ids,
-                    content=content,
-                )
-                stats["topics_processed"] += topic_count
+                    missing_topics = []
+                    for t in topic_list:
+                        ts = str(t).strip()
+                        if ts:
+                            t_vid = _make_vector_id(ch_id, "topic", ts)
+                            if t_vid not in existing_ids:
+                                missing_topics.append(ts)
+                            else:
+                                stats["skipped"] += 1
 
-                await asyncio.sleep(0.1)
+                    if missing_topics:
+                        topic_vecs = await self._build_topic_vectors(
+                            ch_id, subj_id, board_name, class_name, stream_name,
+                            subject_name, chapter_title, chapter.get("chapter_number", 0),
+                            missing_topics, _embed_fn, _current_embed_model,
+                            content=content,
+                        )
+                        vectors_batch.extend(topic_vecs)
+                        stats["topics_processed"] += len(topic_vecs)
 
-            self._cache = []
-            self._cache_loaded_at = 0.0
+                    if len(vectors_batch) >= 20:
+                        await vectorize_client.upsert_vectors(vectors_batch)
+                        vectors_batch = []
+
+                    await asyncio.sleep(0.1)
+
+            if vectors_batch:
+                await vectorize_client.upsert_vectors(vectors_batch)
+
             stats["status"] = "ok"
             logger.info(f"reseed_all complete: {stats}")
             return stats
 
-    async def _seed_topic_embeddings(
+    async def _build_topic_vectors(
         self,
         chapter_id: str,
         subject_id: str,
@@ -877,20 +882,15 @@ class SyllabusEmbedder:
         topics: list,
         embed_text_fn,
         embed_model: str,
-        existing_ids: set,
         content: str = "",
-    ) -> int:
+    ) -> list[dict]:
         if not topics:
-            return 0
+            return []
 
-        inserted = 0
+        vectors = []
         for topic in topics:
             topic_str = str(topic).strip()
             if not topic_str:
-                continue
-
-            cache_key = f"{chapter_id}::topic::{topic_str}"
-            if cache_key in existing_ids:
                 continue
 
             topic_embed_text = _build_topic_embed_text(
@@ -907,29 +907,24 @@ class SyllabusEmbedder:
                 logger.warning(f"Topic embed failed for {topic_str[:30]}: {exc}")
                 vec = None
 
-            doc = {
-                "chapter_id":     chapter_id,
-                "subject_id":     subject_id,
-                "board":          board_name,
-                "class_name":     class_name,
-                "stream":         stream_name,
-                "subject_name":   subject_name,
-                "chapter_title":  chapter_title,
-                "chapter_number": chapter_number,
-                "level":          "topic",
-                "topic":          topic_str,
-                "embed_text":     topic_embed_text,
-                "embedding":      vec,
-                "embedding_model": embed_model,
-                "status":         "active",
-                "created_at":     __import__("datetime").datetime.utcnow().isoformat(),
-            }
-            await self._col.update_one(
-                {"chapter_id": chapter_id, "level": "topic", "topic": topic_str},
-                {"$set": doc},
-                upsert=True,
-            )
-            existing_ids.add(cache_key)
-            inserted += 1
+            if vec:
+                vectors.append({
+                    "id": _make_vector_id(chapter_id, "topic", topic_str),
+                    "values": vec,
+                    "metadata": {
+                        "chapter_id": chapter_id,
+                        "subject_id": subject_id,
+                        "board": board_name,
+                        "class_name": class_name,
+                        "stream": stream_name,
+                        "subject_name": subject_name,
+                        "chapter_title": chapter_title,
+                        "chapter_number": chapter_number,
+                        "level": "topic",
+                        "topic": topic_str,
+                        "embed_text": topic_embed_text[:500],
+                        "embedding_model": embed_model,
+                    },
+                })
 
-        return inserted
+        return vectors

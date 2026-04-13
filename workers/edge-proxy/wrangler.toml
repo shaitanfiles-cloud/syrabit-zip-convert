@@ -33,5 +33,11 @@ database_name = "syrabit-content"
 database_id = "REPLACE_WITH_D1_DATABASE_ID"
 migrations_dir = "migrations"
 
+# Create Vectorize index before deploying:
+#   wrangler vectorize create syllabus-index --dimensions=768 --metric=cosine
+[[vectorize]]
+binding = "SYLLABUS_INDEX"
+index_name = "syllabus-index"
+
 [triggers]
 crons = ["0 */6 * * *"]
