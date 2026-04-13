@@ -154,7 +154,7 @@ async def _ddg_search(query: str, max_results: int = 5) -> list:
                 return list(ddgs.text(query, max_results=max_results, region="in-en"))
         results = await asyncio.wait_for(
             asyncio.to_thread(_do_search),
-            timeout=3.0,
+            timeout=1.5,
         )
         return results or []
     except asyncio.TimeoutError:
@@ -252,23 +252,7 @@ async def web_search_with_fallback(
 
     scoped_query = _build_search_query(query, board_name, class_name, subject_name, chapter_name)
 
-    syrabit_task = _ddg_search(f"site:syrabit.ai {scoped_query}", max_results=3)
-    web_task = _ddg_search(scoped_query, max_results=num_results)
-    syrabit_raw, web_raw = await asyncio.gather(syrabit_task, web_task, return_exceptions=True)
-
-    if isinstance(syrabit_raw, list):
-        for r in syrabit_raw:
-            url = r.get("href", r.get("url", ""))
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                all_results.append({
-                    "title": r.get("title", ""),
-                    "snippet": r.get("body", r.get("snippet", "")),
-                    "url": url,
-                    "_layer": "syrabit",
-                })
-    else:
-        logger.warning(f"[WEB_SEARCH] Syrabit layer failed: {syrabit_raw}")
+    web_raw = await _ddg_search(scoped_query, max_results=num_results)
 
     if isinstance(web_raw, list):
         edu_results = []
@@ -300,15 +284,6 @@ async def web_search_with_fallback(
     if not all_results:
         logger.warning(f"[WEB_SEARCH] No results for: {query[:60]}")
         return []
-
-    if enrich_top_n > 0 and all_results:
-        to_enrich = all_results[:enrich_top_n]
-        enrichment_tasks = [_fetch_page_content(r["url"]) for r in to_enrich]
-        enriched = await asyncio.gather(*enrichment_tasks, return_exceptions=True)
-        for i, content in enumerate(enriched):
-            if isinstance(content, str) and content.strip():
-                to_enrich[i]["full_content"] = content
-                to_enrich[i]["_enriched"] = True
 
     dur_ms = (time.perf_counter() - t0) * 1000
     logger.info(

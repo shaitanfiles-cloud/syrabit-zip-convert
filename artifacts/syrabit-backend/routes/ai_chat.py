@@ -833,13 +833,31 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.warning(f"[STREAM] History prefetch failed (non-fatal): {_hist_err}")
         return None
 
-    _subj_ctx_result, _sem_class_result, document_text, _s_topic_meta, _stream_followup_info, _prefetched_conv = await asyncio.gather(
+    async def _early_web_search():
+        if _is_card_context or msg.document_id:
+            return []
+        if _stream_intent in ("casual", "general"):
+            return []
+        try:
+            return await web_search_with_fallback(
+                msg.message,
+                board_name=msg.board_name or "",
+                class_name=msg.class_name or "",
+                subject_name=msg.subject_name or "",
+                chapter_name=msg.chapter_name or "",
+            )
+        except Exception as _ews_err:
+            logger.warning(f"[STREAM] Early web search failed (non-fatal): {_ews_err}")
+            return []
+
+    _subj_ctx_result, _sem_class_result, document_text, _s_topic_meta, _stream_followup_info, _prefetched_conv, _early_web = await asyncio.gather(
         _resolve_subject_context(msg.subject_id),
         _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
         _fetch_doc(),
         _fetch_stage1_stream(),
         _fetch_followup_info(),
         _prefetch_history(),
+        _early_web_search(),
     )
 
     _is_followup_s = False
@@ -938,29 +956,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             document_text=document_text, intent=_stream_intent,
         )
 
-    async def _fetch_web_search():
-        if _is_casual or document_text:
-            return []
-        try:
-            return await web_search_with_fallback(
-                _s_rag_query,
-                board_name=ctx_board_name or "",
-                class_name=ctx_class_name or "",
-                subject_name=msg.subject_name or "",
-                chapter_name=msg.chapter_name or "",
-                enrich_top_n=2,
-            )
-        except Exception as _ws_err:
-            logger.warning(f"[STREAM] Web search failed (non-fatal): {_ws_err}")
-            return []
+    web_results = _early_web if isinstance(_early_web, list) else []
 
-    _phase2_results = await asyncio.gather(
-        _syllabus_task,
-        _fetch_web_search(),
-        return_exceptions=True,
-    )
-    syllabus = _phase2_results[0] if not isinstance(_phase2_results[0], BaseException) else None
-    web_results = _phase2_results[1] if not isinstance(_phase2_results[1], BaseException) else []
+    try:
+        syllabus = await asyncio.wait_for(_syllabus_task, timeout=1.0)
+    except (asyncio.TimeoutError, Exception):
+        syllabus = None
 
     _t_phase2_done = _time_mod.time()
     logger.info(f"[STREAM][TIMING] Phase 2 (web+syllabus): {_t_phase2_done - _t_phase2:.3f}s | web_results={len(web_results)} | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
