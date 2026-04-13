@@ -43,7 +43,8 @@ export default function ChapterList({
         {chapters.map(ch => {
           const assets   = chapterAssets[ch.id] || {};
           const hasNotes = assets.notesGenerated || (ch.content && ch.content.trim().length > 50);
-          const hasAssamese = !!(ch.content_as && ch.content_as.trim().length > 10);
+          const isQP = ch.content_type === 'question_paper';
+          const hasAssamese = !isQP && !!(ch.content_as && ch.content_as.trim().length > 10);
           const preview  = ch.content ? ch.content.replace(/#{1,6}\s?/g, '').replace(/\*+/g, '').replace(/\n+/g, ' ').trim().slice(0, 130) : '';
           const wordCount = ch.content ? ch.content.split(/\s+/).filter(Boolean).length : 0;
           const hasPyqs   = (assets.pyqCount || 0) > 0;
@@ -69,7 +70,10 @@ export default function ChapterList({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-semibold text-gray-900 truncate">{ch.title}</p>
-                    {ch.content_type && ch.content_type !== 'notes' && (
+                    {ch.content_type === 'question_paper' && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide" style={{ background: 'rgba(245,158,11,0.15)', color: '#d97706', border: '1px solid rgba(245,158,11,0.25)' }}>Question Paper</span>
+                    )}
+                    {ch.content_type && ch.content_type !== 'notes' && ch.content_type !== 'question_paper' && (
                       <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-gray-100 text-gray-400 uppercase tracking-wide">{ch.content_type}</span>
                     )}
                     {wordCount > 0 && (

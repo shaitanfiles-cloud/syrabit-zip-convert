@@ -26,7 +26,7 @@ import '@mdxeditor/editor/style.css';
 
 const CONTENT_TYPES = [
   { value: 'notes', label: 'Notes', color: 'violet' },
-  { value: 'pyq', label: 'PYQ', color: 'amber' },
+  { value: 'question_paper', label: 'Question Paper', color: 'amber' },
   { value: 'formula', label: 'Formula Sheet', color: 'pink' },
   { value: 'summary', label: 'Summary', color: 'emerald' },
   { value: 'solution', label: 'Solution', color: 'blue' },
@@ -201,7 +201,7 @@ export default function ChapterEditForm({
           </div>
         )}
 
-        {(editView === 'edit-chapter' || editView === 'new-chapter') && (
+        {(editView === 'edit-chapter' || editView === 'new-chapter') && contentForm.content_type !== 'question_paper' && (
           <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-50/50 border border-violet-200/50">
             <Languages size={14} className="text-violet-500 shrink-0" />
             <div className="flex items-center gap-0.5 rounded-md p-0.5" style={{ background: 'rgba(139,92,246,0.1)' }}>

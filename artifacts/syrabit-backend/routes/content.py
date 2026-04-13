@@ -623,13 +623,16 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
         content = "\n\n".join(content_parts)
     content_as = chapter.get("content_as", "")
     word_count = len(content.split()) if content else 0
+    chapter_content_type = chapter.get("content_type") or chapter.get("category") or "notes"
+    is_question_paper = chapter_content_type in ("question_paper", "pyq")
     result = {
         "title": f"{chapter.get('title', chapter_slug)} — {subj['name']}",
         "topic_title": chapter.get("title", chapter_slug),
         "chapter_id": chapter.get("id", ""),
         "content": content or f"# {chapter.get('title', chapter_slug)}\n\nContent for this chapter is being prepared. Check back soon!",
-        "content_as": content_as or "",
-        "has_assamese": bool(content_as and content_as.strip()),
+        "content_as": "" if is_question_paper else (content_as or ""),
+        "has_assamese": False if is_question_paper else bool(content_as and content_as.strip()),
+        "content_type": chapter_content_type,
         "meta_description": chapter.get("description", f"{chapter.get('title', '')} notes for {subj['name']}"),
         "board_name": board.get("name", ""), "class_name": cls.get("name", ""),
         "subject_name": subj.get("name", ""), "chapter_title": chapter.get("title", ""),

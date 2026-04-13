@@ -278,11 +278,13 @@ export default function ChapterPage() {
     return () => { cancelled = true; };
   }, [data?.chapter_id]);
 
-  const hasAssamese = data?.has_assamese || false;
+  const isQuestionPaper = data?.content_type === 'question_paper' || data?.content_type === 'pyq';
+  const hasAssamese = isQuestionPaper ? false : (data?.has_assamese || false);
   const displayContent = useMemo(() => {
     if (!data) return '';
+    if (isQuestionPaper) return data.content;
     return (contentLang === 'as' && hasAssamese) ? (data.content_as || data.content) : data.content;
-  }, [data, contentLang, hasAssamese]);
+  }, [data, contentLang, hasAssamese, isQuestionPaper]);
 
   const headings = useMemo(() => {
     if (!displayContent) return [];
@@ -700,26 +702,32 @@ export default function ChapterPage() {
             >
               {sharing ? <svg className="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg> : <Share2 size={14} />} {contentLang === 'as' ? 'শ্বেয়াৰ' : 'Share'}
             </button>
-            <div className="flex items-center gap-0.5 rounded-lg p-0.5 ml-auto" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
-              <button
-                onClick={() => switchLang('en')}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                  contentLang === 'en' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-50'
-                }`}
-              >
-                English
-              </button>
-              <button
-                onClick={() => switchLang('as')}
-                className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                  contentLang === 'as' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-50'
-                }`}
-              >
-                অসমীয়া
-              </button>
-            </div>
+            {isQuestionPaper ? (
+              <span className="ml-auto px-3 py-1 rounded-lg text-xs font-bold bg-amber-100 text-amber-700 border border-amber-200">
+                Question Paper
+              </span>
+            ) : (
+              <div className="flex items-center gap-0.5 rounded-lg p-0.5 ml-auto" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
+                <button
+                  onClick={() => switchLang('en')}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                    contentLang === 'en' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-50'
+                  }`}
+                >
+                  English
+                </button>
+                <button
+                  onClick={() => switchLang('as')}
+                  className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                    contentLang === 'as' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-600 hover:bg-violet-50'
+                  }`}
+                >
+                  অসমীয়া
+                </button>
+              </div>
+            )}
           </div>
-          {contentLang === 'as' && !hasAssamese && (
+          {!isQuestionPaper && contentLang === 'as' && !hasAssamese && (
             <p className="mt-2 text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
               {contentLang === 'as' ? 'এই অধ্যায়ৰ বাবে অসমীয়া অনুবাদ এতিয়াও উপলব্ধ নহয়। ইংৰাজী বিষয়বস্তু দেখুৱাই আছে।' : 'Assamese translation is not yet available for this chapter. Showing English content.'}
             </p>
