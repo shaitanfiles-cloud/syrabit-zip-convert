@@ -779,7 +779,69 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _s_should_pipeline, _s_stage1, _s_apply_s1, _s_enhance_q = should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query
 
+    _cache_msg_key_early = f"{msg.message}::lang={_resp_lang}" if _want_translate else msg.message
+    _cache_key_early = _cache_key(_cache_msg_key_early, subject_id=msg.subject_id or "", board_id=msg.board_id or "", conversation_id=msg.conversation_id or "")
+    _early_cached_answer = _redis_get_ai_cache(_cache_key_early)
+    if not _early_cached_answer and _cache_key_early in _ai_response_cache:
+        _early_cached_answer = _ai_response_cache[_cache_key_early]
+    if _early_cached_answer:
+        logger.info(f"[STREAM] EARLY cache HIT — skipping all preprocessing (key={_cache_key_early})")
+        _conv_id_early = msg.conversation_id
+        if not _conv_id_early and (user_id or anon_id):
+            _conv_id_early = str(uuid.uuid4())
+            _title_early = msg.message[:50] + ("..." if len(msg.message) > 50 else "")
+            _now_early = datetime.now(timezone.utc).isoformat()
+            _conv_doc_early = {
+                "id": _conv_id_early,
+                "user_id": user_id or anon_id,
+                "title": _title_early,
+                "subject_id": msg.subject_id or "",
+                "subject_name": msg.subject_name or "",
+                "messages": [],
+                "created_at": _now_early,
+                "updated_at": _now_early,
+            }
+            if is_anon and anon_id:
+                _conv_doc_early["is_anonymous"] = True
+                _conv_doc_early["anon_id"] = anon_id
+                from cache import redis_save_anon_conversation
+                redis_save_anon_conversation(anon_id, _conv_id_early, _conv_doc_early)
+            asyncio.create_task(supa_upsert_conversation(_conv_doc_early))
 
+        async def _early_cache_persist():
+            try:
+                _answer_e = _early_cached_answer
+                _now_e = datetime.now(timezone.utc).isoformat()
+                _uid_e = user_id or anon_id
+                if _conv_id_early and _uid_e:
+                    await _persist_chat_turn(
+                        _conv_id_early, _uid_e,
+                        msg.message, _answer_e,
+                        "cache", 0, credits_info["used"] if credits_info else 0,
+                    )
+            except Exception as _pe:
+                logger.warning(f"[STREAM] Early cache persist failed (non-fatal): {_pe}")
+
+        async def _early_cache_stream():
+            yield f"data: {json.dumps({'conversation_id': _conv_id_early or '', 'rag_source': 'cache', 'rag_quality': 'none', 'rag_chunks': 0, 'web_search_used': False, 'ctx_board_name': msg.board_name or '', 'ctx_class_name': msg.class_name or ''})}\n\n"
+            logger.info(f"[STREAM][TIMING] TTFT (early cache): {_time_mod.time() - _stream_t0:.3f}s")
+            _CHUNK_SIZE = 120
+            for _ci in range(0, len(_early_cached_answer), _CHUNK_SIZE):
+                yield f"data: {json.dumps({'content': _early_cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
+                if _ci % (_CHUNK_SIZE * 5) == 0:
+                    await asyncio.sleep(0)
+            _answer_words = len(_early_cached_answer.split())
+            yield f"data: {json.dumps({'event': 'syrabit_done', 'conversation_id': _conv_id_early or '', 'rag_source': 'cache', 'words': _answer_words, 'web_search_used': False})}\n\n"
+            yield "data: [DONE]\n\n"
+            asyncio.create_task(_early_cache_persist())
+            try:
+                _record_chat_latency((_time_mod.time() - _stream_t0) * 1000)
+            except Exception:
+                pass
+        if not is_anon and credits_info:
+            asyncio.create_task(_refund_credit(user_id, credits_info["used"] + 1))
+        return StreamingResponse(_early_cache_stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     # ── Phase 0+1 fully parallel: context, semester, doc, search scope, Stage 1, follow-up all at once ──
     _t_phase0 = _time_mod.time()
@@ -795,20 +857,23 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         subj = await db.subjects.find_one({"id": msg.document_id}, {"_id": 0, "document_text": 1})
         return (subj or {}).get("document_text")
 
-    async def _fetch_stage1_stream():
-        if not _s_should_pipeline(_stream_intent, msg.message):
-            return None
-        if _want_translate:
+    _is_casual = _stream_intent in ("casual", "general")
+
+    _stage1_task = None
+    if _s_should_pipeline(_stream_intent, msg.message):
+        _s1_timeout = 0.4 if _want_translate else 0.8
+        async def _stage1_wrapper():
             try:
-                result = await asyncio.wait_for(_s_stage1(msg.message), timeout=0.4)
+                result = await asyncio.wait_for(_s_stage1(msg.message), timeout=_s1_timeout)
                 return result if result else {}
             except asyncio.TimeoutError:
-                logger.info("[STREAM] Stage 1 fast-timeout for Indic (0.4s) — proceeding without")
+                logger.info(f"[STREAM] Stage 1 timeout ({_s1_timeout}s) — proceeding without")
                 return {}
-        result = await _s_stage1(msg.message)
-        return result if result else {}
+        _stage1_task = asyncio.create_task(_stage1_wrapper())
 
     async def _fetch_followup_info():
+        if is_anon or _is_casual:
+            return None
         if not (msg.conversation_id and user_id):
             return None
         try:
@@ -836,7 +901,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     async def _early_web_search():
         if _is_card_context or msg.document_id:
             return []
-        if _stream_intent in ("casual", "general"):
+        if _is_casual:
             return []
         try:
             return await web_search_with_fallback(
@@ -845,20 +910,38 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 class_name=msg.class_name or "",
                 subject_name=msg.subject_name or "",
                 chapter_name=msg.chapter_name or "",
+                enrich_top_n=0,
             )
         except Exception as _ews_err:
             logger.warning(f"[STREAM] Early web search failed (non-fatal): {_ews_err}")
             return []
 
-    _subj_ctx_result, _sem_class_result, document_text, _s_topic_meta, _stream_followup_info, _prefetched_conv, _early_web = await asyncio.gather(
+    _skip_semester = _is_casual or is_anon
+
+    _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web = await asyncio.gather(
         _resolve_subject_context(msg.subject_id),
-        _resolve_semester_class_id(msg.message, msg.board_id) if msg.board_id else asyncio.sleep(0),
+        _resolve_semester_class_id(msg.message, msg.board_id) if (msg.board_id and not _skip_semester) else asyncio.sleep(0),
         _fetch_doc(),
-        _fetch_stage1_stream(),
         _fetch_followup_info(),
         _prefetch_history(),
         _early_web_search(),
     )
+
+    _s_topic_meta = None
+    if _stage1_task:
+        if _stage1_task.done():
+            try:
+                _s_topic_meta = _stage1_task.result()
+            except Exception:
+                _s_topic_meta = None
+        else:
+            try:
+                _s_topic_meta = await asyncio.wait_for(_stage1_task, timeout=0.15)
+            except asyncio.TimeoutError:
+                logger.info("[STREAM] Stage 1 still pending after gather — proceeding without it")
+                _s_topic_meta = None
+            except Exception:
+                _s_topic_meta = None
 
     _is_followup_s = False
     if _stream_followup_info:
@@ -894,7 +977,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     ctx_class_name = subj_ctx.get("class_name") or msg.class_name or (user.get("class_name", "") if user else "")
     ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or (user.get("stream_name", "") if user else "")
 
-    if not _sem_class_result and ctx_board_id and ctx_board_id != msg.board_id:
+    if not _is_casual and not _sem_class_result and ctx_board_id and ctx_board_id != msg.board_id:
         _sem_class_result = await _resolve_semester_class_id(msg.message, ctx_board_id)
 
     _syl_class_id_s = _sem_class_result or ctx_class_id
