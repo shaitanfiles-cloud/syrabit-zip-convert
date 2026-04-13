@@ -43,6 +43,7 @@ export default function ChapterList({
         {chapters.map(ch => {
           const assets   = chapterAssets[ch.id] || {};
           const hasNotes = assets.notesGenerated || (ch.content && ch.content.trim().length > 50);
+          const hasAssamese = !!(ch.content_as && ch.content_as.trim().length > 10);
           const preview  = ch.content ? ch.content.replace(/#{1,6}\s?/g, '').replace(/\*+/g, '').replace(/\n+/g, ' ').trim().slice(0, 130) : '';
           const wordCount = ch.content ? ch.content.split(/\s+/).filter(Boolean).length : 0;
           const hasPyqs   = (assets.pyqCount || 0) > 0;
@@ -73,6 +74,9 @@ export default function ChapterList({
                     )}
                     {wordCount > 0 && (
                       <span className="text-[9px] text-gray-300 font-mono">{wordCount.toLocaleString()} words</span>
+                    )}
+                    {hasAssamese && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide" style={{ background: 'rgba(139,92,246,0.12)', color: '#8b5cf6', border: '1px solid rgba(139,92,246,0.20)' }}>অসমীয়া</span>
                     )}
                   </div>
                   {ch.description && !preview && (

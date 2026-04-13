@@ -236,8 +236,11 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
       const res = await axios.post(`${API}/admin/content/chapters/${chapterId}/generate-notes`, {}, authHeaders(adminToken));
       const generated = res.data?.content;
       if (generated) {
-        setChapters(prev => prev.map(ch => ch.id === chapterId ? { ...ch, content: generated, content_type: 'notes', notes_generated: true, _word_count: res.data?.word_count } : ch));
-        if (!silent) toast.success(`Notes generated for "${chapterTitle}"${res.data?.word_count ? ` — ${res.data.word_count.toLocaleString()} words` : ''}`);
+        const freshChapters = await axios.get(`${API}/admin/content/chapters/${selSubject}`, authHeaders(adminToken));
+        const freshChapter = (freshChapters.data || []).find(c => c.id === chapterId);
+        setChapters(prev => prev.map(ch => ch.id === chapterId ? { ...ch, content: generated, content_as: freshChapter?.content_as || ch.content_as || '', content_type: 'notes', notes_generated: true, _word_count: res.data?.word_count } : ch));
+        const asMsg = res.data?.content_as_words ? ` + ${res.data.content_as_words} অসমীয়া words` : '';
+        if (!silent) toast.success(`Notes generated for "${chapterTitle}"${res.data?.word_count ? ` — ${res.data.word_count.toLocaleString()} words${asMsg}` : ''}`);
         return true;
       }
       return false;
