@@ -1210,108 +1210,125 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     if use_model_raw == "openai/gpt-oss-20b":
         _active_pool = _slm_pool
         _input_chars = sum(len(m.get("content", "")) for m in messages)
+
         _skipped_slots: set = set()
-        _tried = 0
-        while _tried < len(_active_pool.all_slots):
+        _candidates = []
+        for _ in range(len(_active_pool.all_slots)):
             slot = _active_pool.pick(_skipped_slots)
             if slot is None:
                 break
-            _tried += 1
-            p_name, p_key, p_model = slot["provider"], slot["key"], slot["model"]
+            p_name = slot["provider"]
             _max_chars = _SLM_PROVIDER_MAX_INPUT_CHARS.get(p_name, 80000)
             if _input_chars > _max_chars:
-                logger.info(f"SLM pool: skipping {p_name}/{p_model} — input too large ({_input_chars} chars > {_max_chars} limit)")
+                logger.info(f"SLM pool: skipping {p_name}/{slot['model']} — input too large ({_input_chars} chars > {_max_chars} limit)")
                 _skipped_slots.add(id(slot))
                 continue
+            _candidates.append(slot)
+            _skipped_slots.add(id(slot))
+            if len(_candidates) >= 2:
+                break
+
+        if _candidates:
             _effective_ttft = min(1.2, _SLM_TTFT_TIMEOUT + (0.2 if _input_chars > 8000 else 0.0))
+            _hedged_q: asyncio.Queue = asyncio.Queue()
+            _hedged_errors: dict = {}
+
+            async def _hedged_producer(_slot, _slot_idx):
+                _pn, _pk, _pm = _slot["provider"], _slot["key"], _slot["model"]
+                try:
+                    async with _slot["sem"]:
+                        _chunk_count = 0
+                        async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
+                            _chunk_count += 1
+                            await _hedged_q.put((_slot_idx, "chunk", chunk))
+                        if _chunk_count == 0:
+                            logger.warning(f"SLM hedged: {_pn}/{_pm} 0 chunks")
+                        await _hedged_q.put((_slot_idx, "done", None))
+                except Exception as exc:
+                    _hedged_errors[_slot_idx] = exc
+                    logger.warning(f"SLM hedged: {_pn}/{_pm} error: {type(exc).__name__}: {str(exc)[:200]}")
+                    await _hedged_q.put((_slot_idx, "error", None))
+
+            _hedged_tasks = [asyncio.create_task(_hedged_producer(s, i)) for i, s in enumerate(_candidates)]
+            if len(_candidates) > 1:
+                _race_desc = " vs ".join(f"{s['provider']}/{s['model']}" for s in _candidates)
+                logger.info(f"SLM hedged: racing {_race_desc}")
+
+            _winner = None
+            _finished_slots: set = set()
             try:
-                async with slot["sem"]:
-                    token_q: asyncio.Queue = asyncio.Queue()
-                    _producer_error = None
-                    _stream_ok = False
-
-                    async def _producer(_pn=p_name, _pk=p_key, _pm=p_model):
-                        nonlocal _producer_error
-                        try:
-                            _chunk_count = 0
-                            async for chunk in _emit_tokens(_stream_from_provider(_pn, _pk, _pm)):
-                                _chunk_count += 1
-                                await token_q.put(chunk)
-                            if _chunk_count == 0:
-                                logger.warning(f"SLM pool: {_pn}/{_pm} stream completed with 0 chunks (think-block stripping may have consumed all output)")
-                        except Exception as exc:
-                            _producer_error = exc
-                            logger.warning(f"SLM pool: {_pn}/{_pm} producer error: {type(exc).__name__}: {str(exc)[:200]}")
-                        finally:
-                            await token_q.put(None)
-
-                    producer_task = asyncio.create_task(_producer())
+                _deadline = time.monotonic() + _effective_ttft
+                while _winner is None and len(_finished_slots) < len(_candidates):
+                    _remaining = _deadline - time.monotonic()
+                    if _remaining <= 0:
+                        break
                     try:
-                        try:
-                            first_chunk = await asyncio.wait_for(token_q.get(), timeout=_effective_ttft)
-                        except asyncio.TimeoutError:
-                            _slm_pool.mark_err(slot)
-                            logger.warning(f"SLM pool: {p_name}/{p_model} TTFT timeout after {_effective_ttft}s (input_chars={_input_chars}) → trying next")
-                            continue
+                        _sid, _evt, _data = await asyncio.wait_for(_hedged_q.get(), timeout=_remaining)
+                    except asyncio.TimeoutError:
+                        break
+                    if _evt == "chunk":
+                        _winner = _sid
+                    elif _evt in ("done", "error"):
+                        _finished_slots.add(_sid)
+                        if _evt == "error":
+                            _slm_pool.mark_err(_candidates[_sid])
+            except Exception:
+                pass
 
-                        if first_chunk is None:
-                            if _producer_error:
-                                raise _producer_error
-                            _slm_pool.mark_err(slot)
-                            logger.warning(f"SLM pool: {p_name}/{p_model} yielded no tokens")
-                            continue
+            if _winner is not None:
+                _win_slot = _candidates[_winner]
+                _slm_pool.mark_ok(_win_slot)
+                _win_pname = _win_slot["provider"]
+                _win_model = _win_slot["model"]
+                if len(_candidates) > 1:
+                    logger.info(f"SLM hedged: winner={_win_pname}/{_win_model}")
 
-                        yield first_chunk
+                for i, t in enumerate(_hedged_tasks):
+                    if i != _winner:
+                        t.cancel()
 
-                        _tokens_yielded = 1
-                        while True:
-                            try:
-                                chunk = await asyncio.wait_for(token_q.get(), timeout=_SLM_SLOT_TIMEOUT)
-                            except asyncio.TimeoutError:
-                                _slm_pool.mark_err(slot)
-                                logger.warning(f"SLM pool: {p_name}/{p_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens already yielded — cannot failover)")
-                                _stream_ok = True
-                                break
-                            if chunk is None:
-                                break
-                            yield chunk
-                            _tokens_yielded += 1
+                yield _data
 
-                        if _producer_error and _tokens_yielded <= 1:
-                            _slm_pool.mark_err(slot)
-                            logger.warning(f"SLM pool: {p_name}/{p_model} error during stream: {type(_producer_error).__name__}: {str(_producer_error)[:80]}")
-                        elif _producer_error:
-                            _slm_pool.mark_err(slot)
-                            logger.warning(f"SLM pool: {p_name}/{p_model} error during stream after {_tokens_yielded} tokens: {type(_producer_error).__name__}: {str(_producer_error)[:80]}")
-                            _stream_ok = True
-                        else:
-                            _stream_ok = True
-                            _slm_pool.mark_ok(slot)
-                    finally:
-                        producer_task.cancel()
-                        try:
-                            await producer_task
-                        except (asyncio.CancelledError, Exception):
-                            pass
-                yield f"data: {json.dumps({'__provider': p_name})}\n\n"
+                _tokens_yielded = 1
+                while True:
+                    try:
+                        _sid, _evt, _chunk = await asyncio.wait_for(_hedged_q.get(), timeout=_SLM_SLOT_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        _slm_pool.mark_err(_win_slot)
+                        logger.warning(f"SLM hedged: {_win_pname}/{_win_model} stalled mid-stream after {_SLM_SLOT_TIMEOUT}s ({_tokens_yielded} tokens yielded)")
+                        break
+                    if _sid != _winner:
+                        continue
+                    if _evt == "chunk":
+                        yield _chunk
+                        _tokens_yielded += 1
+                    else:
+                        if _winner in _hedged_errors and _tokens_yielded <= 1:
+                            _slm_pool.mark_err(_win_slot)
+                        break
+
+                _hedged_tasks[_winner].cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
+                yield f"data: {json.dumps({'__provider': _win_pname})}\n\n"
                 return
-            except asyncio.TimeoutError:
-                _slm_pool.mark_err(slot)
-                logger.warning(f"SLM pool: {p_name}/{p_model} timed out after {_SLM_SLOT_TIMEOUT}s → trying next")
-                continue
-            except Exception as e:
-                err_str = str(e)
-                is_429 = "429" in err_str or "413" in err_str or "rate" in err_str.lower() or "quota" in err_str.lower() or "throttl" in err_str.lower() or "too large" in err_str.lower()
-                is_402 = "402" in err_str or "payment" in err_str.lower() or "credits" in err_str.lower() or "afford" in err_str.lower() or "insufficient" in err_str.lower()
-                is_403 = "403" in err_str or "forbidden" in err_str.lower() or "permission" in err_str.lower() or "unauthorized" in err_str.lower()
-                if is_429:
-                    _slm_pool.mark_429(slot)
-                elif is_402 or is_403:
-                    _slm_pool.mark_403(slot)
-                else:
-                    _slm_pool.mark_err(slot)
-                logger.warning(f"SLM pool: {p_name}/{p_model} failed ({type(e).__name__}: {err_str[:80]})")
-                continue
+            else:
+                for t in _hedged_tasks:
+                    t.cancel()
+                for t in _hedged_tasks:
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                for i, s in enumerate(_candidates):
+                    if i not in _finished_slots:
+                        _slm_pool.mark_err(s)
+                        logger.warning(f"SLM hedged: {s['provider']}/{s['model']} TTFT timeout after {_effective_ttft}s")
+
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
 

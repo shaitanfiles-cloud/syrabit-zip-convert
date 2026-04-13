@@ -1020,7 +1020,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _t_phase1_done = _time_mod.time()
     logger.info(f"[STREAM][TIMING] Phase 0+1 (context+doc+scope): {_t_phase1_done - _t_phase0:.3f}s")
 
-    # ── Phase 2: Web search + history + syllabus (all parallel) ──
+    # ── Phase 2: context assembly (no web search) ──
     _t_phase2 = _time_mod.time()
 
     _s_rag_query = msg.message
@@ -1047,13 +1047,19 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     web_results = []
 
-    try:
-        syllabus = await asyncio.wait_for(_syllabus_task, timeout=0.2)
-    except (asyncio.TimeoutError, Exception):
-        syllabus = None
+    if _syllabus_task.done():
+        try:
+            syllabus = _syllabus_task.result()
+        except Exception:
+            syllabus = None
+    else:
+        try:
+            syllabus = await asyncio.wait_for(_syllabus_task, timeout=0.05)
+        except (asyncio.TimeoutError, Exception):
+            syllabus = None
 
     _t_phase2_done = _time_mod.time()
-    logger.info(f"[STREAM][TIMING] Phase 2 (web+syllabus): {_t_phase2_done - _t_phase2:.3f}s | web_results={len(web_results)} | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
+    logger.info(f"[STREAM][TIMING] Phase 2 (context): {_t_phase2_done - _t_phase2:.3f}s | total pre-LLM: {_t_phase2_done - _stream_t0:.3f}s")
 
     # ── Build prompt ───────────────────────────────────────────────────────────
     system_prompt = build_rag_system_prompt(
