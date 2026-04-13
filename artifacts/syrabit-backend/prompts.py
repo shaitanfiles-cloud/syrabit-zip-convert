@@ -1,19 +1,17 @@
 """
 Syrabit.ai — Adaptive system prompt builder.
 
-Intent-based classification (6 intents) with syllabus-focused web search
-and intent-specific formatting rules.
+Intent-based classification (6 intents) with LLM training knowledge.
 
 Intents:
-  casual        — greetings, small talk, motivational → no web search
-  syllabus      — syllabus/topic list queries → syllabus DB + web search
-  chapter_meta  — chapter info, exam pattern, overview → web search
-  notes         — study material, definitions, explanations → web search
-  important_questions — imp questions, repeated questions → web search
-  pyq           — previous year question papers → web search
+  casual        — greetings, small talk, motivational
+  syllabus      — syllabus/topic list queries
+  chapter_meta  — chapter info, exam pattern, overview
+  notes         — study material, definitions, explanations
+  important_questions — imp questions, repeated questions
+  pyq           — previous year question papers
 
-Pipeline: Stage 1 (topic classify) → web search → LLM
-Web search prioritizes Syrabit browser pages and educational domains.
+Pipeline: Single LLM call with optional Stage 1 topic classification.
 """
 import re
 import logging
@@ -423,10 +421,10 @@ RULES:
 
 _INTENT_EXTRACTION_RULES: dict[str, str] = {
     "syllabus": (
-        "CONTENT EXTRACTION RULES:\n"
+        "CONTENT RULES:\n"
         "- Look for the SUBJECT CHAPTERS block — it contains the EXACT chapter list from the database.\n"
         "- Use chapter titles and descriptions EXACTLY as written. Do NOT rename, split, or merge chapters.\n"
-        "- If no SUBJECT CHAPTERS block exists, use the CURRICULUM block or web search results.\n"
+        "- If no SUBJECT CHAPTERS block exists, use the CURRICULUM block or your training knowledge.\n"
         "- Do NOT extract individual topics, sub-topics, or marks breakdowns within each chapter.\n"
         "SEMESTER HANDLING:\n"
         "- If the student asks for a specific semester, filter and present ONLY the chapters for that semester.\n"
@@ -434,22 +432,20 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
         "RESPONSE FORMAT: List each chapter with its exact title and description."
     ),
     "pyq": (
-        "CONTENT EXTRACTION RULES:\n"
-        "- Extract questions from web search results preserving question numbers, marks, and sub-parts.\n"
-        "- Look for actual question paper content in the search results.\n"
-        "- Prioritize Syrabit results as they contain curriculum-aligned content.\n"
+        "CONTENT RULES:\n"
+        "- Generate likely previous year questions based on your knowledge of the curriculum and exam patterns.\n"
+        "- Include question numbers, marks, and sub-parts.\n"
         "RESPONSE FORMAT: Organize by section (1-mark, 2-mark, 5-mark, 10-mark). Never solve — just present."
     ),
     "notes": (
-        "CONTENT EXTRACTION RULES:\n"
-        "- Use web search results and your knowledge to answer the question.\n"
-        "- Prioritize Syrabit results for curriculum-aligned content.\n"
+        "CONTENT RULES:\n"
+        "- Answer from your training knowledge. Be accurate and curriculum-aligned.\n"
         "RESPONSE FORMAT: Answer ONLY the question asked. 'what is X?' → 2-3 sentences. 'explain X' → 3-5 sentences. No tangents."
     ),
     "important_questions": (
-        "CONTENT EXTRACTION RULES:\n"
-        "- Extract important questions from web search results.\n"
-        "- Cross-reference to determine frequency and importance.\n"
+        "CONTENT RULES:\n"
+        "- Generate important questions based on your knowledge of the curriculum and exam patterns.\n"
+        "- Focus on frequently asked and high-weight topics.\n"
         "CHAPTER-WISE CHUNKING (MANDATORY):\n"
         "- If results contain questions from MULTIPLE chapters/units, show ONLY the FIRST chapter/unit.\n"
         "- At the end, ask: 'Would you like to see important questions for [next chapter/unit name]?'\n"
@@ -471,9 +467,8 @@ _INTENT_EXTRACTION_RULES: dict[str, str] = {
         "   Would you like to see important questions for Unit II: [Name]?\n"
     ),
     "chapter_meta": (
-        "CONTENT EXTRACTION RULES:\n"
-        "- Use the CURRICULUM block and web search results for exam structure information.\n"
-        "- Prioritize Syrabit and official board sources.\n"
+        "CONTENT RULES:\n"
+        "- Use the CURRICULUM block and your training knowledge for exam structure information.\n"
         "RESPONSE FORMAT: Table with Section, Question Type, Marks, Count, Total. Include time, pass marks, choice rules."
     ),
 }

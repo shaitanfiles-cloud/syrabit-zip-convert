@@ -37,7 +37,7 @@ from utils import *
 from analytics_helpers import *
 from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
-from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, run_pipeline_stream, get_instant_response
+from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response
 
 _CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
 
@@ -861,7 +861,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _stage1_task = None
     if _s_should_pipeline(_stream_intent, msg.message):
-        _s1_timeout = 0.4 if _want_translate else 0.8
+        _s1_timeout = 0.2
         async def _stage1_wrapper():
             try:
                 result = await asyncio.wait_for(_s_stage1(msg.message), timeout=_s1_timeout)
@@ -899,33 +899,39 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         return None
 
     async def _early_web_search():
-        if _is_card_context or msg.document_id:
-            return []
-        if _is_casual:
-            return []
-        try:
-            return await web_search_with_fallback(
-                msg.message,
-                board_name=msg.board_name or "",
-                class_name=msg.class_name or "",
-                subject_name=msg.subject_name or "",
-                chapter_name=msg.chapter_name or "",
-                enrich_top_n=0,
-            )
-        except Exception as _ews_err:
-            logger.warning(f"[STREAM] Early web search failed (non-fatal): {_ews_err}")
-            return []
+        return []
 
     _skip_semester = _is_casual or is_anon
 
-    _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web = await asyncio.gather(
-        _resolve_subject_context(msg.subject_id),
-        _resolve_semester_class_id(msg.message, msg.board_id) if (msg.board_id and not _skip_semester) else asyncio.sleep(0),
-        _fetch_doc(),
-        _fetch_followup_info(),
-        _prefetch_history(),
-        _early_web_search(),
-    )
+    _PRE_LLM_BUDGET = 0.2
+
+    _tasks_pre = [
+        asyncio.create_task(_resolve_subject_context(msg.subject_id)),
+        asyncio.create_task(_resolve_semester_class_id(msg.message, msg.board_id) if (msg.board_id and not _skip_semester) else asyncio.sleep(0)),
+        asyncio.create_task(_fetch_doc()),
+        asyncio.create_task(_fetch_followup_info()),
+        asyncio.create_task(_prefetch_history()),
+        asyncio.create_task(_early_web_search()),
+    ]
+    _defaults_pre = [None, None, None, None, None, []]
+
+    _done_pre, _pending_pre = await asyncio.wait(_tasks_pre, timeout=_PRE_LLM_BUDGET, return_when=asyncio.ALL_COMPLETED)
+    if _pending_pre:
+        logger.info(f"[STREAM] Pre-LLM budget expired — {len(_pending_pre)} tasks still pending, using partial results")
+        for _pt in _pending_pre:
+            _pt.cancel()
+
+    _pre_results = []
+    for _i, _t in enumerate(_tasks_pre):
+        if _t.done() and not _t.cancelled():
+            try:
+                _pre_results.append(_t.result())
+            except Exception:
+                _pre_results.append(_defaults_pre[_i])
+        else:
+            _pre_results.append(_defaults_pre[_i])
+
+    _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web = _pre_results
 
     _s_topic_meta = None
     if _stage1_task:
@@ -935,13 +941,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             except Exception:
                 _s_topic_meta = None
         else:
-            try:
-                _s_topic_meta = await asyncio.wait_for(_stage1_task, timeout=0.15)
-            except asyncio.TimeoutError:
-                logger.info("[STREAM] Stage 1 still pending after gather — proceeding without it")
-                _s_topic_meta = None
-            except Exception:
-                _s_topic_meta = None
+            logger.info("[STREAM] Stage 1 still pending after gather — proceeding without it (non-blocking)")
+            _s_topic_meta = None
 
     _is_followup_s = False
     if _stream_followup_info:
@@ -969,7 +970,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _is_casual = _stream_intent in ("casual", "general")
 
-    subj_ctx = _subj_ctx_result
+    subj_ctx = _subj_ctx_result or {}
     ctx_board_id   = subj_ctx.get("board_id")   or msg.board_id
     ctx_class_id   = subj_ctx.get("class_id")   or msg.class_id
     ctx_stream_id  = subj_ctx.get("stream_id")  or getattr(msg, 'stream_id', None)
@@ -978,7 +979,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     ctx_stream_name= subj_ctx.get("stream_name") or getattr(msg, 'stream_name', None) or (user.get("stream_name", "") if user else "")
 
     if not _is_casual and not _sem_class_result and ctx_board_id and ctx_board_id != msg.board_id:
-        _sem_class_result = await _resolve_semester_class_id(msg.message, ctx_board_id)
+        try:
+            _sem_class_result = await asyncio.wait_for(
+                _resolve_semester_class_id(msg.message, ctx_board_id), timeout=0.1
+            )
+        except (asyncio.TimeoutError, Exception):
+            _sem_class_result = None
 
     _syl_class_id_s = _sem_class_result or ctx_class_id
 
@@ -1039,10 +1045,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             document_text=document_text, intent=_stream_intent,
         )
 
-    web_results = _early_web if isinstance(_early_web, list) else []
+    web_results = []
 
     try:
-        syllabus = await asyncio.wait_for(_syllabus_task, timeout=1.0)
+        syllabus = await asyncio.wait_for(_syllabus_task, timeout=0.2)
     except (asyncio.TimeoutError, Exception):
         syllabus = None
 
@@ -1119,7 +1125,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     elif not conv_id:
         conv_id = None
 
-    _MAX_PROMPT_CHARS = 24_000
+    _MAX_PROMPT_CHARS = 12_000
     _sys_len = len(system_prompt)
     _hist_len = sum(len(m.get("content", "")) for m in history_messages)
     _user_len = len(msg.message)
@@ -1292,74 +1298,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _output_violation = False
                 _tune_buf = {"total": "", "chars": 0}
 
-                _pipeline_stream = None
-                try:
-                    if should_use_pipeline(_stream_intent, user_msg_saved):
-                        _pipeline_ctx = {
-                            "board_name": ctx_board_name,
-                            "class_name": ctx_class_name,
-                            "stream_name": ctx_stream_name,
-                            "subject_name": msg.subject_name,
-                            "chapter_name": msg.chapter_name,
-                        }
-                        _pipeline_ui = {
-                            "name": (user.get("name", "") if user else ""),
-                            "board_name": ctx_board_name or (user.get("board_name", "") if user else ""),
-                            "class_name": ctx_class_name or (user.get("class_name", "") if user else ""),
-                            "plan": (user.get("plan", "free") if user else "free"),
-                        }
-                        _pipeline_stream = await run_pipeline_stream(
-                            query=user_msg_saved,
-                            rag_ctx=rag_ctx,
-                            context=_pipeline_ctx,
-                            user_info=_pipeline_ui,
-                            max_tokens=max_tokens,
-                            regex_intent=_stream_intent,
-                            intent=_stream_intent,
-                            topic_metadata=_s_topic_meta,
-                        )
-                        if _pipeline_stream:
-                            logger.info("[PIPELINE] Using multi-LLM pipeline for stream response")
-                except Exception as _pipe_stream_err:
-                    logger.warning(f"[PIPELINE] Stream pipeline setup failed, falling back: {_pipe_stream_err}")
-                    _pipeline_stream = None
-
                 _stream_model = None if _want_translate else (msg.model or "openai/gpt-oss-20b")
-                _slm_fallback_stream = lambda: call_llm_api_stream(messages_payload, model=_stream_model, max_tokens=max_tokens, intent=_stream_intent, response_lang=_resp_lang)
-                if _want_translate:
-                    _pipeline_stream = None
-
-                def _is_sse_error(sse_chunk: str) -> bool:
-                    if '"error"' in sse_chunk and sse_chunk.startswith("data: "):
-                        try:
-                            d = json.loads(sse_chunk[6:])
-                            return bool(d.get("error"))
-                        except Exception:
-                            pass
-                    return False
-
-                async def _resilient_pipeline_stream():
-                    _emitted_any = False
-                    _failed = False
-                    try:
-                        async for c in _pipeline_stream:
-                            if _is_sse_error(c):
-                                logger.warning(f"[PIPELINE] Stage 3 stream emitted error — falling back to single-LLM")
-                                _failed = True
-                                break
-                            _emitted_any = True
-                            yield c
-                    except Exception as _mid_err:
-                        logger.warning(f"[PIPELINE] Stage 3 stream raised — falling back to single-LLM: {_mid_err}")
-                        _failed = True
-
-                    if _failed and not _emitted_any:
-                        async for c in _slm_fallback_stream():
-                            yield c
-                    elif _failed and _emitted_any:
-                        yield f"data: {json.dumps({'content': ' ...[response interrupted, please retry]'})}\n\n"
-
-                _active_stream = _slm_fallback_stream() if _want_translate else (_resilient_pipeline_stream() if _pipeline_stream else _slm_fallback_stream())
+                _active_stream = call_llm_api_stream(messages_payload, model=_stream_model, max_tokens=max_tokens, intent=_stream_intent, response_lang=_resp_lang)
 
                 async for chunk in _active_stream:
                     if '"__provider"' in chunk and chunk.startswith("data: "):

@@ -1,4 +1,4 @@
-"""Syrabit.ai — Syllabus-focused web search engine (RAG removed)."""
+"""Syrabit.ai — LLM knowledge-based responses (web search and RAG removed)."""
 import os, re, asyncio, time, uuid, hashlib, logging
 from typing import Optional, Dict, List
 from datetime import datetime, timezone
@@ -453,14 +453,14 @@ def build_rag_system_prompt(
 
     if _intent in _content_intents:
         base_prompt += (
-            "\n\nCONTENT RULE: Answer using the web search results below as your primary source. "
-            "Supplement with your knowledge. Accuracy over completeness."
+            "\n\nCONTENT RULE: Answer from your training knowledge. "
+            "Be accurate and curriculum-aligned. Accuracy over completeness."
         )
     if _intent == "pyq":
         base_prompt += (
             "\n\nPYQ RULE: The student is asking for previous year questions. "
-            "If the web results contain actual question paper content (numbered questions, marks), "
-            "present the EXACT questions as they appear — do NOT paraphrase or summarize them."
+            "Generate likely exam questions based on your knowledge of the curriculum and common exam patterns. "
+            "Present them with realistic marks allocation."
         )
 
     if not _is_casual:
@@ -513,36 +513,52 @@ def build_rag_system_prompt(
             grounding += "\n"
         grounding += "\n---\n"
 
+    def _cap_and_return(bp: str, gr: str) -> str:
+        _CAP = 10_000
+        total = len(bp) + len(gr)
+        if total > _CAP:
+            budget = _CAP - len(bp)
+            if budget > 500:
+                gr = gr[:budget]
+                logger.info(f"[PROMPT] Grounding trimmed to {budget} chars (source={source})")
+            else:
+                bp = bp[:_CAP]
+                gr = ""
+                logger.info(f"[PROMPT] Base prompt capped at {_CAP} chars (source={source})")
+        return bp + gr
+
     if source == "document":
         document_text = rag_context.get("document_text", "")
         if document_text:
+            doc_budget = max(2000, 8000 - len(grounding))
             grounding += (
                 "\n\n---\n"
                 "**GROUNDING CONTEXT (Uploaded Study Document):**\n"
                 "The student is asking about content from a specific uploaded study document. "
                 "Base your answer **exclusively** on this document. Quote directly when possible.\n\n"
                 "**Document content:**\n"
-                f"{document_text}\n\n"
+                f"{document_text[:doc_budget]}\n\n"
                 "---\n"
                 "*INSTRUCTION: Answer ONLY from the document above. "
                 "If the question cannot be answered from this document, say so clearly "
                 "and offer to answer from general knowledge instead.*"
             )
-            return base_prompt + grounding
+            return _cap_and_return(base_prompt, grounding)
 
     if source == "library":
         document_text = rag_context.get("document_text", "")
         if document_text:
+            lib_budget = max(2000, 8000 - len(grounding))
             grounding += (
                 "\n\n---\n"
                 "**GROUNDING CONTEXT (Subject Library Context):**\n"
                 "The student opened AI chat from a specific subject in the Syrabit library. "
                 "Use this syllabus and chapter context to give accurate, curriculum-aligned answers.\n\n"
                 "**Subject & syllabus:**\n"
-                f"{document_text}\n\n"
+                f"{document_text[:lib_budget]}\n\n"
                 "---\n"
             )
-            return base_prompt + grounding
+            return _cap_and_return(base_prompt, grounding)
 
     _extraction_rules = get_intent_extraction_rules(_intent)
     if _extraction_rules and not _is_casual:
@@ -557,23 +573,18 @@ def build_rag_system_prompt(
         web_block += (
             "**WEB SEARCH RESULTS — PRIMARY SOURCE:**\n"
             "Use the following web search results as your primary factual base to answer the student's question. "
-            "Prioritize results from syrabit.ai (marked [Syrabit]) as they contain curriculum-aligned content. "
             "Supplement with your own knowledge for deeper explanations and examples.\n\n"
         )
 
-        _any_enriched = any(r.get("_enriched") for r in web_results)
         _idx = 1
-
-        if syrabit_results:
-            for r in syrabit_results:
-                title   = r.get("title", "")
-                url     = r.get("url", "")
-                content = r.get("full_content") or r.get("snippet", "")
-                _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
-                web_block += f"[Syrabit {_idx}] {_tag} {title}\n{content}\nSource: {url}\n\n"
-                _idx += 1
-
-        for r in base_results:
+        for r in syrabit_results:
+            title   = r.get("title", "")
+            url     = r.get("url", "")
+            content = r.get("full_content") or r.get("snippet", "")
+            _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
+            web_block += f"[Syrabit {_idx}] {_tag} {title}\n{content}\nSource: {url}\n\n"
+            _idx += 1
+        for r in base_results + polish_results:
             title   = r.get("title", "")
             url     = r.get("url", "")
             content = r.get("full_content") or r.get("snippet", "")
@@ -581,30 +592,7 @@ def build_rag_system_prompt(
             web_block += f"[Web {_idx}] {_tag} {title}\n{content}\nSource: {url}\n\n"
             _idx += 1
 
-        for r in polish_results:
-            title   = r.get("title", "")
-            url     = r.get("url", "")
-            content = r.get("full_content") or r.get("snippet", "")
-            _tag = "[Full Content]" if r.get("_enriched") else "[Snippet]"
-            web_block += f"[Web {_idx}] {_tag} {title}\n{content}\nSource: {url}\n\n"
-            _idx += 1
-
-        _enriched_note = (
-            "Results marked [Full Content] contain detailed page text — rely on these heavily. "
-            if _any_enriched else ""
-        )
-        web_block += (
-            "---\n"
-            "**ANSWER RULES (WEB SEARCH + YOUR KNOWLEDGE):**\n"
-            f"*{_enriched_note}"
-            "1. Syrabit results are HIGHEST PRIORITY — they contain curriculum-aligned content for Assam board students.\n"
-            "2. Use web results as your factual anchor — extract key facts, definitions, explanations.\n"
-            "3. Enrich with your own knowledge — deeper context, examples, analogies.\n"
-            "4. Answer the student's actual question completely and accurately.\n"
-            "5. ADAPT to the student: Use simple language, relatable examples, focus on what helps them score well.\n"
-            "6. Do NOT add source citations inline — the system appends SOURCE automatically.\n"
-            "7. NEVER hallucinate or invent facts.*\n"
-        )
+        web_block += "---\n"
         grounding += web_block
     elif not _is_casual:
         _s1_subject_hint = rag_context.get("_stage1_subject", "")
@@ -615,7 +603,23 @@ def build_rag_system_prompt(
                 f"Be accurate, educational, and helpful."
             )
 
-    return base_prompt + grounding if grounding else base_prompt
+    _PROMPT_CAP = 10_000
+    if grounding:
+        total_len = len(base_prompt) + len(grounding)
+        if total_len > _PROMPT_CAP:
+            grounding_budget = _PROMPT_CAP - len(base_prompt)
+            if grounding_budget > 500:
+                grounding = grounding[:grounding_budget]
+                logger.info(f"[PROMPT] Grounding trimmed to {grounding_budget} chars (base_prompt={len(base_prompt)} chars)")
+            else:
+                grounding = ""
+                base_prompt = base_prompt[:_PROMPT_CAP]
+                logger.info(f"[PROMPT] Base prompt too large, capped at {_PROMPT_CAP} chars")
+        return base_prompt + grounding
+    elif len(base_prompt) > _PROMPT_CAP:
+        base_prompt = base_prompt[:_PROMPT_CAP]
+        logger.info(f"[PROMPT] Base prompt capped at {_PROMPT_CAP} chars")
+    return base_prompt
 
 
 _rag_telemetry: list = []

@@ -1,12 +1,11 @@
 """
-Syrabit.ai — Multi-LLM RAG Pipeline (3-stage chain).
+Syrabit.ai — Single-LLM Pipeline with optional Stage 1 topic classification.
 
-Stage 1 (Topic Resolver):   Fast/small model extracts structured topic metadata from user query.
-Stage 2 (RAG Synthesizer):  Mid-tier model synthesizes a strictly-grounded factual draft from RAG chunks.
-Stage 3 (Response Polisher): Premium model formats the draft into a student-friendly response (streams).
+Stage 1 (Topic Resolver):   Fast/small model extracts structured topic metadata (non-blocking, best-effort).
+Main LLM call:              Single streaming LLM call using training knowledge directly.
 
-Casual/simple queries bypass the full chain and go directly to a single LLM call.
-If any stage fails, the system falls back to the existing single-LLM approach.
+Stage 2 (RAG Synthesizer) and Stage 3 (Response Polisher) have been removed.
+All queries go to a single LLM call for sub-1-second TTFT.
 """
 import json
 import time
@@ -62,9 +61,9 @@ def get_pipeline_stats(window_seconds: int = 3600) -> dict:
 _HARD_BYPASS_INTENTS = {"syllabus", "chapter_meta"}
 
 _STAGE1_PROMPT = """Topic classifier for Assam board education (AHSEC/SEBA/DEGREE). Return ONLY JSON:
-{"subject":"","chapter":"","topic":"","intent":"notes|important_questions|pyq|syllabus|chapter_meta|casual|general","search_keywords":["3-5 terms"],"confidence":"high|low","needs_web_search":true/false}
+{"subject":"","chapter":"","topic":"","intent":"notes|important_questions|pyq|syllabus|chapter_meta|casual|general","search_keywords":["3-5 terms"],"confidence":"high|low"}
 
-Rules: casual=greetings/small talk. general=non-academic. needs_web_search=true for ALL academic/content queries (notes, PYQ, important questions, syllabus). false only for casual/general. search_keywords should be syllabus-aligned terms that help find relevant content. JSON only, no explanation."""
+Rules: casual=greetings/small talk. general=non-academic. search_keywords should be syllabus-aligned terms that help enrich context. JSON only, no explanation."""
 
 _STAGE2_PROMPT_TEMPLATE = """You are a factual synthesizer. Your job is to read the retrieved content chunks below and produce a strictly-grounded factual answer to the student's question.
 

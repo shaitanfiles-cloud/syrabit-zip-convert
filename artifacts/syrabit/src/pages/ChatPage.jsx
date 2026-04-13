@@ -252,7 +252,7 @@ export default function ChatPage() {
 
       let pendingChunk = '';
       let flushTimer = null;
-      const FLUSH_INTERVAL = 40;
+      const FLUSH_INTERVAL = 16;
       const flushPending = () => {
         if (!pendingChunk) return;
         fullContent += pendingChunk; pendingChunk = '';
@@ -315,7 +315,7 @@ export default function ChatPage() {
           if (meta.hasError) continue;
           if (parsed.content) {
             pendingChunk += parsed.content;
-            if (!fullContent && !flushTimer) flushPending();
+            if (!fullContent) flushPending();
             else if (!flushTimer) flushTimer = setTimeout(flushPending, FLUSH_INTERVAL);
           }
           if (parsed.event === 'syrabit_done') {
