@@ -196,7 +196,9 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     try {
       const slug = contentForm.slug || autoSlug(contentForm.title);
       const topics = (contentForm.topics || []).filter(Boolean);
-      await axios.post(`${API}/admin/content/chapters`, { subject_id: selSubject, title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, status: 'published', topics }, authHeaders(adminToken));
+      const createPayload = { subject_id: selSubject, title: contentForm.title, slug, description: contentForm.description, content: contentForm.content, content_type: contentForm.content_type, order: contentForm.order, status: 'published', topics };
+      if (contentForm.content_as) createPayload.content_as = contentForm.content_as;
+      await axios.post(`${API}/admin/content/chapters`, createPayload, authHeaders(adminToken));
       toast.success('Chapter created successfully'); setEditView(null); setContentForm({ title: '', slug: '', description: '', content: '', content_type: 'notes', order: 1, topics: [], content_as: '' }); setChapterStats(null); refreshChapters(selSubject);
     } catch { toast.error('Failed to create chapter'); }
     finally { setSaving(false); }

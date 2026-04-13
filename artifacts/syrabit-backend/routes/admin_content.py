@@ -1260,6 +1260,7 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
         "slug": _slug,
         "description": data.description,
         "content": data.content,
+        "content_as": data.content_as or "",
         "content_type": _category,
         "category": _category,
         "chapter_number": data.chapter_number,

@@ -102,6 +102,7 @@ class ChapterCreate(BaseModel):
     slug: Optional[str] = ""
     description: Optional[str] = ""
     content: Optional[str] = ""
+    content_as: Optional[str] = ""
     content_type: Optional[str] = "notes"
     category: Optional[Literal["notes", "important_questions", "question_paper"]] = "notes"
     chapter_number: Optional[int] = 1

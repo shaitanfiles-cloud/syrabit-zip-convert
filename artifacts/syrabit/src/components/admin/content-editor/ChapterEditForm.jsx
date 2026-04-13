@@ -201,7 +201,7 @@ export default function ChapterEditForm({
           </div>
         )}
 
-        {editView === 'edit-chapter' && editTarget?.id && (
+        {(editView === 'edit-chapter' || editView === 'new-chapter') && (
           <div className="flex-shrink-0 flex items-center gap-2 px-3 py-2 rounded-lg bg-violet-50/50 border border-violet-200/50">
             <Languages size={14} className="text-violet-500 shrink-0" />
             <div className="flex items-center gap-0.5 rounded-md p-0.5" style={{ background: 'rgba(139,92,246,0.1)' }}>
@@ -225,7 +225,7 @@ export default function ChapterEditForm({
                 <span className="text-[10px] text-gray-400">No Assamese content</span>
               )
             )}
-            {!contentForm.content_as && (
+            {!contentForm.content_as && editTarget?.id && (
               <button
                 onClick={handleTranslateToAssamese}
                 disabled={translating || !contentForm.content?.trim()}
@@ -235,10 +235,15 @@ export default function ChapterEditForm({
                 {translating ? 'Translating…' : 'Translate to অসমীয়া'}
               </button>
             )}
+            {!contentForm.content_as && !editTarget?.id && editorLang === 'as' && (
+              <span className="ml-auto text-[10px] text-amber-600 bg-amber-50 px-2 py-1 rounded-md border border-amber-200">
+                Save chapter first to use auto-translate
+              </span>
+            )}
             {contentForm.content_as && (
               <button
                 onClick={handleTranslateToAssamese}
-                disabled={translating || !contentForm.content?.trim()}
+                disabled={translating || !contentForm.content?.trim() || !editTarget?.id}
                 className="ml-auto flex items-center gap-1.5 px-2 py-1 rounded-lg text-[10px] font-medium text-violet-500 hover:bg-violet-100 disabled:opacity-50 transition-all border border-violet-200"
               >
                 {translating ? <Loader2 size={10} className="animate-spin" /> : <RefreshCw size={10} />}
