@@ -259,7 +259,7 @@ if _apprunner_url:
     if _ar_origin not in CORS_ORIGINS:
         CORS_ORIGINS.append(_ar_origin)
 
-CORS_ORIGIN_REGEX = r"^https://[a-z0-9]+\.[a-z0-9-]+\.awsapprunner\.com$"
+CORS_ORIGIN_REGEX = r"^https://[a-z0-9-]+(\.[a-z0-9-]+)*\.(awsapprunner\.com|up\.railway\.app|railway\.app)$"
 
 # ── Admin accounts ────────────────────────────────────────────────────────────
 # Admin accounts loaded from environment (no credentials in source code)

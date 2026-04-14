@@ -42,3 +42,9 @@ id = "3U0e16xc_5g5r_IWzI6M8"
 uri = "file://docs/AWS-DEPLOYMENT.md"
 type = "text"
 title = "AWS ECS Express Mode Deployment Guide"
+
+[[outputs]]
+id = "-Xzdmp09knCe2QzPlPksz"
+uri = "file://docs/RAILWAY-DEPLOYMENT.md"
+type = "text"
+title = "Railway Deployment Guide"
