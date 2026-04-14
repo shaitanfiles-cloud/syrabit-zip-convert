@@ -9,7 +9,7 @@ routes = [
 [vars]
 # After deploying the Replit backend, replace this with your Replit deployment URL
 # (e.g. "https://<your-repl-slug>.<your-username>.replit.app")
-BACKEND_URL = "https://REPLIT_DEPLOY_URL"
+BACKEND_URL = "https://syrabit-zip-convert-maliktez.replit.app"
 D1_SYNC_SECRET = "REPLACE_WITH_SECURE_RANDOM_SECRET"
 
 # Create KV namespaces before deploying:
