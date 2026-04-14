@@ -7,7 +7,7 @@ import { PageTitle } from '@/components/PageTitle';
 import { apiClient, createPaymentOrder, verifyPayment, createCreditTopUp, verifyCreditTopUp } from '@/utils/api';
 import { toast } from 'sonner';
 import { Analytics } from '@/utils/analytics';
-import { PLANS, loadRazorpay, ga4Track } from './profile/shared';
+import { PLANS, loadRazorpay } from './profile/shared';
 import ProfileHeader from './profile/ProfileHeader';
 import AcademicDetails from './profile/AcademicDetails';
 import AiCredits from './profile/AiCredits';
@@ -188,13 +188,13 @@ export default function ProfilePage() {
       let orderData;
       try { orderData = (await createPaymentOrder(paymentPlan)).data; }
       catch (err) { toast.error(err?.response?.data?.detail || 'Payment gateway not configured. Contact admin@syrabit.ai.'); setPaymentLoading(false); return; }
-      ga4Track('begin_checkout', { currency: 'INR', value: orderData.amount / 100, items: [{ item_id: paymentPlan, item_name: `${paymentPlan}_plan`, item_category: 'subscription' }] });
+      Analytics.upgradeInitiated(paymentPlan, orderData.amount);
       orderData._desc = `${orderData.plan_label} Plan — ${PLANS[paymentPlan]?.credits.toLocaleString()} AI credits`;
       orderData._plan = paymentPlan;
       openRzp(orderData, setPaymentLoading, async (response) => {
         try {
           await verifyPayment({ razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature, plan: paymentPlan });
-          ga4Track('purchase', { transaction_id: response.razorpay_payment_id, currency: 'INR', value: orderData.amount / 100, items: [{ item_id: paymentPlan, item_name: `${paymentPlan}_plan`, item_category: 'subscription' }] });
+          Analytics.purchaseComplete(paymentPlan, orderData.amount, response.razorpay_payment_id);
           toast.success(`🎉 ${PLANS[paymentPlan]?.label} plan activated!`, { description: `${PLANS[paymentPlan]?.credits.toLocaleString()} AI credits added to your account.` });
           setShowPaymentModal(false);
           await refreshData();
@@ -225,13 +225,13 @@ export default function ProfilePage() {
       let orderData;
       try { orderData = (await createCreditTopUp(topUpCredits)).data; }
       catch (err) { toast.error(err?.response?.data?.detail || 'Failed to create top-up order.'); setTopUpLoading(false); return; }
-      ga4Track('begin_checkout', { currency: 'INR', value: orderData.amount / 100, items: [{ item_id: 'credit_topup', item_name: `topup_${topUpCredits}`, item_category: 'credits', quantity: topUpCredits }] });
+      Analytics.upgradeInitiated(`topup_${topUpCredits}`, orderData.amount);
       orderData._desc = `Credit Top-up — ${topUpCredits} credits`;
       orderData._plan = `topup_${topUpCredits}`;
       openRzp(orderData, setTopUpLoading, async (response) => {
         try {
           await verifyCreditTopUp({ razorpay_order_id: response.razorpay_order_id, razorpay_payment_id: response.razorpay_payment_id, razorpay_signature: response.razorpay_signature, credits: topUpCredits });
-          ga4Track('purchase', { transaction_id: response.razorpay_payment_id, currency: 'INR', value: orderData.amount / 100, items: [{ item_id: 'credit_topup', item_name: `topup_${topUpCredits}`, item_category: 'credits', quantity: topUpCredits }] });
+          Analytics.purchaseComplete(`topup_${topUpCredits}`, orderData.amount, response.razorpay_payment_id);
           toast.success(`${topUpCredits} credits added to your account!`);
           setShowTopUpModal(false);
           await refreshData();

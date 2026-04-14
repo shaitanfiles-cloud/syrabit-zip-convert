@@ -1,7 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useParams } from "react-router-dom";
 import { lazy, Suspense, useEffect, useState } from "react";
 import { PageTracker } from "@/utils/usePageTracking";
-import { initGA4 } from "@/utils/analytics";
 import { AuthProvider } from "@/context/AuthContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthGuard } from "@/components/AuthGuard";
@@ -108,7 +107,7 @@ function LegacyTopicRedirect() {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
-  useEffect(() => { initGA4(); prefetchCriticalRoutes(); }, []); // eslint-disable-line
+  useEffect(() => { prefetchCriticalRoutes(); }, []); // eslint-disable-line
 
   useEffect(() => {
     const prefetchBundle = () => {

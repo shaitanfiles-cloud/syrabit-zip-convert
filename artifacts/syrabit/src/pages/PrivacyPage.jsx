@@ -78,7 +78,7 @@ const sections = [
   },
   {
     title: '8. Cookies & Local Storage',
-    body: `We use browser local storage (not tracking cookies) to maintain your session and preferences. No third-party tracking cookies are used. Google Analytics (GA4) is used for anonymized, aggregate usage analytics only — no personally identifiable information is shared with Google.`,
+    body: `We use browser local storage (not tracking cookies) to maintain your session and preferences. No third-party tracking cookies are used. Cloudflare Web Analytics is used for anonymized, aggregate page-view analytics — it is cookie-free and does not collect personally identifiable information.`,
   },
   {
     title: '9. Children\'s Privacy',

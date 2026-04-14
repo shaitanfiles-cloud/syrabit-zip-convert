@@ -430,6 +430,18 @@ function botRenderPlugin() {
   };
 }
 
+function cfAnalyticsPlugin() {
+  const token = process.env.VITE_CF_ANALYTICS_TOKEN || '';
+  return {
+    name: 'syrabit-cf-analytics',
+    transformIndexHtml(html) {
+      if (!token) return html.replace('<!--CF_ANALYTICS_BEACON-->', '');
+      const tag = `<!-- Cloudflare Web Analytics -->\n    <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "${token}"}'></script>`;
+      return html.replace('<!--CF_ANALYTICS_BEACON-->', tag);
+    },
+  };
+}
+
 function backendPreconnectPlugin() {
   const backendUrl = process.env.VITE_BACKEND_URL || '';
   return {
@@ -463,6 +475,7 @@ export default defineConfig({
       include: /\.(js|jsx|ts|tsx)$/,
     }),
     backendPreconnectPlugin(),
+    cfAnalyticsPlugin(),
     pyqPagePlugin(),
     botRenderPlugin(),
   ],
