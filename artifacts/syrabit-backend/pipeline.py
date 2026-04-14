@@ -134,12 +134,10 @@ def _pick_stage1_providers() -> list:
 
 def _pick_stage2_providers() -> list:
     from llm import _LLM_PROVIDERS
-    from config import _GROQ_KEY, _FIREWORKS_KEY, _OPENROUTER_KEY
+    from config import _GROQ_KEY, _OPENROUTER_KEY
     providers = []
     if _GROQ_KEY:
         providers.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
-    if _FIREWORKS_KEY:
-        providers.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/gpt-oss-120b"})
     if _OPENROUTER_KEY:
         providers.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
     for p in _LLM_PROVIDERS:

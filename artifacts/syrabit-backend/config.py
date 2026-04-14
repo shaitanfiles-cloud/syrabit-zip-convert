@@ -64,7 +64,6 @@ _CF_PROVIDER_SLUGS = {
     "groq":        "groq",
     "xai":         "grok",
     "gemini":      "google-ai-studio/v1beta/openai",
-    "fireworksai": "fireworks-ai/inference/v1",
     "sarvam":      "sarvam",
 }
 
@@ -73,7 +72,6 @@ _DIRECT_PROVIDER_URLS = {
     "groq":        None,
     "xai":         "https://api.x.ai/v1",
     "gemini":      "https://generativelanguage.googleapis.com/v1beta/openai/",
-    "fireworksai": "https://api.fireworks.ai/inference/v1",
     "sarvam":      "https://api.sarvam.ai",
 }
 
@@ -119,12 +117,10 @@ _GEMINI_KEY = os.environ.get('GEMINI_API_KEY', '').strip()
 _GEMINI_KEY_2 = os.environ.get('GEMINI_API_KEY_2', '').strip()
 _XAI_KEY = os.environ.get('XAI_API_KEY', '').strip()
 _OPENAI_KEY = os.environ.get('OPENAI_API_KEY', '').strip()
-_FIREWORKS_KEY = os.environ.get('FIREWORKS_API_KEY', '').strip()
 _SARVAM_LLM_KEY = os.environ.get('SARVAM_API_KEY', '').strip()
 _SARVAM_LLM_KEY_2 = os.environ.get('SARVAM_API_KEY_2', '').strip()
 _SARVAM_LLM_KEY_3 = os.environ.get('SARVAM_API_KEY_3', '').strip()
 _CEREBRAS_KEY = os.environ.get('CEREBRAS_API_KEY', '').strip()
-_EMERGENT_KEY = os.environ.get('EMERGENT_API_KEY', '').strip()
 _OPENROUTER_KEY = os.environ.get('OPENROUTER_API_KEY', '').strip()
 _EXPLICIT_PROVIDER = os.environ.get('LLM_PROVIDER', '').strip().lower()
 _AWS_ACCESS_KEY = os.environ.get('AWS_ACCESS_KEY_ID', '').strip()
@@ -143,10 +139,6 @@ elif _EXPLICIT_PROVIDER == 'cerebras' and _CEREBRAS_KEY:
     LLM_PROVIDER = 'cerebras'
     LLM_API_KEY = _CEREBRAS_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'llama3.1-8b')
-elif _EXPLICIT_PROVIDER == 'fireworksai' and _FIREWORKS_KEY:
-    LLM_PROVIDER = 'fireworksai'
-    LLM_API_KEY = _FIREWORKS_KEY
-    LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/gpt-oss-120b')
 elif _EXPLICIT_PROVIDER == 'openai' and _OPENAI_KEY and _OPENAI_KEY != 'x':
     LLM_PROVIDER = 'openai'
     LLM_API_KEY = _OPENAI_KEY
@@ -163,10 +155,6 @@ elif _SARVAM_LLM_KEY:
     LLM_PROVIDER = 'sarvam'
     LLM_API_KEY = _SARVAM_LLM_KEY
     LLM_MODEL = os.environ.get('LLM_MODEL', 'sarvam-m')
-elif _FIREWORKS_KEY:
-    LLM_PROVIDER = 'fireworksai'
-    LLM_API_KEY = _FIREWORKS_KEY
-    LLM_MODEL = os.environ.get('LLM_MODEL', 'accounts/fireworks/models/gpt-oss-120b')
 elif _OPENAI_KEY and _OPENAI_KEY != 'x':
     LLM_PROVIDER = 'openai'
     LLM_API_KEY = _OPENAI_KEY

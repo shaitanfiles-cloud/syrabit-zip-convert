@@ -31,8 +31,8 @@ from fastapi import HTTPException
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 from config import (
     LLM_PROVIDER, LLM_MODEL, OPENAI_API_KEY, SARVAM_THINK_BUFFER,
-    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY, _FIREWORKS_KEY,
-    _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _SARVAM_LLM_KEY_3, _CEREBRAS_KEY, _EMERGENT_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
+    _GROQ_KEY, _GROQ_KEY_2, _GEMINI_KEY, _GEMINI_KEY_2, _XAI_KEY, _OPENAI_KEY,
+    _SARVAM_LLM_KEY, _SARVAM_LLM_KEY_2, _SARVAM_LLM_KEY_3, _CEREBRAS_KEY, _OPENROUTER_KEY, _AWS_ACCESS_KEY, _AWS_SECRET_KEY, _AWS_REGION,
     CF_GATEWAY_ENABLED, CF_CACHE_TTL, is_cf_gateway_up, mark_cf_gateway_down, get_provider_base_url,
 )
 from deps import sarvam_llm_client, sarvam_llm_client_direct, logger as _dep_logger
@@ -194,8 +194,6 @@ if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY_2,   "default_model": "gemini-2.5-flash"})
-if _FIREWORKS_KEY:
-    _LLM_PROVIDERS.append({"provider": "fireworksai", "key": _FIREWORKS_KEY,  "default_model": "accounts/fireworks/models/gpt-oss-120b"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS.append({"provider": "openrouter",  "key": _OPENROUTER_KEY, "default_model": "deepseek/deepseek-chat-v3-0324"})
 if _OPENAI_KEY and _OPENAI_KEY != 'x':
@@ -208,8 +206,6 @@ if _CEREBRAS_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
-if _FIREWORKS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "fireworksai", "key": _FIREWORKS_KEY, "default_model": "accounts/fireworks/models/gpt-oss-120b"})
 
 _MODEL_PROVIDER_MAP = {
     "sarvam-m": "sarvam",
@@ -217,10 +213,6 @@ _MODEL_PROVIDER_MAP = {
     "sarvam-30b-16k": "sarvam",
     "sarvam-105b": "sarvam",
     "sarvam-105b-32k": "sarvam",
-    "accounts/fireworks/models/qwen2p5-72b-instruct": "fireworksai",
-    "accounts/fireworks/models/qwen3-235b-a22b": "fireworksai",
-    "accounts/fireworks/models/deepseek-v3p2": "fireworksai",
-    "accounts/fireworks/models/gpt-oss-120b": "fireworksai",
     "llama3.1-8b": "cerebras",
     "qwen-3-235b-a22b-instruct-2507": "cerebras",
     "gemini-2.5-flash": "gemini",
@@ -238,7 +230,7 @@ _MODEL_PROVIDER_MAP = {
 }
 
 _MODEL_ALIAS_MAP = {
-    "openai/gpt-oss-20b": "accounts/fireworks/models/deepseek-v3p2",
+    "openai/gpt-oss-20b": "deepseek/deepseek-chat-v3-0324",
     "openai/gpt-oss-120b": "qwen-3-235b-a22b-instruct-2507",
     "llama-3.3-70b-versatile": "deepseek/deepseek-chat-v3-0324",
 }
@@ -252,7 +244,6 @@ _SLM_SLOT_CANDIDATES = [
     ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 0),
     ("cerebras",    "llama3.1-8b",                                       4, 1),
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
-    ("fireworksai", "accounts/fireworks/models/gpt-oss-120b",            4, 3),
 ]
 
 _CONTENT_SLOT_CANDIDATES = [
@@ -289,7 +280,6 @@ class _SmartKeyPool:
         "sarvam": 30,
         "gemini": 30,
         "openrouter": 60,
-        "fireworksai": 60,
         "openai": 60,
         "bedrock": 30,
     }
@@ -1230,10 +1220,6 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             logger.info(f"LLM stream: provider=cerebras, model={p_model}")
             async for token in _stream_cerebras(messages, p_key, p_model, _mt):
                 yield token
-        elif p_name == "fireworksai":
-            logger.info(f"LLM stream: provider=fireworksai, model={p_model}")
-            async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "fireworksai", "https://api.fireworks.ai/inference/v1"):
-                yield token
         elif p_name == "groq":
             logger.info(f"LLM stream: provider=groq, model={p_model}")
             async for token in _stream_openai_compat(messages, p_key, p_model, _mt, "groq", "https://api.groq.com/openai/v1"):
@@ -1268,7 +1254,6 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         "cerebras": 24000,
         "sarvam": 12000,
         "groq": 100000,
-        "fireworksai": 80000,
         "gemini": 500000,
         "openrouter": 200000,
         "openai": 80000,

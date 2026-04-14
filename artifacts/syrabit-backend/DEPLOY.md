@@ -149,7 +149,6 @@ Set every variable listed below. Values marked **required** must be set for the 
 | `OPENAI_API_KEY` | — | OpenAI key (if using OpenAI provider) |
 | `GROQ_API_KEY` | — | Groq key (if using Groq provider) |
 | `GEMINI_API_KEY` | — | Gemini key (if using Gemini provider) |
-| `FIREWORKS_API_KEY` | — | Fireworks key (if using Fireworks provider) |
 | `XAI_API_KEY` | — | xAI key (if using xAI provider) |
 | `AWS_ACCESS_KEY_ID` | — | AWS key (if using Bedrock provider) |
 | `AWS_SECRET_ACCESS_KEY` | — | AWS secret (if using Bedrock provider) |

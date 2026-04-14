@@ -72,11 +72,9 @@ railway variables set GROQ_API_KEY="gsk_xxx"
 railway variables set GROQ_API_KEY_2="gsk_xxx"
 railway variables set GEMINI_API_KEY="AIza..."
 railway variables set CEREBRAS_API_KEY="csk-xxx"
-railway variables set FIREWORKS_API_KEY="fw_xxx"
 railway variables set SARVAM_API_KEY="xxx"
 railway variables set SARVAM_API_KEY_2="xxx"
 railway variables set OPENROUTER_API_KEY="sk-or-xxx"
-railway variables set EMERGENT_API_KEY="xxx"
 railway variables set VOYAGE_API_KEY="pa-xxx"
 
 # Payments & Email
