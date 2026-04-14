@@ -263,7 +263,7 @@ ADMIN_ACCOUNTS = _load_admin_accounts()
 ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
 ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
 
-_PG_DSN = os.environ.get("DATABASE_URL", "")
+_PG_DSN = os.environ.get("DATABASE_URL", "") or os.environ.get("SUPABASE_DB_URL", "")
 
 VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY', '').strip()
 
