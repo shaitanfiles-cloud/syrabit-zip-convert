@@ -1,0 +1,5 @@
+[build]
+buildCommand = "pnpm --filter @workspace/mockup-sandbox build"
+
+[deploy]
+startCommand = "pnpm --filter @workspace/mockup-sandbox preview"
