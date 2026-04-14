@@ -53,12 +53,17 @@ async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optiona
             return {"boards": [], "classes": [], "streams": [], "subjects": []}
         async with _slow_query("library_bundle"):
             try:
-                boards_data, classes_data, streams_data, subjects_data, chapters_data, pyq_data, fc_data = await asyncio.wait_for(
+                boards_data, classes_data, streams_data, subjects_data = await asyncio.wait_for(
                     asyncio.gather(
                         db.boards.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1}).to_list(100),
                         db.classes.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1}).to_list(100),
                         db.streams.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "class_id": 1}).to_list(100),
                         db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
+                    ),
+                    timeout=10.0,
+                )
+                chapters_data, pyq_data, fc_data = await asyncio.wait_for(
+                    asyncio.gather(
                         db.chapters.find(
                             {},
                             {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "notes_generated": 1},
@@ -66,10 +71,10 @@ async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optiona
                         db.topic_pyq_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
                         db.flashcard_collections.find({}, {"_id": 0, "subject_id": 1, "total": 1}).to_list(2000),
                     ),
-                    timeout=8.0,
+                    timeout=10.0,
                 )
             except asyncio.TimeoutError:
-                logger.warning("library-bundle MongoDB query timed out after 8s")
+                logger.warning("library-bundle MongoDB query timed out after 10s")
                 return {"boards": [], "classes": [], "streams": [], "subjects": []}
 
         chapters_by_subject: dict = {}

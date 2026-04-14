@@ -237,12 +237,16 @@ async def _seed_syllabus_embeddings():
 
 async def _prewarm_library_cache():
     await asyncio.sleep(3)
-    try:
-        from routes.content import get_library_bundle
-        await get_library_bundle(nocache="1", include_seo=None, response=None)
-        logger.info("Library-bundle cache pre-warmed")
-    except Exception as e:
-        logger.warning(f"Library-bundle pre-warm failed: {e}")
+    from routes.content import get_library_bundle
+    for attempt in range(3):
+        try:
+            await get_library_bundle(nocache="1", include_seo=None, response=None)
+            logger.info("Library-bundle cache pre-warmed")
+            return
+        except Exception as e:
+            logger.warning(f"Library-bundle pre-warm attempt {attempt+1}/3 failed: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2 * (attempt + 1))
 
 @asynccontextmanager
 async def lifespan(app):
@@ -263,8 +267,10 @@ async def lifespan(app):
         if _is_leader:
             await ensure_seeded()
             await db.chapters.create_index("subject_id")
+            await db.chapters.create_index("order_index")
             await db.chapters.create_index([("slug", 1), ("subject_id", 1)])
             await db.subjects.create_index("stream_id")
+            await db.subjects.create_index("status")
             await db.subjects.create_index([("slug", 1), ("stream_id", 1)])
             await db.boards.create_index("slug")
             await db.classes.create_index([("slug", 1), ("board_id", 1)])
