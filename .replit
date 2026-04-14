@@ -48,4 +48,8 @@ CF_AI_GATEWAY_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
 
 [[ports]]
 localPort = 8000
+externalPort = 8000
+
+[[ports]]
+localPort = 25144
 externalPort = 80
