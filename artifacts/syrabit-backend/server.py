@@ -326,6 +326,34 @@ async def lifespan(app):
             except Exception as e:
                 logger.warning(f"bot_name backfill skipped: {e}")
 
+            try:
+                from utils import slugify_title as _slugify_title
+                from pymongo import UpdateOne as _SlugUpdateOne
+                _slug_cursor = db.chapters.find(
+                    {"$or": [{"slug": ""}, {"slug": {"$exists": False}}, {"slug": None}]},
+                    {"_id": 1, "title": 1},
+                )
+                _slug_batch = []
+                _slug_total = 0
+                async for doc in _slug_cursor:
+                    title = doc.get("title", "")
+                    if not title:
+                        continue
+                    generated = _slugify_title(title)
+                    if generated:
+                        _slug_batch.append(_SlugUpdateOne({"_id": doc["_id"]}, {"$set": {"slug": generated}}))
+                    if len(_slug_batch) >= 500:
+                        await db.chapters.bulk_write(_slug_batch)
+                        _slug_total += len(_slug_batch)
+                        _slug_batch = []
+                if _slug_batch:
+                    await db.chapters.bulk_write(_slug_batch)
+                    _slug_total += len(_slug_batch)
+                if _slug_total:
+                    logger.info(f"Backfilled slug for {_slug_total} chapters")
+            except Exception as e:
+                logger.warning(f"chapter slug backfill skipped: {e}")
+
             await db.users.create_index("email", unique=True, sparse=True)
             await db.users.create_index("id", unique=True)
             await db.password_resets.create_index("token", unique=True)

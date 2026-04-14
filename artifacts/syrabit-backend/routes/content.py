@@ -80,6 +80,10 @@ async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optiona
         chapters_by_subject: dict = {}
         chapter_id_to_subject: dict = {}
         for ch in chapters_data:
+            if not ch.get("slug"):
+                title = ch.get("title", "")
+                if title:
+                    ch["slug"] = slugify_title(title)
             sid = ch.get("subject_id", "")
             ch_id = ch.get("id", "")
             if sid and ch_id:
@@ -562,10 +566,9 @@ async def get_chapters(subject_id: str, response: Response = None):
         if not await is_mongo_available():
             return []
         chapters = await db.chapters.find({"subject_id": subject_id}, {"_id": 0}).sort("order_index", 1).to_list(100)
-        import re as _re
         for ch in chapters:
             if not ch.get("slug") and ch.get("title"):
-                ch["slug"] = _re.sub(r'[^a-z0-9]+', '-', ch["title"].lower()).strip('-')
+                ch["slug"] = slugify_title(ch["title"])
         _set_content_cache(ck, chapters)
         if response: response.headers["Cache-Control"] = "public, max-age=600, stale-while-revalidate=7200"
         return chapters
@@ -581,13 +584,28 @@ async def _resolve_slug_hierarchy(board_slug, class_slug, subject_slug):
         return cached
     board = await db.boards.find_one({"slug": board_slug}, {"_id": 0, "id": 1, "name": 1, "slug": 1})
     if not board:
+        board = await db.boards.find_one(
+            {"slug": re.compile(f"^{re.escape(board_slug)}$", re.IGNORECASE)},
+            {"_id": 0, "id": 1, "name": 1, "slug": 1},
+        )
+    if not board:
         return None
     cls = await db.classes.find_one({"slug": class_slug, "board_id": board["id"]}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1})
+    if not cls:
+        cls = await db.classes.find_one(
+            {"slug": re.compile(f"^{re.escape(class_slug)}$", re.IGNORECASE), "board_id": board["id"]},
+            {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1},
+        )
     if not cls:
         return None
     streams = await db.streams.find({"class_id": cls["id"]}, {"_id": 0, "id": 1, "name": 1}).to_list(100)
     stream_ids = [s["id"] for s in streams]
     subj = await db.subjects.find_one({"slug": subject_slug, "stream_id": {"$in": stream_ids}, "status": "published"}, {"_id": 0})
+    if not subj:
+        subj = await db.subjects.find_one(
+            {"slug": re.compile(f"^{re.escape(subject_slug)}$", re.IGNORECASE), "stream_id": {"$in": stream_ids}, "status": "published"},
+            {"_id": 0},
+        )
     if not subj:
         return None
     stream = next((s for s in streams if s["id"] == subj.get("stream_id")), None)
@@ -608,16 +626,37 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
     if not hier:
         raise HTTPException(404, "Board, class, or subject not found")
     board, cls, subj, stream = hier["board"], hier["cls"], hier["subj"], hier["stream"]
+    import unicodedata
+    from urllib.parse import unquote
+    decoded_slug = unquote(chapter_slug)
+    normalized_slug = unicodedata.normalize("NFKC", decoded_slug.strip().lower())
     chapter = await db.chapters.find_one({"slug": chapter_slug, "subject_id": subj["id"]}, {"_id": 0})
+    if not chapter and decoded_slug != chapter_slug:
+        chapter = await db.chapters.find_one({"slug": decoded_slug, "subject_id": subj["id"]}, {"_id": 0})
     if not chapter:
-        import re as _re
+        chapter = None
+        async for c in db.chapters.find({"subject_id": subj["id"]}, {"_id": 0}):
+            c_slug = (c.get("slug") or "").strip().lower()
+            c_slug_normalized = unicodedata.normalize("NFKC", c_slug)
+            if c_slug_normalized and c_slug_normalized == normalized_slug:
+                chapter = c
+                break
+    if not chapter:
         all_chapters = await db.chapters.find({"subject_id": subj["id"]}, {"_id": 0}).to_list(200)
         for c in all_chapters:
             title = c.get("title", "")
-            auto_slug = _re.sub(r'[^a-z0-9]+', '-', title.lower()).strip('-')
-            if auto_slug == chapter_slug:
+            auto_slug = slugify_title(title)
+            if auto_slug == normalized_slug:
                 chapter = c
                 break
+        if not chapter:
+            for c in all_chapters:
+                title = c.get("title", "")
+                title_normalized = re.sub(r'[^\w]+', ' ', title.strip().lower(), flags=re.UNICODE).strip()
+                slug_normalized = re.sub(r'-+', ' ', normalized_slug).strip()
+                if title_normalized == slug_normalized:
+                    chapter = c
+                    break
     if not chapter: raise HTTPException(404, "Chapter not found")
     chapter_content = chapter.get("content", "")
     if chapter_content:

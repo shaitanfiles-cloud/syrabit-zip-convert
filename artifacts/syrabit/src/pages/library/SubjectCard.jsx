@@ -264,8 +264,11 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
               )}
             </div>
             {visibleChapters.map((ch, i) => {
-              const chPath = sub.boardSlug && sub.classSlug && sub.slug && ch.slug
-                ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}/${ch.slug}`
+              const effectiveSlug = ch.slug || (ch.title ? ch.title.toLowerCase().replace(/[^\p{L}\p{N}\p{M}]+/gu, '-').replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '') : '');
+              const hasValidLink = !!(sub.boardSlug && sub.classSlug && sub.slug && effectiveSlug);
+              const hasContent = ch.notes_generated !== false;
+              const chPath = hasValidLink
+                ? `/${sub.boardSlug}/${sub.classSlug}/${sub.slug}/${effectiveSlug}`
                 : subjectLandingPath;
               return (
                 <div key={ch.id || i}>
@@ -291,6 +294,7 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
                       style={{
                         color: hasWP ? '#93c5fd' : 'hsl(var(--primary))',
                         textShadow: hasWP ? '0 1px 3px rgba(0,0,0,0.5)' : 'none',
+                        opacity: (hasValidLink && hasContent) ? 1 : 0.5,
                       }}
                     >
                       {ch.title}

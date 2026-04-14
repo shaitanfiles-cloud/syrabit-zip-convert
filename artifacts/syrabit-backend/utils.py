@@ -13,7 +13,20 @@ __all__ = [
     "_SlowQueryTimer", "_extract_keywords", "_get_device_type",
     "_ip_country_cache", "_is_bot", "_resolve_country", "_slow_query",
     "get_library_analytics", "track_library_event",
+    "slugify_title",
 ]
+
+
+def slugify_title(title: str) -> str:
+    if not title:
+        return ""
+    import unicodedata
+    normalized = unicodedata.normalize("NFKC", title.strip())
+    slug = re.sub(r'[^\w\u0300-\u036f\u0980-\u09ff\u0900-\u097f]+', '-', normalized.lower(), flags=re.UNICODE).strip('-')
+    slug = re.sub(r'-{2,}', '-', slug)
+    if not slug or slug == '-':
+        slug = re.sub(r'[^a-z0-9]+', '-', normalized.lower()).strip('-')
+    return slug
 
 try:
     from user_agents import parse as _parse_ua
