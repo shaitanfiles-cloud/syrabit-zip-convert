@@ -49,18 +49,19 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes("node_modules/react-dom")) return "vendor";
-          if (id.includes("node_modules/react/")) return "vendor";
-          if (id.includes("node_modules/react-router-dom")) return "router";
+          if (id.includes("node_modules/react-dom")) return "react-dom";
+          if (id.includes("node_modules/react/") || id.includes("node_modules/scheduler")) return "vendor";
+          if (id.includes("node_modules/react-router-dom") || id.includes("node_modules/react-router/") || id.includes("node_modules/@remix-run")) return "router";
           if (id.includes("node_modules/@tanstack/react-query")) return "query";
-          if (id.includes("node_modules/framer-motion")) return "motion";
+          if (id.includes("node_modules/framer-motion")) return "framer";
           if (id.includes("node_modules/lucide-react")) return "icons";
           if (id.includes("node_modules/@radix-ui")) return "radix";
-          if (id.includes("node_modules/react-markdown") || id.includes("node_modules/remark-") || id.includes("node_modules/rehype-") || id.includes("node_modules/unified") || id.includes("node_modules/mdast-") || id.includes("node_modules/hast-") || id.includes("node_modules/micromark")) return "markdown";
+          if (id.includes("node_modules/react-markdown") || id.includes("node_modules/remark-") || id.includes("node_modules/rehype-") || id.includes("node_modules/unified") || id.includes("node_modules/mdast-") || id.includes("node_modules/hast-") || id.includes("node_modules/micromark") || id.includes("node_modules/devlop") || id.includes("node_modules/vfile")) return "markdown";
           if (id.includes("node_modules/recharts") || id.includes("node_modules/d3-") || id.includes("node_modules/victory-")) return "charts";
           if (id.includes("node_modules/react-helmet-async")) return "seo";
           if (id.includes("node_modules/sonner")) return "ui-extras";
           if (id.includes("node_modules/codemirror") || id.includes("node_modules/@codemirror") || id.includes("node_modules/@lezer")) return "codemirror";
+          if (id.includes("node_modules/axios")) return "axios";
         },
       },
     },

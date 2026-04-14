@@ -2,7 +2,7 @@
 
 ## Overview
 
-Syrabit.ai is an AI-powered educational platform for AHSEC Class 11/12 and Degree students in Assam, India. It offers comprehensive, localized learning resources across 55 subjects, utilizing AI-driven content generation, syllabus management, and SEO optimization. The platform aims to personalize education, improve content delivery through chapter-level RAG chunks, and make high-quality educational content accessible and engaging via a robust admin panel.
+Syrabit.ai is an AI-powered educational platform designed for AHSEC Class 11/12 and Degree students in Assam, India. It offers comprehensive, localized learning resources across 55 subjects. The platform leverages AI for content generation, syllabus management, and SEO optimization, aiming to personalize education, enhance content delivery through chapter-level RAG chunks, and make high-quality educational content accessible and engaging via a robust admin panel. Its core mission is to provide an affordable, AI-first learning experience for students in the region.
 
 ## User Preferences
 
@@ -10,55 +10,49 @@ I prefer iterative development with clear communication on major changes. I valu
 
 ## System Architecture
 
-The project is structured as a pnpm workspace monorepo, comprising a React + Vite frontend and a FastAPI Python backend.
-
-**Backend Architecture:**
-- **Modular Design:** Utilizes an app factory, shared modules, and route modules for clear separation of concerns.
-- **On-Demand Embeddings:** Chapter embeddings are automatically generated and cleaned up.
-- **Observability:** Tracks LLM provider metrics, vector search similarity, and pipeline runs.
-- **Content Feedback Loop:** Features auto-detection of thin chapters, an auto-heal endpoint with version history, and quality gates for content generation.
-- **Content Pipeline Batching:** Notes, MCQs, and flashcard generation run in parallel using `asyncio.gather` with a pipeline semaphore for concurrent LLM calls.
-- **Content Generation Prompt:** Generates detailed exam-ready study notes (2500-4000+ words) with specific formatting.
-- **Admin Analytics:** Dashboard displays RAG telemetry, chat latency, user counts, and content heatmaps.
-- **AI Integration:** Integrates with Vertex AI / Gemini for text embeddings, translation, vision analysis, content enhancement, quality scoring, and SEO meta generation.
-- **SEO & Content Quality:** Implements prompt variants, title diversification, content-derived meta descriptions, and a quality scoring system.
-- **PYQ HTML Replica:** Processes PYQ PDFs via Gemini Vision OCR to create SEO-optimized, RAG-indexed HTML replicas.
-- **Syllabus Embedder:** Generates chapter and topic-level embeddings (768 dimensions via gemini-embedding-001), stored in Cloudflare Vectorize (`syllabus-index`) via the official `cloudflare` Python SDK (`vectorize_client.py`). Classification queries use Vectorize's native nearest-neighbor search at the edge. `full_reseed()` performs a true destructive clear (deletes known IDs + sweeps stale vectors via zero-vector queries) before re-embedding. Migration script: `migrate_vectors.py` (Phase 1: reads from MongoDB `syllabus_embeddings`, Phase 2: fills gaps from `chapters`). Requires `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` env vars.
-- **Pipeline (Single LLM, no web search/RAG):** Stage 1 topic metadata (subject/chapter classification) is preserved as optional non-blocking enrichment (200ms timeout). Document uploads still use `resolve_rag_context` for document-only grounding. Pipeline is now: single LLM call using training knowledge directly. Web search and RAG synthesizer removed for sub-1-second TTFT.
-- **Single-LLM Pipeline:** Direct LLM call with training knowledge. Concise responses: 50-100 words default, max 300 words. Supported response languages: English and Assamese (`as`) only. Hindi removed. Assamese routes through Sarvam LLM (`sarvam-m` preferred, `sarvam-105b` fallback). English uses SLM pool (Groq/Cerebras). Instant casual fast-path skipped for Assamese to ensure proper Indic responses.
-- **Monetization:** Supports free, starter, and pro plans with credit-based usage, integrating Razorpay and Stripe.
-- **Optional Authentication:** Chat, History, and Profile pages are accessible to anonymous users via a `syrabit_anon_id`. Conversations are persisted in Redis and PostgreSQL.
-- **Security:** Uses ASGI-native `SecurityHeadersMiddleware` and prompt safety guardrails.
-- **Privacy:** Tracks DPDP Act consent per-user.
-- **Performance Optimizations:** Includes bounded content caching (1800s TTL in-memory + Redis), efficient JWT decoding, thread pooling, MongoDB compound indexes (slug+board_id, slug+subject_id), hierarchy caching (slug→board/class/subject resolution cached 30min), AsyncOpenAI client pooling, instant fast-path responses for casual greetings, fully parallelized chat pre-processing (Phase 0: subject context, stage1, followup, history all run concurrently via `asyncio.gather`), library-bundle pre-warming on startup, MongoDB availability check cooldown (60s/30s), and LLM health probe throttled to 5min intervals. SEO queries in library-bundle are deferred (only fetched with `include_seo=1` param).
-- **Chat Latency:** English queries: sub-1s TTFT via hedged requests (top 2 SLM providers race simultaneously, fastest wins). Cached queries: ~4ms. Casual queries: instant (~0s). Assamese: ~1.4-2.1s (Sarvam). TTFT timeout: 0.5s. Phase 2 syllabus timeout: 50ms (non-blocking). System prompt cap: 10K chars. Payload cap: 12K chars. Default model: `meta-llama/llama-4-scout-17b-16e-instruct` (Groq) racing `llama3.1-8b` (Cerebras). Max tokens: free=512, starter=768, pro=1024.
-- **Response Length:** Concise by default (30-60 words). Hard limit 200 words. Prompts enforce: "what is X?" → 2-3 sentences, "explain X" → 3-5 sentences, "define X" → 1-2 sentences. System prompt ~1500 chars (down from 2800+).
-- **GEO (Generative Engine Optimization):** Syllabi include `geo_phrases` for AI answer injection, and SEO prompts generate FAQ blocks and specific citations.
+The project is structured as a pnpm workspace monorepo, with a React + Vite frontend and a FastAPI Python backend.
 
 **Frontend Architecture:**
-- **UI/UX:** Built with React, Vite, React Router, and Tailwind CSS, featuring a mobile-first responsive design and a light-only theme using CSS variables.
+- **UI/UX:** Built with React, Vite, React Router, and Tailwind CSS, featuring a mobile-first responsive design and a light-only theme.
 - **Admin Panel:** A comprehensive interface for content editing, CMS, blog publishing, SEO management, QA review, and system intelligence.
-- **Bot-Aware Pre-Rendering:** `BotRenderMiddleware` serves cached pre-rendered HTML to search engine bots.
-- **Bot Crawlability:** The backend serves `robots.txt`, `sitemap.xml`, and `sitemap-index.xml`.
-- **Performance Optimizations:** Includes emergent badge suppression, PWA icon optimization, lazy-loading CMS sections, React Query for caching, CSS grid for content display, prefetching key pages, SSE metadata consolidation, and memoization. Third-party scripts (AdSense, Emergent) are deferred via `requestIdleCallback`. Build pipeline includes post-build steps for modulepreload hint injection and SW precache manifest generation (`scripts/inject-modulepreload.mjs`, `scripts/generate-precache-manifest.mjs`). Compression handled by Cloudflare Pages at the edge.
-- **PWA:** Fully optimized with a multi-cache service worker (v9) featuring: Navigation Preload (~100ms saving on repeat visits), 3-tier caching (STATIC for hashed assets, RUNTIME for navigation/fonts/images, API_CACHE for read-only content endpoints with 1hr TTL + stale-while-revalidate), JSON Content-Type validation to prevent caching HTML fallbacks, bounded cache sizes (200 runtime, 100 API entries with automatic trimming), offline fallback page, build-generated precache manifest, and background API data precaching (boards/subjects) triggered on SW activation. `warmApiCache()` prefetches key API data using `requestIdleCallback` during idle time.
-- **SEO Chapter Pages:** Chapter pages serve as single SEO landing pages with clean URLs, SERP preview modals, and deduplicated heading IDs. Supports both 4-segment (`/{board}/{class}/{subject}/{chapter}`) and 5-segment (`/{board}/{class}/{stream}/{subject}/{chapter}`) URL patterns for backward compatibility with old Cloudflare Pages builds. Backend has a fallback search (`_chapter_fallback_search`) that resolves chapters by subject slug when the board/class in the URL is stale.
-- **Analytics:** Multi-source analytics merging Cloudflare Analytics API, GA4, server-side tracking, and JS-tracked data, with an admin dashboard picking the highest-confidence metric.
+- **Bot-Aware Pre-Rendering:** Utilizes `BotRenderMiddleware` to serve cached pre-rendered HTML to search engine bots. The backend manages `robots.txt`, `sitemap.xml`, and `sitemap-index.xml` for crawlability.
+- **PWA:** Fully optimized with a multi-cache service worker (v9) for offline access, performance, and API data precaching.
+- **SEO Chapter Pages:** Chapter pages serve as single SEO landing pages with clean URLs, SERP preview modals, and deduplicated heading IDs, supporting both 4-segment and 5-segment URL patterns.
+- **Analytics:** Multi-source analytics merging Cloudflare Analytics API, GA4, server-side tracking, and JS-tracked data.
 - **SEO Coverage:** All pages include `PageMeta` for title, description, OG, Twitter, canonical, and geo targeting, using JSON-LD structured data and a programmatic SEO engine.
-- **Bilingual Content (EN/AS):** `LanguageContext` stores user's content language preference (EN/AS) in localStorage. Library and Chapter pages have an EN/অসমীয়া toggle. All UI labels (headings, buttons, filter chips, error states, empty states, search placeholders, subject card labels like LESSONS/notes/PYQs/Flash, action buttons Save/Browse/Ask AI/Share, TOC header, Important Questions section, CTA prompts) are fully bilingual via `_t` translation maps in LibraryPage and inline ternaries in SubjectCard/ChapterPage using `useContentLang()` hook. Chapters store `content_as` field independently alongside English `content`. When "Generate Notes" runs, Sarvam auto-translates to Assamese. Admin editor has EN/AS tabs for independent editing of both languages. Subject/class/board names remain English in all modes. Chapter API returns `content_as` and `has_assamese` flag; frontend falls back to English when Assamese is unavailable.
+- **Bilingual Content (EN/AS):** Supports English and Assamese content with a user-selectable language preference, independent content storage, and UI toggles.
 - **Content Display:** Library page features subject cards; lesson pages have a blog-style layout with reading progress and sticky TOC.
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.
-- **Chat Interface:** Uses a standardized 0.1 temperature for LLMs and increased RAG chunk size for academic concepts.
-- **Assamese Language Responses:** When Assamese is selected, Sarvam routing is applied: model preference chain (`sarvam-m` → `sarvam-105b`) picks the fastest available model, a dedicated Assamese system prompt replaces the English prompt (অসমীয়া script enforced), think budget injection is skipped to reduce TTFT, and `response_language: as-IN` is passed to Sarvam. Latency is logged with `[INDIC-PERF]` tags. Cache keys are language-aware. Instant casual fast-path is skipped for Assamese. `SARVAM_API_KEY_3` is the priority key.
+
+**Backend Architecture:**
+- **Modular Design:** Employs an app factory, shared modules, and route modules for clear separation of concerns.
+- **On-Demand Embeddings:** Chapter embeddings are automatically generated and managed.
+- **Observability:** Tracks LLM provider metrics, vector search similarity, and pipeline runs.
+- **Content Feedback Loop:** Features auto-detection of thin chapters, an auto-heal endpoint with version history, and quality gates for content generation.
+- **Content Pipeline Batching:** Notes, MCQs, and flashcard generation run in parallel using `asyncio.gather` with a pipeline semaphore.
+- **Content Generation Prompt:** Generates detailed exam-ready study notes (2500-4000+ words) with specific formatting.
+- **Admin Analytics:** Dashboard displays RAG telemetry, chat latency, user counts, and content heatmaps.
+- **AI Integration:** Integrates with Vertex AI / Gemini for various AI tasks including embeddings, translation, vision analysis, content enhancement, quality scoring, and SEO meta generation.
+- **SEO & Content Quality:** Implements prompt variants, title diversification, content-derived meta descriptions, and a quality scoring system, including Generative Engine Optimization (GEO) for AI answer injection and FAQ blocks.
+- **PYQ HTML Replica:** Processes PYQ PDFs via Gemini Vision OCR to create SEO-optimized, RAG-indexed HTML replicas.
+- **Syllabus Embedder:** Generates chapter and topic-level embeddings (768 dimensions via gemini-embedding-001), stored in Cloudflare Vectorize (`syllabus-index`).
+- **Single-LLM Pipeline:** Direct LLM calls using training knowledge for concise responses (50-100 words default, max 300) in English and Assamese. Assamese routes through Sarvam LLM, English uses an SLM pool.
+- **Monetization:** Supports free, starter, and pro plans with credit-based usage.
+- **Optional Authentication:** Chat, History, and Profile pages are accessible to anonymous users, with conversations persisted in Redis and PostgreSQL.
+- **Security:** Uses ASGI-native `SecurityHeadersMiddleware` and prompt safety guardrails.
+- **Privacy:** Tracks DPDP Act consent per-user.
+- **Performance Optimizations:** Includes bounded content caching (in-memory + Redis), efficient JWT decoding, thread pooling, MongoDB compound indexes, hierarchy caching, AsyncOpenAI client pooling, fully parallelized chat pre-processing, and throttled LLM health probes.
+- **Chat Latency:** Achieves sub-1s TTFT for English queries via hedged requests (TTFT timeout: 0.35s, Phase 0 budget: 150ms). Casual queries skip Phase 0 entirely when no context is provided. Redis cache check is async (non-blocking via run_in_executor). Assamese queries around 1.4-2.1s.
+- **Response Length:** Concise by default (30-60 words), hard limit 200 words, with specific prompt guidelines for various query types.
 
 ## External Dependencies
 
-- **Databases:** PostgreSQL (users/auth) and MongoDB (content/RAG).
+- **Databases:** PostgreSQL (users/auth), MongoDB (content/RAG), Cloudflare D1 (edge replica for read-heavy content catalog).
 - **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers, Google OAuth.
-- **Caching:** Redis, in-memory caching.
+- **Caching:** Redis, in-memory caching, Cloudflare Worker edge caching.
 - **LLM Providers:**
     - **Chat:** Groq, Cerebras, OpenRouter, Fireworks (SLM pool).
-    - **Content Generation:** Cerebras (primary), Sarvam (fallback), Gemini 2.5-flash (last resort). Gemini Vision and gemini-embedding-001.
+    - **Content Generation:** Cerebras (primary), Sarvam (fallback), Gemini 2.5-flash (last resort), Gemini Vision, gemini-embedding-001.
 - **Cloudflare AI Gateway:** Routes LLM traffic, provides caching, analytics, and graceful degradation.
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).
 - **Email Service:** Resend API.
@@ -69,7 +63,5 @@ The project is structured as a pnpm workspace monorepo, comprising a React + Vit
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm.
 - **Containerization:** Docker.
-- **Production Deployment:** Hybrid architecture with FastAPI backend on Replit, Cloudflare Worker edge proxy (`api.syrabit.ai`), and frontend on Cloudflare Pages (`syrabit.ai`). SPA routing uses `_routes.json` (not `_redirects`) to avoid Cloudflare's infinite loop detection. `.env.production` bakes `VITE_BACKEND_URL=https://api.syrabit.ai` into production builds. `.node-version` (20) at repo root; `.python-version` removed from root to prevent Python compilation during Pages builds.
-- **Edge Caching Strategy:** Cloudflare Worker caches 20+ public/read-only GET routes (content, notes, MCQs, flashcards, CMS articles, sitemaps) with long-lived TTLs (1 week / 604800s for content, shorter for SEO/user-stats). Content routes are cached even when `Authorization`/`Cookie`/`x-anon-id` headers are present (only user-specific routes like `/api/user/stats` bypass cache with auth). Dynamic routes (`/api/ai/chat/*`, `/api/webhooks/*`, `/api/auth/*`) and all non-GET methods bypass cache and proxy directly to the Replit backend. SSE streaming for AI chat passes through untouched.
-- **Cloudflare Edge Cache Auto-Purge:** When admin edits/deletes content via `_invalidate_content_cache()`, a fire-and-forget async task purges the corresponding Cloudflare edge cache URLs via the Cloudflare Cache Purge API (`CF_API_TOKEN` + `CF_ZONE_ID`). A "Purge All Content Cache" button in Admin Settings clears both backend and Cloudflare edge caches. Purge utility is in `cloudflare_client.py`.
-- **Cloudflare D1 Edge Database:** Read-heavy content catalog data (boards, classes, streams, subjects, chapters, topics, SEO pages) is replicated to a Cloudflare D1 (SQLite) database at the edge. The edge proxy queries D1 first for content and SEO routes; if D1 has data, it responds directly without hitting the backend. D1-backed routes include all content catalog endpoints, SEO page routes (`/api/seo/page/{board}/{class}/{subject}/{topic}[/{page_type}]`, `/api/seo/page-bundle/*`, `/api/seo/page-types/*`), sitemap XML endpoints (`sitemap-index.xml`, `sitemap-pages.xml`, `sitemap-subjects.xml`, `sitemap-chapters.xml`, `sitemap-notes.xml`, `sitemap-mcqs.xml`, `sitemap-pyqs.xml`, `sitemap-examples.xml`, `sitemap-definitions.xml`, `sitemap.xml`), and sitemap-entries JSON. Fallback: if D1 is not synced, returns null/errors, or a table is completely empty (via `isTablePopulated()` guard), the worker falls through to the existing CF cache → backend proxy chain. SEO pages store hierarchical slug fields (`board_slug`, `class_slug`, `subject_slug`, `chapter_slug`, `topic_slug`) for direct edge lookup. Sync mechanism: a scheduled cron worker (every 6 hours) pulls `/api/admin/d1-export` and upserts into D1, plus admin content mutations fire `_schedule_d1_sync_fire()` for real-time sync. Manual sync via `POST /api/admin/d1-sync`. D1 status: `GET /api/edge/d1-status`. Observability: `X-Source` header (`d1`, `cf-cache`, `backend`, `edge`). Schema: `workers/edge-proxy/migrations/`. D1 queries: `workers/edge-proxy/src/d1-queries.ts`. Sync logic: `workers/edge-proxy/src/d1-sync.ts` (edge) and `artifacts/syrabit-backend/d1_sync.py` (backend). Environment variables: `D1_SYNC_SECRET`, `EDGE_WORKER_URL`.
+- **Production Deployment:** Hybrid architecture with FastAPI backend on Replit, Cloudflare Worker edge proxy (`api.syrabit.ai`), and frontend on Cloudflare Pages (`syrabit.ai`).
+- **Cloudflare Edge Cache Auto-Purge:** Utilizes Cloudflare Cache Purge API for invalidating cached content.

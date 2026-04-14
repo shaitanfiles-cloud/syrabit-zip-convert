@@ -903,19 +903,27 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _skip_semester = _is_casual or is_anon
 
-    _PRE_LLM_BUDGET = 0.2
+    _PRE_LLM_BUDGET = 0.15
 
-    _tasks_pre = [
-        asyncio.create_task(_resolve_subject_context(msg.subject_id)),
-        asyncio.create_task(_resolve_semester_class_id(msg.message, msg.board_id) if (msg.board_id and not _skip_semester) else asyncio.sleep(0)),
-        asyncio.create_task(_fetch_doc()),
-        asyncio.create_task(_fetch_followup_info()),
-        asyncio.create_task(_prefetch_history()),
-        asyncio.create_task(_early_web_search()),
-    ]
-    _defaults_pre = [None, None, None, None, None, []]
+    if _is_casual and not msg.subject_id and not msg.document_id and not msg.conversation_id and not _is_card_context:
+        _tasks_pre = []
+        _defaults_pre = []
+        _pre_results = []
+        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web = None, None, None, None, None, []
+        _done_pre, _pending_pre = set(), set()
+        logger.info("[STREAM] Casual fast-path: skipping Phase 0 entirely")
+    else:
+        _tasks_pre = [
+            asyncio.create_task(_resolve_subject_context(msg.subject_id)),
+            asyncio.create_task(_resolve_semester_class_id(msg.message, msg.board_id) if (msg.board_id and not _skip_semester) else asyncio.sleep(0)),
+            asyncio.create_task(_fetch_doc()),
+            asyncio.create_task(_fetch_followup_info()),
+            asyncio.create_task(_prefetch_history()),
+            asyncio.create_task(_early_web_search()),
+        ]
+        _defaults_pre = [None, None, None, None, None, []]
 
-    _done_pre, _pending_pre = await asyncio.wait(_tasks_pre, timeout=_PRE_LLM_BUDGET, return_when=asyncio.ALL_COMPLETED)
+        _done_pre, _pending_pre = await asyncio.wait(_tasks_pre, timeout=_PRE_LLM_BUDGET, return_when=asyncio.ALL_COMPLETED)
     if _pending_pre:
         logger.info(f"[STREAM] Pre-LLM budget expired — {len(_pending_pre)} tasks still pending, using partial results")
         for _pt in _pending_pre:
@@ -1269,12 +1277,13 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _cache_msg_key = f"{msg.message}::lang={_resp_lang}" if _want_translate else msg.message
     _cache_key_val = _cache_key(_cache_msg_key, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
     _cache_ttl_val = REDIS_CASUAL_CACHE_TTL if _cache_is_casual else REDIS_AI_CACHE_TTL
-    _cached_answer = _redis_get_ai_cache(_cache_key_val)
+    _cached_answer = _ai_response_cache.get(_cache_key_val)
     if _cached_answer:
-        logger.info(f"Redis cache HIT (pre-SSE): {_cache_key_val}")
-    elif _cache_key_val in _ai_response_cache:
-        _cached_answer = _ai_response_cache[_cache_key_val]
         logger.info(f"Memory cache HIT (pre-SSE): {_cache_key_val}")
+    else:
+        _cached_answer = await _redis_get_ai_cache_async(_cache_key_val)
+        if _cached_answer:
+            logger.info(f"Redis cache HIT (pre-SSE): {_cache_key_val}")
 
     async def event_stream():
         nonlocal full_response

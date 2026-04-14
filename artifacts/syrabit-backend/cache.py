@@ -18,7 +18,7 @@ __all__ = [
     "_get_content_cache", "_invalidate_content_cache", "_invalidate_conv_cache",
     "_invalidate_user_cache", "_rag_cache", "_rag_cache_key",
     "_redis_cache_conversation", "_redis_cache_search", "_redis_cache_session",
-    "_redis_del", "_redis_get", "_redis_get_ai_cache", "_redis_get_conversation",
+    "_redis_del", "_redis_get", "_redis_get_ai_cache", "_redis_get_ai_cache_async", "_redis_get_conversation",
     "_redis_get_search", "_redis_get_session", "_redis_hit_count",
     "_redis_invalidate_conversation", "_redis_invalidate_session", "_redis_miss_count",
     "_redis_set", "_set_content_cache", "_syllabus_cache", "_syllabus_cache_key",
@@ -112,6 +112,14 @@ def _redis_get(prefix: str, key: str) -> Optional[str]:
         except Exception as e:
             logger.debug(f"Redis GET {prefix}:{key} failed: {e}")
     return None
+
+async def _redis_get_async(prefix: str, key: str) -> Optional[str]:
+    import asyncio
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _redis_get, prefix, key)
+
+async def _redis_get_ai_cache_async(key: str) -> Optional[str]:
+    return await _redis_get_async("ai_cache", key)
 
 def _redis_set(prefix: str, key: str, value: str, ttl: int):
     if redis_client:
