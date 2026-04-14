@@ -45,3 +45,4 @@ pywebpush==2.3.0
 py-vapid==1.9.4
 PyPDF2==3.0.1
 stripe>=9.0.0
+cloudflare>=4.3.0
