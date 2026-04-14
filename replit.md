@@ -63,5 +63,5 @@ The project is structured as a pnpm workspace monorepo, with a React + Vite fron
 - **API Codegen:** Orval.
 - **Build Tools:** esbuild, pnpm.
 - **Containerization:** Docker.
-- **Production Deployment:** Hybrid architecture with FastAPI backend on Replit, Cloudflare Worker edge proxy (`api.syrabit.ai`), and frontend on Cloudflare Pages (`syrabit.ai`).
+- **Production Deployment:** Hybrid architecture — FastAPI backend deployable to Railway (Dockerfile + railway.toml ready) or Replit, Cloudflare Worker edge proxy (`api.syrabit.ai`), frontend on Cloudflare Pages (`syrabit.ai`). Railway deployment guide at `artifacts/syrabit-backend/RAILWAY-DEPLOY.md`.
 - **Cloudflare Edge Cache Auto-Purge:** Utilizes Cloudflare Cache Purge API for invalidating cached content.

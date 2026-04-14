@@ -7,10 +7,15 @@ __pycache__
 *.pyo
 .pytest_cache
 .mypy_cache
+.ruff_cache
 node_modules
 docker-compose.yml
+apprunner.yaml
+railway.toml
 .vscode
 .idea
 tests
 .gitignore
-apprunner.yaml
+*.md
+*.log
+.DS_Store
