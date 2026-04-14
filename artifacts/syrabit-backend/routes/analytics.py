@@ -99,9 +99,10 @@ def _best_metric(*values_with_sources):
 async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user)):
     users = await supa_list_users()
 
+    signup_range = min(days, 90)
     daily_signups = []
-    for i in range(7):
-        day = (datetime.now(timezone.utc) - timedelta(days=6-i)).strftime("%Y-%m-%d")
+    for i in range(signup_range):
+        day = (datetime.now(timezone.utc) - timedelta(days=signup_range-1-i)).strftime("%Y-%m-%d")
         count = sum(1 for u in users if u.get("created_at", "")[:10] == day)
         daily_signups.append({"date": day, "count": count})
 

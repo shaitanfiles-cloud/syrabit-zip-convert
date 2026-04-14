@@ -1,6 +1,6 @@
 import { Globe, TrendingUp, Eye, Users, DollarSign, Zap, Target,
   Activity, Clock, Smartphone, Monitor, Tablet, AlertTriangle, Server, Bot,
-  Cloud, BarChart3, Download, Loader2, CheckCircle } from 'lucide-react';
+  Cloud, BarChart3, Download, Loader2, CheckCircle, Calendar } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Legend, PieChart, Pie, Cell,
@@ -55,8 +55,15 @@ function HeroStat({ icon: Icon, color, value, label, source, glow }) {
   );
 }
 
+const TIME_RANGES = [
+  { value: 1,  label: 'Today' },
+  { value: 7,  label: 'Last 7 days' },
+  { value: 30, label: 'Last 30 days' },
+  { value: 90, label: 'Last 90 days' },
+];
+
 export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors, mrr, predicted, growth, arpu, ltv,
-  syncing, onSyncHistorical, cfConnected, ga4Connected }) {
+  syncing, onSyncHistorical, cfConnected, ga4Connected, overviewDays, setOverviewDays }) {
   const hasDailySignup = data?.daily_signups?.some(d => d.count > 0);
   const hasPlanUsage   = data?.plan_usage && Object.keys(data.plan_usage).length > 0;
   const best = vs.best_estimate || {};
@@ -64,9 +71,29 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
   const hasMergedDaily = mergedDaily.some(d => d.visitors > 0 || d.page_views > 0);
   const hasDailyVis    = vs.daily_visitors?.some(d => d.visitors > 0 || d.page_views > 0);
   const hasSsDailyVis  = vs.server_side?.daily_visitors?.some(d => d.visitors > 0 || d.page_views > 0);
+  const rangeLabel = TIME_RANGES.find(t => t.value === overviewDays)?.label || `Last ${overviewDays} days`;
 
   return (
     <>
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-center gap-1.5 text-gray-400 text-sm">
+          <Calendar size={14} />
+          <span>Time range:</span>
+        </div>
+        {TIME_RANGES.map(t => (
+          <button key={t.value} onClick={() => setOverviewDays(t.value)}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all ${
+              overviewDays === t.value ? 'text-white' : 'text-gray-400 hover:text-gray-500'
+            }`}
+            style={overviewDays === t.value
+              ? { background: 'linear-gradient(135deg, #7c3aed, #6d28d9)', boxShadow: '0 2px 12px rgba(124,58,237,0.3)' }
+              : { background: '#f9fafb', border: '1px solid #e5e7eb' }
+            }>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {widgetErrors.overview && (
         <div className="flex items-center gap-3 p-3.5 rounded-xl" style={{
           background: 'rgba(245,158,11,0.06)',
@@ -110,8 +137,8 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
       </GlassCard>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <HeroStat icon={TrendingUp} color="#7c3aed" value={(best.total_visitors ?? 0).toLocaleString()} label="Best Estimate (7d)" source={best.total_visitors_source} />
-        <HeroStat icon={Users} color="#06b6d4" value={(best.visitors_today ?? 0).toLocaleString()} label="Best Estimate (Today)" source={best.visitors_today_source} />
+        <HeroStat icon={TrendingUp} color="#7c3aed" value={(best.total_visitors ?? 0).toLocaleString()} label={`Visitors (${rangeLabel})`} source={best.total_visitors_source} />
+        <HeroStat icon={Users} color="#06b6d4" value={(best.visitors_today ?? 0).toLocaleString()} label="Visitors Today" source={best.visitors_today_source} />
         <HeroStat icon={Eye} color="#ec4899" value={(best.page_views_today ?? 0).toLocaleString()} label="Page Views Today" source={best.page_views_today_source} />
         <Stat icon={Users} label="Active Users" value={data?.active_users} color="#06b6d4" />
       </div>
@@ -284,9 +311,10 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         </div>
       )}
 
-      <Card title="Daily Visitors — Last 7 Days (All Sources)"
+      <Card title={`Daily Visitors — ${rangeLabel} (All Sources)`}
         empty={!hasMergedDaily && !hasDailyVis && !hasSsDailyVis} emptyMsg="No visitor data yet">
         {(() => {
+          const xInterval = (len) => Math.max(0, Math.floor(len / 8) - 1);
           if (hasMergedDaily) {
             const chartData = mergedDaily.map(d => {
               const row = { date: d.date, best_visitors: d.visitors };
@@ -305,7 +333,8 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
               <ResponsiveContainer width="100%" height={280}>
                 <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt}
+                    interval={xInterval(chartData.length)} />
                   <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
                   <Tooltip {...TT} />
                   <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
@@ -332,7 +361,8 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
             <ResponsiveContainer width="100%" height={250}>
               <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+                <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt}
+                  interval={Math.max(0, Math.floor(chartData.length / 8) - 1)} />
                 <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
                 <Tooltip {...TT} />
                 <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
@@ -344,9 +374,10 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         })()}
       </Card>
 
-      <Card title="Daily Page Views — Last 7 Days (All Sources)"
+      <Card title={`Daily Page Views — ${rangeLabel} (All Sources)`}
         empty={!hasMergedDaily && !hasDailyVis && !hasSsDailyVis} emptyMsg="No page view data yet">
         {(() => {
+          const xInterval = (len) => Math.max(0, Math.floor(len / 8) - 1);
           if (hasMergedDaily) {
             const chartData = mergedDaily.map(d => {
               const row = { date: d.date, best_pv: d.page_views };
@@ -365,7 +396,8 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
               <ResponsiveContainer width="100%" height={220}>
                 <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+                  <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt}
+                    interval={xInterval(chartData.length)} />
                   <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
                   <Tooltip {...TT} />
                   <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
@@ -390,7 +422,8 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
             <ResponsiveContainer width="100%" height={220}>
               <AreaChart data={chartData} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+                <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt}
+                  interval={xInterval(chartData.length)} />
                 <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
                 <Tooltip {...TT} />
                 <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
@@ -402,11 +435,12 @@ export default function OverviewTab({ data, vs, widgetErrors, load, liveVisitors
         })()}
       </Card>
 
-      <Card title="Daily Signups — Last 7 Days" empty={!hasDailySignup} emptyMsg="No signups in the last 7 days">
+      <Card title={`Daily Signups — ${rangeLabel}`} empty={!hasDailySignup} emptyMsg="No signups in this range">
         <ResponsiveContainer width="100%" height={180}>
           <BarChart data={data.daily_signups} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-            <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt} />
+            <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} tickFormatter={fmt}
+              interval={Math.max(0, Math.floor((data.daily_signups?.length || 0) / 8) - 1)} />
             <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} allowDecimals={false} />
             <Tooltip {...TT} />
             <Bar dataKey="count" name="Signups" fill="#7c3aed" radius={[4, 4, 0, 0]} />

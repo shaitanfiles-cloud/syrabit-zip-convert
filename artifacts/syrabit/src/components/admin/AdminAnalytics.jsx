@@ -35,6 +35,7 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
   const [dailyData, setDailyData] = useState(null);
   const [dailyLoading, setDailyLoading] = useState(false);
   const [dailyDays, setDailyDays] = useState(30);
+  const [overviewDays, setOverviewDays] = useState(7);
   const [widgetErrors, setWidgetErrors] = useState({});
   const [liveVisitors, setLiveVisitors] = useState(null);
   const [syncing, setSyncing] = useState(false);
@@ -43,7 +44,7 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true); else setRefreshing(true);
     const [r1, r2, r3, r4, r5, r6] = await Promise.allSettled([
-      adminGetAnalytics(adminToken),
+      adminGetAnalytics(adminToken, overviewDays),
       axios.get(`${API_BASE}/admin/analytics/funnel`, h),
       axios.get(`${API_BASE}/admin/analytics/content-heatmap`, h),
       adminGetRevenue(adminToken, 30),
@@ -61,7 +62,7 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
     setLastRefresh(new Date());
     setLoading(false);
     setRefreshing(false);
-  }, [adminToken]);
+  }, [adminToken, overviewDays]);
 
   const handleGA4Connect = async () => {
     const redirectUri = `${window.location.origin}/admin?ga4callback=1`;
@@ -221,7 +222,8 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
         <OverviewTab data={data} vs={vs} widgetErrors={widgetErrors} load={load}
           liveVisitors={liveVisitors} mrr={mrr} predicted={predicted} growth={growth} arpu={arpu} ltv={ltv}
           syncing={syncing} onSyncHistorical={handleSyncHistorical}
-          cfConnected={data?.cf_connected} ga4Connected={data?.ga4_connected} />
+          cfConnected={data?.cf_connected} ga4Connected={data?.ga4_connected}
+          overviewDays={overviewDays} setOverviewDays={setOverviewDays} />
       )}
 
       {tab === 'daily' && (
