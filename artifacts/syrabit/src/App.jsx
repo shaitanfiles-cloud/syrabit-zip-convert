@@ -230,6 +230,7 @@ function App() {
                   <Route path="/pyq/:slug" element={<PYQReplicaPage />} />
 
                   {/* ── SEO routes: /{board}/{class}/{subject} and /{board}/{class}/{subject}/{chapter} ── */}
+                  <Route path="/:board/:classSlug/:streamSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
                   <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug" element={<ChapterPage />} />
                   <Route path="/:board/:classSlug/:subjectSlug/:chapterSlug/:pageType" element={<LegacyTopicRedirect />} />
                   <Route path="/:board/:classSlug/:subjectSlug" element={<SubjectLandingPage />} />

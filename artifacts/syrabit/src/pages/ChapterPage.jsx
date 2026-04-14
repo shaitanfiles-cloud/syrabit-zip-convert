@@ -207,7 +207,13 @@ function ImportantQuestions({ chapterTitle, pyqData }) {
 }
 
 export default function ChapterPage() {
-  const { board, classSlug, subjectSlug, chapterSlug } = useParams();
+  const params = useParams();
+  const board = params.board;
+  const classSlug = params.classSlug;
+  const hasStreamInUrl = !!(params.streamSlug && params.chapterSlug);
+  const subjectSlug = hasStreamInUrl ? params.subjectSlug : params.subjectSlug;
+  const chapterSlug = hasStreamInUrl ? params.chapterSlug : params.chapterSlug;
+  const streamSlug = hasStreamInUrl ? params.streamSlug : null;
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -223,13 +229,16 @@ export default function ChapterPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    const apiPath = hasStreamInUrl
+      ? `/content/chapter-by-slug/${board}/${classSlug}/${streamSlug}/${subjectSlug}/${chapterSlug}`
+      : `/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`;
     apiClient()
-      .get(`/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`)
+      .get(apiPath)
       .then(r => { if (!cancelled) setData(r.data); })
       .catch(e => { if (!cancelled) setError(e.response?.status === 404 ? 'Chapter not found' : 'Failed to load chapter'); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [board, classSlug, subjectSlug, chapterSlug]);
+  }, [board, classSlug, streamSlug, subjectSlug, chapterSlug, hasStreamInUrl]);
 
   useEffect(() => {
     if (!data) return;
@@ -592,8 +601,11 @@ export default function ChapterPage() {
       Analytics.chapterRetry(chapterSlug);
       setError(null);
       setLoading(true);
+      const retryPath = hasStreamInUrl
+        ? `/content/chapter-by-slug/${board}/${classSlug}/${streamSlug}/${subjectSlug}/${chapterSlug}`
+        : `/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`;
       apiClient()
-        .get(`/content/chapter-by-slug/${board}/${classSlug}/${subjectSlug}/${chapterSlug}`)
+        .get(retryPath)
         .then(r => setData(r.data))
         .catch(e => setError(e.response?.status === 404 ? 'Chapter not found' : 'Failed to load chapter'))
         .finally(() => setLoading(false));

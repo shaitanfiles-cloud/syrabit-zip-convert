@@ -613,6 +613,41 @@ async def _resolve_slug_hierarchy(board_slug, class_slug, subject_slug):
     _slug_hierarchy_cache[hk] = result
     return result
 
+@router.get("/content/chapter-by-slug/{board_slug}/{class_slug}/{stream_slug}/{subject_slug}/{chapter_slug}")
+async def get_chapter_by_slug_with_stream(board_slug: str, class_slug: str, stream_slug: str, subject_slug: str, chapter_slug: str, response: Response = None):
+    try:
+        return await get_chapter_by_slug(board_slug, class_slug, subject_slug, chapter_slug, response)
+    except HTTPException:
+        return await _chapter_fallback_search(subject_slug, chapter_slug, response)
+
+@router.get("/content/chapter/{board_slug}/{class_slug}/{stream_slug}/{subject_slug}/{chapter_slug}")
+async def get_chapter_legacy_with_stream(board_slug: str, class_slug: str, stream_slug: str, subject_slug: str, chapter_slug: str, response: Response = None):
+    try:
+        return await get_chapter_by_slug(board_slug, class_slug, subject_slug, chapter_slug, response)
+    except HTTPException:
+        return await _chapter_fallback_search(subject_slug, chapter_slug, response)
+
+@router.get("/content/chapter/{board_slug}/{class_slug}/{subject_slug}/{chapter_slug}")
+async def get_chapter_legacy(board_slug: str, class_slug: str, subject_slug: str, chapter_slug: str, response: Response = None):
+    return await get_chapter_by_slug(board_slug, class_slug, subject_slug, chapter_slug, response)
+
+async def _chapter_fallback_search(subject_slug: str, chapter_slug: str, response: Response = None):
+    if not await is_mongo_available():
+        raise HTTPException(503, "Content database unavailable")
+    subj = await db.subjects.find_one({"slug": subject_slug, "status": "published"}, {"_id": 0})
+    if not subj:
+        subj = await db.subjects.find_one(
+            {"slug": re.compile(f"^{re.escape(subject_slug)}$", re.IGNORECASE), "status": "published"}, {"_id": 0}
+        )
+    if not subj:
+        raise HTTPException(404, "Subject not found")
+    stream = await db.streams.find_one({"id": subj.get("stream_id")}, {"_id": 0, "id": 1, "name": 1, "class_id": 1})
+    cls = await db.classes.find_one({"id": stream["class_id"]}, {"_id": 0}) if stream else None
+    board = await db.boards.find_one({"id": cls["board_id"]}, {"_id": 0}) if cls else None
+    if board and cls:
+        return await get_chapter_by_slug(board["slug"], cls["slug"], subject_slug, chapter_slug, response)
+    raise HTTPException(404, "Chapter not found")
+
 @router.get("/content/chapter-by-slug/{board_slug}/{class_slug}/{subject_slug}/{chapter_slug}")
 async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: str, chapter_slug: str, response: Response = None):
     ck = f"ch-slug:{board_slug}:{class_slug}:{subject_slug}:{chapter_slug}"
