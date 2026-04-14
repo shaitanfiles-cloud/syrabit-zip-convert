@@ -1344,6 +1344,21 @@ async def readiness():
 
 @router.get("/health", response_model=HealthOut)
 async def health():
+    try:
+        return await _health_inner()
+    except Exception as exc:
+        logging.getLogger(__name__).error(f"Health check failed: {exc}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "version": "2.0.0",
+                "service": "Syrabit.ai API",
+                "error": str(exc),
+            },
+        )
+
+async def _health_inner():
     _ensure_llm_health_probe()
     kv_ok = await is_mongo_available()
     kv_latency = 0
@@ -1377,12 +1392,15 @@ async def health():
         except Exception:
             pass
 
-    # Razorpay — check if keys are configured (no live HTTP call; avoids cost)
-    rp_cfg = await db.api_config.find_one({}, {"payment": 1}) or {}
-    rp_payment = rp_cfg.get("payment", {})
-    rp_key_id = (rp_payment.get("razorpay_key_id") or os.environ.get("RAZORPAY_KEY_ID", "")).strip()
-    rp_key_secret = (rp_payment.get("razorpay_key_secret") or os.environ.get("RAZORPAY_KEY_SECRET", "")).strip()
-    rp_status = "configured" if (rp_key_id and rp_key_secret) else "not_configured"
+    rp_status = "not_configured"
+    try:
+        rp_cfg = await db.api_config.find_one({}, {"payment": 1}) or {}
+        rp_payment = rp_cfg.get("payment", {})
+        rp_key_id = (rp_payment.get("razorpay_key_id") or os.environ.get("RAZORPAY_KEY_ID", "")).strip()
+        rp_key_secret = (rp_payment.get("razorpay_key_secret") or os.environ.get("RAZORPAY_KEY_SECRET", "")).strip()
+        rp_status = "configured" if (rp_key_id and rp_key_secret) else "not_configured"
+    except Exception:
+        pass
 
     llm_status = "not_configured"
     llm_latency = 0

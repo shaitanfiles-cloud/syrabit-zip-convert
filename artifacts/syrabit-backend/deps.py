@@ -242,10 +242,11 @@ async def _init_pg_pool():
                 await conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider TEXT")
             except Exception:
                 pass
-        logging.getLogger(__name__).info("Replit PostgreSQL pool ready — tables created/verified")
+        _pg_host = "supabase-pooler" if "pooler.supabase" in _PG_DSN else "replit-internal"
+        logging.getLogger(__name__).info(f"PostgreSQL pool ready ({_pg_host}) — tables created/verified")
     except Exception as _pg_err:
         pg_pool = None
-        logging.getLogger(__name__).warning(f"Replit PostgreSQL unavailable: {_pg_err}")
+        logging.getLogger(__name__).warning(f"PostgreSQL unavailable: {_pg_err}")
 
 # ── Sarvam AI — two persistent pooled HTTP/2 clients ─────────────────────────
 # Client A: translation / TTS / transliterate (short read timeout, 30s)
