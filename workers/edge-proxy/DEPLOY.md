@@ -22,11 +22,13 @@ Make sure your code is pushed to a GitHub repository.
    - **Framework preset**: None
    - **Build command**: `cd artifacts/syrabit && npm install && npm run build`
    - **Build output directory**: `artifacts/syrabit/dist`
+   - **Note**: SPA routing is handled by `_worker.js` (Advanced Mode) + `_routes.json` in the build output. Do NOT add a `_redirects` file — it triggers "Infinite loop detected" warnings.
 5. Add environment variables:
-   - `VITE_BACKEND_URL` = `https://api.syrabit.ai` (after Worker is deployed)
+   - `VITE_BACKEND_URL` = `https://api.syrabit.ai` (also baked in via `.env.production`)
    - `VITE_WORKER_API_URL` = `https://api.syrabit.ai`
    - `VITE_GA4_ID` = your GA4 measurement ID
    - `NODE_VERSION` = `20`
+   - `SKIP_PYTHON_INSTALL` = `true` (optional — `.python-version` is removed from repo root)
 6. Click **Save and Deploy**
 
 ### Step 3: Add custom domain
