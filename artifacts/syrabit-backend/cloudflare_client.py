@@ -232,8 +232,8 @@ async def get_top_pages_cf(days: int = 30, limit: int = 20) -> Optional[list]:
 
     zone_id = _cfg()["zone_id"]
     now = datetime.now(timezone.utc)
-    start_dt = (now - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
-    end_dt = now.strftime("%Y-%m-%dT23:59:59Z")
+    start_dt = (now - timedelta(hours=23, minutes=59)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_dt = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
     query = """
     query TopPaths($zoneTag: String!, $since: String!, $until: String!, $limit: Int!) {
