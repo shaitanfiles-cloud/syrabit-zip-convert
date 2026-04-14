@@ -108,7 +108,7 @@ def _validate_env():
 
 _validate_env()
 
-from config import ROOT_DIR, CORS_ORIGINS, _CORS_ALLOW_CREDENTIALS
+from config import ROOT_DIR, CORS_ORIGINS, CORS_ORIGIN_REGEX, _CORS_ALLOW_CREDENTIALS
 import deps
 from deps import (
     db, supa, sarvam_client, sarvam_translate_client, sarvam_llm_client,
@@ -757,6 +757,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_credentials=_CORS_ALLOW_CREDENTIALS,
     allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "x-anon-id"],
     expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After", "X-Request-Id"],

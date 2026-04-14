@@ -253,6 +253,14 @@ for _dpo in _default_prod_origins:
     if _dpo not in CORS_ORIGINS:
         CORS_ORIGINS.append(_dpo)
 
+_apprunner_url = os.environ.get('APPRUNNER_SERVICE_URL', '').strip().rstrip('/')
+if _apprunner_url:
+    _ar_origin = _apprunner_url if _apprunner_url.startswith('https://') else f"https://{_apprunner_url}"
+    if _ar_origin not in CORS_ORIGINS:
+        CORS_ORIGINS.append(_ar_origin)
+
+CORS_ORIGIN_REGEX = r"^https://[a-z0-9]+\.[a-z0-9-]+\.awsapprunner\.com$"
+
 # ── Admin accounts ────────────────────────────────────────────────────────────
 # Admin accounts loaded from environment (no credentials in source code)
 def _load_admin_accounts():

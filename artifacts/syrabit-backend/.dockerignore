@@ -9,8 +9,8 @@ __pycache__
 .mypy_cache
 node_modules
 docker-compose.yml
-*.md
 .vscode
 .idea
 tests
 .gitignore
+apprunner.yaml

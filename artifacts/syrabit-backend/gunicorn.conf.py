@@ -20,4 +20,4 @@ preload_app     = True
 max_requests         = 5000
 max_requests_jitter  = 500
 
-worker_tmp_dir  = "/dev/shm"
+worker_tmp_dir  = "/dev/shm" if os.path.isdir("/dev/shm") else None

@@ -1,174 +1,280 @@
-# Deploying Syrabit Backend on Hostinger VPS
+# Deploying Syrabit Backend on AWS App Runner
+
+## Architecture
+
+```
+Users ──→ Cloudflare Pages (syrabit.ai) ──→ Static frontend (React/Vite)
+               │
+               │ API calls
+               ▼
+         AWS App Runner (api.syrabit.ai)
+          ┌────┴────────────────────────┐
+          │  Gunicorn + Uvicorn Workers │
+          │  FastAPI application        │
+          └────┬───────┬───────┬────────┘
+               │       │       │
+               ▼       ▼       ▼
+        MongoDB    Supabase   Upstash
+        Atlas      Postgres   Redis
+```
+
+- **Frontend**: Cloudflare Pages (`syrabit.ai`)
+- **Backend**: AWS App Runner (`api.syrabit.ai`)
+- **Database**: MongoDB Atlas (primary), Supabase PostgreSQL (supplementary)
+- **Cache**: Upstash Redis
+
+---
 
 ## Prerequisites
 
-- Hostinger VPS (India DC, KVM plan)
-- Domain `api.syrabit.ai` managed in Cloudflare
-- MongoDB Atlas cluster (managed, not on VPS)
-- Upstash Redis (managed, not on VPS)
+- AWS account with billing enabled
+- GitHub repository containing the backend code
+- MongoDB Atlas cluster provisioned
+- Supabase project provisioned
+- Upstash Redis instance provisioned
+- Cloudflare account managing `syrabit.ai` DNS
+- API keys for payment providers (Razorpay/Stripe) and LLM providers
 
 ---
 
-## 1. VPS Initial Setup
+## Step 1: Install the AWS Connector for GitHub
 
-SSH into the VPS and run:
+1. Open the [AWS App Runner console](https://console.aws.amazon.com/apprunner).
+2. Click **Create service**.
+3. Under **Source**, select **Source code repository**.
+4. Click **Add new** next to the GitHub connection.
+5. Follow the prompts to install the **AWS Connector for GitHub** app on your GitHub account/org.
+6. Grant access to the repository containing the Syrabit backend.
+7. Once connected, the repository will appear in the dropdown.
+
+---
+
+## Step 2: Create the App Runner Service
+
+App Runner supports two deployment modes:
+
+| Mode | How it works | Best for |
+|------|-------------|----------|
+| **Source-based** | App Runner reads `apprunner.yaml`, installs deps, runs the app | Simple setup, no Docker knowledge needed |
+| **Image-based** | You push a Docker image to ECR; App Runner pulls and runs it | Full control over the build environment |
+
+**Recommended: Source-based deployment** (uses the `apprunner.yaml` in the repo).
+
+### Source-Based Setup
+
+1. In the App Runner console, click **Create service**.
+2. **Source**: Select **Source code repository**.
+3. **Connect to GitHub**: Choose your GitHub connection and select the repository.
+4. **Branch**: `main` (or your production branch).
+5. **Deployment trigger**: **Automatic** (deploys on every push to the branch).
+6. **Build settings**: Select **Use a configuration file** — App Runner will read `apprunner.yaml` from the repository root. If the backend is in a subdirectory, set the **Source directory** to `artifacts/syrabit-backend`.
+7. **Service settings**:
+   - **Service name**: `syrabit-backend`
+   - **Virtual CPU & Memory**: Start with **1 vCPU / 2 GB** (scale up if needed).
+   - **Port**: `8000`
+8. **Health check** (must be configured in the console — not supported in `apprunner.yaml`):
+   - **Protocol**: HTTP
+   - **Path**: `/api/health`
+   - **Interval**: 10 seconds
+   - **Timeout**: 5 seconds
+   - **Healthy threshold**: 1
+   - **Unhealthy threshold**: 3
+9. **Auto scaling**:
+   - **Min instances**: 1 (to avoid cold starts)
+   - **Max instances**: 4 (adjust based on traffic)
+   - **Max concurrency**: 80
+10. Click **Create & deploy**.
+
+### Image-Based Setup (Alternative)
+
+If you prefer Docker-based deployment:
+
+1. Build and push the Docker image to Amazon ECR:
+   ```bash
+   aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.ap-south-1.amazonaws.com
+   docker build -t syrabit-backend .
+   docker tag syrabit-backend:latest <account-id>.dkr.ecr.ap-south-1.amazonaws.com/syrabit-backend:latest
+   docker push <account-id>.dkr.ecr.ap-south-1.amazonaws.com/syrabit-backend:latest
+   ```
+2. In the App Runner console, select **Container registry** → **Amazon ECR**.
+3. Select the image and configure the same health check and scaling settings above.
+
+---
+
+## Step 3: Configure Environment Variables
+
+In the App Runner console, go to your service → **Configuration** → **Environment variables**.
+
+Set every variable listed below. Values marked **required** must be set for the service to start. All secrets should be entered directly in the App Runner console (they are encrypted at rest).
+
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `MONGO_URL` | MongoDB Atlas connection string |
+| `DB_NAME` | MongoDB database name (e.g. `syrabit_prod`) |
+| `JWT_SECRET` | Long random secret for user JWTs |
+| `ADMIN_JWT_SECRET` | Separate random secret for admin JWTs |
+| `LLM_PROVIDER` | LLM provider: `sarvam`, `openai`, `groq`, `gemini`, `fireworks` |
+| `LLM_MODEL` | Model identifier (e.g. `sarvam-m`) |
+| `SARVAM_API_KEY` | API key for chosen LLM provider |
+| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST endpoint |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token |
+| `RESEND_API_KEY` | Resend API key for transactional email |
+| `SUPABASE_URL` | Supabase project URL |
+| `SUPABASE_SERVICE_KEY` | Supabase service role key |
+| `SUPABASE_ANON_KEY` | Supabase anonymous key |
+| `DATABASE_URL` | Supabase/Postgres connection string |
+| `RAZORPAY_KEY_ID` | Razorpay key ID |
+| `RAZORPAY_KEY_SECRET` | Razorpay key secret |
+| `ADMIN_EMAILS` | Comma-separated admin email addresses |
+| `ADMIN_PASSWORDS` | Comma-separated admin passwords (same order) |
+| `ADMIN_NAMES` | Comma-separated admin display names (same order) |
+| `FRONTEND_URL` | `https://syrabit.ai` |
+| `CORS_ORIGINS` | `https://syrabit.ai,https://www.syrabit.ai` |
+| `COOKIE_DOMAIN` | `.syrabit.ai` |
+| `SECURE_COOKIES` | `true` |
+
+### Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8000` | Server port (App Runner routes traffic to this port) |
+| `GUNICORN_WORKERS` | auto-detect | Number of Gunicorn workers (auto-detects from CPU count; leave empty for 1 vCPU services, set to `2` for 2+ vCPU) |
+| `GUNICORN_THREADS` | `2` | Threads per worker |
+| `LOG_LEVEL` | `warning` | Gunicorn log level |
+| `LLM_MAX_CONCURRENT` | `20` | Max concurrent LLM requests |
+| `LLM_BATCH_WINDOW_MS` | `15` | LLM batch window in milliseconds |
+| `EMAIL_FROM` | `noreply@syrabit.ai` | Sender address for emails |
+| `OPENAI_API_KEY` | — | OpenAI key (if using OpenAI provider) |
+| `GROQ_API_KEY` | — | Groq key (if using Groq provider) |
+| `GEMINI_API_KEY` | — | Gemini key (if using Gemini provider) |
+| `FIREWORKS_API_KEY` | — | Fireworks key (if using Fireworks provider) |
+| `XAI_API_KEY` | — | xAI key (if using xAI provider) |
+| `AWS_ACCESS_KEY_ID` | — | AWS key (if using Bedrock provider) |
+| `AWS_SECRET_ACCESS_KEY` | — | AWS secret (if using Bedrock provider) |
+| `AWS_REGION` | `us-east-1` | AWS region for Bedrock |
+| `REDIS_URL` | — | Plain Redis URL (fallback if Upstash not set) |
+| `APPRUNNER_SERVICE_URL` | — | App Runner default domain (additionally added to CORS allow list) |
+
+> **CORS and App Runner domains**: The backend automatically allows any `*.awsapprunner.com` origin via regex matching, so the API works immediately after first deploy before a custom domain is configured. No manual setup is needed. Optionally, set `APPRUNNER_SERVICE_URL` to your specific App Runner URL for an additional explicit CORS entry.
+
+---
+
+## Step 4: Custom Domain Setup (`api.syrabit.ai`)
+
+1. In the App Runner console, go to your service → **Custom domains**.
+2. Click **Link domain** and enter `api.syrabit.ai`.
+3. App Runner provides DNS validation records (CNAME). Add these in Cloudflare:
+   - **Type**: CNAME
+   - **Name**: the validation subdomain App Runner provides (e.g. `_abcdef.api`)
+   - **Target**: the validation target App Runner provides
+   - **Proxy status**: **DNS only** (grey cloud) — validation requires direct DNS resolution.
+4. Wait for App Runner to show the domain as **Active** (can take 10–30 minutes).
+5. Add the production CNAME in Cloudflare:
+   - **Type**: CNAME
+   - **Name**: `api`
+   - **Target**: your App Runner service URL (e.g. `abc123.ap-south-1.awsapprunner.com`)
+   - **Proxy status**: **DNS only** (grey cloud) — App Runner provides its own TLS certificate, so Cloudflare proxying is not needed and may cause certificate conflicts.
+
+> **Note**: Unlike the previous VPS setup, do **not** enable Cloudflare proxying (orange cloud) for the `api` record. App Runner handles TLS termination with its own managed certificate.
+
+---
+
+## Step 5: Verify Deployment
+
+### Health Check
 
 ```bash
-# Update system
-sudo apt update && sudo apt upgrade -y
-
-# Install Docker
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-
-# Install Docker Compose plugin
-sudo apt install -y docker-compose-plugin
-
-# Reboot to apply group changes
-sudo reboot
+curl https://api.syrabit.ai/api/health
 ```
 
-After reboot, verify:
+Expected response:
+```json
+{"status": "ok", ...}
+```
+
+### CORS Verification
+
+From the frontend domain, verify the API responds with correct CORS headers:
 
 ```bash
-docker --version
-docker compose version
+curl -I -X OPTIONS https://api.syrabit.ai/api/health \
+  -H "Origin: https://syrabit.ai" \
+  -H "Access-Control-Request-Method: GET"
 ```
 
-### Firewall
+Confirm the `Access-Control-Allow-Origin` header includes `https://syrabit.ai`.
 
-Only ports 80 and 443 need to be open (Cloudflare connects on these).
-SSH (22) should remain open for management.
+### App Runner Console
 
-```bash
-sudo ufw allow 22/tcp
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw enable
-```
-
-> The docker-compose.yml maps host port 80 to container port 8000
-> (`"80:8000"`). Cloudflare proxies HTTPS traffic to port 80 and
-> terminates SSL on its edge, so no TLS cert is needed on the VPS.
+Check the **Logs** tab in the App Runner console for any startup errors. Logs are streamed to CloudWatch Logs automatically.
 
 ---
 
-## 2. Cloudflare DNS
+## Step 6: Update Webhook URLs
 
-In the Cloudflare dashboard for `syrabit.ai`:
-
-1. Add an **A record**:
-   - Name: `api`
-   - Content: `<VPS_IP_ADDRESS>`
-   - Proxy status: **Proxied** (orange cloud)
-   - TTL: Auto
-
-2. SSL/TLS settings:
-   - Encryption mode: **Full (Strict)** is recommended if you add an origin
-     cert via Cloudflare Origin CA. Otherwise use **Full**.
-   - Edge Certificates → Always Use HTTPS: **On**
-   - Edge Certificates → Minimum TLS Version: **1.2**
-
-3. Caching:
-   - Page Rule for `api.syrabit.ai/*` → Cache Level: **Bypass**
-     (API responses should not be cached at Cloudflare edge)
-
----
-
-## 3. Deploy the Application
-
-```bash
-# Clone or copy the backend code to the VPS
-mkdir -p ~/syrabit && cd ~/syrabit
-
-# Copy .env.example and fill in real values
-cp .env.example .env
-nano .env  # fill in all CHANGE_ME values
-
-# Build and start
-docker compose up -d --build
-
-# Verify health
-curl http://localhost:8000/api/health
-```
-
----
-
-## 4. Update / Redeploy
-
-```bash
-cd ~/syrabit
-
-# Pull latest code (git pull, scp, rsync — your choice)
-git pull origin main
-
-# Rebuild and restart (zero-downtime with health checks)
-docker compose up -d --build
-
-# Or if using a pre-built image from a registry:
-# docker compose pull && docker compose up -d
-```
-
----
-
-## 5. Logs & Debugging
-
-```bash
-# Follow live logs
-docker compose logs -f web
-
-# Last 200 lines
-docker compose logs --tail 200 web
-
-# Check container status
-docker compose ps
-
-# Restart
-docker compose restart web
-
-# Full teardown and rebuild
-docker compose down && docker compose up -d --build
-```
-
----
-
-## 6. Production Checklist
-
-- [ ] `.env` has real values (no `CHANGE_ME` remaining)
-- [ ] `COOKIE_DOMAIN` is set to `.syrabit.ai`
-- [ ] `CORS_ORIGINS` includes `https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai`
-- [ ] `FRONTEND_URL` is `https://syrabit.ai`
-- [ ] Razorpay webhook URL updated to `https://api.syrabit.ai/api/webhooks/razorpay`
-- [ ] Stripe webhook URL updated to `https://api.syrabit.ai/api/webhooks/stripe`
-- [ ] Cloudflare A record for `api` points to VPS IP (orange-clouded)
-- [ ] `curl https://api.syrabit.ai/api/health` returns `{"status":"ok"}`
-- [ ] Frontend `VITE_BACKEND_URL` env var in Cloudflare Pages set to `https://api.syrabit.ai`
-
----
-
-## 7. Webhook URLs
-
-After switching to `api.syrabit.ai`, update webhook endpoints in payment provider dashboards:
+After deploying to `api.syrabit.ai`, update webhook endpoints in each payment provider's dashboard:
 
 | Provider | Webhook URL |
 |----------|-------------|
 | Razorpay | `https://api.syrabit.ai/api/webhooks/razorpay` |
 | Stripe   | `https://api.syrabit.ai/api/webhooks/stripe` |
 
-These are relative API routes — no code change is needed. Just update the
-URLs in each provider's dashboard settings.
+No code changes are needed — only the dashboard URLs must be updated.
 
 ---
 
-## Architecture
+## Step 7: Update Frontend Environment
 
-```
-User → Cloudflare (SSL + DDoS) → VPS:80 → Docker:8000 (uvicorn)
-                                              ↓
-                                   MongoDB Atlas (managed)
-                                   Upstash Redis  (managed)
-                                   Supabase PG    (managed)
-```
+In the Cloudflare Pages dashboard for the frontend:
 
-Frontend: Cloudflare Pages (`syrabit.ai`)
-Backend:  Hostinger VPS via Cloudflare proxy (`api.syrabit.ai`)
+1. Go to **Settings** → **Environment variables**.
+2. Set `VITE_BACKEND_URL` to `https://api.syrabit.ai` for the **Production** environment.
+3. Trigger a redeploy of the frontend for the change to take effect.
+
+---
+
+## Production Checklist
+
+### Environment & Secrets
+- [ ] All required environment variables are set in the App Runner console (no `CHANGE_ME` values)
+- [ ] `JWT_SECRET` and `ADMIN_JWT_SECRET` are unique, long random strings
+- [ ] `COOKIE_DOMAIN` is set to `.syrabit.ai`
+- [ ] `CORS_ORIGINS` includes `https://syrabit.ai,https://www.syrabit.ai`
+- [ ] `FRONTEND_URL` is `https://syrabit.ai`
+- [ ] `SECURE_COOKIES` is `true`
+
+### Domain & DNS
+- [ ] Custom domain `api.syrabit.ai` is linked and shows **Active** in App Runner
+- [ ] Cloudflare CNAME for `api` points to the App Runner service URL (DNS only, grey cloud)
+- [ ] `curl https://api.syrabit.ai/api/health` returns `{"status":"ok"}`
+
+### External Services
+- [ ] Razorpay webhook URL updated to `https://api.syrabit.ai/api/webhooks/razorpay`
+- [ ] Stripe webhook URL updated to `https://api.syrabit.ai/api/webhooks/stripe`
+- [ ] MongoDB Atlas allows connections from App Runner (IP allowlist or `0.0.0.0/0` for managed services)
+- [ ] Supabase connection pooler enabled if using connection limits
+
+### App Runner Configuration
+- [ ] Health check configured: path `/api/health`, interval 10s, timeout 5s
+- [ ] Auto-scaling: min 1 instance (avoids cold starts), max 4 instances
+- [ ] Max concurrency set appropriately (default 80)
+- [ ] Deployment trigger set to **Automatic** on the production branch
+
+### Frontend
+- [ ] `VITE_BACKEND_URL` in Cloudflare Pages set to `https://api.syrabit.ai`
+- [ ] Frontend redeployed after updating the environment variable
+
+---
+
+## Notes on Other Deployment Files
+
+### `docker-compose.yml`
+The `docker-compose.yml` file is for **local development only**. It is not used by App Runner. Keep it in the repo for developers who want to run the backend locally with Docker.
+
+### `Dockerfile`
+The `Dockerfile` is used by App Runner if you choose **image-based deployment** (pushing to ECR). For **source-based deployment**, App Runner uses `apprunner.yaml` instead and ignores the Dockerfile.
+
+### `.dockerignore`
+Relevant only for Docker image builds (local development or ECR-based deployment). App Runner source-based deployment does not use it.
