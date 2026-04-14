@@ -8,7 +8,7 @@ router = "application"
 deploymentTarget = "autoscale"
 
 [deployment.postBuild]
-args = ["sh", "-c", "corepack enable && pnpm store prune"]
+args = ["sh", "-c", "npm i -g pnpm@10.26.1 && pnpm store prune"]
 env = { "CI" = "true" }
 
 [workflows]
