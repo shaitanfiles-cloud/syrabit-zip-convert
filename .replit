@@ -41,6 +41,7 @@ D1_SYNC_SECRET = "5b5b091800ea2e552e8f600956ca7df609e25d90cecdcce502c8688df27625
 EDGE_WORKER_URL = "https://api.syrabit.ai"
 CF_ZONE_ID = "5b8c97df4431491dc7f60ea72fb61871"
 CF_AI_GATEWAY_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
+SUPABASE_DB_URL = "postgresql://postgres.czeznmqogtwecidhpysa:Rimjhimiya%405490@aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres"
 
 [userenv.development]
 
