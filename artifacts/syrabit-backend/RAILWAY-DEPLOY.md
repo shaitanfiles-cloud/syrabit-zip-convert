@@ -2,33 +2,35 @@
 
 ## Prerequisites
 - Railway account (https://railway.app)
-- Railway CLI installed (`npm i -g @railway/cli`)
+- GitHub repo connected to Railway (recommended) OR Railway CLI
 - All environment variables from `.env.example` ready
 
-## Step 1: Create Railway Project
+## Step 1: Create Railway Project (Dashboard — Recommended)
+
+1. Go to https://railway.app/new
+2. Click **"Deploy from GitHub repo"**
+3. Select your Syrabit repository
+4. **CRITICAL**: After the service is created, go to **Settings > Source**:
+   - Set **Root Directory** to: `artifacts/syrabit-backend`
+   - This ensures Railway finds the Dockerfile and Python code (not the root package.json)
+5. Railway will auto-detect the Dockerfile and start building
+
+### Alternative: Railway CLI
 
 ```bash
-# Login to Railway
 railway login
-
-# Create a new project
 railway init
-# Select "Empty Project"
-# Name it: syrabit-backend
-```
+# Select "Empty Project", name: syrabit-backend
 
-## Step 2: Link and Deploy
-
-```bash
-# Navigate to the backend directory
 cd artifacts/syrabit-backend
-
-# Link to your Railway project
 railway link
-
-# Deploy (Railway auto-detects the Dockerfile)
 railway up
 ```
+
+> **If the CLI deploy fails with `pnpm: not found`**: Railway is reading the
+> root `package.json` instead of the backend's `Dockerfile`. You MUST set
+> the Root Directory to `artifacts/syrabit-backend` in the Railway dashboard
+> under **Settings > Source > Root Directory**.
 
 ## Step 3: Set Environment Variables
 
