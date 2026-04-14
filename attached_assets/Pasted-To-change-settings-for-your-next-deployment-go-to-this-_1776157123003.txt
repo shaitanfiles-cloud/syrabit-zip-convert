@@ -1,0 +1,92 @@
+To change settings for your next deployment go to this project's Settings.
+
+Build command:
+pnpm install --frozen-lockfile && cd artifacts/syrabit && pnpm run build
+Build output directory:
+/artifacts/syrabit/dist
+Build system version:
+3 (latest)
+Root directory:
+/
+Environment variables:
+Variable name	Value
+ADMIN_EMAILS
+admin@syrabit.ai
+ADMIN_JWT_SECRET
+19146e5b12cb4c0a6f5d709253ec55e29ac1d4d44f417cc55b759644bc350c405d98a0661b02b36742bc7bc82c575f07
+ADMIN_NAMES
+Administrator
+ADMIN_PASSWORDS
+EWDv7s8nIlVALJZwM30tDcISwVHW72Ve
+CEREBRAS_API_KEY
+csk-djxev9j6pyrv4x96myt5t6ktv5je6n3n9vmkdfdvnhr45wwc
+CORS_ORIGINS
+http://localhost:5000,http://localhost:3000,http://0.0.0.0:5000,https://90464407-7954-469a-ae00-d16f60f666ea-00-19ag09bq0sa15.pike.replit.dev
+DB_NAME
+test_database
+GA4_PROPERTY_ID
+530170895
+GEMINI_API_KEY
+AIzaSyC4o7_5VD6fR020ezyssd8163CuRaSwctg
+GOOGLE_CLIENT_SECRET
+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
+GOOGLE_OAUTH_CLIENT_ID
+562571664721-d4pji8dnp263qmafctfhdsts09u3h3jc.apps.googleusercontent.com
+GROQ_API_KEY
+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
+GROQ_API_KEY_2
+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
+JWT_SECRET
+48db16969938a0a4ccd7180737b83a00816f4159c06447856aaa8d65dd9615961272acb519c4af37d247b00ed0324100
+MONGO_URL
+mongodb+srv://syrabit:Rimjhimiya@cluster0.rt24pqk.mongodb.net/?appName=Cluster0
+NODE_VERSION
+20
+OPENROUTER_API_KEY
+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
+RAZORPAY_KEY_ID
+rzp_live_SYmjWkri1h9btT
+RAZORPAY_KEY_SECRET
+GbWPnnjibwlhqGZU5u2QdSQF
+RAZORPAY_WEBHOOK_SECRET
+https://syrabit.ai/api/webhooks/razorpay
+RESEND_API_KEY
+re_93sCfP9q_2971yDXqVU4o3iZSBDyo2qwT
+SARVAM_API_KEY
+sk_9ykf6lbz_ovlGaBmHPJUS4gq2195b8uJS
+SARVAM_API_KEY_2
+sk_r6nv69cf_wrft9t1JdtXT2pmqFIyraOhz
+SARVAM_API_KEY_3
+sk_ehazr7rd_rB2gVWef2koUPRaEFejtkqFt
+SECURE_COOKIES
+false
+SESSION_SECRET
+7CZk1Y/RzKHj6aIB2O4sZ3fzV+xofW9RS+ansLyxiHKg4MdmN31n8epakrQLcpmhJdyNJusPzlMF9EMaGzb1Og==
+SKIP_DEPENDENCY_INSTALL
+true
+SUPABASE_SERVICE_KEY
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN6ZXpubXFvZ3R3ZWNpZGhweXNhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjEyMjU0NSwiZXhwIjoyMDg3Njk4NTQ1fQ.J3wqyZJN3AFotnKwIEZUfhRASww6g5oyyDzD_G-Ca2A
+TRUSTPILOT_API_KEY
+mwx7hW4REaL8L4DL
+TRUSTPILOT_BUSINESS_UNIT_ID
+mwx7hW4REaL8L4DL
+UPSTASH_REDIS_REST_TOKEN
+gQAAAAAAAQY_AAIncDI4M2U2M2QwMmVhZTA0MTZhYmFlOGJmZmFkY2VkMjA5MnAyNjcxMzU
+UPSTASH_REDIS_REST_URL
+https://tolerant-sawfish-67135.upstash.io
+VITE_BACKEND_URL
+https://syrabit-zip-convert-maliktez.replit.app
+VITE_GA4_ID
+530170895
+VITE_SITE_URL
+https://syrabit.ai
+VITE_WORKER_API_URL
+https://syrabit-zip-convert-maliktez.replit.app
+VOYAGE_API_KEY
+al-R84lkxGgV9yfOEoERpA_IPK7HBf6t5DHPdAbCVn3ZwH
+Build log
+Functions
+Redirects
+Headers
+Building and deploying
+Initializing build environment
