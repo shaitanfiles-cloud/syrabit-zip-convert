@@ -53,36 +53,42 @@ def is_configured() -> bool:
 async def upsert_vectors(vectors: list[dict]) -> dict:
     """Upsert vectors to Vectorize. Each dict must have: id, values, metadata.
 
-    The SDK upsert method accepts ndjson as a string body.
-    We batch internally at VECTORIZE_BATCH_SIZE.
+    Uses the Cloudflare REST API directly since the Python SDK has ndjson
+    encoding issues. We batch internally at VECTORIZE_BATCH_SIZE.
     """
-    cf = _get_cf_client()
+    import httpx
+
+    token = os.environ.get("CLOUDFLARE_API_TOKEN", "").strip()
     account_id = _account_id()
 
     total_upserted = 0
     errors = []
 
-    for i in range(0, len(vectors), VECTORIZE_BATCH_SIZE):
-        batch = vectors[i : i + VECTORIZE_BATCH_SIZE]
-        ndjson_lines = []
-        for v in batch:
-            ndjson_lines.append(json.dumps({
-                "id": v["id"],
-                "values": v["values"],
-                "metadata": v.get("metadata", {}),
-            }))
-        ndjson_body = "\n".join(ndjson_lines)
+    url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/vectorize/v2/indexes/{VECTORIZE_INDEX_NAME}/upsert"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/x-ndjson",
+    }
 
-        try:
-            result = await cf.vectorize.indexes.upsert(
-                index_name=VECTORIZE_INDEX_NAME,
-                account_id=account_id,
-                body=ndjson_body,
-            )
-            total_upserted += len(batch)
-        except Exception as exc:
-            logger.warning(f"Vectorize upsert batch failed: {exc}")
-            errors.append(f"batch {i // VECTORIZE_BATCH_SIZE}: {exc}")
+    async with httpx.AsyncClient(timeout=30) as client:
+        for i in range(0, len(vectors), VECTORIZE_BATCH_SIZE):
+            batch = vectors[i : i + VECTORIZE_BATCH_SIZE]
+            ndjson_lines = []
+            for v in batch:
+                ndjson_lines.append(json.dumps({
+                    "id": v["id"],
+                    "values": v["values"],
+                    "metadata": v.get("metadata", {}),
+                }, ensure_ascii=False))
+            ndjson_body = "\n".join(ndjson_lines)
+
+            try:
+                resp = await client.post(url, content=ndjson_body.encode("utf-8"), headers=headers)
+                resp.raise_for_status()
+                total_upserted += len(batch)
+            except Exception as exc:
+                logger.warning(f"Vectorize upsert batch failed: {exc}")
+                errors.append(f"batch {i // VECTORIZE_BATCH_SIZE}: {exc}")
 
     result_dict = {"upserted": total_upserted}
     if errors:
@@ -155,36 +161,38 @@ async def delete_vectors(ids: list[str]) -> int:
 
 
 async def get_vectors_by_ids(ids: list[str]) -> list[dict]:
-    """Retrieve vectors by their IDs."""
+    """Retrieve vectors by their IDs. Batches at 20 IDs per call (CF limit)."""
     if not ids:
         return []
     cf = _get_cf_client()
     account_id = _account_id()
 
-    try:
-        result = await cf.vectorize.indexes.get_by_ids(
-            index_name=VECTORIZE_INDEX_NAME,
-            account_id=account_id,
-            ids=ids,
-        )
-        if result is None:
-            return []
-        raw_list = result if isinstance(result, list) else [result]
-        normalized = []
-        for item in raw_list:
-            if isinstance(item, dict):
-                normalized.append(item)
-            elif hasattr(item, "id"):
-                entry = {"id": item.id}
-                if hasattr(item, "values") and item.values:
-                    entry["values"] = list(item.values)
-                if hasattr(item, "metadata") and item.metadata:
-                    entry["metadata"] = dict(item.metadata) if not isinstance(item.metadata, dict) else item.metadata
-                normalized.append(entry)
-        return normalized
-    except Exception as exc:
-        logger.warning(f"Vectorize get_by_ids exception: {exc}")
-        return []
+    _BATCH = 20
+    normalized = []
+    for i in range(0, len(ids), _BATCH):
+        batch_ids = ids[i : i + _BATCH]
+        try:
+            result = await cf.vectorize.indexes.get_by_ids(
+                index_name=VECTORIZE_INDEX_NAME,
+                account_id=account_id,
+                ids=batch_ids,
+            )
+            if result is None:
+                continue
+            raw_list = result if isinstance(result, list) else [result]
+            for item in raw_list:
+                if isinstance(item, dict):
+                    normalized.append(item)
+                elif hasattr(item, "id"):
+                    entry = {"id": item.id}
+                    if hasattr(item, "values") and item.values:
+                        entry["values"] = list(item.values)
+                    if hasattr(item, "metadata") and item.metadata:
+                        entry["metadata"] = dict(item.metadata) if not isinstance(item.metadata, dict) else item.metadata
+                    normalized.append(entry)
+        except Exception as exc:
+            logger.warning(f"Vectorize get_by_ids exception: {exc}")
+    return normalized
 
 
 async def get_index_info() -> dict:
