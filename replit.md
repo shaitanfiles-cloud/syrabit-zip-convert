@@ -53,7 +53,7 @@ The project is structured as a pnpm workspace monorepo, with a React + Vite fron
 - **LLM Providers:**
     - **Chat:** Groq, Cerebras, OpenRouter, Fireworks (SLM pool).
     - **Content Generation:** Cerebras (primary), Sarvam (fallback), Gemini 2.5-flash (last resort), Gemini Vision, gemini-embedding-001.
-- **Cloudflare AI Gateway:** Routes LLM traffic, provides caching, analytics, and graceful degradation.
+- **Cloudflare AI Gateway:** Routes LLM traffic, provides caching, analytics, and graceful degradation. Gateway 401 auth errors trigger automatic fallback to direct provider URLs with a 5-minute cooldown before retrying the gateway.
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).
 - **Email Service:** Resend API.
 - **UI/UX Frameworks:** React, Vite, React Router, Tailwind CSS.

@@ -1,8 +1,5 @@
 modules = ["nodejs-24", "postgresql-16", "python-3.11"]
 
-[[artifacts]]
-id = "artifacts/mockup-sandbox"
-
 [deployment]
 router = "application"
 deploymentTarget = "autoscale"
@@ -48,3 +45,7 @@ CF_AI_GATEWAY_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
 [userenv.development]
 
 [userenv.production]
+
+[[ports]]
+localPort = 8000
+externalPort = 80

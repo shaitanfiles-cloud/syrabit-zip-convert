@@ -502,10 +502,15 @@ def _safe_model_for_provider(model: str, provider: str, provider_list=None) -> s
         return matched["default_model"]
     return model
 
+def _pick_sarvam_client():
+    if sarvam_llm_client_direct is not None and not is_cf_gateway_up():
+        return sarvam_llm_client_direct
+    return sarvam_llm_client
+
 async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens: int) -> str:
     """Non-streaming call to Sarvam LLM — reuses persistent sarvam_llm_client (zero TCP overhead).
     Adds SARVAM_THINK_BUFFER so the <think> block never consumes the user's answer budget.
-    Falls back to direct client if CF gateway connection fails."""
+    Falls back to direct client if CF gateway returns connection error or 401."""
     api_max = max_tokens + SARVAM_THINK_BUFFER
     payload = {
         "model": model,
@@ -514,15 +519,22 @@ async def _call_sarvam_llm(messages: list, api_key: str, model: str, max_tokens:
         "temperature": 0.1,
         "stream": False,
     }
-    client = sarvam_llm_client
+    client = _pick_sarvam_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
     try:
         resp = await client.post("/v1/chat/completions", json=payload)
         resp.raise_for_status()
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-        if sarvam_llm_client_direct is not None:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
             _handle_cf_connection_error(e)
+            resp = await sarvam_llm_client_direct.post("/v1/chat/completions", json=payload)
+            resp.raise_for_status()
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
             resp = await sarvam_llm_client_direct.post("/v1/chat/completions", json=payload)
             resp.raise_for_status()
         else:
@@ -550,6 +562,10 @@ def _handle_cf_connection_error(exc: Exception) -> None:
         mark_cf_gateway_down()
         logger.warning(f"Cloudflare AI Gateway connection error — falling back to direct URLs for 5 min: {type(exc).__name__}")
 
+def _handle_cf_gateway_auth_error(exc: Exception) -> None:
+    mark_cf_gateway_down()
+    logger.warning(f"Cloudflare AI Gateway 401 auth error — falling back to direct URLs for 5 min: {type(exc).__name__}: {str(exc)[:200]}")
+
 async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int) -> str:
     """Non-streaming call to Google Gemini via its OpenAI-compatible endpoint."""
     direct_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -563,6 +579,15 @@ async def _call_gemini(messages: list, api_key: str, model: str, max_tokens: int
     except _oai.APIConnectionError as e:
         if base != direct_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
             client = _get_oai_client(api_key, direct_base)
             resp = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
@@ -584,6 +609,15 @@ async def _call_openai_compat(messages: list, api_key: str, model: str, max_toke
     except _oai.APIConnectionError as e:
         if base != fallback_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            resp = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
             client = _get_oai_client(api_key, fallback_base)
             resp = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, temperature=0.1,
@@ -825,7 +859,7 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
     }
     if _indic and response_lang in _SARVAM_LANG_CODE_MAP:
         payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
-    client = sarvam_llm_client
+    client = _pick_sarvam_client()
     if client is None:
         raise HTTPException(status_code=503, detail="Sarvam LLM client not initialised")
 
@@ -857,8 +891,15 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         async for token in _do_stream(client):
             yield token
     except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-        if sarvam_llm_client_direct is not None:
+        if sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
             _handle_cf_connection_error(e)
+            async for token in _do_stream(sarvam_llm_client_direct):
+                yield token
+        else:
+            raise
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401 and sarvam_llm_client_direct is not None and client is not sarvam_llm_client_direct:
+            _handle_cf_gateway_auth_error(e)
             async for token in _do_stream(sarvam_llm_client_direct):
                 yield token
         else:
@@ -876,6 +917,15 @@ async def _stream_gemini(messages: list, api_key: str, model: str, max_tokens: i
     except _oai.APIConnectionError as e:
         if base != direct_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
             client = _get_oai_client(api_key, direct_base)
             stream = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
@@ -915,6 +965,15 @@ async def _stream_xai(messages: list, api_key: str, model: str, max_tokens: int)
             )
         else:
             raise
+    except _oai.AuthenticationError as e:
+        if base != direct_base:
+            _handle_cf_gateway_auth_error(e)
+            client = _get_oai_client(api_key, direct_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
     async for chunk in stream:
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta and delta.content:
@@ -931,6 +990,15 @@ async def _stream_openai_compat(messages: list, api_key: str, model: str, max_to
     except _oai.APIConnectionError as e:
         if base != fallback_base and _is_cf_connection_error(e):
             _handle_cf_connection_error(e)
+            client = _get_oai_client(api_key, fallback_base)
+            stream = await client.chat.completions.create(
+                model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,
+            )
+        else:
+            raise
+    except _oai.AuthenticationError as e:
+        if base != fallback_base:
+            _handle_cf_gateway_auth_error(e)
             client = _get_oai_client(api_key, fallback_base)
             stream = await client.chat.completions.create(
                 model=model, messages=messages, max_tokens=max_tokens, stream=True, temperature=0.1,

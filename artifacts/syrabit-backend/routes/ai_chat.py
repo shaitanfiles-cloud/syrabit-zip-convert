@@ -430,7 +430,7 @@ async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_
 
     # ── Cache check (Non-streaming) — Redis first, in-memory fallback ───────
     is_casual = _detected_intent in ("casual", "general")
-    cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
+    cache_key = _cache_key(msg.message, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id="" if is_casual else (conv_id or ""))
     _cache_ttl = REDIS_CASUAL_CACHE_TTL if is_casual else REDIS_AI_CACHE_TTL
     answer = None
     _ns_cache_hit = False
@@ -780,7 +780,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _s_should_pipeline, _s_stage1, _s_apply_s1, _s_enhance_q = should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query
 
     _cache_msg_key_early = f"{msg.message}::lang={_resp_lang}" if _want_translate else msg.message
-    _cache_key_early = _cache_key(_cache_msg_key_early, subject_id=msg.subject_id or "", board_id=msg.board_id or "", conversation_id=msg.conversation_id or "")
+    _early_is_casual = _stream_intent in ("casual", "general")
+    _cache_key_early = _cache_key(_cache_msg_key_early, subject_id=msg.subject_id or "", board_id=msg.board_id or "", conversation_id="" if _early_is_casual else (msg.conversation_id or ""))
     _early_cached_answer = _redis_get_ai_cache(_cache_key_early)
     if not _early_cached_answer and _cache_key_early in _ai_response_cache:
         _early_cached_answer = _ai_response_cache[_cache_key_early]
@@ -1275,7 +1276,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
     _cache_is_casual = _stream_intent in ("casual", "general")
     _cache_msg_key = f"{msg.message}::lang={_resp_lang}" if _want_translate else msg.message
-    _cache_key_val = _cache_key(_cache_msg_key, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id=conv_id or "")
+    _cache_key_val = _cache_key(_cache_msg_key, subject_id=msg.subject_id or "", board_id=ctx_board_id or "", conversation_id="" if _cache_is_casual else (conv_id or ""))
     _cache_ttl_val = REDIS_CASUAL_CACHE_TTL if _cache_is_casual else REDIS_AI_CACHE_TTL
     _cached_answer = _ai_response_cache.get(_cache_key_val)
     if _cached_answer:
