@@ -64,7 +64,6 @@ _CF_PROVIDER_SLUGS = {
     "groq":        "groq",
     "xai":         "grok",
     "gemini":      "google-ai-studio/v1beta/openai",
-    "sarvam":      "sarvam",
 }
 
 _DIRECT_PROVIDER_URLS = {

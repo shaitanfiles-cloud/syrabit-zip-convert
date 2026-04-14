@@ -53,17 +53,13 @@ async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optiona
             return {"boards": [], "classes": [], "streams": [], "subjects": []}
         async with _slow_query("library_bundle"):
             try:
-                boards_data, classes_data, streams_data, subjects_data = await asyncio.wait_for(
+                (boards_data, classes_data, streams_data, subjects_data,
+                 chapters_data, pyq_data, fc_data) = await asyncio.wait_for(
                     asyncio.gather(
                         db.boards.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1}).to_list(100),
                         db.classes.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "board_id": 1}).to_list(100),
                         db.streams.find({}, {"_id": 0, "id": 1, "name": 1, "slug": 1, "class_id": 1}).to_list(100),
                         db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500),
-                    ),
-                    timeout=10.0,
-                )
-                chapters_data, pyq_data, fc_data = await asyncio.wait_for(
-                    asyncio.gather(
                         db.chapters.find(
                             {},
                             {"_id": 0, "id": 1, "title": 1, "slug": 1, "subject_id": 1, "order_index": 1, "notes_generated": 1},

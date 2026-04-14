@@ -129,37 +129,42 @@ async def _migrate_supabase_users_to_pg():
     """One-time background task: copy all Supabase users into PG (upsert, safe to re-run)."""
     if not deps.pg_pool or not supa:
         return
-    await asyncio.sleep(5)
+    await asyncio.sleep(2)
+    t0 = asyncio.get_event_loop().time()
     try:
         r = await _supa(lambda: supa.table("users").select("*").order("created_at", desc=False).limit(2000).execute())
         users = r.data or []
+        if not users:
+            logger.info("[migration] Supabase→PG: no users to migrate")
+            return
+        _insert_sql = """INSERT INTO users (id, name, email, password_hash, plan, credits_used,
+                   credits_limit, document_access, onboarding_done, is_admin, status,
+                   bio, phone, avatar_url, saved_subjects, has_free_credits_issued,
+                   board_id, board_name, class_id, class_name, stream_id, stream_name,
+                   created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,$19,$20,$21,$22,$23)
+                   ON CONFLICT (id) DO NOTHING"""
         imported = 0
-        for u in users:
-            try:
-                saved = json.dumps(u.get("saved_subjects") or [])
-                async with deps.pg_pool.acquire() as conn:
+        async with deps.pg_pool.acquire() as conn:
+            for u in users:
+                try:
                     await conn.execute(
-                        """INSERT INTO users (id, name, email, password_hash, plan, credits_used,
-                           credits_limit, document_access, onboarding_done, is_admin, status,
-                           bio, phone, avatar_url, saved_subjects, has_free_credits_issued,
-                           board_id, board_name, class_id, class_name, stream_id, stream_name,
-                           created_at)
-                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-                           ON CONFLICT (id) DO NOTHING""",
+                        _insert_sql,
                         u.get("id"), u.get("name",""), u.get("email","").lower(), u.get("password_hash",""),
                         u.get("plan","free"), u.get("credits_used",0) or 0, u.get("credits_limit",30) or 30,
                         u.get("document_access","zero"), bool(u.get("onboarding_done",False)),
                         bool(u.get("is_admin",False)), u.get("status","active") or "active",
                         u.get("bio","") or "", u.get("phone","") or "", u.get("avatar_url","") or "",
-                        saved, bool(u.get("has_free_credits_issued",True)),
+                        json.dumps(u.get("saved_subjects") or []), bool(u.get("has_free_credits_issued",True)),
                         u.get("board_id"), u.get("board_name"), u.get("class_id"),
                         u.get("class_name"), u.get("stream_id"), u.get("stream_name"),
-                        u.get("created_at")
+                        u.get("created_at"),
                     )
-                imported += 1
-            except Exception:
-                pass
-        logger.info(f"[migration] Supabase→PG: processed {len(users)} users, inserted {imported} new rows")
+                    imported += 1
+                except Exception:
+                    pass
+        elapsed = int((asyncio.get_event_loop().time() - t0) * 1000)
+        logger.info(f"[migration] Supabase→PG: processed {len(users)} users, inserted {imported} new rows in {elapsed}ms")
     except Exception as e:
         logger.warning(f"[migration] Supabase→PG migration failed: {e}")
 

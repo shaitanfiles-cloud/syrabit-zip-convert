@@ -32,7 +32,7 @@ from config import (
     MONGO_URL, DB_NAME, SARVAM_API_KEY, SARVAM_TRANSLATE_KEY, SARVAM_BASE_URL,
     REDIS_URL, REDIS_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_KEY,
     _PG_DSN,
-    CF_GATEWAY_ENABLED, get_provider_base_url,
+    CF_GATEWAY_ENABLED, get_provider_base_url, cf_gateway_url, _CF_PROVIDER_SLUGS,
 )
 
 logger = logging.getLogger(__name__)
@@ -268,7 +268,7 @@ _sarvam_translate_headers = {
     'api-subscription-key': SARVAM_TRANSLATE_KEY,
     'Content-Type': 'application/json',
 }
-_sarvam_gw_base = get_provider_base_url("sarvam") if CF_GATEWAY_ENABLED else None
+_sarvam_gw_base = cf_gateway_url("sarvam") if (CF_GATEWAY_ENABLED and "sarvam" in _CF_PROVIDER_SLUGS) else None
 _sarvam_effective_base = _sarvam_gw_base or SARVAM_BASE_URL
 sarvam_client: Optional[httpx.AsyncClient] = None
 sarvam_translate_client: Optional[httpx.AsyncClient] = None
