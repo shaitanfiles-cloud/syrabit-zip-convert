@@ -1,0 +1,13 @@
+version: 1.0
+runtime: python311
+build:
+  commands:
+    build:
+      - pip install --no-cache-dir -r requirements.txt
+run:
+  command: gunicorn server:app -c gunicorn.conf.py
+  network:
+    port: 8000
+  env:
+    - name: PORT
+      value: "8000"

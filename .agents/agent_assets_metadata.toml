@@ -36,3 +36,9 @@ id = "RBsYnUeGp9BZC8R9PwfXF"
 uri = "file://.local/syrabit_audit.md"
 type = "text"
 title = "Syrabit.ai — Full Product & Performance Audit"
+
+[[outputs]]
+id = "3U0e16xc_5g5r_IWzI6M8"
+uri = "file://docs/AWS-DEPLOYMENT.md"
+type = "text"
+title = "AWS App Runner Deployment Guide"
