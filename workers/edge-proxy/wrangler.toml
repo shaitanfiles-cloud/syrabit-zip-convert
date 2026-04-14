@@ -7,37 +7,25 @@ routes = [
 ]
 
 [vars]
-# After deploying the Replit backend, replace this with your Replit deployment URL
-# (e.g. "https://<your-repl-slug>.<your-username>.replit.app")
 BACKEND_URL = "https://syrabit-zip-convert-maliktez.replit.app"
-D1_SYNC_SECRET = "REPLACE_WITH_SECURE_RANDOM_SECRET"
+D1_SYNC_SECRET = "5b5b091800ea2e552e8f600956ca7df609e25d90cecdcce502c8688df276250e"
 
-# Create KV namespaces before deploying:
-#   wrangler kv:namespace create RATE_LIMIT
-#   wrangler kv:namespace create RATE_LIMIT --preview
-# Then paste the returned IDs below.
 [[kv_namespaces]]
 binding = "RATE_LIMIT"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID"
+id = "3ee723af8e82480eb6d4855b0ca09f69"
+preview_id = "c7d531ef4b9a4cd980134251f5739556"
 
-# Create D1 database before deploying:
-#   wrangler d1 create syrabit-content
-# Then paste the returned database_id below.
-# Apply migrations:
-#   wrangler d1 migrations apply syrabit-content --local
-#   wrangler d1 migrations apply syrabit-content --remote
 [[d1_databases]]
 binding = "CONTENT_DB"
 database_name = "syrabit-content"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "da5b5b9d-a8f9-43dd-bd23-a938f5c0cf69"
 migrations_dir = "migrations"
 
-# Create Vectorize index before deploying:
+# Vectorize requires separate API permission — add back after creating index:
 #   wrangler vectorize create syllabus-index --dimensions=768 --metric=cosine
-[[vectorize]]
-binding = "SYLLABUS_INDEX"
-index_name = "syllabus-index"
+# [[vectorize]]
+# binding = "SYLLABUS_INDEX"
+# index_name = "syllabus-index"
 
 [triggers]
 crons = ["0 */6 * * *"]
