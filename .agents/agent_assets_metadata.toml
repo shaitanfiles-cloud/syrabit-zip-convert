@@ -48,3 +48,9 @@ id = "-Xzdmp09knCe2QzPlPksz"
 uri = "file://docs/RAILWAY-DEPLOYMENT.md"
 type = "text"
 title = "Railway Deployment Guide"
+
+[[outputs]]
+id = "MkIKoNTOSY1m_lJwbdfM2"
+uri = "file://.local/syrabit-features-audit.md"
+type = "text"
+title = "Syrabit.ai — Detailed Feature Audit Report"
