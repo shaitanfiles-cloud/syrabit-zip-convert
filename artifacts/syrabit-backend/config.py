@@ -262,20 +262,21 @@ ADMIN_ACCOUNTS = _load_admin_accounts()
 ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
 ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
 
-_PG_DSN_RAW = os.environ.get("SUPABASE_DB_URL", "") or os.environ.get("DATABASE_URL", "")
+_PG_DSN_RAW = os.environ.get("DATABASE_URL", "") or os.environ.get("SUPABASE_DB_URL", "")
 _PG_DSN = _PG_DSN_RAW.strip().strip('"').strip("'").strip()
 if _PG_DSN and not _PG_DSN.startswith(("postgresql://", "postgres://")):
     _cfg_log.warning(f"PG DSN invalid scheme — starts with: {_PG_DSN[:20]}...")
     _PG_DSN = ""
+_pg_source = "DATABASE_URL" if os.environ.get("DATABASE_URL", "").strip() else ("SUPABASE_DB_URL" if os.environ.get("SUPABASE_DB_URL", "").strip() else "none")
 if _PG_DSN:
     try:
         from urllib.parse import urlparse as _urlparse
         _pg_parsed = _urlparse(_PG_DSN)
-        _cfg_log.info(f"PG DSN detected — host={_pg_parsed.hostname}, port={_pg_parsed.port}, user={_pg_parsed.username}, db={_pg_parsed.path}")
+        _cfg_log.info(f"PG DSN detected (from {_pg_source}) — host={_pg_parsed.hostname}, port={_pg_parsed.port}, user={_pg_parsed.username}, db={_pg_parsed.path}")
     except Exception:
-        _cfg_log.info(f"PG DSN detected — length={len(_PG_DSN)} chars (parse failed)")
+        _cfg_log.info(f"PG DSN detected (from {_pg_source}) — length={len(_PG_DSN)} chars (parse failed)")
 else:
-    _cfg_log.warning("PG DSN empty — neither SUPABASE_DB_URL nor DATABASE_URL is set")
+    _cfg_log.warning("PG DSN empty — neither DATABASE_URL nor SUPABASE_DB_URL is set")
 
 VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY', '').strip()
 
