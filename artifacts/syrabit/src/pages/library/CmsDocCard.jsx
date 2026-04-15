@@ -16,7 +16,7 @@ const CmsDocCard = memo(function CmsDocCard({ doc }) {
     >
       {doc.thumbnail_url && (
         <div className="w-full aspect-video overflow-hidden">
-          <img src={doc.thumbnail_url} alt={doc.alt_text || doc.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy" />
+          <img src={doc.thumbnail_url} alt={doc.alt_text || doc.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" loading="lazy" width="400" height="225" />
         </div>
       )}
       <div className="p-4 flex flex-col flex-1 gap-3">

@@ -1,4 +1,4 @@
-const CACHE_VERSION = '9';
+const CACHE_VERSION = '10';
 const STATIC_CACHE = 'syrabit-static-v' + CACHE_VERSION;
 const RUNTIME_CACHE = 'syrabit-runtime-v' + CACHE_VERSION;
 const API_CACHE = 'syrabit-api-v' + CACHE_VERSION;

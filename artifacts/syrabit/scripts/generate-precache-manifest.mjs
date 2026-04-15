@@ -28,7 +28,7 @@ for (const m of modulepreloadMatches) {
 }
 
 for (const file of fs.readdirSync(assetsDir)) {
-  if (/^(vendor|router)-[A-Za-z0-9_-]+\.js$/.test(file)) {
+  if (/^(react-dom|vendor|router|query|radix|framer)-[A-Za-z0-9_-]+\.js$/.test(file)) {
     critical.add("/assets/" + file);
   }
 }

@@ -39,7 +39,20 @@ const _getAttribution = () => {
     const curSource = params.get('utm_source') || params.get('ref') || '';
     const curMedium = params.get('utm_medium') || '';
     const curCampaign = params.get('utm_campaign') || '';
-    if (curSource && !sessionStorage.getItem('syrabit_utm_source')) {
+    const curContent = params.get('utm_content') || '';
+    const curTerm = params.get('utm_term') || '';
+
+    if (curSource && !localStorage.getItem('syrabit_ft_utm_source')) {
+      localStorage.setItem('syrabit_ft_utm_source', curSource);
+      localStorage.setItem('syrabit_ft_utm_medium', curMedium);
+      localStorage.setItem('syrabit_ft_utm_campaign', curCampaign);
+      localStorage.setItem('syrabit_ft_utm_content', curContent);
+      localStorage.setItem('syrabit_ft_utm_term', curTerm);
+      localStorage.setItem('syrabit_ft_landing_page', window.location.pathname);
+      localStorage.setItem('syrabit_ft_timestamp', new Date().toISOString());
+    }
+
+    if (curSource) {
       sessionStorage.setItem('syrabit_utm_source', curSource);
       sessionStorage.setItem('syrabit_utm_medium', curMedium);
       sessionStorage.setItem('syrabit_utm_campaign', curCampaign);
@@ -47,10 +60,16 @@ const _getAttribution = () => {
     if (!sessionStorage.getItem('syrabit_landing_page')) {
       sessionStorage.setItem('syrabit_landing_page', window.location.pathname);
     }
-    const source = sessionStorage.getItem('syrabit_utm_source') || '';
-    const medium = sessionStorage.getItem('syrabit_utm_medium') || '';
-    const campaign = sessionStorage.getItem('syrabit_utm_campaign') || '';
-    const landing = sessionStorage.getItem('syrabit_landing_page') || '';
+
+    const ftSource = localStorage.getItem('syrabit_ft_utm_source') || '';
+    const ftMedium = localStorage.getItem('syrabit_ft_utm_medium') || '';
+    const ftCampaign = localStorage.getItem('syrabit_ft_utm_campaign') || '';
+    const ftLanding = localStorage.getItem('syrabit_ft_landing_page') || '';
+
+    const source = ftSource || sessionStorage.getItem('syrabit_utm_source') || '';
+    const medium = ftMedium || sessionStorage.getItem('syrabit_utm_medium') || '';
+    const campaign = ftCampaign || sessionStorage.getItem('syrabit_utm_campaign') || '';
+    const landing = ftLanding || sessionStorage.getItem('syrabit_landing_page') || '';
     return [source, medium, campaign, landing].filter(Boolean).join(' | ') || 'direct';
   } catch { return 'direct'; }
 };
@@ -172,6 +191,20 @@ export const Analytics = {
 
   pwaPromptDismissed: () => {
     track('pwa_prompt_dismissed');
+  },
+
+  getFirstTouchAttribution: () => {
+    try {
+      return {
+        source: localStorage.getItem('syrabit_ft_utm_source') || '',
+        medium: localStorage.getItem('syrabit_ft_utm_medium') || '',
+        campaign: localStorage.getItem('syrabit_ft_utm_campaign') || '',
+        content: localStorage.getItem('syrabit_ft_utm_content') || '',
+        term: localStorage.getItem('syrabit_ft_utm_term') || '',
+        landing_page: localStorage.getItem('syrabit_ft_landing_page') || '',
+        timestamp: localStorage.getItem('syrabit_ft_timestamp') || '',
+      };
+    } catch { return {}; }
   },
 
   adminLogin: (email) => {

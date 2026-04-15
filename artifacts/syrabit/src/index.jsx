@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
 import App from "./App";
+import { initWebVitals } from "./utils/webVitals";
 
 const root = ReactDOM.createRoot(document.getElementById("root"));
 root.render(
@@ -52,3 +53,5 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
     regs.forEach((r) => r.unregister());
   });
 }
+
+initWebVitals();

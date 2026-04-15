@@ -9,7 +9,7 @@ const htmlPath = path.join(distDir, "index.html");
 const assetsDir = path.join(distDir, "assets");
 const files = fs.readdirSync(assetsDir);
 
-const targets = ["vendor", "router"];
+const targets = ["react-dom", "vendor", "router", "query", "radix", "framer"];
 const links = [];
 
 for (const name of targets) {

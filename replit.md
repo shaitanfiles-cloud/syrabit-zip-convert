@@ -16,9 +16,9 @@ The project is structured as a pnpm workspace monorepo, with a React + Vite fron
 - **UI/UX:** Built with React, Vite, React Router, and Tailwind CSS, featuring a mobile-first responsive design and a light-only theme.
 - **Admin Panel:** A comprehensive interface for content editing, CMS, blog publishing, SEO management, QA review, and system intelligence.
 - **Bot-Aware Pre-Rendering:** Utilizes `BotRenderMiddleware` to serve cached pre-rendered HTML to search engine bots. The backend manages `robots.txt`, `sitemap.xml`, and `sitemap-index.xml` for crawlability.
-- **PWA:** Fully optimized with a multi-cache service worker (v9) for offline access, performance, and API data precaching.
+- **PWA:** Fully optimized with a multi-cache service worker (v10) for offline access, performance, and API data precaching. Precache manifest covers critical chunks (react-dom, vendor, router, query, radix, framer).
 - **SEO Chapter Pages:** Chapter pages serve as single SEO landing pages with clean URLs, SERP preview modals, and deduplicated heading IDs, supporting both 4-segment and 5-segment URL patterns.
-- **Analytics:** Multi-source analytics merging Cloudflare Analytics API, GA4, server-side tracking, and JS-tracked data.
+- **Analytics:** Multi-source analytics merging Cloudflare Analytics API, GA4, server-side tracking, and JS-tracked data. Core Web Vitals (LCP, INP, CLS, FCP, TTFB) reported to PostHog/GA4 via `web-vitals` library. First-touch UTM attribution persisted in localStorage for cross-session conversion tracking.
 - **SEO Coverage:** All pages include `PageMeta` for title, description, OG, Twitter, canonical, and geo targeting, using JSON-LD structured data and a programmatic SEO engine.
 - **Bilingual Content (EN/AS):** Supports English and Assamese content with a user-selectable language preference, independent content storage, and UI toggles.
 - **Content Display:** Library page features subject cards; lesson pages have a blog-style layout with reading progress and sticky TOC.

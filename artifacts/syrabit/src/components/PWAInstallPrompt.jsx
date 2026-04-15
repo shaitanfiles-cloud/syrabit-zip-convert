@@ -96,7 +96,7 @@ export default function PWAInstallPrompt() {
           <X size={16} />
         </button>
         <div className="flex items-start gap-3">
-          <img src="/icons/icon-96x96.png" alt="Syrabit.ai" className="w-12 h-12 rounded-xl flex-shrink-0" />
+          <img src="/icons/icon-96x96.png" alt="Syrabit.ai" className="w-12 h-12 rounded-xl flex-shrink-0" width="48" height="48" loading="lazy" />
           <div className="flex-1 min-w-0">
             <h3 className="text-foreground font-semibold text-sm">Install Syrabit.ai</h3>
             <p className="text-muted-foreground text-xs mt-0.5 leading-relaxed">Get instant access from your home screen. Works offline too!</p>

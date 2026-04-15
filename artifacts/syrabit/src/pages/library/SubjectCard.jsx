@@ -91,6 +91,8 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
             src={sub.thumbnailUrl}
             alt=""
             loading="lazy"
+            width="400"
+            height="300"
             className="absolute inset-0 w-full h-full object-cover"
             style={{ opacity: 0.25 }}
           />

@@ -53,8 +53,8 @@
     <!-- Backend API preconnect — injected at build time by Vite (see vite.config.js htmlPlugin) -->
     <!--BACKEND_PRECONNECT-->
 
-    <link rel="dns-prefetch" href="https://us.i.posthog.com" />
-    <link rel="dns-prefetch" href="https://us-assets.i.posthog.com" />
+    <link rel="preconnect" href="https://us.i.posthog.com" crossorigin />
+    <link rel="preconnect" href="https://us-assets.i.posthog.com" crossorigin />
     <link rel="dns-prefetch" href="https://assets.emergent.sh" />
 
     <!-- Font preconnect — reduces DNS/TLS handshake latency -->
@@ -148,7 +148,7 @@
 
     <script>
       (function(){
-        var V='9';
+        var V='10';
         var keep=new Set(['syrabit-static-v'+V,'syrabit-runtime-v'+V,'syrabit-api-v'+V]);
         if('caches' in window){
           caches.keys().then(function(names){

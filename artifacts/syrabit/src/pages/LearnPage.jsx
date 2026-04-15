@@ -368,6 +368,8 @@ export default function LearnPage() {
                     alt={doc.alt_text || doc.title}
                     className="w-full h-full object-cover"
                     loading="lazy"
+                    width="800"
+                    height="450"
                   />
                 </div>
               )}
