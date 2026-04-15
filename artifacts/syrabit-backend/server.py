@@ -558,6 +558,9 @@ async def serve_robots_txt():
 # ── Search & Answer Bots (welcome) ──────────────────────────────────────
 User-agent: Googlebot
 Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
@@ -575,6 +578,9 @@ Allow: /
 
 User-agent: Bingbot
 Allow: /
+Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
@@ -583,6 +589,7 @@ Disallow: /cms/
 
 User-agent: Yandexbot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
@@ -590,16 +597,19 @@ Disallow: /profile
 
 User-agent: DuckDuckBot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 
 User-agent: Applebot
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 
 User-agent: Applebot-Extended
 Allow: /
+Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 
@@ -607,6 +617,8 @@ Disallow: /chat
 User-agent: ChatGPT-User
 Allow: /
 Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
 Allow: /api/content/library-bundle
 Allow: /api/content/chapters/
 Allow: /llms.txt
@@ -621,6 +633,8 @@ Disallow: /api/admin/
 User-agent: OAI-SearchBot
 Allow: /
 Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
 Allow: /llms.txt
 Allow: /llms-full.txt
 Disallow: /admin/
@@ -631,6 +645,8 @@ Disallow: /api/ai/
 User-agent: PerplexityBot
 Allow: /
 Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
 Allow: /api/content/library-bundle
 Allow: /llms.txt
 Allow: /llms-full.txt
@@ -643,6 +659,8 @@ Disallow: /api/ai/
 User-agent: ClaudeBot
 Allow: /
 Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
 Allow: /llms.txt
 Allow: /llms-full.txt
 Disallow: /admin/
@@ -653,6 +671,8 @@ Disallow: /api/ai/
 User-agent: Meta-ExternalAgent
 Allow: /
 Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
 Disallow: /admin/
 Disallow: /chat
 Disallow: /api/auth/
@@ -714,6 +734,8 @@ Disallow: /
 User-agent: *
 Allow: /
 Allow: /api/seo/
+Allow: /api/seo/keyword-index
+Allow: /api/seo/keyword-index.txt
 Allow: /llms.txt
 Allow: /llms-full.txt
 Allow: /feed.xml

@@ -71,6 +71,7 @@ const CACHE_TTL: Record<string, number> = {
   "/api/content/chapter-by-slug/": 604800,
   "/api/content/topic/": 604800,
   "/api/content/syllabus/": 604800,
+  "/api/seo/keyword-index": 3600,
   "/api/seo/": 600,
   "/api/pyq/": 604800,
   "/api/notes/public": 604800,

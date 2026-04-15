@@ -874,6 +874,8 @@ async def _build_llms_txt() -> str:
         "- /sitemap-index.xml — Master sitemap index",
         "- /robots.txt — Robots directives",
         "- /llms.txt — This file",
+        "- /api/seo/keyword-index — JSON index of ALL topic keywords with URLs (for discovering relevant pages by keyword match)",
+        "- /api/seo/keyword-index.txt — Plain-text keyword-to-topic mapping (KEYWORD | TOPIC | SUBJECT | BOARD CLASS | URL)",
         "- /api/seo/sitemap-pages.xml — Static pages sitemap",
         "- /api/seo/sitemap-notes.xml — Notes pages sitemap",
         "- /api/seo/sitemap-mcqs.xml — MCQ pages sitemap",

@@ -34,7 +34,20 @@ function ChapterJsonLd({ data, url, basePath }) {
         datePublished: data.generated_at || new Date().toISOString(),
         dateModified: data.updated_at || data.generated_at || new Date().toISOString(),
         educationalLevel: `${className} ${boardName}`.trim(),
-        about: { '@type': 'Thing', name: chapterTitle },
+        about: (() => {
+          const things = [{ '@type': 'Thing', name: chapterTitle }];
+          const words = chapterTitle.split(/[\s,\-–—/&]+/).filter(w => w.length > 2);
+          words.slice(0, 5).forEach(w => things.push({ '@type': 'Thing', name: w }));
+          if (data.chapter_title) things.push({ '@type': 'Thing', name: data.chapter_title });
+          return things.length > 1 ? things : things[0];
+        })(),
+        keywords: (() => {
+          const words = chapterTitle.split(/[\s,\-–—/&]+/).filter(w => w.length > 2);
+          const kws = [chapterTitle, subjectName, boardName, ...words,
+            `${chapterTitle} notes`, `${chapterTitle} definition`, `${chapterTitle} MCQ`,
+            `${chapterTitle} ${subjectName}`, `${chapterTitle} ${boardName} ${className}`];
+          return [...new Set(kws.map(k => k.toLowerCase()))].join(', ');
+        })(),
         wordCount: data.word_count || 0,
         inLanguage: 'en-IN',
         mainEntityOfPage: { '@type': 'WebPage', '@id': url },
@@ -46,9 +59,20 @@ function ChapterJsonLd({ data, url, basePath }) {
         description: data.meta_description,
         educationalLevel: `${className} ${boardName}`.trim(),
         learningResourceType: 'Study Notes',
+        teaches: chapterTitle,
         provider: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
         inLanguage: 'en-IN',
+        isAccessibleForFree: true,
         url,
+      },
+      {
+        '@type': 'WebPage',
+        '@id': url,
+        name: data.title,
+        speakable: {
+          '@type': 'SpeakableSpecification',
+          cssSelector: ['article h1', 'article > p:first-of-type', 'article h2'],
+        },
       },
       {
         '@type': 'BreadcrumbList',
@@ -649,7 +673,13 @@ export default function ChapterPage() {
         title={seoTitle}
         description={seoDesc}
         url={canonical}
-        keywords={`${chapterTitle}, ${subjectName}, ${boardName} notes, ${className} study material, AHSEC, SEBA, exam preparation`}
+        keywords={(() => {
+          const words = chapterTitle.split(/[\s,\-–—/&]+/).filter(w => w.length > 2);
+          const base = [chapterTitle, subjectName, `${boardName} notes`, `${className} study material`, 'AHSEC', 'SEBA', 'exam preparation'];
+          const expanded = [...base, ...words, `${chapterTitle} notes`, `${chapterTitle} definition`, `${chapterTitle} MCQ`, `${chapterTitle} important questions`, `${chapterTitle} ${subjectName}`, `${subjectName} ${className}`, `${chapterTitle} ${boardName}`, `${chapterTitle} study notes`, `${chapterTitle} exam notes`];
+          return [...new Set(expanded)].join(', ');
+        })()}
+        tags={[chapterTitle, subjectName, boardName, className, data.chapter_title || ''].filter(Boolean)}
       />
       <ChapterJsonLd data={data} url={canonical} basePath={basePath} />
 

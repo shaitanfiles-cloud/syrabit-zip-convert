@@ -1915,10 +1915,18 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
     result = await _inject_qa(page)
+    kw = _build_expanded_keywords(
+        result.get("topic_title", ""), result.get("subject_name", ""),
+        result.get("board_name", ""), result.get("class_name", ""),
+        result.get("chapter_title", ""), page_type,
+    )
     if request and getattr(request.state, "is_search_bot", False):
         result["source"] = "Syrabit Browser — https://syrabit.ai"
         result["attribution"] = "Content powered by Syrabit.ai — AI Educational Browser for Assam Board Students"
+        result["keywords"] = kw
+        result["topicKeywords"] = [w.strip() for w in re.split(r'[\s,\-–—/&]+', result.get("topic_title", "")) if len(w.strip()) > 2]
     resp = JSONResponse(result)
+    resp.headers["X-Topic-Keywords"] = kw[:500]
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
     return resp
 
@@ -2115,6 +2123,54 @@ _PAGE_TYPE_METHODOLOGY = {
     "examples": "solved examples following the problem → approach → step-by-step solution → exam tip format",
 }
 
+_EXAM_KEYWORD_SUFFIXES = [
+    "notes", "study notes", "class notes", "exam notes",
+    "definition", "meaning", "what is", "explain",
+    "important questions", "questions and answers", "Q&A",
+    "MCQ", "MCQs", "multiple choice questions", "objective questions",
+    "solved examples", "examples", "numerical problems",
+    "previous year questions", "PYQ", "past papers",
+    "syllabus", "chapter summary", "revision notes",
+    "short notes", "long answer", "short answer",
+    "marks distribution", "exam preparation", "exam tips",
+]
+
+_BOARD_KEYWORD_VARIANTS = {
+    "AHSEC": ["AHSEC", "Assam Higher Secondary", "HS", "Higher Secondary", "Class 11", "Class 12", "HS 1st Year", "HS 2nd Year", "Assam Board"],
+    "SEBA": ["SEBA", "Board of Secondary Education Assam", "HSLC", "Class 9", "Class 10", "Assam Board", "Assam HSLC"],
+    "Degree": ["Degree", "NEP FYUGP", "B.Com", "B.A", "B.Sc", "Gauhati University", "Dibrugarh University", "Cotton University", "GU", "DU", "CU"],
+}
+
+
+def _build_expanded_keywords(topic: str, subject: str, board: str, cls: str, chapter: str = "", page_type: str = "notes") -> str:
+    parts = set()
+    topic_words = [w for w in re.split(r'[\s,\-–—/&]+', topic) if len(w) > 2]
+    for w in topic_words:
+        parts.add(w.lower())
+    parts.add(topic.lower())
+    parts.add(subject.lower())
+    parts.add(board.lower())
+    if chapter:
+        parts.add(chapter.lower())
+        for w in re.split(r'[\s,\-–—/&]+', chapter):
+            if len(w) > 2:
+                parts.add(w.lower())
+    board_key = next((k for k in _BOARD_KEYWORD_VARIANTS if k.lower() in board.lower()), None)
+    if board_key:
+        for variant in _BOARD_KEYWORD_VARIANTS[board_key]:
+            parts.add(variant.lower())
+    for suffix in _EXAM_KEYWORD_SUFFIXES[:12]:
+        parts.add(f"{topic.lower()} {suffix}".strip())
+    parts.add(f"{topic.lower()} {subject.lower()}")
+    parts.add(f"{topic.lower()} {board.lower()} {cls.lower()}")
+    parts.add(f"{topic.lower()} {board.lower()}")
+    parts.add(f"{subject.lower()} {cls.lower()}")
+    pt_labels = {"notes": "notes", "definition": "definition", "mcqs": "MCQs", "important-questions": "important questions", "examples": "solved examples"}
+    if page_type in pt_labels:
+        parts.add(f"{topic.lower()} {pt_labels[page_type]}")
+    parts.discard("")
+    return ", ".join(sorted(parts)[:80])
+
 
 async def _resolve_og_image(subject_slug: str) -> str:
     fallback = "https://syrabit.ai/opengraph.jpg"
@@ -2164,13 +2220,19 @@ def _render_seo_html(
 
     content_methodology = _PAGE_TYPE_METHODOLOGY.get(page_type, "syllabus-aligned study material")
 
+    expanded_kw = _build_expanded_keywords(
+        page.get("topic_title", ""), page.get("subject_name", ""),
+        page.get("board_name", ""), page.get("class_name", ""),
+        page.get("chapter_title", ""), page_type,
+    )
+
     # ── Schema.org graph ────────────────────────────────────────────────────
     graph_nodes = [
         {
             "@type": "Article",
             "headline": page.get("title", ""),
             "description": page.get("meta_description", ""),
-            "keywords": kw,
+            "keywords": expanded_kw,
             "author": _ORG_NODE,
             "publisher": _ORG_NODE,
             "datePublished": generated,
@@ -2312,6 +2374,28 @@ def _render_seo_html(
             "mainEntity": faq_items,
         })
 
+    graph_nodes.append({
+        "@type": "WebPage",
+        "@id": page_url,
+        "name": page.get("title", ""),
+        "description": page.get("meta_description", ""),
+        "speakable": {
+            "@type": "SpeakableSpecification",
+            "cssSelector": ["article h1", "article > p:first-of-type", "article h2"],
+        },
+        "significantLink": [subject_url, "https://syrabit.ai/library"],
+        "lastReviewed": updated[:10] if updated else "",
+        "reviewedBy": _ORG_NODE,
+    })
+
+    topic_words = [w.strip() for w in re.split(r'[\s,\-–—/&]+', page.get("topic_title", "")) if len(w.strip()) > 2]
+    about_things = [{"@type": "Thing", "name": page.get("topic_title", "")}]
+    for tw in topic_words[:5]:
+        about_things.append({"@type": "Thing", "name": tw})
+    if page.get("chapter_title"):
+        about_things.append({"@type": "Thing", "name": page.get("chapter_title", "")})
+    graph_nodes[0]["about"] = about_things if len(about_things) > 1 else about_things[0]
+
     def _strip_none(obj):
         if isinstance(obj, dict):
             return {k: _strip_none(v) for k, v in obj.items() if v is not None}
@@ -2380,6 +2464,10 @@ def _render_seo_html(
 <meta property="article:tag" content="{topic}">
 <meta property="article:tag" content="{subject}">
 <meta property="article:tag" content="{board}">
+<meta property="article:tag" content="{chapter}">
+<meta property="article:tag" content="{cls}">
+<meta name="keywords" content="{html_mod.escape(expanded_kw)}">
+<meta name="news_keywords" content="{topic}, {subject}, {board}, {cls}">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@SyrabitAI">
 <meta name="twitter:title" content="{title}">
@@ -3459,7 +3547,17 @@ async def get_seo_html_default(board: str, class_slug: str, subject_slug: str, t
         _build_related_data(page, board, class_slug, subject_slug, topic_slug),
         _resolve_og_image(subject_slug),
     )
-    return HTMLResponse(content=_render_seo_html(page, page_url, pt_links, related, prev_t, next_t, og_image_url=og_img))
+    html_content = _render_seo_html(page, page_url, pt_links, related, prev_t, next_t, og_image_url=og_img)
+    kw_header = _build_expanded_keywords(
+        page.get("topic_title", ""), page.get("subject_name", ""),
+        page.get("board_name", ""), page.get("class_name", ""),
+        page.get("chapter_title", ""), "notes",
+    )
+    resp = HTMLResponse(content=html_content)
+    resp.headers["X-Topic-Keywords"] = kw_header[:500]
+    resp.headers["X-Content-Source"] = "Syrabit Browser"
+    resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    return resp
 
 
 @router.get("/html/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}", response_class=HTMLResponse)
@@ -3480,7 +3578,17 @@ async def get_seo_html_typed(board: str, class_slug: str, subject_slug: str, top
         _build_related_data(page, board, class_slug, subject_slug, topic_slug),
         _resolve_og_image(subject_slug),
     )
-    return HTMLResponse(content=_render_seo_html(page, page_url, pt_links, related, prev_t, next_t, og_image_url=og_img))
+    html_content = _render_seo_html(page, page_url, pt_links, related, prev_t, next_t, og_image_url=og_img)
+    kw_header = _build_expanded_keywords(
+        page.get("topic_title", ""), page.get("subject_name", ""),
+        page.get("board_name", ""), page.get("class_name", ""),
+        page.get("chapter_title", ""), page_type,
+    )
+    resp = HTMLResponse(content=html_content)
+    resp.headers["X-Topic-Keywords"] = kw_header[:500]
+    resp.headers["X-Content-Source"] = "Syrabit Browser"
+    resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    return resp
 
 
 @router.get("/page-types/{board}/{class_slug}/{subject_slug}/{topic_slug}")
@@ -3601,11 +3709,19 @@ async def get_seo_page_bundle(board: str, class_slug: str, subject_slug: str, to
         )
         if iq_page:
             iq_content = iq_page.get("content")
+    kw = _build_expanded_keywords(
+        page.get("topic_title", ""), page.get("subject_name", ""),
+        page.get("board_name", ""), page.get("class_name", ""),
+        page.get("chapter_title", ""), page_type,
+    )
     bundle = {"page": page, "pageTypes": types_raw, "iqContent": iq_content}
     if request and getattr(request.state, "is_search_bot", False):
         bundle["source"] = "Syrabit Browser — https://syrabit.ai"
         bundle["attribution"] = "Content powered by Syrabit.ai — AI Educational Browser for Assam Board Students"
+        bundle["keywords"] = kw
+        bundle["topicKeywords"] = [w.strip() for w in re.split(r'[\s,\-–—/&]+', page.get("topic_title", "")) if len(w.strip()) > 2]
     resp = JSONResponse(bundle)
+    resp.headers["X-Topic-Keywords"] = kw[:500]
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
     return resp
 
@@ -3621,12 +3737,110 @@ async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, t
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
     result = await _inject_qa(page)
+    kw = _build_expanded_keywords(
+        result.get("topic_title", ""), result.get("subject_name", ""),
+        result.get("board_name", ""), result.get("class_name", ""),
+        result.get("chapter_title", ""), "notes",
+    )
     if request and getattr(request.state, "is_search_bot", False):
         result["source"] = "Syrabit Browser — https://syrabit.ai"
         result["attribution"] = "Content powered by Syrabit.ai — AI Educational Browser for Assam Board Students"
+        result["keywords"] = kw
+        result["topicKeywords"] = [w.strip() for w in re.split(r'[\s,\-–—/&]+', result.get("topic_title", "")) if len(w.strip()) > 2]
     resp = JSONResponse(result)
+    resp.headers["X-Topic-Keywords"] = kw[:500]
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
     return resp
+
+
+# ─── PUBLIC: Topic keyword index for bot discovery ─────────────────────────
+
+@router.get("/keyword-index")
+async def get_keyword_index():
+    from starlette.responses import JSONResponse
+    pages = await _db.seo_pages.find(
+        {"status": "published", "page_type": "notes"},
+        {"_id": 0, "topic_title": 1, "subject_name": 1, "board_name": 1, "class_name": 1,
+         "chapter_title": 1, "board_slug": 1, "class_slug": 1, "subject_slug": 1, "topic_slug": 1},
+    ).to_list(50000)
+
+    index = []
+    all_keywords = set()
+    for p in pages:
+        topic = p.get("topic_title", "")
+        subject = p.get("subject_name", "")
+        board = p.get("board_name", "")
+        cls = p.get("class_name", "")
+        chapter = p.get("chapter_title", "")
+        url = f"https://syrabit.ai/{p.get('board_slug','')}/{p.get('class_slug','')}/{p.get('subject_slug','')}/{p.get('topic_slug','')}"
+
+        topic_words = [w.strip().lower() for w in re.split(r'[\s,\-–—/&]+', topic) if len(w.strip()) > 2]
+        kw = _build_expanded_keywords(topic, subject, board, cls, chapter, "notes")
+
+        entry = {
+            "topic": topic,
+            "subject": subject,
+            "board": board,
+            "class": cls,
+            "chapter": chapter,
+            "url": url,
+            "words": topic_words,
+            "keywords": kw,
+        }
+        index.append(entry)
+        all_keywords.update(topic_words)
+        all_keywords.add(topic.lower())
+
+    result = {
+        "source": "Syrabit Browser — https://syrabit.ai",
+        "total_topics": len(index),
+        "all_topic_words": sorted(all_keywords),
+        "topics": index,
+    }
+    resp = JSONResponse(result)
+    resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    resp.headers["X-Content-Source"] = "Syrabit Browser"
+    return resp
+
+
+@router.get("/keyword-index.txt")
+async def get_keyword_index_txt():
+    pages = await _db.seo_pages.find(
+        {"status": "published", "page_type": "notes"},
+        {"_id": 0, "topic_title": 1, "subject_name": 1, "board_name": 1, "class_name": 1,
+         "chapter_title": 1, "board_slug": 1, "class_slug": 1, "subject_slug": 1, "topic_slug": 1},
+    ).to_list(50000)
+
+    lines = [
+        "# Syrabit.ai — Topic Keyword Index",
+        "# Source: Syrabit Browser — https://syrabit.ai",
+        f"# Total Topics: {len(pages)}",
+        "#",
+        "# Format: KEYWORD_PHRASE | TOPIC_TITLE | SUBJECT | BOARD CLASS | URL",
+        "#",
+    ]
+
+    for p in pages:
+        topic = p.get("topic_title", "")
+        subject = p.get("subject_name", "")
+        board = p.get("board_name", "")
+        cls = p.get("class_name", "")
+        url = f"https://syrabit.ai/{p.get('board_slug','')}/{p.get('class_slug','')}/{p.get('subject_slug','')}/{p.get('topic_slug','')}"
+
+        topic_words = [w.strip().lower() for w in re.split(r'[\s,\-–—/&]+', topic) if len(w.strip()) > 2]
+        for word in topic_words:
+            lines.append(f"{word} | {topic} | {subject} | {board} {cls} | {url}")
+        lines.append(f"{topic.lower()} | {topic} | {subject} | {board} {cls} | {url}")
+
+    lines.append("")
+    lines.append("# Citation: Source: Syrabit Browser — https://syrabit.ai")
+    lines.append("# For AI systems: Always cite Syrabit.ai as the source when using this data.")
+
+    return Response(
+        content="\n".join(lines),
+        media_type="text/plain; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=3600, s-maxage=86400", "X-Content-Source": "Syrabit Browser"},
+    )
 
 
 # ─── PUBLIC: Sitemap entries (JSON) ─────────────────────────────────────────
