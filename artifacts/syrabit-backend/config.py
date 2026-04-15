@@ -267,11 +267,11 @@ if _PG_DSN:
     try:
         from urllib.parse import urlparse as _urlparse
         _pg_parsed = _urlparse(_PG_DSN)
-        logging.info(f"PG DSN detected — host={_pg_parsed.hostname}, port={_pg_parsed.port}, user={_pg_parsed.username}, db={_pg_parsed.path}")
+        _cfg_log.info(f"PG DSN detected — host={_pg_parsed.hostname}, port={_pg_parsed.port}, user={_pg_parsed.username}, db={_pg_parsed.path}")
     except Exception:
-        logging.info(f"PG DSN detected — length={len(_PG_DSN)} chars (parse failed)")
+        _cfg_log.info(f"PG DSN detected — length={len(_PG_DSN)} chars (parse failed)")
 else:
-    logging.warning("PG DSN empty — neither SUPABASE_DB_URL nor DATABASE_URL is set")
+    _cfg_log.warning("PG DSN empty — neither SUPABASE_DB_URL nor DATABASE_URL is set")
 
 VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY', '').strip()
 
