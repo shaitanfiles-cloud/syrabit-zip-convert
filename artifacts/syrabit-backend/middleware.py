@@ -29,12 +29,12 @@ _SEC_CSP_REPORT_ONLY = _env_bool("SEC_CSP_REPORT_ONLY", False)
 
 _CSP_VALUE = (
     "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://accounts.google.com https://apis.google.com https://widget.trustpilot.com; "
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com https://accounts.google.com https://apis.google.com https://widget.trustpilot.com https://challenges.cloudflare.com; "
     "style-src 'self' 'unsafe-inline' https://accounts.google.com https://widget.trustpilot.com; "
     "img-src 'self' data: https:; "
     "font-src 'self' data:; "
     "connect-src 'self' https:; "
-    "frame-src https://accounts.google.com https://widget.trustpilot.com; "
+    "frame-src https://accounts.google.com https://widget.trustpilot.com https://challenges.cloudflare.com; "
     "frame-ancestors 'self'; "
     "report-uri /api/security/csp-report"
 )

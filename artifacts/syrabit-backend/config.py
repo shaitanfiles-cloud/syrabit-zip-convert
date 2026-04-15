@@ -47,6 +47,10 @@ CF_ANALYTICS_API_TOKEN = os.environ.get('CF_ANALYTICS_API_TOKEN', '').strip()
 CF_ZONE_ID = os.environ.get('CF_ZONE_ID', '').strip()
 CF_API_TOKEN = os.environ.get('CF_API_TOKEN', '').strip() or CF_ANALYTICS_API_TOKEN
 
+# ── Cloudflare Turnstile ────────────────────────────────────────────────────
+CF_TURNSTILE_SECRET_KEY = os.environ.get('CF_TURNSTILE_SECRET_KEY', '').strip()
+CF_TURNSTILE_ENABLED = bool(CF_TURNSTILE_SECRET_KEY)
+
 # ── Cloudflare AI Gateway ────────────────────────────────────────────────────
 import time as _time
 

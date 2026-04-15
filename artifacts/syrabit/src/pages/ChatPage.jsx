@@ -15,6 +15,7 @@ import { toast } from 'sonner';
 import { MessageBubble } from './chat/MessageBubble';
 import { InputBar } from './chat/InputBar';
 import { ModelSelector, MODELS } from './chat/ModelSelector';
+import { useTurnstile } from '@/hooks/useTurnstile';
 
 const EmptyState = lazy(() => import('./chat/EmptyState').then(m => ({ default: m.EmptyState })));
 
@@ -41,6 +42,7 @@ export default function ChatPage() {
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
   const [responseLang, setResponseLang]   = useState(() => localStorage.getItem('syrabit_response_lang') || 'en');
+  const { getToken: getTurnstileToken } = useTurnstile();
   const handleCopy = useCallback((msgId) => setCopiedMsgId(msgId), []);
 
 
@@ -223,6 +225,8 @@ export default function ChatPage() {
     try {
       const fetchHeaders = { 'Content-Type': 'application/json' };
       if (!user) fetchHeaders['x-anon-id'] = getAnonId();
+      const _tsToken = await getTurnstileToken();
+      if (_tsToken) fetchHeaders['x-turnstile-token'] = _tsToken;
       const response = await fetch(`${API_BASE}/ai/chat/stream`, {
         method: 'POST', headers: fetchHeaders,
         credentials: 'include', body: JSON.stringify(payload), signal: controller.signal,

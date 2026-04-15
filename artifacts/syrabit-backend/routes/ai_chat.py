@@ -41,6 +41,21 @@ from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_
 
 _CONTENT_INTENTS_SET = {"notes", "important_questions", "pyq"}
 
+import httpx as _httpx_mod
+
+async def _verify_turnstile(token: str, ip: str = "") -> bool:
+    if not CF_TURNSTILE_ENABLED or not token:
+        return True
+    try:
+        async with _httpx_mod.AsyncClient(timeout=3.0) as _tc:
+            r = await _tc.post(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data={"secret": CF_TURNSTILE_SECRET_KEY, "response": token, "remoteip": ip},
+            )
+            return r.json().get("success", False)
+    except Exception:
+        return True
+
 def _tune_response_stream(chunk_text: str, intent: str, _buf: dict) -> str:
     _buf["total"] += chunk_text
     _buf["chars"] += len(chunk_text)
@@ -150,9 +165,17 @@ async def _resolve_semester_class_id(query: str, ctx_board_id: str) -> str | Non
     return None
 
 @router.post("/ai/chat")
-async def chat(msg: ChatMessage, user: Optional[dict] = Depends(rate_limit_chat_optional)):
+async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depends(rate_limit_chat_optional)):
     _chat_t0 = _time_mod.time()
     is_anon = user is None
+
+    if CF_TURNSTILE_ENABLED:
+        _ts_tok = request.headers.get("x-turnstile-token", "")
+        _ts_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "")
+        if not _ts_tok and is_anon:
+            raise HTTPException(status_code=403, detail="Turnstile token required")
+        if _ts_tok and not await _verify_turnstile(_ts_tok, _ts_ip):
+            raise HTTPException(status_code=403, detail="Turnstile verification failed")
 
     plan = user.get("plan", "free") if user else "free"
     max_tokens = PLAN_LIMITS[plan]["max_tokens"]
@@ -724,6 +747,14 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _raw_anon = request.headers.get("x-anon-id", "")
         if _raw_anon and re.match(r"^anon_[a-f0-9]{32}$", _raw_anon):
             anon_id = _raw_anon
+
+    if CF_TURNSTILE_ENABLED:
+        _ts_tok = request.headers.get("x-turnstile-token", "")
+        _ts_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "")
+        if not _ts_tok and is_anon:
+            raise HTTPException(status_code=403, detail="Turnstile token required")
+        if _ts_tok and not await _verify_turnstile(_ts_tok, _ts_ip):
+            raise HTTPException(status_code=403, detail="Turnstile verification failed")
 
     safe_prompt, fallback_msg, guardrail_tag = evaluate_prompt_safety(msg.message)
     _stream_intent, _stream_db_category = classify_intent(msg.message)

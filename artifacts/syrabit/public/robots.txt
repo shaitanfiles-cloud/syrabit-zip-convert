@@ -15,78 +15,9 @@ Sitemap: https://syrabit.ai/sitemap-index.xml
 
 Crawl-delay: 1
 
-# AI Search & Training Crawlers
-User-agent: GPTBot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: OAI-SearchBot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: ChatGPT-User
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: Google-Extended
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+# ── Search bots (ALLOWED) ───────────────────────────────────────────────────
 
 User-agent: Googlebot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: PerplexityBot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: ClaudeBot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: anthropic-ai
 Allow: /
 Allow: /api/seo/
 Disallow: /admin/
@@ -126,6 +57,36 @@ Disallow: /profile
 Disallow: /cms/
 Disallow: /api/
 
+User-agent: OAI-SearchBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: ChatGPT-User
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
+User-agent: PerplexityBot
+Allow: /
+Allow: /api/seo/
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+Disallow: /cms/
+Disallow: /api/
+
 User-agent: FacebookBot
 Allow: /
 Allow: /api/seo/
@@ -136,7 +97,7 @@ Disallow: /profile
 Disallow: /cms/
 Disallow: /api/
 
-User-agent: meta-externalagent
+User-agent: facebookexternalhit
 Allow: /
 Allow: /api/seo/
 Disallow: /admin/
@@ -146,32 +107,28 @@ Disallow: /profile
 Disallow: /cms/
 Disallow: /api/
 
-User-agent: cohere-ai
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+# ── AI training crawlers (BLOCKED) ──────────────────────────────────────────
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
 
 User-agent: Bytespider
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+Disallow: /
 
 User-agent: CCBot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+Disallow: /
+
+User-agent: cohere-ai
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /
