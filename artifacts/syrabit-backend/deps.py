@@ -220,8 +220,23 @@ CREATE TABLE IF NOT EXISTS notifications (
 async def _init_pg_pool():
     global pg_pool
     if not _asyncpg or not _PG_DSN:
-        logging.getLogger(__name__).warning("[WARN] Replit PostgreSQL not configured — asyncpg disabled")
+        logging.getLogger(__name__).warning("[WARN] PostgreSQL not configured — asyncpg disabled")
         return
+    _log = logging.getLogger(__name__)
+    try:
+        from urllib.parse import urlparse as _urlparse
+        _parsed = _urlparse(_PG_DSN)
+        _host = _parsed.hostname or "unknown"
+        _log.info(f"PG connecting to host={_host} port={_parsed.port}")
+        import socket
+        try:
+            socket.getaddrinfo(_host, _parsed.port or 5432)
+            _log.info(f"PG DNS resolved for {_host}")
+        except socket.gaierror as dns_err:
+            _log.warning(f"PG DNS resolution FAILED for '{_host}': {dns_err} — raw DSN length={len(_PG_DSN)}, first 30 chars={repr(_PG_DSN[:30])}")
+            return
+    except Exception as _parse_err:
+        _log.warning(f"PG DSN parse error: {_parse_err}")
     try:
         pg_pool = await _asyncpg.create_pool(_PG_DSN, min_size=3, max_size=40)
         async with pg_pool.acquire() as conn:

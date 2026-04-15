@@ -262,7 +262,11 @@ ADMIN_ACCOUNTS = _load_admin_accounts()
 ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
 ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
 
-_PG_DSN = os.environ.get("SUPABASE_DB_URL", "") or os.environ.get("DATABASE_URL", "")
+_PG_DSN_RAW = os.environ.get("SUPABASE_DB_URL", "") or os.environ.get("DATABASE_URL", "")
+_PG_DSN = _PG_DSN_RAW.strip().strip('"').strip("'").strip()
+if _PG_DSN and not _PG_DSN.startswith(("postgresql://", "postgres://")):
+    _cfg_log.warning(f"PG DSN invalid scheme — starts with: {_PG_DSN[:20]}...")
+    _PG_DSN = ""
 if _PG_DSN:
     try:
         from urllib.parse import urlparse as _urlparse
