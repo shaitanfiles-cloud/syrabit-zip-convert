@@ -263,6 +263,15 @@ ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
 ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
 
 _PG_DSN = os.environ.get("SUPABASE_DB_URL", "") or os.environ.get("DATABASE_URL", "")
+if _PG_DSN:
+    try:
+        from urllib.parse import urlparse as _urlparse
+        _pg_parsed = _urlparse(_PG_DSN)
+        logging.info(f"PG DSN detected — host={_pg_parsed.hostname}, port={_pg_parsed.port}, user={_pg_parsed.username}, db={_pg_parsed.path}")
+    except Exception:
+        logging.info(f"PG DSN detected — length={len(_PG_DSN)} chars (parse failed)")
+else:
+    logging.warning("PG DSN empty — neither SUPABASE_DB_URL nor DATABASE_URL is set")
 
 VOYAGE_API_KEY = os.environ.get('VOYAGE_API_KEY', '').strip()
 
