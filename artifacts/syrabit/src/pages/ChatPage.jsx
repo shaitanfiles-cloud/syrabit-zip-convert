@@ -42,7 +42,7 @@ export default function ChatPage() {
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
   const [responseLang, setResponseLang]   = useState(() => localStorage.getItem('syrabit_response_lang') || 'en');
-  const { getToken: getTurnstileToken } = useTurnstile();
+  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled } = useTurnstile();
   const handleCopy = useCallback((msgId) => setCopiedMsgId(msgId), []);
 
 
@@ -200,7 +200,7 @@ export default function ChatPage() {
   }, []);
 
   const sendMsg = async (text) => {
-    if (!text.trim() || isLoading || isOutOfCredits) return;
+    if (!text.trim() || isLoading || isOutOfCredits || (turnstileEnabled && !turnstileReady)) return;
     const msgId = Date.now().toString();
     const userMsg = { id: msgId + '_u', role: 'user', content: text, timestamp: new Date().toISOString() };
     const aiMsgId = msgId + '_a';
