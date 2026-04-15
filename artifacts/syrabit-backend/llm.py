@@ -1255,8 +1255,8 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # async with slot["sem"] lets up to max_concurrent requests run in parallel.
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
-    _SLM_SLOT_TIMEOUT = 0.9    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 1.0    # max seconds to wait for FIRST token from a slot
+    _SLM_SLOT_TIMEOUT = 0.7    # max seconds between any two tokens mid-stream
+    _SLM_TTFT_TIMEOUT = 0.8    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
@@ -1395,39 +1395,48 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
 
     # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
     _SARVAM_TTFT_TIMEOUT = 3.0
-    _SARVAM_SLOT_TIMEOUT = 1.5
+    _SARVAM_SLOT_TIMEOUT = 1.2
     if _indic_mode and provider == "sarvam":
+        _indic_candidates = []
+
         _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
         if key not in _sarvam_keys:
             _sarvam_keys.insert(0, key)
         _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+        for _sk in _sarvam_keys:
+            _indic_candidates.append({"provider": "sarvam", "key": _sk, "model": use_model})
+
+        _gemini_keys_for_indic = [p["key"] for p in _LLM_PROVIDERS if p["provider"] == "gemini" and p.get("key")]
+        for _gk in _gemini_keys_for_indic[:1]:
+            _indic_candidates.append({"provider": "gemini", "key": _gk, "model": "gemini-2.5-flash"})
 
         _indic_q: asyncio.Queue = asyncio.Queue()
 
-        async def _sarvam_producer(_key, _key_idx):
+        async def _indic_producer(_cand, _cand_idx):
+            _cprov, _ckey, _cmodel = _cand["provider"], _cand["key"], _cand["model"]
             try:
                 _cn = 0
-                async for chunk in _emit_tokens(_stream_from_provider(provider, _key, use_model)):
+                async for chunk in _emit_tokens(_stream_from_provider(_cprov, _ckey, _cmodel)):
                     _cn += 1
-                    await _indic_q.put((_key_idx, "chunk", chunk))
+                    await _indic_q.put((_cand_idx, "chunk", chunk))
                 if _cn == 0:
-                    logger.warning(f"[INDIC] Sarvam key_idx={_key_idx} returned 0 chunks")
-                await _indic_q.put((_key_idx, "done", None))
+                    logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} returned 0 chunks")
+                await _indic_q.put((_cand_idx, "done", None))
             except Exception as _e:
                 _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
-                logger.warning(f"[INDIC] Sarvam key_idx={_key_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
-                await _indic_q.put((_key_idx, "error", None))
+                logger.warning(f"[INDIC] {_cprov}/{_cmodel} idx={_cand_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_cand_idx, "error", None))
 
-        _sarvam_tasks = [asyncio.create_task(_sarvam_producer(k, i)) for i, k in enumerate(_sarvam_keys)]
-        if len(_sarvam_keys) > 1:
-            logger.info(f"[INDIC] Hedged racing {len(_sarvam_keys)} Sarvam keys for {response_lang}")
+        _indic_tasks = [asyncio.create_task(_indic_producer(c, i)) for i, c in enumerate(_indic_candidates)]
+        _race_providers = ", ".join(f"{c['provider']}/{c['model']}" for c in _indic_candidates)
+        logger.info(f"[INDIC] Hedged racing {len(_indic_candidates)} candidates for {response_lang}: {_race_providers}")
 
         _sarvam_winner = None
         _sarvam_finished: set = set()
         _sarvam_race_t0 = time.monotonic()
         try:
             _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
-            while _sarvam_winner is None and len(_sarvam_finished) < len(_sarvam_keys):
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_indic_candidates):
                 _rem = _deadline - time.monotonic()
                 if _rem <= 0:
                     break
@@ -1443,10 +1452,11 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
             pass
 
         if _sarvam_winner is not None:
+            _win_cand = _indic_candidates[_sarvam_winner]
             _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
-            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} model={use_model} key_idx={_sarvam_winner}")
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']} idx={_sarvam_winner}")
 
-            for i, t in enumerate(_sarvam_tasks):
+            for i, t in enumerate(_indic_tasks):
                 if i != _sarvam_winner:
                     t.cancel()
 
@@ -1456,7 +1466,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                 try:
                     _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
                 except asyncio.TimeoutError:
-                    logger.warning(f"[INDIC] Sarvam key_idx={_sarvam_winner} stalled mid-stream")
+                    logger.warning(f"[INDIC] {_win_cand['provider']}/{_win_cand['model']} stalled mid-stream")
                     break
                 if _sid != _sarvam_winner:
                     continue
@@ -1466,26 +1476,26 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
                     break
 
             _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
-            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} model={use_model} key_idx={_sarvam_winner}")
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} winner={_win_cand['provider']}/{_win_cand['model']}")
 
-            for t in _sarvam_tasks:
+            for t in _indic_tasks:
                 t.cancel()
-            for t in _sarvam_tasks:
+            for t in _indic_tasks:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
 
-            yield f"data: {json.dumps({'__provider': provider})}\n\n"
+            yield f"data: {json.dumps({'__provider': _win_cand['provider']})}\n\n"
         else:
-            for t in _sarvam_tasks:
+            for t in _indic_tasks:
                 t.cancel()
-            for t in _sarvam_tasks:
+            for t in _indic_tasks:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
-            logger.warning(f"[INDIC] All {len(_sarvam_keys)} Sarvam keys failed/timed out")
+            logger.warning(f"[INDIC] All {len(_indic_candidates)} candidates failed/timed out")
             yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
         return
 
