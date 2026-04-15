@@ -217,6 +217,7 @@ export default function TestimonialsFooter({ year }) {
             <div className="space-y-1">
               <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">COMPANY</p>
               <Link to="/about" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">About Us</Link>
+              <Link to="/technology" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Technology</Link>
               <Link to="/privacy" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Privacy Policy</Link>
               <Link to="/terms" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Terms of Service</Link>
               <Link to="/status" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">System Status</Link>

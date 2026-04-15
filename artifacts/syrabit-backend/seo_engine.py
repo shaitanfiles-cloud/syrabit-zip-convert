@@ -3921,6 +3921,7 @@ STATIC_PAGES = [
     ("/exam-routine", "weekly", "0.8"),
     ("/terms", "yearly", "0.3"),
     ("/privacy", "yearly", "0.3"),
+    ("/technology", "monthly", "0.7"),
 ]
 
 _SITEMAP_TYPES = ["notes", "mcqs", "important-questions", "examples", "definition"]

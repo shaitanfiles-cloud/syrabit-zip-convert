@@ -1,4 +1,5 @@
 import { PublicLayout } from '@/components/layout/PublicLayout';
+import { Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 
 export default function AboutPage() {
@@ -92,6 +93,22 @@ export default function AboutPage() {
                 We serve students across Assam preparing for board exams and university exams under
                 AHSEC, SEBA, Gauhati University, and Dibrugarh University curricula. Our content covers
                 Class 11, Class 12, and undergraduate degree programmes.
+              </p>
+            </div>
+
+            <div>
+              <h2 className="text-foreground font-semibold text-lg mb-3">Built With</h2>
+              <p className="mb-3">
+                Syrabit.ai is a production-grade platform built with React 18, FastAPI, and a
+                multi-provider LLM pipeline (Groq, Cerebras, Sarvam AI, Gemini) — powered by
+                MongoDB Atlas, Redis, Cloudflare Workers, and a custom programmatic SEO engine
+                that auto-generates 15,000+ optimized pages. The entire system is deployed as a
+                hybrid architecture across Cloudflare&apos;s edge network and Railway.
+              </p>
+              <p>
+                <Link to="/technology" className="text-violet-600 hover:underline">
+                  View the full technology stack and architecture details →
+                </Link>
               </p>
             </div>
 

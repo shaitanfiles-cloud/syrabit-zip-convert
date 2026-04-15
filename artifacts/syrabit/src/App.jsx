@@ -57,6 +57,7 @@ const LearnPage              = lazy(() => import("@/pages/LearnPage"));
 const PYQReplicaPage         = lazy(() => import("@/pages/PYQReplicaPage"));
 const PersonalizedCmsPage    = lazy(() => import("@/pages/PersonalizedCmsPage"));
 const AboutPage              = lazy(() => import("@/pages/AboutPage"));
+const TechnologyPage         = lazy(() => import("@/pages/TechnologyPage"));
 
 // ── Page loading fallback (boot splash) ──────────────────────────────────────
 const PageFallbackContent = () => (
@@ -199,6 +200,7 @@ function App() {
                   <Route path="/terms"    element={<TermsPage />} />
                   <Route path="/privacy"       element={<PrivacyPage />} />
                   <Route path="/about"         element={<AboutPage />} />
+                  <Route path="/technology"   element={<TechnologyPage />} />
                   <Route path="/status"        element={<StatusPage />} />
                   <Route path="/exam-routine" element={<ExamRoutinePage />} />
                   <Route path="/payment/success" element={<PaymentSuccessPage />} />
