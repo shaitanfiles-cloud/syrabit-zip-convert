@@ -940,7 +940,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         else:
             _pre_results.append(_defaults_pre[_i])
 
-    _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web = _pre_results
+    if _pre_results:
+        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web = _pre_results
 
     _s_topic_meta = None
     if _stage1_task:
