@@ -436,7 +436,7 @@ function cfAnalyticsPlugin() {
     name: 'syrabit-cf-analytics',
     transformIndexHtml(html) {
       if (!token) return html.replace('<!--CF_ANALYTICS_BEACON-->', '');
-      const tag = `<!-- Cloudflare Web Analytics -->\n    <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "${token}"}'></script>`;
+      const tag = `<!-- Cloudflare Web Analytics -->\n    <script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "${token}", "spa": true}'></script>`;
       return html.replace('<!--CF_ANALYTICS_BEACON-->', tag);
     },
   };
