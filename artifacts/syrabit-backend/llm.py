@@ -831,7 +831,11 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         api_max = max_tokens + 100
         patched = [dict(m) for m in messages]
         if patched and patched[0].get("role") == "system":
-            patched[0]["content"] = "<think> টেগ ব্যৱহাৰ নকৰিবা। পোনপটীয়াকৈ অসমীয়াত উত্তৰ দিয়া।\n" + patched[0]["content"]
+            patched[0]["content"] = (
+                "CRITICAL: Do NOT use <think> tags. Do NOT write internal thoughts. "
+                "Do NOT start with 'Okay' or 'Let me'. "
+                "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
+            ) + patched[0]["content"]
         logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
     else:
         api_max = max_tokens + SARVAM_THINK_BUFFER
@@ -847,7 +851,11 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         "presence_penalty": 0,
         "stream": True,
     }
-    if _indic and response_lang in _SARVAM_LANG_CODE_MAP:
+    if _indic:
+        payload["thinking"] = {"enabled": False}
+        if response_lang in _SARVAM_LANG_CODE_MAP:
+            payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
+    elif response_lang in _SARVAM_LANG_CODE_MAP:
         payload["response_language"] = _SARVAM_LANG_CODE_MAP[response_lang]
     client = _pick_sarvam_client()
     if client is None:
@@ -1248,7 +1256,7 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
     # Tokens are yielded in real-time as they arrive (true streaming).
     # TTFT timeout ensures fast failover when a provider is unresponsive.
     _SLM_SLOT_TIMEOUT = 0.9    # max seconds between any two tokens mid-stream
-    _SLM_TTFT_TIMEOUT = 0.3    # max seconds to wait for FIRST token from a slot
+    _SLM_TTFT_TIMEOUT = 1.0    # max seconds to wait for FIRST token from a slot
 
     _SLM_PROVIDER_MAX_INPUT_CHARS = {
         "cerebras": 24000,
@@ -1385,45 +1393,99 @@ async def call_llm_api_stream(messages: list, model: str = None, max_tokens: int
         yield f"data: {json.dumps({'error': 'All AI providers temporarily unavailable'})}\n\n"
         return
 
-    # ── Indic Sarvam with key + model fallback ──────────────────────────────────
+    # ── Indic Sarvam with hedged key racing ─────────────────────────────────────
+    _SARVAM_TTFT_TIMEOUT = 3.0
+    _SARVAM_SLOT_TIMEOUT = 1.5
     if _indic_mode and provider == "sarvam":
-        _indic_success = False
         _sarvam_keys = [p["key"] for p in _prov_list if p["provider"] == "sarvam"]
         if key not in _sarvam_keys:
             _sarvam_keys.insert(0, key)
-        _model_chain = [use_model] + [m for m in _SARVAM_INDIC_MODEL_PREFERENCE if m != use_model]
-        for _try_key_idx, _try_key in enumerate(_sarvam_keys):
-            for _try_model in _model_chain:
-                try:
-                    _chunk_n = 0
-                    _try_t0 = time.monotonic()
-                    async for chunk in _emit_tokens(_stream_from_provider(provider, _try_key, _try_model)):
-                        if _chunk_n == 0:
-                            _ttft_ms = (time.monotonic() - _try_t0) * 1000
-                            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} model={_try_model} key_idx={_try_key_idx}")
-                        _chunk_n += 1
-                        yield chunk
-                    _total_ms = (time.monotonic() - _try_t0) * 1000
-                    logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms chunks={_chunk_n} lang={response_lang} model={_try_model} key_idx={_try_key_idx}")
-                    if _chunk_n == 0:
-                        logger.warning(f"[INDIC] Sarvam key_idx={_try_key_idx} model='{_try_model}' returned 0 chunks — trying next")
-                        in_think = False
-                        buf = ""
-                        continue
-                    yield f"data: {json.dumps({'__provider': provider})}\n\n"
-                    _indic_success = True
+        _sarvam_keys = list(dict.fromkeys(_sarvam_keys))
+
+        _indic_q: asyncio.Queue = asyncio.Queue()
+
+        async def _sarvam_producer(_key, _key_idx):
+            try:
+                _cn = 0
+                async for chunk in _emit_tokens(_stream_from_provider(provider, _key, use_model)):
+                    _cn += 1
+                    await _indic_q.put((_key_idx, "chunk", chunk))
+                if _cn == 0:
+                    logger.warning(f"[INDIC] Sarvam key_idx={_key_idx} returned 0 chunks")
+                await _indic_q.put((_key_idx, "done", None))
+            except Exception as _e:
+                _is_rate = any(s in str(_e).lower() for s in ("429", "rate", "quota", "throttl"))
+                logger.warning(f"[INDIC] Sarvam key_idx={_key_idx} failed ({type(_e).__name__}: {str(_e)[:120]}) rate_limit={_is_rate}")
+                await _indic_q.put((_key_idx, "error", None))
+
+        _sarvam_tasks = [asyncio.create_task(_sarvam_producer(k, i)) for i, k in enumerate(_sarvam_keys)]
+        if len(_sarvam_keys) > 1:
+            logger.info(f"[INDIC] Hedged racing {len(_sarvam_keys)} Sarvam keys for {response_lang}")
+
+        _sarvam_winner = None
+        _sarvam_finished: set = set()
+        _sarvam_race_t0 = time.monotonic()
+        try:
+            _deadline = time.monotonic() + _SARVAM_TTFT_TIMEOUT
+            while _sarvam_winner is None and len(_sarvam_finished) < len(_sarvam_keys):
+                _rem = _deadline - time.monotonic()
+                if _rem <= 0:
                     break
-                except Exception as _fb_err:
-                    _is_rate = any(s in str(_fb_err).lower() for s in ("429", "rate", "quota", "throttl"))
-                    logger.warning(f"[INDIC] Sarvam key_idx={_try_key_idx} model='{_try_model}' failed ({type(_fb_err).__name__}: {str(_fb_err)[:120]}) rate_limit={_is_rate}")
-                    in_think = False
-                    buf = ""
-                    if _is_rate:
-                        break
+                try:
+                    _sid, _evt, _data = await asyncio.wait_for(_indic_q.get(), timeout=_rem)
+                except asyncio.TimeoutError:
+                    break
+                if _evt == "chunk":
+                    _sarvam_winner = _sid
+                elif _evt in ("done", "error"):
+                    _sarvam_finished.add(_sid)
+        except Exception:
+            pass
+
+        if _sarvam_winner is not None:
+            _ttft_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] TTFT={_ttft_ms:.0f}ms lang={response_lang} model={use_model} key_idx={_sarvam_winner}")
+
+            for i, t in enumerate(_sarvam_tasks):
+                if i != _sarvam_winner:
+                    t.cancel()
+
+            yield _data
+
+            while True:
+                try:
+                    _sid, _evt, _chunk = await asyncio.wait_for(_indic_q.get(), timeout=_SARVAM_SLOT_TIMEOUT)
+                except asyncio.TimeoutError:
+                    logger.warning(f"[INDIC] Sarvam key_idx={_sarvam_winner} stalled mid-stream")
+                    break
+                if _sid != _sarvam_winner:
                     continue
-            if _indic_success:
-                break
-        if not _indic_success:
+                if _evt == "chunk":
+                    yield _chunk
+                else:
+                    break
+
+            _total_ms = (time.monotonic() - _sarvam_race_t0) * 1000
+            logger.info(f"[INDIC-PERF] Total={_total_ms:.0f}ms lang={response_lang} model={use_model} key_idx={_sarvam_winner}")
+
+            for t in _sarvam_tasks:
+                t.cancel()
+            for t in _sarvam_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            yield f"data: {json.dumps({'__provider': provider})}\n\n"
+        else:
+            for t in _sarvam_tasks:
+                t.cancel()
+            for t in _sarvam_tasks:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            logger.warning(f"[INDIC] All {len(_sarvam_keys)} Sarvam keys failed/timed out")
             yield f"data: {json.dumps({'error': 'Indic language AI service temporarily unavailable'})}\n\n"
         return
 
