@@ -3,30 +3,9 @@
    Light-only theme
    ══════════════════════════════════════════════════════════════ */
 
-@import "tailwindcss";
-
-@theme inline {
-  --color-background: hsl(240 20% 96%);
-  --color-foreground: hsl(240 65% 7%);
-  --color-primary: hsl(263 80% 57%);
-  --color-primary-foreground: hsl(0 0% 100%);
-  --color-secondary: hsl(257 100% 93%);
-  --color-secondary-foreground: hsl(263 73% 40%);
-  --color-muted: hsl(263 55% 97%);
-  --color-muted-foreground: hsl(215 20% 47%);
-  --color-accent: hsl(225 75% 93%);
-  --color-accent-foreground: hsl(243 73% 34%);
-  --color-destructive: hsl(0 84% 60%);
-  --color-destructive-foreground: hsl(0 0% 100%);
-  --color-border: hsl(263 60% 75%);
-  --color-input: hsl(263 55% 97%);
-  --color-ring: hsl(263 80% 57%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(240 65% 7%);
-  --color-popover: hsl(0 0% 98%);
-  --color-popover-foreground: hsl(240 65% 7%);
-  --radius: 0.875rem;
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
 /* ══════════════════════════════════════════════════════════════
    SECTION 1 — COLOR TOKENS (LIGHT MODE : ROOT)
@@ -573,11 +552,7 @@
 
   /* ── CHAT BUBBLES ── */
   .msg-ai {
-    background: var(--card-glass, rgba(255,255,255,0.75));
-    border: 1px solid var(--card-glass-border, rgba(139,92,246,0.12));
-    backdrop-filter: blur(16px) saturate(1.6);
-    -webkit-backdrop-filter: blur(16px) saturate(1.6);
-    box-shadow: 0 1px 4px rgba(0,0,0,0.04), 0 0 0 1px rgba(139,92,246,0.06);
+    @apply glass-card rounded-2xl;
     padding: 14px 18px;
     max-width: 88%;
     align-self: flex-start;
