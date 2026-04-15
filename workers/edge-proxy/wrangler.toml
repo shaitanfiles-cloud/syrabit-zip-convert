@@ -7,7 +7,7 @@ routes = [
 ]
 
 [vars]
-BACKEND_URL = "BACKEND_URL = "https://workspacesyrabit-production-0ddc.up.railway.app"
+BACKEND_URL = "https://workspacesyrabit-production-0ddc.up.railway.app"
 D1_SYNC_SECRET = "5b5b091800ea2e552e8f600956ca7df609e25d90cecdcce502c8688df276250e"
 
 [[kv_namespaces]]
