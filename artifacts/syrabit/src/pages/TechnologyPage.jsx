@@ -367,17 +367,19 @@ export default function TechnologyPage() {
               </h2>
               <p className="mb-3">
                 Syrabit.ai was developed as a grant-funded initiative (funded under the Assam
-                Startup ecosystem) to address the lack of quality, syllabus-aligned digital
-                education resources for students in Assam. The platform covers three major
-                examination boards — AHSEC, SEBA, and university-level Degree programmes — across
-                55+ subjects spanning Science, Commerce, and Arts streams.
+                Startup ecosystem with ₹7.5 lakh seed funding) to address the lack of quality,
+                syllabus-aligned digital education resources for students in Assam. The platform
+                covers three major examination boards — AHSEC, SEBA, and university-level
+                Degree programmes — across 55+ subjects spanning Science, Commerce, and Arts
+                streams.
               </p>
               <p className="mb-3">
-                The development encompasses full-stack engineering across frontend, backend,
-                AI/ML pipeline, infrastructure, DevOps, content generation, SEO automation,
-                payment integration, and admin tooling. The architecture is designed for
-                horizontal scalability with edge caching, database replication, and provider
-                failover at every layer.
+                Built by a solo full-stack developer over 12+ months of continuous development,
+                the project spans frontend engineering, backend API design, AI/ML pipeline
+                architecture, infrastructure and DevOps, content generation automation, SEO
+                engine development, payment integration, and admin tooling. The architecture
+                is designed for horizontal scalability with edge caching, database replication,
+                and provider failover at every layer.
               </p>
               <p>
                 Learn more about our mission and approach on the{' '}
