@@ -52,9 +52,13 @@ async def _verify_turnstile(token: str, ip: str = "") -> bool:
                 "https://challenges.cloudflare.com/turnstile/v0/siteverify",
                 data={"secret": CF_TURNSTILE_SECRET_KEY, "response": token, "remoteip": ip},
             )
+            if r.status_code != 200:
+                logger.warning(f"Turnstile siteverify returned {r.status_code}")
+                return False
             return r.json().get("success", False)
-    except Exception:
-        return True
+    except Exception as e:
+        logger.warning(f"Turnstile verification error: {type(e).__name__}: {e}")
+        return False
 
 def _tune_response_stream(chunk_text: str, intent: str, _buf: dict) -> str:
     _buf["total"] += chunk_text
@@ -172,9 +176,9 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
     if CF_TURNSTILE_ENABLED:
         _ts_tok = request.headers.get("x-turnstile-token", "")
         _ts_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "")
-        if not _ts_tok and is_anon:
+        if not _ts_tok:
             raise HTTPException(status_code=403, detail="Turnstile token required")
-        if _ts_tok and not await _verify_turnstile(_ts_tok, _ts_ip):
+        if not await _verify_turnstile(_ts_tok, _ts_ip):
             raise HTTPException(status_code=403, detail="Turnstile verification failed")
 
     plan = user.get("plan", "free") if user else "free"
@@ -751,9 +755,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     if CF_TURNSTILE_ENABLED:
         _ts_tok = request.headers.get("x-turnstile-token", "")
         _ts_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "")
-        if not _ts_tok and is_anon:
+        if not _ts_tok:
             raise HTTPException(status_code=403, detail="Turnstile token required")
-        if _ts_tok and not await _verify_turnstile(_ts_tok, _ts_ip):
+        if not await _verify_turnstile(_ts_tok, _ts_ip):
             raise HTTPException(status_code=403, detail="Turnstile verification failed")
 
     safe_prompt, fallback_msg, guardrail_tag = evaluate_prompt_safety(msg.message)
