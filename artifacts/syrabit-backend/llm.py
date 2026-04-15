@@ -831,7 +831,7 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         api_max = max_tokens + 100
         patched = [dict(m) for m in messages]
         if patched and patched[0].get("role") == "system":
-            patched[0]["content"] = "Do not use <think> tags. Respond directly.\n" + patched[0]["content"]
+            patched[0]["content"] = "<think> টেগ ব্যৱহাৰ নকৰিবা। পোনপটীয়াকৈ অসমীয়াত উত্তৰ দিয়া।\n" + patched[0]["content"]
         logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
     else:
         api_max = max_tokens + SARVAM_THINK_BUFFER
@@ -841,8 +841,8 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
         "model": model,
         "messages": patched,
         "max_tokens": api_max,
-        "temperature": 0.1,
-        "top_p": 0.95,
+        "temperature": 0.05 if _indic else 0.1,
+        "top_p": 0.9 if _indic else 0.95,
         "frequency_penalty": 0,
         "presence_penalty": 0,
         "stream": True,

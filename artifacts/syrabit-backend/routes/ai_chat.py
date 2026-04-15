@@ -763,8 +763,25 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _sarvam_target = _SARVAM_LANG_MAP.get(_resp_lang)
     _want_translate = bool(_sarvam_target and _resp_lang != "en")
 
-    _instant_s = get_instant_response(msg.message) if (_stream_intent == "casual" and not _want_translate) else None
+    _instant_s = get_instant_response(msg.message) if _stream_intent == "casual" else None
     if _instant_s:
+        if _want_translate and _instant_s:
+            try:
+                _tr_resp = await asyncio.wait_for(
+                    sarvam_client.post("/translate", json={
+                        "input": _instant_s[:2000],
+                        "source_language_code": "en-IN",
+                        "target_language_code": _sarvam_target,
+                        "mode": "formal",
+                        "model": "sarvam-translate:v1",
+                        "enable_preprocessing": False,
+                    }),
+                    timeout=2.0,
+                )
+                if _tr_resp.status_code == 200:
+                    _instant_s = _tr_resp.json().get("translated_text") or _instant_s
+            except Exception:
+                pass
         logger.info(f"[STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant_s)} chars (0 LLM calls)")
         async def _instant_stream():
             nonlocal _instant_s
@@ -1162,8 +1179,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _target_lang_name = _LANG_NAME_MAP.get(_resp_lang)
     if _want_translate and _target_lang_name:
         _indic_system_prompt = (
-            "You are Syra, AI tutor. Reply ONLY in Assamese (অসমীয়া). "
-            "Technical terms/formulas in English OK. Be concise: 30-60 words, max 200.\n"
+            "তুমি Syra, এগৰাকী AI শিক্ষক। কেৱল অসমীয়াত উত্তৰ দিয়া। "
+            "কাৰিকৰী শব্দ/সূত্ৰ ইংৰাজীত ৰাখিব পাৰা। চমুকৈ লিখা: ৩০-৬০ শব্দ, সৰ্বাধিক ২০০।\n"
         )
         if system_prompt:
             _ctx_markers = ["**GROUNDING CONTEXT", "**CURRICULUM", "**SUBJECT CHAPTERS", "REFERENCE MATERIAL:", "CONTEXT:", "RELEVANT CONTENT:"]
@@ -1178,7 +1195,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             else:
                 _content_lines = [l for l in system_prompt.split('\n') if l.strip() and not l.strip().startswith(('You are', 'IMPORTANT:', 'RULES:', 'Format'))]
                 if _content_lines:
-                    _indic_system_prompt += "\nCONTEXT:\n" + "\n".join(_content_lines[-15:])
+                    _indic_system_prompt += "\nতথ্য:\n" + "\n".join(_content_lines[-15:])
 
         system_prompt = _indic_system_prompt
         logger.info(f"[STREAM] Indic-first prompt built for {_target_lang_name} ({len(system_prompt)} chars)")
