@@ -99,6 +99,90 @@ const RATE_LIMIT_WINDOW_S = 60;
 
 const SEARCH_BOT_UA = /googlebot|google-extended|bingbot|yandexbot|duckduckbot|slurp|applebot|chatgpt-user|oai-searchbot|perplexitybot|claudebot|meta-externalagent/i;
 
+interface CidrRange { network: number; mask: number }
+
+function parseCidr(cidr: string): CidrRange {
+  const [ip, bits] = cidr.split("/");
+  const p = ip.split(".").map(Number);
+  const net = ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0;
+  const m = bits === "0" ? 0 : (~((1 << (32 - Number(bits))) - 1)) >>> 0;
+  return { network: net & m, mask: m };
+}
+
+function parseCidrs(cidrs: string[]): CidrRange[] {
+  return cidrs.map(parseCidr);
+}
+
+function ipInRanges(ip: string, ranges: CidrRange[]): boolean {
+  if (ip.includes(":")) return false;
+  const p = ip.split(".").map(Number);
+  if (p.length !== 4 || p.some((n) => isNaN(n) || n < 0 || n > 255)) return false;
+  const ipNum = ((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]) >>> 0;
+  for (const r of ranges) {
+    if ((ipNum & r.mask) === r.network) return true;
+  }
+  return false;
+}
+
+const GOOGLE_BOT_RANGES = parseCidrs([
+  "66.249.64.0/19", "66.249.96.0/20",
+  "34.100.182.96/28", "34.101.50.144/28", "34.118.254.0/28",
+  "34.118.66.0/28", "34.126.178.96/28", "34.146.150.144/28",
+  "34.147.110.160/28", "34.151.74.144/28", "34.152.50.64/28",
+  "34.154.114.144/28", "34.155.98.32/28", "34.165.18.176/28",
+  "34.175.160.64/28", "34.176.130.16/28", "34.22.85.0/27",
+  "34.64.82.64/28", "34.65.242.112/28", "34.80.50.80/28",
+  "34.88.194.0/28", "34.89.10.80/28", "34.89.198.80/28",
+  "34.96.162.48/28", "35.247.243.240/28",
+]);
+
+const BING_BOT_RANGES = parseCidrs([
+  "157.55.39.0/24", "207.46.13.0/24", "40.77.167.0/24",
+  "52.167.144.0/24", "13.66.139.0/24", "13.67.8.0/24",
+  "131.253.24.0/22", "131.253.46.0/23", "157.55.16.0/23",
+  "157.56.92.0/24", "199.30.24.0/23",
+]);
+
+const OPENAI_BOT_RANGES = parseCidrs([
+  "23.98.142.176/28", "40.84.180.224/28",
+  "20.15.240.64/28", "20.15.240.80/28", "20.15.240.96/28",
+  "20.15.240.176/28", "20.15.241.0/28",
+  "20.169.232.0/28", "20.171.206.0/28",
+  "52.230.152.0/24", "52.233.106.0/24",
+]);
+
+const YANDEX_BOT_RANGES = parseCidrs([
+  "5.255.253.0/24", "77.88.5.0/24", "77.88.47.0/24",
+  "87.250.224.0/19", "93.158.161.0/24", "95.108.128.0/17",
+  "100.43.80.0/24", "141.8.153.0/24", "178.154.128.0/17",
+  "199.21.99.0/24", "213.180.192.0/19",
+]);
+
+const APPLE_BOT_RANGES = parseCidrs([
+  "17.0.0.0/8",
+]);
+
+const BOT_UA_RANGES: Array<[RegExp, CidrRange[]]> = [
+  [/googlebot|google-extended|googleother/i, GOOGLE_BOT_RANGES],
+  [/bingbot/i, BING_BOT_RANGES],
+  [/duckduckbot/i, BING_BOT_RANGES],
+  [/chatgpt-user|oai-searchbot/i, OPENAI_BOT_RANGES],
+  [/yandexbot/i, YANDEX_BOT_RANGES],
+  [/applebot/i, APPLE_BOT_RANGES],
+];
+
+function isVerifiedSearchBot(ua: string, request: Request, clientIp: string): boolean {
+  if (!SEARCH_BOT_UA.test(ua)) return false;
+  const cf = (request as unknown as { cf?: { verifiedBot?: boolean } }).cf;
+  if (cf && cf.verifiedBot === true) return true;
+  for (const [pattern, ranges] of BOT_UA_RANGES) {
+    if (pattern.test(ua)) {
+      return ipInRanges(clientIp, ranges);
+    }
+  }
+  return false;
+}
+
 const BASE_URL = "https://syrabit.ai";
 const STATIC_PAGES: Array<[string, string, string]> = [
   ["/home", "weekly", "1.0"],
@@ -712,7 +796,7 @@ export default {
       "unknown";
 
     const ua = request.headers.get("User-Agent") || "";
-    const isSearchBot = SEARCH_BOT_UA.test(ua);
+    const isSearchBot = isVerifiedSearchBot(ua, request, clientIp);
     let remaining = 999999;
 
     if (!isSearchBot) {

@@ -1,5 +1,5 @@
 """Syrabit.ai — ASGI middleware classes."""
-import os, re, time as _time_mod, logging, uuid, contextvars, hashlib
+import os, re, time as _time_mod, logging, uuid, contextvars, hashlib, asyncio
 from datetime import datetime, timezone
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
@@ -79,7 +79,7 @@ class SecurityHeadersMiddleware:
 
         await self.app(scope, receive, send_with_security_headers)
 
-from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE, _TRAINING_SCRAPER_UA_RE
+from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE, _TRAINING_SCRAPER_UA_RE, verify_bot_ip
 
 _BOT_RATE_LIMIT = 1200
 
@@ -118,8 +118,8 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         request.state.start_time = _time_mod.time()
 
         ua = request.headers.get("user-agent", "")
-        is_legit_bot = bool(ua and _SEARCH_BOT_UA_RE.search(ua) and not _ABUSIVE_SCRAPER_UA_RE.search(ua) and not _TRAINING_SCRAPER_UA_RE.search(ua))
-        request.state.is_search_bot = is_legit_bot
+        ua_claims_bot = bool(ua and _SEARCH_BOT_UA_RE.search(ua) and not _ABUSIVE_SCRAPER_UA_RE.search(ua) and not _TRAINING_SCRAPER_UA_RE.search(ua))
+        request.state.is_search_bot = False
 
         exempt = any(path.startswith(p) for p in self._RATE_LIMIT_EXEMPT_PREFIXES)
         if exempt:
@@ -154,7 +154,16 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         except Exception:
             pass
 
-        client_ip = request.client.host if request.client else "unknown"
+        cf_ip = request.headers.get("cf-connecting-ip", "")
+        xff = request.headers.get("x-forwarded-for", "")
+        client_ip = cf_ip or (xff.split(",")[0].strip() if xff else "") or (request.client.host if request.client else "unknown")
+        is_legit_bot = False
+        if ua_claims_bot:
+            try:
+                is_legit_bot = await asyncio.to_thread(verify_bot_ip, client_ip, ua)
+            except Exception:
+                is_legit_bot = False
+        request.state.is_search_bot = is_legit_bot
         if not is_legit_bot:
             if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
                 from fastapi.responses import JSONResponse

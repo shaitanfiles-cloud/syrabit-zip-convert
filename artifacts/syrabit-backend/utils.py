@@ -1,6 +1,7 @@
 """Syrabit.ai — Utility functions: bot detection, device type, country, keywords, etc."""
-import re, time as _time_mod, logging, asyncio, hashlib, uuid
+import re, time as _time_mod, logging, asyncio, hashlib, uuid, socket
 from typing import Optional
+from threading import Lock
 from datetime import datetime, timezone, timedelta
 import httpx
 from config import SLOW_QUERY_THRESHOLD_MS
@@ -13,7 +14,7 @@ __all__ = [
     "_SlowQueryTimer", "_extract_keywords", "_get_device_type",
     "_ip_country_cache", "_is_bot", "_resolve_country", "_slow_query",
     "get_library_analytics", "track_library_event",
-    "slugify_title",
+    "slugify_title", "verify_bot_ip",
 ]
 
 
@@ -208,6 +209,99 @@ _BOT_PATTERNS = re.compile(
     _SEARCH_BOT_UA_RE.pattern + r"|" + _TRAINING_SCRAPER_UA_RE.pattern + r"|" + _ABUSIVE_SCRAPER_UA_RE.pattern,
     re.IGNORECASE,
 )
+
+_RDNS_BOT_DOMAINS: dict[str, list[str]] = {
+    "googlebot": [".googlebot.com", ".google.com"],
+    "google-extended": [".googlebot.com", ".google.com"],
+    "googleother": [".googlebot.com", ".google.com"],
+    "google-inspectiontool": [".googlebot.com", ".google.com"],
+    "bingbot": [".search.msn.com"],
+    "msnbot": [".search.msn.com"],
+    "yandexbot": [".yandex.ru", ".yandex.net", ".yandex.com"],
+    "yandex": [".yandex.ru", ".yandex.net", ".yandex.com"],
+    "applebot": [".applebot.apple.com"],
+    "applebot-extended": [".applebot.apple.com"],
+    "baiduspider": [".baidu.com", ".baidu.jp"],
+    "duckduckbot": [".duckduckgo.com"],
+    "slurp": [".crawl.yahoo.net"],
+    "oai-searchbot": [".openai.com"],
+    "chatgpt-user": [".openai.com"],
+}
+
+_bot_verify_cache: dict[str, tuple[bool, float]] = {}
+_bot_verify_lock = Lock()
+_BOT_VERIFY_TTL = 3600
+
+
+def _identify_bot_key(ua: str) -> str | None:
+    ua_lower = ua.lower()
+    for bot_key in _RDNS_BOT_DOMAINS:
+        if bot_key in ua_lower:
+            return bot_key
+    return None
+
+
+def _do_rdns_verify(ip: str, bot_key: str) -> bool:
+    expected_domains = _RDNS_BOT_DOMAINS.get(bot_key)
+    if not expected_domains:
+        return False
+    try:
+        import dns.resolver
+        import dns.reversename
+        rev_name = dns.reversename.from_address(ip)
+        answers = dns.resolver.resolve(rev_name, "PTR", lifetime=3)
+        hostname = str(answers[0]).rstrip(".")
+        if not any(hostname.lower().endswith(d) for d in expected_domains):
+            return False
+        fwd_answers = dns.resolver.resolve(hostname, "A", lifetime=3)
+        fwd_ips = {str(rdata) for rdata in fwd_answers}
+        if ip in fwd_ips:
+            return True
+        try:
+            fwd6 = dns.resolver.resolve(hostname, "AAAA", lifetime=3)
+            fwd_ips.update(str(rdata) for rdata in fwd6)
+        except Exception:
+            pass
+        return ip in fwd_ips
+    except ImportError:
+        pass
+    try:
+        hostname, _, _ = socket.gethostbyaddr(ip)
+        if not any(hostname.lower().endswith(d) for d in expected_domains):
+            return False
+        forward_ips: set[str] = set()
+        try:
+            for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
+                forward_ips.add(sockaddr[0])
+        except socket.gaierror:
+            return False
+        return ip in forward_ips
+    except (socket.herror, socket.gaierror, OSError):
+        return False
+
+
+def verify_bot_ip(ip: str, ua: str) -> bool:
+    if not ip or ip in ("127.0.0.1", "::1", "unknown"):
+        return False
+    bot_key = _identify_bot_key(ua)
+    if not bot_key:
+        return False
+    cache_key = f"{ip}:{bot_key}"
+    now = _time_mod.time()
+    with _bot_verify_lock:
+        cached = _bot_verify_cache.get(cache_key)
+        if cached and (now - cached[1]) < _BOT_VERIFY_TTL:
+            return cached[0]
+    result = _do_rdns_verify(ip, bot_key)
+    with _bot_verify_lock:
+        _bot_verify_cache[cache_key] = (result, now)
+        if len(_bot_verify_cache) > 10000:
+            cutoff = now - _BOT_VERIFY_TTL
+            expired = [k for k, (_, t) in _bot_verify_cache.items() if t < cutoff]
+            for k in expired:
+                _bot_verify_cache.pop(k, None)
+    return result
+
 
 def _is_bot(user_agent: str) -> bool:
     if not user_agent:
