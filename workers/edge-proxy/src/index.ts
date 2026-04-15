@@ -31,7 +31,6 @@ interface D1PreparedStatement {
 interface D1Result<T = unknown> { results: T[]; success: boolean; meta: object }
 interface D1ExecResult { count: number; duration: number }
 
-const BLOCKED_AI_CRAWLER_RE = /gptbot|google-extended|claudebot|anthropic-ai|bytespider|ccbot|cohere-ai|meta-externalagent/i;
 
 const ALLOWED_ORIGINS = [
   "https://syrabit.ai",
@@ -667,11 +666,6 @@ export default {
         return new Response(null, { status: 403 });
       }
       return new Response(null, { status: 204, headers: preflight });
-    }
-
-    const ua = request.headers.get("User-Agent") || "";
-    if (BLOCKED_AI_CRAWLER_RE.test(ua)) {
-      return new Response("Forbidden", { status: 403, headers: { ...cors, "X-Blocked": "ai-crawler" } });
     }
 
     if (pathname === "/api/health" || pathname === "/health") {
