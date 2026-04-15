@@ -252,7 +252,7 @@ export default function ChatPage() {
 
       let pendingChunk = '';
       let flushTimer = null;
-      const FLUSH_INTERVAL = 16;
+      const FLUSH_INTERVAL = 8;
       const flushPending = () => {
         if (!pendingChunk) return;
         fullContent += pendingChunk; pendingChunk = '';
