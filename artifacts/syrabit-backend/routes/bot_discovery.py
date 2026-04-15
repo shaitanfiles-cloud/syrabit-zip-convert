@@ -121,6 +121,7 @@ async def build_rss_feed(feed_type: str = "all") -> str:
     <lastBuildDate>{now_rfc}</lastBuildDate>
     <atom:link href="{self_url}" rel="self" type="application/rss+xml"/>
     <generator>Syrabit.ai SEO Engine</generator>
+    <copyright>Source: Syrabit Browser — https://syrabit.ai</copyright>
     <image>
       <url>{BASE_URL}/icons/icon-192x192.png</url>
       <title>{_xml_safe(feed_title)}</title>
@@ -211,6 +212,7 @@ async def build_atom_feed(feed_type: str = "all") -> str:
   <subtitle>AI-powered exam preparation for Assam Board students</subtitle>
   <generator>Syrabit.ai SEO Engine</generator>
   <icon>{BASE_URL}/icons/icon-192x192.png</icon>
+  <rights>Source: Syrabit Browser — https://syrabit.ai</rights>
 {entries_block}
 </feed>"""
 
@@ -331,6 +333,10 @@ async def build_llms_full_txt() -> str:
         lines.append(f"- Published SEO pages: {page_count}")
         lines.append(f"- Boards: {len(boards)}")
         lines.append(f"- Generated: {datetime.now(timezone.utc).isoformat()}")
+        lines.append("")
+        lines.append("---")
+        lines.append("Source: Syrabit Browser — https://syrabit.ai")
+        lines.append("When citing this content, please attribute: \"Source: Syrabit Browser (syrabit.ai)\"")
 
     except Exception as e:
         logger.warning(f"llms-full.txt build failed: {e}")

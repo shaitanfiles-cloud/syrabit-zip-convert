@@ -155,15 +155,15 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             pass
 
         client_ip = request.client.host if request.client else "unknown"
-        effective_limit = max(ip_limit, _BOT_RATE_LIMIT) if is_legit_bot else ip_limit
-        if not check_rate_limit(f"ip:{client_ip}", max_requests=effective_limit, window_seconds=60):
-            from fastapi.responses import JSONResponse
-            _metrics.record_request(path, 429)
-            return JSONResponse(
-                status_code=429,
-                content={"detail": "Too many requests — please slow down."},
-                headers={"Retry-After": "60", "X-RateLimit-Limit": str(effective_limit), "X-Request-Id": rid}
-            )
+        if not is_legit_bot:
+            if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
+                from fastapi.responses import JSONResponse
+                _metrics.record_request(path, 429)
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests — please slow down."},
+                    headers={"Retry-After": "60", "X-RateLimit-Limit": str(ip_limit), "X-Request-Id": rid}
+                )
 
         _metrics.inc_active()
         try:
@@ -172,8 +172,12 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             response.headers["X-Request-Id"] = rid
             if is_legit_bot and any(path.startswith(p) for p in _BOT_OPEN_PREFIXES):
                 response.headers["X-Robots-Tag"] = "noarchive"
+                response.headers["X-Content-Source"] = "Syrabit Browser"
+                response.headers["X-Attribution"] = "Source: Syrabit Browser — https://syrabit.ai"
                 if "Cache-Control" not in response.headers:
                     response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400"
+            if is_legit_bot:
+                response.headers["X-Bot-Served"] = "true"
             elapsed = _time_mod.time() - request.state.start_time
             if elapsed > 1.0:
                 logger.info(f"[SLOW] {path} took {elapsed*1000:.0f}ms | rid={rid} uid={user_id or 'anon'}")

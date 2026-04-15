@@ -11,7 +11,7 @@ URL pattern (4-segment):
   /{board}/{class}/{subject}/{topic}/{page_type}
 """
 
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Cookie
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Cookie, Request
 from fastapi.responses import Response, HTMLResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from motor.motor_asyncio import AsyncIOMotorDatabase
@@ -1897,7 +1897,7 @@ async def _inject_qa(page: dict) -> dict:
 
 
 @router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}/{page_type}")
-async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, topic_slug: str, page_type: str):
+async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, topic_slug: str, page_type: str, request: Request = None):
     from starlette.responses import JSONResponse
     if page_type not in ALL_PAGE_TYPES:
         raise HTTPException(status_code=404, detail="Invalid page type")
@@ -1915,6 +1915,9 @@ async def get_seo_page_typed(board: str, class_slug: str, subject_slug: str, top
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
     result = await _inject_qa(page)
+    if request and getattr(request.state, "is_search_bot", False):
+        result["source"] = "Syrabit Browser — https://syrabit.ai"
+        result["attribution"] = "Content powered by Syrabit.ai — AI Educational Browser for Assam Board Students"
     resp = JSONResponse(result)
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
     return resp
@@ -3571,7 +3574,7 @@ async def get_related_topics(topic_slug: str, chapter_id: Optional[str] = None, 
 
 
 @router.get("/page-bundle/{board}/{class_slug}/{subject_slug}/{topic_slug}")
-async def get_seo_page_bundle(board: str, class_slug: str, subject_slug: str, topic_slug: str, pt: str = "notes"):
+async def get_seo_page_bundle(board: str, class_slug: str, subject_slug: str, topic_slug: str, pt: str = "notes", request: Request = None):
     from starlette.responses import JSONResponse
     page_type = pt if pt in ALL_PAGE_TYPES else "notes"
     page_q = _db.seo_pages.find_one(
@@ -3598,13 +3601,17 @@ async def get_seo_page_bundle(board: str, class_slug: str, subject_slug: str, to
         )
         if iq_page:
             iq_content = iq_page.get("content")
-    resp = JSONResponse({"page": page, "pageTypes": types_raw, "iqContent": iq_content})
+    bundle = {"page": page, "pageTypes": types_raw, "iqContent": iq_content}
+    if request and getattr(request.state, "is_search_bot", False):
+        bundle["source"] = "Syrabit Browser — https://syrabit.ai"
+        bundle["attribution"] = "Content powered by Syrabit.ai — AI Educational Browser for Assam Board Students"
+    resp = JSONResponse(bundle)
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
     return resp
 
 
 @router.get("/page/{board}/{class_slug}/{subject_slug}/{topic_slug}")
-async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, topic_slug: str):
+async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, topic_slug: str, request: Request = None):
     from starlette.responses import JSONResponse
     page = await _db.seo_pages.find_one(
         {"board_slug": board, "class_slug": class_slug, "subject_slug": subject_slug,
@@ -3614,6 +3621,9 @@ async def get_seo_page_default(board: str, class_slug: str, subject_slug: str, t
     if not page:
         raise HTTPException(status_code=404, detail="Page not found")
     result = await _inject_qa(page)
+    if request and getattr(request.state, "is_search_bot", False):
+        result["source"] = "Syrabit Browser — https://syrabit.ai"
+        result["attribution"] = "Content powered by Syrabit.ai — AI Educational Browser for Assam Board Students"
     resp = JSONResponse(result)
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
     return resp

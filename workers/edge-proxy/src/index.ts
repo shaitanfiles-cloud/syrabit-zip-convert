@@ -712,23 +712,26 @@ export default {
 
     const ua = request.headers.get("User-Agent") || "";
     const isSearchBot = SEARCH_BOT_UA.test(ua);
-    const effectiveLimit = isSearchBot ? BOT_RATE_LIMIT_RPM : RATE_LIMIT_RPM;
+    let remaining = 999999;
 
-    const { allowed, remaining } = await checkRateLimit(clientIp, env.RATE_LIMIT, effectiveLimit);
-    if (!allowed) {
-      return new Response(
-        JSON.stringify({ detail: "Rate limit exceeded. Try again shortly." }),
-        {
-          status: 429,
-          headers: {
-            ...cors,
-            "Content-Type": "application/json",
-            "Retry-After": String(RATE_LIMIT_WINDOW_S),
-            "X-RateLimit-Limit": String(effectiveLimit),
-            "X-RateLimit-Remaining": "0",
-          },
-        }
-      );
+    if (!isSearchBot) {
+      const rl = await checkRateLimit(clientIp, env.RATE_LIMIT, RATE_LIMIT_RPM);
+      remaining = rl.remaining;
+      if (!rl.allowed) {
+        return new Response(
+          JSON.stringify({ detail: "Rate limit exceeded. Try again shortly." }),
+          {
+            status: 429,
+            headers: {
+              ...cors,
+              "Content-Type": "application/json",
+              "Retry-After": String(RATE_LIMIT_WINDOW_S),
+              "X-RateLimit-Limit": String(RATE_LIMIT_RPM),
+              "X-RateLimit-Remaining": "0",
+            },
+          }
+        );
+      }
     }
 
     if (request.method !== "GET" || isBypass(pathname)) {
