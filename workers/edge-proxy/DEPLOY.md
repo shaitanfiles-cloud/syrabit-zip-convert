@@ -1,115 +1,342 @@
-# Cloudflare Deployment Guide — syrabit.ai
+# Cloudflare Edge Proxy Worker — Deployment Guide
 
 ## Architecture
-- **Cloudflare Pages** → serves frontend at `syrabit.ai`
-- **Cloudflare Worker** → edge API proxy at `api.syrabit.ai` (with D1 cache)
-- **Replit Backend** → origin API server
+
+```
+Browser → api.syrabit.ai (Cloudflare Worker)
+              ├─ D1 database (content cache — edge-fast reads)
+              ├─ KV namespace (rate limiting)
+              └─ Backend proxy → Railway/Replit backend
+```
+
+- **Cloudflare Worker** (`syrabit-edge`) → edge API proxy at `api.syrabit.ai`
+- **D1 Database** (`syrabit-content`) → edge-replicated content catalog
+- **KV Namespace** (`RATE_LIMIT`) → per-IP rate limiting (120 req/min)
+- **Cron Trigger** → every 6 hours, auto-syncs content from backend to D1
+- **Backend** → Railway or Replit origin server for auth, AI chat, and admin
 
 ---
 
-## Part 1: Deploy Frontend on Cloudflare Pages
+## Prerequisites
 
-### Step 1: Push code to GitHub
-Make sure your code is pushed to a GitHub repository.
+Before deploying, confirm you have:
 
-### Step 2: Connect to Cloudflare Pages
-1. Go to https://dash.cloudflare.com → **Workers & Pages** → **Create**
-2. Select **Pages** → **Connect to Git**
-3. Select your GitHub repo
-4. Configure build settings:
-   - **Project name**: `syrabit`
-   - **Production branch**: `main`
-   - **Framework preset**: None
-   - **Build command**: `cd artifacts/syrabit && npm install && npm run build`
-   - **Build output directory**: `artifacts/syrabit/dist`
-   - **Note**: SPA routing is handled by `_worker.js` (Advanced Mode) + `_routes.json` in the build output. Do NOT add a `_redirects` file — it triggers "Infinite loop detected" warnings.
-5. Add environment variables:
-   - `VITE_BACKEND_URL` = `https://api.syrabit.ai` (also baked in via `.env.production`)
-   - `VITE_WORKER_API_URL` = `https://api.syrabit.ai`
-   - `VITE_GA4_ID` = your GA4 measurement ID
-   - `NODE_VERSION` = `20`
-   - `SKIP_PYTHON_INSTALL` = `true` (optional — `.python-version` is removed from repo root)
-6. Click **Save and Deploy**
-
-### Step 3: Add custom domain
-1. In Pages project → **Custom domains** → **Set up a custom domain**
-2. Enter `syrabit.ai`
-3. Cloudflare will auto-configure DNS (your domain must be on Cloudflare DNS)
-4. Also add `www.syrabit.ai` and set up redirect to `syrabit.ai`
+1. **Cloudflare account** with `syrabit.ai` domain on Cloudflare DNS
+2. **Node.js 18+** installed locally
+3. **Backend already deployed** — you need the live backend URL (e.g., `https://xxx.up.railway.app` or `https://xxx.replit.app`)
+4. **Git clone** of the repository on your local machine
 
 ---
 
-## Part 2: Deploy Edge Worker (api.syrabit.ai)
+## Step 1: Install Wrangler & Authenticate
 
-Run these commands from your local machine (not Replit):
-
-### Step 1: Install and login
 ```bash
 npm install -g wrangler
 wrangler login
 ```
 
-### Step 2: Create D1 database
+This opens a browser window for Cloudflare OAuth. Confirm access.
+
+---
+
+## Step 2: Create D1 Database
+
 ```bash
 cd workers/edge-proxy
-npm install
 wrangler d1 create syrabit-content
 ```
-Copy the `database_id` from the output.
 
-### Step 3: Create KV namespace
-```bash
-wrangler kv:namespace create RATE_LIMIT
-# Copy the id from output
-
-wrangler kv:namespace create RATE_LIMIT --preview
-# Copy the preview_id from output
+**Copy the `database_id`** from the output. It looks like:
+```
+✅ Successfully created DB 'syrabit-content'
+database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 ```
 
-### Step 4: Generate sync secret
+---
+
+## Step 3: Create KV Namespaces
+
+```bash
+wrangler kv:namespace create RATE_LIMIT
+```
+Copy the `id` from the output.
+
+```bash
+wrangler kv:namespace create RATE_LIMIT --preview
+```
+Copy the `preview_id` from the output.
+
+> **Note:** Wrangler v3+ also accepts `wrangler kv namespace create` (without the colon). Use whichever your version supports.
+
+---
+
+## Step 4: Generate D1 Sync Secret
+
 ```bash
 openssl rand -hex 32
 ```
-Copy the output.
 
-### Step 5: Update wrangler.toml
-Replace the placeholder values in `workers/edge-proxy/wrangler.toml`:
-- `REPLACE_WITH_D1_DATABASE_ID` → your D1 database ID
-- `REPLACE_WITH_KV_NAMESPACE_ID` → your KV namespace ID
-- `REPLACE_WITH_KV_PREVIEW_NAMESPACE_ID` → your KV preview ID
-- `REPLACE_WITH_SECURE_RANDOM_SECRET` → your generated secret
-- `REPLIT_DEPLOY_URL` → your Replit published URL (e.g., `https://xxx.replit.app`)
+Copy the output — this 64-character hex string is shared between the Worker and the backend. **Save it securely; you'll need it in two places.**
 
-### Step 6: Apply D1 migrations
+---
+
+## Step 5: Update `wrangler.toml` and Set Secrets
+
+Open `workers/edge-proxy/wrangler.toml` and update:
+
+| Field | Replace with | Source |
+|---|---|---|
+| `database_id` under `[[d1_databases]]` | D1 database ID | Step 2 |
+| `id` under `[[kv_namespaces]]` | KV namespace ID | Step 3 |
+| `preview_id` under `[[kv_namespaces]]` | KV preview namespace ID | Step 3 |
+| `BACKEND_URL` under `[vars]` | Your deployed backend URL | e.g., `https://xxx.up.railway.app` |
+
+> **Note:** The current `wrangler.toml` in the repo already has production values filled in. If they match your Cloudflare account, you only need to set the secret below.
+
+**Set the sync secret as a Wrangler secret** (do NOT put it in `wrangler.toml`):
+
+```bash
+wrangler secret put D1_SYNC_SECRET
+```
+
+When prompted, paste the 64-character hex string from Step 4. Wrangler secrets are encrypted and never committed to source control.
+
+The final `wrangler.toml` should look like:
+
+```toml
+name = "syrabit-edge"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+routes = [
+  { pattern = "api.syrabit.ai/*", zone_name = "syrabit.ai" }
+]
+
+[vars]
+BACKEND_URL = "https://your-backend.up.railway.app"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "your-kv-namespace-id"
+preview_id = "your-kv-preview-id"
+
+[[d1_databases]]
+binding = "CONTENT_DB"
+database_name = "syrabit-content"
+database_id = "your-d1-database-id"
+migrations_dir = "migrations"
+
+[triggers]
+crons = ["0 */6 * * *"]
+```
+
+---
+
+## Step 6: Apply D1 Migrations
+
 ```bash
 wrangler d1 migrations apply syrabit-content --remote
 ```
 
-### Step 7: Deploy
+This creates 8 tables with indexes:
+- `boards`, `classes`, `streams`, `subjects`, `chapters`, `topics`, `seo_pages`, `sync_meta`
+
+Verify with:
 ```bash
+wrangler d1 execute syrabit-content --remote --command "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+```
+
+---
+
+## Step 7: Install Dependencies & Deploy
+
+```bash
+npm install
 wrangler deploy
 ```
 
-### Step 8: Set D1_SYNC_SECRET on backend
-Add the same sync secret to your Replit backend as an environment variable:
-- Key: `D1_SYNC_SECRET`
-- Value: the same secret from Step 4
+Expected output:
+```
+Published syrabit-edge (x.xx sec)
+  api.syrabit.ai/* (zone: syrabit.ai)
+  schedule: 0 */6 * * *
+```
 
-Also add:
-- Key: `EDGE_WORKER_URL`
-- Value: `https://api.syrabit.ai`
-
----
-
-## Part 3: Verify
-
-1. Visit `https://syrabit.ai` — frontend should load
-2. Visit `https://api.syrabit.ai/api/health` — should proxy to backend
-3. Trigger D1 sync: from admin, or POST to `/api/admin/d1-sync`
-4. Content reads should now be served from D1 edge cache
+Confirm the route `api.syrabit.ai/*` appears in the output.
 
 ---
 
-## DNS Records (auto-configured if domain is on Cloudflare)
-- `syrabit.ai` → Cloudflare Pages
-- `api.syrabit.ai` → Cloudflare Worker (via route pattern)
+## Step 8: Set Backend Environment Variables
+
+On your backend deployment (Railway dashboard, Replit secrets, or `.env`), add:
+
+| Variable | Value |
+|---|---|
+| `D1_SYNC_SECRET` | Same 64-char hex secret from Step 4 |
+| `EDGE_WORKER_URL` | `https://api.syrabit.ai` |
+
+The backend uses these to push content updates to the Worker's D1 database.
+
+---
+
+## Step 9: Verify Deployment
+
+### 9a. Health Check
+```bash
+curl -s https://api.syrabit.ai/api/health | jq .
+```
+Expected:
+```json
+{
+  "status": "ok",
+  "edge": true,
+  "region": "SIN",
+  "timestamp": "2026-04-15T...",
+  "d1": true
+}
+```
+
+### 9b. Backend Proxy (Content)
+```bash
+curl -s https://api.syrabit.ai/api/content/boards | jq .
+```
+Should return content data. Check headers:
+```bash
+curl -sI https://api.syrabit.ai/api/content/boards | grep X-Source
+```
+Before D1 sync: `X-Source: backend`
+After D1 sync: `X-Source: d1`
+
+### 9b2. Backend Proxy (Auth & AI)
+Auth and AI routes bypass caching and proxy directly to the backend:
+```bash
+curl -s -o /dev/null -w "%{http_code}" https://api.syrabit.ai/api/auth/me
+```
+Should return `401` (unauthorized, but proves the proxy reaches the backend auth route).
+
+```bash
+curl -s -o /dev/null -w "%{http_code}" -X POST https://api.syrabit.ai/api/ai/chat \
+  -H "Content-Type: application/json" -d '{}'
+```
+Should return `401` or `422` (not `502`), confirming the backend is reachable for AI chat.
+
+### 9c. Rate Limiting
+Make 120+ requests in 60 seconds:
+```bash
+for i in $(seq 1 125); do
+  code=$(curl -s -o /dev/null -w "%{http_code}" https://api.syrabit.ai/api/health)
+  echo "Request $i: $code"
+done
+```
+Requests beyond 120 should return `429`.
+
+### 9d. Trigger D1 Sync
+Option A — Full sync via backend admin API (recommended):
+```bash
+curl -X POST https://your-backend-url/api/admin/d1-sync \
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"
+```
+This exports all content from MongoDB and pushes it to D1.
+
+Option B — From the admin panel:
+- Log into the admin dashboard and use the "D1 Sync" button
+
+Option C — Auth test only (verify the sync endpoint accepts credentials):
+```bash
+curl -s -o /dev/null -w "%{http_code}" -X POST https://api.syrabit.ai/api/edge/d1-sync \
+  -H "Authorization: Bearer YOUR_D1_SYNC_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+Should return `200` (not `401`), confirming the secret is correctly configured.
+
+> **Warning:** Do not POST partial payloads (e.g., `{"boards":[]}`) to `/api/edge/d1-sync` — the sync uses replace semantics and will clear tables included in the payload. Always use Option A for production syncs.
+
+### 9e. D1 Status
+```bash
+curl -s https://api.syrabit.ai/api/edge/d1-status | jq .
+```
+Expected (after sync):
+```json
+{
+  "counts": {
+    "boards": 2,
+    "classes": 10,
+    "streams": 53,
+    "subjects": 55,
+    "chapters": 500,
+    "topics": 2000,
+    "seo_pages": 1500
+  },
+  "last_sync": "2026-04-15T12:00:00.000Z",
+  "last_sync_at": "2026-04-15T12:00:00.000Z"
+}
+```
+
+### 9f. Verify D1 Serving
+After a successful sync, content routes should return with `X-Source: d1`:
+```bash
+curl -sI https://api.syrabit.ai/api/content/boards | grep -E "X-Source|X-Cache"
+```
+Expected: `X-Source: d1` and `X-Cache: D1`
+
+---
+
+## Step 10: DNS Verification
+
+If `api.syrabit.ai` doesn't resolve, check Cloudflare DNS:
+
+1. Go to Cloudflare Dashboard → your zone (`syrabit.ai`) → DNS
+2. The Worker route `api.syrabit.ai/*` should auto-configure when deployed
+3. If needed, add a CNAME or A record for `api` (proxied through Cloudflare)
+
+---
+
+## Cron Schedule
+
+The Worker has a cron trigger (`0 */6 * * *`) that runs every 6 hours. On each run it:
+
+1. Calls `GET {BACKEND_URL}/api/admin/d1-export` with the sync secret
+2. Receives the full content catalog as JSON
+3. Replaces all D1 tables with fresh data
+4. Updates `sync_meta.last_sync` timestamp
+
+You can check cron execution in Cloudflare Dashboard → Workers → syrabit-edge → Triggers.
+
+---
+
+## Troubleshooting
+
+| Issue | Fix |
+|---|---|
+| `502 Backend unavailable` | Check BACKEND_URL in wrangler.toml points to a running backend |
+| `403` on CORS preflight | Origin must be in ALLOWED_ORIGINS list in `src/index.ts` |
+| D1 sync returns empty | Backend must have `D1_SYNC_SECRET` env var set to the same secret |
+| `429` too quickly | Rate limit is 120 req/min per IP — adjust `RATE_LIMIT_RPM` if needed |
+| Cron not firing | Check Cloudflare Dashboard → Workers → Triggers tab |
+| Health shows `"d1": false` | D1 binding may be misconfigured in wrangler.toml |
+
+---
+
+## Security Notes
+
+- **`D1_SYNC_SECRET` must be stored as a Wrangler secret** (via `wrangler secret put D1_SYNC_SECRET`), not in `wrangler.toml`. This prevents the secret from being committed to source control.
+- **Secret rotation required:** If a `D1_SYNC_SECRET` was previously committed in plaintext to `wrangler.toml` or any git history, generate a new secret (`openssl rand -hex 32`), update it in both the Wrangler secret and the backend environment, and verify the old secret no longer works.
+- The sync endpoint (`/api/edge/d1-sync`) requires `Authorization: Bearer {secret}` — it cannot be called without the secret.
+- Rate limiting uses KV with auto-expiring keys (TTL = 120s).
+
+---
+
+## Updating the Worker
+
+After code changes:
+```bash
+cd workers/edge-proxy
+wrangler deploy
+```
+
+After schema changes (new migration files in `migrations/`):
+```bash
+wrangler d1 migrations apply syrabit-content --remote
+wrangler deploy
+```
