@@ -181,13 +181,20 @@ async def get_library_analytics(days: int = 30):
 _SEARCH_BOT_UA_RE = re.compile(
     r"googlebot|google-extended|googleother|google-inspectiontool|"
     r"bingbot|yandexbot|yandex|duckduckbot|slurp|baiduspider|"
-    r"facebookexternalhit|facebookbot|twitterbot|linkedinbot|telegrambot|whatsapp|"
-    r"applebot|applebot-extended|ia_archiver|msnbot|ahrefsbot|semrushbot|petalbot|"
-    r"gptbot|oai-searchbot|chatgpt-user|claudebot|anthropic-ai|perplexitybot|"
-    r"meta-externalagent|cohere-ai|bytespider|ccbot|"
+    r"facebookexternalhit|twitterbot|linkedinbot|telegrambot|whatsapp|"
+    r"applebot|applebot-extended|ia_archiver|msnbot|"
+    r"oai-searchbot|chatgpt-user|claudebot|perplexitybot|"
+    r"meta-externalagent|"
     r"rogerbot|embedly|quora link preview|showyoubot|"
     r"outbrain|pinterest/0\.|developers\.google\.com/\+/web/snippet|slackbot|"
     r"vkshare|w3c_validator|redditbot|googleweblight",
+    re.IGNORECASE,
+)
+
+_TRAINING_SCRAPER_UA_RE = re.compile(
+    r"gptbot|ccbot|anthropic-ai|cohere-ai|bytespider|petalbot|"
+    r"facebookbot|amazonbot|youbot|diffbot|img2dataset|omgili|"
+    r"dotbot|mj12bot",
     re.IGNORECASE,
 )
 
@@ -198,7 +205,7 @@ _ABUSIVE_SCRAPER_UA_RE = re.compile(
 )
 
 _BOT_PATTERNS = re.compile(
-    _SEARCH_BOT_UA_RE.pattern + r"|" + _ABUSIVE_SCRAPER_UA_RE.pattern,
+    _SEARCH_BOT_UA_RE.pattern + r"|" + _TRAINING_SCRAPER_UA_RE.pattern + r"|" + _ABUSIVE_SCRAPER_UA_RE.pattern,
     re.IGNORECASE,
 )
 

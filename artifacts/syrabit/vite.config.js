@@ -262,6 +262,11 @@ function pyqPagePlugin() {
 function botRenderPlugin() {
   return {
     name: 'syrabit-bot-render',
+    // NOTE: configureServer only runs in Vite dev mode.
+    // In production, bot rendering is handled by:
+    //   1. Edge proxy (workers/edge-proxy) — detects bot UA, proxies to backend SEO engine
+    //   2. Backend BotRenderMiddleware (routes/cms_sarvam_health.py) — catches bots on CMS pages
+    //   3. Backend root_redirect (server.py) — serves SEO HTML for bots hitting /
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const ua = req.headers['user-agent'] || '';

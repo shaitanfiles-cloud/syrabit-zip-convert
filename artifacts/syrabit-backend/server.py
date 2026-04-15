@@ -543,6 +543,9 @@ init_qa_engine(db, get_admin_user)
 api.include_router(qa_public_router)
 api.include_router(qa_admin_router)
 
+from routes.bot_discovery import router as bot_discovery_router
+api.include_router(bot_discovery_router)
+
 app.include_router(api)
 
 from routes.pyq import router as pyq_router
@@ -552,184 +555,191 @@ app.include_router(pyq_router)
 async def serve_robots_txt():
     txt = """# Syrabit.ai — robots.txt
 
-User-agent: *
+# ── Search & Answer Bots (welcome) ──────────────────────────────────────
+User-agent: Googlebot
 Allow: /
-Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
-Disallow: /api/
 
-Sitemap: https://syrabit.ai/sitemap.xml
-Sitemap: https://syrabit.ai/sitemap-index.xml
-
-# AI LLM description
-# https://syrabit.ai/llms.txt
-
-Crawl-delay: 1
-
-# AI Search & Training Crawlers
-User-agent: GPTBot
+User-agent: Googlebot-Image
 Allow: /
-Allow: /api/seo/
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: GoogleOther
+Allow: /
+
+User-agent: Bingbot
+Allow: /
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
-Disallow: /api/
+
+User-agent: Yandexbot
+Allow: /
+Disallow: /admin/
+Disallow: /chat
+Disallow: /history
+Disallow: /profile
+
+User-agent: DuckDuckBot
+Allow: /
+Disallow: /admin/
+Disallow: /chat
+
+User-agent: Applebot
+Allow: /
+Disallow: /admin/
+Disallow: /chat
+
+User-agent: Applebot-Extended
+Allow: /
+Disallow: /admin/
+Disallow: /chat
+
+# ── AI Search/Answer Bots (send traffic, welcome) ──────────────────────
+User-agent: ChatGPT-User
+Allow: /
+Allow: /api/seo/
+Allow: /api/content/library-bundle
+Allow: /api/content/chapters/
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /feed.xml
+Disallow: /admin/
+Disallow: /chat
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
 
 User-agent: OAI-SearchBot
 Allow: /
 Allow: /api/seo/
+Allow: /llms.txt
+Allow: /llms-full.txt
 Disallow: /admin/
 Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: ChatGPT-User
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: Google-Extended
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: Googlebot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+Disallow: /api/auth/
+Disallow: /api/ai/
 
 User-agent: PerplexityBot
 Allow: /
 Allow: /api/seo/
+Allow: /api/content/library-bundle
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /feed.xml
 Disallow: /admin/
 Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+Disallow: /api/auth/
+Disallow: /api/ai/
 
 User-agent: ClaudeBot
 Allow: /
 Allow: /api/seo/
+Allow: /llms.txt
+Allow: /llms-full.txt
 Disallow: /admin/
 Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+Disallow: /api/auth/
+Disallow: /api/ai/
 
-User-agent: anthropic-ai
+User-agent: Meta-ExternalAgent
 Allow: /
 Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+Disallow: /api/auth/
+Disallow: /api/ai/
 
-User-agent: Bingbot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: Applebot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: Applebot-Extended
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: FacebookBot
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: meta-externalagent
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: cohere-ai
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
-
-User-agent: Bytespider
-Allow: /
-Allow: /api/seo/
-Disallow: /admin/
-Disallow: /chat
-Disallow: /history
-Disallow: /profile
-Disallow: /cms/
-Disallow: /api/
+# ── Training / Scraping Bots (BLOCKED) ──────────────────────────────────
+User-agent: GPTBot
+Disallow: /
 
 User-agent: CCBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Cohere-ai
+Disallow: /
+
+User-agent: Bytespider
+Disallow: /
+
+User-agent: PetalBot
+Disallow: /
+
+User-agent: Scrapy
+Disallow: /
+
+User-agent: AhrefsBot
+Disallow: /
+
+User-agent: SemrushBot
+Disallow: /
+
+User-agent: MJ12bot
+Disallow: /
+
+User-agent: DotBot
+Disallow: /
+
+User-agent: Amazonbot
+Disallow: /
+
+User-agent: YouBot
+Disallow: /
+
+User-agent: Diffbot
+Disallow: /
+
+User-agent: img2dataset
+Disallow: /
+
+User-agent: omgili
+Disallow: /
+
+User-agent: FacebookBot
+Disallow: /
+
+# ── Default (all other bots) ────────────────────────────────────────────
+User-agent: *
 Allow: /
 Allow: /api/seo/
+Allow: /llms.txt
+Allow: /llms-full.txt
+Allow: /feed.xml
 Disallow: /admin/
 Disallow: /chat
 Disallow: /history
 Disallow: /profile
 Disallow: /cms/
-Disallow: /api/
+Disallow: /api/auth/
+Disallow: /api/ai/
+Disallow: /api/admin/
+
+# ── Sitemaps & Feeds ────────────────────────────────────────────────────
+Sitemap: https://syrabit.ai/sitemap.xml
+Sitemap: https://syrabit.ai/sitemap-index.xml
+
+# RSS feeds
+# https://syrabit.ai/feed.xml
+# https://syrabit.ai/feed/notes.xml
+# https://syrabit.ai/feed/mcqs.xml
+# https://syrabit.ai/feed/blog.xml
+# Atom feeds
+# https://syrabit.ai/feed/atom.xml
+# https://syrabit.ai/feed/notes-atom.xml
+# https://syrabit.ai/feed/mcqs-atom.xml
+# https://syrabit.ai/feed/blog-atom.xml
 """
     return Response(content=txt.strip(), media_type="text/plain")
 
@@ -766,6 +776,72 @@ async def serve_llms_txt_root():
     from routes.admin_advanced import _build_llms_txt
     txt = await _build_llms_txt()
     return Response(content=txt, media_type="text/plain; charset=utf-8")
+
+@app.get("/llms-full.txt", response_class=Response)
+async def serve_llms_full_txt():
+    from routes.bot_discovery import build_llms_full_txt
+    txt = await build_llms_full_txt()
+    return Response(content=txt, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "public, max-age=3600, s-maxage=86400"})
+
+@app.get("/feed.xml", response_class=Response)
+async def serve_main_feed():
+    from routes.bot_discovery import build_rss_feed
+    xml = await build_rss_feed("all")
+    return Response(content=xml, media_type="application/rss+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=1800, s-maxage=3600"})
+
+@app.get("/feed/notes.xml", response_class=Response)
+async def serve_notes_feed():
+    from routes.bot_discovery import build_rss_feed
+    xml = await build_rss_feed("notes")
+    return Response(content=xml, media_type="application/rss+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=1800, s-maxage=3600"})
+
+@app.get("/feed/mcqs.xml", response_class=Response)
+async def serve_mcqs_feed():
+    from routes.bot_discovery import build_rss_feed
+    xml = await build_rss_feed("mcqs")
+    return Response(content=xml, media_type="application/rss+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=1800, s-maxage=3600"})
+
+@app.get("/feed/blog.xml", response_class=Response)
+async def serve_blog_feed():
+    from routes.bot_discovery import build_rss_feed
+    xml = await build_rss_feed("blog")
+    return Response(content=xml, media_type="application/rss+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=1800, s-maxage=3600"})
+
+@app.get("/feed/atom.xml", response_class=Response)
+async def serve_atom_feed():
+    from routes.bot_discovery import build_atom_feed
+    xml = await build_atom_feed("all")
+    return Response(content=xml, media_type="application/atom+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=1800, s-maxage=3600"})
+
+@app.get("/feed/notes-atom.xml", response_class=Response)
+async def serve_notes_atom_feed():
+    from routes.bot_discovery import build_atom_feed
+    xml = await build_atom_feed("notes")
+    return Response(content=xml, media_type="application/atom+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=1800, s-maxage=3600"})
+
+@app.get("/feed/mcqs-atom.xml", response_class=Response)
+async def serve_mcqs_atom_feed():
+    from routes.bot_discovery import build_atom_feed
+    xml = await build_atom_feed("mcqs")
+    return Response(content=xml, media_type="application/atom+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=1800, s-maxage=3600"})
+
+@app.get("/feed/blog-atom.xml", response_class=Response)
+async def serve_blog_atom_feed():
+    from routes.bot_discovery import build_atom_feed
+    xml = await build_atom_feed("blog")
+    return Response(content=xml, media_type="application/atom+xml; charset=utf-8", headers={"Cache-Control": "public, max-age=1800, s-maxage=3600"})
+
+@app.get("/.well-known/ai-plugin.json", response_class=Response)
+async def serve_ai_plugin_json():
+    from routes.bot_discovery import build_ai_plugin_json
+    data = build_ai_plugin_json()
+    return Response(content=data, media_type="application/json; charset=utf-8", headers={"Cache-Control": "public, max-age=86400"})
+
+from routes.bot_discovery import INDEXNOW_KEY as _INDEXNOW_KEY
+
+@app.get(f"/{_INDEXNOW_KEY}.txt", response_class=Response)
+async def serve_indexnow_key_root():
+    return Response(content=_INDEXNOW_KEY, media_type="text/plain")
 
 @app.get("/sitemap.xml")
 async def serve_root_sitemap():

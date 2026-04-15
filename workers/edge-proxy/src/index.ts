@@ -93,7 +93,10 @@ const BYPASS_PREFIXES = [
 ];
 
 const RATE_LIMIT_RPM = 120;
+const BOT_RATE_LIMIT_RPM = 1200;
 const RATE_LIMIT_WINDOW_S = 60;
+
+const SEARCH_BOT_UA = /googlebot|google-extended|bingbot|yandexbot|duckduckbot|slurp|applebot|chatgpt-user|oai-searchbot|perplexitybot|claudebot|meta-externalagent/i;
 
 const BASE_URL = "https://syrabit.ai";
 const STATIC_PAGES: Array<[string, string, string]> = [
@@ -106,8 +109,8 @@ const STATIC_PAGES: Array<[string, string, string]> = [
   ["/terms", "yearly", "0.3"],
   ["/privacy", "yearly", "0.3"],
 ];
-const ALL_PAGE_TYPES = ["notes", "mcqs", "important-questions", "examples", "definition"];
-const SITEMAP_TYPES = ["notes", "mcqs", "important-questions", "examples", "definition"];
+const ALL_PAGE_TYPES = ["notes", "mcqs", "important-questions", "examples", "definition", "faq"];
+const SITEMAP_TYPES = ["notes", "mcqs", "important-questions", "examples", "definition", "faq"];
 
 function getCorsHeaders(origin: string | null): Record<string, string> | null {
   if (!origin || !ALLOWED_ORIGINS.includes(origin)) return null;
@@ -146,7 +149,8 @@ function isUserSpecific(pathname: string): boolean {
 
 async function checkRateLimit(
   ip: string,
-  kv: KVNamespace
+  kv: KVNamespace,
+  limit: number = RATE_LIMIT_RPM
 ): Promise<{ allowed: boolean; remaining: number }> {
   const key = `rl:${ip}`;
   const now = Math.floor(Date.now() / 1000);
@@ -157,7 +161,7 @@ async function checkRateLimit(
     let timestamps: number[] = raw ? JSON.parse(raw) : [];
     timestamps = timestamps.filter((t) => t > windowStart);
 
-    if (timestamps.length >= RATE_LIMIT_RPM) {
+    if (timestamps.length >= limit) {
       return { allowed: false, remaining: 0 };
     }
 
@@ -166,9 +170,9 @@ async function checkRateLimit(
       expirationTtl: RATE_LIMIT_WINDOW_S * 2,
     });
 
-    return { allowed: true, remaining: RATE_LIMIT_RPM - timestamps.length };
+    return { allowed: true, remaining: limit - timestamps.length };
   } catch {
-    return { allowed: true, remaining: RATE_LIMIT_RPM };
+    return { allowed: true, remaining: limit };
   }
 }
 
@@ -482,6 +486,7 @@ async function trySitemapD1Route(
       "important-questions": "sitemap-pyqs.xml",
       "examples": "sitemap-examples.xml",
       "definition": "sitemap-definitions.xml",
+      "faq": "sitemap-faq.xml",
     };
     const sitemapNames = [...alwaysInclude];
     for (const [pt, smName] of Object.entries(typeToSitemap)) {
@@ -502,8 +507,9 @@ async function trySitemapD1Route(
   }
 
   if (pathname === "/api/seo/sitemap-pages.xml") {
+    const stableDate = "2026-04-01";
     const entries = STATIC_PAGES.map(([path, freq, pri]) => ({
-      loc: `${BASE_URL}${path}`, lastmod: today, pri, freq,
+      loc: `${BASE_URL}${path}`, lastmod: stableDate, pri, freq,
     }));
     return { type: "xml", data: buildUrlset(entries) };
   }
@@ -511,9 +517,10 @@ async function trySitemapD1Route(
   if (pathname === "/api/seo/sitemap-subjects.xml") {
     const subjectEntries = await getSubjectSitemapEntries(db);
     if (subjectEntries === null) return null;
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
     const entries = subjectEntries.map(e => ({
       loc: `${BASE_URL}/${e.board_slug}/${e.class_slug}/${e.subject_slug}`,
-      lastmod: today, pri: "0.7", freq: "weekly",
+      lastmod: weekAgo, pri: "0.7", freq: "weekly",
     }));
     return { type: "xml", data: buildUrlset(entries) };
   }
@@ -535,6 +542,7 @@ async function trySitemapD1Route(
     "/api/seo/sitemap-pyqs.xml": "important-questions",
     "/api/seo/sitemap-examples.xml": "examples",
     "/api/seo/sitemap-definitions.xml": "definition",
+    "/api/seo/sitemap-faq.xml": "faq",
   };
 
   const seoPageType = seoTypeMap[pathname];
@@ -702,7 +710,11 @@ export default {
       request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ||
       "unknown";
 
-    const { allowed, remaining } = await checkRateLimit(clientIp, env.RATE_LIMIT);
+    const ua = request.headers.get("User-Agent") || "";
+    const isSearchBot = SEARCH_BOT_UA.test(ua);
+    const effectiveLimit = isSearchBot ? BOT_RATE_LIMIT_RPM : RATE_LIMIT_RPM;
+
+    const { allowed, remaining } = await checkRateLimit(clientIp, env.RATE_LIMIT, effectiveLimit);
     if (!allowed) {
       return new Response(
         JSON.stringify({ detail: "Rate limit exceeded. Try again shortly." }),
@@ -712,7 +724,7 @@ export default {
             ...cors,
             "Content-Type": "application/json",
             "Retry-After": String(RATE_LIMIT_WINDOW_S),
-            "X-RateLimit-Limit": String(RATE_LIMIT_RPM),
+            "X-RateLimit-Limit": String(effectiveLimit),
             "X-RateLimit-Remaining": "0",
           },
         }

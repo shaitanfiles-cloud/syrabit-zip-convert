@@ -79,9 +79,22 @@ class SecurityHeadersMiddleware:
 
         await self.app(scope, receive, send_with_security_headers)
 
-from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE
+from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE, _TRAINING_SCRAPER_UA_RE
 
-_BOT_RATE_LIMIT = 600
+_BOT_RATE_LIMIT = 1200
+
+_BOT_OPEN_PREFIXES = (
+    "/api/content/library-bundle",
+    "/api/content/boards",
+    "/api/content/classes",
+    "/api/content/streams",
+    "/api/content/subjects",
+    "/api/content/chapters/",
+    "/api/content/chapter-by-slug/",
+    "/api/content/chapter/",
+    "/api/content/search",
+    "/api/seo/",
+)
 
 
 class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
@@ -105,7 +118,8 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         request.state.start_time = _time_mod.time()
 
         ua = request.headers.get("user-agent", "")
-        is_legit_bot = bool(ua and _SEARCH_BOT_UA_RE.search(ua) and not _ABUSIVE_SCRAPER_UA_RE.search(ua))
+        is_legit_bot = bool(ua and _SEARCH_BOT_UA_RE.search(ua) and not _ABUSIVE_SCRAPER_UA_RE.search(ua) and not _TRAINING_SCRAPER_UA_RE.search(ua))
+        request.state.is_search_bot = is_legit_bot
 
         exempt = any(path.startswith(p) for p in self._RATE_LIMIT_EXEMPT_PREFIXES)
         if exempt:
@@ -156,6 +170,10 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             _metrics.record_request(path, response.status_code, user_id)
             response.headers["X-Request-Id"] = rid
+            if is_legit_bot and any(path.startswith(p) for p in _BOT_OPEN_PREFIXES):
+                response.headers["X-Robots-Tag"] = "noarchive"
+                if "Cache-Control" not in response.headers:
+                    response.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400"
             elapsed = _time_mod.time() - request.state.start_time
             if elapsed > 1.0:
                 logger.info(f"[SLOW] {path} took {elapsed*1000:.0f}ms | rid={rid} uid={user_id or 'anon'}")
@@ -170,13 +188,15 @@ _STATIC_ASSET_RE = re.compile(
 )
 
 _SKIP_TRACKING_PREFIXES = (
-    "/api/", "/static/", "/assets/", "/icons/", "/fonts/",
+    "/api/auth/", "/api/admin/", "/api/ai/", "/api/analytics/",
+    "/api/health", "/api/billing/",
+    "/static/", "/assets/", "/icons/", "/fonts/",
     "/health", "/docs", "/openapi.json", "/robots.txt", "/sitemap",
     "/__mockup", "/favicon",
 )
 
 _SERVER_BOT_RE = re.compile(
-    _SEARCH_BOT_UA_RE.pattern + r"|" + _ABUSIVE_SCRAPER_UA_RE.pattern,
+    _SEARCH_BOT_UA_RE.pattern + r"|" + _TRAINING_SCRAPER_UA_RE.pattern + r"|" + _ABUSIVE_SCRAPER_UA_RE.pattern,
     re.IGNORECASE,
 )
 

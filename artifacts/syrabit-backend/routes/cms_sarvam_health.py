@@ -2506,6 +2506,12 @@ async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends
             upsert=True,
         )
 
+    try:
+        from routes.bot_discovery import notify_indexnow_for_page
+        asyncio.create_task(notify_indexnow_for_page(page_doc))
+    except Exception:
+        pass
+
     # ── 4b. Embed page for vector search ─────────────────────────────────────
     # Run fire-and-forget so publish response is never delayed by embedding
     _embed_content = " ".join(

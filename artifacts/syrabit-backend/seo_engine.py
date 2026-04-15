@@ -1770,6 +1770,17 @@ async def update_page_status(page_id: str, status: str = "published", _admin: di
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Page not found")
+
+    if status == "published":
+        try:
+            import asyncio
+            page = await _db.seo_pages.find_one({"id": page_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1, "topic_slug": 1, "page_type": 1})
+            if page:
+                from routes.bot_discovery import notify_indexnow_for_page
+                asyncio.create_task(notify_indexnow_for_page(page))
+        except Exception:
+            pass
+
     return {"message": f"Status updated to {status}"}
 
 

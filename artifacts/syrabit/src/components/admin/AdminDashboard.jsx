@@ -263,6 +263,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [funnel, setFunnel] = useState(null);
   const [coverage, setCoverage] = useState(null);
   const [pwaStats, setPwaStats] = useState(null);
+  const [botAnalytics, setBotAnalytics] = useState(null);
   const [failedSections, setFailedSections] = useState([]);
 
   const headers = { withCredentials: true };
@@ -278,7 +279,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       const [
         dashRes, metricsRes,
         ragAccRes, fallbackRes, vectorRes, latencyRes,
-        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes,
+        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes,
       ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
         axios.get(`${API_BASE}/admin/dashboard/metrics`, adminHdr(adminToken)),
@@ -291,6 +292,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         axios.get(`${API_BASE}/admin/monetization/funnel`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/content/coverage`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/pwa/stats`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/analytics/bot-traffic?days=30`, adminHdr(adminToken)),
       ]);
       const failed = [];
       if (dashRes.status === 'fulfilled') setData(dashRes.value.data); else { failed.push('overview'); setData(null); }
@@ -304,6 +306,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       if (funnelRes.status === 'fulfilled') setFunnel(funnelRes.value.data); else { failed.push('funnel'); setFunnel(null); }
       if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data); else { failed.push('coverage'); setCoverage(null); }
       if (pwaRes.status === 'fulfilled') setPwaStats(pwaRes.value.data); else { failed.push('pwa'); setPwaStats(null); }
+      if (botRes.status === 'fulfilled') setBotAnalytics(botRes.value.data); else { failed.push('bot-analytics'); setBotAnalytics(null); }
       setFailedSections(failed);
       setLastRefresh(new Date());
     } catch (e) {
@@ -576,6 +579,93 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         )}
       </GlassCard>
+
+      {botAnalytics && (
+        <GlassCard className="p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Bot size={16} className="text-amber-500" />
+            <h3 className="text-gray-700 font-semibold">Bot Traffic Analytics</h3>
+            <span className="ml-auto text-[10px] text-gray-400">{botAnalytics.period_days}-day window</span>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="rounded-lg p-3 bg-blue-50 border border-blue-200 text-center">
+              <p className="text-blue-700 font-bold text-lg">{(botAnalytics.bot_vs_human?.total_bot ?? 0).toLocaleString()}</p>
+              <p className="text-[10px] text-gray-500">Bot Hits</p>
+            </div>
+            <div className="rounded-lg p-3 bg-green-50 border border-green-200 text-center">
+              <p className="text-green-700 font-bold text-lg">{(botAnalytics.bot_vs_human?.total_human ?? 0).toLocaleString()}</p>
+              <p className="text-[10px] text-gray-500">Human Hits</p>
+            </div>
+            <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center">
+              <p className="text-violet-700 font-bold text-lg">{botAnalytics.crawl_coverage ?? 0}%</p>
+              <p className="text-[10px] text-gray-500">Crawl Coverage</p>
+            </div>
+            <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-center">
+              <p className="text-amber-700 font-bold text-lg">{botAnalytics.bot_vs_human?.bot_ratio_pct ?? 0}%</p>
+              <p className="text-[10px] text-gray-500">Bot Ratio</p>
+            </div>
+          </div>
+
+          <div className="text-[10px] text-gray-400 mb-1">
+            Crawled {(botAnalytics.pages_crawled ?? 0).toLocaleString()} of {(botAnalytics.total_sitemap_pages ?? 0).toLocaleString()} sitemap pages
+          </div>
+
+          {botAnalytics.daily_bot_hits?.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Daily Bot vs Human Hits</div>
+              <div style={{ width: '100%', height: 200 }}>
+                <ResponsiveContainer>
+                  <BarChart data={botAnalytics.daily_bot_hits.slice(-14)} margin={{ top: 5, right: 5, left: -15, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                    <XAxis dataKey="date" tick={{ fontSize: 9 }} tickFormatter={v => v.slice(5)} />
+                    <YAxis tick={{ fontSize: 9 }} />
+                    <Tooltip contentStyle={{ fontSize: 11 }} labelFormatter={v => `Date: ${v}`} />
+                    <Bar dataKey="bot_hits" fill="#f59e0b" name="Bot" radius={[2, 2, 0, 0]} />
+                    <Bar dataKey="human_hits" fill="#6366f1" name="Human" radius={[2, 2, 0, 0]} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {botAnalytics.top_bots?.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Top Bots (by hits)</div>
+              <div className="space-y-1.5">
+                {botAnalytics.top_bots.slice(0, 10).map((b, i) => {
+                  const maxHits = botAnalytics.top_bots[0]?.hits || 1;
+                  const pct = Math.round((b.hits / maxHits) * 100);
+                  return (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-[10px] text-gray-600 font-medium w-28 truncate">{b.bot}</span>
+                      <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden">
+                        <div className="h-full bg-amber-400 rounded-full" style={{ width: `${pct}%` }} />
+                      </div>
+                      <span className="text-[10px] text-gray-500 w-14 text-right">{b.hits.toLocaleString()}</span>
+                      <span className="text-[9px] text-gray-400 w-12 text-right">{b.unique_ips} IPs</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {botAnalytics.per_bot_pages?.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Pages Fetched per Bot</div>
+              <div className="flex flex-wrap gap-1.5">
+                {botAnalytics.per_bot_pages.slice(0, 10).map((b, i) => (
+                  <span key={i} className="text-[10px] px-2 py-0.5 rounded-md text-violet-700 bg-violet-50 border border-violet-200">
+                    {b.bot}: {b.pages_fetched} pages
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </GlassCard>
+      )}
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard label="Page Views Today" value={vs.page_views_today ?? 0} icon={Eye}      color="#ec4899" pulse />
