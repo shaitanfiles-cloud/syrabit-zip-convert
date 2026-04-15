@@ -2222,6 +2222,18 @@ async def _pipeline_process_one_chapter(
         except Exception as e:
             chapter_result["errors"].append(f"pyq-page: {str(e)[:80]}")
 
+        try:
+            from routes.bot_discovery import indexnow_batcher
+            indexnow_paths = []
+            for blog_url in geo_blog_urls:
+                indexnow_paths.append(blog_url)
+            if chapter_result.get("pyq_page"):
+                indexnow_paths.append(f"/learn/pyq-{board_slug}-{class_slug}-{chapter_slug}")
+            if indexnow_paths:
+                await indexnow_batcher.queue_raw_paths(indexnow_paths)
+        except Exception:
+            pass
+
         done_counter["done"] += 1
         _update_stage("done", "Complete")
 
@@ -2500,6 +2512,15 @@ async def _pipeline_auto_generate_core(subject_id: str, job_id: str = "", skip_e
     except Exception as e:
         summary["ping_status"] = f"check failed: {str(e)[:50]}"
         logger.warning(f"Sitemap self-check failed: {e}")
+
+    try:
+        from routes.bot_discovery import indexnow_batcher
+        flushed = await indexnow_batcher.flush_force(source="pipeline_auto_generate")
+        logger.info(f"IndexNow flush after pipeline: {flushed} URLs pushed")
+        summary["indexnow_urls_pushed"] = flushed
+    except Exception as e:
+        logger.debug(f"IndexNow pipeline flush failed: {e}")
+        summary["indexnow_urls_pushed"] = 0
 
     logger.info(
         f"Pipeline complete: subject={subject_name}, chapters={summary['chapters_processed']}, "

@@ -1,7 +1,7 @@
 """Syrabit.ai — Bot discovery routes: RSS feeds, llms-full.txt, IndexNow, ai-plugin.json, bot analytics."""
-import json, logging, os, uuid, hashlib
+import asyncio, json, logging, os, uuid, hashlib
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, List
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -13,6 +13,9 @@ router = APIRouter()
 
 BASE_URL = "https://syrabit.ai"
 INDEXNOW_KEY = os.environ.get("INDEXNOW_KEY", hashlib.sha256(b"syrabit-indexnow-2026").hexdigest()[:32])
+
+_INDEXNOW_BATCH_SIZE = 500
+_INDEXNOW_COOLDOWN_SECONDS = 300
 
 
 def _xml_safe(text: str) -> str:
@@ -369,44 +372,159 @@ def build_ai_plugin_json() -> str:
     return json.dumps(plugin, indent=2)
 
 
-async def notify_indexnow_for_page(page_doc: dict):
+def _page_doc_to_url(page_doc: dict) -> Optional[str]:
     bs = page_doc.get("board_slug", "")
     cs = page_doc.get("class_slug", "")
     ss = page_doc.get("subject_slug", "")
     ts = page_doc.get("topic_slug", "")
     pt = page_doc.get("page_type", "notes")
     if not all([bs, cs, ss, ts]):
-        return
+        return None
     path = f"/{bs}/{cs}/{ss}/{ts}" if pt == "notes" else f"/{bs}/{cs}/{ss}/{ts}/{pt}"
-    url = f"{BASE_URL}{path}"
+    return f"{BASE_URL}{path}"
+
+
+async def notify_indexnow_for_page(page_doc: dict):
+    url = _page_doc_to_url(page_doc)
+    if not url:
+        return
     try:
         await push_indexnow([url])
     except Exception as e:
         logger.debug(f"IndexNow auto-push failed for {url}: {e}")
 
 
-async def push_indexnow(urls: list[str]):
+async def _log_indexnow_push(urls: List[str], source: str, results: dict):
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return
+        await db.indexnow_push_log.insert_one({
+            "id": f"inow-{uuid.uuid4().hex[:8]}",
+            "url_count": len(urls),
+            "urls_sample": urls[:20],
+            "source": source,
+            "results": results,
+            "pushed_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception as e:
+        logger.debug(f"IndexNow log write failed: {e}")
+
+
+async def push_indexnow(urls: list[str], source: str = "auto"):
     if not urls:
         return
     import httpx
-    payload = {
-        "host": "syrabit.ai",
-        "key": INDEXNOW_KEY,
-        "keyLocation": f"{BASE_URL}/{INDEXNOW_KEY}.txt",
-        "urlList": urls[:10000],
-    }
-    endpoints = [
-        "https://api.indexnow.org/indexnow",
-        "https://www.bing.com/indexnow",
-        "https://yandex.com/indexnow",
-    ]
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        for endpoint in endpoints:
+    unique_urls = list(dict.fromkeys(urls))
+    all_results = []
+    for i in range(0, len(unique_urls), 10000):
+        batch = unique_urls[i:i + 10000]
+        payload = {
+            "host": "syrabit.ai",
+            "key": INDEXNOW_KEY,
+            "keyLocation": f"{BASE_URL}/{INDEXNOW_KEY}.txt",
+            "urlList": batch,
+        }
+        endpoints = [
+            "https://api.indexnow.org/indexnow",
+            "https://www.bing.com/indexnow",
+            "https://yandex.com/indexnow",
+        ]
+        chunk_results = {}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            for endpoint in endpoints:
+                try:
+                    resp = await client.post(endpoint, json=payload)
+                    chunk_results[endpoint] = resp.status_code
+                    logger.info(f"IndexNow push to {endpoint}: {resp.status_code} ({len(batch)} URLs)")
+                except Exception as e:
+                    chunk_results[endpoint] = str(e)
+                    logger.warning(f"IndexNow push to {endpoint} failed: {e}")
+        all_results.append({"chunk_index": i // 10000, "url_count": len(batch), "endpoints": chunk_results})
+    results_flat = all_results[0]["endpoints"] if len(all_results) == 1 else {"chunks": all_results}
+    asyncio.create_task(_log_indexnow_push(unique_urls, source, results_flat))
+
+
+class IndexNowBatcher:
+    def __init__(self):
+        self._pending: List[str] = []
+        self._lock = asyncio.Lock()
+        self._last_flush: Optional[datetime] = None
+        self._deferred_task: Optional[asyncio.Task] = None
+
+    async def queue(self, urls: List[str]):
+        async with self._lock:
+            self._pending.extend(urls)
+
+    async def queue_page(self, page_doc: dict):
+        url = _page_doc_to_url(page_doc)
+        if url:
+            await self.queue([url])
+
+    async def queue_raw_paths(self, paths: List[str]):
+        urls = []
+        for p in paths:
+            if not p:
+                continue
+            if p.startswith("http://") or p.startswith("https://"):
+                urls.append(p)
+            else:
+                urls.append(f"{BASE_URL}{p}")
+        if urls:
+            await self.queue(urls)
+
+    async def _do_push(self, to_push: List[str], source: str) -> int:
+        pushed = 0
+        for i in range(0, len(to_push), _INDEXNOW_BATCH_SIZE):
+            batch = to_push[i:i + _INDEXNOW_BATCH_SIZE]
             try:
-                resp = await client.post(endpoint, json=payload)
-                logger.info(f"IndexNow push to {endpoint}: {resp.status_code}")
+                await push_indexnow(batch, source=source)
+                pushed += len(batch)
             except Exception as e:
-                logger.warning(f"IndexNow push to {endpoint} failed: {e}")
+                logger.error(f"IndexNow batch flush failed ({len(batch)} URLs): {e}")
+                async with self._lock:
+                    self._pending.extend(batch)
+            if i + _INDEXNOW_BATCH_SIZE < len(to_push):
+                await asyncio.sleep(2)
+        return pushed
+
+    async def _deferred_flush(self, delay: float, source: str):
+        await asyncio.sleep(delay)
+        await self.flush_force(source=f"{source}_deferred")
+
+    async def flush(self, source: str = "batch"):
+        async with self._lock:
+            if not self._pending:
+                return 0
+            now = datetime.now(timezone.utc)
+            if self._last_flush and (now - self._last_flush).total_seconds() < _INDEXNOW_COOLDOWN_SECONDS:
+                remaining = _INDEXNOW_COOLDOWN_SECONDS - (now - self._last_flush).total_seconds()
+                logger.info(f"IndexNow flush cooldown active ({len(self._pending)} URLs pending, {remaining:.0f}s left)")
+                if not self._deferred_task or self._deferred_task.done():
+                    self._deferred_task = asyncio.create_task(self._deferred_flush(remaining + 1, source))
+                return 0
+            to_push = list(dict.fromkeys(self._pending))
+            self._pending.clear()
+            self._last_flush = now
+
+        return await self._do_push(to_push, source)
+
+    async def flush_force(self, source: str = "batch_force"):
+        async with self._lock:
+            if not self._pending:
+                return 0
+            to_push = list(dict.fromkeys(self._pending))
+            self._pending.clear()
+            self._last_flush = datetime.now(timezone.utc)
+
+        return await self._do_push(to_push, source)
+
+    async def get_pending_count(self) -> int:
+        async with self._lock:
+            return len(self._pending)
+
+
+indexnow_batcher = IndexNowBatcher()
 
 
 from auth_deps import get_admin_user
@@ -504,8 +622,75 @@ async def admin_indexnow_push(admin: dict = Depends(get_admin_user)):
         urls.append(f"{BASE_URL}{path}")
 
     if urls:
-        await push_indexnow(urls)
+        await push_indexnow(urls, source="admin_manual")
 
     return {"status": "ok", "urls_pushed": len(urls)}
 
 
+@router.get("/admin/indexnow/history")
+async def admin_indexnow_history(
+    limit: int = Query(50, ge=1, le=200),
+    admin: dict = Depends(get_admin_user),
+):
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return {"pushes": [], "total": 0}
+    try:
+        total = await db.indexnow_push_log.count_documents({})
+        pushes = await db.indexnow_push_log.find(
+            {}, {"_id": 0}
+        ).sort("pushed_at", -1).limit(limit).to_list(limit)
+        return {"pushes": pushes, "total": total}
+    except Exception as e:
+        logger.error(f"IndexNow history fetch failed: {e}")
+        return {"pushes": [], "total": 0}
+
+
+@router.get("/admin/indexnow/stats")
+async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return {"total_pushes": 0, "total_urls_pushed": 0, "last_push": None, "by_source": [], "pending": 0}
+    try:
+        total_pushes = await db.indexnow_push_log.count_documents({})
+        url_sum_pipeline = [
+            {"$group": {"_id": None, "total": {"$sum": "$url_count"}}},
+        ]
+        url_sum = await db.indexnow_push_log.aggregate(url_sum_pipeline).to_list(1)
+        total_urls = url_sum[0]["total"] if url_sum else 0
+
+        last_push_doc = await db.indexnow_push_log.find_one(
+            {}, {"_id": 0, "pushed_at": 1, "url_count": 1, "source": 1},
+            sort=[("pushed_at", -1)],
+        )
+
+        by_source_pipeline = [
+            {"$group": {"_id": "$source", "count": {"$sum": 1}, "urls": {"$sum": "$url_count"}}},
+            {"$sort": {"count": -1}},
+            {"$project": {"source": "$_id", "push_count": "$count", "url_count": "$urls", "_id": 0}},
+        ]
+        by_source = await db.indexnow_push_log.aggregate(by_source_pipeline).to_list(20)
+
+        today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_pushes = await db.indexnow_push_log.count_documents(
+            {"pushed_at": {"$gte": today_iso}}
+        )
+        today_url_pipeline = [
+            {"$match": {"pushed_at": {"$gte": today_iso}}},
+            {"$group": {"_id": None, "total": {"$sum": "$url_count"}}},
+        ]
+        today_url_sum = await db.indexnow_push_log.aggregate(today_url_pipeline).to_list(1)
+        today_urls = today_url_sum[0]["total"] if today_url_sum else 0
+
+        return {
+            "total_pushes": total_pushes,
+            "total_urls_pushed": total_urls,
+            "last_push": last_push_doc,
+            "by_source": by_source,
+            "today_pushes": today_pushes,
+            "today_urls_pushed": today_urls,
+            "pending": await indexnow_batcher.get_pending_count(),
+        }
+    except Exception as e:
+        logger.error(f"IndexNow stats fetch failed: {e}")
+        return {"total_pushes": 0, "total_urls_pushed": 0, "last_push": None, "by_source": [], "pending": 0}

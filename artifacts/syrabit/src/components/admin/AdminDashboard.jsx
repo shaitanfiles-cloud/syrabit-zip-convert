@@ -264,6 +264,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [coverage, setCoverage] = useState(null);
   const [pwaStats, setPwaStats] = useState(null);
   const [botAnalytics, setBotAnalytics] = useState(null);
+  const [indexNowStats, setIndexNowStats] = useState(null);
+  const [indexNowHistory, setIndexNowHistory] = useState(null);
   const [failedSections, setFailedSections] = useState([]);
 
   const headers = { withCredentials: true };
@@ -279,7 +281,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       const [
         dashRes, metricsRes,
         ragAccRes, fallbackRes, vectorRes, latencyRes,
-        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes,
+        queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes, indexNowRes, indexNowHistRes,
       ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
         axios.get(`${API_BASE}/admin/dashboard/metrics`, adminHdr(adminToken)),
@@ -293,6 +295,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         axios.get(`${API_BASE}/admin/content/coverage`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/pwa/stats`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/analytics/bot-traffic?days=30`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/indexnow/history?limit=20`, adminHdr(adminToken)),
       ]);
       const failed = [];
       if (dashRes.status === 'fulfilled') setData(dashRes.value.data); else { failed.push('overview'); setData(null); }
@@ -307,6 +311,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       if (coverageRes.status === 'fulfilled') setCoverage(coverageRes.value.data); else { failed.push('coverage'); setCoverage(null); }
       if (pwaRes.status === 'fulfilled') setPwaStats(pwaRes.value.data); else { failed.push('pwa'); setPwaStats(null); }
       if (botRes.status === 'fulfilled') setBotAnalytics(botRes.value.data); else { failed.push('bot-analytics'); setBotAnalytics(null); }
+      if (indexNowRes.status === 'fulfilled') setIndexNowStats(indexNowRes.value.data); else { failed.push('indexnow'); setIndexNowStats(null); }
+      if (indexNowHistRes.status === 'fulfilled') setIndexNowHistory(indexNowHistRes.value.data); else setIndexNowHistory(null);
       setFailedSections(failed);
       setLastRefresh(new Date());
     } catch (e) {
@@ -662,6 +668,93 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   </span>
                 ))}
               </div>
+            </div>
+          )}
+        </GlassCard>
+      )}
+
+      {indexNowStats && (
+        <GlassCard className="p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Search size={16} className="text-green-500" />
+            <h3 className="text-gray-700 font-semibold">IndexNow Push Status</h3>
+            <span className="ml-auto text-[10px] text-gray-400">auto-push active</span>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="rounded-lg p-3 bg-green-50 border border-green-200 text-center">
+              <p className="text-green-700 font-bold text-lg">{(indexNowStats.total_urls_pushed ?? 0).toLocaleString()}</p>
+              <p className="text-[10px] text-gray-500">Total URLs Pushed</p>
+            </div>
+            <div className="rounded-lg p-3 bg-blue-50 border border-blue-200 text-center">
+              <p className="text-blue-700 font-bold text-lg">{(indexNowStats.total_pushes ?? 0).toLocaleString()}</p>
+              <p className="text-[10px] text-gray-500">Total Pushes</p>
+            </div>
+            <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center">
+              <p className="text-violet-700 font-bold text-lg">{(indexNowStats.today_urls_pushed ?? 0).toLocaleString()}</p>
+              <p className="text-[10px] text-gray-500">URLs Today</p>
+            </div>
+            <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-center">
+              <p className="text-amber-700 font-bold text-lg">{indexNowStats.pending ?? 0}</p>
+              <p className="text-[10px] text-gray-500">Pending</p>
+            </div>
+          </div>
+
+          {indexNowStats.last_push && (
+            <div className="text-[10px] text-gray-400 mb-3">
+              Last push: {new Date(indexNowStats.last_push.pushed_at).toLocaleString()} ({indexNowStats.last_push.url_count} URLs, source: {indexNowStats.last_push.source})
+            </div>
+          )}
+
+          {indexNowStats.by_source?.length > 0 && (
+            <div>
+              <div className="text-[10px] text-gray-400 font-semibold mb-1.5 uppercase tracking-wider">Push Sources</div>
+              <div className="flex flex-wrap gap-1.5">
+                {indexNowStats.by_source.map((s, i) => (
+                  <span key={i} className="text-[10px] px-2 py-0.5 rounded-md text-green-700 bg-green-50 border border-green-200">
+                    {s.source}: {s.push_count} pushes · {s.url_count} URLs
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {indexNowHistory?.pushes?.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Recent Push History</div>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {indexNowHistory.pushes.slice(0, 15).map((push, i) => {
+                  const raw = push.results || {};
+                  const endpointEntries = raw.chunks
+                    ? raw.chunks.flatMap(c => Object.entries(c.endpoints || {}))
+                    : Object.entries(raw);
+                  const hasError = endpointEntries.some(([, v]) => typeof v === 'string');
+                  const allOk = endpointEntries.length > 0 && !hasError && endpointEntries.every(([, v]) => v >= 200 && v < 300);
+                  return (
+                    <div key={push.id || i} className="flex items-center gap-2 text-[10px] py-1.5 px-2 rounded-lg bg-gray-50 border border-gray-100">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${allOk ? 'bg-green-400' : hasError ? 'bg-red-400' : 'bg-amber-400'}`} />
+                      <span className="text-gray-500 w-32 flex-shrink-0">{new Date(push.pushed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                      <span className="text-gray-700 font-medium">{push.url_count} URLs</span>
+                      <span className="text-gray-400 px-1">·</span>
+                      <span className="text-gray-500">{push.source}</span>
+                      <span className="ml-auto flex gap-1">
+                        {endpointEntries.map(([ep, code], j) => {
+                          const host = ep.replace(/https?:\/\//, '').split('/')[0];
+                          const ok = typeof code === 'number' && code >= 200 && code < 300;
+                          return (
+                            <span key={j} className={`px-1 py-0.5 rounded text-[9px] ${ok ? 'text-green-600 bg-green-50' : 'text-red-600 bg-red-50'}`}>
+                              {host}: {code}
+                            </span>
+                          );
+                        })}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              {indexNowHistory.total > 15 && (
+                <p className="text-[9px] text-gray-400 mt-1.5 text-center">Showing 15 of {indexNowHistory.total} pushes</p>
+              )}
             </div>
           )}
         </GlassCard>

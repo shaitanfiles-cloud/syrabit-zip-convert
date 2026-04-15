@@ -1421,6 +1421,12 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         page,
         upsert=True,
     )
+    if page_status == "published":
+        try:
+            from routes.bot_discovery import indexnow_batcher
+            await indexnow_batcher.queue_page(page)
+        except Exception:
+            pass
     return page
 
 
@@ -1640,6 +1646,12 @@ async def _batch_generate(topics: list, page_types: list):
         "errors": errors,
         "completed_at": datetime.now(timezone.utc).isoformat(),
     })
+    try:
+        from routes.bot_discovery import indexnow_batcher
+        flushed = await indexnow_batcher.flush(source="seo_batch_generate")
+        logger.info(f"IndexNow flush after batch generation: {flushed} URLs")
+    except Exception as e:
+        logger.debug(f"IndexNow flush failed: {e}")
     await _seo_log(
         action  = "seo:batch_complete",
         details = f"Batch SEO generation complete — {total} pages created across {len(topics)} topics" +
@@ -1700,6 +1712,12 @@ async def _quality_regen_batch(specs: list):
             errors += 1
         await asyncio.sleep(1)
 
+    try:
+        from routes.bot_discovery import indexnow_batcher
+        flushed = await indexnow_batcher.flush(source="seo_quality_edit")
+        logger.info(f"IndexNow flush after quality edit: {flushed} URLs")
+    except Exception as e:
+        logger.debug(f"IndexNow flush failed: {e}")
     await _seo_log(
         action="seo:quality_edit_complete",
         details=f"Quality edit regenerated {total}/{len(specs)} pages" + (f" · {errors} errors" if errors else ""),
@@ -1825,10 +1843,25 @@ async def bulk_review_action(
     else:
         raise HTTPException(status_code=400, detail="Provide page_ids or min_score for bulk publish")
 
+    affected_ids = [
+        doc["id"] async for doc in _db.seo_pages.find(query, {"_id": 0, "id": 1})
+    ]
     result = await _db.seo_pages.update_many(
         query,
         {"$set": {"status": new_status, "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
+    if new_status == "published" and result.modified_count > 0 and affected_ids:
+        try:
+            published_pages = await _db.seo_pages.find(
+                {"id": {"$in": affected_ids}},
+                {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1, "topic_slug": 1, "page_type": 1}
+            ).to_list(len(affected_ids))
+            from routes.bot_discovery import indexnow_batcher
+            for p in published_pages:
+                await indexnow_batcher.queue_page(p)
+            await indexnow_batcher.flush(source="seo_bulk_review")
+        except Exception:
+            pass
     await _seo_log("seo:bulk_review", f"Bulk {action}: {result.modified_count} pages → {new_status}")
     return {"modified": result.modified_count, "new_status": new_status}
 
@@ -4344,10 +4377,25 @@ async def bulk_publish_pages(
     if subject_id:
         query["subject_id"] = subject_id
 
+    affected_ids = [
+        doc["id"] async for doc in _db.seo_pages.find(query, {"_id": 0, "id": 1})
+    ]
     result = await _db.seo_pages.update_many(
         query,
         {"$set": {"status": "published", "in_sitemap": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
     )
+    if result.modified_count > 0 and affected_ids:
+        try:
+            published_pages = await _db.seo_pages.find(
+                {"id": {"$in": affected_ids}},
+                {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1, "topic_slug": 1, "page_type": 1}
+            ).to_list(len(affected_ids))
+            from routes.bot_discovery import indexnow_batcher
+            for p in published_pages:
+                await indexnow_batcher.queue_page(p)
+            await indexnow_batcher.flush(source="seo_bulk_publish")
+        except Exception:
+            pass
     return {
         "published": result.modified_count,
         "message": f"Published {result.modified_count} pages (score ≥ {min_score})",
@@ -4594,6 +4642,12 @@ async def _run_subject_bg(job_id: str, subject_id: str, force: bool, page_types:
             "skipped": skipped, "errors": errors,
             "completed_at": now,
         })
+        try:
+            from routes.bot_discovery import indexnow_batcher
+            flushed = await indexnow_batcher.flush_force(source="seo_run_subject")
+            logger.info(f"IndexNow flush after run-subject: {flushed} URLs")
+        except Exception:
+            pass
         _job_update(
             job_id,
             status="done",
@@ -4730,6 +4784,13 @@ async def _auto_run_bg(job_id: str, page_types: list):
             "new_topics": new_topics,
             "completed_at": now,
         })
+
+        try:
+            from routes.bot_discovery import indexnow_batcher
+            flushed = await indexnow_batcher.flush_force(source="seo_auto_run")
+            logger.info(f"IndexNow flush after auto-run: {flushed} URLs")
+        except Exception:
+            pass
 
         _job_update(
             job_id,
@@ -4923,6 +4984,13 @@ async def _expand_board_bg(job_id: str, board: dict, page_types: list):
                 errors += len(page_types)
                 done += len(page_types)
                 _job_update(job_id, done=done, errors=errors)
+
+        try:
+            from routes.bot_discovery import indexnow_batcher
+            flushed = await indexnow_batcher.flush_force(source="seo_expand_board")
+            logger.info(f"IndexNow flush after expand-board: {flushed} URLs")
+        except Exception:
+            pass
 
         now = datetime.now(timezone.utc).isoformat()
         _job_update(
