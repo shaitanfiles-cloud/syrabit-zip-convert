@@ -826,7 +826,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         async def _early_cache_stream():
             yield f"data: {json.dumps({'conversation_id': _conv_id_early or '', 'rag_source': 'cache', 'rag_quality': 'none', 'rag_chunks': 0, 'web_search_used': False, 'ctx_board_name': msg.board_name or '', 'ctx_class_name': msg.class_name or ''})}\n\n"
             logger.info(f"[STREAM][TIMING] TTFT (early cache): {_time_mod.time() - _stream_t0:.3f}s")
-            _CHUNK_SIZE = 120
+            _CHUNK_SIZE = 300
             for _ci in range(0, len(_early_cached_answer), _CHUNK_SIZE):
                 yield f"data: {json.dumps({'content': _early_cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
                 if _ci % (_CHUNK_SIZE * 5) == 0:
@@ -1301,7 +1301,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _stream_provider = "unknown"
             if cached_answer:
                 logger.info(f"[STREAM][TIMING] TTFT (cache hit): {_time_mod.time() - _stream_t0:.3f}s")
-                _CHUNK_SIZE = 120
+                _CHUNK_SIZE = 300
                 for _ci in range(0, len(cached_answer), _CHUNK_SIZE):
                     yield f"data: {json.dumps({'content': cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
                     if _ci % (_CHUNK_SIZE * 5) == 0:
