@@ -6,14 +6,14 @@
 Browser → api.syrabit.ai (Cloudflare Worker)
               ├─ D1 database (content cache — edge-fast reads)
               ├─ KV namespace (rate limiting)
-              └─ Backend proxy → Railway/Replit backend
+              └─ Backend proxy → Railway backend
 ```
 
 - **Cloudflare Worker** (`syrabit-edge`) → edge API proxy at `api.syrabit.ai`
 - **D1 Database** (`syrabit-content`) → edge-replicated content catalog
 - **KV Namespace** (`RATE_LIMIT`) → per-IP rate limiting (120 req/min)
 - **Cron Trigger** → every 6 hours, auto-syncs content from backend to D1
-- **Backend** → Railway or Replit origin server for auth, AI chat, and admin
+- **Backend** → Railway origin server for auth, AI chat, and admin
 
 ---
 
@@ -23,7 +23,7 @@ Before deploying, confirm you have:
 
 1. **Cloudflare account** with `syrabit.ai` domain on Cloudflare DNS
 2. **Node.js 18+** installed locally
-3. **Backend already deployed** — you need the live backend URL (e.g., `https://xxx.up.railway.app` or `https://xxx.replit.app`)
+3. **Backend already deployed** — you need the live backend URL (e.g., `https://xxx.up.railway.app`)
 4. **Git clone** of the repository on your local machine
 
 ---
@@ -74,6 +74,9 @@ Copy the `preview_id` from the output.
 
 ```bash
 openssl rand -hex 32
+# Copy the output, then set it as a Wrangler secret (never commit to wrangler.toml):
+wrangler secret put D1_SYNC_SECRET
+# Paste the generated secret when prompted
 ```
 
 Copy the output — this 64-character hex string is shared between the Worker and the backend. **Save it securely; you'll need it in two places.**
@@ -168,7 +171,7 @@ Confirm the route `api.syrabit.ai/*` appears in the output.
 
 ## Step 8: Set Backend Environment Variables
 
-On your backend deployment (Railway dashboard, Replit secrets, or `.env`), add:
+On your Railway backend deployment (Railway dashboard → Variables), add:
 
 | Variable | Value |
 |---|---|
@@ -289,6 +292,44 @@ If `api.syrabit.ai` doesn't resolve, check Cloudflare DNS:
 1. Go to Cloudflare Dashboard → your zone (`syrabit.ai`) → DNS
 2. The Worker route `api.syrabit.ai/*` should auto-configure when deployed
 3. If needed, add a CNAME or A record for `api` (proxied through Cloudflare)
+
+---
+
+## Deploy Backend on Railway
+
+See `artifacts/syrabit-backend/RAILWAY-DEPLOY.md` for the full Railway deployment guide.
+
+**Quick summary:**
+1. Go to https://railway.app/new → Deploy from GitHub repo
+2. Set root directory to `artifacts/syrabit-backend`
+3. Railway auto-detects the Dockerfile
+4. Set all environment variables (see `.env.example`)
+5. Generate a public domain under Settings → Networking
+6. Update `BACKEND_URL` in `wrangler.toml` to the Railway URL
+
+---
+
+## Traffic Flow
+
+```
+User → syrabit.ai (CF Pages)
+         │
+         ▼
+    api.syrabit.ai (CF Worker)
+         │
+         ├─ Content reads → D1 (edge, sub-ms)
+         ├─ Cache hits → CF Cache API
+         └─ AI chat / auth / admin → Railway backend
+                                        │
+                                        ├─ MongoDB Atlas
+                                        ├─ Supabase (PostgreSQL)
+                                        └─ Upstash Redis
+```
+
+## DNS Records (auto-configured if domain is on Cloudflare)
+- `syrabit.ai` → Cloudflare Pages
+- `www.syrabit.ai` → Cloudflare Pages (redirect to apex)
+- `api.syrabit.ai` → Cloudflare Worker (via route pattern)
 
 ---
 

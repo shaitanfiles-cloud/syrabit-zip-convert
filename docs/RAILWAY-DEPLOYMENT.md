@@ -9,10 +9,14 @@ Users
   │                            • React + Vite build
   │                            • Global CDN, edge caching
   │
-  └── API calls ──► Railway (backend API)
-                     • FastAPI + Gunicorn in Docker container
-                     • Auto-scaling, HTTPS included
-                     • Connects to: MongoDB Atlas, Supabase, Upstash Redis
+  └── https://api.syrabit.ai ──► Cloudflare Worker (edge proxy)
+                                  • D1 edge cache for content reads
+                                  • Rate limiting (KV)
+                                  │
+                                  └──► Railway (backend API)
+                                        • FastAPI + Gunicorn in Docker container
+                                        • Auto-scaling, HTTPS included
+                                        • Connects to: MongoDB Atlas, Supabase, Upstash Redis
 ```
 
 ## Why Railway?
@@ -74,7 +78,7 @@ ADMIN_PASSWORDS=YOUR_ADMIN_PASSWORD
 ADMIN_NAMES=Administrator
 PORT=8000
 FRONTEND_URL=https://syrabit.ai
-CORS_ORIGINS=https://syrabit.ai,https://www.syrabit.ai
+CORS_ORIGINS=https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai
 SECURE_COOKIES=true
 LOG_LEVEL=info
 GUNICORN_WORKERS=2
@@ -120,6 +124,14 @@ RAZORPAY_WEBHOOK_SECRET=YOUR_WEBHOOK_SECRET
 RESEND_API_KEY=YOUR_KEY
 ```
 
+### Edge Worker Sync
+
+```
+D1_SYNC_SECRET=YOUR_SYNC_SECRET_MATCHING_WORKER
+EDGE_WORKER_URL=https://api.syrabit.ai
+COOKIE_DOMAIN=.syrabit.ai
+```
+
 ---
 
 ## Step 4: Deploy
@@ -148,29 +160,45 @@ https://YOUR-RAILWAY-URL/api/content/library-bundle
 1. Go to **Cloudflare Pages** → Your project → **Settings** → **Environment variables**
 2. Update:
 
-| Variable | New Value |
-|----------|-----------|
-| `VITE_BACKEND_URL` | `https://YOUR-RAILWAY-URL.up.railway.app` |
-| `VITE_WORKER_API_URL` | `https://YOUR-RAILWAY-URL.up.railway.app` |
+| Variable | Value |
+|----------|-------|
+| `VITE_BACKEND_URL` | `https://api.syrabit.ai` |
+| `VITE_WORKER_API_URL` | `https://api.syrabit.ai` |
 
 3. Trigger a redeploy (push a commit or click **"Retry deployment"**)
-4. Visit `https://syrabit.ai` — should load and connect to Railway backend
+4. Visit `https://syrabit.ai` — should load and connect to the API via the edge Worker
+
+> **Note**: The frontend points to `api.syrabit.ai` (the Edge Worker), not directly to Railway. The Worker proxies requests to Railway and serves cached content from D1.
 
 ---
 
-## Step 6: Custom Domain (Optional)
+## Step 5b: Update Edge Worker BACKEND_URL
 
-To use `api.syrabit.ai`:
+After Railway is deployed, update the Worker to point to your Railway URL:
 
+1. Edit `workers/edge-proxy/wrangler.toml`
+2. Set `BACKEND_URL` to your Railway URL (e.g., `https://workspacesyrabit-production-0ddc.up.railway.app`)
+3. Redeploy:
+
+```bash
+cd workers/edge-proxy
+wrangler deploy
+```
+
+Traffic flow: `syrabit.ai` (Pages) → `api.syrabit.ai` (Worker) → Railway backend
+
+---
+
+## Step 6: Domain Setup
+
+> **Important**: `api.syrabit.ai` is routed to the Cloudflare Worker (edge proxy), **not** directly to Railway. The Worker handles D1 caching, rate limiting, and CORS before forwarding to Railway. Do not point `api.syrabit.ai` DNS directly to Railway — this would bypass all edge features.
+
+The Railway service uses its auto-generated domain (e.g., `workspacesyrabit-production-0ddc.up.railway.app`). The Worker's `BACKEND_URL` points to this Railway URL.
+
+If you want a custom Railway domain (optional, for direct access during debugging):
 1. In Railway → Service → **Settings** → **Networking** → **Custom Domain**
-2. Enter `api.syrabit.ai`
-3. Railway shows a CNAME record to add
-4. Go to **Cloudflare DNS** → Add CNAME:
-   - **Name:** `api`
-   - **Target:** The CNAME value Railway provides
-   - **Proxy:** OFF (grey cloud — Railway handles SSL)
-5. Wait 5-10 minutes for DNS propagation
-6. Update CF Pages env vars to use `https://api.syrabit.ai`
+2. Use a subdomain like `railway-backend.syrabit.ai` (not `api.syrabit.ai`)
+3. Add the CNAME in Cloudflare DNS with **Proxy OFF** (grey cloud)
 
 ---
 

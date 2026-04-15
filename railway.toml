@@ -1,5 +1,11 @@
 [build]
-buildCommand = "pnpm --filter @workspace/mockup-sandbox build"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "pnpm --filter @workspace/mockup-sandbox dev"
+startCommand = "gunicorn server:app -c gunicorn.conf.py"
+healthcheckPath = "/api/health"
+healthcheckTimeout = 300
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+numReplicas = 1

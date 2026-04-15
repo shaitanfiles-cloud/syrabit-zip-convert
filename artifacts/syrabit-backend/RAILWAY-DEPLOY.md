@@ -121,9 +121,8 @@ After Railway is deployed, update the Worker's `BACKEND_URL` to point to Railway
 cd workers/edge-proxy
 
 # Update wrangler.toml BACKEND_URL
-# Change from: BACKEND_URL = "https://syrabit-zip-convert-maliktez.replit.app"
-# Change to:   BACKEND_URL = "https://syrabit-backend-production.up.railway.app"
-#         or:  BACKEND_URL = "https://backend.syrabit.ai"
+# Set to your Railway URL, e.g.:
+# BACKEND_URL = "https://workspacesyrabit-production-0ddc.up.railway.app"
 
 # Redeploy the worker
 npx wrangler deploy

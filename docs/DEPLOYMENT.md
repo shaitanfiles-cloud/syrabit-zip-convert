@@ -12,11 +12,11 @@ Users
   │
   └── https://api.syrabit.ai ──► Cloudflare Worker (edge proxy)
                                   • Rate limiting (KV-backed)
-                                  • Edge caching for content/SEO routes
+                                  • D1 edge cache for content reads
                                   • CORS enforcement
                                   │
-                                  └──► Replit (FastAPI backend)
-                                        • Replit Deployments
+                                  └──► Railway (FastAPI backend)
+                                        • Docker-based deployment
                                         • MongoDB, PostgreSQL, Redis
                                         • AI chat, auth, payments, admin
 ```
@@ -26,8 +26,8 @@ Users
 | Setting           | Value                                        |
 | ----------------- | -------------------------------------------- |
 | Root directory    | `artifacts/syrabit`                          |
-| Build command     | `pnpm install && pnpm run build`             |
-| Output directory  | `dist`                                       |
+| Build command     | `cd artifacts/syrabit && npm install && npm run build` |
+| Output directory  | `artifacts/syrabit/dist`                     |
 | Node version      | 20                                           |
 
 ### Environment Variables (Pages)
@@ -35,17 +35,21 @@ Users
 | Variable             | Value                        |
 | -------------------- | ---------------------------- |
 | `VITE_BACKEND_URL`   | `https://api.syrabit.ai`     |
-| `VITE_WORKER_API_URL`| (optional, leave empty if not using a separate Worker API) |
+| `VITE_WORKER_API_URL`| `https://api.syrabit.ai`     |
 | `VITE_GA4_ID`        | GA4 Measurement ID (optional)|
-| `NODE_ENV`           | `production`                 |
-
-See `artifacts/syrabit/.env.example` for the full list.
+| `NODE_VERSION`       | `20`                         |
 
 ### Notes
 
-- **Compression**: Cloudflare Pages applies brotli/gzip at the edge automatically. The build does not generate `.gz`/`.br` files.
+- **SPA routing**: Handled by `_worker.js` (Advanced Mode) + `_routes.json`. Do NOT add a `_redirects` file.
+- **Compression**: Cloudflare Pages applies brotli/gzip at the edge automatically.
 - **Cache headers**: `public/_headers` configures immutable caching for hashed `/assets/*` files and must-revalidate for `index.html` and `sw.js`.
-- **Replit plugin**: The `@replit/vite-plugin-runtime-error-modal` import is wrapped in a try/catch so it gracefully no-ops when the package is absent (e.g. in the CF Pages build environment).
+- **Production env**: `.env.production` bakes in the API URL at build time.
+
+### Custom Domains
+
+- `syrabit.ai` → Cloudflare Pages (apex domain)
+- `www.syrabit.ai` → redirect to `syrabit.ai`
 
 ### Redeploy Frontend
 
@@ -55,14 +59,19 @@ Push to the connected GitHub branch. Cloudflare Pages auto-deploys on push.
 
 The Worker lives in `workers/edge-proxy/` and is deployed via Wrangler.
 
-### Prerequisites
+### Bindings
 
-1. Create a KV namespace in the Cloudflare dashboard:
-   ```
-   wrangler kv:namespace create RATE_LIMIT
-   wrangler kv:namespace create RATE_LIMIT --preview
-   ```
-2. Copy the returned namespace IDs into `wrangler.toml` replacing the placeholder values.
+| Binding       | Type | Purpose                        |
+| ------------- | ---- | ------------------------------ |
+| `CONTENT_DB`  | D1   | Edge content cache             |
+| `RATE_LIMIT`  | KV   | Distributed rate limiting      |
+
+### Environment Variables (Worker)
+
+| Variable         | Value                                                      |
+| ---------------- | ---------------------------------------------------------- |
+| `BACKEND_URL`    | `https://workspacesyrabit-production-0ddc.up.railway.app`  |
+| `D1_SYNC_SECRET` | Shared secret with backend for D1 sync                     |
 
 ### Redeploy Worker
 
@@ -71,57 +80,56 @@ cd workers/edge-proxy
 wrangler deploy
 ```
 
-### Environment Variables (Worker)
+## Backend — Railway (Docker)
 
-| Variable      | Value                                    |
-| ------------- | ---------------------------------------- |
-| `BACKEND_URL` | `https://<your-repl-slug>.<your-username>.replit.app` (Replit deployment URL) |
+The backend is hosted on Railway using the Dockerfile in `artifacts/syrabit-backend`.
 
-The `RATE_LIMIT` KV binding handles distributed rate limiting at the edge.
+### Railway Configuration
 
-## Backend — Replit Deployments
+| Setting            | Value                                |
+| ------------------ | ------------------------------------ |
+| Root Directory     | `artifacts/syrabit-backend`          |
+| Builder            | Dockerfile (auto-detected)           |
+| Health Check Path  | `/api/health`                        |
+| Health Check Timeout | 300s                               |
+| Restart Policy     | On failure (max 5 retries)           |
+| Replicas           | 1                                    |
 
-The backend is hosted on Replit. Use Replit's built-in Deployments feature to publish the FastAPI backend.
-
-### Replit Project Setup
-
-1. The backend lives in `artifacts/syrabit-backend`.
-2. Configure the run command to start gunicorn/uvicorn.
-3. Use Replit Deployments to publish the backend.
-4. Health check endpoint: `GET /api/health`.
-
-### Required Environment Variables (Replit)
+### Required Environment Variables (Railway)
 
 | Variable              | Description                                                         |
 | --------------------- | ------------------------------------------------------------------- |
-| `PORT`                | Replit assigns automatically                                        |
 | `MONGO_URL`           | MongoDB Atlas connection string                                     |
-| `DB_NAME`             | MongoDB database name (e.g. `syrabit_prod`)                         |
-| `JWT_SECRET`          | Random 96-char hex (`python3 -c "import secrets; print(secrets.token_hex(48))"`) |
-| `ADMIN_JWT_SECRET`    | Different random 96-char hex                                        |
+| `DB_NAME`             | MongoDB database name (e.g. `test_database`)                        |
+| `JWT_SECRET`          | Random secret (`openssl rand -hex 48`)                              |
+| `ADMIN_JWT_SECRET`    | Different random secret                                             |
 | `ADMIN_EMAILS`        | Comma-separated admin emails                                        |
 | `ADMIN_PASSWORDS`     | Comma-separated admin passwords (matching order)                    |
 | `ADMIN_NAMES`         | Comma-separated admin display names                                 |
 | `CORS_ORIGINS`        | `https://syrabit.ai,https://www.syrabit.ai,https://api.syrabit.ai` |
-| `PRODUCTION_ORIGINS`  | Same as CORS_ORIGINS                                                |
 | `FRONTEND_URL`        | `https://syrabit.ai`                                                |
 | `SECURE_COOKIES`      | `true`                                                              |
 | `COOKIE_DOMAIN`       | `.syrabit.ai`                                                       |
 
-### Optional Environment Variables
+### Database & Cache Variables
 
-| Variable              | Description                                                         |
-| --------------------- | ------------------------------------------------------------------- |
-| `PG_URL` / `DATABASE_URL` | PostgreSQL connection string (Supabase)                         |
-| `SUPABASE_URL`        | Supabase project URL                                                |
-| `SUPABASE_SERVICE_KEY` | Supabase service role key                                          |
-| `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL                                           |
-| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token                                      |
-| `GUNICORN_WORKERS`    | Number of gunicorn workers (default: 4)                             |
-| `GUNICORN_THREADS`    | Number of threads per worker (default: 4)                           |
-| `LOG_LEVEL`           | Gunicorn log level (default: `warning`)                             |
+| Variable                   | Description                        |
+| -------------------------- | ---------------------------------- |
+| `DATABASE_URL`             | PostgreSQL connection string       |
+| `SUPABASE_URL`             | Supabase project URL               |
+| `SUPABASE_SERVICE_KEY`     | Supabase service role key          |
+| `SUPABASE_ANON_KEY`        | Supabase anonymous key             |
+| `UPSTASH_REDIS_REST_URL`   | Upstash Redis REST URL             |
+| `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token           |
 
-### API Keys (Replit Secrets)
+### Edge Sync Variables
+
+| Variable           | Description                                      |
+| ------------------ | ------------------------------------------------ |
+| `D1_SYNC_SECRET`   | Same secret as in the Worker's `wrangler.toml`   |
+| `EDGE_WORKER_URL`  | `https://api.syrabit.ai`                         |
+
+### AI Provider Keys
 
 | Variable              | Provider               |
 | --------------------- | ---------------------- |
@@ -131,26 +139,35 @@ The backend is hosted on Replit. Use Replit's built-in Deployments feature to pu
 | `SARVAM_API_KEY`      | Sarvam AI              |
 | `SARVAM_API_KEY_2`    | Sarvam AI (fallback)   |
 | `GEMINI_API_KEY`      | Google Gemini          |
-| `GEMINI_API_KEY_2`    | Google Gemini (backup) |
 | `OPENROUTER_API_KEY`  | OpenRouter             |
-| `FIREWORKS_API_KEY`   | Fireworks AI           |
 | `XAI_API_KEY`         | xAI (Grok)             |
-| `EMERGENT_API_KEY`    | Emergent AI            |
 | `VOYAGE_API_KEY`      | Voyage AI (embeddings) |
-| `RAZORPAY_KEY_ID`     | Razorpay payments      |
-| `RAZORPAY_KEY_SECRET` | Razorpay secret        |
-| `RAZORPAY_WEBHOOK_SECRET` | Razorpay webhook   |
-| `RESEND_API_KEY`      | Resend (email)         |
-| `GOOGLE_CLIENT_ID`    | Google OAuth           |
-| `GOOGLE_CLIENT_SECRET`| Google OAuth           |
 
-### Custom Domain (Optional)
+### Auth, Payments & Email
 
-The Cloudflare Worker proxies `api.syrabit.ai` to the Replit backend, so a custom domain on Replit is optional. If needed, configure a custom domain in Replit Deployments settings and add the CNAME in Cloudflare DNS.
+| Variable                  | Provider               |
+| ------------------------- | ---------------------- |
+| `GOOGLE_CLIENT_ID`        | Google OAuth           |
+| `GOOGLE_CLIENT_SECRET`    | Google OAuth           |
+| `RAZORPAY_KEY_ID`         | Razorpay payments      |
+| `RAZORPAY_KEY_SECRET`     | Razorpay secret        |
+| `RAZORPAY_WEBHOOK_SECRET` | Razorpay webhook       |
+| `RESEND_API_KEY`          | Resend (email)         |
+
+### Server Tuning
+
+| Variable             | Default   | Description                    |
+| -------------------- | --------- | ------------------------------ |
+| `PORT`               | `8000`    | Server port (Railway injects)  |
+| `GUNICORN_WORKERS`   | auto      | Gunicorn worker count          |
+| `GUNICORN_THREADS`   | `2`       | Threads per worker             |
+| `LOG_LEVEL`          | `warning` | Gunicorn log level             |
+| `LLM_MAX_CONCURRENT` | `40`     | Max concurrent LLM requests    |
 
 ### Redeploy Backend
 
-Use Replit's Deployments feature to redeploy the backend after changes.
+Push to the connected GitHub branch. Railway auto-deploys on push.
+Or manually: Railway dashboard → Deployments → Redeploy.
 
 ## DNS — Cloudflare
 
@@ -178,3 +195,13 @@ Configure these callback URLs in the respective payment provider dashboards:
 | Stripe   | `https://api.syrabit.ai/api/webhooks/stripe`   |
 
 Both endpoints verify signatures using their respective secrets.
+
+## Verification Checklist
+
+- [ ] `https://syrabit.ai` loads the React SPA
+- [ ] `https://api.syrabit.ai/api/health` returns `{"status":"ok"}`
+- [ ] `https://api.syrabit.ai/api/content/boards` returns content data
+- [ ] Browser console shows no CORS errors
+- [ ] AI chat streaming works end-to-end
+- [ ] Login/signup flows work (cookies set correctly)
+- [ ] D1 sync succeeds from admin panel
