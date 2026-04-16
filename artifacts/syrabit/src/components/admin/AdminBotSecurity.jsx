@@ -9,7 +9,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 function GlassCard({ children, className = '' }) {
@@ -52,6 +52,8 @@ function AlertThresholdPanel({ adminToken }) {
   const [settingsError, setSettingsError] = useState(null);
   const [fieldErrors, setFieldErrors] = useState({});
   const [expanded, setExpanded] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillResult, setBackfillResult] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -410,6 +412,51 @@ function AlertThresholdPanel({ adminToken }) {
               <RotateCcw size={12} />
               Reset to Defaults
             </button>
+          </div>
+
+          <div className="border-t border-gray-100 pt-5">
+            <h4 className="text-xs font-medium text-gray-700 mb-1.5 flex items-center gap-1.5">
+              <Database size={12} className="text-gray-400" />
+              Backfill Old Alerts
+            </h4>
+            <p className="text-[10px] text-gray-400 mb-3">
+              Adds threshold context (metric, configured limit, actual value) to older alerts that were created before threshold tracking was added. Safe to run multiple times.
+            </p>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={async () => {
+                  setBackfilling(true);
+                  setBackfillResult(null);
+                  try {
+                    const res = await adminBackfillThresholds(adminToken);
+                    setBackfillResult(res.data);
+                  } catch (err) {
+                    setBackfillResult({ error: err.response?.data?.detail || 'Backfill failed' });
+                  } finally {
+                    setBackfilling(false);
+                  }
+                }}
+                disabled={backfilling}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {backfilling ? <Loader2 size={12} className="animate-spin" /> : <History size={12} />}
+                {backfilling ? 'Running...' : 'Backfill Old Alerts'}
+              </button>
+              {backfillResult && !backfillResult.error && (
+                <span className="text-[11px] text-emerald-600 flex items-center gap-1">
+                  <Check size={11} />
+                  {backfillResult.updated > 0
+                    ? `Updated ${backfillResult.updated} of ${backfillResult.total} alerts${backfillResult.skipped > 0 ? ` (${backfillResult.skipped} skipped)` : ''}`
+                    : 'All alerts already have threshold data'}
+                </span>
+              )}
+              {backfillResult?.error && (
+                <span className="text-[11px] text-red-500 flex items-center gap-1">
+                  <AlertTriangle size={11} />
+                  {backfillResult.error}
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -520,3 +520,6 @@ export const adminAcknowledgeAlert = (token, alertId) =>
 
 export const adminAcknowledgeAllAlerts = (token) =>
   axios.patch(`${API_BASE}/admin/alerts/acknowledge-all`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminBackfillThresholds = (token) =>
+  axios.post(`${API_BASE}/admin/alerts/backfill-thresholds`, {}, { headers: adminHeaders(token), withCredentials: true });

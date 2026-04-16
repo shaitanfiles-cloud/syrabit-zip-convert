@@ -897,3 +897,92 @@ async def admin_acknowledge_all_alerts(
     )
     return {"ok": True, "modified": result.modified_count}
 
+
+_BACKFILL_TYPE_TO_METRIC = {
+    "high_error_rate": "error_rate_pct",
+    "high_latency": "latency_p95_ms",
+    "spoofed_bot_surge": "spoof_rpm",
+    "high_fallback_rate": "fallback_rate_pct",
+    "endpoint_down": "endpoint_down_minutes",
+}
+
+import re as _re
+_BACKFILL_BODY_PARSERS = {
+    "high_error_rate": _re.compile(r"([\d.]+)%\s*errors"),
+    "high_latency": _re.compile(r"p95\s*=\s*(\d+)\s*ms", _re.IGNORECASE),
+    "spoofed_bot_surge": _re.compile(r"([\d.]+)\s*spoofed\s*requests/min", _re.IGNORECASE),
+    "high_fallback_rate": _re.compile(r"([\d.]+)%\s*of\s*last"),
+    "endpoint_down": _re.compile(r"failing\s*for\s*(\d+)\s*min", _re.IGNORECASE),
+}
+_BACKFILL_ENDPOINT_RE = _re.compile(r"Endpoint\s+(\S+)\s+has\s+been")
+
+
+@router.post("/admin/alerts/backfill-thresholds")
+async def admin_backfill_thresholds(
+    admin: dict = Depends(get_admin_user),
+):
+    import metrics as _metrics_mod
+
+    configured = dict(_metrics_mod._ALERT_THRESHOLDS_DEFAULT)
+    try:
+        cfg = await db.api_config.find_one({}, {"_id": 0})
+        if cfg and "alert_settings" in cfg:
+            saved = cfg["alert_settings"].get("thresholds", {})
+            for k in _metrics_mod._ALERT_THRESHOLDS_DEFAULT:
+                if k in saved:
+                    try:
+                        configured[k] = float(saved[k])
+                    except (ValueError, TypeError):
+                        pass
+    except Exception:
+        pass
+
+    query = {"threshold_snapshot": {"$exists": False}}
+    total = await db.alerts.count_documents(query)
+    if total == 0:
+        return {"ok": True, "total": 0, "updated": 0, "skipped": 0, "by_type": {}}
+
+    updated = 0
+    skipped = 0
+    by_type = {}
+
+    async for alert in db.alerts.find(query):
+        alert_type = alert.get("type", "")
+        body = alert.get("body", "")
+        metric = _BACKFILL_TYPE_TO_METRIC.get(alert_type)
+
+        if not metric:
+            skipped += 1
+            continue
+
+        threshold_value = configured.get(metric, _metrics_mod._ALERT_THRESHOLDS_DEFAULT.get(metric))
+
+        actual = None
+        parser = _BACKFILL_BODY_PARSERS.get(alert_type)
+        if parser:
+            m = parser.search(body or "")
+            if m:
+                try:
+                    val = float(m.group(1))
+                    actual = int(val) if alert_type in ("high_latency", "spoofed_bot_surge", "endpoint_down") else round(val, 1)
+                except (ValueError, IndexError):
+                    pass
+
+        snapshot = {"metric": metric, "value": threshold_value}
+        if actual is not None:
+            snapshot["actual"] = actual
+
+        if alert_type == "endpoint_down":
+            ep_m = _BACKFILL_ENDPOINT_RE.search(body or "")
+            if ep_m:
+                snapshot["endpoint"] = ep_m.group(1)
+
+        await db.alerts.update_one(
+            {"_id": alert["_id"]},
+            {"$set": {"threshold_snapshot": snapshot}},
+        )
+        updated += 1
+        by_type[alert_type] = by_type.get(alert_type, 0) + 1
+
+    return {"ok": True, "total": total, "updated": updated, "skipped": skipped, "by_type": by_type}
+
