@@ -1874,6 +1874,51 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             </div>
           )}
 
+          {indexNowStats.sitemap_diff_latest && (
+            <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] text-indigo-700 font-semibold uppercase tracking-wider">Sitemap Diff</span>
+                <span className="text-[10px] text-gray-500">
+                  Last run: {indexNowStats.sitemap_diff_latest.ran_at ? new Date(indexNowStats.sitemap_diff_latest.ran_at).toLocaleString() : '—'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="rounded-md bg-white border border-indigo-100 py-1.5">
+                  <p className="text-indigo-700 font-bold text-sm">{(indexNowStats.sitemap_diff_latest.sitemap_total ?? 0).toLocaleString()}</p>
+                  <p className="text-[9px] text-gray-500">Sitemap Total</p>
+                </div>
+                <div className="rounded-md bg-white border border-indigo-100 py-1.5">
+                  <p className="text-emerald-700 font-bold text-sm">{(indexNowStats.sitemap_diff_latest.new_queued ?? 0).toLocaleString()}</p>
+                  <p className="text-[9px] text-gray-500">New Queued</p>
+                </div>
+                <div className="rounded-md bg-white border border-indigo-100 py-1.5">
+                  <p className="text-amber-700 font-bold text-sm">{(indexNowStats.sitemap_diff_latest.skipped_capacity ?? 0).toLocaleString()}</p>
+                  <p className="text-[9px] text-gray-500">Skipped (capacity)</p>
+                </div>
+              </div>
+              {indexNowStats.sitemap_diff_history?.length > 1 && (
+                <div className="mt-3">
+                  <div className="text-[10px] text-gray-500 font-semibold mb-1 uppercase tracking-wider">Recent Runs</div>
+                  <div className="space-y-1 max-h-40 overflow-y-auto">
+                    {indexNowStats.sitemap_diff_history.map((run, i) => (
+                      <div key={i} className="flex items-center gap-2 text-[10px] py-1 px-2 rounded bg-white border border-indigo-100">
+                        <span className="text-gray-500 min-w-[140px]">
+                          {run.ran_at ? new Date(run.ran_at).toLocaleString() : '—'}
+                        </span>
+                        <span className="text-gray-700">total <span className="font-mono font-semibold">{(run.sitemap_total ?? 0).toLocaleString()}</span></span>
+                        <span className="text-emerald-700">new <span className="font-mono font-semibold">{(run.new_queued ?? 0).toLocaleString()}</span></span>
+                        <span className="text-gray-500">already <span className="font-mono">{(run.already_submitted ?? 0).toLocaleString()}</span></span>
+                        {(run.skipped_capacity ?? 0) > 0 && (
+                          <span className="text-amber-600 ml-auto">skipped <span className="font-mono font-semibold">{run.skipped_capacity.toLocaleString()}</span></span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {indexNowStats.by_source?.length > 0 && (
             <div>
               <div className="text-[10px] text-gray-400 font-semibold mb-1.5 uppercase tracking-wider">Push Sources</div>

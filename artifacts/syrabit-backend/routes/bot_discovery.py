@@ -2517,6 +2517,24 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
         except Exception as hist_err:
             logger.debug("Health history aggregation failed: %s", hist_err)
 
+        sitemap_diff_latest = None
+        sitemap_diff_history: list = []
+        try:
+            diff_docs = await db.indexnow_sitemap_diff_log.find(
+                {},
+                {"_id": 0, "ran_at": 1, "sitemap_total": 1, "already_submitted": 1,
+                 "new_queued": 1, "skipped_capacity": 1},
+            ).sort("ran_at", -1).limit(10).to_list(10)
+            for doc in diff_docs:
+                ts = doc.get("ran_at")
+                if isinstance(ts, datetime):
+                    doc["ran_at"] = ts.isoformat()
+            if diff_docs:
+                sitemap_diff_latest = diff_docs[0]
+                sitemap_diff_history = diff_docs
+        except Exception as diff_err:
+            logger.debug("Sitemap diff log fetch failed: %s", diff_err)
+
         return {
             "total_pushes": total_pushes,
             "total_urls_pushed": total_urls,
@@ -2527,6 +2545,8 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
             "pending": await indexnow_batcher.get_pending_count(),
             "endpoint_health": endpoint_health_list,
             "endpoint_health_history": endpoint_health_history,
+            "sitemap_diff_latest": sitemap_diff_latest,
+            "sitemap_diff_history": sitemap_diff_history,
         }
     except Exception as e:
         logger.error(f"IndexNow stats fetch failed: {e}")
