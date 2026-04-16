@@ -906,15 +906,14 @@ _BACKFILL_TYPE_TO_METRIC = {
     "endpoint_down": "endpoint_down_minutes",
 }
 
-import re as _re
 _BACKFILL_BODY_PARSERS = {
-    "high_error_rate": _re.compile(r"([\d.]+)%\s*errors"),
-    "high_latency": _re.compile(r"p95\s*=\s*(\d+)\s*ms", _re.IGNORECASE),
-    "spoofed_bot_surge": _re.compile(r"([\d.]+)\s*spoofed\s*requests/min", _re.IGNORECASE),
-    "high_fallback_rate": _re.compile(r"([\d.]+)%\s*of\s*last"),
-    "endpoint_down": _re.compile(r"failing\s*for\s*(\d+)\s*min", _re.IGNORECASE),
+    "high_error_rate": re.compile(r"([\d.]+)%\s*errors"),
+    "high_latency": re.compile(r"p95\s*=\s*(\d+)\s*ms", re.IGNORECASE),
+    "spoofed_bot_surge": re.compile(r"([\d.]+)\s*spoofed\s*requests/min", re.IGNORECASE),
+    "high_fallback_rate": re.compile(r"([\d.]+)%\s*of\s*last"),
+    "endpoint_down": re.compile(r"failing\s*for\s*(\d+)\s*min", re.IGNORECASE),
 }
-_BACKFILL_ENDPOINT_RE = _re.compile(r"Endpoint\s+(\S+)\s+has\s+been")
+_BACKFILL_ENDPOINT_RE = re.compile(r"Endpoint\s+(\S+)\s+has\s+been")
 
 
 @router.post("/admin/alerts/backfill-thresholds")
