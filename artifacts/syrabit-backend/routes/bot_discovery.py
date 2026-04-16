@@ -1233,8 +1233,48 @@ async def seo_health_check():
 
 
 _seo_health_alert_last_fired: float = 0.0
+_seo_url_spike_alert_last_fired: float = 0.0
 _SEO_HEALTH_ALERT_COOLDOWN_S = 6 * 3600
+_SEO_URL_SPIKE_ALERT_COOLDOWN_S = 6 * 3600
 _SEO_HEALTH_HISTORY_RETENTION_DAYS = 30
+
+
+def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
+    """Render an HTML table showing per-sitemap pass/fail counts. Rows where
+    the success rate is at or below ``100 - threshold_pct`` are highlighted."""
+    if not by_sitemap:
+        return ""
+    rows_html = []
+    for row in by_sitemap:
+        sr = row.get("success_rate", 0)
+        bad = sr <= (100.0 - threshold_pct)
+        bg = "background:#fdecea;color:#c0392b;font-weight:bold" if bad else ""
+        rows_html.append(
+            f"<tr style='{bg}'>"
+            f"<td style='padding:6px 10px;border:1px solid #ddd'>{row.get('name', 'unknown')}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #ddd'>{row.get('ok', 0)} / {row.get('total', 0)}</td>"
+            f"<td style='padding:6px 10px;border:1px solid #ddd'>{sr}%</td>"
+            f"</tr>"
+        )
+    return (
+        "<table style='border-collapse:collapse;margin:12px 0;width:100%;max-width:520px;font-family:sans-serif;font-size:13px'>"
+        "<tr style='background:#f3f4f6'>"
+        "<th style='text-align:left;padding:6px 10px;border:1px solid #ddd'>Sitemap (page-type)</th>"
+        "<th style='text-align:left;padding:6px 10px;border:1px solid #ddd'>OK / total</th>"
+        "<th style='text-align:left;padding:6px 10px;border:1px solid #ddd'>Success rate</th>"
+        "</tr>"
+        + "".join(rows_html)
+        + "</table>"
+    )
+
+
+def _format_by_sitemap_text(by_sitemap) -> str:
+    """Plain-text fallback for the per-sitemap breakdown."""
+    if not by_sitemap:
+        return ""
+    lines = [f"  - {r.get('name', 'unknown')}: {r.get('ok', 0)}/{r.get('total', 0)} OK ({r.get('success_rate', 0)}%)"
+             for r in by_sitemap]
+    return "\nPer-sitemap breakdown:\n" + "\n".join(lines)
 
 
 async def _record_seo_health_snapshot() -> Dict:
@@ -1257,6 +1297,21 @@ async def _record_seo_health_snapshot() -> Dict:
         }
 
     summary = report.get("summary") or {}
+    # Per-sitemap pass/fail breakdown — used by the seo_url_spike alert
+    # to tell admins which page-type is failing (e.g. only /learn/* URLs).
+    by_sitemap = []
+    for sm in report.get("sitemaps") or []:
+        checks = sm.get("sample_checks") or []
+        if not checks:
+            continue
+        ok = sum(1 for c in checks if c.get("ok"))
+        total = len(checks)
+        by_sitemap.append({
+            "name": sm.get("name", "unknown"),
+            "ok": ok,
+            "total": total,
+            "success_rate": round(ok / max(total, 1) * 100, 1),
+        })
     snapshot = {
         "status": report.get("status", "unknown"),
         "checked_at": report.get("checked_at") or datetime.now(timezone.utc).isoformat(),
@@ -1268,6 +1323,7 @@ async def _record_seo_health_snapshot() -> Dict:
             "ok_url_checks": summary.get("ok_url_checks", 0),
             "url_check_success_rate": summary.get("url_check_success_rate", 0),
         },
+        "by_sitemap": by_sitemap,
         "d1_status": (report.get("d1_sync") or {}).get("status", "unknown"),
         "content_stats": report.get("content_stats", {}),
         "error": report.get("error"),
@@ -1287,16 +1343,86 @@ async def _record_seo_health_snapshot() -> Dict:
 
 
 async def _seo_health_alert_loop():
-    """Hourly: snapshot /seo/health. If two most-recent snapshots are degraded
-    or critical, fire an admin alert via metrics._dispatch_alert (Resend email
-    + persisted to db.alerts for the dashboard banner)."""
-    global _seo_health_alert_last_fired
+    """Hourly: snapshot /seo/health. Fires two independent admin alerts via
+    metrics._dispatch_alert (Resend email + persisted to db.alerts):
+
+      1. ``seo_health_degraded`` — when the two most recent snapshots both
+         have aggregate status of ``degraded`` or ``critical``.
+      2. ``seo_url_spike`` — when the URL spot-check success rate falls
+         below ``100 - url_404_spike_pct`` for two consecutive snapshots.
+         The alert email includes a per-page-type breakdown so admins can
+         see which sitemap is failing (e.g. only ``/learn/*`` URLs).
+    """
+    global _seo_health_alert_last_fired, _seo_url_spike_alert_last_fired
 
     await asyncio.sleep(180)
     while True:
         try:
             snapshot = await _record_seo_health_snapshot()
             status = (snapshot.get("status") or "unknown").lower()
+
+            # ── (2) seo_url_spike — checked first because it can fire even
+            # when aggregate status is still "ok".
+            try:
+                from metrics import _ALERT_THRESHOLDS, _load_alert_settings, _dispatch_alert as _md
+                from metrics import _alert_last_fired as _ml
+                # Refresh thresholds so admin tweaks apply within an hour.
+                try:
+                    await _load_alert_settings()
+                except Exception:
+                    pass
+                threshold_pct = float(_ALERT_THRESHOLDS.get("url_404_spike_pct", 20.0))
+                bad_floor = 100.0 - threshold_pct
+                latest_rate = float((snapshot.get("summary") or {}).get("url_check_success_rate", 100))
+                latest_total = int((snapshot.get("summary") or {}).get("total_url_checks", 0))
+                if latest_total > 0 and latest_rate < bad_floor:
+                    from deps import db as _db, is_mongo_available as _ma
+                    spike_consecutive = 1
+                    if await _ma():
+                        try:
+                            recent = await _db.seo_health_history.find(
+                                {}, {"_id": 0, "summary": 1, "recorded_at": 1}
+                            ).sort("recorded_at", -1).limit(2).to_list(2)
+                            if len(recent) >= 2:
+                                prev_summary = recent[1].get("summary") or {}
+                                prev_rate = float(prev_summary.get("url_check_success_rate", 100))
+                                prev_total = int(prev_summary.get("total_url_checks", 0))
+                                if prev_total > 0 and prev_rate < bad_floor:
+                                    spike_consecutive = 2
+                        except Exception:
+                            pass
+
+                    now_ts = time.time()
+                    if spike_consecutive >= 2 and (now_ts - _seo_url_spike_alert_last_fired) >= _SEO_URL_SPIKE_ALERT_COOLDOWN_S:
+                        _ml.pop("seo_url_spike", None)
+                        s = snapshot.get("summary") or {}
+                        by_sm = snapshot.get("by_sitemap") or []
+                        body_text = (
+                            f"URL spot-check success rate has been at {latest_rate}% for two "
+                            f"consecutive hourly checks (alert fires below {bad_floor}%). "
+                            f"OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
+                            f"sampled URLs. Inspect /api/seo/health and the SEO Manager dashboard."
+                            f"{_format_by_sitemap_text(by_sm)}"
+                        )
+                        try:
+                            await _md(
+                                "seo_url_spike",
+                                f"SEO: URL 404 spike ({latest_rate}% OK)",
+                                body_text,
+                                threshold_snapshot={
+                                    "metric": "url_404_spike_pct",
+                                    "value": threshold_pct,
+                                    "actual": round(100.0 - latest_rate, 1),
+                                    "ok_url_checks": s.get("ok_url_checks", 0),
+                                    "total_url_checks": s.get("total_url_checks", 0),
+                                    "by_sitemap_html": _format_by_sitemap_html(by_sm, threshold_pct),
+                                },
+                            )
+                            _seo_url_spike_alert_last_fired = now_ts
+                        except Exception as exc:
+                            logger.debug(f"Failed to dispatch seo_url_spike alert: {exc}")
+            except Exception as exc:
+                logger.debug(f"seo_url_spike check skipped: {exc}")
 
             if status in ("degraded", "critical"):
                 from deps import db, is_mongo_available

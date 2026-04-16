@@ -260,6 +260,7 @@ _ALERT_THRESHOLDS_DEFAULT = {
     "endpoint_down_minutes": 60,
     "endpoint_down_check_minutes": 15,
     "collection_growth_per_day": 500,
+    "url_404_spike_pct": 20.0,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,
@@ -358,11 +359,25 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
                     f"<td style='padding:8px;border:1px solid #ddd;color:#c0392b;font-weight:bold'>{actual}</td>"
                     f"</tr></table>"
                 )
+            # Optional rich extra HTML block (e.g. per-sitemap breakdown for
+            # the seo_url_spike alert). Callers may attach pre-rendered HTML
+            # via threshold_snapshot["extra_html"] or the older
+            # threshold_snapshot["by_sitemap_html"] alias.
+            extra_html = ""
+            if threshold_snapshot:
+                extra_html = (
+                    threshold_snapshot.get("extra_html")
+                    or threshold_snapshot.get("by_sitemap_html")
+                    or ""
+                )
+            # Render newlines in the body as <br> so multi-line bodies (e.g.
+            # the seo_url_spike text fallback) read cleanly in HTML email.
+            body_html = (body or "").replace("\n", "<br>")
             _resend_sdk.Emails.send({
                 "from": EMAIL_FROM,
                 "to": [admin_email],
                 "subject": f"🚨 Syrabit Alert: {title}",
-                "html": f"<h2>{title}</h2><p>{body}</p>{threshold_html}<p style='color:#888'>Alert type: {alert_type}<br>Cooldown: {_ALERT_COOLDOWN_S // 60} min</p>",
+                "html": f"<h2>{title}</h2><p>{body_html}</p>{threshold_html}{extra_html}<p style='color:#888'>Alert type: {alert_type}<br>Cooldown: {_ALERT_COOLDOWN_S // 60} min</p>",
             })
     except Exception as e:
         logger.debug(f"Alert email failed: {e}")

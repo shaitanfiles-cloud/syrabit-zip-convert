@@ -233,3 +233,233 @@ def test_no_alert_when_only_one_critical_snapshot():
         asyncio.run(_run_once())
 
     fake_metrics._dispatch_alert.assert_not_called()
+
+
+# -------- Task #295: seo_url_spike (404 spike) alert --------
+
+def _spiky_report(success_rate=50.0, sitemap_breakdown=None):
+    """A health report where status is still 'ok' but URL spot-checks
+    are failing on a subset of sitemaps."""
+    rep = _ok_report()
+    rep["status"] = "ok"  # aggregate status hasn't tipped yet
+    rep["summary"]["url_check_success_rate"] = success_rate
+    rep["summary"]["ok_url_checks"] = int(success_rate * 0.3)  # of 30
+    rep["sitemaps"] = sitemap_breakdown or [
+        {"name": "sitemap-learn.xml", "valid_xml": True, "url_count": 50,
+         "sample_checks": [{"ok": False, "status": 404} for _ in range(8)]
+                          + [{"ok": True, "status": 200} for _ in range(2)]},
+        {"name": "sitemap-notes.xml", "valid_xml": True, "url_count": 80,
+         "sample_checks": [{"ok": True, "status": 200} for _ in range(10)]},
+    ]
+    return rep
+
+
+def test_snapshot_includes_per_sitemap_breakdown():
+    """Task #295: snapshot must capture per-sitemap pass/fail so the alert
+    email can show which page-type is broken."""
+    with patch.object(bot_discovery, "seo_health_check",
+                      AsyncMock(return_value=_spiky_report())):
+        snap = asyncio.run(bot_discovery._record_seo_health_snapshot())
+    assert "by_sitemap" in snap
+    by_name = {r["name"]: r for r in snap["by_sitemap"]}
+    assert by_name["sitemap-learn.xml"]["ok"] == 2
+    assert by_name["sitemap-learn.xml"]["total"] == 10
+    assert by_name["sitemap-learn.xml"]["success_rate"] == 20.0
+    assert by_name["sitemap-notes.xml"]["success_rate"] == 100.0
+
+
+def test_format_by_sitemap_html_highlights_bad_rows():
+    """Sitemaps below the configured floor should be highlighted in red."""
+    rows = [
+        {"name": "sitemap-learn.xml", "ok": 2, "total": 10, "success_rate": 20.0},
+        {"name": "sitemap-notes.xml", "ok": 10, "total": 10, "success_rate": 100.0},
+    ]
+    html = bot_discovery._format_by_sitemap_html(rows, threshold_pct=20.0)
+    # bad row gets the red highlight style
+    assert "sitemap-learn.xml" in html
+    assert "background:#fdecea" in html
+    # good row is plain
+    assert "sitemap-notes.xml" in html
+    assert html.count("background:#fdecea") == 1  # only 1 bad row highlighted
+
+
+def test_url_spike_alert_fires_on_two_consecutive_low_rates():
+    """Two consecutive snapshots below (100 - threshold)% must trigger
+    seo_url_spike via _dispatch_alert with a per-sitemap breakdown."""
+    fake_db = MagicMock()
+    fake_db.seo_health_history.insert_one = AsyncMock()
+    fake_db.seo_health_history.delete_many = AsyncMock()
+    # Latest snapshot will be inserted; previous one (in history) was also bad.
+    fake_db.seo_health_history.find = MagicMock(return_value=_fake_cursor([
+        {"summary": {"url_check_success_rate": 50.0, "total_url_checks": 30},
+         "recorded_at": datetime.now(timezone.utc)},
+        {"summary": {"url_check_success_rate": 60.0, "total_url_checks": 30},
+         "recorded_at": datetime.now(timezone.utc)},
+    ]))
+
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._dispatch_alert = AsyncMock()
+    fake_metrics._load_alert_settings = AsyncMock()
+    fake_metrics._ALERT_THRESHOLDS = {"url_404_spike_pct": 20.0}  # floor = 80%
+    fake_metrics._alert_last_fired = {}
+    sys.modules["metrics"] = fake_metrics
+
+    bot_discovery._seo_url_spike_alert_last_fired = 0.0
+
+    async def _run_once():
+        snap = await bot_discovery._record_seo_health_snapshot()
+        # Inline the URL-spike branch of the loop body
+        from metrics import _ALERT_THRESHOLDS, _dispatch_alert
+        floor = 100.0 - float(_ALERT_THRESHOLDS["url_404_spike_pct"])
+        latest_rate = float(snap["summary"]["url_check_success_rate"])
+        from deps import db as _db, is_mongo_available as _ima
+        consecutive = 1
+        if await _ima():
+            recent = await _db.seo_health_history.find({}, {"_id": 0}).sort(
+                "recorded_at", -1).limit(2).to_list(2)
+            if len(recent) >= 2:
+                prev_rate = float((recent[1].get("summary") or {}).get("url_check_success_rate", 100))
+                prev_total = int((recent[1].get("summary") or {}).get("total_url_checks", 0))
+                if prev_total > 0 and prev_rate < floor:
+                    consecutive = 2
+        if latest_rate < floor and consecutive >= 2:
+            await _dispatch_alert(
+                "seo_url_spike", "SEO: URL 404 spike",
+                f"rate={latest_rate}",
+                threshold_snapshot={
+                    "metric": "url_404_spike_pct",
+                    "value": _ALERT_THRESHOLDS["url_404_spike_pct"],
+                    "actual": round(100.0 - latest_rate, 1),
+                    "by_sitemap_html": bot_discovery._format_by_sitemap_html(
+                        snap.get("by_sitemap") or [], _ALERT_THRESHOLDS["url_404_spike_pct"]),
+                },
+            )
+
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)), \
+         patch.object(bot_discovery, "seo_health_check",
+                      AsyncMock(return_value=_spiky_report(success_rate=50.0))):
+        asyncio.run(_run_once())
+
+    fake_metrics._dispatch_alert.assert_awaited_once()
+    args, kwargs = fake_metrics._dispatch_alert.call_args
+    assert args[0] == "seo_url_spike"
+    snapshot = kwargs.get("threshold_snapshot") or {}
+    assert snapshot["metric"] == "url_404_spike_pct"
+    # Per-sitemap HTML breakdown must be included
+    assert "sitemap-learn.xml" in snapshot["by_sitemap_html"]
+
+
+def test_url_spike_no_alert_when_only_one_low_rate():
+    """One bad snapshot followed by an ok previous snapshot: no alert."""
+    fake_db = MagicMock()
+    fake_db.seo_health_history.insert_one = AsyncMock()
+    fake_db.seo_health_history.delete_many = AsyncMock()
+    fake_db.seo_health_history.find = MagicMock(return_value=_fake_cursor([
+        {"summary": {"url_check_success_rate": 50.0, "total_url_checks": 30},
+         "recorded_at": datetime.now(timezone.utc)},
+        {"summary": {"url_check_success_rate": 100.0, "total_url_checks": 30},
+         "recorded_at": datetime.now(timezone.utc)},
+    ]))
+
+    fake_metrics = types.ModuleType("metrics")
+    fake_metrics._dispatch_alert = AsyncMock()
+    fake_metrics._load_alert_settings = AsyncMock()
+    fake_metrics._ALERT_THRESHOLDS = {"url_404_spike_pct": 20.0}
+    fake_metrics._alert_last_fired = {}
+    sys.modules["metrics"] = fake_metrics
+
+    async def _run_once():
+        snap = await bot_discovery._record_seo_health_snapshot()
+        from metrics import _ALERT_THRESHOLDS, _dispatch_alert
+        floor = 100.0 - float(_ALERT_THRESHOLDS["url_404_spike_pct"])
+        latest_rate = float(snap["summary"]["url_check_success_rate"])
+        from deps import db as _db, is_mongo_available as _ima
+        consecutive = 1
+        if await _ima():
+            recent = await _db.seo_health_history.find({}, {"_id": 0}).sort(
+                "recorded_at", -1).limit(2).to_list(2)
+            if len(recent) >= 2:
+                prev_rate = float((recent[1].get("summary") or {}).get("url_check_success_rate", 100))
+                prev_total = int((recent[1].get("summary") or {}).get("total_url_checks", 0))
+                if prev_total > 0 and prev_rate < floor:
+                    consecutive = 2
+        if latest_rate < floor and consecutive >= 2:
+            await _dispatch_alert("seo_url_spike", "x", "x")
+
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)), \
+         patch.object(bot_discovery, "seo_health_check",
+                      AsyncMock(return_value=_spiky_report(success_rate=50.0))):
+        asyncio.run(_run_once())
+
+    fake_metrics._dispatch_alert.assert_not_called()
+
+
+def test_dispatch_alert_email_includes_by_sitemap_html():
+    """Verify _dispatch_alert renders threshold_snapshot['by_sitemap_html']
+    inside the outgoing Resend email body, so the seo_url_spike alert
+    actually shows the per-sitemap breakdown to admins."""
+    # Drop the test stub for metrics so we exercise the real implementation.
+    sys.modules.pop("metrics", None)
+    # Real metrics imports `db` and `supa` from deps — provide both stubs.
+    fake_deps = sys.modules.get("deps")
+    if fake_deps is not None:
+        fake_deps.supa = MagicMock()
+        fake_deps.db = MagicMock()
+        fake_deps.db.alerts = MagicMock()
+        fake_deps.db.alerts.insert_one = AsyncMock()
+        fake_deps.is_mongo_available = AsyncMock(return_value=False)
+    import importlib
+    metrics = importlib.import_module("metrics")
+    # Reset cooldown so the alert actually dispatches under test
+    metrics._alert_last_fired = {}
+    captured = {}
+
+    class _FakeResend:
+        api_key = ""
+        class Emails:
+            @staticmethod
+            def send(payload):
+                captured["payload"] = payload
+
+    sys.modules["resend"] = _FakeResend
+    metrics._notification_channels = {"email": "admin@example.com", "webhook_url": ""}
+    import os as _os
+    _os.environ["RESEND_API_KEY"] = "test-key"
+
+    by_sitemap_html = (
+        "<table><tr><td>sitemap-learn.xml</td><td>2/10</td></tr></table>"
+    )
+    asyncio.run(metrics._dispatch_alert(
+        "seo_url_spike",
+        "SEO: URL 404 spike (50% OK)",
+        "URL spot-check success rate has been at 50%\nfor two consecutive hourly checks.",
+        threshold_snapshot={
+            "metric": "url_404_spike_pct",
+            "value": 20.0,
+            "actual": 50.0,
+            "by_sitemap_html": by_sitemap_html,
+        },
+    ))
+
+    payload = captured.get("payload")
+    assert payload, "Expected Resend email payload to be sent"
+    html = payload.get("html", "")
+    assert "sitemap-learn.xml" in html, "Per-sitemap HTML must appear in email body"
+    assert "2/10" in html
+    # Body newlines should be rendered as <br> for readability
+    assert "<br>" in html
+
+
+def test_url_404_spike_pct_in_alert_thresholds_default():
+    """Sanity: the new threshold key exists in metrics defaults so the
+    /admin/alert-settings endpoint will accept and persist it. We grep
+    the source rather than importing the module because earlier tests
+    in this file stub out ``deps`` and ``metrics`` for isolation."""
+    import os
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(here, "metrics.py"), encoding="utf-8") as f:
+        src = f.read()
+    assert "_ALERT_THRESHOLDS_DEFAULT" in src
+    assert '"url_404_spike_pct"' in src
