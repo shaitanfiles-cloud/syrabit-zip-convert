@@ -66,3 +66,9 @@ id = "NGoa1qAjmIbi4r7Nf6GoG"
 uri = "file://.local/reports/cloudflare-search-bots-6h-vs-7d-2026-04-16.md"
 type = "text"
 title = "Search Bots: Last 6h vs Last 7d (syrabit.ai)"
+
+[[outputs]]
+id = "qOpjdaGXtKPXwf-2iG4cy"
+uri = "file://.local/plans/seo-crawler-boost-11-plans.md"
+type = "text"
+title = "Crawler-Boost Roadmap — 11 Independent Plans"
