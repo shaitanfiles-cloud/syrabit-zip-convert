@@ -1,6 +1,6 @@
 """Syrabit.ai — ASGI middleware classes."""
 import os, re, time as _time_mod, logging, uuid, contextvars, hashlib, asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.datastructures import MutableHeaders
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -154,6 +154,57 @@ _spoof_counter_lock = __import__("threading").Lock()
 _spoof_minute_counts: dict[str, int] = {}
 _SPOOF_ALERT_THRESHOLD = 50
 
+def _get_auto_block_threshold() -> int:
+    try:
+        from metrics import _ALERT_THRESHOLDS
+        return int(_ALERT_THRESHOLDS.get("auto_block_threshold", 100))
+    except Exception:
+        return 100
+
+async def _check_auto_block(db, ip_hash: str, now: datetime):
+    threshold = _get_auto_block_threshold()
+    if threshold <= 0:
+        return
+    if _is_ip_blocked(ip_hash):
+        return
+    try:
+        cutoff = now - timedelta(hours=24)
+        count = await db.bot_spoof_attempts.count_documents({
+            "ip_hash": ip_hash,
+            "timestamp": {"$gte": cutoff},
+        })
+        if count >= threshold:
+            existing = await db.blocked_ips.find_one({"ip_hash": ip_hash})
+            if existing:
+                return
+            doc = {
+                "ip_hash": ip_hash,
+                "reason": "auto_threshold",
+                "blocked_at": now,
+                "blocked_by": "system/auto-block",
+                "auto_blocked": True,
+                "threshold_at_block": threshold,
+                "spoof_count_24h": count,
+            }
+            await db.blocked_ips.insert_one(doc)
+            await _refresh_blocked_ip_cache()
+            logger.warning(
+                f"AUTO_BLOCK ip_hash={ip_hash} spoof_count_24h={count} threshold={threshold}"
+            )
+            try:
+                from metrics import _dispatch_alert
+                await _dispatch_alert(
+                    "auto_block_ip",
+                    "IP Auto-Blocked",
+                    f"IP {ip_hash[:12]}... was automatically blocked after {count} spoofing attempts in 24h (threshold: {threshold}).",
+                    {"ip_hash": ip_hash, "spoof_count_24h": count, "threshold": threshold},
+                )
+            except Exception as e:
+                logger.debug(f"auto-block alert dispatch failed: {e}")
+    except Exception as e:
+        logger.debug(f"auto-block check failed: {e}")
+
+
 _BOT_OPEN_PREFIXES = (
     "/api/content/library-bundle",
     "/api/content/boards",
@@ -283,6 +334,7 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                             "date": _now.strftime("%Y-%m-%d"),
                             "request_id": rid,
                         })
+                        await _check_auto_block(db, ip_hash, _now)
                 except Exception as e:
                     logger.debug(f"spoof persist failed: {e}")
             asyncio.create_task(_bg_persist_spoof())

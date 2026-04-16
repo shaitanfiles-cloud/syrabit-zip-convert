@@ -537,12 +537,17 @@ async def admin_update_alert_settings(
     expiration = data.get("expiration", {})
     notification_channels = data.get("notification_channels", {})
     validated_thresholds = {}
+    _ZERO_ALLOWED_THRESHOLDS = {"auto_block_threshold"}
     for k, default_val in _metrics_mod._ALERT_THRESHOLDS_DEFAULT.items():
         if k in thresholds:
             try:
                 val = float(thresholds[k])
-                if val <= 0:
-                    raise ValueError("Must be positive")
+                if k in _ZERO_ALLOWED_THRESHOLDS:
+                    if val < 0:
+                        raise ValueError("Must be zero or positive")
+                else:
+                    if val <= 0:
+                        raise ValueError("Must be positive")
                 validated_thresholds[k] = val
             except (ValueError, TypeError):
                 raise HTTPException(status_code=400, detail=f"Invalid value for threshold '{k}'")

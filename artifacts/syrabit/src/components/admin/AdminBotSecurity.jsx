@@ -42,7 +42,7 @@ function StatCard({ label, value, icon: Icon, color, pulse }) {
 
 function AlertThresholdPanel({ adminToken }) {
   const [settings, setSettings] = useState(null);
-  const [form, setForm] = useState({ spoof_rpm: 50, email: '', webhook_url: '' });
+  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, email: '', webhook_url: '' });
   const [defaults, setDefaults] = useState(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -60,6 +60,7 @@ function AlertThresholdPanel({ adminToken }) {
         setDefaults(d.defaults);
         setForm({
           spoof_rpm: d.thresholds?.spoof_rpm ?? d.defaults?.thresholds?.spoof_rpm ?? 50,
+          auto_block_threshold: d.thresholds?.auto_block_threshold ?? d.defaults?.thresholds?.auto_block_threshold ?? 100,
           email: d.notification_channels?.email ?? '',
           webhook_url: d.notification_channels?.webhook_url ?? '',
         });
@@ -77,6 +78,14 @@ function AlertThresholdPanel({ adminToken }) {
       if (isNaN(num) || !num) return 'RPM threshold is required';
       if (num <= 0) return 'Must be a positive number';
       if (num > 10000) return 'Maximum allowed value is 10,000';
+      if (!Number.isInteger(num)) return 'Must be a whole number';
+      return null;
+    }
+    if (field === 'auto_block_threshold') {
+      const num = Number(value);
+      if (isNaN(num)) return 'Auto-block threshold is required';
+      if (num < 0) return 'Must be zero or positive (0 = disabled)';
+      if (num > 100000) return 'Maximum allowed value is 100,000';
       if (!Number.isInteger(num)) return 'Must be a whole number';
       return null;
     }
@@ -111,6 +120,7 @@ function AlertThresholdPanel({ adminToken }) {
         const loc = item.loc || [];
         const field = loc[loc.length - 1] || 'general';
         const mapped = field === 'spoof_rpm' ? 'spoof_rpm'
+          : field === 'auto_block_threshold' ? 'auto_block_threshold'
           : field === 'email' ? 'email'
           : field === 'webhook_url' ? 'webhook_url'
           : null;
@@ -124,6 +134,7 @@ function AlertThresholdPanel({ adminToken }) {
     }
     if (typeof detail === 'string') {
       const lower = detail.toLowerCase();
+      if (lower.includes('auto_block')) return { auto_block_threshold: detail };
       if (lower.includes('threshold') || lower.includes('rpm') || lower.includes('spoof_rpm')) return { spoof_rpm: detail };
       if (lower.includes('email')) return { email: detail };
       if (lower.includes('webhook')) return { webhook_url: detail };
@@ -135,6 +146,7 @@ function AlertThresholdPanel({ adminToken }) {
   const handleSave = async () => {
     const errors = {};
     errors.spoof_rpm = validateField('spoof_rpm', form.spoof_rpm);
+    errors.auto_block_threshold = validateField('auto_block_threshold', form.auto_block_threshold);
     errors.email = validateField('email', form.email);
     errors.webhook_url = validateField('webhook_url', form.webhook_url);
     const cleaned = {};
@@ -153,6 +165,7 @@ function AlertThresholdPanel({ adminToken }) {
         thresholds: {
           ...settings?.thresholds,
           spoof_rpm: Number(form.spoof_rpm),
+          auto_block_threshold: Number(form.auto_block_threshold),
         },
         expiration: settings?.expiration || {},
         notification_channels: {
@@ -178,6 +191,7 @@ function AlertThresholdPanel({ adminToken }) {
     if (defaults) {
       setForm({
         spoof_rpm: defaults.thresholds?.spoof_rpm ?? 50,
+        auto_block_threshold: defaults.thresholds?.auto_block_threshold ?? 100,
         email: defaults.notification_channels?.email ?? '',
         webhook_url: defaults.notification_channels?.webhook_url ?? '',
       });
@@ -212,7 +226,7 @@ function AlertThresholdPanel({ adminToken }) {
           <div className="text-left">
             <h3 className="text-sm font-semibold text-gray-900">Alert Threshold Controls</h3>
             <p className="text-[10px] text-gray-400 mt-0.5">
-              RPM threshold: {form.spoof_rpm} &middot; Notifications: {form.email || form.webhook_url ? 'configured' : 'not configured'}
+              RPM threshold: {form.spoof_rpm} &middot; Auto-block: {Number(form.auto_block_threshold) > 0 ? `${form.auto_block_threshold}/24h` : 'disabled'} &middot; Notifications: {form.email || form.webhook_url ? 'configured' : 'not configured'}
             </p>
           </div>
         </div>
@@ -245,6 +259,33 @@ function AlertThresholdPanel({ adminToken }) {
             </div>
             {fieldErrors.spoof_rpm && (
               <p className="text-[11px] text-red-500 mt-1">{fieldErrors.spoof_rpm}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">
+              Auto-Block Threshold (24h)
+            </label>
+            <p className="text-[10px] text-gray-400 mb-2">
+              IPs exceeding this many spoofing attempts in 24 hours are automatically blocked. Set to 0 to disable auto-blocking (default: {defaults?.thresholds?.auto_block_threshold ?? 100})
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min="0"
+                max="100000"
+                value={form.auto_block_threshold}
+                onChange={(e) => handleFieldChange('auto_block_threshold', e.target.value)}
+                className={`w-32 text-sm border rounded-lg px-3 py-2 bg-white text-gray-900 focus:outline-none focus:ring-2 ${
+                  fieldErrors.auto_block_threshold
+                    ? 'border-red-300 focus:ring-red-200 focus:border-red-300'
+                    : 'border-gray-200 focus:ring-violet-200 focus:border-violet-300'
+                }`}
+              />
+              <span className="text-xs text-gray-400">attempts/24h</span>
+            </div>
+            {fieldErrors.auto_block_threshold && (
+              <p className="text-[11px] text-red-500 mt-1">{fieldErrors.auto_block_threshold}</p>
             )}
           </div>
 
@@ -740,7 +781,14 @@ export default function AdminBotSecurity({ adminToken }) {
                       <td className="px-5 py-2 text-gray-600 font-mono text-[11px]">
                         {b.ip_hash ? `${b.ip_hash.slice(0, 12)}...` : '—'}
                       </td>
-                      <td className="px-5 py-2 text-gray-500">{b.reason || '—'}</td>
+                      <td className="px-5 py-2 text-gray-500">
+                        <span className="flex items-center gap-1.5">
+                          {b.reason || '—'}
+                          {b.reason === 'auto_threshold' && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 text-[9px] font-semibold uppercase tracking-wider">Auto</span>
+                          )}
+                        </span>
+                      </td>
                       <td className="px-5 py-2 text-gray-500 whitespace-nowrap">
                         {b.blocked_at ? new Date(b.blocked_at).toLocaleString() : '—'}
                       </td>
