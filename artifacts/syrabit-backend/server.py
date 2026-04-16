@@ -531,7 +531,7 @@ async def lifespan(app):
                 # Task #327: Persist Google Indexing API daily counters so
                 # the 200/day cap survives a backend restart. One doc per
                 # day, keyed by `day` (YYYY-MM-DD UTC). Unique index keeps
-                # the upsert-with-$max idempotent across workers.
+                # the upsert-with-$inc aggregation correct across workers.
                 await db.google_indexing_daily.create_index(
                     "day", unique=True, name="google_indexing_daily_day",
                 )

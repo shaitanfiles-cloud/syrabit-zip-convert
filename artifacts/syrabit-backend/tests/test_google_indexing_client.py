@@ -505,7 +505,9 @@ def test_diff_skips_google_sitemap_ping_when_no_changes(monkeypatch):
 
 class _FakeMongoCollection:
     """Minimal stand-in for a motor collection exposing `update_one` and
-    `find_one` with $inc / $max / $set / $setOnInsert semantics."""
+    `find_one`. Supports $inc (primary write path), $set, $setOnInsert,
+    plus $max (kept only so older helper tests keep working). Production
+    code only issues $inc deltas — see `_flush_to_store`."""
 
     def __init__(self):
         self.docs: dict = {}  # day -> doc
