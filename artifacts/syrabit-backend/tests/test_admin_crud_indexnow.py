@@ -8,15 +8,9 @@ import types
 from unittest.mock import AsyncMock, MagicMock
 
 
-def _install_stubs():
-    if "deps" not in sys.modules:
-        deps = types.ModuleType("deps")
-        deps.db = MagicMock()
-        deps.is_mongo_available = AsyncMock(return_value=False)
-        sys.modules["deps"] = deps
+from tests._deps_stub import install_deps_stub  # noqa: E402
 
-
-_install_stubs()
+install_deps_stub()
 
 
 def _make_fake_batcher():

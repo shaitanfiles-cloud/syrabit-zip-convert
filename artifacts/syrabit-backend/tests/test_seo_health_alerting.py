@@ -7,18 +7,9 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
-def _install_stubs():
-    if "deps" not in sys.modules:
-        deps = types.ModuleType("deps")
-        deps.db = MagicMock()
-        deps.is_mongo_available = AsyncMock(return_value=False)
-        deps.security = MagicMock()
-        deps.redis_client = None
-        deps.logger = MagicMock()
-        sys.modules["deps"] = deps
+from tests._deps_stub import install_deps_stub  # noqa: E402
 
-
-_install_stubs()
+install_deps_stub()
 from routes import bot_discovery  # noqa: E402
 
 

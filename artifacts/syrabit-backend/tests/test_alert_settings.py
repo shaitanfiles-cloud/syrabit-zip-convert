@@ -32,7 +32,14 @@ def _reset_metrics_globals():
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # asyncio.get_event_loop() raises RuntimeError on Python 3.11+ when there
+    # is no running loop in the current thread. Make and tear down a fresh
+    # loop per call so the helper is order-independent.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 class TestLoadAlertSettings:
