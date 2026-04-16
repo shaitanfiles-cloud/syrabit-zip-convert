@@ -1,0 +1,400 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { Play, Pause, Scissors, X, Upload, Loader2, AlertTriangle } from 'lucide-react';
+
+const MAX_DURATION = 5;
+const WAVEFORM_BARS = 80;
+const BAR_WIDTH = 3;
+const BAR_GAP = 1;
+
+function formatTime(s) {
+  const sec = Math.max(0, s || 0);
+  const m = Math.floor(sec / 60);
+  const r = (sec % 60).toFixed(1);
+  return `${m}:${r.padStart(4, '0')}`;
+}
+
+function drawWaveform(audioBuffer) {
+  const raw = audioBuffer.getChannelData(0);
+  const step = Math.floor(raw.length / WAVEFORM_BARS);
+  const bars = [];
+  for (let i = 0; i < WAVEFORM_BARS; i++) {
+    let sum = 0;
+    for (let j = 0; j < step; j++) {
+      sum += Math.abs(raw[i * step + j]);
+    }
+    bars.push(sum / step);
+  }
+  const max = Math.max(...bars, 0.01);
+  return bars.map(b => b / max);
+}
+
+function trimAudioBuffer(audioBuffer, startTime, endTime) {
+  const sr = audioBuffer.sampleRate;
+  const ch = audioBuffer.numberOfChannels;
+  const startSample = Math.floor(startTime * sr);
+  const endSample = Math.floor(endTime * sr);
+  const length = endSample - startSample;
+  const offlineCtx = new OfflineAudioContext(ch, length, sr);
+  const newBuffer = offlineCtx.createBuffer(ch, length, sr);
+  for (let c = 0; c < ch; c++) {
+    const src = audioBuffer.getChannelData(c);
+    const dst = newBuffer.getChannelData(c);
+    for (let i = 0; i < length; i++) {
+      dst[i] = src[startSample + i] || 0;
+    }
+  }
+  return newBuffer;
+}
+
+function audioBufferToWav(buffer) {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const format = 1;
+  const bitsPerSample = 16;
+  const bytesPerSample = bitsPerSample / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const interleaved = numChannels === 1
+    ? buffer.getChannelData(0)
+    : interleaveChannels(buffer);
+  const dataLength = interleaved.length * bytesPerSample;
+  const headerLength = 44;
+  const arrayBuffer = new ArrayBuffer(headerLength + dataLength);
+  const view = new DataView(arrayBuffer);
+
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(view, 8, 'WAVE');
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, format, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * blockAlign, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  let offset = 44;
+  for (let i = 0; i < interleaved.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, interleaved[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+  }
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
+function interleaveChannels(buffer) {
+  const ch0 = buffer.getChannelData(0);
+  const ch1 = buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : ch0;
+  const length = ch0.length + ch1.length;
+  const result = new Float32Array(length);
+  let idx = 0;
+  for (let i = 0; i < ch0.length; i++) {
+    result[idx++] = ch0[i];
+    result[idx++] = ch1[i];
+  }
+  return result;
+}
+
+function writeString(view, offset, str) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
+  }
+}
+
+export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading }) {
+  const [audioBuffer, setAudioBuffer] = useState(null);
+  const [waveformData, setWaveformData] = useState(null);
+  const [duration, setDuration] = useState(0);
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [playbackPos, setPlaybackPos] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [sizeError, setSizeError] = useState(null);
+  const sourceRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const playStartTimeRef = useRef(0);
+  const playOffsetRef = useRef(0);
+  const waveContainerRef = useRef(null);
+  const draggingRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        setLoading(true);
+        setError(null);
+        const arrayBuffer = await file.arrayBuffer();
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtxRef.current = ctx;
+        const decoded = await ctx.decodeAudioData(arrayBuffer);
+        if (cancelled) return;
+        setAudioBuffer(decoded);
+        setDuration(decoded.duration);
+        setTrimEnd(Math.min(decoded.duration, MAX_DURATION));
+        setWaveformData(drawWaveform(decoded));
+      } catch {
+        if (!cancelled) setError('Could not decode audio file');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+      stopPlayback();
+    };
+  }, [file]);
+
+  const stopPlayback = useCallback(() => {
+    if (sourceRef.current) {
+      try { sourceRef.current.stop(); } catch {}
+      sourceRef.current = null;
+    }
+    if (animFrameRef.current) {
+      cancelAnimationFrame(animFrameRef.current);
+      animFrameRef.current = null;
+    }
+    setPlaying(false);
+  }, []);
+
+  const playPreview = useCallback(() => {
+    if (!audioBuffer || !audioCtxRef.current) return;
+    stopPlayback();
+    const ctx = audioCtxRef.current;
+    if (ctx.state === 'suspended') ctx.resume();
+    const src = ctx.createBufferSource();
+    src.buffer = audioBuffer;
+    src.connect(ctx.destination);
+    const clipDuration = trimEnd - trimStart;
+    src.start(0, trimStart, clipDuration);
+    sourceRef.current = src;
+    playStartTimeRef.current = ctx.currentTime;
+    playOffsetRef.current = trimStart;
+    setPlaying(true);
+
+    const tick = () => {
+      const elapsed = ctx.currentTime - playStartTimeRef.current;
+      const pos = trimStart + elapsed;
+      if (pos >= trimEnd) {
+        stopPlayback();
+        setPlaybackPos(trimStart);
+        return;
+      }
+      setPlaybackPos(pos);
+      animFrameRef.current = requestAnimationFrame(tick);
+    };
+    animFrameRef.current = requestAnimationFrame(tick);
+    src.onended = () => {
+      stopPlayback();
+      setPlaybackPos(trimStart);
+    };
+  }, [audioBuffer, trimStart, trimEnd, stopPlayback]);
+
+  const togglePlay = useCallback(() => {
+    if (playing) stopPlayback();
+    else playPreview();
+  }, [playing, stopPlayback, playPreview]);
+
+  const clipDuration = useMemo(() => trimEnd - trimStart, [trimStart, trimEnd]);
+
+  const handleConfirm = useCallback(async () => {
+    if (!audioBuffer) return;
+    setSizeError(null);
+    const needsTrim = trimStart > 0.01 || Math.abs(trimEnd - audioBuffer.duration) > 0.01;
+    if (needsTrim) {
+      const trimmed = trimAudioBuffer(audioBuffer, trimStart, trimEnd);
+      const blob = audioBufferToWav(trimmed);
+      if (blob.size > 500 * 1024) {
+        setSizeError(`Trimmed file is ${Math.round(blob.size / 1024)} KB — exceeds the 500 KB limit. Try a shorter selection.`);
+        return;
+      }
+      const trimmedFile = new File([blob], file.name.replace(/\.\w+$/, '.wav'), { type: 'audio/wav' });
+      onConfirm(trimmedFile);
+    } else {
+      onConfirm(file);
+    }
+  }, [audioBuffer, trimStart, trimEnd, file, onConfirm]);
+
+  const pctForTime = useCallback((t) => duration > 0 ? (t / duration) * 100 : 0, [duration]);
+
+  const timeForClientX = useCallback((clientX) => {
+    if (!waveContainerRef.current || !duration) return 0;
+    const rect = waveContainerRef.current.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return pct * duration;
+  }, [duration]);
+
+  const handlePointerDown = useCallback((e, handle) => {
+    e.preventDefault();
+    draggingRef.current = handle;
+    const onMove = (ev) => {
+      if (!draggingRef.current) return;
+      setSizeError(null);
+      const t = timeForClientX(ev.clientX);
+      if (draggingRef.current === 'start') {
+        const clamped = Math.max(0, Math.min(t, trimEnd - 0.1));
+        const maxStart = Math.max(0, trimEnd - MAX_DURATION);
+        setTrimStart(Math.max(maxStart, clamped));
+      } else {
+        const clamped = Math.min(duration, Math.max(t, trimStart + 0.1));
+        const maxEnd = trimStart + MAX_DURATION;
+        setTrimEnd(Math.min(maxEnd, clamped));
+      }
+    };
+    const onUp = () => {
+      draggingRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [timeForClientX, trimStart, trimEnd, duration]);
+
+  if (loading) {
+    return (
+      <div className="mt-2 p-3 rounded-lg border border-violet-200 bg-violet-50/50">
+        <div className="flex items-center gap-2 text-[10px] text-violet-600">
+          <Loader2 size={12} className="animate-spin" />
+          Loading audio...
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="mt-2 p-3 rounded-lg border border-red-200 bg-red-50/50">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-red-600">{error}</span>
+          <button onClick={onCancel} className="text-gray-400 hover:text-gray-600">
+            <X size={12} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 p-3 rounded-lg border border-violet-200 bg-violet-50/50 space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-medium text-gray-700 truncate max-w-[160px]">
+          {file.name}
+        </span>
+        <button onClick={onCancel} className="text-gray-400 hover:text-gray-600" title="Cancel">
+          <X size={12} />
+        </button>
+      </div>
+
+      <div
+        ref={waveContainerRef}
+        className="relative h-12 bg-white rounded border border-gray-200 overflow-hidden select-none"
+        style={{ touchAction: 'none' }}
+      >
+        {waveformData && (
+          <div className="absolute inset-0 flex items-center justify-center gap-px px-1">
+            {waveformData.map((v, i) => {
+              const barTime = (i / WAVEFORM_BARS) * duration;
+              const inRange = barTime >= trimStart && barTime <= trimEnd;
+              return (
+                <div
+                  key={i}
+                  className={`rounded-sm transition-colors ${inRange ? 'bg-violet-400' : 'bg-gray-200'}`}
+                  style={{
+                    width: BAR_WIDTH,
+                    height: `${Math.max(8, v * 85)}%`,
+                    flexShrink: 0,
+                  }}
+                />
+              );
+            })}
+          </div>
+        )}
+
+        <div
+          className="absolute top-0 bottom-0 bg-violet-500/10 border-l-2 border-r-2 border-violet-500/40 pointer-events-none"
+          style={{
+            left: `${pctForTime(trimStart)}%`,
+            width: `${pctForTime(trimEnd) - pctForTime(trimStart)}%`,
+          }}
+        />
+
+        <div
+          className="absolute top-0 bottom-0 w-3 cursor-col-resize z-10 group"
+          style={{ left: `calc(${pctForTime(trimStart)}% - 6px)` }}
+          onPointerDown={(e) => handlePointerDown(e, 'start')}
+        >
+          <div className="absolute left-1.5 top-0 bottom-0 w-0.5 bg-violet-600 group-hover:bg-violet-700" />
+          <div className="absolute left-0.5 top-1/2 -translate-y-1/2 w-2 h-4 rounded-sm bg-violet-600 group-hover:bg-violet-700" />
+        </div>
+
+        <div
+          className="absolute top-0 bottom-0 w-3 cursor-col-resize z-10 group"
+          style={{ left: `calc(${pctForTime(trimEnd)}% - 6px)` }}
+          onPointerDown={(e) => handlePointerDown(e, 'end')}
+        >
+          <div className="absolute left-1.5 top-0 bottom-0 w-0.5 bg-violet-600 group-hover:bg-violet-700" />
+          <div className="absolute left-0.5 top-1/2 -translate-y-1/2 w-2 h-4 rounded-sm bg-violet-600 group-hover:bg-violet-700" />
+        </div>
+
+        {playing && (
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 pointer-events-none transition-none"
+            style={{ left: `${pctForTime(playbackPos)}%` }}
+          />
+        )}
+      </div>
+
+      <div className="flex items-center justify-between text-[9px] text-gray-500">
+        <span>{formatTime(trimStart)}</span>
+        <span className="flex items-center gap-1">
+          <Scissors size={9} />
+          {clipDuration.toFixed(1)}s{clipDuration > MAX_DURATION && (
+            <span className="text-red-500 font-medium"> (max {MAX_DURATION}s)</span>
+          )}
+        </span>
+        <span>{formatTime(trimEnd)}</span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={togglePlay}
+          className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-white border border-gray-200 hover:bg-violet-50 text-gray-700 font-medium transition-colors"
+        >
+          {playing ? <Pause size={10} /> : <Play size={10} />}
+          {playing ? 'Stop' : 'Preview'}
+        </button>
+        <div className="flex-1" />
+        <button
+          onClick={onCancel}
+          className="text-[10px] px-2 py-1 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 font-medium transition-colors"
+          disabled={uploading}
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleConfirm}
+          disabled={uploading || clipDuration < 0.1}
+          className="flex items-center gap-1 text-[10px] px-2.5 py-1 rounded-md bg-violet-600 text-white hover:bg-violet-700 font-medium transition-colors disabled:opacity-50"
+        >
+          {uploading ? <Loader2 size={10} className="animate-spin" /> : <Upload size={10} />}
+          {uploading ? 'Uploading...' : 'Upload'}
+        </button>
+      </div>
+
+      {sizeError && (
+        <div className="flex items-center gap-1.5 text-[9px] text-red-600 bg-red-50 border border-red-200 rounded px-2 py-1">
+          <AlertTriangle size={10} className="flex-shrink-0" />
+          {sizeError}
+        </div>
+      )}
+
+      <p className="text-[9px] text-gray-400">
+        Drag the handles to trim. Max {MAX_DURATION}s. MP3/WAV, max 500 KB after trim.
+      </p>
+    </div>
+  );
+}

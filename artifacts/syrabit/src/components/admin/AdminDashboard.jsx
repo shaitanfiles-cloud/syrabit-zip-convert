@@ -10,6 +10,7 @@ import {
   Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
   Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music,
 } from 'lucide-react';
+import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
 import { adminGetDashboard, seoPipelineStatus, API_BASE } from '@/utils/api';
@@ -286,6 +287,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const customAudioRef = useRef(null);
   const chimeFileInputRef = useRef(null);
   const [chimeUploading, setChimeUploading] = useState(false);
+  const [pendingChimeFile, setPendingChimeFile] = useState(null);
   const pushNotif = usePushNotifications({
     serverPushEnabled: notifPrefs?.push_enabled,
   });
@@ -379,34 +381,45 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
     } catch {}
   }, [chimeTone, notifPrefs?.custom_chime_url]);
 
-  const handleChimeUpload = useCallback(async (e) => {
+  const handleChimeFileSelect = useCallback((e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const validTypes = ['audio/mpeg', 'audio/wav', 'audio/wave', 'audio/x-wav', 'audio/mp3'];
     if (!validTypes.includes(file.type)) {
       toast.error('Only MP3 and WAV files are supported');
+      if (chimeFileInputRef.current) chimeFileInputRef.current.value = '';
       return;
     }
     if (file.size > 500 * 1024) {
       toast.error('File must be under 500 KB');
+      if (chimeFileInputRef.current) chimeFileInputRef.current.value = '';
+      return;
+    }
+    setPendingChimeFile(file);
+    if (chimeFileInputRef.current) chimeFileInputRef.current.value = '';
+  }, []);
+
+  const handleChimeUploadConfirm = useCallback(async (fileToUpload) => {
+    if (fileToUpload.size > 500 * 1024) {
+      toast.error('Trimmed file exceeds 500 KB limit');
       return;
     }
     setChimeUploading(true);
     try {
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append('file', fileToUpload);
       const res = await axios.post(`${API_BASE}/admin/notification-prefs/upload-chime`, formData, {
         ...adminHdr(adminToken),
         headers: { ...adminHdr(adminToken).headers, 'Content-Type': 'multipart/form-data' },
       });
       setNotifPrefs(res.data);
+      setPendingChimeFile(null);
       toast.success('Custom chime uploaded');
     } catch (err) {
       const msg = err.response?.data?.detail || 'Upload failed';
       toast.error(msg);
     } finally {
       setChimeUploading(false);
-      if (chimeFileInputRef.current) chimeFileInputRef.current.value = '';
     }
   }, [adminToken]);
 
@@ -1241,21 +1254,28 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                         <Trash2 size={10} />
                       </button>
                     </div>
+                  ) : pendingChimeFile ? (
+                    <AudioTrimPreview
+                      file={pendingChimeFile}
+                      onConfirm={handleChimeUploadConfirm}
+                      onCancel={() => setPendingChimeFile(null)}
+                      uploading={chimeUploading}
+                    />
                   ) : (
                     <label className="inline-flex items-center gap-1.5 text-[10px] text-violet-600 hover:text-violet-700 cursor-pointer font-medium">
-                      {chimeUploading ? <Loader2 size={10} className="animate-spin" /> : <Upload size={10} />}
-                      {chimeUploading ? 'Uploading...' : 'Upload custom sound'}
+                      <Upload size={10} />
+                      Upload custom sound
                       <input
                         ref={chimeFileInputRef}
                         type="file"
                         accept=".mp3,.wav"
                         className="hidden"
-                        onChange={handleChimeUpload}
+                        onChange={handleChimeFileSelect}
                         disabled={chimeUploading}
                       />
                     </label>
                   )}
-                  <p className="text-[9px] text-gray-400 mt-0.5">MP3 or WAV, max 500 KB</p>
+                  {!pendingChimeFile && <p className="text-[9px] text-gray-400 mt-0.5">MP3 or WAV, max 500 KB</p>}
                 </div>
               </div>
 
