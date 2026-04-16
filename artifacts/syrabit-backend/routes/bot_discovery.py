@@ -2444,14 +2444,16 @@ async def admin_seo_google_indexing_stats(
 ):
     """SEO Phase C — return today's Google Indexing API counters
     (submissions, 2xx/4xx/5xx, quota remaining) plus sitemap-ping stats
-    and service-account-load status. Used by the admin dashboard to
-    verify that URL_UPDATED notifications are firing and to spot quota
-    problems before they silently drop submissions."""
+    and service-account-load status. Since Task #327 it also returns
+    yesterday's totals (hydrated from Mongo `google_indexing_daily`) for
+    the admin dashboard history panel, and hydrates today's in-memory
+    counters on first call per process so the 200/day cap survives a
+    restart."""
     try:
-        from google_indexing_client import get_stats
+        from google_indexing_client import get_stats_with_history
     except Exception as e:
         return {"enabled": False, "error": str(e)}
-    return get_stats()
+    return await get_stats_with_history()
 
 
 @router.post("/admin/seo/google-sitemap-ping")

@@ -499,6 +499,431 @@ def test_diff_skips_google_sitemap_ping_when_no_changes(monkeypatch):
 # seo_fanout now runs the Google Indexing hook as a 4th gathered signal
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# Persistence — Task #327: counters survive a restart
+# ---------------------------------------------------------------------------
+
+class _FakeMongoCollection:
+    """Minimal stand-in for a motor collection exposing `update_one` and
+    `find_one` with $inc / $max / $set / $setOnInsert semantics."""
+
+    def __init__(self):
+        self.docs: dict = {}  # day -> doc
+        self.update_calls: list = []
+
+    async def update_one(self, filt, update, upsert=False):
+        self.update_calls.append((filt, update, upsert))
+        day = filt["day"]
+        new_doc = day not in self.docs
+        current = self.docs.get(day, {})
+        if "$inc" in update:
+            for k, v in update["$inc"].items():
+                current[k] = current.get(k, 0) + v
+        if "$max" in update:
+            for k, v in update["$max"].items():
+                current[k] = max(current.get(k, 0), v)
+        if "$set" in update:
+            current.update(update["$set"])
+        if "$setOnInsert" in update and new_doc:
+            current.update(update["$setOnInsert"])
+        self.docs[day] = current
+        return MagicMock()
+
+    async def find_one(self, filt, *_a, **_kw):
+        day = filt["day"]
+        doc = self.docs.get(day)
+        if doc is None:
+            return None
+        return dict(doc)
+
+
+def _install_fake_store(monkeypatch, gic, store_docs=None):
+    """Wire a fake `deps.db.google_indexing_daily` that tests can observe.
+    Also flip the persist-in-tests switch on so _schedule_flush fires."""
+    import deps as deps_mod
+
+    fake_coll = _FakeMongoCollection()
+    if store_docs:
+        fake_coll.docs.update(store_docs)
+
+    fake_db = MagicMock()
+
+    def _getitem(_self, name):
+        if name == gic._STORE_COLLECTION:
+            return fake_coll
+        return MagicMock()
+
+    class _FakeDb:
+        google_indexing_daily = fake_coll
+
+        def __getitem__(self, name):
+            if name == gic._STORE_COLLECTION:
+                return fake_coll
+            return MagicMock()
+
+    async def _avail():
+        return True
+
+    monkeypatch.setattr(deps_mod, "db", _FakeDb(), raising=False)
+    monkeypatch.setattr(deps_mod, "is_mongo_available", _avail, raising=False)
+    monkeypatch.setenv("GOOGLE_INDEXING_PERSIST_IN_TESTS", "1")
+    return fake_coll
+
+
+def test_counters_flush_to_mongo_on_bump(monkeypatch):
+    gic = _fresh_client(monkeypatch)
+    store = _install_fake_store(monkeypatch, gic)
+    fake = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+    _install_httpx(monkeypatch, gic, fake)
+
+    async def _drive():
+        await gic.notify_url_updated("https://syrabit.ai/a")
+        # Allow _schedule_flush's create_task to actually run.
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    _run(_drive())
+
+    today = gic._today_key()
+    assert today in store.docs
+    doc = store.docs[today]
+    assert doc["sent"] >= 1
+    assert doc["status_2xx"] >= 1
+    assert doc["day"] == today
+
+
+def test_counters_hydrate_from_mongo_on_first_call(monkeypatch):
+    """Simulate a restart: a previous process left counters in Mongo. When
+    the first notify_url_updated runs on the new process it must hydrate
+    from the store so the 200/day cap isn't reset to zero."""
+    gic = _fresh_client(monkeypatch, limit=5)
+    today = gic._today_key()
+    # Previous process already sent 4 submissions today.
+    store = _install_fake_store(monkeypatch, gic, store_docs={
+        today: {
+            "day": today, "sent": 4, "status_2xx": 4,
+            "status_4xx": 0, "status_5xx": 0, "errors": 0,
+            "quota_blocks": 0, "skipped_disabled": 0,
+            "sitemap_ping_sent": 0, "sitemap_ping_2xx": 0,
+            "sitemap_ping_errors": 0,
+        },
+    })
+    fake = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+    _install_httpx(monkeypatch, gic, fake)
+
+    async def _drive():
+        # First call — hydrates, then sends (bumping sent 4→5).
+        r1 = await gic.notify_url_updated("https://syrabit.ai/a")
+        # Second call — cap of 5 reached after first send, must block.
+        r2 = await gic.notify_url_updated("https://syrabit.ai/b")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return r1, r2
+
+    r1, r2 = _run(_drive())
+    assert r1["status"] == "ok"
+    assert r2["status"] == "quota_blocked", (
+        "restart must not reset the counter to zero"
+    )
+    stats = gic.get_stats()
+    assert stats["sent"] == 5
+    assert stats["quota_blocks"] == 1
+
+
+def test_multi_worker_flushes_aggregate_via_inc(monkeypatch):
+    """Two workers each send their own deltas; the stored total must
+    equal the SUM of both workers' work, not the max of either. This is
+    the whole reason we use $inc-on-delta instead of $max."""
+    gic = _fresh_client(monkeypatch)
+    store = _install_fake_store(monkeypatch, gic)
+
+    async def _drive():
+        # Worker A: simulate 10 locally-bumped sends.
+        with gic._stats_lock:
+            gic._stats["sent"] = 10
+        await gic._flush_to_store()
+        # Clear worker-A's baseline and switch to worker-B simulation by
+        # resetting in-memory counters (emulates a fresh process).
+        gic._reset_state_for_tests()
+        monkeypatch.setenv("GOOGLE_INDEXING_PERSIST_IN_TESTS", "1")
+        # Worker B needs to know the shared baseline is already 10, then
+        # add its own 3 sends on top.
+        await gic._ensure_loaded()
+        with gic._stats_lock:
+            gic._stats["sent"] = gic._stats.get("sent", 0) + 3
+        await gic._flush_to_store()
+
+    _run(_drive())
+    today = gic._today_key()
+    assert store.docs[today]["sent"] == 13, (
+        "aggregate must be 10 (worker A) + 3 (worker B) = 13"
+    )
+
+
+def test_hydrate_after_restart_does_not_double_count(monkeypatch):
+    """A worker that hydrates `sent=5` and then immediately flushes must
+    NOT re-send those 5 as a fresh $inc. The baseline must be seeded on
+    hydrate so the first post-hydrate flush sends a zero delta."""
+    gic = _fresh_client(monkeypatch)
+    today = gic._today_key()
+    store = _install_fake_store(monkeypatch, gic, store_docs={
+        today: {"day": today, "sent": 5, "status_2xx": 5,
+                "status_4xx": 0, "status_5xx": 0, "errors": 0,
+                "quota_blocks": 0, "skipped_disabled": 0,
+                "sitemap_ping_sent": 0, "sitemap_ping_2xx": 0,
+                "sitemap_ping_errors": 0},
+    })
+
+    async def _drive():
+        await gic._ensure_loaded()
+        await gic._flush_to_store()  # should be a no-op (zero delta)
+
+    _run(_drive())
+    # Still just 5 — hydrate+flush cycle must not inflate the number.
+    assert store.docs[today]["sent"] == 5
+
+
+def test_flush_rolls_back_baseline_on_mongo_error(monkeypatch):
+    """If the Mongo write raises, the delta must stay un-committed so the
+    next flush retries it."""
+    gic = _fresh_client(monkeypatch)
+    store = _install_fake_store(monkeypatch, gic)
+
+    async def _failing_update(*a, **kw):
+        raise RuntimeError("mongo is sulking")
+
+    async def _drive():
+        with gic._stats_lock:
+            gic._stats["sent"] = 7
+        # Swap in a failing update_one just for this flush.
+        good = store.update_one
+        store.update_one = _failing_update
+        await gic._flush_to_store()
+        store.update_one = good
+        # Retry — baseline should have been rolled back, so the delta is
+        # still 7 and the store gets the full 7.
+        await gic._flush_to_store()
+
+    _run(_drive())
+    today = gic._today_key()
+    assert store.docs[today]["sent"] == 7
+
+
+def test_concurrent_first_use_single_flights_hydrate(monkeypatch):
+    """Two coroutines calling notify_url_updated concurrently on a fresh
+    process must both wait for the same hydrate, not race past it using
+    zeroed counters. We prove this by seeding the store with sent=199
+    (cap=200) and asserting only ONE of two concurrent submissions
+    succeeds — if the race existed, both would see sent=0 and both would
+    succeed."""
+    gic = _fresh_client(monkeypatch, limit=200)
+    today = gic._today_key()
+    _install_fake_store(monkeypatch, gic, store_docs={
+        today: {"day": today, "sent": 199, "status_2xx": 199,
+                "status_4xx": 0, "status_5xx": 0, "errors": 0,
+                "quota_blocks": 0, "skipped_disabled": 0,
+                "sitemap_ping_sent": 0, "sitemap_ping_2xx": 0,
+                "sitemap_ping_errors": 0},
+    })
+    fake = _FakeAsyncClient(post_response=_FakeResponse(200, "{}"))
+    _install_httpx(monkeypatch, gic, fake)
+
+    async def _drive():
+        # Issue two concurrent requests BEFORE any hydrate has happened.
+        r1, r2 = await asyncio.gather(
+            gic.notify_url_updated("https://syrabit.ai/a"),
+            gic.notify_url_updated("https://syrabit.ai/b"),
+        )
+        return r1, r2
+
+    r1, r2 = _run(_drive())
+    statuses = sorted([r1["status"], r2["status"]])
+    assert statuses == ["ok", "quota_blocked"], (
+        f"exactly one must succeed (cap=200, stored=199), got {statuses}"
+    )
+
+
+def test_load_failure_does_not_mark_day_loaded(monkeypatch):
+    """A transient Mongo error on first hydrate must NOT permanently
+    strand the worker — the next call must retry."""
+    import deps as deps_mod
+    gic = _fresh_client(monkeypatch)
+
+    fails = {"n": 0}
+
+    async def _avail_fail_then_ok():
+        fails["n"] += 1
+        return fails["n"] > 1  # first call fails, second succeeds
+
+    class _FakeDb:
+        def __getitem__(self, name):
+            coll = _FakeMongoCollection()
+            coll.docs[gic._today_key()] = {
+                "day": gic._today_key(), "sent": 42, "status_2xx": 42,
+                "status_4xx": 0, "status_5xx": 0, "errors": 0,
+                "quota_blocks": 0, "skipped_disabled": 0,
+                "sitemap_ping_sent": 0, "sitemap_ping_2xx": 0,
+                "sitemap_ping_errors": 0,
+            }
+            return coll
+
+    monkeypatch.setattr(deps_mod, "db", _FakeDb(), raising=False)
+    monkeypatch.setattr(deps_mod, "is_mongo_available",
+                        _avail_fail_then_ok, raising=False)
+    monkeypatch.setenv("GOOGLE_INDEXING_PERSIST_IN_TESTS", "1")
+
+    async def _drive():
+        await gic._ensure_loaded()  # fails — day not marked
+        assert gic._today_key() not in gic._loaded_days
+        await gic._ensure_loaded()  # retries — succeeds
+        assert gic._today_key() in gic._loaded_days
+
+    _run(_drive())
+
+
+def test_get_stats_with_history_returns_yesterday(monkeypatch):
+    from datetime import timedelta
+    gic = _fresh_client(monkeypatch)
+    today = gic._today_key()
+    yesterday = (
+        datetime.now(timezone.utc) - timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    _install_fake_store(monkeypatch, gic, store_docs={
+        yesterday: {
+            "day": yesterday, "sent": 42, "status_2xx": 40,
+            "status_4xx": 2, "status_5xx": 0, "errors": 0,
+            "quota_blocks": 0, "skipped_disabled": 0,
+            "sitemap_ping_sent": 1, "sitemap_ping_2xx": 1,
+            "sitemap_ping_errors": 0,
+        },
+    })
+    snapshot = _run(gic.get_stats_with_history())
+    assert snapshot["day"] == today
+    assert snapshot["yesterday"] is not None
+    assert snapshot["yesterday"]["day"] == yesterday
+    assert snapshot["yesterday"]["sent"] == 42
+    assert snapshot["yesterday"]["status_2xx"] == 40
+
+
+def test_get_stats_with_history_returns_none_when_no_prior_day(monkeypatch):
+    gic = _fresh_client(monkeypatch)
+    _install_fake_store(monkeypatch, gic)  # empty store
+    snapshot = _run(gic.get_stats_with_history())
+    assert snapshot["yesterday"] is None
+
+
+def test_hydrate_only_happens_once_per_day(monkeypatch):
+    """Repeated calls within the same day must not re-hit Mongo."""
+    gic = _fresh_client(monkeypatch)
+    today = gic._today_key()
+    store = _install_fake_store(monkeypatch, gic, store_docs={
+        today: {"day": today, "sent": 2, "status_2xx": 2,
+                "status_4xx": 0, "status_5xx": 0, "errors": 0,
+                "quota_blocks": 0, "skipped_disabled": 0,
+                "sitemap_ping_sent": 0, "sitemap_ping_2xx": 0,
+                "sitemap_ping_errors": 0},
+    })
+
+    find_calls = {"n": 0}
+    original_find_one = store.find_one
+
+    async def _counting_find_one(*a, **kw):
+        find_calls["n"] += 1
+        return await original_find_one(*a, **kw)
+
+    store.find_one = _counting_find_one
+
+    async def _drive():
+        await gic._ensure_loaded()
+        await gic._ensure_loaded()
+        await gic._ensure_loaded()
+
+    _run(_drive())
+    assert find_calls["n"] == 1
+    assert gic._stats["sent"] == 2
+
+
+def test_hydrate_takes_max_of_local_and_stored(monkeypatch):
+    """If a worker has already bumped locally before hydrating (rare —
+    only possible if load is deferred), the hydrate must not clobber the
+    higher in-memory value."""
+    gic = _fresh_client(monkeypatch)
+    today = gic._today_key()
+    _install_fake_store(monkeypatch, gic, store_docs={
+        today: {"day": today, "sent": 3, "status_2xx": 3,
+                "status_4xx": 0, "status_5xx": 0, "errors": 0,
+                "quota_blocks": 0, "skipped_disabled": 0,
+                "sitemap_ping_sent": 0, "sitemap_ping_2xx": 0,
+                "sitemap_ping_errors": 0},
+    })
+    # Pre-bump in-memory so the local value is higher than Mongo.
+    with gic._stats_lock:
+        gic._stats["sent"] = 8
+
+    _run(gic._ensure_loaded())
+    assert gic._stats["sent"] == 8  # local max preserved
+
+
+def test_flush_is_skipped_when_mongo_unavailable(monkeypatch):
+    """Never raises back to content generator when Mongo is down."""
+    import deps as deps_mod
+    gic = _fresh_client(monkeypatch)
+    monkeypatch.setenv("GOOGLE_INDEXING_PERSIST_IN_TESTS", "1")
+
+    async def _unavail():
+        return False
+
+    monkeypatch.setattr(deps_mod, "is_mongo_available", _unavail, raising=False)
+    # Should not raise.
+    _run(gic._flush_to_store())
+
+
+def test_day_rollover_clears_loaded_days(monkeypatch):
+    """After UTC rollover, the first read must re-hydrate with the new
+    day's stored counters (not the previous day's)."""
+    gic = _fresh_client(monkeypatch)
+
+    from datetime import timedelta
+
+    # Pretend "today" is day-1.
+    fixed_today = "2026-04-16"
+    fixed_tomorrow = "2026-04-17"
+
+    def _today_fixed():
+        return _today_fixed.val
+
+    _today_fixed.val = fixed_today
+    monkeypatch.setattr(gic, "_today_key", _today_fixed)
+
+    store = _install_fake_store(monkeypatch, gic, store_docs={
+        fixed_today: {"day": fixed_today, "sent": 10, "status_2xx": 10,
+                      "status_4xx": 0, "status_5xx": 0, "errors": 0,
+                      "quota_blocks": 0, "skipped_disabled": 0,
+                      "sitemap_ping_sent": 0, "sitemap_ping_2xx": 0,
+                      "sitemap_ping_errors": 0},
+        fixed_tomorrow: {"day": fixed_tomorrow, "sent": 1, "status_2xx": 1,
+                         "status_4xx": 0, "status_5xx": 0, "errors": 0,
+                         "quota_blocks": 0, "skipped_disabled": 0,
+                         "sitemap_ping_sent": 0, "sitemap_ping_2xx": 0,
+                         "sitemap_ping_errors": 0},
+    })
+
+    # Reset _stats to match fixed_today.
+    with gic._stats_lock:
+        gic._stats.clear()
+        gic._stats.update(gic._fresh_stats())
+
+    _run(gic._ensure_loaded())
+    assert gic._stats["sent"] == 10
+
+    # Simulate UTC rollover.
+    _today_fixed.val = fixed_tomorrow
+    _run(gic._ensure_loaded())
+    # After rollover, the new day's counters are hydrated, not the old.
+    assert gic._stats["day"] == fixed_tomorrow
+    assert gic._stats["sent"] == 1
+
+
 def test_seo_fanout_includes_google_indexing_step(monkeypatch):
     import seo_fanout
     import google_indexing_client as gic

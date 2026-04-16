@@ -168,6 +168,12 @@ def _reset_state_for_tests() -> None:
     with _stats_lock:
         _stats.clear()
         _stats.update(_fresh_stats())
+    _loaded_days.clear()
+    _load_locks.clear()
+    global _last_flushed_day
+    for k in _COUNTER_KEYS:
+        _last_flushed_stats[k] = 0
+    _last_flushed_day = ""
 
 
 # -----------------------------------------------------------------------------
@@ -299,6 +305,38 @@ async def _get_cached_token() -> Optional[str]:
 
 _stats_lock = threading.Lock()
 
+# Every counter field in `_stats` that should survive a restart.
+# Persistence uses `$inc` with delta tracking (see `_last_flushed_stats`) so
+# concurrent gunicorn workers accumulate into a shared per-day total instead
+# of clobbering one another. On restart, a worker hydrates by reading the
+# shared total and seeding both `_stats` and `_last_flushed_stats` to it, so
+# its first flush sends a zero delta and no double-counts occur.
+_COUNTER_KEYS = (
+    "sent", "status_2xx", "status_4xx", "status_5xx",
+    "errors", "quota_blocks", "skipped_disabled",
+    "sitemap_ping_sent", "sitemap_ping_2xx", "sitemap_ping_errors",
+)
+
+_STORE_COLLECTION = "google_indexing_daily"
+
+# Days we've successfully hydrated from the Mongo store. A rollover to a
+# new day clears this so the next touch re-hydrates. Only populated AFTER
+# a successful load so a transient Mongo outage on first touch doesn't
+# permanently strand a worker with stale zeroed counters.
+_loaded_days: set = set()
+
+# Per-day async locks to single-flight the hydrate path: concurrent first
+# requests on a fresh process all await the same load instead of racing.
+_load_locks: Dict[str, "asyncio.Lock"] = {}
+_load_locks_guard = threading.Lock()
+
+# Mirror of `_stats` as of the last successful flush. Used to compute the
+# delta for $inc-based persistence so multi-worker totals aggregate
+# correctly. Seeded on hydrate with the stored values so the next flush
+# sends a zero delta.
+_last_flushed_stats: Dict[str, int] = {k: 0 for k in _COUNTER_KEYS}
+_last_flushed_day: str = ""
+
 
 def _today_key() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -326,14 +364,18 @@ _stats: Dict[str, Any] = _fresh_stats()
 def _roll_day_if_needed() -> None:
     today = _today_key()
     if _stats.get("day") != today:
+        # New UTC day: reset counters and force a re-hydrate on next read.
+        # The previous day's totals stay in Mongo for historical queries.
         _stats.clear()
         _stats.update(_fresh_stats())
+        _loaded_days.clear()
 
 
 def _bump(key: str, amount: int = 1) -> None:
     with _stats_lock:
         _roll_day_if_needed()
         _stats[key] = _stats.get(key, 0) + amount
+    _schedule_flush()
 
 
 def _record_status_code(status_code: int) -> None:
@@ -345,6 +387,7 @@ def _record_status_code(status_code: int) -> None:
             _stats["status_4xx"] = _stats.get("status_4xx", 0) + 1
         elif 500 <= status_code < 600:
             _stats["status_5xx"] = _stats.get("status_5xx", 0) + 1
+    _schedule_flush()
 
 
 def _under_quota_and_reserve() -> bool:
@@ -357,13 +400,176 @@ def _under_quota_and_reserve() -> bool:
         limit = _daily_limit()
         if _stats.get("sent", 0) >= limit:
             _stats["quota_blocks"] = _stats.get("quota_blocks", 0) + 1
+            reserved = False
+        else:
+            _stats["sent"] = _stats.get("sent", 0) + 1
+            reserved = True
+    _schedule_flush()
+    return reserved
+
+
+# -----------------------------------------------------------------------------
+# Persistence: load-on-first-use + $inc-delta upsert per mutation.
+# Every helper here is async and never raises back to the caller; Mongo
+# being down should NEVER stop the content generator from running.
+# -----------------------------------------------------------------------------
+
+async def _load_day_from_store(day: str) -> bool:
+    """Hydrate `_stats` with the persisted counters for `day`. Returns
+    True if the load reached Mongo (regardless of whether a doc existed
+    for the day), False on Mongo-unavailable / error — caller uses this
+    to decide whether to mark the day loaded."""
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
             return False
-        _stats["sent"] = _stats.get("sent", 0) + 1
-        return True
+        doc = await db[_STORE_COLLECTION].find_one(
+            {"day": day}, {"_id": 0},
+        )
+    except Exception as e:
+        logger.debug("google_indexing store load failed: %s", e)
+        return False
+    global _last_flushed_day
+    with _stats_lock:
+        # Guard against rollover racing with the load.
+        if _stats.get("day") != day:
+            return True
+        if doc:
+            for k in _COUNTER_KEYS:
+                v = doc.get(k)
+                if isinstance(v, int) and v > _stats.get(k, 0):
+                    _stats[k] = v
+        # Seed `_last_flushed_stats` to the current in-memory view so the
+        # next `_flush_to_store` sends a zero delta for anything already
+        # persisted (no double-counting after restart).
+        for k in _COUNTER_KEYS:
+            _last_flushed_stats[k] = int(_stats.get(k, 0))
+        _last_flushed_day = day
+    return True
+
+
+def _get_load_lock(day: str) -> "asyncio.Lock":
+    with _load_locks_guard:
+        lock = _load_locks.get(day)
+        if lock is None:
+            lock = asyncio.Lock()
+            _load_locks[day] = lock
+        # Opportunistic cleanup: keep only the last 3 days' locks.
+        if len(_load_locks) > 3:
+            stale = sorted(_load_locks.keys())[:-3]
+            for s in stale:
+                _load_locks.pop(s, None)
+        return lock
+
+
+async def _ensure_loaded() -> None:
+    """Load today's counters from the store exactly once per day per
+    process. Concurrent callers single-flight through a per-day lock so
+    none proceed with stale zeros while hydration is in flight. If the
+    load fails (Mongo unavailable or transient error) the day is NOT
+    marked loaded — the next call retries."""
+    with _stats_lock:
+        _roll_day_if_needed()
+        day = _stats.get("day")
+    if not day or day in _loaded_days:
+        return
+    lock = _get_load_lock(day)
+    async with lock:
+        # Re-check under the lock in case a sibling coroutine loaded it
+        # while we were waiting.
+        if day in _loaded_days:
+            return
+        ok = await _load_day_from_store(day)
+        if ok:
+            _loaded_days.add(day)
+
+
+async def _flush_to_store() -> None:
+    """Upsert today's counters into Mongo using `$inc` on per-field
+    deltas so concurrent gunicorn workers sum into a shared total
+    instead of overwriting each other. Safe to call concurrently — each
+    worker only reports its own uncommitted delta, and `_last_flushed_stats`
+    is updated under `_stats_lock` right after the Mongo call succeeds."""
+    global _last_flushed_day
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return
+    except Exception as e:
+        logger.debug("google_indexing store flush: deps import failed: %s", e)
+        return
+    with _stats_lock:
+        day = _stats.get("day")
+        if not day:
+            return
+        # Day rolled over under us: start a fresh delta baseline.
+        if _last_flushed_day != day:
+            for k in _COUNTER_KEYS:
+                _last_flushed_stats[k] = 0
+            _last_flushed_day = day
+        current = {k: int(_stats.get(k, 0)) for k in _COUNTER_KEYS}
+        delta = {
+            k: current[k] - _last_flushed_stats.get(k, 0)
+            for k in _COUNTER_KEYS
+        }
+        # Filter to positive deltas only; counters are monotonic within a
+        # day so a negative delta means a reset we don't want to propagate.
+        inc = {k: v for k, v in delta.items() if v > 0}
+        if not inc:
+            return
+        # Optimistically advance the baseline so concurrent flushers on
+        # the same worker don't double-report the same delta. If the
+        # Mongo write fails below, the counters we lose are bounded to
+        # one flush window (sub-second) which is acceptable for stats.
+        for k in inc:
+            _last_flushed_stats[k] = current[k]
+    try:
+        await db[_STORE_COLLECTION].update_one(
+            {"day": day},
+            {
+                "$inc": inc,
+                "$set": {
+                    "day": day,
+                    "updated_at": datetime.now(timezone.utc),
+                },
+                "$setOnInsert": {"created_at": datetime.now(timezone.utc)},
+            },
+            upsert=True,
+        )
+    except Exception as e:
+        logger.debug("google_indexing store flush failed: %s", e)
+        # Roll the baseline back so the next flush retries this delta.
+        with _stats_lock:
+            if _last_flushed_day == day:
+                for k, v in inc.items():
+                    _last_flushed_stats[k] = max(
+                        0, _last_flushed_stats.get(k, 0) - v
+                    )
+
+
+def _schedule_flush() -> None:
+    """Fire-and-forget the persistence write. If there's no running event
+    loop (module imported from a sync context, or tests) we skip silently —
+    the next async mutation will catch up. Killswitch-aware."""
+    if os.getenv("GOOGLE_INDEXING_PERSIST_DISABLED", "").strip().lower() in (
+        "1", "true", "yes", "on"
+    ):
+        return
+    if os.getenv("PYTEST_CURRENT_TEST") and not os.getenv(
+        "GOOGLE_INDEXING_PERSIST_IN_TESTS"
+    ):
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_flush_to_store())
 
 
 def get_stats() -> Dict[str, Any]:
-    """Snapshot of today's counters + config. Admin endpoint wraps this."""
+    """Synchronous snapshot of today's in-memory counters + config. Does
+    NOT include yesterday's totals — for the admin dashboard history view,
+    use the async `get_stats_with_history` instead."""
     with _stats_lock:
         _roll_day_if_needed()
         snapshot = dict(_stats)
@@ -373,6 +579,33 @@ def get_stats() -> Dict[str, Any]:
     snapshot["enabled"] = _enabled()
     snapshot["service_account_loaded"] = _load_service_account() is not None
     snapshot["service_account_error"] = _sa_load_error
+    return snapshot
+
+
+async def get_stats_with_history() -> Dict[str, Any]:
+    """Async variant that first hydrates today's counters from the store
+    (so a fresh process shows correct values immediately), then pulls
+    yesterday's persisted totals for the admin dashboard history panel."""
+    await _ensure_loaded()
+    snapshot = get_stats()
+    # Fetch yesterday's row. Best-effort; Mongo unavailability returns None.
+    from datetime import timedelta
+    yesterday_key = (
+        datetime.now(timezone.utc) - timedelta(days=1)
+    ).strftime("%Y-%m-%d")
+    yesterday: Optional[Dict[str, Any]] = None
+    try:
+        from deps import db, is_mongo_available
+        if await is_mongo_available():
+            doc = await db[_STORE_COLLECTION].find_one(
+                {"day": yesterday_key}, {"_id": 0},
+            )
+            if doc:
+                yesterday = {k: int(doc.get(k, 0)) for k in _COUNTER_KEYS}
+                yesterday["day"] = yesterday_key
+    except Exception as e:
+        logger.debug("google_indexing yesterday fetch failed: %s", e)
+    snapshot["yesterday"] = yesterday
     return snapshot
 
 
@@ -388,6 +621,9 @@ async def notify_url_updated(url: str, source: str = "content_fanout") -> Dict[s
     if not url or not isinstance(url, str):
         result["reason"] = "empty_url"
         return result
+    # Hydrate today's counters from Mongo on first call per day per process
+    # so the quota cap survives a restart. Never raises.
+    await _ensure_loaded()
     if not _enabled():
         result["reason"] = "disabled"
         _bump("skipped_disabled")
@@ -466,6 +702,7 @@ async def ping_sitemap(sitemap_url: str = "https://syrabit.ai/sitemap-index.xml"
         "status": "skipped",
         "reason": "",
     }
+    await _ensure_loaded()
     if not _enabled():
         result["reason"] = "disabled"
         return result

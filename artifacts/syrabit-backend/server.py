@@ -527,6 +527,17 @@ async def lifespan(app):
             except Exception:
                 pass
 
+            try:
+                # Task #327: Persist Google Indexing API daily counters so
+                # the 200/day cap survives a backend restart. One doc per
+                # day, keyed by `day` (YYYY-MM-DD UTC). Unique index keeps
+                # the upsert-with-$max idempotent across workers.
+                await db.google_indexing_daily.create_index(
+                    "day", unique=True, name="google_indexing_daily_day",
+                )
+            except Exception:
+                pass
+
             logger.info("MongoDB indexes ensured")
 
     except Exception as e:
