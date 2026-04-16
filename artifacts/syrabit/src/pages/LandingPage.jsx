@@ -23,6 +23,53 @@ const _meta = {
   },
 };
 
+const faqJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'How do I get started with Syrabit.ai?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Getting started is free and takes seconds. Visit syrabit.ai, browse your board and subject, and start reading notes or asking Syra, the AI tutor, questions right away — no signup required. You receive 30 free credits every day to explore syllabus-aligned notes, PYQs, MCQs, and AI-powered answers.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Which boards and courses does Syrabit.ai support?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai supports AHSEC (Class 11 and Class 12 Science, Commerce, and Arts), SEBA, and undergraduate Degree programmes (B.Com, B.A, B.Sc) under Gauhati University and Dibrugarh University. Content is mapped chapter-wise to the official syllabus for each board and course.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Is Syrabit.ai free for students in Assam?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes, Syrabit.ai offers a generous free tier. Every visitor gets 30 AI credits per day at no cost — enough to browse notes, read PYQs, and ask Syra study questions daily. Premium plans with unlimited credits are available for students who need heavier usage during exam season.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'How does Syrabit.ai help with exam preparation?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai combines chapter-wise study notes, previous year questions with solutions, MCQ practice, and an AI tutor into a single platform. Syra answers questions grounded in your actual syllabus with source citations, so every response is exam-relevant. Students can review important questions, practise PYQs, and clarify doubts instantly — all aligned to AHSEC, SEBA, and university curricula.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Can I use Syrabit.ai in Assamese?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes. Syrabit.ai supports bilingual study in both English and Assamese. You can switch the interface language with a single tap, and Syra the AI tutor can answer questions in Assamese as well. Study notes, PYQs, and other content are available in both languages where applicable.',
+      },
+    },
+  ],
+};
+
 export default function LandingPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -54,7 +101,7 @@ export default function LandingPage() {
         description={m.description}
         url="https://syrabit.ai/"
         keywords="AssamBoard educational browser, AHSEC study app, SEBA study tool, Class 11 12 exam prep, AHSEC syllabus browser, degree exam prep Assam, B.Com B.A B.Sc notes, AssamBoard 2025 study tool, free educational browser India"
-        jsonLd={jsonLd}
+        jsonLd={[jsonLd, faqJsonLd]}
       />
       <PublicNavbar />
       <LangToggle contentLang={contentLang} switchLang={switchLang} variant="floating" />
