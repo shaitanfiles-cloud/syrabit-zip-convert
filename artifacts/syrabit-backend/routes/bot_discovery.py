@@ -2890,6 +2890,19 @@ async def _try_run_cf_bot_report_once(db, now_utc: datetime) -> dict:
         )
     except Exception as exc:
         logger.warning(f"[CF bot report] store failed: {exc}")
+        # Mirror the generate-failure rollback: roll the lock marker
+        # back so a later poll inside the same Monday window can retry
+        # the store after a transient Mongo blip.
+        try:
+            await db.job_locks.update_one(
+                {
+                    "_id": _CF_BOT_REPORT_LOCK_ID,
+                    _CF_BOT_REPORT_API_CONFIG_KEY: cur_iso_week,
+                },
+                {"$set": {_CF_BOT_REPORT_API_CONFIG_KEY: last_run or ""}},
+            )
+        except Exception:
+            pass
         return {"claimed": True, "stored": False, "reason": f"store_error:{type(exc).__name__}"}
 
     # Also drop a dated markdown + JSON sidecar into `.local/reports/` so
