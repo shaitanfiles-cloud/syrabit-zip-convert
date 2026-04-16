@@ -194,13 +194,14 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
                 try:
                     from deps import db, is_mongo_available
                     if await is_mongo_available():
+                        _now = datetime.now(timezone.utc)
                         await db.bot_spoof_attempts.insert_one({
                             "ip_hash": ip_hash,
                             "claimed_bot": claimed_bot,
                             "user_agent": ua[:500],
                             "path": path,
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                            "timestamp": _now,
+                            "date": _now.strftime("%Y-%m-%d"),
                             "request_id": rid,
                         })
                 except Exception as e:

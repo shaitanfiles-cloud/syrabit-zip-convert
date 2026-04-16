@@ -380,6 +380,19 @@ async def lifespan(app):
                 name="source_pushed_at",
             )
 
+            await db.bot_spoof_attempts.create_index(
+                [("date", 1), ("claimed_bot", 1)],
+                name="date_claimed_bot",
+            )
+            await db.bot_spoof_attempts.create_index(
+                [("ip_hash", 1), ("date", 1)],
+                name="ip_hash_date",
+            )
+            await db.bot_spoof_attempts.create_index(
+                "timestamp", expireAfterSeconds=90 * 24 * 3600,
+                name="timestamp_ttl_90d",
+            )
+
             try:
                 await db.chapters.create_index(
                     [("title", "text"), ("content", "text")],
