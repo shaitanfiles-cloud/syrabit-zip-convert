@@ -371,6 +371,10 @@ async def lifespan(app):
             await db.password_resets.create_index("expires_at", expireAfterSeconds=0)
             await db.activity_log.create_index([("created_at", -1)])
             await db.notifications.create_index([("created_at", -1)])
+            await db.push_subscriptions.create_index(
+                [("role", 1), ("user_id", 1)],
+                name="role_user_id",
+            )
             await db.settings.create_index("id", unique=True, sparse=True)
 
             await db.syllabi.create_index([("board_id", 1), ("class_id", 1)])
