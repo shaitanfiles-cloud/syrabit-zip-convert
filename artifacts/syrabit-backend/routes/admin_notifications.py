@@ -666,6 +666,77 @@ async def admin_delete_custom_chime(
     return prefs
 
 
+@router.post("/admin/push/cleanup-orphan-chimes")
+async def admin_cleanup_orphan_chimes(admin: dict = Depends(get_admin_user)):
+    from deps import supa
+    if not supa:
+        raise HTTPException(503, "Supabase storage not available")
+
+    all_prefs = await db.admin_notification_prefs.find(
+        {"custom_chime_url": {"$exists": True, "$ne": None}},
+        {"_id": 0, "custom_chime_url": 1},
+    ).to_list(10000)
+    referenced_paths = set()
+    for p in all_prefs:
+        path = _chime_storage_path_from_url(p.get("custom_chime_url", ""))
+        if path and path.startswith(f"{_CHIME_PREFIX}/"):
+            referenced_paths.add(path)
+
+    try:
+        stored_files = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: supa.storage.from_(_CHIME_BUCKET).list(
+                _CHIME_PREFIX, {"limit": 10000}
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"Failed to list chime storage: {e}")
+        stored_files = []
+
+    all_paths = []
+    if stored_files:
+        for item in stored_files:
+            name = item.get("name", "") if isinstance(item, dict) else str(item)
+            if not name:
+                continue
+            full_path = f"{_CHIME_PREFIX}/{name}"
+            if name.endswith("/") or item.get("id") is None:
+                try:
+                    sub_files = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda n=name: supa.storage.from_(_CHIME_BUCKET).list(
+                            f"{_CHIME_PREFIX}/{n}", {"limit": 10000}
+                        ),
+                    )
+                    for sf in (sub_files or []):
+                        sf_name = sf.get("name", "") if isinstance(sf, dict) else str(sf)
+                        if sf_name and sf.get("id") is not None:
+                            all_paths.append(f"{_CHIME_PREFIX}/{name}/{sf_name}")
+                except Exception:
+                    pass
+            else:
+                all_paths.append(full_path)
+
+    orphaned = [p for p in all_paths if p not in referenced_paths]
+    deleted = 0
+    for op in orphaned:
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda path=op: supa.storage.from_(_CHIME_BUCKET).remove([path]),
+            )
+            deleted += 1
+        except Exception as e:
+            logger.debug(f"Failed to delete orphan chime {op}: {e}")
+
+    return {
+        "total_files": len(all_paths),
+        "referenced": len(referenced_paths),
+        "orphaned": len(orphaned),
+        "deleted": deleted,
+    }
+
+
 @router.get("/admin/alert-settings")
 async def admin_get_alert_settings(admin: dict = Depends(get_admin_user)):
     import metrics as _metrics_mod
