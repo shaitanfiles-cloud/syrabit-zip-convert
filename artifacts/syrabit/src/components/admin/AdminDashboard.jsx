@@ -262,6 +262,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [chatFallbacks, setChatFallbacks] = useState(null);
   const [vectorStats, setVectorStats] = useState(null);
   const [latency, setLatency] = useState(null);
+  const [chatSpeedups, setChatSpeedups] = useState(null);
+  const [speedupDays, setSpeedupDays] = useState(7);
+  const [speedupLoading, setSpeedupLoading] = useState(false);
   const [topQueries, setTopQueries] = useState(null);
   const [tokenSpend, setTokenSpend] = useState(null);
   const [funnel, setFunnel] = useState(null);
@@ -525,6 +528,26 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
     const interval = setInterval(() => load(true), 60000);
     return () => clearInterval(interval);
   }, [load, loadNotifPrefs]);
+
+  const loadChatSpeedups = useCallback(async (days) => {
+    setSpeedupLoading(true);
+    try {
+      const res = await axios.get(`${API_BASE}/admin/chat/speedups?days=${days}`, adminHdr(adminToken));
+      setChatSpeedups(res.data);
+    } catch (e) {
+      log.error('Failed to load chat speedups', { error: e.message });
+      setChatSpeedups(null);
+    } finally {
+      setSpeedupLoading(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminToken]);
+
+  useEffect(() => {
+    loadChatSpeedups(speedupDays);
+    const interval = setInterval(() => loadChatSpeedups(speedupDays), 60000);
+    return () => clearInterval(interval);
+  }, [loadChatSpeedups, speedupDays]);
 
   if (loading) {
     return (
@@ -2199,6 +2222,126 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             <p className="text-xs text-gray-400 mt-1">Target: &ge;90%</p>
           </div>
         </div>
+      </GlassCard>
+
+      <GlassCard className="p-5">
+        <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Zap size={14} className="text-violet-500" />
+            <h3 className="text-gray-700 font-semibold text-sm">Chat Speed-up Scoreboard</h3>
+            <span className="text-xs text-gray-400">cache &amp; speculative-web impact</span>
+          </div>
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            {[7, 14, 30].map(d => (
+              <button
+                key={d}
+                onClick={() => setSpeedupDays(d)}
+                disabled={speedupLoading}
+                className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
+                  speedupDays === d
+                    ? 'bg-white text-violet-600 font-medium shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+                data-testid={`speedup-period-${d}`}
+              >
+                {d}d
+              </button>
+            ))}
+            {speedupLoading && <Loader2 size={11} className="animate-spin text-gray-400 ml-1" />}
+          </div>
+        </div>
+
+        {(() => {
+          const totals = chatSpeedups?.totals || {};
+          const daily = chatSpeedups?.daily || [];
+          const warmRuns = chatSpeedups?.warm_runs || [];
+          const hasData = chatSpeedups?.has_data;
+          const stats = [
+            { label: 'Cache hit', value: `${totals.cache_hit_pct ?? 0}%`, sub: `${(totals.early_cache_hits ?? 0) + (totals.pre_sse_cache_hits ?? 0)} hits`, color: '#10b981' },
+            { label: 'Warmed cache', value: `${totals.warmed_cache_hit_pct ?? 0}%`, sub: `${totals.early_cache_hits ?? 0} early`, color: '#7c3aed' },
+            { label: 'Speculative web used', value: `${totals.speculative_web_used_pct ?? 0}%`, sub: `${totals.speculative_web_used ?? 0} / ${totals.speculative_web_started ?? 0}`, color: '#f59e0b' },
+            { label: 'Avg TTFB', value: `${totals.avg_ttfb_ms ?? 0}ms`, sub: `${totals.ttfb_samples ?? 0} samples`, color: '#3b82f6' },
+          ];
+          return (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {stats.map(s => (
+                  <div key={s.label} className="rounded-xl p-3 bg-gray-50 border border-gray-100">
+                    <p className="text-xs text-gray-500 font-medium">{s.label}</p>
+                    <p className="text-xl font-bold mt-1" style={{ color: s.color }}>{s.value}</p>
+                    <p className="text-xs text-gray-400 mt-0.5">{s.sub}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-gray-500 font-medium">Cache hit % &middot; Avg TTFB</span>
+                    <span className="text-xs text-gray-400">{totals.chats_total ?? 0} chats</span>
+                  </div>
+                  {hasData && daily.length > 0 ? (
+                    <ResponsiveContainer width="100%" height={130}>
+                      <LineChart data={daily}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                        <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#9ca3af' }} tickFormatter={d => d.slice(5)} />
+                        <YAxis yAxisId="pct" orientation="left" tick={{ fontSize: 9, fill: '#9ca3af' }} domain={[0, 100]} unit="%" />
+                        <YAxis yAxisId="ms" orientation="right" tick={{ fontSize: 9, fill: '#9ca3af' }} domain={[0, 'auto']} />
+                        <Tooltip content={<ChartTooltip />} />
+                        <Legend wrapperStyle={{ fontSize: 9 }} />
+                        <Line yAxisId="pct" type="monotone" dataKey="cache_hit_pct" stroke="#10b981" strokeWidth={2} dot={false} name="Cache %" />
+                        <Line yAxisId="pct" type="monotone" dataKey="warmed_cache_hit_pct" stroke="#7c3aed" strokeWidth={2} dot={false} name="Warmed %" />
+                        <Line yAxisId="ms" type="monotone" dataKey="avg_ttfb_ms" stroke="#3b82f6" strokeWidth={2} dot={false} name="TTFB ms" />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-[130px] text-gray-400 text-xs gap-1">
+                      <Zap size={20} className="opacity-30" />
+                      <span>No chat speed-up data yet</span>
+                      <span className="text-xs text-gray-300">Populates after chats are served</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl p-3 bg-gray-50 border border-gray-100">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-gray-500 font-medium flex items-center gap-1">
+                      <RefreshCw size={11} /> Recent cache-warm runs
+                    </span>
+                    <span className="text-xs text-gray-400">6h pre-warm cycle</span>
+                  </div>
+                  {warmRuns.length > 0 ? (
+                    <div className="space-y-1.5 max-h-[130px] overflow-y-auto pr-1" data-testid="speedup-warm-runs">
+                      {warmRuns.slice(0, 8).map((r, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs">
+                          <span className="text-gray-400 font-mono w-[88px] flex-shrink-0">
+                            {r.ts ? new Date(r.ts).toLocaleString(undefined, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'}
+                          </span>
+                          <span className="text-emerald-600 font-mono">{r.warmed}w</span>
+                          <span className="text-gray-400 font-mono">{r.already_cached}c</span>
+                          <span className={`font-mono ${r.failed > 0 ? 'text-red-500' : 'text-gray-300'}`}>{r.failed}f</span>
+                          <span className="text-gray-400 truncate ml-auto">{r.source}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-[130px] text-gray-400 text-xs gap-1">
+                      <RefreshCw size={20} className="opacity-30" />
+                      <span>No warm runs in window</span>
+                      <span className="text-xs text-gray-300">Pre-warm cycle runs every 6h</span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <p className="text-xs text-gray-400">
+                Window: last {chatSpeedups?.period_days ?? speedupDays} day{(chatSpeedups?.period_days ?? speedupDays) === 1 ? '' : 's'}
+                {totals.avg_total_ms ? <> &middot; Avg full chat: {totals.avg_total_ms}ms</> : null}
+                {totals.instant_fastpath ? <> &middot; Instant fast-path fires: {totals.instant_fastpath}</> : null}
+              </p>
+            </div>
+          );
+        })()}
       </GlassCard>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
