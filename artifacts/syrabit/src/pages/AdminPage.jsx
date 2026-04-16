@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   LayoutDashboard, GitBranch, BookOpen, Users,
@@ -9,7 +9,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import axios from 'axios';
-import { adminVerify, adminLogout, adminGetSettings, API_BASE } from '@/utils/api';
+import { adminVerify, adminLogout, adminGetSettings, adminGetUnacknowledgedAlertCount, API_BASE } from '@/utils/api';
 import { toast } from 'sonner';
 
 const AdminDashboard     = lazy(() => import('@/components/admin/AdminDashboard'));
@@ -113,6 +113,20 @@ export default function AdminPage() {
   const [adminEmail, setAdminEmail] = useState('');
   const [adminName,  setAdminName]  = useState('Admin');
   const [adminToken, setAdminToken] = useState(null);
+  const [unackAlertCount, setUnackAlertCount] = useState(0);
+  const alertPollRef = useRef(null);
+
+  useEffect(() => {
+    if (!adminToken || verifying) return;
+    const fetchCount = () => {
+      adminGetUnacknowledgedAlertCount(adminToken)
+        .then((res) => setUnackAlertCount(res.data?.count || 0))
+        .catch(() => {});
+    };
+    fetchCount();
+    alertPollRef.current = setInterval(fetchCount, 60_000);
+    return () => clearInterval(alertPollRef.current);
+  }, [adminToken, verifying]);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('admin_token');
@@ -272,6 +286,11 @@ export default function AdminPage() {
                       </div>
                       {!collapsed && (
                         <span className="text-[13px] truncate">{sectionLabel}</span>
+                      )}
+                      {id === 'botsecurity' && unackAlertCount > 0 && (
+                        <span className="ml-auto flex-shrink-0 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-red-500 text-white text-[10px] font-bold px-1">
+                          {unackAlertCount > 99 ? '99+' : unackAlertCount}
+                        </span>
                       )}
                     </button>
                   );

@@ -509,6 +509,9 @@ export const adminGetAlerts = (token, { limit = 50, acknowledged, type, date_fro
   return axios.get(`${API_BASE}/admin/alerts`, { headers: adminHeaders(token), withCredentials: true, params });
 };
 
+export const adminGetUnacknowledgedAlertCount = (token) =>
+  axios.get(`${API_BASE}/admin/alerts/unacknowledged-count`, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminAcknowledgeAlert = (token, alertId) =>
   axios.patch(`${API_BASE}/admin/alerts/${alertId}/acknowledge`, {}, { headers: adminHeaders(token), withCredentials: true });
 

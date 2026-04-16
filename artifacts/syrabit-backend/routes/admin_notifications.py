@@ -858,6 +858,16 @@ async def admin_get_alerts(
         raise HTTPException(status_code=500, detail="Failed to fetch alerts")
 
 
+@router.get("/admin/alerts/unacknowledged-count")
+async def admin_unacknowledged_alert_count(admin: dict = Depends(get_admin_user)):
+    try:
+        count = await db.alerts.count_documents({"acknowledged": False})
+        return {"count": count}
+    except Exception as exc:
+        logger.debug(f"Failed to count unacknowledged alerts: {exc}")
+        return {"count": 0}
+
+
 @router.patch("/admin/alerts/{alert_id}/acknowledge")
 async def admin_acknowledge_alert(
     alert_id: str,
