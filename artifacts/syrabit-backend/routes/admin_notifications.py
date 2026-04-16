@@ -520,7 +520,7 @@ async def admin_get_alerts(
 
 @router.patch("/admin/alerts/{alert_id}/acknowledge")
 async def admin_acknowledge_alert(
-    alert_id: str = Path(...),
+    alert_id: str,
     admin: dict = Depends(get_admin_user),
 ):
     from bson import ObjectId as _ObjId
