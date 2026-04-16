@@ -993,6 +993,96 @@ async function fetchBotRenderedHtml(
   }
 }
 
+export interface BotCacheEntry {
+  body: string;
+  lastmod: string;
+  etag: string;
+}
+
+export function formatRfc7231(d: Date): string {
+  return d.toUTCString();
+}
+
+export function parseHttpDate(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) return null;
+  return parsed;
+}
+
+export async function computeEtag(body: string): Promise<string> {
+  const enc = new TextEncoder().encode(body);
+  const buf = await crypto.subtle.digest("SHA-256", enc);
+  const arr = Array.from(new Uint8Array(buf));
+  return arr.slice(0, 6).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function parseBotCacheEntry(raw: string | null | undefined): BotCacheEntry | null {
+  if (!raw) return null;
+  try {
+    const obj = JSON.parse(raw);
+    if (
+      obj && typeof obj.body === "string" &&
+      typeof obj.lastmod === "string" && typeof obj.etag === "string"
+    ) {
+      return obj as BotCacheEntry;
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+export function ifNoneMatchMatches(header: string | null | undefined, etag: string): boolean {
+  if (!header) return false;
+  const trimmed = header.trim();
+  if (!trimmed) return false;
+  if (trimmed === "*") return true;
+  return trimmed.split(",").some((tok) => {
+    let v = tok.trim();
+    if (!v) return false;
+    if (v.startsWith("W/")) v = v.slice(2);
+    if (v.length >= 2 && v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+    return v === etag;
+  });
+}
+
+export function shouldReturn304(
+  request: Request,
+  etag: string,
+  lastmodMs: number,
+): boolean {
+  const inm = request.headers.get("If-None-Match");
+  if (inm) return ifNoneMatchMatches(inm, etag);
+  const ims = request.headers.get("If-Modified-Since");
+  if (!ims) return false;
+  const parsed = parseHttpDate(ims);
+  if (parsed === null) return false; // never 304 on parse failure
+  // Drop sub-second precision on the cache side too — RFC 7232 Last-Modified
+  // resolution is one second.
+  return Math.floor(lastmodMs / 1000) <= Math.floor(parsed / 1000);
+}
+
+function buildBotCacheHeaders(
+  cacheTtl: number,
+  lastmod: string,
+  etag: string,
+  source: string,
+): Record<string, string> {
+  return {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": `public, max-age=${cacheTtl}, s-maxage=${cacheTtl * 2}`,
+    "X-Bot-Rendered": "1",
+    "X-Cache": source === "bot-cache" ? "BOT-KV-HIT" : "BOT-KV-MISS",
+    "X-Source": source,
+    "Vary": "User-Agent",
+    "X-Robots-Tag": "index, follow",
+    "Content-Language": "en-IN",
+    "Last-Modified": lastmod,
+    "ETag": `"${etag}"`,
+  };
+}
+
 async function handleBotContentRequest(
   env: Env,
   pathname: string,
@@ -1007,21 +1097,23 @@ async function handleBotContentRequest(
 
   if (env.BOT_HTML_CACHE) {
     try {
-      const cached = await env.BOT_HTML_CACHE.get(cacheKey);
-      if (cached) {
-        return new Response(cached, {
-          status: 200,
-          headers: {
-            "Content-Type": "text/html; charset=utf-8",
-            "Cache-Control": `public, max-age=${cacheTtl}, s-maxage=${cacheTtl * 2}`,
-            "X-Bot-Rendered": "1",
-            "X-Cache": "BOT-KV-HIT",
-            "X-Source": "bot-cache",
-            "Vary": "User-Agent",
-            "X-Robots-Tag": "index, follow",
-            "Content-Language": "en-IN",
-          },
-        });
+      const raw = await env.BOT_HTML_CACHE.get(cacheKey);
+      if (raw) {
+        let entry = parseBotCacheEntry(raw);
+        if (!entry) {
+          // Legacy entry written as a plain HTML string before this header
+          // wrapper landed. Synthesize lastmod=now and a body-derived etag
+          // so we still emit conditional headers — the worst case is a
+          // single full-body response per legacy entry until it expires.
+          const etag = await computeEtag(raw);
+          entry = { body: raw, lastmod: formatRfc7231(new Date()), etag };
+        }
+        const lastmodMs = parseHttpDate(entry.lastmod) ?? Date.now();
+        const headers = buildBotCacheHeaders(cacheTtl, entry.lastmod, entry.etag, "bot-cache");
+        if (shouldReturn304(request, entry.etag, lastmodMs)) {
+          return new Response(null, { status: 304, headers });
+        }
+        return new Response(entry.body, { status: 200, headers });
       }
     } catch { /* fall through */ }
   }
@@ -1029,14 +1121,27 @@ async function handleBotContentRequest(
   const rendered = await fetchBotRenderedHtml(env, pathname, clientIp, request);
   if (!rendered) return null;
 
+  const htmlBody = await rendered.clone().text();
+  const etag = await computeEtag(htmlBody);
+  const lastmod = formatRfc7231(new Date());
+
   if (env.BOT_HTML_CACHE) {
-    const htmlBody = await rendered.clone().text();
+    const entry: BotCacheEntry = { body: htmlBody, lastmod, etag };
     ctx.waitUntil(
-      env.BOT_HTML_CACHE.put(cacheKey, htmlBody, { expirationTtl: cacheTtl }).catch(() => {})
+      env.BOT_HTML_CACHE.put(cacheKey, JSON.stringify(entry), { expirationTtl: cacheTtl })
+        .catch(() => {})
     );
   }
 
-  return rendered;
+  const headers = buildBotCacheHeaders(cacheTtl, lastmod, etag, "bot-prerender");
+  // Preserve any explicit X-Source set by the renderer (e.g.
+  // bot-prerender-fallback) so observability stays accurate.
+  const renderedSource = rendered.headers.get("X-Source");
+  if (renderedSource) headers["X-Source"] = renderedSource;
+  if (shouldReturn304(request, etag, parseHttpDate(lastmod) ?? Date.now())) {
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(htmlBody, { status: 200, headers });
 }
 
 async function handleScheduledSync(env: Env): Promise<void> {

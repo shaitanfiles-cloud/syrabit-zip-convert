@@ -15,9 +15,6 @@ Disallow: /cms/
 User-agent: Googlebot-Image
 Allow: /
 
-User-agent: Google-Extended
-Allow: /
-
 User-agent: GoogleOther
 Allow: /
 
@@ -58,7 +55,7 @@ Allow: /api/seo/
 Disallow: /admin/
 Disallow: /chat
 
-# ── AI Search/Answer Bots (send traffic, welcome) ─────────────────────────
+# ── AI Search/Answer Bots that send referral traffic (welcome) ────────────
 User-agent: ChatGPT-User
 Allow: /
 Allow: /api/seo/
@@ -101,18 +98,6 @@ Disallow: /chat
 Disallow: /api/auth/
 Disallow: /api/ai/
 
-User-agent: ClaudeBot
-Allow: /
-Allow: /api/seo/
-Allow: /api/seo/keyword-index
-Allow: /api/seo/keyword-index.txt
-Allow: /llms.txt
-Allow: /llms-full.txt
-Disallow: /admin/
-Disallow: /chat
-Disallow: /api/auth/
-Disallow: /api/ai/
-
 User-agent: Meta-ExternalAgent
 Allow: /
 Allow: /api/seo/
@@ -123,11 +108,30 @@ Disallow: /chat
 Disallow: /api/auth/
 Disallow: /api/ai/
 
+# ── Long-tail Search Bots (welcome) ────────────────────────────────────────
+User-agent: PetalBot
+Allow: /
+
+User-agent: MojeekBot
+Allow: /
+
+User-agent: SeznamBot
+Allow: /
+
+User-agent: Yeti
+Allow: /
+
 # ── Training / Scraping Bots (BLOCKED) ─────────────────────────────────────
 User-agent: GPTBot
 Disallow: /
 
 User-agent: CCBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: Google-Extended
 Disallow: /
 
 User-agent: anthropic-ai
@@ -137,9 +141,6 @@ User-agent: Cohere-ai
 Disallow: /
 
 User-agent: Bytespider
-Disallow: /
-
-User-agent: PetalBot
 Disallow: /
 
 User-agent: Scrapy
@@ -194,7 +195,6 @@ Disallow: /api/ai/
 Disallow: /api/admin/
 
 # ── Sitemaps ────────────────────────────────────────────────────────────────
-Sitemap: https://syrabit.ai/sitemap.xml
 Sitemap: https://syrabit.ai/sitemap-index.xml
 
 # ── Feeds ───────────────────────────────────────────────────────────────────

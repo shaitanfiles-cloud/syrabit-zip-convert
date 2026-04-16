@@ -374,6 +374,58 @@ def test_diff_does_not_repush_unedited_subject(monkeypatch):
     assert queued == []
 
 
+def test_diff_repushes_seo_page_after_ai_rewrite(monkeypatch):
+    """Phase B / Plan 6 regression: simulate an AI rewrite path bumping
+    `updated_at` on a published seo_page (e.g. refresh_meta_descriptions,
+    quality-pass rescore, or _generate_single_page replace_one) and assert
+    the next sitemap-diff iteration picks the URL up and queues it for
+    IndexNow re-submission.
+
+    All the rewrite paths in `seo_engine.py` and `routes/admin_content.py`
+    set `updated_at = datetime.now(timezone.utc).isoformat()` explicitly,
+    so this test models the post-write state of the seo_pages collection
+    rather than calling the rewrite endpoint directly (which would require
+    the full LLM stack)."""
+    bd, fake_db = _patch_db(
+        monkeypatch,
+        seo_pages=[{
+            "board_slug": "ahsec", "class_slug": "class-12",
+            "subject_slug": "physics", "topic_slug": "newtons-laws",
+            "page_type": "notes",
+            "status": "published",
+            # Simulate the rewrite having just happened: updated_at is "now".
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }],
+    )
+    page_url = f"{bd.BASE_URL}/ahsec/class-12/physics/newtons-laws"
+
+    async def _fake_sitemap():
+        return [page_url]
+    monkeypatch.setattr(bd, "_collect_current_sitemap_urls", _fake_sitemap)
+
+    # Submitted to IndexNow weeks ago — well outside the 7-day dedupe window
+    # AND strictly older than the just-bumped updated_at.
+    fake_db.indexnow_submitted_urls = _FakeCollection([
+        {"url": page_url,
+         "last_submitted_at": datetime.now(timezone.utc) - timedelta(days=21)},
+    ])
+    fake_db.indexnow_sitemap_diff_log = MagicMock()
+    fake_db.indexnow_sitemap_diff_log.insert_one = AsyncMock()
+
+    queued: list[list[str]] = []
+    flushed: list[str] = []
+    bd.indexnow_batcher = MagicMock()
+    bd.indexnow_batcher.queue = AsyncMock(side_effect=lambda urls: queued.append(list(urls)))
+    bd.indexnow_batcher.flush_force = AsyncMock(side_effect=lambda source="": flushed.append(source))
+
+    summary = _run(bd.diff_sitemap_against_submitted(source="phase_b_rewrite"))
+
+    assert summary["edited_queued"] == 1
+    assert summary["new_queued"] == 0
+    assert queued == [[page_url]]
+    assert flushed == ["phase_b_rewrite"]
+
+
 def test_diff_repushes_edited_chapter(monkeypatch):
     """Chapter whose updated_at is newer than its last submission gets
     re-queued, exercising the new chapter branch end-to-end."""
