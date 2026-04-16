@@ -911,7 +911,7 @@ async def admin_update_alert_settings(
     expiration = data.get("expiration", {})
     notification_channels = data.get("notification_channels", {})
     validated_thresholds = {}
-    _ZERO_ALLOWED_THRESHOLDS = {"auto_block_threshold", "auto_block_expiry_hours"}
+    _ZERO_ALLOWED_THRESHOLDS = {"auto_block_threshold", "auto_block_expiry_hours", "collection_growth_per_day"}
     for k, default_val in _metrics_mod._ALERT_THRESHOLDS_DEFAULT.items():
         if k in thresholds:
             try:
