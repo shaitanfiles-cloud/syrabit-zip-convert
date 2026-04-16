@@ -8,7 +8,8 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor } from '@/utils/api';
+import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 function GlassCard({ children, className = '' }) {
   return (
@@ -415,6 +416,196 @@ function AlertThresholdPanel({ adminToken }) {
   );
 }
 
+function TtlMonitorPanel({ adminToken }) {
+  const [ttlData, setTtlData] = useState(null);
+  const [ttlLoading, setTtlLoading] = useState(true);
+  const [ttlError, setTtlError] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const fetchTtl = useCallback(async () => {
+    setTtlLoading(true);
+    setTtlError(null);
+    try {
+      const res = await adminGetTtlMonitor(adminToken);
+      setTtlData(res.data);
+    } catch (err) {
+      setTtlError(err.response?.data?.detail || 'Failed to load TTL monitoring data');
+    } finally {
+      setTtlLoading(false);
+    }
+  }, [adminToken]);
+
+  useEffect(() => { fetchTtl(); }, [fetchTtl]);
+
+  const healthColor = ttlData?.health_status === 'healthy' ? '#10b981' : '#f59e0b';
+  const HealthIcon = ttlData?.health_status === 'healthy' ? CheckCircle2 : AlertTriangle;
+
+  if (ttlLoading && !ttlData) {
+    return (
+      <GlassCard>
+        <div className="p-5 flex items-center gap-2 text-sm text-gray-400">
+          <Loader2 size={14} className="animate-spin" />
+          Loading TTL monitoring data...
+        </div>
+      </GlassCard>
+    );
+  }
+
+  if (ttlError && !ttlData) {
+    return (
+      <GlassCard className="p-6">
+        <div className="flex items-center gap-3 text-red-500">
+          <XCircle size={18} />
+          <p className="text-sm">{ttlError}</p>
+        </div>
+        <button onClick={fetchTtl} className="mt-3 text-sm text-violet-600 hover:text-violet-800 flex items-center gap-1.5">
+          <RefreshCw size={13} /> Retry
+        </button>
+      </GlassCard>
+    );
+  }
+
+  if (!ttlData) return null;
+
+  const ageDist = ttlData.age_distribution || [];
+  const dailyIngest = ttlData.daily_ingest || [];
+
+  return (
+    <GlassCard>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => setExpanded(!expanded)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded(!expanded); } }}
+        className="w-full p-5 flex items-center justify-between hover:bg-gray-50 transition-colors cursor-pointer"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-teal-50">
+            <Database size={16} className="text-teal-500" />
+          </div>
+          <div className="text-left">
+            <h3 className="text-sm font-semibold text-gray-900">TTL Cleanup Monitor</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              {ttlData.total_documents?.toLocaleString()} docs &middot; TTL: {ttlData.ttl_index?.ttl_days || 90} days &middot;
+              <span style={{ color: healthColor }} className="font-medium ml-1">
+                {ttlData.health_status === 'healthy' ? 'Healthy' : 'Needs attention'}
+              </span>
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); fetchTtl(); }}
+            disabled={ttlLoading}
+            className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+          >
+            <RefreshCw size={12} className={`text-gray-400 ${ttlLoading ? 'animate-spin' : ''}`} />
+          </button>
+          <Activity size={14} className={`text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        </div>
+      </div>
+
+      {expanded && (
+        <div className="border-t border-gray-100 p-5 space-y-5">
+          <div className="flex items-start gap-3 p-3 rounded-xl" style={{ background: `${healthColor}08`, border: `1px solid ${healthColor}20` }}>
+            <HealthIcon size={16} style={{ color: healthColor }} className="mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-xs font-medium" style={{ color: healthColor }}>
+                {ttlData.health_status === 'healthy' ? 'TTL Cleanup Healthy' : 'TTL Cleanup Warning'}
+              </p>
+              <p className="text-[11px] text-gray-500 mt-0.5">{ttlData.health_message}</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="rounded-xl border border-gray-100 p-3 bg-gray-50">
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider">Total Documents</p>
+              <p className="text-lg font-bold text-gray-900 mt-1">{ttlData.total_documents?.toLocaleString()}</p>
+            </div>
+            <div className="rounded-xl border border-gray-100 p-3 bg-gray-50">
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider">TTL Duration</p>
+              <p className="text-lg font-bold text-gray-900 mt-1">{ttlData.ttl_index?.ttl_days || 90}d</p>
+            </div>
+            <div className="rounded-xl border border-gray-100 p-3 bg-gray-50">
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider">TTL Index</p>
+              <p className="text-lg font-bold text-gray-900 mt-1">{ttlData.ttl_index?.name ? 'Active' : 'Missing'}</p>
+            </div>
+            <div className="rounded-xl border border-gray-100 p-3 bg-gray-50">
+              <p className="text-[10px] text-gray-400 uppercase tracking-wider">String Timestamps</p>
+              <p className={`text-lg font-bold mt-1 ${ttlData.string_timestamps_remaining > 0 ? 'text-amber-600' : 'text-gray-900'}`}>
+                {ttlData.string_timestamps_remaining?.toLocaleString()}
+              </p>
+            </div>
+          </div>
+
+          {ageDist.length > 0 && (
+            <div>
+              <h4 className="text-xs font-medium text-gray-700 mb-3">Document Age Distribution</h4>
+              <div className="space-y-2">
+                {ageDist.map((bucket) => {
+                  const maxCount = Math.max(...ageDist.map(b => b.count), 1);
+                  const pct = (bucket.count / maxCount) * 100;
+                  const isOverTtl = bucket.label.includes('past TTL');
+                  return (
+                    <div key={bucket.label} className="flex items-center gap-3">
+                      <span className={`text-[11px] w-32 text-right flex-shrink-0 ${isOverTtl && bucket.count > 0 ? 'text-amber-600 font-medium' : 'text-gray-500'}`}>{bucket.label}</span>
+                      <div className="flex-1 h-6 bg-gray-50 rounded-lg overflow-hidden border border-gray-100">
+                        <div
+                          className="h-full rounded-lg transition-all duration-500"
+                          style={{
+                            width: `${Math.max(pct, bucket.count > 0 ? 2 : 0)}%`,
+                            background: isOverTtl && bucket.count > 0 ? '#f59e0b' : '#8b5cf6',
+                          }}
+                        />
+                      </div>
+                      <span className={`text-[11px] font-medium w-14 text-right flex-shrink-0 ${isOverTtl && bucket.count > 0 ? 'text-amber-600' : 'text-gray-600'}`}>
+                        {bucket.count.toLocaleString()}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {dailyIngest.length > 0 && (
+            <div>
+              <h4 className="text-xs font-medium text-gray-700 mb-2">Daily Document Ingest (Last 30 Days)</h4>
+              <div style={{ height: 200 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={dailyIngest}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 10, fill: '#94a3b8' }}
+                      tickFormatter={(v) => {
+                        const d = new Date(v);
+                        return `${d.getMonth() + 1}/${d.getDate()}`;
+                      }}
+                    />
+                    <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0' }}
+                      labelFormatter={(v) => new Date(v).toLocaleDateString()}
+                    />
+                    <Bar dataKey="count" fill="#14b8a6" radius={[4, 4, 0, 0]} name="Documents Added" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {ttlData.checked_at && (
+            <p className="text-[10px] text-gray-400 text-right">
+              Last checked: {new Date(ttlData.checked_at).toLocaleString()}
+            </p>
+          )}
+        </div>
+      )}
+    </GlassCard>
+  );
+}
+
 const PERIOD_OPTIONS = [
   { label: '7 days', value: 7 },
   { label: '14 days', value: 14 },
@@ -598,6 +789,8 @@ export default function AdminBotSecurity({ adminToken }) {
       </div>
 
       <AlertThresholdPanel adminToken={adminToken} />
+
+      <TtlMonitorPanel adminToken={adminToken} />
 
       <GlassCard>
         <div className="p-5 pb-2 flex items-center justify-between">

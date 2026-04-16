@@ -2753,6 +2753,110 @@ async def admin_spoofed_bots_dashboard(
     }
 
 
+@router.get("/admin/security/ttl-monitor")
+async def admin_ttl_monitor(
+    admin: dict = Depends(get_admin_user),
+):
+    try:
+        total_docs = await db.bot_spoof_attempts.count_documents({})
+
+        now = datetime.now(timezone.utc)
+
+        ttl_seconds = 90 * 24 * 3600
+        index_info = {}
+        try:
+            indexes = await db.bot_spoof_attempts.index_information()
+            for idx_name, idx_data in indexes.items():
+                if "expireAfterSeconds" in idx_data:
+                    ttl_seconds = idx_data["expireAfterSeconds"]
+                    index_info = {
+                        "name": idx_name,
+                        "expireAfterSeconds": ttl_seconds,
+                        "ttl_days": round(ttl_seconds / 86400, 1),
+                    }
+                    break
+        except Exception:
+            pass
+
+        ttl_days = ttl_seconds / 86400
+        bucket_defs = [
+            ("< 1 day", timedelta(days=1)),
+            ("1-7 days", timedelta(days=7)),
+            ("7-30 days", timedelta(days=30)),
+            (f"30-{int(ttl_days)} days", timedelta(seconds=ttl_seconds)),
+            (f"> {int(ttl_days)} days (past TTL)", None),
+        ]
+        if ttl_days > 60:
+            bucket_defs = [
+                ("< 1 day", timedelta(days=1)),
+                ("1-7 days", timedelta(days=7)),
+                ("7-30 days", timedelta(days=30)),
+                ("30-60 days", timedelta(days=60)),
+                (f"60-{int(ttl_days)} days", timedelta(seconds=ttl_seconds)),
+                (f"> {int(ttl_days)} days (past TTL)", None),
+            ]
+
+        age_buckets = []
+        prev_cutoff = now
+        for label, delta in bucket_defs:
+            if delta is not None:
+                bucket_cutoff = now - delta
+                count = await db.bot_spoof_attempts.count_documents({
+                    "timestamp": {"$lt": prev_cutoff, "$gte": bucket_cutoff}
+                })
+                prev_cutoff = bucket_cutoff
+            else:
+                count = await db.bot_spoof_attempts.count_documents({
+                    "timestamp": {"$lt": prev_cutoff}
+                })
+            age_buckets.append({"label": label, "count": count})
+
+        expired_count = age_buckets[-1]["count"] if age_buckets else 0
+
+        if expired_count > 0:
+            health_status = "warning"
+            health_message = f"{expired_count} documents older than {int(ttl_days)} days still exist — TTL cleanup may be delayed"
+        elif total_docs > 100000:
+            health_status = "warning"
+            health_message = f"Collection has {total_docs:,} documents — monitor for unexpected growth"
+        else:
+            health_status = "healthy"
+            health_message = "TTL cleanup is operating normally"
+
+        daily_size_pipeline = [
+            {"$match": {"timestamp": {"$gte": now - timedelta(days=30), "$type": "date"}}},
+            {"$group": {
+                "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$timestamp"}},
+                "count": {"$sum": 1},
+            }},
+            {"$sort": {"_id": 1}},
+        ]
+        try:
+            daily_ingest = await db.bot_spoof_attempts.aggregate(daily_size_pipeline).to_list(30)
+        except Exception:
+            daily_ingest = []
+
+        string_ts_count = 0
+        try:
+            string_ts_count = await db.bot_spoof_attempts.count_documents({"timestamp": {"$type": "string"}})
+        except Exception:
+            pass
+
+        return {
+            "total_documents": total_docs,
+            "ttl_index": index_info,
+            "age_distribution": age_buckets,
+            "health_status": health_status,
+            "health_message": health_message,
+            "daily_ingest": [{"date": d["_id"], "count": d["count"]} for d in daily_ingest],
+            "string_timestamps_remaining": string_ts_count,
+            "checked_at": now.isoformat(),
+        }
+    except Exception as exc:
+        logger.error(f"TTL monitor error: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to fetch TTL monitoring data")
+
+
 @router.get("/admin/security/blocked-ips")
 async def admin_list_blocked_ips(
     admin: dict = Depends(get_admin_user),
