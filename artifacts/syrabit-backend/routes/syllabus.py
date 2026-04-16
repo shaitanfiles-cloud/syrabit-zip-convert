@@ -98,11 +98,21 @@ async def admin_full_reseed_embeddings(admin: dict = Depends(get_admin_user)):
 
 @router.get("/admin/syllabus/embedding-stats")
 async def admin_syllabus_embedding_stats(admin: dict = Depends(get_admin_user)):
-    """Return Vectorize index stats: total vectors, dimensions, metric, thresholds."""
+    """Return Vectorize index stats: total vectors, dimensions, metric, thresholds.
+
+    Also includes the Cloudflare-auth circuit-breaker status so admins can see
+    when the embedder loop has been suspended due to repeated 401s.
+    """
     emb = _get_syllabus_embedder()
     if emb is None:
         raise HTTPException(status_code=503, detail="SyllabusEmbedder not initialised")
-    return await emb.stats()
+    stats = await emb.stats()
+    try:
+        import vectorize_client
+        stats["auth_breaker"] = vectorize_client.auth_breaker_status()
+    except Exception:
+        pass
+    return stats
 
 
 @router.get("/admin/syllabus/test-classify")

@@ -304,7 +304,11 @@ REDIS_CONTENT_PREFIX = "content:"
 # ── Plan configuration ────────────────────────────────────────────────────────
 # Credits reset daily at midnight UTC.
 PLAN_LIMITS = {
-    "free":    {"credits_per_day": 30,   "max_tokens": 512,    "document_access": "zero",    "req_per_min": 5,  "req_per_min_ip": 60},
+    # `req_per_min` for free is the per-anon-IP cap. Bumped 5→15 because a
+    # single classroom behind one NAT shares the same IP — 5/min throttled
+    # legitimate students at peak usage. 15/min ≈ one chat every 4s, still
+    # well below abuse thresholds.
+    "free":    {"credits_per_day": 30,   "max_tokens": 512,    "document_access": "zero",    "req_per_min": 15, "req_per_min_ip": 60},
     "starter": {"credits_per_day": 500,  "max_tokens": 768,    "document_access": "limited", "req_per_min": 10, "req_per_min_ip": 90},
     "pro":     {"credits_per_day": 4000, "max_tokens": 1024,   "document_access": "full",    "req_per_min": 15, "req_per_min_ip": 120},
 }
