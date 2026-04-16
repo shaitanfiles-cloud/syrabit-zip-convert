@@ -900,6 +900,13 @@ indexnow_batcher = IndexNowBatcher()
 _SITEMAP_DIFF_INTERVAL_S = 24 * 3600
 _SITEMAP_DIFF_INITIAL_DELAY_S = 600
 _SITEMAP_DIFF_MAX_QUEUE = 5000
+# Re-push cap: when content is meaningfully edited, cap how many edited URLs
+# we re-notify IndexNow about per run to avoid hammering the endpoints on mass
+# edits (e.g., a bulk chapter rewrite).
+_SITEMAP_DIFF_MAX_REPUSH = 1000
+# Dedupe window: don't re-push the same URL more than once per this interval,
+# even if edits keep happening, to prevent thrashing IndexNow.
+_SITEMAP_DIFF_REPUSH_MIN_AGE_S = 7 * 24 * 3600
 
 
 async def _collect_current_sitemap_urls() -> List[str]:
@@ -1013,58 +1020,181 @@ async def _collect_current_sitemap_urls() -> List[str]:
     return list(dict.fromkeys(urls))
 
 
+def _ensure_utc(dt_value) -> Optional[datetime]:
+    """Normalize a Mongo-sourced datetime to a timezone-aware UTC datetime.
+    Mongo's BSON decoder returns naive datetimes in some codecs; treat those
+    as UTC to avoid TypeError when comparing/subtracting against aware `now`."""
+    if not isinstance(dt_value, datetime):
+        return None
+    if dt_value.tzinfo is None:
+        return dt_value.replace(tzinfo=timezone.utc)
+    return dt_value.astimezone(timezone.utc)
+
+
+async def _collect_edited_url_mtimes(urls: List[str]) -> Dict[str, datetime]:
+    """For a list of candidate URLs, look up the `updated_at` of the
+    corresponding seo_pages / cms_documents record so we can tell whether the
+    content has been meaningfully edited since the last IndexNow submission.
+    Returns a dict {url: updated_at}. URLs without a matching record (static
+    pages, subject/chapter index pages) are omitted."""
+    out: Dict[str, datetime] = {}
+    if not urls:
+        return out
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return out
+
+        url_set = set(urls)
+        learn_prefix = f"{BASE_URL}/learn/"
+
+        # seo_pages: rebuild URL from slug chain and match against candidate set.
+        try:
+            cursor = db.seo_pages.find(
+                {"status": "published"},
+                {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1,
+                 "topic_slug": 1, "page_type": 1, "updated_at": 1},
+            )
+            async for p in cursor:
+                u = _page_doc_to_url(p)
+                if not u or u not in url_set:
+                    continue
+                ua = _ensure_utc(p.get("updated_at"))
+                if ua is not None:
+                    out[u] = ua
+        except Exception as e:
+            logger.debug(f"sitemap diff mtime: seo_pages scan failed: {e}")
+
+        # cms_documents -> /learn/<slug> URLs
+        try:
+            cursor = db.cms_documents.find(
+                {"status": "published", "doc_type": {"$ne": "personalized"}},
+                {"_id": 0, "seo_slug": 1, "id": 1, "updated_at": 1},
+            )
+            async for d in cursor:
+                slug = (d.get("seo_slug") or d.get("id") or "").strip()
+                if not slug:
+                    continue
+                u = f"{learn_prefix}{slug}"
+                if u not in url_set:
+                    continue
+                ua = _ensure_utc(d.get("updated_at"))
+                if ua is not None:
+                    out[u] = ua
+        except Exception as e:
+            logger.debug(f"sitemap diff mtime: cms_documents scan failed: {e}")
+    except Exception as e:
+        logger.warning(f"sitemap diff mtime collection failed: {e}")
+    return out
+
+
 async def diff_sitemap_against_submitted(source: str = "sitemap_diff") -> dict:
-    """Find URLs in the current sitemap that have never been pushed to
-    IndexNow and queue them for batched submission. Returns a small summary
-    suitable for logging or admin display."""
+    """Find URLs in the current sitemap that either have never been pushed to
+    IndexNow, or whose backing content has been meaningfully edited since the
+    last submission, and queue them for batched re-submission. Re-submissions
+    are capped per-run and a per-URL dedupe window prevents thrashing IndexNow
+    if mass updates happen."""
     from deps import db, is_mongo_available
-    summary = {"sitemap_total": 0, "already_submitted": 0, "new_queued": 0,
-               "skipped_capacity": 0, "ran_at": datetime.now(timezone.utc).isoformat()}
+    now = datetime.now(timezone.utc)
+    summary = {
+        "sitemap_total": 0,
+        "already_submitted": 0,
+        "new_queued": 0,
+        "skipped_capacity": 0,
+        "edited_queued": 0,
+        "edited_skipped_dedupe": 0,
+        "edited_skipped_capacity": 0,
+        "ran_at": now.isoformat(),
+    }
 
     candidates = await _collect_current_sitemap_urls()
     summary["sitemap_total"] = len(candidates)
     if not candidates:
         return summary
 
-    submitted: set = set()
+    # Fetch last_submitted_at for all candidates so we can detect both
+    # "never submitted" and "submitted-but-stale" URLs in one pass.
+    submitted_at: Dict[str, datetime] = {}
     try:
         if await is_mongo_available():
-            cursor = db.indexnow_submitted_urls.find(
-                {"url": {"$in": candidates}},
-                {"_id": 0, "url": 1},
-            )
-            async for doc in cursor:
-                u = doc.get("url")
-                if u:
-                    submitted.add(u)
+            for i in range(0, len(candidates), 5000):
+                chunk = candidates[i:i + 5000]
+                cursor = db.indexnow_submitted_urls.find(
+                    {"url": {"$in": chunk}},
+                    {"_id": 0, "url": 1, "last_submitted_at": 1},
+                )
+                async for doc in cursor:
+                    u = doc.get("url")
+                    if not u:
+                        continue
+                    ts = _ensure_utc(doc.get("last_submitted_at"))
+                    # Treat missing/invalid timestamp as "just-submitted" so
+                    # we don't spuriously classify the URL as edited.
+                    submitted_at[u] = ts if ts is not None else now
     except Exception as e:
         logger.warning(f"sitemap diff: submitted-url lookup failed: {e}")
 
-    new_urls = [u for u in candidates if u not in submitted]
+    new_urls = [u for u in candidates if u not in submitted_at]
     summary["already_submitted"] = len(candidates) - len(new_urls)
 
     if len(new_urls) > _SITEMAP_DIFF_MAX_QUEUE:
         summary["skipped_capacity"] = len(new_urls) - _SITEMAP_DIFF_MAX_QUEUE
         new_urls = new_urls[:_SITEMAP_DIFF_MAX_QUEUE]
 
-    if new_urls:
-        await indexnow_batcher.queue(new_urls)
+    # Determine which already-submitted URLs have been edited since their last
+    # submission. Only consider URLs backed by seo_pages / cms_documents where
+    # we have a reliable `updated_at` timestamp.
+    already_submitted_urls = [u for u in candidates if u in submitted_at]
+    mtimes = await _collect_edited_url_mtimes(already_submitted_urls)
+
+    edited_candidates: List[str] = []
+    edited_skipped_dedupe = 0
+    for u, updated_at in mtimes.items():
+        last_sub = submitted_at.get(u)
+        if not last_sub:
+            continue
+        if updated_at <= last_sub:
+            continue
+        # Dedupe window: if we submitted this URL recently, skip to avoid
+        # thrashing IndexNow (e.g., when an author saves many edits in a row).
+        if (now - last_sub).total_seconds() < _SITEMAP_DIFF_REPUSH_MIN_AGE_S:
+            edited_skipped_dedupe += 1
+            continue
+        edited_candidates.append(u)
+
+    summary["edited_skipped_dedupe"] = edited_skipped_dedupe
+
+    # Per-run cap on edited re-pushes.
+    if len(edited_candidates) > _SITEMAP_DIFF_MAX_REPUSH:
+        summary["edited_skipped_capacity"] = len(edited_candidates) - _SITEMAP_DIFF_MAX_REPUSH
+        # Prefer the most recently edited URLs first so the freshest changes
+        # get re-notified when we hit the cap.
+        edited_candidates.sort(key=lambda x: mtimes.get(x) or now, reverse=True)
+        edited_candidates = edited_candidates[:_SITEMAP_DIFF_MAX_REPUSH]
+
+    to_queue = new_urls + [u for u in edited_candidates if u not in new_urls]
+    if to_queue:
+        await indexnow_batcher.queue(to_queue)
         await indexnow_batcher.flush_force(source=source)
     summary["new_queued"] = len(new_urls)
+    summary["edited_queued"] = len(edited_candidates)
 
     try:
         if await is_mongo_available():
             await db.indexnow_sitemap_diff_log.insert_one({
                 **summary,
-                "ran_at": datetime.now(timezone.utc),
+                "ran_at": now,
             })
     except Exception as e:
         logger.debug(f"sitemap diff log write failed: {e}")
 
     logger.info(
-        "IndexNow sitemap diff: total=%d submitted=%d new_queued=%d skipped=%d",
+        "IndexNow sitemap diff: total=%d submitted=%d new_queued=%d new_skipped=%d "
+        "edited_queued=%d edited_dedupe=%d edited_skipped=%d",
         summary["sitemap_total"], summary["already_submitted"],
         summary["new_queued"], summary["skipped_capacity"],
+        summary["edited_queued"], summary["edited_skipped_dedupe"],
+        summary["edited_skipped_capacity"],
     )
     return summary
 
