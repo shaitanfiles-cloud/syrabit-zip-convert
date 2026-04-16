@@ -133,6 +133,19 @@ export const adminLogout = () =>
 export const adminGetDashboard = (token) =>
   axios.get(`${API_BASE}/admin/dashboard`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminSeoHealthHistory = (token, limit = 168) =>
+  axios.get(`${API_BASE}/admin/seo/health-history`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { limit },
+  });
+
+export const adminSeoHealthSnapshotNow = (token) =>
+  axios.post(`${API_BASE}/admin/seo/health-snapshot`, {}, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+  });
+
 export const adminGetUsers = (token, params = {}) =>
   axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true, params });
 

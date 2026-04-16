@@ -13,7 +13,7 @@ import {
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
-import { adminGetDashboard, seoPipelineStatus, API_BASE } from '@/utils/api';
+import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, API_BASE } from '@/utils/api';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
@@ -272,6 +272,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [indexNowHistory, setIndexNowHistory] = useState(null);
   const [retryingEndpoint, setRetryingEndpoint] = useState(null);
   const [alertHistory, setAlertHistory] = useState(null);
+  const [seoHealth, setSeoHealth] = useState(null);
+  const [seoHealthRefreshing, setSeoHealthRefreshing] = useState(false);
   const [alertFilter, setAlertFilter] = useState('all');
   const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
   const [alertSettings, setAlertSettings] = useState(null);
@@ -461,7 +463,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         dashRes, metricsRes,
         ragAccRes, fallbackRes, vectorRes, latencyRes,
         queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes, indexNowRes, indexNowHistRes,
-        alertHistRes,
+        alertHistRes, seoHealthRes,
       ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
         axios.get(`${API_BASE}/admin/dashboard/metrics`, adminHdr(adminToken)),
@@ -478,6 +480,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/history?limit=20`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/alerts?limit=50`, adminHdr(adminToken)),
+        adminSeoHealthHistory(adminToken, 168),
       ]);
       const failed = [];
       if (dashRes.status === 'fulfilled') setData(dashRes.value.data); else { failed.push('overview'); setData(null); }
@@ -495,6 +498,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       if (indexNowRes.status === 'fulfilled') setIndexNowStats(indexNowRes.value.data); else { failed.push('indexnow'); setIndexNowStats(null); }
       if (indexNowHistRes.status === 'fulfilled') setIndexNowHistory(indexNowHistRes.value.data); else setIndexNowHistory(null);
       if (alertHistRes.status === 'fulfilled') setAlertHistory(alertHistRes.value.data); else { failed.push('alerts'); setAlertHistory(null); }
+      if (seoHealthRes.status === 'fulfilled') setSeoHealth(seoHealthRes.value.data); else { failed.push('seo-health'); setSeoHealth(null); }
       setFailedSections(failed);
       setLastRefresh(new Date());
     } catch (e) {
@@ -998,6 +1002,99 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   </span>
                 ))}
               </div>
+            </div>
+          )}
+        </GlassCard>
+      )}
+
+      {seoHealth?.banner && (
+        <div
+          className={`rounded-xl border-2 p-4 flex items-start gap-3 ${
+            seoHealth.banner.severity === 'critical'
+              ? 'bg-red-50 border-red-300 text-red-800'
+              : 'bg-amber-50 border-amber-300 text-amber-800'
+          }`}
+          role="alert"
+        >
+          <AlertTriangle size={20} className={seoHealth.banner.severity === 'critical' ? 'text-red-600' : 'text-amber-600'} />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold">
+              SEO health is {seoHealth.banner.severity.toUpperCase()}
+              {seoHealth.banner.consecutive >= 2 && (
+                <span className="ml-2 text-xs font-normal opacity-80">
+                  ({seoHealth.banner.consecutive} consecutive checks · alert email sent)
+                </span>
+              )}
+            </div>
+            <div className="text-xs mt-1 opacity-90">
+              Sitemaps valid: {seoHealth.banner.summary?.valid_sitemaps ?? 0}/{seoHealth.banner.summary?.total_sitemaps ?? 0}
+              {' · '}URL spot-checks OK: {seoHealth.banner.summary?.ok_url_checks ?? 0}/{seoHealth.banner.summary?.total_url_checks ?? 0}
+              {' ('}{seoHealth.banner.summary?.url_check_success_rate ?? 0}%{')'}
+              {seoHealth.banner.checked_at && ` · last checked ${new Date(seoHealth.banner.checked_at).toLocaleTimeString()}`}
+            </div>
+          </div>
+          <button
+            onClick={async () => {
+              setSeoHealthRefreshing(true);
+              try {
+                await adminSeoHealthSnapshotNow(adminToken);
+                const r = await adminSeoHealthHistory(adminToken, 168);
+                setSeoHealth(r.data);
+                toast.success('SEO health re-checked');
+              } catch (e) {
+                toast.error('Re-check failed');
+              } finally {
+                setSeoHealthRefreshing(false);
+              }
+            }}
+            disabled={seoHealthRefreshing}
+            className="text-xs px-3 py-1.5 rounded-md bg-white border border-current hover:bg-opacity-80 font-medium disabled:opacity-50"
+          >
+            {seoHealthRefreshing ? 'Checking…' : 'Re-check now'}
+          </button>
+        </div>
+      )}
+
+      {seoHealth?.history && seoHealth.history.length > 0 && (
+        <GlassCard className="p-5">
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <Globe size={16} className="text-cyan-500" />
+            <h3 className="text-gray-700 font-semibold">SEO Health Trend</h3>
+            <span className="text-[10px] text-gray-500">
+              last {seoHealth.history.length} hourly snapshots
+            </span>
+            <div className="ml-auto flex items-center gap-3 text-[10px] text-gray-500">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-emerald-500" /> ok</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-amber-500" /> degraded</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm bg-red-500" /> critical</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-[3px]">
+            {seoHealth.history.map((h, i) => {
+              const s = (h.status || '').toLowerCase();
+              const cls = s === 'ok'
+                ? 'bg-emerald-500'
+                : s === 'degraded'
+                ? 'bg-amber-500'
+                : s === 'critical'
+                ? 'bg-red-500'
+                : 'bg-gray-300';
+              const when = h.checked_at || h.recorded_at;
+              return (
+                <div
+                  key={i}
+                  className={`w-2.5 h-6 rounded-sm ${cls}`}
+                  title={`${s.toUpperCase()} · ${when ? new Date(when).toLocaleString() : ''} · ${h.summary?.valid_sitemaps ?? 0}/${h.summary?.total_sitemaps ?? 0} sitemaps`}
+                />
+              );
+            })}
+          </div>
+          {seoHealth.latest && (
+            <div className="text-[11px] text-gray-500 mt-3">
+              Latest: <span className="font-semibold text-gray-700">{(seoHealth.latest.status || 'unknown').toUpperCase()}</span>
+              {' · '}{seoHealth.latest.summary?.valid_sitemaps ?? 0}/{seoHealth.latest.summary?.total_sitemaps ?? 0} sitemaps valid
+              {' · '}{seoHealth.latest.summary?.url_check_success_rate ?? 0}% URL checks OK
+              {seoHealth.latest.checked_at && ` · ${new Date(seoHealth.latest.checked_at).toLocaleString()}`}
             </div>
           )}
         </GlassCard>

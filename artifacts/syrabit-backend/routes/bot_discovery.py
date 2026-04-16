@@ -1232,6 +1232,181 @@ async def seo_health_check():
     return results
 
 
+_seo_health_alert_last_fired: float = 0.0
+_SEO_HEALTH_ALERT_COOLDOWN_S = 6 * 3600
+_SEO_HEALTH_HISTORY_RETENTION_DAYS = 30
+
+
+async def _record_seo_health_snapshot() -> Dict:
+    """Run seo_health_check, persist a compact snapshot in db.seo_health_history.
+
+    Returns the snapshot doc (including status). Designed to be called every
+    hour by the background loop and on-demand via admin endpoint.
+    """
+    from deps import db, is_mongo_available
+
+    try:
+        report = await seo_health_check()
+    except Exception as exc:
+        logger.warning(f"seo_health_check raised during snapshot: {exc}")
+        report = {
+            "status": "critical",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "summary": {},
+            "error": str(exc)[:200],
+        }
+
+    summary = report.get("summary") or {}
+    snapshot = {
+        "status": report.get("status", "unknown"),
+        "checked_at": report.get("checked_at") or datetime.now(timezone.utc).isoformat(),
+        "recorded_at": datetime.now(timezone.utc),
+        "summary": {
+            "total_sitemaps": summary.get("total_sitemaps", 0),
+            "valid_sitemaps": summary.get("valid_sitemaps", 0),
+            "total_url_checks": summary.get("total_url_checks", 0),
+            "ok_url_checks": summary.get("ok_url_checks", 0),
+            "url_check_success_rate": summary.get("url_check_success_rate", 0),
+        },
+        "d1_status": (report.get("d1_sync") or {}).get("status", "unknown"),
+        "content_stats": report.get("content_stats", {}),
+        "error": report.get("error"),
+    }
+
+    if not await is_mongo_available():
+        return snapshot
+
+    try:
+        await db.seo_health_history.insert_one(dict(snapshot))
+        cutoff = datetime.now(timezone.utc) - timedelta(days=_SEO_HEALTH_HISTORY_RETENTION_DAYS)
+        await db.seo_health_history.delete_many({"recorded_at": {"$lt": cutoff}})
+    except Exception as exc:
+        logger.debug(f"Failed to persist seo health snapshot: {exc}")
+
+    return snapshot
+
+
+async def _seo_health_alert_loop():
+    """Hourly: snapshot /seo/health. If two most-recent snapshots are degraded
+    or critical, fire an admin alert via metrics._dispatch_alert (Resend email
+    + persisted to db.alerts for the dashboard banner)."""
+    global _seo_health_alert_last_fired
+
+    await asyncio.sleep(180)
+    while True:
+        try:
+            snapshot = await _record_seo_health_snapshot()
+            status = (snapshot.get("status") or "unknown").lower()
+
+            if status in ("degraded", "critical"):
+                from deps import db, is_mongo_available
+                consecutive_bad = 1
+                if await is_mongo_available():
+                    try:
+                        recent = await db.seo_health_history.find(
+                            {}, {"_id": 0, "status": 1, "recorded_at": 1}
+                        ).sort("recorded_at", -1).limit(2).to_list(2)
+                        if len(recent) >= 2 and (recent[1].get("status") or "").lower() in ("degraded", "critical"):
+                            consecutive_bad = 2
+                    except Exception:
+                        pass
+
+                now = time.time()
+                if consecutive_bad >= 2 and (now - _seo_health_alert_last_fired) >= _SEO_HEALTH_ALERT_COOLDOWN_S:
+                    try:
+                        from metrics import _dispatch_alert, _alert_last_fired as _ml
+                        _ml.pop("seo_health_degraded", None)
+                        s = snapshot.get("summary") or {}
+                        await _dispatch_alert(
+                            "seo_health_degraded",
+                            f"SEO health: {status.upper()}",
+                            (
+                                f"/api/seo/health reported {status.upper()} for two consecutive hourly checks. "
+                                f"Sitemaps valid: {s.get('valid_sitemaps', 0)}/{s.get('total_sitemaps', 0)} · "
+                                f"URL spot-checks OK: {s.get('ok_url_checks', 0)}/{s.get('total_url_checks', 0)} "
+                                f"({s.get('url_check_success_rate', 0)}%). "
+                                f"Inspect /api/seo/health and the SEO Manager dashboard."
+                            ),
+                            threshold_snapshot={
+                                "metric": "seo_health_status",
+                                "value": "ok",
+                                "actual": status,
+                                "valid_sitemaps": s.get("valid_sitemaps", 0),
+                                "total_sitemaps": s.get("total_sitemaps", 0),
+                                "url_check_success_rate": s.get("url_check_success_rate", 0),
+                            },
+                        )
+                        _seo_health_alert_last_fired = now
+                    except Exception as exc:
+                        logger.debug(f"Failed to dispatch seo_health_degraded alert: {exc}")
+        except Exception as exc:
+            logger.debug(f"SEO health alert loop iteration error: {exc}")
+
+        await asyncio.sleep(3600)
+
+
+@router.get("/admin/seo/health-history")
+async def admin_seo_health_history(
+    limit: int = Query(168, ge=1, le=720),
+    admin: dict = Depends(get_admin_user),
+):
+    """Return recent SEO health snapshots for trend analysis (default last 7 days
+    of hourly snapshots). Also returns latest status and a flag indicating whether
+    the dashboard should display a degraded banner."""
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return {"history": [], "latest": None, "banner": None}
+
+    try:
+        docs = await db.seo_health_history.find(
+            {}, {"_id": 0}
+        ).sort("recorded_at", -1).limit(limit).to_list(limit)
+    except Exception as exc:
+        logger.debug(f"seo health history fetch failed: {exc}")
+        docs = []
+
+    latest = docs[0] if docs else None
+    banner = None
+    if latest:
+        latest_status = (latest.get("status") or "").lower()
+        if latest_status in ("degraded", "critical"):
+            consecutive = 1
+            for d in docs[1:]:
+                if (d.get("status") or "").lower() in ("degraded", "critical"):
+                    consecutive += 1
+                else:
+                    break
+            banner = {
+                "severity": latest_status,
+                "consecutive": consecutive,
+                "checked_at": latest.get("checked_at"),
+                "summary": latest.get("summary", {}),
+            }
+
+    history_asc = list(reversed(docs))
+    for d in history_asc:
+        ra = d.get("recorded_at")
+        if isinstance(ra, datetime):
+            d["recorded_at"] = ra.isoformat()
+
+    return {
+        "history": history_asc,
+        "latest": latest,
+        "banner": banner,
+        "count": len(docs),
+    }
+
+
+@router.post("/admin/seo/health-snapshot")
+async def admin_seo_health_snapshot_now(admin: dict = Depends(get_admin_user)):
+    """Manually trigger an SEO health snapshot (does not bypass the alert
+    cooldown). Useful for verifying the system after fixing a regression."""
+    snapshot = await _record_seo_health_snapshot()
+    if isinstance(snapshot.get("recorded_at"), datetime):
+        snapshot["recorded_at"] = snapshot["recorded_at"].isoformat()
+    return snapshot
+
+
 @router.post("/admin/indexnow/push")
 async def admin_indexnow_push(admin: dict = Depends(get_admin_user)):
     from deps import db, is_mongo_available
