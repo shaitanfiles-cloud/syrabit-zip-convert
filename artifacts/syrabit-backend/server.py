@@ -455,6 +455,10 @@ async def lifespan(app):
                 name="ip_hash_date",
             )
             await db.bot_spoof_attempts.create_index(
+                [("ip_hash", 1), ("timestamp", -1)],
+                name="ip_hash_timestamp_desc",
+            )
+            await db.bot_spoof_attempts.create_index(
                 "timestamp", expireAfterSeconds=90 * 24 * 3600,
                 name="timestamp_ttl_90d",
             )
