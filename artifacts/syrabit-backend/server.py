@@ -380,6 +380,44 @@ async def lifespan(app):
                 name="source_pushed_at",
             )
 
+            try:
+                from datetime import datetime as _dt, timezone as _tz
+                from pymongo import UpdateOne as _PushLogUpdateOne
+                _pl_cursor = db.indexnow_push_log.find(
+                    {"pushed_at": {"$type": "string"}},
+                    {"_id": 1, "pushed_at": 1},
+                )
+                _pl_batch: list = []
+                _pl_total = 0
+                _BATCH_SIZE = 500
+                _epoch = _dt(2000, 1, 1, tzinfo=_tz.utc)
+                async for doc in _pl_cursor:
+                    raw = doc.get("pushed_at", "")
+                    try:
+                        cleaned = raw.replace("Z", "+00:00") if raw else ""
+                        parsed = _dt.fromisoformat(cleaned) if cleaned else _epoch
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=_tz.utc)
+                    except (ValueError, TypeError):
+                        parsed = _epoch
+                    _pl_batch.append(
+                        _PushLogUpdateOne({"_id": doc["_id"]}, {"$set": {"pushed_at": parsed}})
+                    )
+                    if len(_pl_batch) >= _BATCH_SIZE:
+                        await db.indexnow_push_log.bulk_write(_pl_batch)
+                        _pl_total += len(_pl_batch)
+                        _pl_batch = []
+                if _pl_batch:
+                    await db.indexnow_push_log.bulk_write(_pl_batch)
+                    _pl_total += len(_pl_batch)
+                if _pl_total:
+                    logger.info(f"Migrated pushed_at string->datetime for {_pl_total} indexnow_push_log docs")
+                _remaining = await db.indexnow_push_log.count_documents({"pushed_at": {"$type": "string"}})
+                if _remaining:
+                    logger.warning(f"indexnow_push_log: {_remaining} docs still have string pushed_at after migration")
+            except Exception as e:
+                logger.warning(f"indexnow_push_log pushed_at migration skipped: {e}")
+
             await db.indexnow_endpoint_health.create_index(
                 "endpoint", unique=True, name="endpoint_unique",
             )
