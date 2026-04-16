@@ -33,7 +33,7 @@ The project is structured as a pnpm workspace monorepo, with a React + Vite fron
 - **Content Feedback Loop:** Features auto-detection of thin chapters, an auto-heal endpoint with version history, and quality gates for content generation.
 - **Content Pipeline Batching:** Notes, MCQs, and flashcard generation run in parallel using `asyncio.gather` with a pipeline semaphore.
 - **Content Generation Prompt:** Generates detailed exam-ready study notes (2500-4000+ words) with specific formatting.
-- **Admin Analytics:** Dashboard displays RAG telemetry, chat latency, user counts, and content heatmaps.
+- **Admin Analytics:** Dashboard displays RAG telemetry, chat latency, user counts, content heatmaps, and historical alert log. Alert history panel shows past bot/system alerts from `db.alerts` with timestamp, type, severity, message, and acknowledge/dismiss functionality. Backend routes: `GET /admin/alerts`, `PATCH /admin/alerts/{id}/acknowledge`, `PATCH /admin/alerts/acknowledge-all`.
 - **AI Integration:** Integrates with Vertex AI / Gemini for various AI tasks including embeddings, translation, vision analysis, content enhancement, quality scoring, and SEO meta generation.
 - **SEO & Content Quality:** Implements prompt variants, title diversification, content-derived meta descriptions, and a quality scoring system, including Generative Engine Optimization (GEO) for AI answer injection and FAQ blocks.
 - **PYQ HTML Replica:** Processes PYQ PDFs via Gemini Vision OCR to create SEO-optimized, RAG-indexed HTML replicas.

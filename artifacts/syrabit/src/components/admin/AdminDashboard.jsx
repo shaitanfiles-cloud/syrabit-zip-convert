@@ -266,6 +266,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [botAnalytics, setBotAnalytics] = useState(null);
   const [indexNowStats, setIndexNowStats] = useState(null);
   const [indexNowHistory, setIndexNowHistory] = useState(null);
+  const [alertHistory, setAlertHistory] = useState(null);
+  const [alertFilter, setAlertFilter] = useState('all');
   const [failedSections, setFailedSections] = useState([]);
 
   const headers = { withCredentials: true };
@@ -282,6 +284,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         dashRes, metricsRes,
         ragAccRes, fallbackRes, vectorRes, latencyRes,
         queriesRes, tokenRes, funnelRes, coverageRes, pwaRes, botRes, indexNowRes, indexNowHistRes,
+        alertHistRes,
       ] = await Promise.allSettled([
         adminGetDashboard(adminToken),
         axios.get(`${API_BASE}/admin/dashboard/metrics`, adminHdr(adminToken)),
@@ -297,6 +300,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         axios.get(`${API_BASE}/admin/analytics/bot-traffic?days=30`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken)),
         axios.get(`${API_BASE}/admin/indexnow/history?limit=20`, adminHdr(adminToken)),
+        axios.get(`${API_BASE}/admin/alerts?limit=50`, adminHdr(adminToken)),
       ]);
       const failed = [];
       if (dashRes.status === 'fulfilled') setData(dashRes.value.data); else { failed.push('overview'); setData(null); }
@@ -313,6 +317,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       if (botRes.status === 'fulfilled') setBotAnalytics(botRes.value.data); else { failed.push('bot-analytics'); setBotAnalytics(null); }
       if (indexNowRes.status === 'fulfilled') setIndexNowStats(indexNowRes.value.data); else { failed.push('indexnow'); setIndexNowStats(null); }
       if (indexNowHistRes.status === 'fulfilled') setIndexNowHistory(indexNowHistRes.value.data); else setIndexNowHistory(null);
+      if (alertHistRes.status === 'fulfilled') setAlertHistory(alertHistRes.value.data); else { failed.push('alerts'); setAlertHistory(null); }
       setFailedSections(failed);
       setLastRefresh(new Date());
     } catch (e) {
@@ -339,6 +344,30 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       </div>
     );
   }
+
+  const handleAcknowledgeAlert = async (alertId) => {
+    try {
+      await axios.patch(`${API_BASE}/admin/alerts/${alertId}/acknowledge`, {}, adminHdr(adminToken));
+      setAlertHistory(prev => ({
+        ...prev,
+        alerts: prev.alerts.map(a => a._id === alertId ? { ...a, acknowledged: true } : a),
+      }));
+    } catch (e) {
+      log.error('Failed to acknowledge alert', { error: e.message });
+    }
+  };
+
+  const handleAcknowledgeAll = async () => {
+    try {
+      await axios.patch(`${API_BASE}/admin/alerts/acknowledge-all`, {}, adminHdr(adminToken));
+      setAlertHistory(prev => ({
+        ...prev,
+        alerts: prev.alerts.map(a => ({ ...a, acknowledged: true })),
+      }));
+    } catch (e) {
+      log.error('Failed to acknowledge all alerts', { error: e.message });
+    }
+  };
 
   const vs = data?.visitor_stats || {};
   const recentEvents = data?.recent_events || [];
@@ -701,6 +730,132 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 ))}
               </div>
             </div>
+          )}
+        </GlassCard>
+      )}
+
+      {alertHistory && (
+        <GlassCard className="p-5">
+          <div className="flex items-center gap-2 mb-4 flex-wrap">
+            <AlertTriangle size={16} className="text-orange-500" />
+            <h3 className="text-gray-700 font-semibold">Alert History</h3>
+            {alertHistory.alerts?.some(a => !a.acknowledged) && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-semibold">
+                {alertHistory.alerts.filter(a => !a.acknowledged).length} unacknowledged
+              </span>
+            )}
+            <div className="ml-auto flex items-center gap-2">
+              <select
+                className="text-[10px] border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-600"
+                value={alertFilter}
+                onChange={e => setAlertFilter(e.target.value)}
+              >
+                <option value="all">All alerts</option>
+                <option value="unacknowledged">Unacknowledged</option>
+                <option value="acknowledged">Acknowledged</option>
+              </select>
+              {alertHistory.alerts?.some(a => !a.acknowledged) && (
+                <button
+                  onClick={handleAcknowledgeAll}
+                  className="text-[10px] px-2.5 py-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors font-medium"
+                >
+                  Acknowledge All
+                </button>
+              )}
+            </div>
+          </div>
+
+          {(!alertHistory.alerts || alertHistory.alerts.length === 0) && (
+            <p className="text-center text-[11px] text-gray-400 py-6">No alerts have been triggered yet. Alerts appear here when system thresholds are exceeded.</p>
+          )}
+
+          {alertHistory.alerts?.length > 0 && (
+          <div className="space-y-2 max-h-[400px] overflow-y-auto">
+            {alertHistory.alerts
+              .filter(a => {
+                if (alertFilter === 'unacknowledged') return !a.acknowledged;
+                if (alertFilter === 'acknowledged') return a.acknowledged;
+                return true;
+              })
+              .map((alert) => {
+                const severityMap = {
+                  high_error_rate: 'red',
+                  high_latency: 'yellow',
+                  spoofed_bot_surge: 'red',
+                  high_fallback_rate: 'yellow',
+                };
+                const severity = severityMap[alert.type] || 'yellow';
+                const isRed = severity === 'red';
+                return (
+                  <div
+                    key={alert._id}
+                    className={`flex items-start gap-3 px-3 py-2.5 rounded-lg border text-xs transition-all ${
+                      alert.acknowledged
+                        ? 'bg-gray-50 border-gray-200 opacity-60'
+                        : isRed
+                          ? 'bg-red-50 border-red-200'
+                          : 'bg-amber-50 border-amber-200'
+                    }`}
+                  >
+                    <div className="mt-0.5 flex-shrink-0">
+                      {isRed
+                        ? <AlertCircle size={14} className="text-red-500" />
+                        : <AlertTriangle size={14} className="text-amber-500" />
+                      }
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap mb-0.5">
+                        <span className={`font-semibold ${alert.acknowledged ? 'text-gray-500' : isRed ? 'text-red-800' : 'text-amber-800'}`}>
+                          {alert.title}
+                        </span>
+                        <span className={`text-[9px] px-1.5 py-0.5 rounded font-medium ${
+                          isRed ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600'
+                        }`}>
+                          {isRed ? 'High' : 'Medium'}
+                        </span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 font-medium">
+                          {alert.type.replace(/_/g, ' ')}
+                        </span>
+                        {alert.acknowledged && (
+                          <CheckCircle size={12} className="text-emerald-500" />
+                        )}
+                      </div>
+                      <p className={`text-[11px] ${alert.acknowledged ? 'text-gray-400' : 'text-gray-600'} break-words`}>
+                        {alert.body}
+                      </p>
+                      <div className="flex items-center gap-3 mt-1.5">
+                        <span className="text-[10px] text-gray-400 flex items-center gap-1">
+                          <Clock size={10} />
+                          {alert.fired_at ? formatTimeAgo(alert.fired_at) : 'unknown'}
+                        </span>
+                        {alert.fired_at && (
+                          <span className="text-[9px] text-gray-300">
+                            {new Date(alert.fired_at).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    {!alert.acknowledged && (
+                      <button
+                        onClick={() => handleAcknowledgeAlert(alert._id)}
+                        className="flex-shrink-0 text-[10px] px-2 py-1 rounded-md bg-white border border-gray-200 text-gray-500 hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200 transition-colors"
+                        title="Acknowledge"
+                      >
+                        <CheckCircle size={12} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+          </div>
+
+          {alertHistory.alerts.filter(a => {
+            if (alertFilter === 'unacknowledged') return !a.acknowledged;
+            if (alertFilter === 'acknowledged') return a.acknowledged;
+            return true;
+          }).length === 0 && (
+            <p className="text-center text-[11px] text-gray-400 py-4">No alerts matching this filter</p>
+          )}
           )}
         </GlassCard>
       )}

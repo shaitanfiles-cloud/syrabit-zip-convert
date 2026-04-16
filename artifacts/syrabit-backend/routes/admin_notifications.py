@@ -429,3 +429,54 @@ async def admin_get_rate_stats(admin: dict = Depends(get_admin_user)):
         "cost_degraded": False,
     }
 
+
+@router.get("/admin/alerts")
+async def admin_get_alerts(
+    limit: int = Query(50, ge=1, le=200),
+    acknowledged: Optional[bool] = Query(None),
+    admin: dict = Depends(get_admin_user),
+):
+    try:
+        query: Dict[str, Any] = {}
+        if acknowledged is not None:
+            query["acknowledged"] = acknowledged
+        cursor = db.alerts.find(query).sort("fired_at", -1).limit(limit)
+        alerts = []
+        async for doc in cursor:
+            doc["_id"] = str(doc["_id"])
+            alerts.append(doc)
+        return {"alerts": alerts, "total": len(alerts)}
+    except Exception as exc:
+        logger.error(f"Failed to fetch alerts: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to fetch alerts")
+
+
+@router.patch("/admin/alerts/{alert_id}/acknowledge")
+async def admin_acknowledge_alert(
+    alert_id: str = Path(...),
+    admin: dict = Depends(get_admin_user),
+):
+    from bson import ObjectId as _ObjId
+    try:
+        oid = _ObjId(alert_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid alert ID")
+    result = await db.alerts.update_one(
+        {"_id": oid},
+        {"$set": {"acknowledged": True, "acknowledged_at": datetime.now(timezone.utc).isoformat(), "acknowledged_by": admin.get("email", "admin")}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return {"ok": True}
+
+
+@router.patch("/admin/alerts/acknowledge-all")
+async def admin_acknowledge_all_alerts(
+    admin: dict = Depends(get_admin_user),
+):
+    result = await db.alerts.update_many(
+        {"acknowledged": False},
+        {"$set": {"acknowledged": True, "acknowledged_at": datetime.now(timezone.utc).isoformat(), "acknowledged_by": admin.get("email", "admin")}},
+    )
+    return {"ok": True, "modified": result.modified_count}
+
