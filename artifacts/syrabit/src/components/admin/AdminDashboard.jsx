@@ -1171,40 +1171,48 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             </div>
           )}
 
-          {indexNowStats.health_history?.length > 0 && (
+          {indexNowStats.endpoint_health_history && Object.keys(indexNowStats.endpoint_health_history).length > 0 && (
             <div className="mt-4">
               <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Endpoint Health History</div>
-              <div className="space-y-1 max-h-40 overflow-y-auto">
-                {indexNowStats.health_history.map((evt, i) => {
-                  const host = evt.endpoint?.replace(/https?:\/\//, '').split('/')[0] || '?';
-                  const eventColor = evt.event === 'recovered'
-                    ? 'bg-green-400' : evt.event === 'dead_lettered'
-                    ? 'bg-red-400' : 'bg-amber-400';
-                  const eventLabel = evt.event === 'recovered'
-                    ? 'Recovered' : evt.event === 'dead_lettered'
-                    ? 'Dead-lettered' : 'Failure started';
-                  const ts = evt.timestamp ? new Date(evt.timestamp) : null;
-                  const ago = ts ? (() => {
-                    const diff = Math.floor((Date.now() - ts.getTime()) / 1000);
-                    if (diff < 60) return `${diff}s ago`;
-                    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-                    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-                    return `${Math.floor(diff / 86400)}d ago`;
-                  })() : '';
-                  const detail = evt.details?.previous_consecutive_failures
-                    ? `after ${evt.details.previous_consecutive_failures} failures`
-                    : evt.details?.consecutive_failures
-                    ? `${evt.details.consecutive_failures} consecutive`
-                    : evt.details?.backoff_seconds
-                    ? `backoff ${evt.details.backoff_seconds}s`
-                    : '';
+              <div className="space-y-3 max-h-48 overflow-y-auto">
+                {Object.entries(indexNowStats.endpoint_health_history).map(([endpoint, events]) => {
+                  const host = endpoint.replace(/https?:\/\//, '').split('/')[0] || '?';
                   return (
-                    <div key={i} className="flex items-center gap-2 text-[10px] py-1.5 px-2 rounded-lg bg-gray-50 border border-gray-100">
-                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${eventColor}`} />
-                      <span className="text-gray-500 min-w-[40px]">{ago}</span>
-                      <span className="text-gray-700 font-medium">{host}</span>
-                      <span className={evt.event === 'recovered' ? 'text-green-600' : evt.event === 'dead_lettered' ? 'text-red-600' : 'text-amber-600'}>{eventLabel}</span>
-                      {detail && <span className="text-gray-400">{detail}</span>}
+                    <div key={endpoint}>
+                      <div className="text-[10px] text-gray-600 font-semibold mb-1">{host}</div>
+                      <div className="space-y-1">
+                        {events.map((evt, i) => {
+                          const eventColor = evt.event === 'recovered'
+                            ? 'bg-green-400' : evt.event === 'dead_lettered'
+                            ? 'bg-red-400' : 'bg-amber-400';
+                          const eventLabel = evt.event === 'recovered'
+                            ? 'Recovered' : evt.event === 'dead_lettered'
+                            ? 'Dead-lettered' : 'Failure started';
+                          const ts = evt.timestamp ? new Date(evt.timestamp) : null;
+                          const ago = ts ? (() => {
+                            const diff = Math.floor((Date.now() - ts.getTime()) / 1000);
+                            if (diff < 60) return `${diff}s ago`;
+                            if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+                            if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+                            return `${Math.floor(diff / 86400)}d ago`;
+                          })() : '';
+                          const detail = evt.details?.previous_consecutive_failures
+                            ? `after ${evt.details.previous_consecutive_failures} failures`
+                            : evt.details?.consecutive_failures
+                            ? `${evt.details.consecutive_failures} consecutive`
+                            : evt.details?.backoff_seconds
+                            ? `backoff ${evt.details.backoff_seconds}s`
+                            : '';
+                          return (
+                            <div key={i} className="flex items-center gap-2 text-[10px] py-1.5 px-2 rounded-lg bg-gray-50 border border-gray-100">
+                              <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${eventColor}`} />
+                              <span className="text-gray-500 min-w-[40px]">{ago}</span>
+                              <span className={evt.event === 'recovered' ? 'text-green-600' : evt.event === 'dead_lettered' ? 'text-red-600' : 'text-amber-600'}>{eventLabel}</span>
+                              {detail && <span className="text-gray-400">{detail}</span>}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   );
                 })}

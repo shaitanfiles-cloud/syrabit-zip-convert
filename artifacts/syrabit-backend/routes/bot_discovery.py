@@ -65,7 +65,8 @@ class _EndpointHealth:
                 "total_failures=%d backoff_seconds=%d",
                 self.endpoint, self.consecutive_failures, self.total_failures, delay,
             )
-            _schedule_health_log(self.endpoint, "dead_lettered", {"consecutive_failures": self.consecutive_failures, "backoff_seconds": delay})
+            if self.consecutive_failures == _DEAD_LETTER_THRESHOLD:
+                _schedule_health_log(self.endpoint, "dead_lettered", {"consecutive_failures": self.consecutive_failures, "backoff_seconds": delay})
         else:
             logger.info(
                 "IndexNow endpoint backoff: endpoint=%s consecutive_failures=%d backoff_seconds=%d",
@@ -1100,16 +1101,34 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
             info["pending_retry_urls"] = retry_counts.get(ep, 0)
             endpoint_health_list.append(info)
 
-        health_history = []
+        per_endpoint_limit = 10
+        endpoint_health_history = {}
         try:
-            history_docs = await db.indexnow_health_log.find(
-                {}, {"_id": 0}
-            ).sort("timestamp", -1).limit(50).to_list(50)
-            for doc in history_docs:
-                ts = doc.get("timestamp")
-                if isinstance(ts, datetime):
-                    doc["timestamp"] = ts.isoformat()
-                health_history.append(doc)
+            pipeline = [
+                {"$sort": {"timestamp": -1}},
+                {"$group": {
+                    "_id": "$endpoint",
+                    "events": {"$push": {
+                        "event": "$event",
+                        "timestamp": "$timestamp",
+                        "details": "$details",
+                    }},
+                }},
+                {"$project": {
+                    "_id": 0,
+                    "endpoint": "$_id",
+                    "events": {"$slice": ["$events", per_endpoint_limit]},
+                }},
+            ]
+            agg_results = await db.indexnow_health_log.aggregate(pipeline).to_list(20)
+            for group in agg_results:
+                ep = group.get("endpoint", "unknown")
+                events = group.get("events", [])
+                for evt in events:
+                    ts = evt.get("timestamp")
+                    if isinstance(ts, datetime):
+                        evt["timestamp"] = ts.isoformat()
+                endpoint_health_history[ep] = events
         except Exception:
             pass
 
@@ -1122,7 +1141,7 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
             "today_urls_pushed": today_urls,
             "pending": await indexnow_batcher.get_pending_count(),
             "endpoint_health": endpoint_health_list,
-            "health_history": health_history,
+            "endpoint_health_history": endpoint_health_history,
         }
     except Exception as e:
         logger.error(f"IndexNow stats fetch failed: {e}")
