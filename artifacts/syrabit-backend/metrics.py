@@ -259,6 +259,7 @@ _ALERT_THRESHOLDS_DEFAULT = {
     "auto_block_expiry_hours": 168,
     "endpoint_down_minutes": 60,
     "endpoint_down_check_minutes": 15,
+    "collection_growth_per_day": 500,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,
@@ -503,6 +504,36 @@ async def _alerting_loop():
                         f"(primary: {primary_model})",
                         threshold_snapshot={"metric": "fallback_rate_pct", "value": _ALERT_THRESHOLDS["fallback_rate_pct"], "actual": round(fb_rate, 1)},
                     )
+
+            # ── 5. Collection size growth rate ──
+            try:
+                _growth_threshold = _ALERT_THRESHOLDS.get("collection_growth_per_day", 500)
+                if _growth_threshold > 0:
+                    _now_growth = datetime.now(timezone.utc)
+                    _yesterday = (_now_growth - timedelta(days=1)).strftime("%Y-%m-%d")
+                    _today_str = _now_growth.strftime("%Y-%m-%d")
+                    _snapshots = await db.collection_size_history.find(
+                        {"collection": "bot_spoof_attempts", "date": {"$in": [_yesterday, _today_str]}},
+                        {"_id": 0, "date": 1, "size": 1},
+                    ).to_list(2)
+                    if len(_snapshots) == 2:
+                        _snap_map = {s["date"]: s["size"] for s in _snapshots}
+                        if _yesterday in _snap_map and _today_str in _snap_map:
+                            _daily_growth = _snap_map[_today_str] - _snap_map[_yesterday]
+                            if _daily_growth > _growth_threshold:
+                                await _dispatch_alert(
+                                    "collection_growth_spike",
+                                    "Collection size growing fast",
+                                    f"bot_spoof_attempts grew by {_daily_growth:,} docs in 1 day "
+                                    f"(threshold: {_growth_threshold:,}/day)",
+                                    threshold_snapshot={
+                                        "metric": "collection_growth_per_day",
+                                        "value": _growth_threshold,
+                                        "actual": _daily_growth,
+                                    },
+                                )
+            except Exception:
+                pass
 
         except Exception as exc:
             logger.debug(f"Alerting loop error: {exc}")

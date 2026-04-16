@@ -44,7 +44,7 @@ function StatCard({ label, value, icon: Icon, color, pulse }) {
 
 function AlertThresholdPanel({ adminToken }) {
   const [settings, setSettings] = useState(null);
-  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, email: '', webhook_url: '' });
+  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '' });
   const [defaults, setDefaults] = useState(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -66,6 +66,7 @@ function AlertThresholdPanel({ adminToken }) {
           spoof_rpm: d.thresholds?.spoof_rpm ?? d.defaults?.thresholds?.spoof_rpm ?? 50,
           auto_block_threshold: d.thresholds?.auto_block_threshold ?? d.defaults?.thresholds?.auto_block_threshold ?? 100,
           auto_block_expiry_hours: d.thresholds?.auto_block_expiry_hours ?? d.defaults?.thresholds?.auto_block_expiry_hours ?? 168,
+          collection_growth_per_day: d.thresholds?.collection_growth_per_day ?? d.defaults?.thresholds?.collection_growth_per_day ?? 500,
           email: d.notification_channels?.email ?? '',
           webhook_url: d.notification_channels?.webhook_url ?? '',
         });
@@ -99,6 +100,14 @@ function AlertThresholdPanel({ adminToken }) {
       if (isNaN(num)) return 'Expiry hours is required';
       if (num < 0) return 'Must be zero or positive (0 = permanent)';
       if (num > 8760) return 'Maximum allowed is 8,760 hours (1 year)';
+      return null;
+    }
+    if (field === 'collection_growth_per_day') {
+      const num = Number(value);
+      if (isNaN(num)) return 'Growth threshold is required';
+      if (num < 0) return 'Must be zero or positive (0 = disabled)';
+      if (num > 1000000) return 'Maximum allowed value is 1,000,000';
+      if (!Number.isInteger(num)) return 'Must be a whole number';
       return null;
     }
     if (field === 'email') {
@@ -161,6 +170,7 @@ function AlertThresholdPanel({ adminToken }) {
     errors.spoof_rpm = validateField('spoof_rpm', form.spoof_rpm);
     errors.auto_block_threshold = validateField('auto_block_threshold', form.auto_block_threshold);
     errors.auto_block_expiry_hours = validateField('auto_block_expiry_hours', form.auto_block_expiry_hours);
+    errors.collection_growth_per_day = validateField('collection_growth_per_day', form.collection_growth_per_day);
     errors.email = validateField('email', form.email);
     errors.webhook_url = validateField('webhook_url', form.webhook_url);
     const cleaned = {};
@@ -181,6 +191,7 @@ function AlertThresholdPanel({ adminToken }) {
           spoof_rpm: Number(form.spoof_rpm),
           auto_block_threshold: Number(form.auto_block_threshold),
           auto_block_expiry_hours: Number(form.auto_block_expiry_hours),
+          collection_growth_per_day: Number(form.collection_growth_per_day),
         },
         expiration: settings?.expiration || {},
         notification_channels: {
@@ -208,6 +219,7 @@ function AlertThresholdPanel({ adminToken }) {
         spoof_rpm: defaults.thresholds?.spoof_rpm ?? 50,
         auto_block_threshold: defaults.thresholds?.auto_block_threshold ?? 100,
         auto_block_expiry_hours: defaults.thresholds?.auto_block_expiry_hours ?? 168,
+        collection_growth_per_day: defaults.thresholds?.collection_growth_per_day ?? 500,
         email: defaults.notification_channels?.email ?? '',
         webhook_url: defaults.notification_channels?.webhook_url ?? '',
       });
@@ -329,6 +341,33 @@ function AlertThresholdPanel({ adminToken }) {
             </div>
             {fieldErrors.auto_block_expiry_hours && (
               <p className="text-[11px] text-red-500 mt-1">{fieldErrors.auto_block_expiry_hours}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-[11px] font-medium text-gray-600 mb-1">
+              Collection Growth Alert (docs/day)
+            </label>
+            <p className="text-[10px] text-gray-400 mb-2">
+              Alert when daily collection growth exceeds this number. Set to 0 to disable (default: {defaults?.thresholds?.collection_growth_per_day ?? 500})
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min="0"
+                max="1000000"
+                value={form.collection_growth_per_day}
+                onChange={(e) => handleFieldChange('collection_growth_per_day', e.target.value)}
+                className={`w-32 text-sm border rounded-lg px-3 py-2 bg-white text-gray-900 focus:outline-none focus:ring-2 ${
+                  fieldErrors.collection_growth_per_day
+                    ? 'border-red-300 focus:ring-red-200 focus:border-red-300'
+                    : 'border-gray-200 focus:ring-violet-200 focus:border-violet-300'
+                }`}
+              />
+              <span className="text-xs text-gray-400">docs/day</span>
+            </div>
+            {fieldErrors.collection_growth_per_day && (
+              <p className="text-[11px] text-red-500 mt-1">{fieldErrors.collection_growth_per_day}</p>
             )}
           </div>
 
@@ -720,6 +759,7 @@ const ALERT_TYPE_OPTIONS = [
   { label: 'High Error Rate', value: 'high_error_rate' },
   { label: 'High Latency', value: 'high_latency' },
   { label: 'High Fallback Rate', value: 'high_fallback_rate' },
+  { label: 'Collection Growth Spike', value: 'collection_growth_spike' },
 ];
 
 const DATE_RANGE_OPTIONS = [
