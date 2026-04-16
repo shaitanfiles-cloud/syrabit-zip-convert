@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import {
   LayoutDashboard, GitBranch, BookOpen, Users,
   MessageSquare, TrendingUp, CreditCard, Bell, Key,
-  Shield, Settings, Activity, HeartPulse, LogOut,
+  Shield, ShieldAlert, Settings, Activity, HeartPulse, LogOut,
   ChevronLeft, ChevronRight, Loader2, Globe,
   Crown, Cpu, Layers, Zap, BarChart2, ThumbsUp,
   ExternalLink,
@@ -32,6 +32,7 @@ const AdminVertexPanel   = lazy(() => import('@/components/admin/AdminVertexPane
 const AdminAutomation    = lazy(() => import('@/components/admin/AdminAutomation'));
 const AdminIntelligence  = lazy(() => import('@/components/admin/AdminIntelligence'));
 const AdminFeedback      = lazy(() => import('@/components/admin/AdminFeedback'));
+const AdminBotSecurity   = lazy(() => import('@/components/admin/AdminBotSecurity'));
 
 const SECTIONS = [
   { id: 'dashboard',     icon: LayoutDashboard, label: 'Dashboard',        group: 'main'     },
@@ -53,6 +54,7 @@ const SECTIONS = [
   { id: 'settings',      icon: Settings,        label: 'Site Settings',     group: 'system'   },
   { id: 'ratelimits',    icon: Shield,          label: 'Rate Limits',       group: 'system'   },
   { id: 'activitylog',   icon: Activity,        label: 'Activity Log',      group: 'system'   },
+  { id: 'botsecurity',   icon: ShieldAlert,     label: 'Bot Security',      group: 'system'   },
   { id: 'health',        icon: HeartPulse,      label: 'Health / Uptime',   group: 'system'   },
 ];
 
@@ -85,6 +87,7 @@ const SECTION_COMPONENTS = {
   settings:      AdminSettings,
   ratelimits:    AdminRateLimits,
   activitylog:   AdminActivityLog,
+  botsecurity:   AdminBotSecurity,
   health:        AdminHealth,
   vertex:        AdminVertexPanel,
   intelligence:  AdminIntelligence,

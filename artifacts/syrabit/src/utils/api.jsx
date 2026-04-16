@@ -478,3 +478,6 @@ export const adminGetFeedbackStats = (token) =>
 
 export const adminPurgeAllCache = (token) =>
   axios.post(`${API_BASE}/admin/cache/purge-all`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminGetSpoofedBots = (token, days = 7) =>
+  axios.get(`${API_BASE}/admin/security/spoofed-bots`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
