@@ -256,6 +256,8 @@ _ALERT_THRESHOLDS_DEFAULT = {
     "fallback_rate_pct": 50.0,
     "spoof_rpm": 50,
     "auto_block_threshold": 100,
+    "endpoint_down_minutes": 60,
+    "endpoint_down_check_minutes": 15,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,

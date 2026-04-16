@@ -1029,6 +1029,28 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                     className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
                   />
                 </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1">Endpoint Down (min)</label>
+                  <input
+                    type="number"
+                    step="5"
+                    min="1"
+                    value={alertSettingsDraft.thresholds.endpoint_down_minutes ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, endpoint_down_minutes: parseInt(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1">EP Check Interval (min)</label>
+                  <input
+                    type="number"
+                    step="5"
+                    min="1"
+                    value={alertSettingsDraft.thresholds.endpoint_down_check_minutes ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, endpoint_down_check_minutes: parseInt(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
               </div>
               <div className="flex items-center gap-4 pt-2 border-t border-gray-200">
                 <label className="flex items-center gap-2 cursor-pointer">

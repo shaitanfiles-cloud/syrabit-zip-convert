@@ -203,17 +203,23 @@ async def load_endpoint_health_from_db():
         logger.warning("Failed to load endpoint health from database: %s", e)
 
 
-_ENDPOINT_DOWN_ALERT_THRESHOLD_SECONDS = 3600
-_ENDPOINT_DOWN_CHECK_INTERVAL_SECONDS = 900
 _endpoint_alert_last_fired: Dict[str, float] = {}
 _ENDPOINT_ALERT_COOLDOWN_S = 1800
 
 
+def _get_endpoint_down_thresholds():
+    from metrics import _ALERT_THRESHOLDS
+    down_min = int(_ALERT_THRESHOLDS.get("endpoint_down_minutes", 60))
+    check_min = int(_ALERT_THRESHOLDS.get("endpoint_down_check_minutes", 15))
+    return max(down_min, 1) * 60, max(check_min, 1) * 60
+
+
 async def _endpoint_health_alert_loop():
-    """Background loop: every 15 min, check for endpoints failing >1 hour and fire admin alerts."""
+    """Background loop: check for endpoints failing beyond configured threshold and fire admin alerts."""
     await asyncio.sleep(120)
     while True:
         try:
+            threshold_s, _ = _get_endpoint_down_thresholds()
             now = time.time()
             for ep, health in list(_endpoint_health.items()):
                 if health.consecutive_failures < _DEAD_LETTER_THRESHOLD:
@@ -221,7 +227,7 @@ async def _endpoint_health_alert_loop():
                 if not health.last_failure_time:
                     continue
                 down_duration = now - health.last_failure_time
-                if down_duration < _ENDPOINT_DOWN_ALERT_THRESHOLD_SECONDS:
+                if down_duration < threshold_s:
                     continue
                 if now - _endpoint_alert_last_fired.get(ep, 0) < _ENDPOINT_ALERT_COOLDOWN_S:
                     continue
@@ -238,7 +244,7 @@ async def _endpoint_health_alert_loop():
                         f"{datetime.fromtimestamp(health.last_success_time, tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC') if health.last_success_time else 'never'}.",
                         threshold_snapshot={
                             "metric": "endpoint_down_minutes",
-                            "value": _ENDPOINT_DOWN_ALERT_THRESHOLD_SECONDS // 60,
+                            "value": threshold_s // 60,
                             "actual": down_minutes,
                             "endpoint": ep,
                             "consecutive_failures": health.consecutive_failures,
@@ -254,7 +260,8 @@ async def _endpoint_health_alert_loop():
         except Exception as exc:
             logger.debug("Endpoint health alert loop error: %s", exc)
 
-        await asyncio.sleep(_ENDPOINT_DOWN_CHECK_INTERVAL_SECONDS)
+        _, check_interval_s = _get_endpoint_down_thresholds()
+        await asyncio.sleep(check_interval_s)
 
 
 def _xml_safe(text: str) -> str:
