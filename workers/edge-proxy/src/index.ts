@@ -61,24 +61,24 @@ const CACHEABLE_PREFIXES = [
 ];
 
 const CACHE_TTL: Record<string, number> = {
-  "/api/content/boards": 604800,
-  "/api/content/classes": 604800,
-  "/api/content/streams": 604800,
-  "/api/content/subjects": 604800,
-  "/api/content/chapters/": 604800,
-  "/api/content/chunks/": 604800,
-  "/api/content/library-bundle": 604800,
-  "/api/content/chapter-by-slug/": 604800,
-  "/api/content/topic/": 604800,
-  "/api/content/syllabus/": 604800,
+  "/api/content/boards": 3600,
+  "/api/content/classes": 3600,
+  "/api/content/streams": 3600,
+  "/api/content/subjects": 3600,
+  "/api/content/chapters/": 3600,
+  "/api/content/chunks/": 3600,
+  "/api/content/library-bundle": 300,
+  "/api/content/chapter-by-slug/": 3600,
+  "/api/content/topic/": 3600,
+  "/api/content/syllabus/": 3600,
   "/api/seo/keyword-index": 3600,
   "/api/seo/": 600,
-  "/api/pyq/": 604800,
-  "/api/notes/public": 604800,
-  "/api/mcq/": 604800,
+  "/api/pyq/": 3600,
+  "/api/notes/public": 3600,
+  "/api/mcq/": 3600,
   "/api/user/stats": 900,
   "/api/cms/articles": 900,
-  "/api/flashcards/": 604800,
+  "/api/flashcards/": 3600,
   "/api/sitemap": 86400,
   "/api/robots.txt": 86400,
 };
@@ -791,8 +791,13 @@ async function handleEdgePurge(
     const baseUrl = new URL(request.url).origin;
 
     if (body.purge_all) {
+      const purgeKeys: string[] = [];
       for (const prefix of CACHEABLE_PREFIXES) {
-        const cacheKey = new Request(`${baseUrl}${prefix}`, { method: "GET" });
+        purgeKeys.push(prefix);
+      }
+      purgeKeys.push("/api/content/library-bundle?slim=1");
+      for (const key of purgeKeys) {
+        const cacheKey = new Request(`${baseUrl}${key}`, { method: "GET" });
         const deleted = await cache.delete(cacheKey);
         if (deleted) purgedCount++;
       }

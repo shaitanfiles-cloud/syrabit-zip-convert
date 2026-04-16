@@ -106,12 +106,13 @@ export const useSavedSubjects = (user) =>
     enabled: !!user,
   });
 
-export const useLibraryBundle = () =>
+export const useLibraryBundle = (enabled = true) =>
   useQuery({
     queryKey: ['library-bundle'],
     queryFn: fetchLibraryBundle,
     staleTime: 30 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
+    enabled,
   });
 
 export const useLibraryBundleSlim = () =>

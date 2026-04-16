@@ -116,7 +116,15 @@ export default function LibraryPage() {
   const [activeFilter, setActiveFilter] = useState('all');
 
   const { data: slimBundle, isLoading: slimLoading } = useLibraryBundleSlim();
-  const { data: fullBundle, isFetching, refetch: refetchBundle } = useLibraryBundle();
+  const [chaptersReady, setChaptersReady] = useState(false);
+  useEffect(() => {
+    if (!slimBundle) return;
+    const id = requestIdleCallback
+      ? requestIdleCallback(() => setChaptersReady(true), { timeout: 2000 })
+      : setTimeout(() => setChaptersReady(true), 500);
+    return () => (requestIdleCallback ? cancelIdleCallback(id) : clearTimeout(id));
+  }, [slimBundle]);
+  const { data: fullBundle, isFetching, refetch: refetchBundle } = useLibraryBundle(chaptersReady);
 
   const bundle = fullBundle || slimBundle;
   const bundleLoading = slimLoading;
