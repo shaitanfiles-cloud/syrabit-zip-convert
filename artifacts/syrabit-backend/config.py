@@ -263,6 +263,18 @@ def _load_admin_accounts():
             for i in range(min(len(emails), len(passwords), len(names)))]
 
 ADMIN_ACCOUNTS = _load_admin_accounts()
+
+_is_dev = bool(os.environ.get('REPLIT_DEV_DOMAIN') or os.environ.get('REPL_ID'))
+_E2E_ADMIN = {
+    "email": "e2e-admin@syrabit.test",
+    "password": "e2e-test-admin-2026",
+    "name": "E2E Test Admin",
+}
+if _is_dev and not any(a["email"] == _E2E_ADMIN["email"] for a in ADMIN_ACCOUNTS):
+    ADMIN_ACCOUNTS.append(_E2E_ADMIN)
+    import logging as _adm_log
+    _adm_log.getLogger("config").info("Dev e2e test admin account added")
+
 ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
 ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
 
