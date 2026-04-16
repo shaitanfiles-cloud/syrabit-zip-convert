@@ -600,7 +600,7 @@ async def _cleanup_old_chime(admin_id: str):
     prefs = await get_admin_notification_prefs(admin_id)
     old_url = prefs.get("custom_chime_url") or ""
     old_path = _chime_storage_path_from_url(old_url)
-    if old_path:
+    if old_path and old_path.startswith(f"{_CHIME_PREFIX}/"):
         await asyncio.get_event_loop().run_in_executor(
             None, lambda: _chime_supabase_delete(old_path)
         )
