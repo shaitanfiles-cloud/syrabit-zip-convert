@@ -250,25 +250,37 @@ async def push_unsubscribe(data: dict, user: dict = Depends(get_current_user)):
 
 @router.post("/admin/push/backfill-roles")
 async def admin_backfill_push_roles(admin: dict = Depends(get_admin_user)):
-    """One-shot backfill: set the 'role' field on every push_subscriptions doc
-    that is missing it, by looking up the user's is_admin flag in db.users."""
-    subs_without_role = await db.push_subscriptions.find(
-        {"role": {"$exists": False}}, {"_id": 1, "user_id": 1}
+    """One-shot backfill: set role, is_admin, and admin_id on every
+    push_subscriptions doc missing any of these fields."""
+    subs_needing_backfill = await db.push_subscriptions.find(
+        {"$or": [
+            {"role": {"$exists": False}},
+            {"is_admin": {"$exists": False}},
+            {"admin_id": {"$exists": False}},
+        ]},
+        {"_id": 1, "user_id": 1},
     ).to_list(50000)
-    if not subs_without_role:
-        return {"backfilled": 0, "message": "All subscriptions already have a role"}
+    if not subs_needing_backfill:
+        return {"backfilled": 0, "message": "All subscriptions already have role/is_admin/admin_id"}
 
-    user_ids = list({s["user_id"] for s in subs_without_role if s.get("user_id")})
+    user_ids = list({s["user_id"] for s in subs_needing_backfill if s.get("user_id")})
     admin_users = await db.users.find(
         {"id": {"$in": user_ids}, "is_admin": True}, {"_id": 0, "id": 1}
     ).to_list(10000)
     admin_id_set = {str(u["id"]) for u in admin_users}
 
     updated = 0
-    for sub in subs_without_role:
-        role = "admin" if sub.get("user_id") in admin_id_set else "student"
+    for sub in subs_needing_backfill:
+        uid = sub.get("user_id", "")
+        is_admin = uid in admin_id_set
+        update_fields = {
+            "role": "admin" if is_admin else "student",
+            "is_admin": is_admin,
+        }
+        if is_admin:
+            update_fields["admin_id"] = uid
         await db.push_subscriptions.update_one(
-            {"_id": sub["_id"]}, {"$set": {"role": role}}
+            {"_id": sub["_id"]}, {"$set": update_fields}
         )
         updated += 1
     return {"backfilled": updated}
