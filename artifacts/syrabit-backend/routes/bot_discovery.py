@@ -2880,6 +2880,7 @@ async def _try_run_cf_bot_report_once(db, now_utc: datetime) -> dict:
         "zone_id": result["zone_id"],
         "data": result["data"],
         "wow": result["wow"],
+        "crosscheck": result.get("crosscheck"),
         "markdown": result["markdown"],
     }
     try:
@@ -3019,6 +3020,72 @@ async def _cf_bot_report_loop():
         await asyncio.sleep(_CF_BOT_REPORT_LOOP_SLEEP_S)
 
 
+@router.post("/admin/cf-bot-report/external-totals")
+async def admin_cf_bot_report_set_externals(
+    payload: dict,
+    admin: dict = Depends(get_admin_user),
+):
+    """Persist the week's Googlebot/Bingbot totals from Google Search
+    Console and Bing Webmaster Tools into the JSON sidecar. The next
+    weekly run (or manual trigger) will then render the comparison
+    table with divergence flags.
+
+    Expected payload:
+    ```json
+    {
+      "iso_week": "2026-W16",  // optional, defaults to current
+      "googlebot": {"requests": 4200, "source": "GSC Crawl stats"},
+      "bingbot":   {"requests":  900, "source": "BWT Crawl information"}
+    }
+    ```
+    Either `googlebot` or `bingbot` may be omitted; existing values for
+    the other bot are preserved.
+    """
+    import json as _json
+    from cf_bot_crosscheck import _default_external_totals_path
+
+    now_utc = datetime.now(timezone.utc)
+    iso_week = (payload.get("iso_week") or "").strip() or _iso_week_tag(now_utc)
+
+    path = _default_external_totals_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(f"[CF crosscheck] cannot create dir {path.parent}: {exc}")
+        raise HTTPException(status_code=500, detail="report_dir_unwritable")
+
+    raw: dict = {}
+    if path.exists():
+        try:
+            raw = _json.loads(path.read_text()) or {}
+        except (OSError, _json.JSONDecodeError) as exc:
+            logger.warning(f"[CF crosscheck] existing file unreadable: {exc}")
+            raw = {}
+    weeks = raw.setdefault("weeks", {})
+    entry = weeks.setdefault(iso_week, {})
+    for key in ("googlebot", "bingbot"):
+        val = payload.get(key)
+        if not val:
+            continue
+        try:
+            req = int(val.get("requests") or 0)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if req <= 0:
+            continue
+        entry[key] = {"requests": req, "source": str(val.get("source") or "")}
+
+    raw.setdefault("source", "Operator-supplied via /admin/cf-bot-report/external-totals")
+    try:
+        path.write_text(_json.dumps(raw, indent=2, sort_keys=True))
+    except OSError as exc:
+        logger.warning(f"[CF crosscheck] write failed: {exc}")
+        raise HTTPException(status_code=500, detail="externals_write_failed")
+
+    return {"stored": True, "iso_week": iso_week, "path": str(path),
+            "entry": entry}
+
+
 @router.get("/admin/cf-bot-report/latest")
 async def admin_cf_bot_report_latest(admin: dict = Depends(get_admin_user)):
     """Return the most recent stored weekly Cloudflare crawler report.
@@ -3068,6 +3135,7 @@ async def admin_cf_bot_report_run(admin: dict = Depends(get_admin_user)):
         "zone_id": result["zone_id"],
         "data": result["data"],
         "wow": result["wow"],
+        "crosscheck": result.get("crosscheck"),
         "markdown": result["markdown"],
         "manual": True,
     }

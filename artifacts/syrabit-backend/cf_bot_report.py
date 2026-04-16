@@ -292,7 +292,8 @@ def _fmt_bytes(n: int) -> str:
 
 def format_report_markdown(data: dict, *, since_iso: str, until_iso: str,
                             zone_id: str, generated_at: datetime,
-                            wow: Optional[dict] = None) -> str:
+                            wow: Optional[dict] = None,
+                            crosscheck_md: Optional[str] = None) -> str:
     """Render the per-UA report as the same markdown shape as the hand-run
     reports in `.local/reports/`."""
     totals = data.get("totals") or {"requests": 0, "bytes": 0, "bots": 0}
@@ -361,6 +362,11 @@ def format_report_markdown(data: dict, *, since_iso: str, until_iso: str,
                 lines.append("_No notable changes vs prior week (within thresholds)._")
         lines.append("")
 
+    if crosscheck_md:
+        # Emits its own `## Cross-check ...` heading and trailing newline.
+        lines.append(crosscheck_md.rstrip())
+        lines.append("")
+
     lines.append("## Per-crawler totals")
     lines.append("")
     lines.append("| Crawler | Requests | % of search bots | Bytes served | Cache hit % | Error rate |")
@@ -388,9 +394,17 @@ def format_report_markdown(data: dict, *, since_iso: str, until_iso: str,
 
 # ── Top-level entry ──────────────────────────────────────────────────────────
 
+def _iso_week_for(dt: datetime) -> str:
+    """Return the ISO year-week tag (e.g. `2026-W16`) for a datetime."""
+    iso_year, iso_week, _ = dt.isocalendar()
+    return f"{iso_year}-W{iso_week:02d}"
+
+
 async def generate_per_ua_report(*, days: int = 7,
                                   prior: Optional[dict] = None,
-                                  now: Optional[datetime] = None) -> Optional[dict]:
+                                  now: Optional[datetime] = None,
+                                  externals: Optional[dict] = None,
+                                  externals_path: Optional[str] = None) -> Optional[dict]:
     """End-to-end report generation. Returns
     ``{"data": agg, "wow": diff, "markdown": str, "since": iso, "until": iso}``
     or None when the Cloudflare credentials are missing/the API call fails.
@@ -415,13 +429,27 @@ async def generate_per_ua_report(*, days: int = 7,
     # `had_baseline=False` so the markdown explicitly notes "first run".
     # This avoids the silent "missing section" surprise on first-ever runs.
     wow = compose_wow_diff(data, prior)
+
+    # Cross-check Googlebot/Bingbot against the operator-supplied GSC/BWT
+    # totals for this ISO week. Section is always rendered (even when no
+    # externals are supplied) so readers always see the comparison —
+    # with either numbers or the "how to populate" stub.
+    from cf_bot_crosscheck import build_crosscheck_section
+    iso_week = _iso_week_for(end)
+    crosscheck = build_crosscheck_section(
+        data, iso_week, path=externals_path, externals=externals)
+
     md = format_report_markdown(
         data, since_iso=since_iso, until_iso=until_iso,
         zone_id=zone_id, generated_at=end, wow=wow,
+        crosscheck_md=crosscheck["markdown"],
     )
     return {
         "data": data,
         "wow": wow,
+        "crosscheck": {"rows": crosscheck["rows"],
+                       "externals": crosscheck["externals"],
+                       "iso_week": iso_week},
         "markdown": md,
         "since": since_iso,
         "until": until_iso,
