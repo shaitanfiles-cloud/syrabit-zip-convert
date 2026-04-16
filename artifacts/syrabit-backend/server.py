@@ -296,6 +296,11 @@ async def lifespan(app):
             await db.sessions.create_index([("start_time", -1)])
 
             await db.blocked_ips.create_index("ip_hash", unique=True)
+            await db.blocked_ips.create_index(
+                "expires_at", expireAfterSeconds=0,
+                name="expires_at_ttl",
+                partialFilterExpression={"expires_at": {"$exists": True}},
+            )
 
             await db.server_hits.create_index([("date", 1), ("is_bot", 1)])
             await db.server_hits.create_index([("ip_hash", 1), ("date", 1)])
