@@ -57,8 +57,11 @@ async def admin_update_settings(data: SettingsUpdate, admin: dict = Depends(get_
         current = await supa_get_settings() or {}
         red = update.get("crawl_coverage_red", current.get("crawl_coverage_red", 30))
         yellow = update.get("crawl_coverage_yellow", current.get("crawl_coverage_yellow", 50))
-        if red > yellow:
-            raise HTTPException(status_code=400, detail="Crawl coverage red threshold must be less than or equal to yellow threshold")
+        if red >= yellow:
+            raise HTTPException(
+                status_code=400,
+                detail=f"crawl_coverage_red ({red}) must be strictly less than crawl_coverage_yellow ({yellow})",
+            )
     if update:
         await supa_update_settings(update)
     return {"message": "Settings updated"}
