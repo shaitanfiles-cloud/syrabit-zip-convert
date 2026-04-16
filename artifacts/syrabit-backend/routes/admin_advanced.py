@@ -2899,7 +2899,8 @@ async def admin_block_trends(
     admin: dict = Depends(get_admin_user),
 ):
     now = datetime.now(timezone.utc)
-    start = now - timedelta(days=days)
+    today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start = today - timedelta(days=days - 1)
     try:
         blocks = await db.blocked_ips.find(
             {"blocked_at": {"$gte": start}},

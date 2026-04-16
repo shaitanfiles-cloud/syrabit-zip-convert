@@ -909,15 +909,16 @@ export default function AdminBotSecurity({ adminToken }) {
     setLoading(true);
     setError(null);
     try {
-      const [spoofRes, blockedRes, trendsRes] = await Promise.all([
+      const [spoofRes, blockedRes] = await Promise.all([
         adminGetSpoofedBots(adminToken, days),
         adminGetBlockedIps(adminToken),
-        adminGetBlockTrends(adminToken, 30),
       ]);
       setData(spoofRes.data);
       setBlockedIps(blockedRes.data?.blocked_ips || []);
       setDurationBreakdown(blockedRes.data?.duration_breakdown || null);
-      setBlockTrends(trendsRes.data?.series || []);
+      adminGetBlockTrends(adminToken, 30)
+        .then(res => setBlockTrends(res.data?.series || []))
+        .catch(() => setBlockTrends([]));
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to load spoofed bot data');
     } finally {
