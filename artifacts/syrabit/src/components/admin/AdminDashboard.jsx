@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { log } from '@/utils/logger';
 import AdminQuickLinks from './AdminQuickLinks';
 import {
@@ -7,7 +7,9 @@ import {
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
+  Volume2, VolumeX, Bell, BellOff,
 } from 'lucide-react';
+import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
 import { adminGetDashboard, seoPipelineStatus, API_BASE } from '@/utils/api';
 import {
@@ -273,6 +275,54 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [alertSettingsDraft, setAlertSettingsDraft] = useState(null);
   const [alertSettingsSaving, setAlertSettingsSaving] = useState(false);
   const [failedSections, setFailedSections] = useState([]);
+  const [alertSoundEnabled, setAlertSoundEnabled] = useState(() => {
+    try { return localStorage.getItem('syrabit_alert_sound') !== 'off'; } catch { return true; }
+  });
+  const prevAlertIdsRef = useRef(new Set());
+  const audioCtxRef = useRef(null);
+  const pushNotif = usePushNotifications();
+
+  const toggleAlertSound = useCallback(() => {
+    setAlertSoundEnabled(prev => {
+      const next = !prev;
+      try { localStorage.setItem('syrabit_alert_sound', next ? 'on' : 'off'); } catch {}
+      return next;
+    });
+  }, []);
+
+  const playAlertChime = useCallback(() => {
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      }
+      const ctx = audioCtxRef.current;
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, now);
+      osc.frequency.setValueAtTime(1100, now + 0.15);
+      osc.frequency.setValueAtTime(880, now + 0.3);
+      gain.gain.setValueAtTime(0.3, now);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+      osc.start(now);
+      osc.stop(now + 0.5);
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!alertHistory?.alerts || !alertSoundEnabled) return;
+    const currentUnack = alertHistory.alerts.filter(a => !a.acknowledged);
+    const currentIds = new Set(currentUnack.map(a => a._id));
+    const prevIds = prevAlertIdsRef.current;
+    const hasNew = currentUnack.some(a => !prevIds.has(a._id));
+    if (hasNew && prevIds.size > 0) {
+      playAlertChime();
+    }
+    prevAlertIdsRef.current = currentIds;
+  }, [alertHistory, alertSoundEnabled, playAlertChime]);
 
   const headers = { withCredentials: true };
   const adminHdr = (token) => {
@@ -787,6 +837,33 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               </span>
             )}
             <div className="ml-auto flex items-center gap-2">
+              <button
+                onClick={toggleAlertSound}
+                className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border transition-colors font-medium ${
+                  alertSoundEnabled
+                    ? 'bg-violet-50 text-violet-700 border-violet-200 hover:bg-violet-100'
+                    : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
+                }`}
+                title={alertSoundEnabled ? 'Alert sound on — click to mute' : 'Alert sound off — click to enable'}
+              >
+                {alertSoundEnabled ? <Volume2 size={11} /> : <VolumeX size={11} />}
+                {alertSoundEnabled ? 'Sound On' : 'Sound Off'}
+              </button>
+              {pushNotif.isSupported && (
+                <button
+                  onClick={pushNotif.subscribed ? pushNotif.unsubscribe : pushNotif.subscribe}
+                  disabled={pushNotif.loading}
+                  className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border transition-colors font-medium ${
+                    pushNotif.subscribed
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                      : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
+                  }`}
+                  title={pushNotif.subscribed ? 'Push notifications enabled — click to disable' : 'Enable browser push notifications for critical alerts'}
+                >
+                  {pushNotif.subscribed ? <Bell size={11} /> : <BellOff size={11} />}
+                  {pushNotif.loading ? 'Loading...' : pushNotif.subscribed ? 'Push On' : 'Push Off'}
+                </button>
+              )}
               <select
                 className="text-[10px] border border-gray-200 rounded-md px-2 py-1 bg-white text-gray-600"
                 value={alertFilter}

@@ -241,21 +241,41 @@ async function trimCache(cacheName, maxEntries) {
 
 self.addEventListener('push', (event) => {
   if (!event.data) return;
-  const data = event.data.json();
+  let data;
+  try {
+    data = event.data.json();
+  } catch {
+    data = { title: 'Syrabit.ai', body: event.data.text() };
+  }
+  const isCritical = data.severity === 'critical' || data.tag?.startsWith('critical-alert');
+  const options = {
+    body: data.body || 'New notification',
+    icon: data.icon || '/icons/icon-192x192.png',
+    badge: '/icons/icon-72x72.png',
+    tag: data.tag || 'syrabit-notification',
+    data: { url: data.url || '/' },
+    requireInteraction: isCritical,
+    vibrate: isCritical ? [200, 100, 200, 100, 200] : [200, 100, 200],
+  };
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Syrabit.ai', {
-      body: data.body || 'New notification',
-      icon: '/icons/icon-192x192.png',
-      badge: '/icons/icon-72x72.png',
-      data: { url: data.url || '/' },
-    })
+    self.registration.showNotification(data.title || 'Syrabit.ai', options)
   );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  const url = event.notification.data?.url || '/';
   event.waitUntil(
-    clients.openWindow(event.notification.data.url || '/')
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if (client.url.includes(url) && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) {
+        return self.clients.openWindow(url);
+      }
+    })
   );
 });
 

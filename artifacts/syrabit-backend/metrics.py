@@ -356,6 +356,22 @@ async def _dispatch_alert(alert_type: str, title: str, body: str):
     except Exception:
         pass
 
+    # 4) Browser push notification for critical (red-severity) alerts
+    _RED_ALERT_TYPES = {"high_error_rate", "spoofed_bot_surge"}
+    if alert_type in _RED_ALERT_TYPES:
+        try:
+            from routes.admin_notifications import _dispatch_push_to_all
+            asyncio.create_task(_dispatch_push_to_all({
+                "title": f"\u26a0\ufe0f {title}",
+                "body": body,
+                "icon": "/icons/icon-192.png",
+                "url": "/admin",
+                "tag": f"critical-alert-{alert_type}-{int(now)}",
+                "severity": "critical",
+            }))
+        except Exception as e:
+            logger.debug(f"Alert push dispatch failed: {e}")
+
 
 async def _alerting_loop():
     """Background loop: checks metrics every 2 minutes for alert conditions."""
