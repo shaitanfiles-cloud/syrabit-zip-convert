@@ -349,6 +349,7 @@ export default function AdminBotSecurity({ adminToken }) {
   const [days, setDays] = useState(7);
   const [blockedIps, setBlockedIps] = useState([]);
   const [actionLoading, setActionLoading] = useState({});
+  const [blockDurationMenu, setBlockDurationMenu] = useState(null);
 
   const blockedSet = new Set(blockedIps.map((b) => b.ip_hash));
 
@@ -373,11 +374,25 @@ export default function AdminBotSecurity({ adminToken }) {
     fetchData();
   }, [fetchData]);
 
-  const handleBlock = async (ipHash) => {
+  const BLOCK_DURATIONS = [
+    { label: '1 hour', hours: 1 },
+    { label: '6 hours', hours: 6 },
+    { label: '24 hours', hours: 24 },
+    { label: '7 days', hours: 168 },
+    { label: '30 days', hours: 720 },
+    { label: 'Permanent', hours: null },
+  ];
+
+  const handleBlock = async (ipHash, expiresIn = null) => {
+    setBlockDurationMenu(null);
     setActionLoading((prev) => ({ ...prev, [ipHash]: 'blocking' }));
     try {
-      await adminBlockIp(adminToken, ipHash);
-      setBlockedIps((prev) => [...prev, { ip_hash: ipHash, blocked_at: new Date().toISOString(), reason: 'repeat_spoof_offender' }]);
+      await adminBlockIp(adminToken, ipHash, 'repeat_spoof_offender', expiresIn);
+      const entry = { ip_hash: ipHash, blocked_at: new Date().toISOString(), reason: 'repeat_spoof_offender' };
+      if (expiresIn) {
+        entry.expires_at = new Date(Date.now() + expiresIn * 3600000).toISOString();
+      }
+      setBlockedIps((prev) => [...prev, entry]);
     } catch (err) {
       alert(err.response?.data?.detail || 'Failed to block IP');
     } finally {
@@ -655,14 +670,29 @@ export default function AdminBotSecurity({ adminToken }) {
                               Unblock
                             </button>
                           ) : (
-                            <button
-                              onClick={() => handleBlock(o.ip_hash)}
-                              disabled={!!busy}
-                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
-                            >
-                              {busy === 'blocking' ? <Loader2 size={10} className="animate-spin" /> : <Ban size={10} />}
-                              Block
-                            </button>
+                            <div className="relative">
+                              <button
+                                onClick={() => setBlockDurationMenu(blockDurationMenu === o.ip_hash ? null : o.ip_hash)}
+                                disabled={!!busy}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+                              >
+                                {busy === 'blocking' ? <Loader2 size={10} className="animate-spin" /> : <Ban size={10} />}
+                                Block
+                              </button>
+                              {blockDurationMenu === o.ip_hash && (
+                                <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[120px]">
+                                  {BLOCK_DURATIONS.map((d) => (
+                                    <button
+                                      key={d.label}
+                                      onClick={() => handleBlock(o.ip_hash, d.hours)}
+                                      className="block w-full text-left px-3 py-1.5 text-[11px] text-gray-700 hover:bg-gray-50 transition-colors"
+                                    >
+                                      {d.label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
                           )}
                         </td>
                       </tr>
@@ -693,6 +723,7 @@ export default function AdminBotSecurity({ adminToken }) {
                   <th className="text-left px-5 py-2 font-medium">IP Hash</th>
                   <th className="text-left px-5 py-2 font-medium">Reason</th>
                   <th className="text-left px-5 py-2 font-medium">Blocked At</th>
+                  <th className="text-left px-5 py-2 font-medium">Expires</th>
                   <th className="text-left px-5 py-2 font-medium">Blocked By</th>
                   <th className="text-center px-5 py-2 font-medium">Action</th>
                 </tr>
@@ -708,6 +739,17 @@ export default function AdminBotSecurity({ adminToken }) {
                       <td className="px-5 py-2 text-gray-500">{b.reason || '—'}</td>
                       <td className="px-5 py-2 text-gray-500 whitespace-nowrap">
                         {b.blocked_at ? new Date(b.blocked_at).toLocaleString() : '—'}
+                      </td>
+                      <td className="px-5 py-2 whitespace-nowrap">
+                        {b.expires_at ? (
+                          new Date(b.expires_at) <= new Date() ? (
+                            <span className="text-amber-600 text-[10px] font-medium">Expired</span>
+                          ) : (
+                            <span className="text-gray-500">{new Date(b.expires_at).toLocaleString()}</span>
+                          )
+                        ) : (
+                          <span className="text-gray-400 text-[10px]">Permanent</span>
+                        )}
                       </td>
                       <td className="px-5 py-2 text-gray-500">{b.blocked_by || '—'}</td>
                       <td className="px-5 py-2 text-center">

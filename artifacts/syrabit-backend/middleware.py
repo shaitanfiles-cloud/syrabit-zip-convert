@@ -91,8 +91,16 @@ async def _refresh_blocked_ip_cache():
     try:
         from deps import db, is_mongo_available
         if await is_mongo_available():
-            docs = await db.blocked_ips.find({}, {"ip_hash": 1, "_id": 0}).to_list(10000)
-            new_set = {d["ip_hash"] for d in docs if d.get("ip_hash")}
+            docs = await db.blocked_ips.find({}, {"ip_hash": 1, "expires_at": 1, "_id": 0}).to_list(10000)
+            now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            new_set = set()
+            for d in docs:
+                if not d.get("ip_hash"):
+                    continue
+                ea = d.get("expires_at")
+                if ea is not None and ea <= now:
+                    continue
+                new_set.add(d["ip_hash"])
             with _blocked_ip_lock:
                 changed = new_set != _blocked_ip_hashes
                 _blocked_ip_hashes.clear()
@@ -104,11 +112,28 @@ async def _refresh_blocked_ip_cache():
 
 
 _BLOCKED_IP_REFRESH_INTERVAL = 10
+_EXPIRED_IP_CLEANUP_COUNTER = 0
+
+async def _cleanup_expired_blocked_ips():
+    try:
+        from deps import db, is_mongo_available
+        if await is_mongo_available():
+            now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            result = await db.blocked_ips.delete_many({"expires_at": {"$lte": now}})
+            if result.deleted_count > 0:
+                logger.info(f"Cleaned up {result.deleted_count} expired IP block(s)")
+    except Exception as e:
+        logger.debug(f"expired IP cleanup failed: {e}")
 
 async def _blocked_ip_refresh_loop():
+    global _EXPIRED_IP_CLEANUP_COUNTER
     while True:
         try:
             await _refresh_blocked_ip_cache()
+            _EXPIRED_IP_CLEANUP_COUNTER += 1
+            if _EXPIRED_IP_CLEANUP_COUNTER >= 30:
+                _EXPIRED_IP_CLEANUP_COUNTER = 0
+                await _cleanup_expired_blocked_ips()
         except Exception as e:
             logger.debug(f"blocked IP refresh loop error: {e}")
         await asyncio.sleep(_BLOCKED_IP_REFRESH_INTERVAL)

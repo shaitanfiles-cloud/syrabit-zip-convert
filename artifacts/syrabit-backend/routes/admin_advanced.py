@@ -2770,6 +2770,7 @@ async def admin_list_blocked_ips(
 async def admin_block_ip(
     ip_hash: str = Body(..., embed=True),
     reason: str = Body("repeat_spoof_offender", embed=True),
+    expires_in: float | None = Body(None, embed=True),
     admin: dict = Depends(get_admin_user),
 ):
     if not ip_hash or len(ip_hash) < 4:
@@ -2777,16 +2778,19 @@ async def admin_block_ip(
     existing = await db.blocked_ips.find_one({"ip_hash": ip_hash})
     if existing:
         raise HTTPException(409, "IP already blocked")
+    now = datetime.now(timezone.utc)
     doc = {
         "ip_hash": ip_hash,
         "reason": reason,
-        "blocked_at": datetime.now(timezone.utc),
+        "blocked_at": now,
         "blocked_by": admin.get("email", "admin"),
     }
+    if expires_in is not None and expires_in > 0:
+        doc["expires_at"] = now + timedelta(hours=float(expires_in))
     await db.blocked_ips.insert_one(doc)
     from middleware import _refresh_blocked_ip_cache
     await _refresh_blocked_ip_cache()
-    logger.info(f"BLOCK_IP ip_hash={ip_hash} by={admin.get('email')}")
+    logger.info(f"BLOCK_IP ip_hash={ip_hash} expires_in={expires_in}h by={admin.get('email')}")
     return {"ok": True, "ip_hash": ip_hash}
 
 
