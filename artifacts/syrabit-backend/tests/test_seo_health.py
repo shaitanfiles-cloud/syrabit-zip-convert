@@ -50,17 +50,13 @@ class _FakeAsyncClient:
         return False
 
 
-def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro) if False else asyncio.run(coro)
-
-
 def test_seo_health_ok_response_shape():
     fake = _FakeAsyncClient()
     fake.get.return_value = _mock_response(200, VALID_SITEMAP_XML)
     fake.head.return_value = _mock_response(200)
 
     with patch("httpx.AsyncClient", lambda *a, **kw: fake):
-        result = _run(bot_discovery.seo_health_check())
+        result = asyncio.run(bot_discovery.seo_health_check())
 
     assert result["status"] == "ok"
     assert "sitemaps" in result
@@ -81,7 +77,7 @@ def test_seo_health_marks_critical_when_most_sitemaps_invalid():
     fake.head.return_value = _mock_response(500)
 
     with patch("httpx.AsyncClient", lambda *a, **kw: fake):
-        result = _run(bot_discovery.seo_health_check())
+        result = asyncio.run(bot_discovery.seo_health_check())
 
     assert result["status"] == "critical"
     assert result["summary"]["valid_sitemaps"] == 0
@@ -98,7 +94,7 @@ def test_seo_health_degraded_when_some_url_checks_fail():
     fake.head.return_value = _mock_response(404)
 
     with patch("httpx.AsyncClient", lambda *a, **kw: fake):
-        result = _run(bot_discovery.seo_health_check())
+        result = asyncio.run(bot_discovery.seo_health_check())
 
     assert result["status"] == "degraded"
     assert result["summary"]["valid_sitemaps"] == result["summary"]["total_sitemaps"]
