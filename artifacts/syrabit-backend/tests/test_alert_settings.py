@@ -562,11 +562,13 @@ class TestAlertSettingsRoundTrip:
              patch("routes.admin_notifications.db", mongo_db):
             app_client.put("/admin/alert-settings", json={
                 "thresholds": {"latency_p95_ms": 2000},
+                "expiration": {"enabled": True, "days": 30},
                 "notification_channels": {"email": "first@example.com"},
             })
 
             app_client.put("/admin/alert-settings", json={
                 "thresholds": {"latency_p95_ms": 9000, "error_rate_pct": 15.0},
+                "expiration": {"enabled": False, "days": 7},
                 "notification_channels": {"email": "second@example.com", "webhook_url": "https://hooks.test/v2"},
             })
 
@@ -578,6 +580,8 @@ class TestAlertSettingsRoundTrip:
 
         assert data["thresholds"]["latency_p95_ms"] == 9000
         assert data["thresholds"]["error_rate_pct"] == 15.0
+        assert data["expiration"]["enabled"] is False
+        assert data["expiration"]["days"] == 7
         assert data["notification_channels"]["email"] == "second@example.com"
         assert data["notification_channels"]["webhook_url"] == "https://hooks.test/v2"
 
