@@ -1270,6 +1270,21 @@ async def _collect_edited_url_mtimes(urls: List[str]) -> Dict[str, datetime]:
     return out
 
 
+async def _ping_google_sitemap(
+    sitemap_url: str = f"{BASE_URL}/sitemap-index.xml",
+) -> dict:
+    """SEO Phase C helper — delegate to `google_indexing_client.ping_sitemap`.
+    Kept as a thin wrapper in this module so the sitemap-diff loop and the
+    admin endpoints have a stable local name, and so tests can monkeypatch
+    it via `routes.bot_discovery._ping_google_sitemap`."""
+    try:
+        from google_indexing_client import ping_sitemap
+    except Exception as e:  # pragma: no cover — module is always importable
+        logger.debug(f"google sitemap ping: client import failed: {e}")
+        return {"status": "error", "reason": "import_failed"}
+    return await ping_sitemap(sitemap_url)
+
+
 async def diff_sitemap_against_submitted(source: str = "sitemap_diff") -> dict:
     """Find URLs in the current sitemap that either have never been pushed to
     IndexNow, or whose backing content has been meaningfully edited since the
@@ -1360,6 +1375,19 @@ async def diff_sitemap_against_submitted(source: str = "sitemap_diff") -> dict:
         await indexnow_batcher.flush_force(source=source)
     summary["new_queued"] = len(new_urls)
     summary["edited_queued"] = len(edited_candidates)
+
+    # SEO Phase C: when sitemap-diff surfaced any change, ping Google's
+    # sitemap endpoint so Googlebot re-fetches the sitemap index sooner
+    # than its natural ~24-72h polling cadence. Free, unauthenticated,
+    # and failure-tolerant — never raises.
+    summary["google_sitemap_ping"] = "skipped"
+    if to_queue:
+        try:
+            ping_result = await _ping_google_sitemap()
+            summary["google_sitemap_ping"] = ping_result.get("status", "skipped")
+        except Exception as e:
+            logger.debug(f"sitemap diff: google sitemap ping failed: {e}")
+            summary["google_sitemap_ping"] = "error"
 
     try:
         if await is_mongo_available():
@@ -2408,6 +2436,32 @@ async def admin_seo_fanout_recent(
         "enabled": is_enabled(),
         "events": recent_fanout_events(limit=limit),
     }
+
+
+@router.get("/admin/seo/google-indexing-stats")
+async def admin_seo_google_indexing_stats(
+    admin: dict = Depends(get_admin_user),
+):
+    """SEO Phase C — return today's Google Indexing API counters
+    (submissions, 2xx/4xx/5xx, quota remaining) plus sitemap-ping stats
+    and service-account-load status. Used by the admin dashboard to
+    verify that URL_UPDATED notifications are firing and to spot quota
+    problems before they silently drop submissions."""
+    try:
+        from google_indexing_client import get_stats
+    except Exception as e:
+        return {"enabled": False, "error": str(e)}
+    return get_stats()
+
+
+@router.post("/admin/seo/google-sitemap-ping")
+async def admin_seo_google_sitemap_ping(
+    admin: dict = Depends(get_admin_user),
+):
+    """Manual trigger for the free Google sitemap-ping endpoint. Useful
+    when an operator wants to nudge Google after a bulk content push
+    without waiting for the nightly sitemap-diff loop."""
+    return await _ping_google_sitemap()
 
 
 @router.get("/admin/seo/health-history")

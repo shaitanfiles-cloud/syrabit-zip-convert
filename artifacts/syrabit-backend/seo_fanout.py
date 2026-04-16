@@ -11,6 +11,7 @@ Signals fired per page:
   1. IndexNow queue + flush (Bing, Yandex)               — bot_discovery
   2. Cloudflare cache purge for the page + ancestors     — cloudflare_client
   3. Synthetic Googlebot-UA GET to populate BOT_HTML_CACHE — bot_discovery
+  4. Google Indexing API URL_UPDATED (Phase C)           — google_indexing_client
 
 All three run as fire-and-forget background tasks; failures are logged
 but never raise back to the generator.
@@ -111,6 +112,18 @@ async def _do_prewarm(urls: list[str]) -> bool:
     return await prewarm_bot_cache(urls)
 
 
+async def _do_google_indexing(url: str, source: str) -> bool:
+    """Notify Google Indexing API (Phase C). Returns True on 2xx, False on
+    any skip/error so the ring-buffer status reflects reality."""
+    try:
+        from google_indexing_client import notify_url_updated
+    except Exception as e:  # pragma: no cover — import is trivially present
+        logger.debug(f"seo_fanout: google_indexing_client import failed: {e}")
+        return False
+    res = await notify_url_updated(url, source=source)
+    return (res or {}).get("status") == "ok"
+
+
 async def _run_fanout(url: str, parent_subject_url: Optional[str],
                       page_type: str, source: str, event: dict) -> None:
     try:
@@ -118,6 +131,7 @@ async def _run_fanout(url: str, parent_subject_url: Optional[str],
             _do_indexnow(url, source),
             _do_cache_purge(url, parent_subject_url, page_type),
             _do_prewarm([u for u in [url, parent_subject_url] if u]),
+            _do_google_indexing(url, source),
             return_exceptions=True,
         )
     except Exception as e:  # defensive: gather() shouldn't raise here
@@ -129,10 +143,13 @@ async def _run_fanout(url: str, parent_subject_url: Optional[str],
     event["indexnow"] = _ok(results[0])
     event["cache_purge"] = _ok(results[1])
     event["prewarm"] = _ok(results[2])
+    event["google_indexing"] = _ok(results[3])
     event["completed_at"] = datetime.now(timezone.utc).isoformat()
     logger.info(
-        "seo_fanout: url=%s indexnow=%s cache_purge=%s prewarm=%s source=%s",
-        url, event["indexnow"], event["cache_purge"], event["prewarm"], source,
+        "seo_fanout: url=%s indexnow=%s cache_purge=%s prewarm=%s "
+        "google_indexing=%s source=%s",
+        url, event["indexnow"], event["cache_purge"], event["prewarm"],
+        event["google_indexing"], source,
     )
 
 
