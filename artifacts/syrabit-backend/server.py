@@ -456,6 +456,12 @@ async def lifespan(app):
                 name="endpoint_timestamp",
             )
 
+            await db.collection_size_history.create_index(
+                [("collection", 1), ("date", 1)],
+                unique=True,
+                name="collection_date_unique",
+            )
+
             await db.bot_spoof_attempts.create_index(
                 [("date", 1), ("claimed_bot", 1)],
                 name="date_claimed_bot",
@@ -557,6 +563,8 @@ async def lifespan(app):
     asyncio.create_task(_endpoint_health_alert_loop())
     from middleware import _init_blocked_ip_cache
     asyncio.create_task(_init_blocked_ip_cache())
+    from routes.admin_advanced import _collection_size_snapshot_loop
+    asyncio.create_task(_collection_size_snapshot_loop())
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")

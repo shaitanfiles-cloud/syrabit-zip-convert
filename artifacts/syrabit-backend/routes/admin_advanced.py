@@ -2857,6 +2857,68 @@ async def admin_ttl_monitor(
         raise HTTPException(status_code=500, detail="Failed to fetch TTL monitoring data")
 
 
+async def _record_collection_size_snapshot():
+    try:
+        now = datetime.now(timezone.utc)
+        today_str = now.strftime("%Y-%m-%d")
+        total = await db.bot_spoof_attempts.count_documents({})
+        await db.collection_size_history.update_one(
+            {"date": today_str, "collection": "bot_spoof_attempts"},
+            {"$set": {
+                "size": total,
+                "recorded_at": now,
+            }},
+            upsert=True,
+        )
+        logger.info(f"Collection size snapshot recorded: bot_spoof_attempts={total} on {today_str}")
+    except Exception as exc:
+        logger.warning(f"Collection size snapshot failed: {exc}")
+
+
+async def _collection_size_snapshot_loop():
+    await asyncio.sleep(120)
+    while True:
+        try:
+            await _record_collection_size_snapshot()
+        except Exception as exc:
+            logger.warning(f"Collection size snapshot loop error: {exc}")
+        await asyncio.sleep(24 * 3600)
+
+
+@router.get("/admin/security/collection-size-history")
+async def admin_collection_size_history(
+    days: int = Query(90, ge=7, le=365),
+    admin: dict = Depends(get_admin_user),
+):
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        docs = await db.collection_size_history.find(
+            {"collection": "bot_spoof_attempts", "date": {"$gte": cutoff}},
+            {"_id": 0, "date": 1, "size": 1},
+        ).sort("date", 1).to_list(365)
+
+        growth_rate = None
+        if len(docs) >= 2:
+            first = docs[0]
+            last = docs[-1]
+            try:
+                d0 = datetime.strptime(first["date"], "%Y-%m-%d")
+                d1 = datetime.strptime(last["date"], "%Y-%m-%d")
+                span_days = max((d1 - d0).days, 1)
+            except (ValueError, KeyError):
+                span_days = max(len(docs) - 1, 1)
+            growth_rate = round((last["size"] - first["size"]) / span_days, 1)
+
+        return {
+            "history": docs,
+            "days": days,
+            "growth_rate_per_day": growth_rate,
+        }
+    except Exception as exc:
+        logger.error(f"Collection size history error: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to fetch collection size history")
+
+
 @router.get("/admin/security/blocked-ips")
 async def admin_list_blocked_ips(
     admin: dict = Depends(get_admin_user),

@@ -497,6 +497,9 @@ export const adminUnblockIp = (token, ip_hash) =>
 export const adminGetTtlMonitor = (token) =>
   axios.get(`${API_BASE}/admin/security/ttl-monitor`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminGetCollectionSizeHistory = (token, days = 90) =>
+  axios.get(`${API_BASE}/admin/security/collection-size-history`, { params: { days }, headers: adminHeaders(token), withCredentials: true });
+
 export const adminGetAlertSettings = (token) =>
   axios.get(`${API_BASE}/admin/alert-settings`, { headers: adminHeaders(token), withCredentials: true });
 

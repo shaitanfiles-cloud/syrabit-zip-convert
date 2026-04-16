@@ -786,3 +786,38 @@ class TestPushNotificationThresholdContext:
         mock_push.assert_called_once()
         payload = mock_push.call_args[0][0]
         assert payload["body"] == "Plain body"
+
+
+class TestCollectionSizeSnapshot:
+
+    def test_snapshot_records_to_db(self):
+        from routes.admin_advanced import _record_collection_size_snapshot
+        mock_col = MagicMock()
+        mock_col.count_documents = AsyncMock(return_value=42000)
+        mock_history = MagicMock()
+        mock_history.update_one = AsyncMock(return_value=None)
+        mock_db = MagicMock(bot_spoof_attempts=mock_col, collection_size_history=mock_history)
+        import routes.admin_advanced as _adv_mod
+        with patch.object(_adv_mod, "db", mock_db):
+            _run(_record_collection_size_snapshot())
+        mock_history.update_one.assert_called_once()
+        call_args = mock_history.update_one.call_args
+        assert call_args[0][0]["collection"] == "bot_spoof_attempts"
+        assert call_args[0][1]["$set"]["size"] == 42000
+        assert call_args[1].get("upsert") is True
+
+    def test_snapshot_is_idempotent_same_day(self):
+        from routes.admin_advanced import _record_collection_size_snapshot
+        mock_col = MagicMock()
+        mock_col.count_documents = AsyncMock(return_value=100)
+        mock_history = MagicMock()
+        mock_history.update_one = AsyncMock(return_value=None)
+        mock_db = MagicMock(bot_spoof_attempts=mock_col, collection_size_history=mock_history)
+        import routes.admin_advanced as _adv_mod
+        with patch.object(_adv_mod, "db", mock_db):
+            _run(_record_collection_size_snapshot())
+            _run(_record_collection_size_snapshot())
+        assert mock_history.update_one.call_count == 2
+        d1 = mock_history.update_one.call_args_list[0][0][0]["date"]
+        d2 = mock_history.update_one.call_args_list[1][0][0]["date"]
+        assert d1 == d2

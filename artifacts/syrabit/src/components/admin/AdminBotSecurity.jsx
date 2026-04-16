@@ -9,7 +9,7 @@ import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 function GlassCard({ children, className = '' }) {
@@ -469,6 +469,9 @@ function TtlMonitorPanel({ adminToken }) {
   const [ttlLoading, setTtlLoading] = useState(true);
   const [ttlError, setTtlError] = useState(null);
   const [expanded, setExpanded] = useState(false);
+  const [sizeHistory, setSizeHistory] = useState([]);
+  const [sizeGrowthRate, setSizeGrowthRate] = useState(null);
+  const [historyDays, setHistoryDays] = useState(90);
 
   const fetchTtl = useCallback(async () => {
     setTtlLoading(true);
@@ -483,7 +486,16 @@ function TtlMonitorPanel({ adminToken }) {
     }
   }, [adminToken]);
 
+  const fetchHistory = useCallback(async () => {
+    try {
+      const res = await adminGetCollectionSizeHistory(adminToken, historyDays);
+      setSizeHistory(res.data.history || []);
+      setSizeGrowthRate(res.data.growth_rate_per_day);
+    } catch {}
+  }, [adminToken, historyDays]);
+
   useEffect(() => { fetchTtl(); }, [fetchTtl]);
+  useEffect(() => { if (expanded) fetchHistory(); }, [expanded, fetchHistory]);
 
   const healthColor = ttlData?.health_status === 'healthy' ? '#10b981' : '#f59e0b';
   const HealthIcon = ttlData?.health_status === 'healthy' ? CheckCircle2 : AlertTriangle;
@@ -638,6 +650,54 @@ function TtlMonitorPanel({ adminToken }) {
                     />
                     <Bar dataKey="count" fill="#14b8a6" radius={[4, 4, 0, 0]} name="Documents Added" />
                   </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
+
+          {sizeHistory.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <h4 className="text-xs font-medium text-gray-700">Collection Size History</h4>
+                  {sizeGrowthRate !== null && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${sizeGrowthRate > 100 ? 'bg-amber-50 text-amber-600' : 'bg-green-50 text-green-600'}`}>
+                      {sizeGrowthRate > 0 ? '+' : ''}{sizeGrowthRate}/day
+                    </span>
+                  )}
+                </div>
+                <select
+                  value={historyDays}
+                  onChange={(e) => setHistoryDays(Number(e.target.value))}
+                  className="text-[10px] border border-gray-200 rounded-md px-1.5 py-0.5 text-gray-600"
+                >
+                  <option value={30}>30 days</option>
+                  <option value={60}>60 days</option>
+                  <option value={90}>90 days</option>
+                  <option value={180}>180 days</option>
+                  <option value={365}>365 days</option>
+                </select>
+              </div>
+              <div style={{ height: 200 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={sizeHistory}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                    <XAxis
+                      dataKey="date"
+                      tick={{ fontSize: 10, fill: '#94a3b8' }}
+                      tickFormatter={(v) => {
+                        const d = new Date(v);
+                        return `${d.getMonth() + 1}/${d.getDate()}`;
+                      }}
+                    />
+                    <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} allowDecimals={false} />
+                    <Tooltip
+                      contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0' }}
+                      labelFormatter={(v) => new Date(v).toLocaleDateString()}
+                      formatter={(value) => [value.toLocaleString(), 'Documents']}
+                    />
+                    <Line type="monotone" dataKey="size" stroke="#8b5cf6" strokeWidth={2} dot={false} name="Collection Size" />
+                  </LineChart>
                 </ResponsiveContainer>
               </div>
             </div>
