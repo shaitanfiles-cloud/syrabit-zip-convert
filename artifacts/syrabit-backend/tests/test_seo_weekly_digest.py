@@ -145,6 +145,68 @@ def test_gather_inputs_returns_empty_when_mongo_unavailable():
     assert result == {}
 
 
+# ── _compose: valid-sitemap trend ──────────────────────────────────────────
+
+def test_compose_reports_valid_sitemap_trend_down():
+    history = [
+        _snap("ok", hours_ago=72, valid_sm=9, total_sm=9),   # first
+        _snap("ok", hours_ago=48, valid_sm=8, total_sm=9),
+        _snap("degraded", hours_ago=2, valid_sm=6, total_sm=9),  # latest
+    ]
+    stats = bot_discovery._compose_seo_weekly_digest(history)
+    assert stats["valid_sitemaps_first"] == 9
+    assert stats["valid_sitemaps_latest"] == 6
+    assert stats["valid_sitemaps_delta"] == -3
+    assert stats["valid_sitemaps_trend"] == "down"
+
+
+def test_compose_reports_valid_sitemap_trend_up():
+    history = [
+        _snap("degraded", hours_ago=72, valid_sm=5, total_sm=9),
+        _snap("ok", hours_ago=2, valid_sm=9, total_sm=9),
+    ]
+    stats = bot_discovery._compose_seo_weekly_digest(history)
+    assert stats["valid_sitemaps_delta"] == 4
+    assert stats["valid_sitemaps_trend"] == "up"
+
+
+def test_format_html_includes_trend_block():
+    stats = bot_discovery._compose_seo_weekly_digest([
+        _snap("ok", hours_ago=72, valid_sm=9, total_sm=9),
+        _snap("degraded", hours_ago=2, valid_sm=6, total_sm=9),
+    ])
+    html = bot_discovery._format_seo_weekly_digest_html(stats)
+    assert "Valid sitemaps trend" in html
+    assert "9 → 6" in html
+    assert "-3" in html
+
+
+# ── _should_send_weekly_digest_now (scheduler gate) ────────────────────────
+
+def test_scheduler_fires_within_tolerance_on_monday():
+    # 2026-04-13 is a Monday. 03:30 UTC == 09:00 IST.
+    on_time = datetime(2026, 4, 13, 3, 30, tzinfo=timezone.utc)
+    assert bot_discovery._should_send_weekly_digest_now(on_time, "")
+    near = datetime(2026, 4, 13, 3, 20, tzinfo=timezone.utc)  # -10 min
+    assert bot_discovery._should_send_weekly_digest_now(near, "")
+    far = datetime(2026, 4, 13, 4, 0, tzinfo=timezone.utc)    # +30 min
+    assert not bot_discovery._should_send_weekly_digest_now(far, "")
+
+
+def test_scheduler_skips_other_weekdays():
+    tue = datetime(2026, 4, 14, 3, 30, tzinfo=timezone.utc)
+    assert not bot_discovery._should_send_weekly_digest_now(tue, "")
+    sun = datetime(2026, 4, 12, 3, 30, tzinfo=timezone.utc)
+    assert not bot_discovery._should_send_weekly_digest_now(sun, "")
+
+
+def test_scheduler_dedups_same_iso_week():
+    on_time = datetime(2026, 4, 13, 3, 30, tzinfo=timezone.utc)
+    same_week_marker = bot_discovery._iso_week_tag(on_time)
+    assert not bot_discovery._should_send_weekly_digest_now(on_time, same_week_marker)
+    assert bot_discovery._should_send_weekly_digest_now(on_time, "2025-W52")
+
+
 def test_gather_inputs_pulls_history_and_alert_count():
     history_docs = [_snap("ok", hours_ago=h) for h in (1, 2, 3)]
 

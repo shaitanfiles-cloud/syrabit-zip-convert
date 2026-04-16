@@ -1239,13 +1239,43 @@ _SEO_URL_SPIKE_ALERT_COOLDOWN_S = 6 * 3600
 _SEO_HEALTH_HISTORY_RETENTION_DAYS = 30
 
 # ── Weekly digest ────────────────────────────────────────────────────────────
-# Mon 09:00 IST = Mon 03:30 UTC. Fire window is 03:00-04:59 UTC on Monday so
-# the loop catches it even if it sleeps slightly past the half-hour mark.
+# Target: Monday 09:00 IST = Monday 03:30 UTC. The loop polls every 5 minutes
+# and only fires inside a tight ±15 minute window around 03:30 UTC so the
+# email lands close to 09:00 IST instead of drifting across an hour.
 _SEO_WEEKLY_DIGEST_DASHBOARD_URL = "https://syrabit.ai/admin/seo"
 _SEO_WEEKLY_DIGEST_API_CONFIG_KEY = "seo_weekly_digest_last_iso_week"
-_SEO_WEEKLY_DIGEST_TARGET_WEEKDAY = 0       # Monday
-_SEO_WEEKLY_DIGEST_TARGET_HOURS_UTC = (3, 4)  # 03:00-04:59 UTC ≈ 08:30-10:30 IST
-_SEO_WEEKLY_DIGEST_LOOP_SLEEP_S = 1800       # check every 30 minutes
+_SEO_WEEKLY_DIGEST_TARGET_WEEKDAY = 0        # Monday
+_SEO_WEEKLY_DIGEST_TARGET_HOUR_UTC = 3       # 03:xx UTC
+_SEO_WEEKLY_DIGEST_TARGET_MINUTE_UTC = 30    # 03:30 UTC = 09:00 IST
+_SEO_WEEKLY_DIGEST_TOLERANCE_MINUTES = 15    # ±15 min window
+_SEO_WEEKLY_DIGEST_LOOP_SLEEP_S = 300        # poll every 5 minutes
+
+
+def _iso_week_tag(now: datetime) -> str:
+    iso = now.isocalendar()
+    return f"{iso.year}-W{iso.week:02d}"
+
+
+def _should_send_weekly_digest_now(now_utc: datetime, last_iso_week: str) -> bool:
+    """Pure gate predicate so the schedule logic can be unit-tested.
+
+    Returns True iff ``now_utc`` is within ±_SEO_WEEKLY_DIGEST_TOLERANCE_MINUTES
+    of Monday 03:30 UTC AND we have not already sent a digest for the current
+    ISO week.
+    """
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    if now_utc.weekday() != _SEO_WEEKLY_DIGEST_TARGET_WEEKDAY:
+        return False
+    target = now_utc.replace(
+        hour=_SEO_WEEKLY_DIGEST_TARGET_HOUR_UTC,
+        minute=_SEO_WEEKLY_DIGEST_TARGET_MINUTE_UTC,
+        second=0, microsecond=0,
+    )
+    delta_minutes = abs((now_utc - target).total_seconds()) / 60.0
+    if delta_minutes > _SEO_WEEKLY_DIGEST_TOLERANCE_MINUTES:
+        return False
+    return _iso_week_tag(now_utc) != (last_iso_week or "")
 
 
 def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
@@ -1419,6 +1449,20 @@ def _compose_seo_weekly_digest(history: list, *, dashboard_url: str = _SEO_WEEKL
     latest = snaps[-1] if snaps else None
     latest_status = (latest.get("status") or "unknown").lower() if latest else "unknown"
 
+    # Valid-sitemap trend across the window: first vs latest snapshot.
+    first = snaps[0] if snaps else None
+    first_valid = int(((first or {}).get("summary") or {}).get("valid_sitemaps", 0) or 0) if first else 0
+    latest_valid = int(((latest or {}).get("summary") or {}).get("valid_sitemaps", 0) or 0) if latest else 0
+    valid_sitemaps_delta = latest_valid - first_valid
+    if not snaps:
+        valid_sitemaps_trend = "flat"
+    elif valid_sitemaps_delta > 0:
+        valid_sitemaps_trend = "up"
+    elif valid_sitemaps_delta < 0:
+        valid_sitemaps_trend = "down"
+    else:
+        valid_sitemaps_trend = "flat"
+
     return {
         "window_start": window_start.isoformat(),
         "window_end": now.isoformat(),
@@ -1432,9 +1476,13 @@ def _compose_seo_weekly_digest(history: list, *, dashboard_url: str = _SEO_WEEKL
         "ok_url_checks": url_ok_sum,
         "avg_valid_sitemaps": avg_valid_sitemaps,
         "avg_total_sitemaps": avg_total_sitemaps,
+        "valid_sitemaps_first": first_valid,
+        "valid_sitemaps_latest": latest_valid,
+        "valid_sitemaps_delta": valid_sitemaps_delta,
+        "valid_sitemaps_trend": valid_sitemaps_trend,
         "recent_alerts": int(recent_alerts or 0),
         "dashboard_url": dashboard_url,
-        "iso_week": f"{now.isocalendar().year}-W{now.isocalendar().week:02d}",
+        "iso_week": _iso_week_tag(now),
     }
 
 
@@ -1472,6 +1520,13 @@ def _format_seo_weekly_digest_html(stats: dict) -> str:
         f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Avg valid sitemaps</td>"
         f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'>"
         f"{stats.get('avg_valid_sitemaps',0)} / {stats.get('avg_total_sitemaps',0)}</td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Valid sitemaps trend</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'>"
+        f"{stats.get('valid_sitemaps_first',0)} → {stats.get('valid_sitemaps_latest',0)} "
+        f"<b style='color:{'#16a34a' if stats.get('valid_sitemaps_trend')=='up' else ('#c0392b' if stats.get('valid_sitemaps_trend')=='down' else '#475569')}'>"
+        f"({'▲' if stats.get('valid_sitemaps_trend')=='up' else ('▼' if stats.get('valid_sitemaps_trend')=='down' else '▬')} "
+        f"{'+' if stats.get('valid_sitemaps_delta',0)>0 else ''}{stats.get('valid_sitemaps_delta',0)})"
+        f"</b></td></tr>"
         f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Alerts fired this week</td>"
         f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'><b>{stats.get('recent_alerts',0)}</b></td></tr>"
         "</table>"
@@ -1564,12 +1619,7 @@ async def _seo_weekly_digest_loop():
     while True:
         try:
             now_utc = datetime.now(timezone.utc)
-            in_window = (
-                now_utc.weekday() == _SEO_WEEKLY_DIGEST_TARGET_WEEKDAY
-                and now_utc.hour in _SEO_WEEKLY_DIGEST_TARGET_HOURS_UTC
-            )
-            if in_window and await is_mongo_available():
-                cur_iso_week = f"{now_utc.isocalendar().year}-W{now_utc.isocalendar().week:02d}"
+            if await is_mongo_available():
                 try:
                     cfg = await db.api_config.find_one(
                         {}, {"_id": 0, _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: 1}
@@ -1577,7 +1627,8 @@ async def _seo_weekly_digest_loop():
                 except Exception:
                     cfg = {}
                 last_sent = cfg.get(_SEO_WEEKLY_DIGEST_API_CONFIG_KEY, "")
-                if last_sent != cur_iso_week:
+                if _should_send_weekly_digest_now(now_utc, last_sent):
+                    cur_iso_week = _iso_week_tag(now_utc)
                     stats = await _gather_weekly_digest_inputs(now_utc)
                     result = await _send_seo_weekly_digest_email(stats)
                     if result.get("sent"):
