@@ -2978,9 +2978,28 @@ async def admin_cf_bot_report_run(admin: dict = Depends(get_admin_user)):
         "markdown": result["markdown"],
         "manual": True,
     }
+    # Ensure a unique index on iso_week so racing manual triggers + the
+    # scheduled run can't write two distinct docs for the same week. The
+    # `update_one(... upsert=True)` below is keyed by iso_week, so the
+    # index is the last-line guarantee against rare concurrent inserts.
+    try:
+        await db[_CF_BOT_REPORT_COLLECTION].create_index("iso_week", unique=True)
+    except Exception:
+        pass
     await db[_CF_BOT_REPORT_COLLECTION].update_one(
         {"iso_week": cur_iso_week}, {"$set": doc}, upsert=True,
     )
+    # Advance the weekly lock marker so a concurrent scheduled run inside
+    # the Monday window observes "already done this ISO week" and skips —
+    # avoids the manual+scheduled overwrite race noted in code review.
+    try:
+        await db.job_locks.update_one(
+            {"_id": _CF_BOT_REPORT_LOCK_ID},
+            {"$set": {_CF_BOT_REPORT_API_CONFIG_KEY: cur_iso_week}},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.debug(f"[CF bot report] manual lock advance failed: {exc}")
     disk_path = _write_cf_report_to_disk(result["markdown"], result["data"], now_utc)
     return {
         "stored": True,
