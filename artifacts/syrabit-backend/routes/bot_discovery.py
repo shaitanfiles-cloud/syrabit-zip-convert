@@ -1638,17 +1638,24 @@ async def _seo_weekly_digest_loop():
 
 
 async def _claim_weekly_digest_slot(db, cur_iso_week: str) -> bool:
-    """Atomic compare-and-set on a dedicated singleton lock document
-    (``_id`` = ``_SEO_WEEKLY_DIGEST_LOCK_ID``). Returns True iff this caller
-    successfully advanced the marker from ``!= cur_iso_week`` to
-    ``cur_iso_week``. Concurrent callers race on the unique ``_id`` so at
-    most one wins per ISO week — no duplicate emails even with multiple
-    Railway replicas."""
+    """Atomic compare-and-set on a dedicated lock document inside the
+    ``job_locks`` collection (``_id`` = ``_SEO_WEEKLY_DIGEST_LOCK_ID``).
+
+    We use a separate collection — not ``api_config`` — because the rest of
+    the codebase reads ``api_config`` as a singleton via ``find_one({})``
+    with no ``_id`` filter. Adding a second document there would make those
+    reads nondeterministic and silently break alert settings, GA4 tokens,
+    notification channel config, etc.
+
+    Returns True iff this caller successfully advanced the marker from
+    ``!= cur_iso_week`` to ``cur_iso_week``. Concurrent callers race on the
+    unique ``_id`` so at most one wins per ISO week — no duplicate emails
+    even with multiple Railway replicas."""
     from pymongo.errors import DuplicateKeyError
 
     # Path A: doc already exists for an older week — atomic compare-and-set.
     try:
-        res = await db.api_config.find_one_and_update(
+        res = await db.job_locks.find_one_and_update(
             {
                 "_id": _SEO_WEEKLY_DIGEST_LOCK_ID,
                 _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: {"$ne": cur_iso_week},
@@ -1666,7 +1673,7 @@ async def _claim_weekly_digest_slot(db, cur_iso_week: str) -> bool:
     # `_id` constraint guarantees only one worker's insert succeeds; the
     # rest get DuplicateKeyError and bail out as losers.
     try:
-        await db.api_config.insert_one({
+        await db.job_locks.insert_one({
             "_id": _SEO_WEEKLY_DIGEST_LOCK_ID,
             _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_iso_week,
         })
@@ -1681,10 +1688,10 @@ async def _claim_weekly_digest_slot(db, cur_iso_week: str) -> bool:
 async def _try_send_weekly_digest_once(db, now_utc: datetime) -> dict:
     """One iteration of the digest loop, factored out for testability."""
     cur_iso_week = _iso_week_tag(now_utc)
-    # Cheap pre-gate read so we don't hammer api_config with CAS calls
-    # outside the Monday window.
+    # Cheap pre-gate read so we don't hammer the lock collection with CAS
+    # calls outside the Monday window.
     try:
-        cfg = await db.api_config.find_one(
+        cfg = await db.job_locks.find_one(
             {"_id": _SEO_WEEKLY_DIGEST_LOCK_ID},
             {"_id": 0, _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: 1},
         ) or {}
@@ -1707,7 +1714,7 @@ async def _try_send_weekly_digest_once(db, now_utc: datetime) -> dict:
             f"(reason={result.get('reason','unknown')}); rolling back claim"
         )
         try:
-            await db.api_config.update_one(
+            await db.job_locks.update_one(
                 {
                     "_id": _SEO_WEEKLY_DIGEST_LOCK_ID,
                     _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_iso_week,
