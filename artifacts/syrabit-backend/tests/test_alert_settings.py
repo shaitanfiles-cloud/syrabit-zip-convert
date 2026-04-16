@@ -238,6 +238,76 @@ class TestDispatchAlert:
             _run(_metrics_mod._dispatch_alert("cooldown_test", "Title 2", "Body 2"))
         assert mock_alerts.insert_one.await_count == 1
 
+    def test_email_includes_threshold_snapshot(self):
+        _metrics_mod._notification_channels["email"] = "admin@example.com"
+        mock_resend = MagicMock()
+        mock_resend.Emails.send = MagicMock()
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        snapshot = {"metric": "error_rate_pct", "value": 5, "actual": 12.3}
+        with patch.dict(os.environ, {"RESEND_API_KEY": "re_test_key"}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts)), \
+             patch.dict("sys.modules", {"resend": mock_resend}), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("thresh_email", "Rate spike", "Body", threshold_snapshot=snapshot))
+        call_args = mock_resend.Emails.send.call_args[0][0]
+        html = call_args["html"]
+        assert "error_rate_pct" in html
+        assert "12.3" in html
+        assert "5" in html
+        assert "<table" in html
+
+    def test_email_omits_threshold_table_when_no_snapshot(self):
+        _metrics_mod._notification_channels["email"] = "admin@example.com"
+        mock_resend = MagicMock()
+        mock_resend.Emails.send = MagicMock()
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        with patch.dict(os.environ, {"RESEND_API_KEY": "re_test_key"}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts)), \
+             patch.dict("sys.modules", {"resend": mock_resend}), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("no_thresh_email", "Title", "Body"))
+        call_args = mock_resend.Emails.send.call_args[0][0]
+        assert "<table" not in call_args["html"]
+
+    def test_webhook_includes_threshold_snapshot(self):
+        _metrics_mod._notification_channels["webhook_url"] = "https://hooks.slack.com/test"
+        _metrics_mod._notification_channels["email"] = ""
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        snapshot = {"metric": "latency_p95_ms", "value": 3000, "actual": 5500}
+        with patch.dict(os.environ, {"RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts)), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("thresh_webhook", "Latency spike", "Body", threshold_snapshot=snapshot))
+        payload = mock_client.post.call_args[1]["json"]
+        assert payload["threshold_snapshot"] == snapshot
+        assert "latency_p95_ms" in payload["text"]
+        assert "5500" in payload["text"]
+
+    def test_webhook_omits_threshold_when_no_snapshot(self):
+        _metrics_mod._notification_channels["webhook_url"] = "https://hooks.slack.com/test"
+        _metrics_mod._notification_channels["email"] = ""
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch.dict(os.environ, {"RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts)), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("no_thresh_wh", "Title", "Body"))
+        payload = mock_client.post.call_args[1]["json"]
+        assert "threshold_snapshot" not in payload
+
     def test_no_email_or_webhook_still_persists_alert(self):
         _metrics_mod._notification_channels["email"] = ""
         _metrics_mod._notification_channels["webhook_url"] = ""

@@ -339,11 +339,29 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
         if admin_email and resend_key:
             import resend as _resend_sdk
             _resend_sdk.api_key = resend_key
+            threshold_html = ""
+            if threshold_snapshot:
+                metric = threshold_snapshot.get("metric", "N/A")
+                configured = threshold_snapshot.get("value", "N/A")
+                actual = threshold_snapshot.get("actual", "N/A")
+                threshold_html = (
+                    "<table style='border-collapse:collapse;margin:12px 0;width:100%;max-width:480px'>"
+                    "<tr style='background:#f8d7da'>"
+                    "<th style='text-align:left;padding:8px;border:1px solid #ddd'>Metric</th>"
+                    "<th style='text-align:left;padding:8px;border:1px solid #ddd'>Threshold</th>"
+                    "<th style='text-align:left;padding:8px;border:1px solid #ddd'>Actual</th>"
+                    "</tr>"
+                    f"<tr>"
+                    f"<td style='padding:8px;border:1px solid #ddd'><code>{metric}</code></td>"
+                    f"<td style='padding:8px;border:1px solid #ddd'>{configured}</td>"
+                    f"<td style='padding:8px;border:1px solid #ddd;color:#c0392b;font-weight:bold'>{actual}</td>"
+                    f"</tr></table>"
+                )
             _resend_sdk.Emails.send({
                 "from": EMAIL_FROM,
                 "to": [admin_email],
                 "subject": f"🚨 Syrabit Alert: {title}",
-                "html": f"<h2>{title}</h2><p>{body}</p><p style='color:#888'>Alert type: {alert_type}<br>Cooldown: {_ALERT_COOLDOWN_S // 60} min</p>",
+                "html": f"<h2>{title}</h2><p>{body}</p>{threshold_html}<p style='color:#888'>Alert type: {alert_type}<br>Cooldown: {_ALERT_COOLDOWN_S // 60} min</p>",
             })
     except Exception as e:
         logger.debug(f"Alert email failed: {e}")
@@ -352,12 +370,20 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
     try:
         webhook_url = (_notification_channels.get("webhook_url") or os.environ.get("ALERT_WEBHOOK_URL", "")).strip()
         if webhook_url:
+            webhook_payload = {
+                "text": f"🚨 *{title}*\n{body}",
+                "alert_type": alert_type,
+                "service": "syrabit-api",
+            }
+            if threshold_snapshot:
+                webhook_payload["threshold_snapshot"] = threshold_snapshot
+                webhook_payload["text"] += (
+                    f"\n📊 Metric: `{threshold_snapshot.get('metric', 'N/A')}` "
+                    f"| Threshold: {threshold_snapshot.get('value', 'N/A')} "
+                    f"| Actual: *{threshold_snapshot.get('actual', 'N/A')}*"
+                )
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(webhook_url, json={
-                    "text": f"🚨 *{title}*\n{body}",
-                    "alert_type": alert_type,
-                    "service": "syrabit-api",
-                })
+                await client.post(webhook_url, json=webhook_payload)
     except Exception as e:
         logger.debug(f"Alert webhook failed: {e}")
 
