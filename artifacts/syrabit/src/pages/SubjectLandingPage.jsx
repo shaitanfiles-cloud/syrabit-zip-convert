@@ -129,6 +129,20 @@ export default function SubjectLandingPage() {
         title={`${subjectName} — ${boardName} ${className} Notes & Study Material`}
         description={subject.description || `Complete ${subjectName} study material for ${boardName} ${className} students. Notes, MCQs, important questions, and AI-powered tutoring.`}
         url={`https://syrabit.ai${basePath}`}
+        pageType="subject"
+        pageData={{
+          subject: {
+            ...subject,
+            name: subjectName,
+            slug: subjectSlug,
+            board_slug: board,
+            class_slug: classSlug,
+            board_name: boardName,
+            class_name: className,
+            stream_name: streamName,
+            chapters,
+          },
+        }}
         jsonLd={faqJsonLd ? [faqJsonLd] : undefined}
       />
 

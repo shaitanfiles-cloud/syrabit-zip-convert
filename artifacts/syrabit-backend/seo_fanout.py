@@ -202,3 +202,53 @@ def fanout_for_page(page_doc: dict, source: str = "seo_generate") -> Optional[as
         return None
 
     return loop.create_task(_run_fanout(url, parent_subject_url, page_type, source, event))
+
+
+def fanout_for_url(url: str, source: str = "fanout_url",
+                   page_type: str = "notes",
+                   parent_subject_url: Optional[str] = None) -> Optional[asyncio.Task]:
+    """SEO Phase D — fan-out a *single absolute URL* (rather than an
+    `seo_pages` doc) through the same IndexNow + cache purge + prewarm +
+    Google-Indexing chain used by `fanout_for_page`.
+
+    Used by the auto-cross-link path (`syllabus_linker.cross_link_for_new_chapter`)
+    where the patched targets are subject hubs and chapter pages — neither
+    of which lives in `seo_pages` — so we can't reuse `fanout_for_page` as-is.
+    Falls back gracefully (returns None) when the killswitch is off, no
+    event loop is running, or `url` is empty. Never raises.
+    """
+    if not is_enabled() or not url:
+        return None
+
+    event = {
+        "event_id": uuid.uuid4().hex[:10],
+        "url": url,
+        "parent_subject_url": parent_subject_url,
+        "page_type": page_type,
+        "source": source,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "indexnow": "pending",
+        "cache_purge": "pending",
+        "prewarm": "pending",
+    }
+    _record_event(event)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        logger.debug("seo_fanout: no running event loop, deferring fan-out for %s", url)
+        event["completed_at"] = datetime.now(timezone.utc).isoformat()
+        event["indexnow"] = event["cache_purge"] = event["prewarm"] = "deferred"
+        return None
+
+    return loop.create_task(_run_fanout(url, parent_subject_url, page_type, source, event))
+
+
+def fanout_for_urls(urls: list[str], source: str = "cross_link") -> list:
+    """Convenience wrapper — fan out a batch of URLs in parallel."""
+    tasks = []
+    for u in urls or []:
+        t = fanout_for_url(u, source=source)
+        if t is not None:
+            tasks.append(t)
+    return tasks

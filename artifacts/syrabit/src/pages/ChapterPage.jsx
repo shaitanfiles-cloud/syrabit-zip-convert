@@ -647,8 +647,9 @@ export default function ChapterPage() {
           return [...new Set(expanded)].join(', ');
         })()}
         tags={[chapterTitle, subjectName, boardName, className, data.chapter_title || ''].filter(Boolean)}
+        pageType="chapter"
+        pageData={{ data, basePath }}
       />
-      <ChapterJsonLd data={data} url={canonical} basePath={basePath} />
 
       <header className="border-b border-border/40 bg-card/80 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 py-5">

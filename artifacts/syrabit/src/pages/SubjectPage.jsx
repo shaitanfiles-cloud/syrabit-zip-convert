@@ -481,15 +481,8 @@ export default function SubjectPage() {
         description={subjectDesc.trim()}
         url={subjectUrl}
         image={ogImage}
-        jsonLd={{
-          '@context': 'https://schema.org',
-          '@type': 'BreadcrumbList',
-          itemListElement: [
-            { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai/' },
-            { '@type': 'ListItem', position: 2, name: 'Browser', item: 'https://syrabit.ai/library' },
-            { '@type': 'ListItem', position: 3, name: subject.name, item: subjectUrl },
-          ],
-        }}
+        pageType="subject"
+        pageData={{ subject: { ...subject, chapters } }}
       />
       <div className="p-4 sm:p-6 space-y-6" data-testid="subject-detail">
         {/* Back */}

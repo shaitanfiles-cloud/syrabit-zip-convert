@@ -230,64 +230,7 @@ export default function LibraryPage() {
     return enrichedSubjects.reduce((sum, s) => sum + (s.seo_stats?.topic_count || 0), 0);
   }, [enrichedSubjects]);
 
-  const libraryJsonLd = useMemo(() => {
-    if (!filteredSubjects.length) return null;
-    return {
-      '@context': 'https://schema.org',
-      '@graph': [
-        {
-          '@type': 'ItemList',
-          name: 'Assamboard Subject Library',
-          description: 'Complete study material library for Assam Board (AHSEC/SEBA) students with notes, MCQs, definitions, and exam preparation resources.',
-          numberOfItems: filteredSubjects.length,
-          itemListElement: filteredSubjects.map((s, i) => ({
-            '@type': 'ListItem',
-            position: i + 1,
-            item: {
-              '@type': 'LearningResource',
-              name: s.name,
-              description: s.description || `Study ${s.name} — ${s.boardName} ${s.className}`,
-              url: s.boardSlug && s.classSlug && s.slug
-                ? `https://syrabit.ai/${s.boardSlug}/${s.classSlug}/${s.slug}`
-                : `https://syrabit.ai/subject/${s.id}`,
-              provider: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
-              educationalLevel: `${s.className || ''} ${s.boardName || ''}`.trim(),
-              inLanguage: 'en-IN',
-              isAccessibleForFree: true,
-            },
-          })),
-        },
-        {
-          '@type': 'WebPage',
-          '@id': 'https://syrabit.ai/library',
-          name: 'Assamboard Subject Library — Study Notes, MCQs & Exam Prep',
-          description: 'Browse study materials for Assam Board subjects. AI-powered notes, MCQs, definitions, important questions, and examples.',
-          url: 'https://syrabit.ai/library',
-          isPartOf: { '@type': 'WebSite', '@id': 'https://syrabit.ai', name: 'Syrabit.ai' },
-          inLanguage: 'en-IN',
-        },
-        {
-          '@type': 'BreadcrumbList',
-          itemListElement: [
-            { '@type': 'ListItem', position: 1, name: 'Home', item: 'https://syrabit.ai' },
-            { '@type': 'ListItem', position: 2, name: 'Library', item: 'https://syrabit.ai/library' },
-          ],
-        },
-      ],
-    };
-  }, [filteredSubjects]);
-
-  useEffect(() => {
-    if (!libraryJsonLd) return;
-    const script = document.createElement('script');
-    script.type = 'application/ld+json';
-    script.id = 'library-jsonld';
-    script.text = JSON.stringify(libraryJsonLd);
-    const existing = document.getElementById('library-jsonld');
-    if (existing) existing.remove();
-    document.head.appendChild(script);
-    return () => { const el = document.getElementById('library-jsonld'); if (el) el.remove(); };
-  }, [libraryJsonLd]);
+  // JSON-LD now emitted via PageMeta (pageType="library"); see src/lib/jsonld.js
 
   const handleAskAI = useCallback((subjectId, hasDocument = false, subjectName = '') => {
     try { Analytics.chatStart(subjectId, subjectName, 'openai/gpt-oss-20b'); } catch {}
@@ -366,6 +309,8 @@ export default function LibraryPage() {
         description={seoDescription}
         url="https://syrabit.ai/library"
         keywords={seoKeywords}
+        pageType="library"
+        pageData={{ subjects: filteredSubjects }}
       />
       <div className="flex flex-col h-full w-full overflow-hidden">
 

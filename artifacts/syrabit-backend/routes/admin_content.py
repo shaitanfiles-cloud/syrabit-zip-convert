@@ -1361,6 +1361,27 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("chapters", "subjects")
     _schedule_indexnow_for_chapter(chap)
+
+    # SEO Phase D — auto cross-link the new chapter into the parent subject
+    # hub + 2-3 sibling chapters, then fan out the patched URLs through the
+    # Phase A IndexNow + cache purge + prewarm helper. Runs as a background
+    # task so chapter creation stays fast; failures are logged and never
+    # propagate back to the admin caller. `depth=0` is a structural guard
+    # against cascading cross-links (Phase D contract: depth capped at 1).
+    async def _do_cross_link():
+        try:
+            from syllabus_linker import cross_link_for_new_chapter
+            from seo_fanout import fanout_for_urls
+            urls = await cross_link_for_new_chapter(chapter_id, db=db, depth=0)
+            if urls:
+                fanout_for_urls(urls, source="phase_d_cross_link_new_chapter")
+        except Exception as exc:
+            logger.warning(f"phase_d cross-link failed for chapter {chapter_id}: {exc}")
+    try:
+        asyncio.create_task(_do_cross_link())
+    except RuntimeError:
+        pass
+
     return result
 
 @router.post("/admin/content/chunks")

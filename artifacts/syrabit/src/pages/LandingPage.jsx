@@ -101,6 +101,7 @@ export default function LandingPage() {
         description={m.description}
         url="https://syrabit.ai/"
         keywords="AssamBoard educational browser, AHSEC study app, SEBA study tool, Class 11 12 exam prep, AHSEC syllabus browser, degree exam prep Assam, B.Com B.A B.Sc notes, AssamBoard 2025 study tool, free educational browser India"
+        pageType="home"
         jsonLd={[jsonLd, faqJsonLd]}
       />
       <PublicNavbar />

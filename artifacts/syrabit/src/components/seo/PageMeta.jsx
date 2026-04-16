@@ -1,4 +1,5 @@
 import { Helmet } from "react-helmet-async";
+import { buildSchemaForPageType } from "@/lib/jsonld";
 
 export default function PageMeta({
   title,
@@ -12,9 +13,20 @@ export default function PageMeta({
   publishedTime,
   modifiedTime,
   jsonLd,
+  pageType,
+  pageData,
 }) {
   const siteName = "Syrabit.ai";
   const absImage = image.startsWith("http") ? image : `https://syrabit.ai${image}`;
+
+  // Per-page-type JSON-LD (Phase D, Plan 9). When a `pageType` is supplied,
+  // build the canonical schema graph for that page type and merge it with any
+  // page-supplied `jsonLd` so legacy callers keep working.
+  const typedSchema = pageType ? buildSchemaForPageType(pageType, { url, ...(pageData || {}) }) : null;
+  const allLd = [
+    ...(typedSchema ? [typedSchema] : []),
+    ...(jsonLd ? (Array.isArray(jsonLd) ? jsonLd : [jsonLd]) : []),
+  ];
 
   return (
     <Helmet
@@ -60,18 +72,11 @@ export default function PageMeta({
       <meta httpEquiv="content-language" content="en-IN" />
       <link rel="alternate" hrefLang="en-IN" href={url} />
 
-      {jsonLd && (Array.isArray(jsonLd)
-        ? jsonLd.map((ld, i) => (
-            <script key={i} type="application/ld+json">
-              {JSON.stringify(ld)}
-            </script>
-          ))
-        : (
-          <script type="application/ld+json">
-            {JSON.stringify(jsonLd)}
-          </script>
-        )
-      )}
+      {allLd.map((ld, i) => (
+        <script key={i} type="application/ld+json">
+          {JSON.stringify(ld)}
+        </script>
+      ))}
     </Helmet>
   );
 }

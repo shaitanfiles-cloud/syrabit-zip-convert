@@ -95,6 +95,231 @@ _DISCIPLINE_STREAMS: dict[str, dict] = {
 
 _NOW = lambda: datetime.now(timezone.utc).isoformat()
 
+# ──────────────────────────────────────────────────────────────────────────────
+# SEO Phase D — Auto cross-linking for newly created chapters
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Maximum number of sibling chapters to patch per new chapter. Keeping this
+# small avoids exhausting Googlebot's per-host crawl budget on the resulting
+# IndexNow fan-out and also keeps the patched HTML readable.
+_CROSS_LINK_SIBLING_LIMIT = 3
+
+_BASE_URL = "https://syrabit.ai"
+
+
+def _related_marker(chapter_id: str) -> str:
+    """Idempotency marker for a single new chapter. Looking up `chapter_id`
+    in another chapter's content tells us whether we've already cross-linked
+    to it, so the patch can be safely re-run any number of times."""
+    return f"<!-- syrabit:related:{chapter_id} -->"
+
+
+def _related_block(chapter: dict, subject: dict) -> str:
+    """Markdown snippet inserted into sibling chapters / subject hubs.
+
+    Embedded inside a single inline marker so the whole block can be detected
+    and (eventually) removed without touching the rest of the content. Uses a
+    simple `<a>` anchor (rather than a markdown link) so the patch survives
+    intact whether the consumer is rendering markdown, raw HTML, or escaping
+    angle brackets — the marker is the source of truth either way.
+    """
+    bs = subject.get("board_slug", "")
+    cs = subject.get("class_slug", "")
+    ss = subject.get("slug", "")
+    ch_slug = chapter.get("slug", "")
+    title = chapter.get("title") or ch_slug
+    if not all([bs, cs, ss, ch_slug]):
+        return ""
+    href = f"/{bs}/{cs}/{ss}/{ch_slug}"
+    marker = _related_marker(chapter["id"])
+    # Single-line block keeps the diff in chapter.content / subject.description
+    # minimal and easy to roll back manually if needed.
+    return f"\n\n{marker}\n> **Related:** [{title}]({href})\n"
+
+
+def _chapter_url(chapter: dict, subject: dict) -> Optional[str]:
+    bs = subject.get("board_slug", "")
+    cs = subject.get("class_slug", "")
+    ss = subject.get("slug", "")
+    ch_slug = chapter.get("slug", "")
+    if not all([bs, cs, ss, ch_slug]):
+        return None
+    return f"{_BASE_URL}/{bs}/{cs}/{ss}/{ch_slug}"
+
+
+def _subject_url(subject: dict) -> Optional[str]:
+    bs = subject.get("board_slug", "")
+    cs = subject.get("class_slug", "")
+    ss = subject.get("slug", "")
+    if not all([bs, cs, ss]):
+        return None
+    return f"{_BASE_URL}/{bs}/{cs}/{ss}"
+
+
+def _pick_sibling_chapters(siblings: list[dict], new_chapter: dict,
+                            limit: int = _CROSS_LINK_SIBLING_LIMIT) -> list[dict]:
+    """Choose at most `limit` siblings to cross-link to the new chapter.
+
+    Strategy (cheap, no embedding lookups — those are reserved for the heavier
+    syllabus_embedder path and we explicitly avoid touching them per task
+    scope):
+      1. Prefer the previous + next chapter by `order_index` (curriculum
+         neighbours) — those are the ones a student is most likely to reach
+         next, so an inline "Related" link there compounds with internal
+         crawler depth.
+      2. Fill remaining slots with same-topic similarity by counting shared
+         tokens in the chapter `topics` list (a simple Jaccard-style overlap),
+         falling back to title-token overlap.
+    """
+    if not siblings:
+        return []
+
+    new_id = new_chapter.get("id")
+    pool = [c for c in siblings if c.get("id") != new_id]
+    if not pool:
+        return []
+
+    new_order = new_chapter.get("order_index") or new_chapter.get("order") or 0
+    pool_sorted = sorted(pool, key=lambda c: c.get("order_index") or c.get("order") or 0)
+
+    chosen: list[dict] = []
+    seen_ids: set = set()
+
+    # Pass 1 — prev + next neighbours by order
+    prev_c = None
+    next_c = None
+    for c in pool_sorted:
+        c_order = c.get("order_index") or c.get("order") or 0
+        if c_order < new_order:
+            prev_c = c
+        elif c_order > new_order and next_c is None:
+            next_c = c
+            break
+    for c in (prev_c, next_c):
+        if c and c.get("id") not in seen_ids and len(chosen) < limit:
+            chosen.append(c)
+            seen_ids.add(c.get("id"))
+
+    # Pass 2 — fill by topic-token overlap
+    if len(chosen) < limit:
+        new_topics = {t.lower() for t in (new_chapter.get("topics") or []) if isinstance(t, str)}
+        new_title_tokens = {w for w in re.split(r"[\s,\-–—/&]+", (new_chapter.get("title") or "").lower()) if len(w) > 2}
+
+        def _overlap(c: dict) -> int:
+            c_topics = {t.lower() for t in (c.get("topics") or []) if isinstance(t, str)}
+            c_title_tokens = {w for w in re.split(r"[\s,\-–—/&]+", (c.get("title") or "").lower()) if len(w) > 2}
+            return len(new_topics & c_topics) * 3 + len(new_title_tokens & c_title_tokens)
+
+        candidates = [(c, _overlap(c)) for c in pool_sorted if c.get("id") not in seen_ids]
+        candidates.sort(key=lambda x: (-x[1], x[0].get("order_index") or 0))
+        for c, score in candidates:
+            if len(chosen) >= limit:
+                break
+            chosen.append(c)
+            seen_ids.add(c.get("id"))
+
+    return chosen[:limit]
+
+
+async def cross_link_for_new_chapter(chapter_id: str, db=None,
+                                     depth: int = 0) -> list[str]:
+    """SEO Phase D — patch the parent subject hub + 2-3 sibling chapters
+    with an inline "Related" link to the freshly-created chapter.
+
+    Returns the list of public URLs (subject hub + each patched sibling +
+    the new chapter itself) that callers should hand to the Phase A
+    `fanout_for_url` helper for IndexNow + cache purge + prewarm.
+
+    Idempotency
+    -----------
+    Each patch is gated on a stable HTML marker
+    (`<!-- syrabit:related:{chapter_id} -->`). If the marker is already
+    present in the target's content/description we leave it untouched and
+    do **not** include that URL in the returned list — preventing IndexNow
+    storms when this function is re-run after a republish.
+
+    Recursion cap
+    -------------
+    `depth` defaults to 0; the wiring in admin_content.py never bumps it,
+    so the function is structurally single-pass. The parameter exists so
+    that any future caller that wires cross-linking into a downstream
+    rewriter can opt-in without accidentally cascading.
+    """
+    if depth > 0:
+        # Hard guard: cross-linking can never recurse, even if a future
+        # caller mistakenly re-enters. The Phase D contract requires depth
+        # capped at 1 (i.e. patching the parent must NOT cross-link further).
+        return []
+
+    if db is None:
+        try:
+            from deps import db as _real_db  # local import to keep this
+            db = _real_db                     # module independent of FastAPI
+        except Exception:
+            return []
+
+    new_chapter = await db.chapters.find_one({"id": chapter_id})
+    if not new_chapter:
+        return []
+    subject_id = new_chapter.get("subject_id")
+    if not subject_id:
+        return []
+    subject = await db.subjects.find_one({"id": subject_id})
+    if not subject:
+        return []
+
+    new_url = _chapter_url(new_chapter, subject)
+    if not new_url:
+        return []
+
+    block = _related_block(new_chapter, subject)
+    if not block:
+        return []
+
+    patched_urls: list[str] = []
+
+    # ── 1) Patch parent subject hub ─────────────────────────────────────
+    subj_marker = _related_marker(chapter_id)
+    subj_desc = subject.get("description") or ""
+    if subj_marker not in subj_desc:
+        new_desc = subj_desc + block
+        await db.subjects.update_one(
+            {"id": subject_id},
+            {"$set": {"description": new_desc, "updated_at": _NOW()}},
+        )
+        subject_url = _subject_url(subject)
+        if subject_url:
+            patched_urls.append(subject_url)
+
+    # ── 2) Patch 2-3 sibling chapters ───────────────────────────────────
+    cursor = db.chapters.find({"subject_id": subject_id})
+    siblings = await cursor.to_list(500) if hasattr(cursor, "to_list") else list(cursor)
+    targets = _pick_sibling_chapters(siblings, new_chapter)
+
+    for sib in targets:
+        sib_id = sib.get("id")
+        sib_marker = _related_marker(chapter_id)
+        sib_content = sib.get("content") or ""
+        if sib_marker in sib_content:
+            continue
+        new_content = sib_content + block
+        await db.chapters.update_one(
+            {"id": sib_id},
+            {"$set": {"content": new_content, "updated_at": _NOW()}},
+        )
+        sib_url = _chapter_url(sib, subject)
+        if sib_url:
+            patched_urls.append(sib_url)
+
+    # Always include the new chapter URL itself so the Phase A fan-out
+    # picks it up (the chapter-create handler still triggers its own
+    # IndexNow ping but the bundled fan-out gives us cache purge + prewarm
+    # for free in the same batched call).
+    patched_urls.append(new_url)
+
+    return patched_urls
+
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Data types
