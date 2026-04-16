@@ -1238,6 +1238,15 @@ _SEO_HEALTH_ALERT_COOLDOWN_S = 6 * 3600
 _SEO_URL_SPIKE_ALERT_COOLDOWN_S = 6 * 3600
 _SEO_HEALTH_HISTORY_RETENTION_DAYS = 30
 
+# ── Weekly digest ────────────────────────────────────────────────────────────
+# Mon 09:00 IST = Mon 03:30 UTC. Fire window is 03:00-04:59 UTC on Monday so
+# the loop catches it even if it sleeps slightly past the half-hour mark.
+_SEO_WEEKLY_DIGEST_DASHBOARD_URL = "https://syrabit.ai/admin/seo"
+_SEO_WEEKLY_DIGEST_API_CONFIG_KEY = "seo_weekly_digest_last_iso_week"
+_SEO_WEEKLY_DIGEST_TARGET_WEEKDAY = 0       # Monday
+_SEO_WEEKLY_DIGEST_TARGET_HOURS_UTC = (3, 4)  # 03:00-04:59 UTC ≈ 08:30-10:30 IST
+_SEO_WEEKLY_DIGEST_LOOP_SLEEP_S = 1800       # check every 30 minutes
+
 
 def _format_by_sitemap_html(by_sitemap, threshold_pct: float) -> str:
     """Render an HTML table showing per-sitemap pass/fail counts. Rows where
@@ -1340,6 +1349,253 @@ async def _record_seo_health_snapshot() -> Dict:
         logger.debug(f"Failed to persist seo health snapshot: {exc}")
 
     return snapshot
+
+
+def _compose_seo_weekly_digest(history: list, *, dashboard_url: str = _SEO_WEEKLY_DIGEST_DASHBOARD_URL,
+                               recent_alerts: int = 0) -> dict:
+    """Aggregate the past-7-days seo_health_history snapshots into a digest dict.
+
+    ``history`` is a list of snapshot docs (any order) — usually the previous
+    168 hourly snapshots. Returns the stats payload consumed by
+    ``_format_seo_weekly_digest_html`` and the manual-trigger admin endpoint.
+    Designed to be a pure function so unit tests can drive it with fixtures.
+    """
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=7)
+
+    in_window = []
+    for h in history or []:
+        ra = h.get("recorded_at")
+        if isinstance(ra, str):
+            try:
+                ra_dt = datetime.fromisoformat(ra.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+        elif isinstance(ra, datetime):
+            ra_dt = ra if ra.tzinfo else ra.replace(tzinfo=timezone.utc)
+        else:
+            continue
+        if ra_dt >= window_start:
+            in_window.append((ra_dt, h))
+
+    in_window.sort(key=lambda t: t[0])
+    snaps = [h for _, h in in_window]
+    total_snapshots = len(snaps)
+
+    status_counts = {"ok": 0, "degraded": 0, "critical": 0, "unknown": 0}
+    valid_sitemaps_sum = 0
+    total_sitemaps_sum = 0
+    url_total_sum = 0
+    url_ok_sum = 0
+    rate_sum = 0.0
+    rate_count = 0
+
+    worst_status = None  # latest non-ok snapshot for quick context
+    for snap in snaps:
+        st = (snap.get("status") or "unknown").lower()
+        if st not in status_counts:
+            st = "unknown"
+        status_counts[st] += 1
+        s = snap.get("summary") or {}
+        valid_sitemaps_sum += int(s.get("valid_sitemaps", 0) or 0)
+        total_sitemaps_sum += int(s.get("total_sitemaps", 0) or 0)
+        url_total_sum += int(s.get("total_url_checks", 0) or 0)
+        url_ok_sum += int(s.get("ok_url_checks", 0) or 0)
+        try:
+            rate = float(s.get("url_check_success_rate", 0) or 0)
+            rate_sum += rate
+            rate_count += 1
+        except (TypeError, ValueError):
+            pass
+        if st in ("degraded", "critical"):
+            worst_status = st
+
+    healthy = status_counts["ok"]
+    uptime_pct = round((healthy / total_snapshots) * 100, 1) if total_snapshots else 0.0
+    avg_url_success = round(rate_sum / rate_count, 1) if rate_count else 0.0
+    avg_valid_sitemaps = round(valid_sitemaps_sum / total_snapshots, 1) if total_snapshots else 0.0
+    avg_total_sitemaps = round(total_sitemaps_sum / total_snapshots, 1) if total_snapshots else 0.0
+
+    latest = snaps[-1] if snaps else None
+    latest_status = (latest.get("status") or "unknown").lower() if latest else "unknown"
+
+    return {
+        "window_start": window_start.isoformat(),
+        "window_end": now.isoformat(),
+        "total_snapshots": total_snapshots,
+        "status_counts": status_counts,
+        "uptime_pct": uptime_pct,
+        "latest_status": latest_status,
+        "worst_status_in_window": worst_status,
+        "avg_url_success_rate": avg_url_success,
+        "total_url_checks": url_total_sum,
+        "ok_url_checks": url_ok_sum,
+        "avg_valid_sitemaps": avg_valid_sitemaps,
+        "avg_total_sitemaps": avg_total_sitemaps,
+        "recent_alerts": int(recent_alerts or 0),
+        "dashboard_url": dashboard_url,
+        "iso_week": f"{now.isocalendar().year}-W{now.isocalendar().week:02d}",
+    }
+
+
+def _format_seo_weekly_digest_html(stats: dict) -> str:
+    """Render the digest payload as a Resend-compatible HTML email body."""
+    sc = stats.get("status_counts") or {}
+    uptime = stats.get("uptime_pct", 0.0)
+    uptime_color = "#16a34a" if uptime >= 95 else ("#d97706" if uptime >= 80 else "#c0392b")
+    latest = (stats.get("latest_status") or "unknown").upper()
+    latest_color = {"OK": "#16a34a", "DEGRADED": "#d97706", "CRITICAL": "#c0392b"}.get(latest, "#475569")
+    dashboard = stats.get("dashboard_url") or _SEO_WEEKLY_DIGEST_DASHBOARD_URL
+
+    return (
+        "<div style='font-family:sans-serif;max-width:560px;margin:auto;padding:24px;color:#0f172a'>"
+        "<h2 style='color:#7c3aed;margin:0 0 4px'>Syrabit.ai · SEO weekly digest</h2>"
+        f"<p style='color:#64748b;margin:0 0 18px;font-size:13px'>"
+        f"Window: {stats.get('window_start','')[:10]} → {stats.get('window_end','')[:10]} "
+        f"(ISO week {stats.get('iso_week','')})"
+        "</p>"
+        "<table style='border-collapse:collapse;width:100%;font-size:14px;margin-bottom:18px'>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Snapshots collected</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'><b>{stats.get('total_snapshots', 0)}</b></td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Healthy uptime</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right;color:{uptime_color};font-weight:bold'>{uptime}%</td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Latest status</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right;color:{latest_color};font-weight:bold'>{latest}</td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Status breakdown</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'>"
+        f"OK: {sc.get('ok',0)} · DEGRADED: {sc.get('degraded',0)} · CRITICAL: {sc.get('critical',0)}"
+        f"{' · UNKNOWN: ' + str(sc.get('unknown',0)) if sc.get('unknown',0) else ''}"
+        "</td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Avg URL spot-check success</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'><b>{stats.get('avg_url_success_rate',0)}%</b> "
+        f"({stats.get('ok_url_checks',0)}/{stats.get('total_url_checks',0)} sampled)</td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Avg valid sitemaps</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'>"
+        f"{stats.get('avg_valid_sitemaps',0)} / {stats.get('avg_total_sitemaps',0)}</td></tr>"
+        f"<tr><td style='padding:8px;border:1px solid #e2e8f0'>Alerts fired this week</td>"
+        f"<td style='padding:8px;border:1px solid #e2e8f0;text-align:right'><b>{stats.get('recent_alerts',0)}</b></td></tr>"
+        "</table>"
+        f"<p style='margin:18px 0'><a href='{dashboard}' style='display:inline-block;background:#7c3aed;"
+        "color:white;text-decoration:none;padding:10px 20px;border-radius:8px;font-weight:600;font-size:14px'>"
+        "Open SEO Manager dashboard</a></p>"
+        "<p style='color:#94a3b8;font-size:12px;margin-top:24px'>"
+        "You're getting this because you're listed as the Syrabit.ai SEO admin contact. "
+        "To stop these weekly summaries, clear the email channel in /admin notifications."
+        "</p></div>"
+    )
+
+
+async def _gather_weekly_digest_inputs(now: Optional[datetime] = None) -> dict:
+    """Pull the past-7-days history and alert count from Mongo, then compose
+    the digest stats. Returns ``{}`` when Mongo is unavailable."""
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return {}
+    _now = now or datetime.now(timezone.utc)
+    cutoff = _now - timedelta(days=7)
+    try:
+        history = await db.seo_health_history.find(
+            {"recorded_at": {"$gte": cutoff}}, {"_id": 0}
+        ).sort("recorded_at", 1).to_list(length=200)
+    except Exception as exc:
+        logger.debug(f"[SEO digest] history fetch failed: {exc}")
+        history = []
+    try:
+        recent_alerts = await db.alerts.count_documents(
+            {"fired_at": {"$gte": cutoff.isoformat()}}
+        )
+    except Exception:
+        recent_alerts = 0
+    return _compose_seo_weekly_digest(history, recent_alerts=recent_alerts)
+
+
+async def _send_seo_weekly_digest_email(stats: dict, *, to: Optional[str] = None) -> dict:
+    """Send the rendered digest via Resend. Returns ``{sent, to, reason?}``."""
+    if not stats:
+        return {"sent": False, "to": "", "reason": "no_stats"}
+    try:
+        from metrics import _notification_channels, _load_alert_settings
+        try:
+            await _load_alert_settings()
+        except Exception:
+            pass
+        admin_email = (to or _notification_channels.get("email")
+                       or os.environ.get("ALERT_EMAIL", "")).strip()
+    except Exception:
+        admin_email = (to or os.environ.get("ALERT_EMAIL", "")).strip()
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not admin_email:
+        return {"sent": False, "to": "", "reason": "no_admin_email"}
+    if not resend_key:
+        return {"sent": False, "to": admin_email, "reason": "no_resend_key"}
+    try:
+        from email_templates import EMAIL_FROM
+    except Exception:
+        EMAIL_FROM = os.environ.get("EMAIL_FROM", "Syrabit.ai <noreply@syrabit.ai>").strip()
+    html = _format_seo_weekly_digest_html(stats)
+    subject = (
+        f"Syrabit SEO weekly digest · "
+        f"{stats.get('uptime_pct', 0)}% uptime · "
+        f"{stats.get('iso_week', '')}"
+    )
+    try:
+        import resend as _resend_sdk
+        _resend_sdk.api_key = resend_key
+        _resend_sdk.Emails.send({
+            "from": EMAIL_FROM,
+            "to": [admin_email],
+            "subject": subject,
+            "html": html,
+        })
+        logger.info(f"[SEO digest] sent weekly digest → {admin_email} ({stats.get('iso_week','')})")
+        return {"sent": True, "to": admin_email, "subject": subject}
+    except Exception as exc:
+        logger.warning(f"[SEO digest] Resend send failed: {exc}")
+        return {"sent": False, "to": admin_email, "reason": f"send_error:{type(exc).__name__}"}
+
+
+async def _seo_weekly_digest_loop():
+    """Wake every ~30 min. On Monday between 03:00-04:59 UTC (Mon 09:00 IST)
+    send the weekly digest if we haven't already sent one for the current ISO
+    week. Dedup state lives in db.api_config.seo_weekly_digest_last_iso_week
+    so restarts don't re-send."""
+    from deps import db, is_mongo_available
+    await asyncio.sleep(600)  # let the app warm up
+    while True:
+        try:
+            now_utc = datetime.now(timezone.utc)
+            in_window = (
+                now_utc.weekday() == _SEO_WEEKLY_DIGEST_TARGET_WEEKDAY
+                and now_utc.hour in _SEO_WEEKLY_DIGEST_TARGET_HOURS_UTC
+            )
+            if in_window and await is_mongo_available():
+                cur_iso_week = f"{now_utc.isocalendar().year}-W{now_utc.isocalendar().week:02d}"
+                try:
+                    cfg = await db.api_config.find_one(
+                        {}, {"_id": 0, _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: 1}
+                    ) or {}
+                except Exception:
+                    cfg = {}
+                last_sent = cfg.get(_SEO_WEEKLY_DIGEST_API_CONFIG_KEY, "")
+                if last_sent != cur_iso_week:
+                    stats = await _gather_weekly_digest_inputs(now_utc)
+                    result = await _send_seo_weekly_digest_email(stats)
+                    if result.get("sent"):
+                        try:
+                            await db.api_config.update_one(
+                                {}, {"$set": {_SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_iso_week}},
+                                upsert=True,
+                            )
+                        except Exception as exc:
+                            logger.debug(f"[SEO digest] failed to persist ISO-week marker: {exc}")
+                    else:
+                        logger.info(
+                            f"[SEO digest] not sent for {cur_iso_week} "
+                            f"(reason={result.get('reason','unknown')})"
+                        )
+        except Exception as exc:
+            logger.debug(f"[SEO digest] loop iteration error: {exc}")
+        await asyncio.sleep(_SEO_WEEKLY_DIGEST_LOOP_SLEEP_S)
 
 
 async def _seo_health_alert_loop():
@@ -1524,6 +1780,23 @@ async def admin_seo_health_history(
         "banner": banner,
         "count": len(docs),
     }
+
+
+@router.post("/admin/seo/weekly-digest/send")
+async def admin_seo_weekly_digest_send(
+    preview_only: bool = Query(False, description="If true, return the rendered stats/HTML without sending the email."),
+    admin: dict = Depends(get_admin_user),
+):
+    """Manually trigger (or preview) the weekly SEO digest. Useful for QA and
+    for catching up after an outage. Does not advance the ISO-week dedup
+    marker so the regular Monday send still happens."""
+    stats = await _gather_weekly_digest_inputs()
+    html = _format_seo_weekly_digest_html(stats) if stats else ""
+    if preview_only:
+        return {"sent": False, "preview": True, "stats": stats, "html": html}
+    result = await _send_seo_weekly_digest_email(stats)
+    return {"sent": result.get("sent", False), "to": result.get("to", ""),
+            "reason": result.get("reason"), "stats": stats}
 
 
 @router.post("/admin/seo/health-snapshot")
