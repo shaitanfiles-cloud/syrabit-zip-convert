@@ -1022,21 +1022,35 @@ async def _collect_current_sitemap_urls() -> List[str]:
 
 def _ensure_utc(dt_value) -> Optional[datetime]:
     """Normalize a Mongo-sourced datetime to a timezone-aware UTC datetime.
-    Mongo's BSON decoder returns naive datetimes in some codecs; treat those
-    as UTC to avoid TypeError when comparing/subtracting against aware `now`."""
-    if not isinstance(dt_value, datetime):
-        return None
-    if dt_value.tzinfo is None:
-        return dt_value.replace(tzinfo=timezone.utc)
-    return dt_value.astimezone(timezone.utc)
+    Accepts both `datetime` objects (BSON decoder may return naive ones in
+    some codecs — treat those as UTC) and ISO-8601 strings (the `subjects`,
+    `chapters`, `seo_pages`, and `cms_documents` collections store
+    `datetime.now(timezone.utc).isoformat()`). Returns None for anything
+    unparseable so callers can safely skip the URL."""
+    if isinstance(dt_value, datetime):
+        if dt_value.tzinfo is None:
+            return dt_value.replace(tzinfo=timezone.utc)
+        return dt_value.astimezone(timezone.utc)
+    if isinstance(dt_value, str) and dt_value:
+        s = dt_value.strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    return None
 
 
 async def _collect_edited_url_mtimes(urls: List[str]) -> Dict[str, datetime]:
     """For a list of candidate URLs, look up the `updated_at` of the
-    corresponding seo_pages / cms_documents record so we can tell whether the
-    content has been meaningfully edited since the last IndexNow submission.
-    Returns a dict {url: updated_at}. URLs without a matching record (static
-    pages, subject/chapter index pages) are omitted."""
+    corresponding seo_pages / cms_documents / subjects / chapters record so
+    we can tell whether the content has been meaningfully edited since the
+    last IndexNow submission. Returns a dict {url: updated_at}. URLs without
+    a matching record (static pages with no `updated_at`) are omitted."""
     out: Dict[str, datetime] = {}
     if not urls:
         return out
@@ -1064,6 +1078,65 @@ async def _collect_edited_url_mtimes(urls: List[str]) -> Dict[str, datetime]:
                     out[u] = ua
         except Exception as e:
             logger.debug(f"sitemap diff mtime: seo_pages scan failed: {e}")
+
+        # subjects -> /<board>/<class>/<subject_slug> URLs
+        # chapters -> /<board>/<class>/<subject_slug>/<chapter_slug> URLs
+        # We need the board+class slug chain for both, so build it once.
+        try:
+            import re as _re
+            lib_streams = {s["id"]: s for s in await db.streams.find({}, {"_id": 0}).to_list(500)}
+            lib_classes = {c["id"]: c for c in await db.classes.find({}, {"_id": 0}).to_list(500)}
+            lib_boards = {b["id"]: b for b in await db.boards.find({}, {"_id": 0}).to_list(500)}
+            lib_subjects = await db.subjects.find(
+                {"status": "published"},
+                {"_id": 0, "id": 1, "slug": 1, "stream_id": 1, "updated_at": 1},
+            ).to_list(2000)
+
+            sub_chain: Dict[str, dict] = {}  # subject_id -> {b, c, s, url, updated_at}
+            for sub in lib_subjects:
+                stream = lib_streams.get(sub.get("stream_id", ""))
+                cls = lib_classes.get(stream.get("class_id", "")) if stream else None
+                board = lib_boards.get(cls.get("board_id", "")) if cls else None
+                if not (board and cls and sub.get("slug")):
+                    continue
+                b_slug = board.get("slug", "")
+                c_slug = cls.get("slug", "")
+                s_slug = sub.get("slug", "")
+                if not (b_slug and c_slug and s_slug):
+                    continue
+                u = f"{BASE_URL}/{b_slug}/{c_slug}/{s_slug}"
+                ua = _ensure_utc(sub.get("updated_at"))
+                sub_chain[sub["id"]] = {
+                    "b": b_slug, "c": c_slug, "s": s_slug, "url": u, "updated_at": ua,
+                }
+                if u in url_set and ua is not None:
+                    out[u] = ua
+
+            # Chapters — pull updated_at and rebuild the URL via subject chain.
+            try:
+                chapters = await db.chapters.find(
+                    {}, {"_id": 0, "subject_id": 1, "slug": 1, "title": 1, "updated_at": 1},
+                ).to_list(10000)
+                for ch in chapters:
+                    sub = sub_chain.get(ch.get("subject_id", ""))
+                    if not sub:
+                        continue
+                    ch_slug = ch.get("slug") or _re.sub(
+                        r"[^a-z0-9]+", "-",
+                        (ch.get("title") or "").lower(),
+                    ).strip("-")
+                    if not ch_slug:
+                        continue
+                    u = f"{BASE_URL}/{sub['b']}/{sub['c']}/{sub['s']}/{ch_slug}"
+                    if u not in url_set:
+                        continue
+                    ua = _ensure_utc(ch.get("updated_at"))
+                    if ua is not None:
+                        out[u] = ua
+            except Exception as e:
+                logger.debug(f"sitemap diff mtime: chapters scan failed: {e}")
+        except Exception as e:
+            logger.debug(f"sitemap diff mtime: subjects scan failed: {e}")
 
         # cms_documents -> /learn/<slug> URLs
         try:
