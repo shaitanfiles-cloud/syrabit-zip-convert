@@ -200,6 +200,7 @@ const _t = {
       'Flashcards & memory tricks',
       'AI-generated study guides',
     ],
+    founderLabel: 'Founded by',
     ctaHeading: 'Start Learning for Free',
     ctaSubtext: 'No credit card required. Get 30 free credits every day.',
     ctaButton: 'Try Syrabit.ai',
@@ -228,6 +229,7 @@ const _t = {
       'ফ্লেচকাৰ্ড আৰু স্মৃতি কৌশল',
       'AI-সৃষ্ট অধ্যয়ন গাইড',
     ],
+    founderLabel: 'প্ৰতিষ্ঠাপক',
     ctaHeading: 'বিনামূলীয়াকৈ শিকিবলৈ আৰম্ভ কৰক',
     ctaSubtext: 'কোনো ক্ৰেডিট কাৰ্ডৰ প্ৰয়োজন নাই। প্ৰতিদিনে ৩০ টা বিনামূলীয়া ক্ৰেডিট পাওক।',
     ctaButton: 'Syrabit.ai চেষ্টা কৰক',
@@ -264,6 +266,10 @@ function getJsonLd(lang) {
         '@type': 'Organization',
         name: 'Syrabit.ai',
         url: 'https://syrabit.ai',
+        founder: {
+          '@type': 'Person',
+          name: 'Dipak Rai',
+        },
       },
     },
     {
@@ -421,6 +427,13 @@ export default function TechnologyPage() {
                 ))}
               </ul>
             </div>
+          </div>
+
+          <div className="text-center mb-14">
+            <p className="text-sm text-muted-foreground">
+              {t.founderLabel}{' '}
+              <span className="font-semibold text-foreground">Dipak Rai</span>
+            </p>
           </div>
 
           <div className="rounded-2xl border border-violet-200/40 bg-gradient-to-br from-violet-50/60 to-white p-8 text-center">
