@@ -26,6 +26,8 @@ __all__ = [
     "supa_insert_user", "supa_list_users", "supa_update_conversation",
     "supa_update_settings", "supa_update_user", "supa_update_user_password",
     "supa_upsert_conversation",
+    "get_admin_notification_prefs", "upsert_admin_notification_prefs",
+    "_ADMIN_NOTIF_PREFS_DEFAULTS",
 ]
 
 _THREAD_POOL = _cf.ThreadPoolExecutor(max_workers=32)
@@ -877,3 +879,52 @@ async def supa_delete_notification(notif_id: str):
     try:
         await db.notifications.delete_one({"id": notif_id})
     except Exception: pass
+
+
+_ADMIN_NOTIF_PREFS_DEFAULTS = {
+    "sound_enabled": True,
+    "push_enabled": False,
+    "chime_tone": "default",
+    "sound_severities": ["high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate"],
+    "push_severities": ["high_error_rate", "spoofed_bot_surge"],
+}
+
+
+async def get_admin_notification_prefs(admin_id: str) -> dict:
+    try:
+        doc = await db.admin_notification_prefs.find_one({"admin_id": admin_id}, {"_id": 0})
+        if doc:
+            merged = {**_ADMIN_NOTIF_PREFS_DEFAULTS, **doc}
+            merged["defaults"] = _ADMIN_NOTIF_PREFS_DEFAULTS
+            return merged
+    except Exception as exc:
+        logger.warning(f"Failed to get admin notification prefs from MongoDB: {exc}")
+    result = {**_ADMIN_NOTIF_PREFS_DEFAULTS, "admin_id": admin_id}
+    result["defaults"] = _ADMIN_NOTIF_PREFS_DEFAULTS
+    return result
+
+
+async def upsert_admin_notification_prefs(admin_id: str, prefs: dict) -> dict:
+    valid_tones = {"default", "soft", "urgent", "bell"}
+    valid_severities = {"high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate"}
+
+    doc = {"admin_id": admin_id, "updated_at": datetime.now(timezone.utc).isoformat()}
+
+    if "sound_enabled" in prefs:
+        doc["sound_enabled"] = bool(prefs["sound_enabled"])
+    if "push_enabled" in prefs:
+        doc["push_enabled"] = bool(prefs["push_enabled"])
+    if "chime_tone" in prefs:
+        tone = str(prefs["chime_tone"]).strip()
+        doc["chime_tone"] = tone if tone in valid_tones else "default"
+    if "sound_severities" in prefs:
+        doc["sound_severities"] = [s for s in prefs["sound_severities"] if s in valid_severities]
+    if "push_severities" in prefs:
+        doc["push_severities"] = [s for s in prefs["push_severities"] if s in valid_severities]
+
+    await db.admin_notification_prefs.update_one(
+        {"admin_id": admin_id},
+        {"$set": doc},
+        upsert=True,
+    )
+    return await get_admin_notification_prefs(admin_id)

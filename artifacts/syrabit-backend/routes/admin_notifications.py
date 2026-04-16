@@ -109,13 +109,14 @@ async def _dispatch_push_to_all(payload: dict):
 
 
 async def _dispatch_push_to_admins(payload: dict):
-    """Send a web-push only to admin-user subscriptions. Fire-and-forget."""
+    """Send a web-push only to admin-user subscriptions. Fire-and-forget.
+    Respects per-admin notification preferences (push_enabled, push_severities)."""
     await _dispatch_push(payload, admin_only=True)
 
 
 async def _dispatch_push(payload: dict, admin_only: bool = False):
     """Core push dispatcher. When admin_only=True, sends only to subscriptions
-    belonging to users with is_admin=True."""
+    belonging to users with is_admin=True, filtered by per-admin notification prefs."""
     try:
         from pywebpush import webpush, WebPushException
         vapid = await _get_or_create_vapid_keys()
@@ -125,14 +126,50 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
             return
         if admin_only:
             admin_docs = await db.users.find(
-                {"is_admin": True}, {"_id": 0, "id": 1}
+                {"is_admin": True}, {"_id": 0, "id": 1, "email": 1}
             ).to_list(500)
             admin_ids = {str(d["id"]) for d in admin_docs if d.get("id")}
             if not admin_ids:
                 logger.info("Push dispatch (admin-only): no admin users found, skipping")
                 return
+
+            id_to_email = {}
+            for d in admin_docs:
+                uid = str(d.get("id", ""))
+                email = str(d.get("email", "")).lower().strip()
+                if uid and email:
+                    id_to_email[uid] = email
+
+            alert_type = payload.get("alert_type", "")
+            admin_prefs_map = {}
+            try:
+                all_admin_keys = list(admin_ids | set(id_to_email.values()))
+                prefs_cursor = db.admin_notification_prefs.find(
+                    {"admin_id": {"$in": all_admin_keys}}, {"_id": 0}
+                )
+                async for pref_doc in prefs_cursor:
+                    admin_prefs_map[pref_doc["admin_id"]] = pref_doc
+            except Exception as exc:
+                logger.debug(f"Failed to load admin notification prefs for push filter: {exc}")
+
+            eligible_admin_ids = set()
+            for aid in admin_ids:
+                email_key = id_to_email.get(aid, "")
+                prefs = admin_prefs_map.get(aid) or admin_prefs_map.get(email_key, {})
+                push_enabled = prefs.get("push_enabled", _ADMIN_NOTIF_PREFS_DEFAULTS.get("push_enabled", False))
+                push_severities = prefs.get("push_severities", _ADMIN_NOTIF_PREFS_DEFAULTS.get("push_severities", []))
+                if not push_enabled:
+                    continue
+                if alert_type and alert_type not in push_severities:
+                    continue
+                eligible_admin_ids.add(aid)
+
+            if not eligible_admin_ids:
+                logger.info("Push dispatch (admin-only): no admins with push enabled for this alert type, skipping")
+                return
+
             subs = await db.push_subscriptions.find(
-                {"user_id": {"$in": list(admin_ids)}}, {"_id": 0}
+                {"user_id": {"$in": list(eligible_admin_ids)}}, {"_id": 0}
             ).to_list(10000)
         else:
             subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
@@ -451,6 +488,23 @@ async def admin_get_rate_stats(admin: dict = Depends(get_admin_user)):
         "daily_budget": 2_000_000,
         "cost_degraded": False,
     }
+
+
+@router.get("/admin/notification-prefs")
+async def admin_get_notification_prefs(admin: dict = Depends(get_admin_user)):
+    admin_id = admin.get("sub") or admin.get("email") or "default"
+    prefs = await get_admin_notification_prefs(admin_id)
+    return prefs
+
+
+@router.put("/admin/notification-prefs")
+async def admin_update_notification_prefs(
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    admin_id = admin.get("sub") or admin.get("email") or "default"
+    prefs = await upsert_admin_notification_prefs(admin_id, data)
+    return prefs
 
 
 @router.get("/admin/alert-settings")

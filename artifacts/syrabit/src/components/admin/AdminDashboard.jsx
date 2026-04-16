@@ -276,54 +276,97 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [alertSettingsDraft, setAlertSettingsDraft] = useState(null);
   const [alertSettingsSaving, setAlertSettingsSaving] = useState(false);
   const [failedSections, setFailedSections] = useState([]);
-  const [alertSoundEnabled, setAlertSoundEnabled] = useState(() => {
-    try { return localStorage.getItem('syrabit_alert_sound') !== 'off'; } catch { return true; }
-  });
+  const [notifPrefs, setNotifPrefs] = useState(null);
+  const [notifPrefsSaving, setNotifPrefsSaving] = useState(false);
+  const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
   const prevAlertIdsRef = useRef(new Set());
   const audioCtxRef = useRef(null);
   const pushNotif = usePushNotifications();
 
-  const toggleAlertSound = useCallback(() => {
-    setAlertSoundEnabled(prev => {
-      const next = !prev;
-      try { localStorage.setItem('syrabit_alert_sound', next ? 'on' : 'off'); } catch {}
-      return next;
-    });
-  }, []);
+  const alertSoundEnabled = notifPrefs?.sound_enabled ?? true;
+  const chimeTone = notifPrefs?.chime_tone ?? 'default';
 
-  const playAlertChime = useCallback(() => {
+  const CHIME_TONES = {
+    default: { label: 'Default', freqs: [880, 1100, 880], type: 'sine', dur: 0.5 },
+    soft: { label: 'Soft', freqs: [440, 550, 440], type: 'sine', dur: 0.6 },
+    urgent: { label: 'Urgent', freqs: [1200, 900, 1200, 900], type: 'square', dur: 0.4 },
+    bell: { label: 'Bell', freqs: [1047, 1319, 1568], type: 'sine', dur: 0.7 },
+  };
+
+  const ALERT_SEVERITY_LABELS = {
+    high_error_rate: 'High Error Rate',
+    high_latency: 'High Latency',
+    spoofed_bot_surge: 'Bot Surge',
+    high_fallback_rate: 'High Fallback Rate',
+  };
+
+  const loadNotifPrefs = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/admin/notification-prefs`, adminHdr(adminToken));
+      setNotifPrefs(res.data);
+    } catch (e) {
+      log.error('Failed to load notification prefs', { error: e.message });
+      setNotifPrefs({
+        sound_enabled: true, push_enabled: false, chime_tone: 'default',
+        sound_severities: ['high_error_rate', 'high_latency', 'spoofed_bot_surge', 'high_fallback_rate'],
+        push_severities: ['high_error_rate', 'spoofed_bot_surge'],
+      });
+    }
+  }, [adminToken]);
+
+  const saveNotifPrefs = useCallback(async (updates) => {
+    const merged = { ...notifPrefs, ...updates };
+    setNotifPrefs(merged);
+    setNotifPrefsSaving(true);
+    try {
+      const res = await axios.put(`${API_BASE}/admin/notification-prefs`, merged, adminHdr(adminToken));
+      setNotifPrefs(res.data);
+    } catch (e) {
+      log.error('Failed to save notification prefs', { error: e.message });
+    } finally {
+      setNotifPrefsSaving(false);
+    }
+  }, [adminToken, notifPrefs]);
+
+  const toggleAlertSound = useCallback(() => {
+    saveNotifPrefs({ sound_enabled: !alertSoundEnabled });
+  }, [saveNotifPrefs, alertSoundEnabled]);
+
+  const playAlertChime = useCallback((tone) => {
     try {
       if (!audioCtxRef.current) {
         audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
       }
       const ctx = audioCtxRef.current;
       const now = ctx.currentTime;
+      const toneConfig = CHIME_TONES[tone || chimeTone] || CHIME_TONES.default;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, now);
-      osc.frequency.setValueAtTime(1100, now + 0.15);
-      osc.frequency.setValueAtTime(880, now + 0.3);
+      osc.type = toneConfig.type;
+      const step = toneConfig.dur / toneConfig.freqs.length;
+      toneConfig.freqs.forEach((f, i) => osc.frequency.setValueAtTime(f, now + i * step));
       gain.gain.setValueAtTime(0.3, now);
-      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.5);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + toneConfig.dur);
       osc.start(now);
-      osc.stop(now + 0.5);
+      osc.stop(now + toneConfig.dur);
     } catch {}
-  }, []);
+  }, [chimeTone]);
 
   useEffect(() => {
     if (!alertHistory?.alerts || !alertSoundEnabled) return;
+    const soundSeverities = new Set(notifPrefs?.sound_severities || []);
     const currentUnack = alertHistory.alerts.filter(a => !a.acknowledged);
     const currentIds = new Set(currentUnack.map(a => a._id));
     const prevIds = prevAlertIdsRef.current;
-    const hasNew = currentUnack.some(a => !prevIds.has(a._id));
-    if (hasNew && prevIds.size > 0) {
-      playAlertChime();
+    const newAlerts = currentUnack.filter(a => !prevIds.has(a._id));
+    if (newAlerts.length > 0 && prevIds.size > 0) {
+      const shouldSound = newAlerts.some(a => soundSeverities.has(a.type));
+      if (shouldSound) playAlertChime();
     }
     prevAlertIdsRef.current = currentIds;
-  }, [alertHistory, alertSoundEnabled, playAlertChime]);
+  }, [alertHistory, alertSoundEnabled, notifPrefs, playAlertChime]);
 
   const headers = { withCredentials: true };
   const adminHdr = (token) => {
@@ -387,9 +430,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
   useEffect(() => {
     load();
+    loadNotifPrefs();
     const interval = setInterval(() => load(true), 60000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, loadNotifPrefs]);
 
   if (loading) {
     return (
@@ -865,7 +909,15 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               </button>
               {pushNotif.isSupported && (
                 <button
-                  onClick={pushNotif.subscribed ? pushNotif.unsubscribe : pushNotif.subscribe}
+                  onClick={async () => {
+                    if (pushNotif.subscribed) {
+                      await pushNotif.unsubscribe();
+                      saveNotifPrefs({ push_enabled: false });
+                    } else {
+                      const success = await pushNotif.subscribe();
+                      if (success !== false) saveNotifPrefs({ push_enabled: true });
+                    }
+                  }}
                   disabled={pushNotif.loading}
                   className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border transition-colors font-medium ${
                     pushNotif.subscribed
@@ -901,6 +953,17 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               >
                 <Settings size={10} />
                 Settings
+              </button>
+              <button
+                onClick={() => setNotifPrefsOpen(prev => !prev)}
+                className={`text-[10px] px-2.5 py-1 rounded-md border transition-colors font-medium flex items-center gap-1 ${
+                  notifPrefsOpen
+                    ? 'bg-violet-50 text-violet-700 border-violet-200'
+                    : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-violet-50 hover:text-violet-600 hover:border-violet-200'
+                }`}
+              >
+                <Bell size={10} />
+                Preferences
               </button>
             </div>
           </div>
@@ -986,6 +1049,114 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   className="w-16 text-xs border border-gray-200 rounded-md px-2 py-1 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none disabled:opacity-40"
                 />
                 <span className="text-[11px] text-gray-500">days</span>
+              </div>
+            </div>
+          )}
+
+          {notifPrefsOpen && notifPrefs && (
+            <div className="mb-4 p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-xs font-semibold text-gray-700">Notification Preferences</h4>
+                {notifPrefsSaving && <span className="text-[10px] text-violet-500 font-medium">Saving...</span>}
+              </div>
+
+              <div className="flex items-center gap-6 mb-3 pb-3 border-b border-gray-200">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={notifPrefs.sound_enabled ?? true}
+                    onChange={e => saveNotifPrefs({ sound_enabled: e.target.checked })}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                  />
+                  <span className="text-[11px] text-gray-600 font-medium">Sound Enabled</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={notifPrefs.push_enabled ?? false}
+                    onChange={async (e) => {
+                      const enabled = e.target.checked;
+                      if (enabled && !pushNotif.subscribed) {
+                        const success = await pushNotif.subscribe();
+                        if (success === false) return;
+                      }
+                      saveNotifPrefs({ push_enabled: enabled });
+                    }}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                  />
+                  <span className="text-[11px] text-gray-600 font-medium">Push Enabled</span>
+                </label>
+              </div>
+
+              <div className="mb-3">
+                <label className="text-[10px] text-gray-500 font-medium block mb-1.5">Chime Tone</label>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {Object.entries(CHIME_TONES).map(([key, tone]) => (
+                    <button
+                      key={key}
+                      onClick={() => { playAlertChime(key); saveNotifPrefs({ chime_tone: key }); }}
+                      className={`text-[10px] px-2.5 py-1 rounded-md border transition-colors font-medium ${
+                        chimeTone === key
+                          ? 'bg-violet-100 text-violet-700 border-violet-300'
+                          : 'bg-white text-gray-500 border-gray-200 hover:bg-violet-50 hover:text-violet-600'
+                      }`}
+                    >
+                      {tone.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1.5">Sound Alerts For</label>
+                  <div className="space-y-1.5">
+                    {Object.entries(ALERT_SEVERITY_LABELS).map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={(notifPrefs.sound_severities || []).includes(key)}
+                          onChange={e => {
+                            const current = notifPrefs.sound_severities || [];
+                            const next = e.target.checked ? [...current, key] : current.filter(s => s !== key);
+                            saveNotifPrefs({ sound_severities: next });
+                          }}
+                          className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span className="text-[11px] text-gray-600">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1.5">Push Alerts For</label>
+                  <div className="space-y-1.5">
+                    {Object.entries(ALERT_SEVERITY_LABELS).map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={(notifPrefs.push_severities || []).includes(key)}
+                          onChange={e => {
+                            const current = notifPrefs.push_severities || [];
+                            const next = e.target.checked ? [...current, key] : current.filter(s => s !== key);
+                            saveNotifPrefs({ push_severities: next });
+                          }}
+                          className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                        />
+                        <span className="text-[11px] text-gray-600">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between mt-3 pt-2 border-t border-gray-200">
+                <button
+                  onClick={() => saveNotifPrefs(notifPrefs.defaults || {})}
+                  className="text-[10px] px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-500 hover:bg-gray-100 transition-colors"
+                >
+                  Reset to Defaults
+                </button>
               </div>
             </div>
           )}
