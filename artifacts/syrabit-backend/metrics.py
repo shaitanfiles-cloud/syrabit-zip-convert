@@ -405,9 +405,15 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
     # 4) Browser push notification — filtered by per-admin prefs (push_enabled + push_severities)
     try:
         from routes.admin_notifications import _dispatch_push_to_admins
+        push_body = body
+        if threshold_snapshot:
+            metric = threshold_snapshot.get("metric", "N/A")
+            configured = threshold_snapshot.get("value", "N/A")
+            actual = threshold_snapshot.get("actual", "N/A")
+            push_body = f"{body}\n📊 {metric}: {actual} (threshold: {configured})"
         asyncio.create_task(_dispatch_push_to_admins({
             "title": f"\u26a0\ufe0f {title}",
-            "body": body,
+            "body": push_body,
             "icon": "/icons/icon-192.png",
             "url": "/admin",
             "tag": f"critical-alert-{alert_type}-{int(now)}",

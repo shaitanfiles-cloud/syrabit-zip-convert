@@ -754,3 +754,35 @@ class TestDispatchAlertWithMongomock:
         doc_b = _run(mongo_db.alerts.find_one({"type": "type_b"}))
         assert doc_a["title"] == "Alert A"
         assert doc_b["title"] == "Alert B"
+
+
+class TestPushNotificationThresholdContext:
+    def test_push_body_includes_threshold_when_snapshot_present(self):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        snapshot = {"metric": "error_rate_pct", "value": 5, "actual": 12.3}
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts)), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock) as mock_push:
+            _run(_metrics_mod._dispatch_alert("push_thresh", "Rate spike", "High errors", threshold_snapshot=snapshot))
+        mock_push.assert_called_once()
+        payload = mock_push.call_args[0][0]
+        assert "error_rate_pct" in payload["body"]
+        assert "12.3" in payload["body"]
+        assert "5" in payload["body"]
+        assert "High errors" in payload["body"]
+
+    def test_push_body_plain_when_no_snapshot(self):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts)), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock) as mock_push:
+            _run(_metrics_mod._dispatch_alert("push_plain", "Title", "Plain body"))
+        mock_push.assert_called_once()
+        payload = mock_push.call_args[0][0]
+        assert payload["body"] == "Plain body"

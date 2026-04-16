@@ -3,7 +3,8 @@ import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, htm
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
+    APIRouter, HTTPException, Depends, Query, Body,
+    Path as FastAPIPath,
     File, UploadFile, Response, Request, Cookie, BackgroundTasks,
     Form, Header, status,
 )
@@ -362,7 +363,7 @@ async def admin_push_delivery_log(
 
 @router.get("/admin/push/delivery-log/{dispatch_id}")
 async def admin_push_delivery_detail(
-    dispatch_id: str = Path(...),
+    dispatch_id: str = FastAPIPath(...),
     admin: dict = Depends(get_admin_user),
 ):
     """Return full delivery detail for a single dispatch, including per-subscription results."""
