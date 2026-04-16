@@ -70,12 +70,50 @@ export default function SubjectLandingPage() {
   const className = subject.class_name || classSlug;
   const streamName = subject.stream_name || '';
 
+  const chapterCount = chapters?.length || 0;
+  const faqJsonLd = useMemo(() => {
+    const qa = [
+      {
+        q: `What topics are covered in ${boardName} ${className} ${subjectName}?`,
+        a: chapterCount > 0
+          ? `Syrabit.ai covers ${chapterCount} chapters for ${boardName} ${className} ${subjectName}, including detailed notes, key concepts, and exam-focused summaries for each chapter.`
+          : `Syrabit.ai provides comprehensive study material for ${boardName} ${className} ${subjectName}, covering the full syllabus with notes and AI-powered tutoring.`,
+      },
+      {
+        q: `Where can I find ${boardName} ${subjectName} previous year questions?`,
+        a: `You can find previous year questions (PYQs) for ${boardName} ${className} ${subjectName} on Syrabit.ai. Each chapter includes mark-wise important questions from past exams to help you prepare effectively.`,
+      },
+      {
+        q: `Is ${subjectName} study material on Syrabit.ai free?`,
+        a: `Yes, Syrabit.ai offers 30 free AI-powered study credits per day. You can browse ${subjectName} notes, ask questions to the AI tutor, and access chapter summaries without creating an account.`,
+      },
+      {
+        q: `How does Syrabit.ai help with ${subjectName} exam preparation?`,
+        a: `Syrabit.ai provides AI-powered explanations, chapter-wise notes, MCQs, and previous year questions for ${boardName} ${className} ${subjectName}. The AI tutor can answer specific questions with source citations from your syllabus.`,
+      },
+      {
+        q: `Can I study ${subjectName} in Assamese on Syrabit.ai?`,
+        a: `Yes, Syrabit.ai supports bilingual study in both English and Assamese. You can switch languages anytime while studying ${subjectName} to better understand concepts in your preferred language.`,
+      },
+    ];
+    return {
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: qa.map(({ q, a }) => ({
+        '@type': 'Question',
+        name: q,
+        acceptedAnswer: { '@type': 'Answer', text: a },
+      })),
+    };
+  }, [subjectName, boardName, className, chapterCount]);
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <PageMeta
         title={`${subjectName} — ${boardName} ${className} Notes & Study Material`}
         description={subject.description || `Complete ${subjectName} study material for ${boardName} ${className} students. Notes, MCQs, important questions, and AI-powered tutoring.`}
         url={`https://syrabit.ai${basePath}`}
+        jsonLd={faqJsonLd}
       />
 
       <header className="border-b border-border/30" style={{ background: 'rgba(255,255,255,0.80)', backdropFilter: 'blur(12px)' }}>
