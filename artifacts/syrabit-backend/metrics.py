@@ -372,12 +372,12 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
     except Exception:
         pass
 
-    # 4) Browser push notification for critical (red-severity) alerts
+    # 4) Browser push notification for critical (red-severity) alerts — admin only
     _RED_ALERT_TYPES = {"high_error_rate", "spoofed_bot_surge"}
     if alert_type in _RED_ALERT_TYPES:
         try:
-            from routes.admin_notifications import _dispatch_push_to_all
-            asyncio.create_task(_dispatch_push_to_all({
+            from routes.admin_notifications import _dispatch_push_to_admins
+            asyncio.create_task(_dispatch_push_to_admins({
                 "title": f"\u26a0\ufe0f {title}",
                 "body": body,
                 "icon": "/icons/icon-192.png",

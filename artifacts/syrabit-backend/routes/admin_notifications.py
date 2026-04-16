@@ -105,6 +105,17 @@ async def _get_or_create_vapid_keys() -> dict:
 
 async def _dispatch_push_to_all(payload: dict):
     """Send a web-push to every stored subscription. Fire-and-forget."""
+    await _dispatch_push(payload, admin_only=False)
+
+
+async def _dispatch_push_to_admins(payload: dict):
+    """Send a web-push only to admin-user subscriptions. Fire-and-forget."""
+    await _dispatch_push(payload, admin_only=True)
+
+
+async def _dispatch_push(payload: dict, admin_only: bool = False):
+    """Core push dispatcher. When admin_only=True, sends only to subscriptions
+    belonging to users with is_admin=True."""
     try:
         from pywebpush import webpush, WebPushException
         vapid = await _get_or_create_vapid_keys()
@@ -112,7 +123,19 @@ async def _dispatch_push_to_all(payload: dict):
         if not private_pem:
             logger.warning("Push dispatch skipped — VAPID private key missing")
             return
-        subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
+        if admin_only:
+            admin_docs = await db.users.find(
+                {"is_admin": True}, {"_id": 0, "id": 1}
+            ).to_list(500)
+            admin_ids = {str(d["id"]) for d in admin_docs if d.get("id")}
+            if not admin_ids:
+                logger.info("Push dispatch (admin-only): no admin users found, skipping")
+                return
+            subs = await db.push_subscriptions.find(
+                {"user_id": {"$in": list(admin_ids)}}, {"_id": 0}
+            ).to_list(10000)
+        else:
+            subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
         sent = failed = 0
         for sub in subs:
             try:
@@ -124,13 +147,13 @@ async def _dispatch_push_to_all(payload: dict):
                 )
                 sent += 1
             except WebPushException as e:
-                # 410 Gone = subscription expired; clean it up
                 if e.response and e.response.status_code in (404, 410):
                     await db.push_subscriptions.delete_one({"endpoint": sub.get("endpoint")})
                 failed += 1
             except Exception:
                 failed += 1
-        logger.info(f"Push dispatch: sent={sent} failed={failed} total={len(subs)}")
+        label = "admin-only" if admin_only else "all"
+        logger.info(f"Push dispatch ({label}): sent={sent} failed={failed} total={len(subs)}")
     except Exception as e:
         logger.error(f"Push dispatch error: {e}")
 
