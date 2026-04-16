@@ -235,6 +235,86 @@ class TestDispatchAlert:
         call_args = mock_client.post.call_args
         assert call_args[0][0] == "https://env-fallback-webhook.com"
 
+    def test_seo_alert_uses_slack_block_payload(self):
+        _metrics_mod._notification_channels["webhook_url"] = "https://hooks.slack.com/seo"
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["seo_slack_enabled"] = True
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        snapshot = {
+            "metric": "seo_health_status", "value": "ok", "actual": "critical",
+            "valid_sitemaps": 3, "total_sitemaps": 5, "url_check_success_rate": 62.5,
+        }
+        with patch.dict(os.environ, {"RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts)), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert(
+                "seo_health_degraded", "SEO health: CRITICAL",
+                "Two consecutive failures.", threshold_snapshot=snapshot,
+            ))
+        assert mock_client.post.await_count == 1
+        sent_url = mock_client.post.call_args[0][0]
+        payload = mock_client.post.call_args.kwargs["json"]
+        assert sent_url == "https://hooks.slack.com/seo"
+        # Slack Block Kit payload with severity + counts + dashboard button
+        assert "blocks" in payload and isinstance(payload["blocks"], list)
+        assert payload["alert_type"] == "seo_health_degraded"
+        text = payload["text"]
+        assert "CRITICAL" in text
+        assert "3 / 5" in text or "3 /" in text
+        assert _metrics_mod._SEO_DASHBOARD_URL in text
+        # Dashboard link button
+        actions = [b for b in payload["blocks"] if b.get("type") == "actions"]
+        assert actions, "expected actions block with dashboard button"
+        assert actions[0]["elements"][0]["url"] == _metrics_mod._SEO_DASHBOARD_URL
+
+    def test_seo_slack_toggle_disables_webhook_for_seo_alerts(self):
+        _metrics_mod._notification_channels["webhook_url"] = "https://hooks.slack.com/seo"
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["seo_slack_enabled"] = False
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch.dict(os.environ, {"ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts)), \
+             patch("httpx.AsyncClient", return_value=mock_client), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert(
+                "seo_health_degraded", "SEO health: DEGRADED", "body",
+                threshold_snapshot={"metric": "seo_health_status", "value": "ok", "actual": "degraded"},
+            ))
+            # But non-SEO alerts still post
+            _metrics_mod._alert_last_fired.clear()
+            _run(_metrics_mod._dispatch_alert("high_error_rate", "Spike", "body"))
+        assert mock_client.post.await_count == 1
+        assert mock_client.post.call_args[0][0] == "https://hooks.slack.com/seo"
+        assert mock_client.post.call_args.kwargs["json"]["alert_type"] == "high_error_rate"
+
+    def test_load_alert_settings_parses_seo_slack_toggle(self):
+        cfg = {
+            "alert_settings": {
+                "thresholds": {},
+                "expiration": {},
+                "notification_channels": {
+                    "email": "a@b.com", "webhook_url": "https://x",
+                    "seo_slack_enabled": False,
+                },
+            }
+        }
+        mock_collection = MagicMock()
+        mock_collection.find_one = AsyncMock(return_value=cfg)
+        with patch.object(_metrics_mod, "db", MagicMock(api_config=mock_collection)):
+            _run(_metrics_mod._load_alert_settings())
+        assert _metrics_mod._notification_channels["seo_slack_enabled"] is False
+
     def test_respects_cooldown(self):
         _metrics_mod._notification_channels["email"] = ""
         _metrics_mod._notification_channels["webhook_url"] = ""
@@ -374,6 +454,23 @@ class TestPutAlertSettingsValidation:
         assert saved["alert_settings"]["notification_channels"]["webhook_url"] == "https://hooks.slack.com/test"
         assert saved["alert_settings"]["expiration"]["enabled"] is True
         assert saved["alert_settings"]["expiration"]["days"] == 30
+
+    def test_put_persists_seo_slack_toggle(self, app_client):
+        mock_collection = MagicMock()
+        mock_collection.find_one = AsyncMock(return_value={})
+        mock_collection.replace_one = AsyncMock(return_value=None)
+        with patch.object(_metrics_mod, "db", MagicMock(api_config=mock_collection)), \
+             patch("routes.admin_notifications.db", MagicMock(api_config=mock_collection)):
+            resp = app_client.put("/admin/alert-settings", json={
+                "thresholds": {},
+                "notification_channels": {
+                    "webhook_url": "https://hooks.slack.com/seo",
+                    "seo_slack_enabled": False,
+                },
+            })
+        assert resp.status_code == 200
+        saved = mock_collection.replace_one.call_args[0][1]
+        assert saved["alert_settings"]["notification_channels"]["seo_slack_enabled"] is False
 
     def test_rejects_invalid_email(self, app_client):
         resp = app_client.put("/admin/alert-settings", json={

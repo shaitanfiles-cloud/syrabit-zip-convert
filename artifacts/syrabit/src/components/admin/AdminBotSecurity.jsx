@@ -44,7 +44,7 @@ function StatCard({ label, value, icon: Icon, color, pulse }) {
 
 function AlertThresholdPanel({ adminToken }) {
   const [settings, setSettings] = useState(null);
-  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '' });
+  const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '', seo_slack_enabled: true });
   const [defaults, setDefaults] = useState(null);
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,6 +69,7 @@ function AlertThresholdPanel({ adminToken }) {
           collection_growth_per_day: d.thresholds?.collection_growth_per_day ?? d.defaults?.thresholds?.collection_growth_per_day ?? 500,
           email: d.notification_channels?.email ?? '',
           webhook_url: d.notification_channels?.webhook_url ?? '',
+          seo_slack_enabled: d.notification_channels?.seo_slack_enabled ?? true,
         });
       } catch {
         setSettingsError('Failed to load alert settings');
@@ -197,6 +198,7 @@ function AlertThresholdPanel({ adminToken }) {
         notification_channels: {
           email: form.email.trim(),
           webhook_url: form.webhook_url.trim(),
+          seo_slack_enabled: !!form.seo_slack_enabled,
         },
       });
       setFieldErrors({});
@@ -222,6 +224,7 @@ function AlertThresholdPanel({ adminToken }) {
         collection_growth_per_day: defaults.thresholds?.collection_growth_per_day ?? 500,
         email: defaults.notification_channels?.email ?? '',
         webhook_url: defaults.notification_channels?.webhook_url ?? '',
+        seo_slack_enabled: defaults.notification_channels?.seo_slack_enabled ?? true,
       });
       setFieldErrors({});
       setSettingsError(null);
@@ -426,6 +429,20 @@ function AlertThresholdPanel({ adminToken }) {
                 )}
               </div>
             </div>
+            <label className="mt-3 flex items-start gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={!!form.seo_slack_enabled}
+                onChange={(e) => handleFieldChange('seo_slack_enabled', e.target.checked)}
+                className="mt-0.5 w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+              />
+              <span>
+                <span className="text-[11px] font-medium text-gray-700">Send SEO health alerts to Slack/webhook</span>
+                <span className="block text-[10px] text-gray-400">
+                  When enabled, <code>seo_health_degraded</code> and <code>seo_url_spike</code> alerts post a rich Slack message (severity, sitemap counts, SEO Manager link) to the webhook above. Email and browser push are unaffected.
+                </span>
+              </span>
+            </label>
           </div>
 
           {settingsError && (

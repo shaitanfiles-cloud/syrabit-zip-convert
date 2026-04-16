@@ -949,6 +949,11 @@ async def admin_update_alert_settings(
         if wh_val and not wh_val.startswith(("http://", "https://")):
             raise HTTPException(status_code=400, detail="Webhook URL must start with http:// or https://")
         validated_channels["webhook_url"] = wh_val
+    if "seo_slack_enabled" in notification_channels:
+        seo_val = notification_channels["seo_slack_enabled"]
+        if not isinstance(seo_val, bool):
+            raise HTTPException(status_code=400, detail="seo_slack_enabled must be a boolean")
+        validated_channels["seo_slack_enabled"] = seo_val
     try:
         existing = await db.api_config.find_one({}, {"_id": 0})
         if existing is None:

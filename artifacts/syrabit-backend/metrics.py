@@ -271,7 +271,14 @@ _alert_expiration = dict(_ALERT_EXPIRATION_DEFAULT)
 _NOTIFICATION_CHANNELS_DEFAULT = {
     "email": "",
     "webhook_url": "",
+    # Per-alert-type webhook toggles. When False, the Slack/Discord webhook
+    # is suppressed for that alert type even if a webhook URL is configured.
+    # (Email, persisted alerts, and browser push are unaffected.)
+    "seo_slack_enabled": True,
 }
+# Alert types treated as "SEO incidents" for the Slack webhook toggle.
+_SEO_WEBHOOK_ALERT_TYPES = ("seo_health_degraded", "seo_url_spike")
+_SEO_DASHBOARD_URL = "https://syrabit.ai/admin/seo"
 _notification_channels: dict = dict(_NOTIFICATION_CHANNELS_DEFAULT)
 
 async def _load_alert_settings():
@@ -304,6 +311,8 @@ async def _load_alert_settings():
                 new_channels["email"] = channels["email"].strip()
             if isinstance(channels.get("webhook_url"), str):
                 new_channels["webhook_url"] = channels["webhook_url"].strip()
+            if isinstance(channels.get("seo_slack_enabled"), bool):
+                new_channels["seo_slack_enabled"] = channels["seo_slack_enabled"]
         _ALERT_THRESHOLDS = new_thresholds
         _alert_expiration = new_expiration
         _notification_channels = new_channels
@@ -325,6 +334,60 @@ async def _auto_expire_alerts():
             logger.info(f"Auto-expired {result.modified_count} alerts older than {days} days")
     except Exception as e:
         logger.debug(f"Alert auto-expiration error: {e}")
+
+def _build_seo_slack_payload(alert_type: str, title: str, body: str, snap: dict) -> dict:
+    """Build a Slack-friendly message for SEO health alerts.
+
+    Uses Slack Block Kit so the message shows severity, sitemap counts, and a
+    "Open SEO Manager" button. Slack, Discord (via `text` fallback), and
+    generic webhooks all accept the `text` field, while Slack additionally
+    renders `blocks` for the rich layout.
+    """
+    status = str(snap.get("actual", "")).lower() or "degraded"
+    severity_label = {
+        "critical": ":rotating_light: CRITICAL",
+        "degraded": ":warning: DEGRADED",
+    }.get(status, f":warning: {status.upper() or 'DEGRADED'}")
+
+    valid_sm = snap.get("valid_sitemaps", "N/A")
+    total_sm = snap.get("total_sitemaps", "N/A")
+    url_rate = snap.get("url_check_success_rate", "N/A")
+    sitemap_line = f"Sitemaps valid: *{valid_sm} / {total_sm}*"
+    url_line = f"URL spot-check success: *{url_rate}%*"
+
+    text_fallback = (
+        f":rotating_light: *{title}*\n"
+        f"{severity_label}\n"
+        f"{body}\n"
+        f"{sitemap_line} · {url_line}\n"
+        f"Dashboard: {_SEO_DASHBOARD_URL}"
+    )
+
+    blocks = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"🚨 {title}", "emoji": True}},
+        {"type": "section", "fields": [
+            {"type": "mrkdwn", "text": f"*Severity*\n{severity_label}"},
+            {"type": "mrkdwn", "text": f"*Alert type*\n`{alert_type}`"},
+            {"type": "mrkdwn", "text": f"*{sitemap_line.split(':',1)[0]}*\n{valid_sm} / {total_sm}"},
+            {"type": "mrkdwn", "text": f"*URL spot-checks*\n{url_rate}%"},
+        ]},
+        {"type": "section", "text": {"type": "mrkdwn", "text": body or "SEO health degraded."}},
+        {"type": "actions", "elements": [
+            {"type": "button",
+             "text": {"type": "plain_text", "text": "Open SEO Manager", "emoji": True},
+             "url": _SEO_DASHBOARD_URL,
+             "style": "primary"},
+        ]},
+    ]
+
+    return {
+        "text": text_fallback,
+        "blocks": blocks,
+        "alert_type": alert_type,
+        "service": "syrabit-api",
+        "threshold_snapshot": snap,
+    }
+
 
 async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snapshot: dict = None):
     """Send alert via email (Resend) and/or webhook. Respects cooldown."""
@@ -385,19 +448,29 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
     # 2) Webhook alert (Slack / Discord / generic)
     try:
         webhook_url = (_notification_channels.get("webhook_url") or os.environ.get("ALERT_WEBHOOK_URL", "")).strip()
+        # Per-category opt-out: admins can silence SEO alerts on Slack
+        # without affecting email or push delivery.
+        seo_slack_enabled = bool(_notification_channels.get("seo_slack_enabled", True))
+        if alert_type in _SEO_WEBHOOK_ALERT_TYPES and not seo_slack_enabled:
+            webhook_url = ""
         if webhook_url:
-            webhook_payload = {
-                "text": f"🚨 *{title}*\n{body}",
-                "alert_type": alert_type,
-                "service": "syrabit-api",
-            }
-            if threshold_snapshot:
-                webhook_payload["threshold_snapshot"] = threshold_snapshot
-                webhook_payload["text"] += (
-                    f"\n📊 Metric: `{threshold_snapshot.get('metric', 'N/A')}` "
-                    f"| Threshold: {threshold_snapshot.get('value', 'N/A')} "
-                    f"| Actual: *{threshold_snapshot.get('actual', 'N/A')}*"
+            if alert_type in _SEO_WEBHOOK_ALERT_TYPES:
+                webhook_payload = _build_seo_slack_payload(
+                    alert_type, title, body, threshold_snapshot or {}
                 )
+            else:
+                webhook_payload = {
+                    "text": f"🚨 *{title}*\n{body}",
+                    "alert_type": alert_type,
+                    "service": "syrabit-api",
+                }
+                if threshold_snapshot:
+                    webhook_payload["threshold_snapshot"] = threshold_snapshot
+                    webhook_payload["text"] += (
+                        f"\n📊 Metric: `{threshold_snapshot.get('metric', 'N/A')}` "
+                        f"| Threshold: {threshold_snapshot.get('value', 'N/A')} "
+                        f"| Actual: *{threshold_snapshot.get('actual', 'N/A')}*"
+                    )
             async with httpx.AsyncClient(timeout=10) as client:
                 await client.post(webhook_url, json=webhook_payload)
     except Exception as e:
