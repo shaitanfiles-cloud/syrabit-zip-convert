@@ -746,7 +746,34 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           <StatCard label="SEO Pages"       value={metrics.seo?.published_pages || 0} icon={Globe} color="#06b6d4"
             subLabel="Topics" subValue={metrics.seo?.topics || 0}
             onClick={() => onNavigate?.('seomanager')} />
+          <StatCard label="Bot Renders"    value={metrics.bot_render?.total_requests || 0} icon={Bot} color="#8b5cf6"
+            subLabel="Success Rate" subValue={metrics.bot_render?.success_rate_pct != null ? `${metrics.bot_render.success_rate_pct}%` : '—'} />
         </div>
+      )}
+      {metrics.bot_render?.by_page_type && Object.keys(metrics.bot_render.by_page_type).length > 0 && (() => {
+        const raw = metrics.bot_render.by_page_type;
+        const grouped = {};
+        Object.entries(raw).forEach(([key, count]) => {
+          const [type, status] = key.split(':');
+          if (!grouped[type]) grouped[type] = { ok: 0, fail: 0 };
+          if (status === 'ok') grouped[type].ok = count;
+          else grouped[type].fail = count;
+        });
+        return (
+        <div className="mt-4 bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2"><Bot size={14} className="text-violet-500" /> Bot Render by Page Type</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            {Object.entries(grouped).map(([type, counts]) => (
+              <div key={type} className="bg-gray-50 rounded-xl px-3 py-2 border border-gray-100">
+                <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">{type.replace(/_/g, ' ')}</p>
+                <p className="text-base font-bold font-mono text-gray-800">{counts.ok + counts.fail}</p>
+                <p className="text-[10px] text-gray-400">{counts.ok} ok / {counts.fail} fail</p>
+              </div>
+            ))}
+          </div>
+        </div>
+        );
+      })()
       )}
 
       <GlassCard className="p-5">

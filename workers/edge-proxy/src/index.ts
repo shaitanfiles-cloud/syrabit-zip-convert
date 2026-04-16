@@ -12,6 +12,7 @@ import { syncFromPayload, getSyncStatus } from "./d1-sync";
 interface Env {
   BACKEND_URL: string;
   RATE_LIMIT: KVNamespace;
+  BOT_HTML_CACHE?: KVNamespace;
   CONTENT_DB: D1Database;
   D1_SYNC_SECRET: string;
 }
@@ -833,6 +834,211 @@ async function handleEdgePurge(
   }
 }
 
+const _KNOWN_BOARDS = new Set(["ahsec", "seba", "degree", "cbse", "nep"]);
+
+const BOT_CONTENT_PATTERNS: Array<{ regex: RegExp; type: string; test?: (p: string) => boolean }> = [
+  { regex: /^\/([a-z0-9-]+)\/([a-z0-9-]+)\/([a-z0-9-]+)\/([a-z0-9-]+)\/(notes|mcqs|important-questions|examples|definition|faq)$/, type: "topic-typed" },
+  { regex: /^\/([a-z0-9-]+)\/([a-z0-9-]+)\/([a-z0-9-]+)\/([a-z0-9-]+)$/, type: "topic" },
+  { regex: /^\/([a-z0-9-]+)\/([a-z0-9-]+)\/([a-z0-9-]+)$/, type: "subject" },
+  { regex: /^\/([a-z0-9-]+)\/([a-z0-9-]+)$/, type: "board-class", test: (p: string) => _KNOWN_BOARDS.has(p.split("/").filter(Boolean)[0]) },
+  { regex: /^\/([a-z0-9-]+)$/, type: "board", test: (p: string) => _KNOWN_BOARDS.has(p.split("/").filter(Boolean)[0]) },
+  { regex: /^\/learn\/([a-z0-9-]+)$/, type: "learn" },
+  { regex: /^\/pyq\/([a-z0-9-]+)$/, type: "pyq" },
+];
+
+const BOT_STATIC_PAGES = new Set([
+  "/", "/home", "/library", "/pricing", "/terms", "/privacy",
+  "/about", "/curriculum", "/exam-routine", "/chat",
+]);
+
+const BOT_SKIP_EXTENSIONS = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|map|json|webp|avif|mp4|webm)$/i;
+
+const BOT_CACHE_TTL_CONTENT = 3600;
+const BOT_CACHE_TTL_STATIC = 86400;
+
+function getBotPageCacheKey(pathname: string): string | null {
+  const clean = pathname.replace(/\/+$/, "") || "/";
+
+  if (BOT_SKIP_EXTENSIONS.test(clean)) return null;
+  if (clean.startsWith("/api/") || clean.startsWith("/admin") ||
+      clean.startsWith("/static/") || clean.startsWith("/assets/") ||
+      clean.startsWith("/icons/") || clean.startsWith("/fonts/") ||
+      clean.startsWith("/history") || clean.startsWith("/profile")) {
+    return null;
+  }
+
+  if (BOT_STATIC_PAGES.has(clean)) return `bot:static:${clean}`;
+
+  for (const pat of BOT_CONTENT_PATTERNS) {
+    if (pat.regex.test(clean)) {
+      if (pat.test && !pat.test(clean)) continue;
+      return `bot:content:${clean}`;
+    }
+  }
+  return null;
+}
+
+function getBotCacheTtl(cacheKey: string): number {
+  return cacheKey.startsWith("bot:static:") ? BOT_CACHE_TTL_STATIC : BOT_CACHE_TTL_CONTENT;
+}
+
+function _botResponseCacheTtl(pathname: string): number {
+  const clean = pathname.replace(/\/+$/, "") || "/";
+  if (BOT_STATIC_PAGES.has(clean)) return BOT_CACHE_TTL_STATIC;
+  return BOT_CACHE_TTL_CONTENT;
+}
+
+async function fetchBotRenderedHtml(
+  env: Env,
+  pathname: string,
+  clientIp: string,
+  request: Request,
+): Promise<Response | null> {
+  const clean = pathname.replace(/\/+$/, "") || "/";
+  const seoBase = `${env.BACKEND_URL}/api/seo`;
+  let apiUrl: string;
+
+  if (clean === "/" || clean === "/home" || clean === "/library") {
+    apiUrl = `${seoBase}/html/homepage`;
+  } else if (clean === "/about") {
+    apiUrl = `${seoBase}/html/about`;
+  } else if (clean === "/pricing" || clean === "/terms" || clean === "/privacy" ||
+             clean === "/curriculum" || clean === "/exam-routine" || clean === "/chat") {
+    apiUrl = `${env.BACKEND_URL}${clean}`;
+  } else if (clean.startsWith("/learn/")) {
+    apiUrl = `${env.BACKEND_URL}${clean}`;
+  } else if (clean.startsWith("/pyq/")) {
+    apiUrl = `${env.BACKEND_URL}${clean}`;
+  } else {
+    const parts = clean.split("/").filter(Boolean);
+    if (parts.length === 1 && _KNOWN_BOARDS.has(parts[0])) {
+      apiUrl = `${env.BACKEND_URL}${clean}`;
+    } else if (parts.length === 2 && _KNOWN_BOARDS.has(parts[0])) {
+      apiUrl = `${env.BACKEND_URL}${clean}`;
+    } else if (parts.length === 3) {
+      apiUrl = `${seoBase}/html/subject/${parts[0]}/${parts[1]}/${parts[2]}`;
+    } else if (parts.length === 4) {
+      apiUrl = `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}`;
+    } else if (parts.length === 5) {
+      apiUrl = `${seoBase}/html/${parts[0]}/${parts[1]}/${parts[2]}/${parts[3]}/${parts[4]}`;
+    } else {
+      return null;
+    }
+  }
+
+  try {
+    const proxyHeaders = buildProxyHeaders(request, clientIp);
+    proxyHeaders.set("X-Bot-Request", "1");
+    const resp = await fetch(apiUrl, {
+      method: "GET",
+      headers: proxyHeaders,
+    });
+
+    if (!resp.ok) {
+      const parts = clean.split("/").filter(Boolean);
+      if (parts.length >= 3 && parts.length <= 5) {
+        const fallbackUrl = `${env.BACKEND_URL}${clean}`;
+        const fallbackResp = await fetch(fallbackUrl, {
+          method: "GET",
+          headers: proxyHeaders,
+        });
+        if (fallbackResp.ok) {
+          const fct = fallbackResp.headers.get("Content-Type") || "";
+          if (fct.includes("text/html")) {
+            const fbody = await fallbackResp.text();
+            if (fbody && fbody.length >= 100) {
+              const fbTtl = _botResponseCacheTtl(pathname);
+              return new Response(fbody, {
+                status: 200,
+                headers: {
+                  "Content-Type": "text/html; charset=utf-8",
+                  "Cache-Control": `public, max-age=${fbTtl}, s-maxage=${fbTtl * 2}`,
+                  "X-Bot-Rendered": "1",
+                  "X-Source": "bot-prerender-fallback",
+                  "Vary": "User-Agent",
+                  "X-Robots-Tag": "index, follow",
+                  "Content-Language": "en-IN",
+                },
+              });
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    const ct = resp.headers.get("Content-Type") || "";
+    if (!ct.includes("text/html") && !ct.includes("text/xml")) {
+      return null;
+    }
+
+    const body = await resp.text();
+    if (!body || body.length < 100) return null;
+
+    const respTtl = _botResponseCacheTtl(pathname);
+    return new Response(body, {
+      status: 200,
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": `public, max-age=${respTtl}, s-maxage=${respTtl * 2}`,
+        "X-Bot-Rendered": "1",
+        "X-Source": "bot-prerender",
+        "Vary": "User-Agent",
+        "X-Robots-Tag": "index, follow",
+        "Content-Language": "en-IN",
+      },
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function handleBotContentRequest(
+  env: Env,
+  pathname: string,
+  clientIp: string,
+  request: Request,
+  ctx: ExecutionContext,
+): Promise<Response | null> {
+  const cacheKey = getBotPageCacheKey(pathname);
+  if (!cacheKey) return null;
+
+  const cacheTtl = getBotCacheTtl(cacheKey);
+
+  if (env.BOT_HTML_CACHE) {
+    try {
+      const cached = await env.BOT_HTML_CACHE.get(cacheKey);
+      if (cached) {
+        return new Response(cached, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": `public, max-age=${cacheTtl}, s-maxage=${cacheTtl * 2}`,
+            "X-Bot-Rendered": "1",
+            "X-Cache": "BOT-KV-HIT",
+            "X-Source": "bot-cache",
+            "Vary": "User-Agent",
+            "X-Robots-Tag": "index, follow",
+            "Content-Language": "en-IN",
+          },
+        });
+      }
+    } catch { /* fall through */ }
+  }
+
+  const rendered = await fetchBotRenderedHtml(env, pathname, clientIp, request);
+  if (!rendered) return null;
+
+  if (env.BOT_HTML_CACHE) {
+    const htmlBody = await rendered.clone().text();
+    ctx.waitUntil(
+      env.BOT_HTML_CACHE.put(cacheKey, htmlBody, { expirationTtl: cacheTtl }).catch(() => {})
+    );
+  }
+
+  return rendered;
+}
+
 async function handleScheduledSync(env: Env): Promise<void> {
   if (!env.CONTENT_DB || !env.BACKEND_URL) return;
 
@@ -927,7 +1133,9 @@ export default {
       ctx.waitUntil(logSpoofedBot(env.RATE_LIMIT, ipH, ua, clientIp, colo));
     }
 
-    if (!isSearchBot) {
+    const isApiRoute = pathname.startsWith("/api/");
+
+    if (!isSearchBot && isApiRoute) {
       const rl = await checkRateLimit(clientIp, env.RATE_LIMIT, RATE_LIMIT_RPM);
       remaining = rl.remaining;
       if (!rl.allowed) {
@@ -945,6 +1153,14 @@ export default {
           }
         );
       }
+    }
+
+    if (!isApiRoute && request.method === "GET") {
+      if (isSearchBot) {
+        const botResp = await handleBotContentRequest(env, pathname, clientIp, request, ctx);
+        if (botResp) return botResp;
+      }
+      return fetch(request);
     }
 
     if (request.method !== "GET" || isBypass(pathname)) {

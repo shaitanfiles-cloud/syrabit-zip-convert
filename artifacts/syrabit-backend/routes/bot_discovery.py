@@ -1116,6 +1116,122 @@ async def admin_indexnow_endpoint_retry(
     }
 
 
+@router.get("/seo/health")
+async def seo_health_check():
+    import httpx
+    from deps import db, is_mongo_available
+
+    results = {
+        "status": "ok",
+        "sitemaps": [],
+        "d1_sync": {"status": "unknown"},
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    sitemap_urls = [
+        f"{BASE_URL}/api/seo/sitemap-pages.xml",
+        f"{BASE_URL}/api/seo/sitemap-subjects.xml",
+        f"{BASE_URL}/api/seo/sitemap-chapters.xml",
+        f"{BASE_URL}/api/seo/sitemap-notes.xml",
+        f"{BASE_URL}/api/seo/sitemap-mcqs.xml",
+        f"{BASE_URL}/api/seo/sitemap-pyqs.xml",
+        f"{BASE_URL}/api/seo/sitemap-examples.xml",
+        f"{BASE_URL}/api/seo/sitemap-definitions.xml",
+        f"{BASE_URL}/api/seo/sitemap-learn.xml",
+    ]
+
+    import random
+    import xml.etree.ElementTree as ET
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        for sm_url in sitemap_urls:
+            sm_name = sm_url.split("/")[-1]
+            sm_result = {"name": sm_name, "url": sm_url, "valid_xml": False, "url_count": 0, "sample_checks": []}
+
+            try:
+                resp = await client.get(sm_url)
+                if resp.status_code != 200:
+                    sm_result["error"] = f"HTTP {resp.status_code}"
+                    results["sitemaps"].append(sm_result)
+                    continue
+
+                try:
+                    root = ET.fromstring(resp.text)
+                    sm_result["valid_xml"] = True
+                    ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+                    locs = [loc.text for loc in root.findall(".//sm:loc", ns) if loc.text]
+                    sm_result["url_count"] = len(locs)
+
+                    sample_urls = random.sample(locs, min(10, len(locs))) if locs else []
+                    for sample_url in sample_urls:
+                        try:
+                            check_resp = await client.head(sample_url, follow_redirects=True, timeout=10.0)
+                            if check_resp.status_code in (405, 403):
+                                check_resp = await client.get(sample_url, follow_redirects=True, timeout=10.0)
+                            sm_result["sample_checks"].append({
+                                "url": sample_url,
+                                "status": check_resp.status_code,
+                                "ok": check_resp.status_code == 200,
+                            })
+                        except Exception as check_err:
+                            sm_result["sample_checks"].append({
+                                "url": sample_url,
+                                "status": 0,
+                                "ok": False,
+                                "error": str(check_err)[:100],
+                            })
+                except ET.ParseError as parse_err:
+                    sm_result["error"] = f"XML parse error: {str(parse_err)[:100]}"
+            except Exception as sm_err:
+                sm_result["error"] = str(sm_err)[:200]
+
+            results["sitemaps"].append(sm_result)
+
+        try:
+            d1_resp = await client.get(f"{BASE_URL}/api/edge/d1-status", timeout=10.0)
+            if d1_resp.status_code == 200:
+                results["d1_sync"] = d1_resp.json()
+            else:
+                results["d1_sync"] = {"status": "error", "http_status": d1_resp.status_code}
+        except Exception as d1_err:
+            results["d1_sync"] = {"status": "error", "error": str(d1_err)[:200]}
+
+    total_sitemaps = len(results["sitemaps"])
+    valid_count = sum(1 for s in results["sitemaps"] if s.get("valid_xml"))
+    all_checks = [c for s in results["sitemaps"] for c in s.get("sample_checks", [])]
+    ok_checks = sum(1 for c in all_checks if c.get("ok"))
+    total_checks = len(all_checks)
+
+    if valid_count < total_sitemaps or (total_checks > 0 and ok_checks < total_checks * 0.8):
+        results["status"] = "degraded"
+    if valid_count < total_sitemaps * 0.5:
+        results["status"] = "critical"
+
+    results["summary"] = {
+        "total_sitemaps": total_sitemaps,
+        "valid_sitemaps": valid_count,
+        "total_url_checks": total_checks,
+        "ok_url_checks": ok_checks,
+        "url_check_success_rate": round(ok_checks / max(total_checks, 1) * 100, 1),
+    }
+
+    if await is_mongo_available():
+        try:
+            seo_published = await db.seo_pages.count_documents({"status": "published"})
+            last_updated = await db.seo_pages.find_one(
+                {"status": "published"}, {"_id": 0, "updated_at": 1},
+                sort=[("updated_at", -1)],
+            )
+            results["content_stats"] = {
+                "published_pages": seo_published,
+                "last_content_update": last_updated.get("updated_at") if last_updated else None,
+            }
+        except Exception:
+            pass
+
+    return results
+
+
 @router.post("/admin/indexnow/push")
 async def admin_indexnow_push(admin: dict = Depends(get_admin_user)):
     from deps import db, is_mongo_available

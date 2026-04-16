@@ -1899,9 +1899,25 @@ def _bot_html_response(html: str):
 
 _bot_render_fallback_count = 0
 _bot_render_success_count = 0
+_bot_render_by_type: dict = {}
 
 def get_bot_render_metrics():
-    return {"fallback_count": _bot_render_fallback_count, "success_count": _bot_render_success_count}
+    return {
+        "fallback_count": _bot_render_fallback_count,
+        "success_count": _bot_render_success_count,
+        "total_requests": _bot_render_fallback_count + _bot_render_success_count,
+        "success_rate_pct": round(_bot_render_success_count / max(_bot_render_success_count + _bot_render_fallback_count, 1) * 100, 1),
+        "by_page_type": dict(_bot_render_by_type),
+    }
+
+def _track_bot_render(page_type: str, success: bool):
+    global _bot_render_success_count, _bot_render_fallback_count
+    if success:
+        _bot_render_success_count += 1
+    else:
+        _bot_render_fallback_count += 1
+    key = f"{page_type}:{'ok' if success else 'fail'}"
+    _bot_render_by_type[key] = _bot_render_by_type.get(key, 0) + 1
 
 class BotRenderMiddleware(BaseHTTPMiddleware):
     """Intercept requests from bot user-agents and return pre-rendered HTML.
@@ -1914,10 +1930,81 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
     - /privacy                           → privacy page
     - /learn/{slug}                      → CMS document page
     - /pyq/{slug}                        → PYQ HTML replica (html only)
+    - /curriculum                        → curriculum map page
+    - /exam-routine                      → exam routine page
+    - /{board}                           → board landing page
+    - /{board}/{class}                   → board+class landing page
     - /{board}/{class}/{subject}         → subject landing page
     - /{board}/{class}/{subject}/{topic}      → topic page (notes)
     - /{board}/{class}/{subject}/{topic}/{type} → topic page (typed)
     """
+
+    async def _render_chapter_fallback(self, board: str, class_slug: str, subject_slug: str, chapter_slug: str):
+        try:
+            from deps import db, is_mongo_available
+            if not await is_mongo_available():
+                return None
+            subj = await db.subjects.find_one(
+                {"board_slug": board, "class_slug": class_slug, "slug": subject_slug},
+                {"_id": 0, "id": 1, "name": 1, "board_slug": 1, "class_slug": 1},
+            )
+            if not subj:
+                return None
+            chapter = await db.chapters.find_one(
+                {"subject_id": subj["id"], "slug": chapter_slug},
+                {"_id": 0, "title": 1, "description": 1, "content": 1, "topics": 1},
+            )
+            if not chapter:
+                return None
+            ch_title = _html_mod.escape(chapter.get("title", chapter_slug))
+            ch_desc = _html_mod.escape((chapter.get("description") or "")[:300])
+            subj_name = _html_mod.escape(subj.get("name", subject_slug))
+            page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{chapter_slug}"
+            topics_list = chapter.get("topics", [])
+            topics_html = ""
+            if topics_list:
+                items = "".join(f"<li>{_html_mod.escape(str(t.get('title', t) if isinstance(t, dict) else t))}</li>" for t in topics_list[:30])
+                topics_html = f"<h2>Topics</h2><ul>{items}</ul>"
+            content_preview = _html_mod.escape((chapter.get("content") or "")[:2000])
+            schema = json.dumps({
+                "@context": "https://schema.org",
+                "@type": "Course",
+                "name": chapter.get("title", ""),
+                "description": chapter.get("description", ""),
+                "url": page_url,
+                "provider": {"@type": "EducationalOrganization", "name": "Syrabit.ai", "url": "https://syrabit.ai"},
+                "isPartOf": {"@type": "Course", "name": subj.get("name", ""), "url": f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}"},
+            }, ensure_ascii=False)
+            return f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{ch_title} | {subj_name} | Syrabit.ai</title>
+<meta name="description" content="{ch_desc}">
+<link rel="canonical" href="{page_url}">
+<meta property="og:title" content="{ch_title} | {subj_name} | Syrabit.ai">
+<meta property="og:description" content="{ch_desc}">
+<meta property="og:url" content="{page_url}">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta name="robots" content="index, follow">
+<meta http-equiv="content-language" content="en-IN">
+<link rel="alternate" hreflang="en-IN" href="{page_url}">
+<script type="application/ld+json">{schema}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <a href="https://syrabit.ai/{board}/{class_slug}/{subject_slug}">{subj_name}</a> &rsaquo; <span>{ch_title}</span></nav>
+<h1>{ch_title}</h1>
+{f'<p>{ch_desc}</p>' if ch_desc else ''}
+{topics_html}
+{f'<div>{content_preview}</div>' if content_preview else ''}
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+        except Exception as e:
+            logger.error(f"BotRenderMiddleware chapter fallback failed: {e}")
+            return None
 
     async def _safe_call_next(self, request, call_next):
         try:
@@ -1944,6 +2031,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
         parts = [p for p in path.split("/") if p]
         n = len(parts)
 
+        _KNOWN_BOARDS = {"ahsec", "seba", "degree", "cbse", "nep"}
+
         if n == 0 or (n == 1 and parts[0] == "library"):
             cache_key = "_homepage_"
         elif n == 1 and parts[0] == "pricing":
@@ -1956,12 +2045,20 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             cache_key = "_about_"
         elif n == 1 and parts[0] == "chat":
             cache_key = "_chat_"
+        elif n == 1 and parts[0] == "curriculum":
+            cache_key = "_curriculum_"
+        elif n == 1 and parts[0] == "exam-routine":
+            cache_key = "_exam_routine_"
+        elif n == 1 and parts[0] in _KNOWN_BOARDS:
+            cache_key = f"_board_/{parts[0]}"
         elif n == 2 and parts[0] == "learn":
             cache_key = f"_learn_/{parts[1]}"
         elif n == 2 and parts[0] == "pyq":
             cache_key = f"_pyq_/{parts[1]}"
         elif n == 2 and parts[0] == "subject":
             cache_key = f"_subject_id_/{parts[1]}"
+        elif n == 2 and parts[0] in _KNOWN_BOARDS:
+            cache_key = f"_board_class_/{parts[0]}/{parts[1]}"
         elif n == 3:
             cache_key = f"_subj_/{parts[0]}/{parts[1]}/{parts[2]}"
         elif n in (4, 5):
@@ -1987,10 +2084,10 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 if resp.status_code == 200:
                     html_content = resp.text
                     _bot_html_cache[cache_key] = html_content
-                    _bot_render_success_count += 1
+                    _track_bot_render("about", True)
                     return _bot_html_response(html_content)
-                _bot_render_fallback_count += 1
-                logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: /about returned {resp.status_code}")
+                _track_bot_render("about", False)
+                logger.error(f"BotRenderMiddleware SEO fallback: /about returned {resp.status_code}")
                 return await self._safe_call_next(request, call_next)
 
             if cache_key == "_chat_":
@@ -2023,6 +2120,162 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 </body>
 </html>"""
                 _bot_html_cache[cache_key] = html_content
+                _track_bot_render("chat", True)
+                return _bot_html_response(html_content)
+
+            if cache_key == "_curriculum_":
+                html_content = """<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Curriculum Map — All Boards & Subjects | Syrabit.ai</title>
+<meta name="description" content="Browse the complete curriculum map for AHSEC, SEBA, and Degree boards. Find subjects, chapters, and topics organized by board and class.">
+<link rel="canonical" href="https://syrabit.ai/curriculum">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:title" content="Curriculum Map — All Boards & Subjects | Syrabit.ai">
+<meta property="og:description" content="Browse the complete curriculum map for AHSEC, SEBA, and Degree boards.">
+<meta property="og:url" content="https://syrabit.ai/curriculum">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="robots" content="index, follow">
+<meta http-equiv="content-language" content="en-IN">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"CollectionPage","name":"Curriculum Map","description":"Complete curriculum map for Assam Board students — AHSEC, SEBA, Degree (NEP FYUGP)","url":"https://syrabit.ai/curriculum","isPartOf":{"@type":"WebSite","@id":"https://syrabit.ai","name":"Syrabit.ai"},"provider":{"@type":"EducationalOrganization","name":"Syrabit.ai","url":"https://syrabit.ai"}}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <span>Curriculum Map</span></nav>
+<h1>Curriculum Map — All Boards &amp; Subjects</h1>
+<p>Browse the complete curriculum for AHSEC (Class 11-12), SEBA (Class 9-10), and Degree (NEP FYUGP) boards.</p>
+<ul>
+<li><a href="https://syrabit.ai/ahsec">AHSEC Board</a></li>
+<li><a href="https://syrabit.ai/seba">SEBA Board</a></li>
+<li><a href="https://syrabit.ai/degree">Degree (NEP FYUGP)</a></li>
+</ul>
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                _bot_html_cache[cache_key] = html_content
+                _track_bot_render("curriculum", True)
+                return _bot_html_response(html_content)
+
+            if cache_key == "_exam_routine_":
+                html_content = """<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Exam Routine &amp; Schedule | Syrabit.ai</title>
+<meta name="description" content="Check the latest exam routine and schedule for AHSEC, SEBA, and Degree board examinations in Assam.">
+<link rel="canonical" href="https://syrabit.ai/exam-routine">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:title" content="Exam Routine & Schedule | Syrabit.ai">
+<meta property="og:description" content="Check the latest exam routine and schedule for AHSEC, SEBA, and Degree board examinations.">
+<meta property="og:url" content="https://syrabit.ai/exam-routine">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="robots" content="index, follow">
+<meta http-equiv="content-language" content="en-IN">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"WebPage","name":"Exam Routine & Schedule","url":"https://syrabit.ai/exam-routine","isPartOf":{"@type":"WebSite","@id":"https://syrabit.ai","name":"Syrabit.ai"},"provider":{"@type":"EducationalOrganization","name":"Syrabit.ai","url":"https://syrabit.ai"}}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <span>Exam Routine</span></nav>
+<h1>Exam Routine &amp; Schedule</h1>
+<p>Check the latest exam routine and schedule for AHSEC, SEBA, and Degree board examinations in Assam.</p>
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                _bot_html_cache[cache_key] = html_content
+                _track_bot_render("exam-routine", True)
+                return _bot_html_response(html_content)
+
+            if cache_key.startswith("_board_/"):
+                board_slug = parts[0]
+                board_label = board_slug.upper() if board_slug in ("ahsec", "seba") else board_slug.title()
+                page_url = f"https://syrabit.ai/{board_slug}"
+                schema = json.dumps({"@context": "https://schema.org", "@graph": [
+                    {"@type": "CollectionPage", "name": f"{board_label} Board", "url": page_url,
+                     "description": f"Study materials for {board_label} board students in Assam",
+                     "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
+                     "provider": {"@type": "EducationalOrganization", "name": "Syrabit.ai", "url": "https://syrabit.ai"}},
+                    {"@type": "BreadcrumbList", "itemListElement": [
+                        {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
+                        {"@type": "ListItem", "position": 2, "name": f"{board_label} Board", "item": page_url},
+                    ]},
+                ]}, ensure_ascii=False)
+                html_content = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{board_label} Board — Study Materials | Syrabit.ai</title>
+<meta name="description" content="Study materials, notes, MCQs, and previous year questions for {board_label} board students in Assam.">
+<link rel="canonical" href="{page_url}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:title" content="{board_label} Board — Study Materials | Syrabit.ai">
+<meta property="og:description" content="Study materials for {board_label} board students in Assam.">
+<meta property="og:url" content="{page_url}">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="robots" content="index, follow">
+<meta http-equiv="content-language" content="en-IN">
+<script type="application/ld+json">{schema}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <span>{board_label} Board</span></nav>
+<h1>{board_label} Board — Study Materials</h1>
+<p>Browse study materials, notes, MCQs, and previous year questions for {board_label} board students in Assam.</p>
+<p><a href="{page_url}">Explore {board_label} subjects on Syrabit.ai</a></p>
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/curriculum">Curriculum</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                _bot_html_cache[cache_key] = html_content
+                _track_bot_render("board", True)
+                return _bot_html_response(html_content)
+
+            if cache_key.startswith("_board_class_/"):
+                board_slug = parts[0]
+                class_slug = parts[1]
+                board_label = board_slug.upper() if board_slug in ("ahsec", "seba") else board_slug.title()
+                class_label = class_slug.replace("-", " ").title()
+                page_url = f"https://syrabit.ai/{board_slug}/{class_slug}"
+                schema = json.dumps({"@context": "https://schema.org", "@graph": [
+                    {"@type": "CollectionPage", "name": f"{board_label} {class_label}", "url": page_url,
+                     "description": f"Study materials for {board_label} {class_label} students",
+                     "isPartOf": {"@type": "WebSite", "@id": "https://syrabit.ai", "name": "Syrabit.ai"},
+                     "provider": {"@type": "EducationalOrganization", "name": "Syrabit.ai", "url": "https://syrabit.ai"}},
+                    {"@type": "BreadcrumbList", "itemListElement": [
+                        {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://syrabit.ai"},
+                        {"@type": "ListItem", "position": 2, "name": f"{board_label} Board", "item": f"https://syrabit.ai/{board_slug}"},
+                        {"@type": "ListItem", "position": 3, "name": class_label, "item": page_url},
+                    ]},
+                ]}, ensure_ascii=False)
+                html_content = f"""<!DOCTYPE html>
+<html lang="en-IN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{board_label} {class_label} — Subjects &amp; Study Materials | Syrabit.ai</title>
+<meta name="description" content="Study materials, notes, and exam preparation resources for {board_label} {class_label} students.">
+<link rel="canonical" href="{page_url}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Syrabit.ai">
+<meta property="og:title" content="{board_label} {class_label} — Subjects | Syrabit.ai">
+<meta property="og:description" content="Study materials for {board_label} {class_label} students.">
+<meta property="og:url" content="{page_url}">
+<meta property="og:image" content="https://syrabit.ai/opengraph.jpg">
+<meta name="robots" content="index, follow">
+<meta http-equiv="content-language" content="en-IN">
+<script type="application/ld+json">{schema}</script>
+</head>
+<body>
+<nav><a href="https://syrabit.ai">Home</a> &rsaquo; <a href="https://syrabit.ai/{board_slug}">{board_label}</a> &rsaquo; <span>{class_label}</span></nav>
+<h1>{board_label} {class_label} — Subjects &amp; Study Materials</h1>
+<p>Browse all subjects and study materials available for {board_label} {class_label} students.</p>
+<footer><a href="https://syrabit.ai/library">Library</a> &middot; <a href="https://syrabit.ai/curriculum">Curriculum</a> &middot; <a href="https://syrabit.ai/sitemap.xml">Sitemap</a></footer>
+</body>
+</html>"""
+                _bot_html_cache[cache_key] = html_content
+                _track_bot_render("board_class", True)
                 return _bot_html_response(html_content)
 
             if cache_key in ("_pricing_", "_terms_", "_privacy_"):
@@ -2053,6 +2306,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 </body>
 </html>"""
                 _bot_html_cache[cache_key] = html_content
+                _track_bot_render("static_page", True)
                 return _bot_html_response(html_content)
 
             if cache_key.startswith("_learn_/"):
@@ -2060,8 +2314,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     doc_resp = await client.get(f"http://localhost:{_seo_port}/api/content/cms-documents/{learn_slug}")
                 if doc_resp.status_code != 200:
-                    _bot_render_fallback_count += 1
-                    logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: /learn/{learn_slug} returned {doc_resp.status_code}")
+                    _track_bot_render("learn", False)
+                    logger.error(f"BotRenderMiddleware SEO fallback: /learn/{learn_slug} returned {doc_resp.status_code}")
                     return await self._safe_call_next(request, call_next)
                 doc = doc_resp.json()
                 doc_title = _html_mod.escape(doc.get("title", learn_slug))
@@ -2116,6 +2370,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 </body>
 </html>"""
                 _bot_html_cache[cache_key] = html_content
+                _track_bot_render("learn", True)
                 return _bot_html_response(html_content)
 
             if cache_key.startswith("_subject_id_/"):
@@ -2123,8 +2378,8 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 async with httpx.AsyncClient(timeout=10.0) as client:
                     subj_resp = await client.get(f"http://localhost:{_seo_port}/api/content/subjects/{subj_id}")
                 if subj_resp.status_code != 200:
-                    _bot_render_fallback_count += 1
-                    logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: /subject/{subj_id} returned {subj_resp.status_code}")
+                    _track_bot_render("subject_id", False)
+                    logger.error(f"BotRenderMiddleware SEO fallback: /subject/{subj_id} returned {subj_resp.status_code}")
                     return await self._safe_call_next(request, call_next)
                 subj = subj_resp.json()
                 subj_name = _html_mod.escape(subj.get("name", "Subject"))
@@ -2165,6 +2420,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 </body>
 </html>"""
                 _bot_html_cache[cache_key] = html_content
+                _track_bot_render("subject", True)
                 return _bot_html_response(html_content)
 
             if cache_key == "_homepage_":
@@ -2180,28 +2436,38 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 
             async with httpx.AsyncClient(timeout=10.0) as client:
                 html_resp = await client.get(api_url)
+            if html_resp.status_code != 200 and n == 4:
+                chapter_html = await self._render_chapter_fallback(parts[0], parts[1], parts[2], parts[3])
+                if chapter_html:
+                    _bot_html_cache[cache_key] = chapter_html
+                    _track_bot_render("chapter", True)
+                    return _bot_html_response(chapter_html)
             if html_resp.status_code != 200:
-                _bot_render_fallback_count += 1
-                logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: {api_url} returned {html_resp.status_code} for path={path}")
+                _page_type = cache_key.split("/")[-1] if "/" in cache_key else "page"
+                _track_bot_render(_page_type, False)
+                logger.error(f"BotRenderMiddleware SEO fallback: {api_url} returned {html_resp.status_code} for path={path}")
                 if n in (3, 4, 5):
                     from starlette.responses import Response as StarletteResponse
                     return StarletteResponse(content="Not Found", status_code=404, media_type="text/plain")
                 return await self._safe_call_next(request, call_next)
             ct = html_resp.headers.get("content-type", "")
             if "text/html" not in ct and "text/xml" not in ct:
-                _bot_render_fallback_count += 1
-                logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: unexpected content-type '{ct}' from {api_url} for path={path}")
+                _page_type = cache_key.split("/")[-1] if "/" in cache_key else "page"
+                _track_bot_render(_page_type, False)
+                logger.error(f"BotRenderMiddleware SEO fallback: unexpected content-type '{ct}' from {api_url} for path={path}")
                 if n in (3, 4, 5):
                     from starlette.responses import Response as StarletteResponse
                     return StarletteResponse(content="Not Found", status_code=404, media_type="text/plain")
                 return await self._safe_call_next(request, call_next)
             html_content = html_resp.text
             _bot_html_cache[cache_key] = html_content
-            _bot_render_success_count += 1
+            _page_type = cache_key.split("/")[-1] if "/" in cache_key else "page"
+            _track_bot_render(_page_type, True)
             return _bot_html_response(html_content)
         except Exception as _bot_err:
-            _bot_render_fallback_count += 1
-            logger.error(f"BotRenderMiddleware SEO fallback #{_bot_render_fallback_count}: {_bot_err} for path={path}")
+            _page_type = cache_key.split("/")[-1] if "/" in cache_key else "page"
+            _track_bot_render(_page_type, False)
+            logger.error(f"BotRenderMiddleware SEO fallback: {_bot_err} for path={path}")
             if n in (3, 4, 5):
                 from starlette.responses import Response as StarletteResponse
                 return StarletteResponse(content="Not Found", status_code=404, media_type="text/plain")
@@ -2323,6 +2589,7 @@ async def admin_dashboard_metrics(admin: dict = Depends(get_admin_user)):
             "revenue": {"total_inr": total_revenue_inr, "total_usd": total_revenue_usd, "mrr_inr": mrr_inr},
             "seo": {"topics": seo_count, "published_pages": seo_published},
             "payments_count": len(payments),
+            "bot_render": get_bot_render_metrics(),
         }
         _metrics_cache["data"] = result
         _metrics_cache["ts"] = now_ts

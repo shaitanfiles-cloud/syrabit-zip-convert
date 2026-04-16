@@ -3,7 +3,9 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
 routes = [
-  { pattern = "api.syrabit.ai/*", zone_name = "syrabit.ai" }
+  { pattern = "api.syrabit.ai/*", zone_name = "syrabit.ai" },
+  { pattern = "syrabit.ai/*", zone_name = "syrabit.ai" },
+  { pattern = "www.syrabit.ai/*", zone_name = "syrabit.ai" },
 ]
 
 [vars]
@@ -15,6 +17,15 @@ BACKEND_URL = "https://workspacesyrabit-production-0ddc.up.railway.app"
 binding = "RATE_LIMIT"
 id = "3ee723af8e82480eb6d4855b0ca09f69"
 preview_id = "c7d531ef4b9a4cd980134251f5739556"
+
+# Create KV namespace before deploying:
+#   wrangler kv namespace create BOT_HTML_CACHE
+#   wrangler kv namespace create BOT_HTML_CACHE --preview
+# Then replace the IDs below with the output values.
+[[kv_namespaces]]
+binding = "BOT_HTML_CACHE"
+id = "REPLACE_WITH_KV_ID"
+preview_id = "REPLACE_WITH_PREVIEW_KV_ID"
 
 [[d1_databases]]
 binding = "CONTENT_DB"

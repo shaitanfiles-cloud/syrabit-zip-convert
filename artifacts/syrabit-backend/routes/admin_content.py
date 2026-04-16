@@ -1,5 +1,47 @@
 """Syrabit.ai — Admin content CRUD & thumbnails"""
 import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, html as _html_mod
+
+def _schedule_indexnow_for_subject(subject_doc: dict):
+    try:
+        from routes.bot_discovery import indexnow_batcher
+        board_slug = subject_doc.get("board_slug", "")
+        class_slug = subject_doc.get("class_slug", "")
+        subject_slug = subject_doc.get("slug", "")
+        if board_slug and class_slug and subject_slug:
+            path = f"/{board_slug}/{class_slug}/{subject_slug}"
+            async def _do_indexnow():
+                await indexnow_batcher.queue_raw_paths([path])
+                await indexnow_batcher.flush(source="admin_subject_update")
+            loop = asyncio.get_running_loop()
+            loop.create_task(_do_indexnow())
+    except Exception:
+        pass
+
+def _schedule_indexnow_for_chapter(chapter_doc: dict):
+    try:
+        from routes.bot_discovery import indexnow_batcher
+        from deps import db
+        subject_id = chapter_doc.get("subject_id", "")
+        chapter_slug = chapter_doc.get("slug", "")
+        if not subject_id or not chapter_slug:
+            return
+        async def _do():
+            subj = await db.subjects.find_one(
+                {"id": subject_id},
+                {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1},
+            )
+            if subj:
+                bs = subj.get("board_slug", "")
+                cs = subj.get("class_slug", "")
+                ss = subj.get("slug", "")
+                if bs and cs and ss:
+                    path = f"/{bs}/{cs}/{ss}/{chapter_slug}"
+                    await indexnow_batcher.queue_raw_paths([path])
+                    await indexnow_batcher.flush(source="admin_chapter_update")
+        loop = asyncio.get_running_loop()
+        loop.create_task(_do())
+    except Exception:
+        pass
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
@@ -507,6 +549,7 @@ async def admin_create_subject(data: SubjectCreate, admin: dict = Depends(get_ad
         await asyncio.wait_for(db.subjects.insert_one(subj), timeout=8.0)
         _invalidate_content_cache("subjects")
         _schedule_d1_sync_fire("subjects")
+        _schedule_indexnow_for_subject(subj)
         logger.info(f"Subject created: {data.name} (id={subject_id}, stream={stream_id_val})")
         return {k: v for k, v in subj.items() if k != "_id"}
     except HTTPException:
@@ -530,6 +573,9 @@ async def admin_update_subject(subject_id: str, data: dict, admin: dict = Depend
         raise HTTPException(status_code=404, detail="Subject not found")
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("subjects")
+    updated_subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1})
+    if updated_subj:
+        _schedule_indexnow_for_subject(updated_subj)
     return {"message": "Updated"}
 
 @router.patch("/admin/content/subjects/{subject_id}")
@@ -544,6 +590,9 @@ async def admin_patch_subject(subject_id: str, data: dict, admin: dict = Depends
         raise HTTPException(status_code=404, detail="Subject not found")
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("subjects")
+    updated_subj = await db.subjects.find_one({"id": subject_id}, {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1})
+    if updated_subj:
+        _schedule_indexnow_for_subject(updated_subj)
     return {"message": "Subject updated"}
 
 
@@ -1311,6 +1360,7 @@ async def admin_create_chapter(data: ChapterCreate, admin: dict = Depends(get_ad
     _invalidate_content_cache("chapters")
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("chapters", "subjects")
+    _schedule_indexnow_for_chapter(chap)
     return result
 
 @router.post("/admin/content/chunks")
@@ -1743,6 +1793,7 @@ async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depend
             logger.error(f"Re-chunking failed for chapter {chapter_id}: {chunk_error}")
             chunks_info = {"error": str(chunk_error)}
     
+    updated_ch = None
     if content_updated or topics_updated or title_updated:
         updated_ch = await db.chapters.find_one({"id": chapter_id}, {"_id": 0})
         if updated_ch:
@@ -1758,5 +1809,9 @@ async def admin_update_chapter(chapter_id: str, data: dict, admin: dict = Depend
     _invalidate_content_cache("chapters")
     _invalidate_content_cache("subjects")
     _schedule_d1_sync_fire("chapters", "subjects")
+    if updated_ch is None:
+        updated_ch = await db.chapters.find_one({"id": chapter_id}, {"_id": 0, "slug": 1, "subject_id": 1})
+    if updated_ch:
+        _schedule_indexnow_for_chapter(updated_ch)
     return {"message": "Chapter updated", **chunks_info}
 
