@@ -234,11 +234,12 @@ class TestGetAlerts:
         assert call_args[0][0] == {}
 
     def test_limit_param(self, app_client):
-        mock_cursor = _AsyncCursorMock([])
-        mock_cursor_limit = MagicMock(wraps=mock_cursor.limit)
-        mock_cursor.limit = mock_cursor_limit
+        mock_cursor = MagicMock()
+        mock_cursor.sort = MagicMock(return_value=mock_cursor)
+        mock_cursor.limit = MagicMock(return_value=_AsyncCursorMock([]))
         mock_alerts = MagicMock()
         mock_alerts.find = MagicMock(return_value=mock_cursor)
         with patch("routes.admin_notifications.db", MagicMock(alerts=mock_alerts)):
             resp = app_client.get("/admin/alerts?limit=10")
         assert resp.status_code == 200
+        mock_cursor.limit.assert_called_once_with(10)
