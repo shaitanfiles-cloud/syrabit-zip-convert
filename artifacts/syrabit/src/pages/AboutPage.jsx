@@ -126,6 +126,53 @@ function LangToggle({ contentLang, switchLang }) {
   );
 }
 
+const faqJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'What is Syrabit.ai?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai is an AI-powered educational platform built specifically for students in Assam. It provides syllabus-aligned study notes, previous year questions (PYQs), MCQs, important questions, and an AI tutor called Syra — covering AHSEC (Class 11–12), SEBA, and Degree (B.Com, B.A, B.Sc) curricula under Gauhati University and Dibrugarh University.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Who is Syrabit.ai for?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai serves students across Assam preparing for board exams and university exams under AHSEC, SEBA, Gauhati University, and Dibrugarh University curricula. It covers Class 11, Class 12, and undergraduate degree programmes across Science, Commerce, and Arts streams.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'How does the Syrabit AI tutor work?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syra, the AI tutor, uses a multi-stage retrieval pipeline grounded in your actual chapter content. It answers only within your syllabus — no hallucination or off-topic answers. Every response includes source citations so you can trace the exact origin of the information. If Syra cannot find relevant material with high confidence, it tells you rather than making something up.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What subjects does Syrabit.ai cover?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai covers 55+ subjects across AHSEC (Class 11–12 Science, Commerce, and Arts), SEBA, and Degree programmes (B.Com, B.A, B.Sc). Each subject includes chapter-wise notes, previous year questions with solutions, MCQs, and important questions aligned to official syllabi.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'How is Syrabit.ai different from ChatGPT for studying?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Unlike generic AI chatbots, Syrabit.ai is purpose-built for Assam board and university syllabi. Every answer is grounded in indexed chapter content with source citations, not general internet knowledge. The platform organises content into structured subject cards that function as knowledge hubs, supports bilingual AI tutoring in English and Assamese, and follows a hierarchical knowledge mapping structure (Topic → Chapter → Subject → Course → Board) to ensure academic accuracy.',
+      },
+    },
+  ],
+};
+
 export default function AboutPage() {
   const { contentLang, switchLang } = useContentLang();
   const t = _t[contentLang] || _t.en;
@@ -138,7 +185,7 @@ export default function AboutPage() {
         description={t.pageDescription}
         url="https://syrabit.ai/about"
         keywords="Syrabit.ai about, AI education platform Assam, AHSEC SEBA Degree, Syrabit ৰ বিষয়ে, অসমীয়া AI শিক্ষা মঞ্চ"
-        jsonLd={[jsonLd]}
+        jsonLd={[jsonLd, faqJsonLd]}
       />
       <div className="min-h-screen pt-8 pb-24 px-4">
         <div className="max-w-3xl mx-auto">

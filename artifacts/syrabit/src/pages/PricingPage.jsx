@@ -8,6 +8,53 @@ import { useAuth } from '@/context/AuthContext';
 import PageMeta from '@/components/seo/PageMeta';
 import { useContentLang } from '@/context/LanguageContext';
 
+const faqJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'Is Syrabit.ai free to use?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes, Syrabit.ai offers a free plan with 30 AI credits per day, access to all subjects, and chat history — no credit card required. You can upgrade to Starter (₹99 one-time) for 500 credits/day or Pro (₹999 one-time) for 4,000 credits/day whenever you need more.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'How much does Syrabit.ai cost?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai has three plans: Free (₹0, 30 credits/day), Starter (₹99 one-time payment, 500 credits/day with priority responses and advanced AI models), and Pro (₹999 one-time payment, 4,000 credits/day with all AI models, full document access, and early access to new features). There are no subscriptions or recurring charges.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What are credits on Syrabit.ai?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Each AI response on Syrabit.ai costs 1 credit. Free users get 30 credits per day, Starter users get 500 credits per day, and Pro users get 4,000 credits per day. All credits reset daily at midnight UTC, giving you a fresh allowance every day based on your plan.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What payment methods does Syrabit.ai accept?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai accepts payments through Razorpay and Stripe, supporting UPI, debit cards, credit cards, net banking, and wallets. Both Starter (₹99) and Pro (₹999) are one-time payments with no recurring subscriptions or lock-in.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Can I upgrade my Syrabit.ai plan later?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes, you can upgrade your plan at any time. Your existing credits are preserved when you upgrade, and the new plan activates immediately. You can start with the free plan and move to Starter or Pro whenever you need more credits, priority responses, or advanced AI models.',
+      },
+    },
+  ],
+};
+
 const PLANS = {
   en: [
     {
