@@ -201,10 +201,26 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
 
   const clipDuration = useMemo(() => trimEnd - trimStart, [trimStart, trimEnd]);
 
+  const needsTrim = useMemo(() => {
+    if (!audioBuffer) return false;
+    return trimStart > 0.01 || Math.abs(trimEnd - audioBuffer.duration) > 0.01;
+  }, [audioBuffer, trimStart, trimEnd]);
+
+  const estimatedSizeKB = useMemo(() => {
+    if (!audioBuffer) return 0;
+    if (!needsTrim) return file.size / 1024;
+    const bitsPerSample = 16;
+    const bytesPerSample = bitsPerSample / 8;
+    const headerBytes = 44;
+    const dataBytes = Math.floor(clipDuration * audioBuffer.sampleRate) * audioBuffer.numberOfChannels * bytesPerSample;
+    return (headerBytes + dataBytes) / 1024;
+  }, [audioBuffer, clipDuration, needsTrim, file.size]);
+
+  const sizeExceedsLimit = estimatedSizeKB > 500;
+
   const handleConfirm = useCallback(async () => {
     if (!audioBuffer) return;
     setSizeError(null);
-    const needsTrim = trimStart > 0.01 || Math.abs(trimEnd - audioBuffer.duration) > 0.01;
     if (needsTrim) {
       const trimmed = trimAudioBuffer(audioBuffer, trimStart, trimEnd);
       const blob = audioBufferToWav(trimmed);
@@ -217,7 +233,7 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
     } else {
       onConfirm(file);
     }
-  }, [audioBuffer, trimStart, trimEnd, file, onConfirm]);
+  }, [audioBuffer, trimStart, trimEnd, file, onConfirm, needsTrim]);
 
   const pctForTime = useCallback((t) => duration > 0 ? (t / duration) * 100 : 0, [duration]);
 
@@ -394,9 +410,23 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
           {clipDuration.toFixed(1)}s{clipDuration > MAX_DURATION && (
             <span className="text-red-500 font-medium"> (max {MAX_DURATION}s)</span>
           )}
+          <span className="mx-0.5">·</span>
+          <span className={sizeExceedsLimit ? 'text-red-500 font-medium' : ''}>
+            ~{Math.round(estimatedSizeKB)} KB
+          </span>
         </span>
         <span>{formatTime(trimEnd)}</span>
       </div>
+
+      {sizeExceedsLimit && (
+        <div className="flex items-start gap-1.5 text-[9px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+          <AlertTriangle size={10} className="flex-shrink-0 mt-px" />
+          <span>
+            Estimated size (~{Math.round(estimatedSizeKB)} KB) exceeds the 500 KB limit.
+            Shorten the selection{file.name.match(/\.wav$/i) ? ' or convert to MP3 before uploading' : ''}.
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center gap-2">
         <button
