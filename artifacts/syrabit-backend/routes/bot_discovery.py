@@ -1009,6 +1009,49 @@ async def admin_bot_traffic(
         }
 
 
+@router.post("/admin/indexnow/endpoint/retry")
+async def admin_indexnow_endpoint_retry(
+    background_tasks: BackgroundTasks,
+    body: dict,
+    admin: dict = Depends(get_admin_user),
+):
+    endpoint = body.get("endpoint", "").strip()
+    if not endpoint or endpoint not in INDEXNOW_ENDPOINTS:
+        raise HTTPException(status_code=400, detail="Invalid or missing endpoint")
+
+    health = _get_health(endpoint)
+    prev_failures = health.consecutive_failures
+    was_dead = health.consecutive_failures >= _DEAD_LETTER_THRESHOLD
+
+    health.consecutive_failures = 0
+    health.backoff_until = None
+    _schedule_persist(health)
+
+    if was_dead:
+        _schedule_health_log(endpoint, "manual_retry", {
+            "previous_consecutive_failures": prev_failures,
+            "admin": admin.get("email", "unknown"),
+        })
+
+    requeued = 0
+    async with indexnow_batcher._lock:
+        queued_urls = indexnow_batcher._endpoint_retry.pop(endpoint, [])
+        if queued_urls:
+            requeued = len(queued_urls)
+            indexnow_batcher._pending.extend(queued_urls)
+
+    if requeued > 0:
+        background_tasks.add_task(indexnow_batcher.flush, source="manual_retry")
+
+    return {
+        "status": "ok",
+        "endpoint": endpoint,
+        "previous_failures": prev_failures,
+        "was_dead_lettered": was_dead,
+        "urls_requeued": requeued,
+    }
+
+
 @router.post("/admin/indexnow/push")
 async def admin_indexnow_push(admin: dict = Depends(get_admin_user)):
     from deps import db, is_mongo_available

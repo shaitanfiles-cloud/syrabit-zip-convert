@@ -7,7 +7,7 @@ import {
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
-  Volume2, VolumeX, Bell, BellOff,
+  Volume2, VolumeX, Bell, BellOff, RotateCcw,
 } from 'lucide-react';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
@@ -268,6 +268,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [botAnalytics, setBotAnalytics] = useState(null);
   const [indexNowStats, setIndexNowStats] = useState(null);
   const [indexNowHistory, setIndexNowHistory] = useState(null);
+  const [retryingEndpoint, setRetryingEndpoint] = useState(null);
   const [alertHistory, setAlertHistory] = useState(null);
   const [alertFilter, setAlertFilter] = useState('all');
   const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
@@ -458,6 +459,19 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         thresholds: { ...alertSettings.defaults.thresholds },
         expiration: { ...alertSettings.defaults.expiration },
       });
+    }
+  };
+
+  const handleRetryEndpoint = async (endpoint) => {
+    setRetryingEndpoint(endpoint);
+    try {
+      await axios.post(`${API_BASE}/admin/indexnow/endpoint/retry`, { endpoint }, adminHdr(adminToken));
+      const statsRes = await axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken));
+      setIndexNowStats(statsRes.data);
+    } catch (e) {
+      log.error('Endpoint retry failed', { endpoint, error: e.message });
+    } finally {
+      setRetryingEndpoint(null);
     }
   };
 
@@ -1161,6 +1175,16 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                       {ep.pending_retry_urls > 0 && (
                         <span className="text-gray-500">{ep.pending_retry_urls} retry queued</span>
                       )}
+                      {ep.is_dead_lettered && (
+                        <button
+                          onClick={() => handleRetryEndpoint(ep.endpoint)}
+                          disabled={retryingEndpoint === ep.endpoint}
+                          className="text-[9px] px-2 py-0.5 rounded-md bg-white text-red-600 border border-red-200 hover:bg-red-50 hover:text-red-700 transition-colors font-medium flex items-center gap-1 disabled:opacity-50"
+                        >
+                          <RotateCcw size={9} className={retryingEndpoint === ep.endpoint ? 'animate-spin' : ''} />
+                          {retryingEndpoint === ep.endpoint ? 'Retrying...' : 'Retry'}
+                        </button>
+                      )}
                       <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded font-medium ${ep.is_dead_lettered ? 'text-red-700 bg-red-100' : ep.consecutive_failures > 0 ? 'text-amber-700 bg-amber-100' : 'text-green-700 bg-green-100'}`}>
                         {ep.is_dead_lettered ? 'DOWN' : ep.consecutive_failures > 0 ? 'DEGRADED' : 'HEALTHY'}
                       </span>
@@ -1184,10 +1208,12 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                         {events.map((evt, i) => {
                           const eventColor = evt.event === 'recovered'
                             ? 'bg-green-400' : evt.event === 'dead_lettered'
-                            ? 'bg-red-400' : 'bg-amber-400';
+                            ? 'bg-red-400' : evt.event === 'manual_retry'
+                            ? 'bg-blue-400' : 'bg-amber-400';
                           const eventLabel = evt.event === 'recovered'
                             ? 'Recovered' : evt.event === 'dead_lettered'
-                            ? 'Dead-lettered' : 'Failure started';
+                            ? 'Dead-lettered' : evt.event === 'manual_retry'
+                            ? 'Manual retry' : 'Failure started';
                           const ts = evt.timestamp ? new Date(evt.timestamp) : null;
                           const ago = ts ? (() => {
                             const diff = Math.floor((Date.now() - ts.getTime()) / 1000);
@@ -1207,7 +1233,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                             <div key={i} className="flex items-center gap-2 text-[10px] py-1.5 px-2 rounded-lg bg-gray-50 border border-gray-100">
                               <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${eventColor}`} />
                               <span className="text-gray-500 min-w-[40px]">{ago}</span>
-                              <span className={evt.event === 'recovered' ? 'text-green-600' : evt.event === 'dead_lettered' ? 'text-red-600' : 'text-amber-600'}>{eventLabel}</span>
+                              <span className={evt.event === 'recovered' ? 'text-green-600' : evt.event === 'dead_lettered' ? 'text-red-600' : evt.event === 'manual_retry' ? 'text-blue-600' : 'text-amber-600'}>{eventLabel}</span>
                               {detail && <span className="text-gray-400">{detail}</span>}
                             </div>
                           );
