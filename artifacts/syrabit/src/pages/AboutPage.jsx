@@ -33,6 +33,9 @@ const _t = {
     builtTitle: 'Built With',
     builtP: 'Syrabit.ai is a production-grade platform built with React 18, FastAPI, and a multi-provider LLM pipeline (Groq, Cerebras, Sarvam AI, Gemini) — powered by MongoDB Atlas, Redis, Cloudflare Workers, and a custom programmatic SEO engine that auto-generates 15,000+ optimized pages. The entire system is deployed as a hybrid architecture across Cloudflare\u2019s edge network and Railway.',
     techLink: 'View the full technology stack and architecture details →',
+    founderTitle: 'Founder',
+    founderName: 'Dipak Rai',
+    founderDesc: 'Syrabit.ai was founded by Dipak Rai to make quality, syllabus-aligned education accessible to every student in Assam.',
     contactTitle: 'Contact',
     contactP: 'For questions, feedback, or partnerships, reach us at',
   },
@@ -65,6 +68,9 @@ const _t = {
     builtTitle: 'কিহেৰে নিৰ্মিত',
     builtP: 'Syrabit.ai হৈছে React 18, FastAPI, আৰু মাল্টি-প্ৰভাইডাৰ LLM পাইপলাইন (Groq, Cerebras, Sarvam AI, Gemini) ৰ সৈতে নিৰ্মিত এখন প্ৰডাকচন-গ্ৰেড মঞ্চ — MongoDB Atlas, Redis, Cloudflare Workers, আৰু 15,000+ অনুকূলিত পৃষ্ঠা স্বয়ংক্ৰিয়ভাৱে সৃষ্টি কৰা এটা কাষ্টম প্ৰগ্ৰামেটিক SEO ইঞ্জিনৰ দ্বাৰা চালিত। সমগ্ৰ ব্যৱস্থাটো Cloudflare ৰ এজ নেটৱৰ্ক আৰু Railway ৰ মাজত হাইব্ৰিড আৰ্কিটেকচাৰ হিচাপে মোতায়েন কৰা হৈছে।',
     techLink: 'সম্পূৰ্ণ প্ৰযুক্তি স্তৰ আৰু আৰ্কিটেকচাৰৰ বিৱৰণ চাওক →',
+    founderTitle: 'প্ৰতিষ্ঠাপক',
+    founderName: 'Dipak Rai',
+    founderDesc: 'অসমৰ প্ৰতিজন ছাত্ৰ-ছাত্ৰীৰ বাবে মানসম্পন্ন, পাঠ্যক্ৰম-সংযুক্ত শিক্ষা সুলভ কৰিবলৈ Dipak Rai ৰ দ্বাৰা Syrabit.ai প্ৰতিষ্ঠা কৰা হৈছিল।',
     contactTitle: 'যোগাযোগ',
     contactP: 'প্ৰশ্ন, মতামত, বা অংশীদাৰিত্বৰ বাবে আমাৰ সৈতে যোগাযোগ কৰক',
   },
@@ -90,6 +96,10 @@ function getJsonLd(lang) {
       name: 'Syrabit',
       url: 'https://syrabit.ai',
       foundingDate: '2024',
+      founder: {
+        '@type': 'Person',
+        name: 'Dipak Rai',
+      },
       areaServed: {
         '@type': 'State',
         name: 'Assam',
@@ -252,6 +262,15 @@ export default function AboutPage() {
                 <Link to="/technology" className="text-violet-600 hover:underline">
                   {t.techLink}
                 </Link>
+              </p>
+            </div>
+
+            <div>
+              <h2 className="text-foreground font-semibold mb-2">{t.founderTitle}</h2>
+              <p>
+                <span className="font-semibold text-foreground">{t.founderName}</span>
+                {' — '}
+                {t.founderDesc}
               </p>
             </div>
 
