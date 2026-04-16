@@ -140,6 +140,7 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
   const [duration, setDuration] = useState(0);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
+  const [announcement, setAnnouncement] = useState('');
   const [playing, setPlaying] = useState(false);
   const [playbackPos, setPlaybackPos] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -247,6 +248,21 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
   const outputFormat = needsTrim ? 'mp3' : (file.name.match(/\.(\w+)$/)?.[1]?.toLowerCase() || 'wav');
 
   const sizeExceedsLimit = estimatedSizeKB > 500;
+
+  const initialTrimRef = useRef(true);
+  useEffect(() => {
+    if (initialTrimRef.current) {
+      initialTrimRef.current = false;
+      return;
+    }
+    const id = setTimeout(() => {
+      const dur = (trimEnd - trimStart).toFixed(1);
+      setAnnouncement(
+        `Clip: ${dur} seconds, from ${formatTime(trimStart)} to ${formatTime(trimEnd)}`
+      );
+    }, 300);
+    return () => clearTimeout(id);
+  }, [trimStart, trimEnd]);
 
   const handleConfirm = useCallback(async () => {
     if (!audioBuffer) return;
@@ -493,6 +509,25 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
       <p className="text-[9px] text-gray-400">
         Drag handles or use arrow keys to trim (Shift for larger steps). Max {MAX_DURATION}s. MP3/WAV, max 500 KB after trim.
       </p>
+
+      <div
+        aria-live="polite"
+        aria-atomic="true"
+        className="sr-only"
+        style={{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          padding: 0,
+          margin: '-1px',
+          overflow: 'hidden',
+          clip: 'rect(0,0,0,0)',
+          whiteSpace: 'nowrap',
+          border: 0,
+        }}
+      >
+        {announcement}
+      </div>
     </div>
   );
 }
