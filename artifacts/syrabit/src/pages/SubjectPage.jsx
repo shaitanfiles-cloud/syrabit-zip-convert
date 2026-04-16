@@ -8,6 +8,7 @@ import {
   Sparkles, CheckCircle,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import StickyToc from '@/components/ui/StickyToc';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -111,44 +112,6 @@ function useCmsPost(subjectId, enabled) {
     return () => { cancelled = true; };
   }, [subjectId, enabled]);
   return { post, loading, error };
-}
-
-function StickyToc({ headings, activeId }) {
-  const h2h3 = useMemo(
-    () => headings.filter(h => h.level === 2 || h.level === 3),
-    [headings]
-  );
-  if (h2h3.length < 2) return null;
-  return (
-    <nav className="sticky top-20 w-56 shrink-0 hidden xl:block self-start" aria-label="Table of contents">
-      <p className="text-[11px] font-semibold uppercase tracking-wider mb-3 text-muted-foreground/50">
-        On this page
-      </p>
-      <ul className="space-y-0.5">
-        {h2h3.map(h => (
-          <li key={h.anchor}>
-            <a
-              href={`#${h.anchor}`}
-              className={`block py-1 text-[12px] leading-snug transition-colors rounded ${
-                h.level === 3 ? 'pl-4' : 'pl-0'
-              } ${
-                activeId === h.anchor
-                  ? 'text-primary font-medium toc-active'
-                  : 'text-muted-foreground/50 hover:text-foreground/70'
-              }`}
-              style={{ borderLeft: h.level === 2 ? (activeId === h.anchor ? '2px solid #9575e0' : '2px solid transparent') : 'none' }}
-              onClick={e => {
-                e.preventDefault();
-                document.getElementById(h.anchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-            >
-              {h.text}
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
 }
 
 function BlogView({ subject, subjectId }) {

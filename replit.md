@@ -24,6 +24,7 @@ The project is structured as a pnpm workspace monorepo, with a React + Vite fron
 - **SEO Coverage:** All pages include `PageMeta` for title, description, OG, Twitter, canonical, and geo targeting, using JSON-LD structured data and a programmatic SEO engine. Premium keyword expansion engine (`_build_expanded_keywords`) generates 80+ keyword variants per topic page including individual word fragments, board variants (AHSEC/SEBA/Degree alternatives), exam suffixes, and cross-references. Topic keyword index endpoints (`/api/seo/keyword-index` JSON and `/api/seo/keyword-index.txt` plain text) expose all topics with keywords for AI bot discovery. Schema.org `SpeakableSpecification` on all topic pages for voice search. `X-Topic-Keywords` HTTP header on all SEO responses.
 - **Bilingual Content (EN/AS):** Supports English and Assamese content with a user-selectable language preference, independent content storage, and UI toggles.
 - **Content Display:** Library page features subject cards; lesson pages have a blog-style layout with reading progress and sticky TOC.
+- **Shared UI Components:** `components/ui/` contains extracted shared components including `StickyToc` (table-of-contents sidebar), `ModalOverlay` (backdrop + card dialog wrapper), `StatCard` (stat display card), and `LangToggle` (language switcher).
 - **Onboarding:** Streamlined onboarding for DEGREE and AHSEC/SEBA students.
 
 **Backend Architecture:**

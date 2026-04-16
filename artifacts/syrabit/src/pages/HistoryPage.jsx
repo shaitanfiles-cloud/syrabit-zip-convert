@@ -13,6 +13,7 @@ import {
   ArchiveRestore, ExternalLink, ChevronDown, X, Check,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
+import ModalOverlay from '@/components/ui/ModalOverlay';
 import { PageTitle } from '@/components/PageTitle';
 import { useAuth } from '@/context/AuthContext';
 import { getConversations, deleteConversation, updateConversation, getAnonConversations, deleteAnonConversation } from '@/utils/api';
@@ -254,46 +255,6 @@ function ConversationCard({ conv, onOpen, onStar, onArchive, onDelete, onRename,
         </div>
       </div>
     </div>
-  );
-}
-
-// ── Modal Dialog (shared for Delete + Rename) ─────────────────────────────────
-function Dialog({ open, onClose, title, description, children, footer }) {
-  if (!open) return null;
-  return (
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center p-4"
-        style={{ background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)' }}
-        onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
-      >
-        <div
-          className="w-full max-w-sm rounded-2xl p-5 space-y-4"
-          style={{
-            background: 'hsl(var(--card))',
-            border: '1px solid rgba(139,92,246,0.20)',
-            boxShadow: '0 24px 80px rgba(0,0,0,0.45)',
-          }}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="dialog-title"
-        >
-          <div className="flex items-start justify-between">
-            <div>
-              <h3 id="dialog-title" className="font-semibold text-foreground">{title}</h3>
-              {description && <p className="text-sm text-muted-foreground mt-0.5">{description}</p>}
-            </div>
-            <button
-              onClick={onClose}
-              className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent/40 transition-colors"
-              aria-label="Close dialog"
-            >
-              <X size={16} aria-hidden="true" />
-            </button>
-          </div>
-          {children}
-          {footer && <div className="flex gap-2 pt-1">{footer}</div>}
-        </div>
-      </div>
   );
 }
 
@@ -680,7 +641,7 @@ export default function HistoryPage() {
       </div>
 
       {/* ── Delete Dialog ── */}
-      <Dialog
+      <ModalOverlay
         open={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
         title="Delete conversation?"
@@ -707,7 +668,7 @@ export default function HistoryPage() {
       />
 
       {/* ── Rename Dialog ── */}
-      <Dialog
+      <ModalOverlay
         open={!!renameTarget}
         onClose={() => { setRenameTarget(null); setRenameValue(''); }}
         title="Rename conversation"
@@ -746,7 +707,7 @@ export default function HistoryPage() {
             Rename
           </button>
         </div>
-      </Dialog>
+      </ModalOverlay>
     </AppLayout>
   );
 }

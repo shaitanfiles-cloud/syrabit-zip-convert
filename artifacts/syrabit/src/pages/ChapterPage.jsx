@@ -12,6 +12,7 @@ import { apiClient } from '@/utils/api';
 import { useShare, SerpPreviewModal } from '@/hooks/useShare';
 import Analytics from '@/utils/analytics';
 import { useContentLang } from '@/context/LanguageContext';
+import StickyToc from '@/components/ui/StickyToc';
 
 function ChapterJsonLd({ data, url, basePath }) {
   useEffect(() => {
@@ -106,40 +107,6 @@ function filterTopicHeadings(headings) {
   });
 }
 
-function StickyToc({ headings, activeId }) {
-  const filtered = filterTopicHeadings(headings);
-  const { contentLang } = useContentLang();
-  if (filtered.length < 2) return null;
-  return (
-    <nav className="sticky top-20 w-56 shrink-0 hidden xl:block self-start" aria-label="Table of contents">
-      <p className="text-[11px] font-semibold uppercase tracking-wider mb-3 text-muted-foreground/50">
-        {contentLang === 'as' ? 'এই পৃষ্ঠাত' : 'On this page'}
-      </p>
-      <ul className="space-y-0.5">
-        {filtered.map(h => (
-          <li key={h.id}>
-            <a
-              href={`#${h.id}`}
-              className={`block py-1 text-[12px] leading-snug transition-colors rounded ${
-                activeId === h.id
-                  ? 'text-primary font-medium'
-                  : 'text-muted-foreground/50 hover:text-foreground/70'
-              }`}
-              style={{ borderLeft: activeId === h.id ? '2px solid #9575e0' : '2px solid transparent' }}
-              onClick={e => {
-                e.preventDefault();
-                Analytics.tocClick(h.text, document.title);
-                document.getElementById(h.id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-            >
-              {h.text}
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-}
 
 function ImportantQuestions({ chapterTitle, pyqData }) {
   const [expandedMark, setExpandedMark] = useState(null);
@@ -822,7 +789,14 @@ export default function ChapterPage() {
             </div>
           </article>
 
-          <StickyToc headings={headings} activeId={activeId} />
+          <StickyToc
+            headings={headings}
+            activeId={activeId}
+            filterFn={filterTopicHeadings}
+            getId={(h) => h.id}
+            label={contentLang === 'as' ? 'এই পৃষ্ঠাত' : 'On this page'}
+            onItemClick={(h) => Analytics.tocClick(h.text, document.title)}
+          />
         </div>
 
         <nav className="mt-10 pt-6 border-t border-border/30" aria-label="Site navigation">

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import { useContentLang } from '@/context/LanguageContext';
 import LangToggle from '@/components/ui/LangToggle';
+import StatCard from '@/components/ui/StatCard';
 import {
   Brain, BookOpen, GraduationCap, Smartphone, Sparkles,
   Shield, CreditCard, Search, Bell, Languages,
@@ -271,15 +272,6 @@ function getJsonLd(lang) {
   ];
 }
 
-
-function StatCard({ value, label }) {
-  return (
-    <div className="text-center p-5 rounded-2xl border border-border/40 bg-card/50">
-      <p className="text-3xl font-bold text-violet-600 mb-1">{value}</p>
-      <p className="text-sm text-muted-foreground">{label}</p>
-    </div>
-  );
-}
 
 function CategoryCard({ category, lang }) {
   const Icon = category.icon;
