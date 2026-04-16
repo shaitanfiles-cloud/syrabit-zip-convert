@@ -320,7 +320,7 @@ async def _auto_expire_alerts():
     except Exception as e:
         logger.debug(f"Alert auto-expiration error: {e}")
 
-async def _dispatch_alert(alert_type: str, title: str, body: str):
+async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snapshot: dict = None):
     """Send alert via email (Resend) and/or webhook. Respects cooldown."""
     now = _time_mod.time()
     if now - _alert_last_fired.get(alert_type, 0) < _ALERT_COOLDOWN_S:
@@ -359,13 +359,16 @@ async def _dispatch_alert(alert_type: str, title: str, body: str):
 
     # 3) Persist to db.alerts for admin dashboard visibility
     try:
-        await db.alerts.insert_one({
+        doc = {
             "type": alert_type,
             "title": title,
             "body": body,
             "fired_at": datetime.now(timezone.utc).isoformat(),
             "acknowledged": False,
-        })
+        }
+        if threshold_snapshot:
+            doc["threshold_snapshot"] = threshold_snapshot
+        await db.alerts.insert_one(doc)
     except Exception:
         pass
 
@@ -416,6 +419,7 @@ async def _alerting_loop():
                         "high_error_rate",
                         "Error rate spike",
                         f"{err_rate:.1f}% errors in last 2 min ({delta_err}/{delta_req} requests)",
+                        threshold_snapshot={"metric": "error_rate_pct", "value": _ALERT_THRESHOLDS["error_rate_pct"], "actual": round(err_rate, 1)},
                     )
 
             # ── 2. LLM latency (p95 from _chat_latencies ring buffer) ──
@@ -430,6 +434,7 @@ async def _alerting_loop():
                             "high_latency",
                             "LLM latency spike",
                             f"p95={int(p95)}ms (threshold: {_ALERT_THRESHOLDS['latency_p95_ms']}ms, sample={len(recent_lats)})",
+                            threshold_snapshot={"metric": "latency_p95_ms", "value": _ALERT_THRESHOLDS["latency_p95_ms"], "actual": int(p95)},
                         )
             except Exception:
                 pass
@@ -445,6 +450,7 @@ async def _alerting_loop():
                     "Spoofed bot UA surge detected",
                     f"{spoof_rpm:.0f} spoofed requests/min (threshold: {_ALERT_THRESHOLDS['spoof_rpm']}). "
                     f"Total lifetime: {spoof_stats['total']}. Top claimed bots: {top_str}",
+                    threshold_snapshot={"metric": "spoof_rpm", "value": _ALERT_THRESHOLDS["spoof_rpm"], "actual": round(spoof_rpm)},
                 )
 
             # ── 4. Fallback rate (from cost log provider != primary) ──
@@ -460,6 +466,7 @@ async def _alerting_loop():
                         "LLM fallback rate high",
                         f"{fb_rate:.0f}% of last {len(recent_cost)} calls used fallback models "
                         f"(primary: {primary_model})",
+                        threshold_snapshot={"metric": "fallback_rate_pct", "value": _ALERT_THRESHOLDS["fallback_rate_pct"], "actual": round(fb_rate, 1)},
                     )
 
         except Exception as exc:

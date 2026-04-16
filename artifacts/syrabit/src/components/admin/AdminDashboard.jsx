@@ -1048,6 +1048,17 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                       <p className={`text-[11px] ${alert.acknowledged ? 'text-gray-400' : 'text-gray-600'} break-words`}>
                         {alert.body}
                       </p>
+                      {alert.threshold_snapshot && alert.threshold_snapshot.metric != null && alert.threshold_snapshot.value != null && (
+                        <div className={`flex items-center gap-2 mt-1 text-[10px] px-2 py-1 rounded ${alert.acknowledged ? 'bg-gray-100 text-gray-400' : 'bg-white/60 text-gray-500'}`}>
+                          <span className="font-medium">Limit:</span>
+                          <span>{alert.threshold_snapshot.metric.replace(/_/g, ' ')} &gt; {alert.threshold_snapshot.value}{alert.threshold_snapshot.metric.includes('pct') ? '%' : alert.threshold_snapshot.metric.includes('ms') ? 'ms' : ''}</span>
+                          {alert.threshold_snapshot.actual != null && (<>
+                            <span className="text-gray-300">|</span>
+                            <span className="font-medium">Actual:</span>
+                            <span className={alert.acknowledged ? '' : isRed ? 'text-red-600' : 'text-amber-600'}>{alert.threshold_snapshot.actual}{alert.threshold_snapshot.metric.includes('pct') ? '%' : alert.threshold_snapshot.metric.includes('ms') ? 'ms' : ''}</span>
+                          </>)}
+                        </div>
+                      )}
                       <div className="flex items-center gap-3 mt-1.5">
                         <span className="text-[10px] text-gray-400 flex items-center gap-1">
                           <Clock size={10} />
