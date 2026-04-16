@@ -1,5 +1,7 @@
 """Syrabit.ai — Utility functions: bot detection, device type, country, keywords, etc."""
-import re, time as _time_mod, logging, asyncio, hashlib, uuid, socket
+import re, time as _time_mod, logging, asyncio, hashlib, uuid
+import dns.resolver
+import dns.reversename
 from typing import Optional
 from threading import Lock
 from datetime import datetime, timezone, timedelta
@@ -246,8 +248,6 @@ def _do_rdns_verify(ip: str, bot_key: str) -> bool:
     if not expected_domains:
         return False
     try:
-        import dns.resolver
-        import dns.reversename
         rev_name = dns.reversename.from_address(ip)
         answers = dns.resolver.resolve(rev_name, "PTR", lifetime=3)
         hostname = str(answers[0]).rstrip(".")
@@ -263,20 +263,7 @@ def _do_rdns_verify(ip: str, bot_key: str) -> bool:
         except Exception:
             pass
         return ip in fwd_ips
-    except ImportError:
-        pass
-    try:
-        hostname, _, _ = socket.gethostbyaddr(ip)
-        if not any(hostname.lower().endswith(d) for d in expected_domains):
-            return False
-        forward_ips: set[str] = set()
-        try:
-            for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None):
-                forward_ips.add(sockaddr[0])
-        except socket.gaierror:
-            return False
-        return ip in forward_ips
-    except (socket.herror, socket.gaierror, OSError):
+    except Exception:
         return False
 
 
