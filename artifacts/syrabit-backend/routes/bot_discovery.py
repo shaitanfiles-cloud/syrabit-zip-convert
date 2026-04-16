@@ -203,6 +203,60 @@ async def load_endpoint_health_from_db():
         logger.warning("Failed to load endpoint health from database: %s", e)
 
 
+_ENDPOINT_DOWN_ALERT_THRESHOLD_SECONDS = 3600
+_ENDPOINT_DOWN_CHECK_INTERVAL_SECONDS = 900
+_endpoint_alert_last_fired: Dict[str, float] = {}
+_ENDPOINT_ALERT_COOLDOWN_S = 1800
+
+
+async def _endpoint_health_alert_loop():
+    """Background loop: every 15 min, check for endpoints failing >1 hour and fire admin alerts."""
+    await asyncio.sleep(120)
+    while True:
+        try:
+            now = time.time()
+            for ep, health in list(_endpoint_health.items()):
+                if health.consecutive_failures < _DEAD_LETTER_THRESHOLD:
+                    continue
+                if not health.last_failure_time:
+                    continue
+                down_duration = now - health.last_failure_time
+                if down_duration < _ENDPOINT_DOWN_ALERT_THRESHOLD_SECONDS:
+                    continue
+                if now - _endpoint_alert_last_fired.get(ep, 0) < _ENDPOINT_ALERT_COOLDOWN_S:
+                    continue
+                down_minutes = int(down_duration / 60)
+                try:
+                    from metrics import _dispatch_alert, _alert_last_fired
+                    _alert_last_fired.pop("endpoint_down", None)
+                    await _dispatch_alert(
+                        "endpoint_down",
+                        "IndexNow endpoint down",
+                        f"Endpoint {ep} has been failing for {down_minutes} min "
+                        f"({health.consecutive_failures} consecutive failures, "
+                        f"{health.total_failures} total). Last success: "
+                        f"{datetime.fromtimestamp(health.last_success_time, tz=timezone.utc).strftime('%Y-%m-%d %H:%M UTC') if health.last_success_time else 'never'}.",
+                        threshold_snapshot={
+                            "metric": "endpoint_down_minutes",
+                            "value": _ENDPOINT_DOWN_ALERT_THRESHOLD_SECONDS // 60,
+                            "actual": down_minutes,
+                            "endpoint": ep,
+                            "consecutive_failures": health.consecutive_failures,
+                        },
+                    )
+                    _endpoint_alert_last_fired[ep] = now
+                    _schedule_health_log(ep, "admin_alert_fired", {
+                        "down_minutes": down_minutes,
+                        "consecutive_failures": health.consecutive_failures,
+                    })
+                except Exception as e:
+                    logger.debug("Failed to dispatch endpoint down alert for %s: %s", ep, e)
+        except Exception as exc:
+            logger.debug("Endpoint health alert loop error: %s", exc)
+
+        await asyncio.sleep(_ENDPOINT_DOWN_CHECK_INTERVAL_SECONDS)
+
+
 def _xml_safe(text: str) -> str:
     if not text:
         return ""

@@ -118,6 +118,7 @@ from auth_deps import _rate_limiter_cleanup
 from seed import ensure_seeded
 from db_ops import _supa, supa_insert_activity_log
 from metrics import _bg_health_loop, _alerting_loop
+from routes.bot_discovery import _endpoint_health_alert_loop
 
 from prompts import build_system_prompt, _classify_question
 from syllabus_embedder import SyllabusEmbedder
@@ -549,6 +550,7 @@ async def lifespan(app):
     from routes.admin_notifications import _exam_reminder_loop
     asyncio.create_task(_exam_reminder_loop())
     asyncio.create_task(_alerting_loop())
+    asyncio.create_task(_endpoint_health_alert_loop())
     from middleware import _init_blocked_ip_cache
     asyncio.create_task(_init_blocked_ip_cache())
     logger.info("Syrabit.ai API started")

@@ -298,6 +298,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
     high_latency: 'High Latency',
     spoofed_bot_surge: 'Bot Surge',
     high_fallback_rate: 'High Fallback Rate',
+    endpoint_down: 'Endpoint Down',
   };
 
   const loadNotifPrefs = useCallback(async () => {
@@ -308,8 +309,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       log.error('Failed to load notification prefs', { error: e.message });
       setNotifPrefs({
         sound_enabled: true, push_enabled: false, chime_tone: 'default',
-        sound_severities: ['high_error_rate', 'high_latency', 'spoofed_bot_surge', 'high_fallback_rate'],
-        push_severities: ['high_error_rate', 'spoofed_bot_surge'],
+        sound_severities: ['high_error_rate', 'high_latency', 'spoofed_bot_surge', 'high_fallback_rate', 'endpoint_down'],
+        push_severities: ['high_error_rate', 'spoofed_bot_surge', 'endpoint_down'],
       });
     }
   }, [adminToken]);
@@ -1179,6 +1180,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   high_latency: 'yellow',
                   spoofed_bot_surge: 'red',
                   high_fallback_rate: 'yellow',
+                  endpoint_down: 'red',
                 };
                 const severity = severityMap[alert.type] || 'yellow';
                 const isRed = severity === 'red';
