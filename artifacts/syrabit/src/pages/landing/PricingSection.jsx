@@ -5,31 +5,74 @@ import { fadeUp, staggerContainer } from './shared';
 import Reveal from './Reveal';
 import GlowOrb from './GlowOrb';
 
-const PLANS = [
-  {
-    id: 'free', name: 'Free', price: '₹0', period: 'forever', credits: '30/day',
-    renewal: '30 credits/day · resets daily', icon: Zap, highlighted: false, badge: null,
-    docAccess: '🔒 Zero document access',
-    features: ['30 AI credits/day', '5 messages/min', 'All subjects access', 'Chat history (limited)', 'Zero document access'],
-    ctaText: 'Get Started Free',
-  },
-  {
-    id: 'starter', name: 'Starter', price: '₹99', period: 'one-time', credits: '500/day',
-    renewal: '500 credits/day · resets daily', icon: Trophy, highlighted: true, badge: 'MOST POPULAR',
-    docAccess: '📄 Limited document access',
-    features: ['500 AI credits/day', '10 messages/min', 'All subjects access', 'Full chat history', 'Limited document access', 'Priority responses'],
-    ctaText: 'Buy Starter',
-  },
-  {
-    id: 'pro', name: 'Pro', price: '₹999', period: 'one-time', credits: '4,000/day',
-    renewal: '4,000 credits/day · resets daily', icon: Sparkles, highlighted: false, badge: 'BEST VALUE',
-    docAccess: '📚 Full document access',
-    features: ['4,000 AI credits/day', '15 messages/min', 'Unlimited subjects access', 'Unlimited history', 'Full document access', 'All AI models (fastest)', 'Early access to features'],
-    ctaText: 'Go Pro',
-  },
-];
+const PLANS = {
+  en: [
+    {
+      id: 'free', name: 'Free', price: '₹0', period: 'forever', credits: '30/day',
+      renewal: '30 credits/day · resets daily', icon: Zap, highlighted: false, badge: null,
+      docAccess: '🔒 Zero document access',
+      features: ['30 AI credits/day', '5 messages/min', 'All subjects access', 'Chat history (limited)', 'Zero document access'],
+      ctaText: 'Get Started Free',
+    },
+    {
+      id: 'starter', name: 'Starter', price: '₹99', period: 'one-time', credits: '500/day',
+      renewal: '500 credits/day · resets daily', icon: Trophy, highlighted: true, badge: 'MOST POPULAR',
+      docAccess: '📄 Limited document access',
+      features: ['500 AI credits/day', '10 messages/min', 'All subjects access', 'Full chat history', 'Limited document access', 'Priority responses'],
+      ctaText: 'Buy Starter',
+    },
+    {
+      id: 'pro', name: 'Pro', price: '₹999', period: 'one-time', credits: '4,000/day',
+      renewal: '4,000 credits/day · resets daily', icon: Sparkles, highlighted: false, badge: 'BEST VALUE',
+      docAccess: '📚 Full document access',
+      features: ['4,000 AI credits/day', '15 messages/min', 'Unlimited subjects access', 'Unlimited history', 'Full document access', 'All AI models (fastest)', 'Early access to features'],
+      ctaText: 'Go Pro',
+    },
+  ],
+  as: [
+    {
+      id: 'free', name: 'বিনামূলীয়া', price: '₹০', period: 'চিৰদিনৰ বাবে', credits: '৩০/দিন',
+      renewal: '৩০ ক্ৰেডিট/দিন · দৈনিক ৰিছেট', icon: Zap, highlighted: false, badge: null,
+      docAccess: '🔒 নথি প্ৰৱেশ নাই',
+      features: ['৩০ AI ক্ৰেডিট/দিন', '৫ বাৰ্তা/মিনিট', 'সকলো বিষয়ৰ প্ৰৱেশ', 'চেট ইতিহাস (সীমিত)', 'নথি প্ৰৱেশ নাই'],
+      ctaText: 'বিনামূলীয়াকৈ আৰম্ভ কৰক',
+    },
+    {
+      id: 'starter', name: 'Starter', price: '₹৯৯', period: 'এবাৰৰ বাবে', credits: '৫০০/দিন',
+      renewal: '৫০০ ক্ৰেডিট/দিন · দৈনিক ৰিছেট', icon: Trophy, highlighted: true, badge: 'আটাইতকৈ জনপ্ৰিয়',
+      docAccess: '📄 সীমিত নথি প্ৰৱেশ',
+      features: ['৫০০ AI ক্ৰেডিট/দিন', '১০ বাৰ্তা/মিনিট', 'সকলো বিষয়ৰ প্ৰৱেশ', 'সম্পূৰ্ণ চেট ইতিহাস', 'সীমিত নথি প্ৰৱেশ', 'অগ্ৰাধিকাৰ উত্তৰ'],
+      ctaText: 'Starter কিনক',
+    },
+    {
+      id: 'pro', name: 'Pro', price: '₹৯৯৯', period: 'এবাৰৰ বাবে', credits: '৪,০০০/দিন',
+      renewal: '৪,০০০ ক্ৰেডিট/দিন · দৈনিক ৰিছেট', icon: Sparkles, highlighted: false, badge: 'শ্ৰেষ্ঠ মূল্য',
+      docAccess: '📚 সম্পূৰ্ণ নথি প্ৰৱেশ',
+      features: ['৪,০০০ AI ক্ৰেডিট/দিন', '১৫ বাৰ্তা/মিনিট', 'সীমাহীন বিষয়ৰ প্ৰৱেশ', 'সীমাহীন ইতিহাস', 'সম্পূৰ্ণ নথি প্ৰৱেশ', 'সকলো AI মডেল (দ্ৰুততম)', 'নতুন সুবিধালৈ আগতীয়া প্ৰৱেশ'],
+      ctaText: 'Pro লওক',
+    },
+  ],
+};
 
-export default function PricingSection() {
+const _t = {
+  en: {
+    badge: 'SIMPLE PRICING',
+    heading: 'Start free. Scale as you need.',
+    sub: 'No subscriptions. No hidden fees. All plans include daily credits that reset at midnight UTC.',
+    footer: 'All credits reset daily at midnight UTC · fresh allowance every day',
+  },
+  as: {
+    badge: 'সৰল মূল্য নিৰ্ধাৰণ',
+    heading: 'বিনামূলীয়াকৈ আৰম্ভ কৰক। প্ৰয়োজন অনুসৰি বৃদ্ধি কৰক।',
+    sub: 'কোনো চাবস্ক্ৰিপশ্বন নাই। কোনো লুকাই থকা মাচুল নাই। সকলো পৰিকল্পনাত দৈনিক ক্ৰেডিট অন্তৰ্ভুক্ত যি মাজনিশা UTC-ত ৰিছেট হয়।',
+    footer: 'সকলো ক্ৰেডিট মাজনিশা UTC-ত দৈনিক ৰিছেট হয় · প্ৰতিদিন নতুন ভাট্টা',
+  },
+};
+
+export default function PricingSection({ contentLang = 'en' }) {
+  const t = _t[contentLang] || _t.en;
+  const plans = PLANS[contentLang] || PLANS.en;
+
   return (
     <section id="pricing" className="py-28 relative overflow-hidden" style={{ background: 'hsl(var(--muted) / 0.15)' }}>
       <div className="absolute inset-0 pointer-events-none">
@@ -42,13 +85,13 @@ export default function PricingSection() {
             style={{ background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(139,92,246,0.18)' }}
           >
             <Zap size={14} className="text-violet-600" />
-            <span className="text-xs font-semibold tracking-widest text-violet-600">SIMPLE PRICING</span>
+            <span className="text-xs font-semibold tracking-widest text-violet-600">{t.badge}</span>
           </div>
           <h2 className="text-foreground mb-4" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
-            Start free. Scale as you need.
+            {t.heading}
           </h2>
           <p className="max-w-lg mx-auto text-muted-foreground">
-            No subscriptions. No hidden fees. All plans include daily credits that reset at midnight UTC.
+            {t.sub}
           </p>
         </Reveal>
 
@@ -59,7 +102,7 @@ export default function PricingSection() {
           variants={staggerContainer}
           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
         >
-          {PLANS.map((plan) => {
+          {plans.map((plan) => {
             const isPro = plan.id === 'pro';
             const priceColor = isPro ? '#d97706' : '#7c3aed';
             return (
@@ -138,7 +181,7 @@ export default function PricingSection() {
         </motion.div>
 
         <p className="text-center text-sm mt-8 text-muted-foreground/50">
-          All credits reset daily at midnight UTC · fresh allowance every day
+          {t.footer}
         </p>
       </div>
     </section>

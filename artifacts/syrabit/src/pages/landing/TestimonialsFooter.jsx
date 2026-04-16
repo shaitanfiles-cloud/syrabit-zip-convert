@@ -9,7 +9,62 @@ import GlowOrb from './GlowOrb';
 
 const TRUSTPILOT_BU_ID = __TRUSTPILOT_BU_ID__;
 
-function TrustpilotCarousel() {
+const _t = {
+  en: {
+    testimonialsHeading: 'Students love Syrabit.ai',
+    testimonialsSub: 'Real feedback from students across Assam',
+    trustpilotLink: 'See our reviews on Trustpilot',
+    trustpilotMini: 'Rated on Trustpilot',
+    ctaHeading: 'Ready to ace your boards?',
+    ctaSub: 'Join hundreds of AssamBoard students (AHSEC, DEGREE & SEBA) who study smarter with Syrabit.ai. Free forever — no credit card required.',
+    ctaPrimary: 'Create Free Account',
+    ctaSecondary: 'View all plans',
+    footerDesc: 'AI-powered exam prep for AssamBoard students in Assam — AHSEC (Class 11–12), DEGREE (B.Com, B.A, B.Sc), and SEBA.',
+    product: 'PRODUCT',
+    company: 'COMPANY',
+    contact: 'CONTACT',
+    features: 'Features',
+    pricing: 'Pricing',
+    subjects: 'Subjects',
+    chat: 'Chat',
+    aboutUs: 'About Us',
+    technology: 'Technology',
+    privacyPolicy: 'Privacy Policy',
+    terms: 'Terms of Service',
+    status: 'System Status',
+    adminPortal: 'Admin Portal →',
+    copyright: (y) => `© ${y} Syrabit.ai · Built for AssamBoard students in Assam, India (AHSEC · DEGREE · SEBA)`,
+    madeWith: 'Made with ♥ for Class 11 & 12 exam warriors',
+  },
+  as: {
+    testimonialsHeading: 'ছাত্ৰ-ছাত্ৰীয়ে Syrabit.ai ভাল পায়',
+    testimonialsSub: 'অসমৰ ছাত্ৰ-ছাত্ৰীৰ প্ৰকৃত মতামত',
+    trustpilotLink: 'Trustpilot-ত আমাৰ পৰ্যালোচনা চাওক',
+    trustpilotMini: 'Trustpilot-ত ৰেটিং',
+    ctaHeading: 'আপোনাৰ বোৰ্ড পৰীক্ষাত উত্তীৰ্ণ হ\'বলৈ সাজু?',
+    ctaSub: 'শত শত অসম বোৰ্ডৰ ছাত্ৰ-ছাত্ৰী (AHSEC, DEGREE আৰু SEBA)ৰ সৈতে যোগদান কৰক যিয়ে Syrabit.ai-ৰ সৈতে স্মাৰ্টকৈ অধ্যয়ন কৰে। চিৰদিনৰ বাবে বিনামূলীয়া — ক্ৰেডিট কাৰ্ডৰ প্ৰয়োজন নাই।',
+    ctaPrimary: 'বিনামূলীয়া একাউণ্ট তৈয়াৰ কৰক',
+    ctaSecondary: 'সকলো পৰিকল্পনা চাওক',
+    footerDesc: 'অসমৰ অসম বোৰ্ডৰ ছাত্ৰ-ছাত্ৰীৰ বাবে AI-চালিত পৰীক্ষা প্ৰস্তুতি — AHSEC (একাদশ-দ্বাদশ শ্ৰেণী), DEGREE (B.Com, B.A, B.Sc), আৰু SEBA।',
+    product: 'সামগ্ৰী',
+    company: 'কোম্পানী',
+    contact: 'যোগাযোগ',
+    features: 'সুবিধাসমূহ',
+    pricing: 'মূল্য নিৰ্ধাৰণ',
+    subjects: 'বিষয়সমূহ',
+    chat: 'চেট',
+    aboutUs: 'আমাৰ বিষয়ে',
+    technology: 'প্ৰযুক্তি',
+    privacyPolicy: 'গোপনীয়তা নীতি',
+    terms: 'সেৱাৰ চৰ্তাৱলী',
+    status: 'চিষ্টেম স্থিতি',
+    adminPortal: 'এডমিন পৰ্টেল →',
+    copyright: (y) => `© ${y} Syrabit.ai · অসম, ভাৰতৰ অসম বোৰ্ডৰ ছাত্ৰ-ছাত্ৰীৰ বাবে নিৰ্মিত (AHSEC · DEGREE · SEBA)`,
+    madeWith: 'একাদশ আৰু দ্বাদশ শ্ৰেণীৰ পৰীক্ষা যোদ্ধাসকলৰ বাবে ♥ৰে নিৰ্মিত',
+  },
+};
+
+function TrustpilotCarousel({ label }) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -37,13 +92,13 @@ function TrustpilotCarousel() {
         rel="noopener noreferrer"
         className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground"
       >
-        See our reviews on Trustpilot
+        {label}
       </a>
     </div>
   );
 }
 
-function TrustpilotMini() {
+function TrustpilotMini({ label }) {
   const ref = useRef(null);
 
   useEffect(() => {
@@ -69,14 +124,16 @@ function TrustpilotMini() {
           rel="noopener noreferrer"
           className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground"
         >
-          Rated on Trustpilot
+          {label}
         </a>
       </div>
     </div>
   );
 }
 
-export default function TestimonialsFooter({ year }) {
+export default function TestimonialsFooter({ year, contentLang = 'en' }) {
+  const t = _t[contentLang] || _t.en;
+
   useEffect(() => {
     if (document.getElementById('trustpilot-widget-script')) return;
     const script = document.createElement('script');
@@ -97,10 +154,10 @@ export default function TestimonialsFooter({ year }) {
       <section className="py-28 max-w-5xl mx-auto px-5">
         <Reveal className="text-center mb-14">
           <h2 className="text-foreground mb-3" style={{ fontSize: 'clamp(1.8rem,4vw,2.8rem)', fontWeight: 800, letterSpacing: '-0.02em' }}>
-            Students love Syrabit.ai
+            {t.testimonialsHeading}
           </h2>
           <p className="text-muted-foreground">
-            Real feedback from students across Assam
+            {t.testimonialsSub}
           </p>
         </Reveal>
 
@@ -111,11 +168,11 @@ export default function TestimonialsFooter({ year }) {
           variants={staggerContainer}
         >
           <motion.div variants={fadeUp()}>
-            <TrustpilotCarousel />
+            <TrustpilotCarousel label={t.trustpilotLink} />
           </motion.div>
         </motion.div>
 
-        <TrustpilotMini />
+        <TrustpilotMini label={t.trustpilotMini} />
       </section>
 
       <section className="py-28 relative overflow-hidden">
@@ -134,10 +191,10 @@ export default function TestimonialsFooter({ year }) {
           </motion.div>
 
           <h2 className="text-foreground mb-4" style={{ fontSize: 'clamp(2rem,4vw,3rem)', fontWeight: 900, letterSpacing: '-0.02em' }}>
-            Ready to ace your boards?
+            {t.ctaHeading}
           </h2>
           <p className="mb-10 text-lg text-muted-foreground">
-            Join hundreds of AssamBoard students (AHSEC, DEGREE &amp; SEBA) who study smarter with Syrabit.ai. Free forever — no credit card required.
+            {t.ctaSub}
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
@@ -156,7 +213,7 @@ export default function TestimonialsFooter({ year }) {
                 data-testid="landing-final-cta-button"
               >
                 <Sparkles size={20} />
-                Create Free Account
+                {t.ctaPrimary}
               </Link>
             </motion.div>
             <motion.div whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.97 }}>
@@ -172,7 +229,7 @@ export default function TestimonialsFooter({ year }) {
                   background: 'hsl(var(--muted) / 0.3)',
                 }}
               >
-                View all plans <ChevronRight size={18} />
+                {t.ctaSecondary} <ChevronRight size={18} />
               </Link>
             </motion.div>
           </div>
@@ -188,7 +245,7 @@ export default function TestimonialsFooter({ year }) {
             <div className="col-span-2 md:col-span-1 space-y-4">
               <LogoFull size="sm" textClassName="text-foreground" />
               <p className="text-sm leading-relaxed text-muted-foreground">
-                AI-powered exam prep for AssamBoard students in Assam — AHSEC (Class 11–12), DEGREE (B.Com, B.A, B.Sc), and SEBA.
+                {t.footerDesc}
               </p>
               <div className="flex items-center gap-2">
                 {[{ icon: Twitter, label: 'Twitter' }, { icon: Github, label: 'GitHub' }, { icon: Mail, label: 'Email' }].map(({ icon: Icon, label }) => (
@@ -207,24 +264,24 @@ export default function TestimonialsFooter({ year }) {
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">PRODUCT</p>
-              <Link to="/home#features" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Features</Link>
-              <Link to="/pricing" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Pricing</Link>
-              <Link to="/library" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Subjects</Link>
-              <Link to="/chat" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Chat</Link>
+              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">{t.product}</p>
+              <Link to="/home#features" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.features}</Link>
+              <Link to="/pricing" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.pricing}</Link>
+              <Link to="/library" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.subjects}</Link>
+              <Link to="/chat" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.chat}</Link>
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">COMPANY</p>
-              <Link to="/about" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">About Us</Link>
-              <Link to="/technology" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Technology</Link>
-              <Link to="/privacy" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Privacy Policy</Link>
-              <Link to="/terms" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">Terms of Service</Link>
-              <Link to="/status" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">System Status</Link>
+              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">{t.company}</p>
+              <Link to="/about" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.aboutUs}</Link>
+              <Link to="/technology" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.technology}</Link>
+              <Link to="/privacy" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.privacyPolicy}</Link>
+              <Link to="/terms" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.terms}</Link>
+              <Link to="/status" className="block text-sm text-muted-foreground hover:text-foreground transition-colors min-h-[44px] flex items-center">{t.status}</Link>
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">CONTACT</p>
+              <p className="text-xs font-bold tracking-[0.10em] pb-1 text-muted-foreground">{t.contact}</p>
               <div className="flex items-center gap-1.5 text-sm min-h-[44px] text-muted-foreground">
                 <Mail size={14} /><span>admin@syrabit.ai</span>
               </div>
@@ -236,7 +293,7 @@ export default function TestimonialsFooter({ year }) {
                   to="/admin/login"
                   className="text-xs text-muted-foreground/20 hover:text-muted-foreground/40 transition-colors"
                 >
-                  Admin Portal →
+                  {t.adminPortal}
                 </Link>
               </div>
             </div>
@@ -247,10 +304,10 @@ export default function TestimonialsFooter({ year }) {
             style={{ borderColor: 'hsl(var(--border) / 0.3)' }}
           >
             <p className="text-xs text-muted-foreground">
-              © {year} Syrabit.ai · Built for AssamBoard students in Assam, India (AHSEC · DEGREE · SEBA)
+              {t.copyright(year)}
             </p>
             <p className="text-xs text-muted-foreground">
-              Made with ♥ for Class 11 &amp; 12 exam warriors
+              {t.madeWith}
             </p>
           </div>
         </div>

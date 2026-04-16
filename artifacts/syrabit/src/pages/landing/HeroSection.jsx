@@ -8,14 +8,42 @@ import AnimatedChatDemo from './AnimatedChatDemo';
 import { prefetchRoute } from '@/utils/prefetchRoute';
 import { usePublicStats } from '@/hooks/usePublicStats';
 
-export default function HeroSection() {
+const _t = {
+  en: {
+    heroLine1: 'Educational Browser',
+    heroLine2Pre: 'For ',
+    heroLine2Highlight: 'AssamBoard Students',
+    subtitle: 'Syrabit gives AssamBoard students (AHSEC, DEGREE & SEBA) instant, syllabus-aligned AI answers, PYQ insights, and structured subject notes — all in one place.',
+    ctaPrimary: 'Start for Free — No Card Needed',
+    ctaSecondary: 'See how it works',
+    freeNote: 'Free plan · No credits needed to browse · Upgrade from ₹99',
+    statDivisions: 'AssamBoard Divisions',
+    statStudents: 'Students',
+    statPlans: 'Plans',
+  },
+  as: {
+    heroLine1: 'শৈক্ষিক ব্ৰাউজাৰ',
+    heroLine2Pre: '',
+    heroLine2Highlight: 'অসম বোৰ্ডৰ ছাত্ৰ-ছাত্ৰীৰ বাবে',
+    subtitle: 'Syrabit-এ অসম বোৰ্ডৰ ছাত্ৰ-ছাত্ৰীক (AHSEC, DEGREE আৰু SEBA) তাৎক্ষণিক, পাঠ্যক্ৰম-সামঞ্জস্যপূৰ্ণ AI উত্তৰ, PYQ অন্তৰ্দৃষ্টি, আৰু গাঁথনিমূলক বিষয়ৰ টোকা প্ৰদান কৰে — সকলো এটা ঠাইতে।',
+    ctaPrimary: 'বিনামূলীয়াকৈ আৰম্ভ কৰক — কাৰ্ডৰ প্ৰয়োজন নাই',
+    ctaSecondary: 'কেনেকৈ কাম কৰে চাওক',
+    freeNote: 'বিনামূলীয়া পৰিকল্পনা · ব্ৰাউজ কৰিবলৈ ক্ৰেডিট নালাগে · ₹99ৰ পৰা আপগ্ৰেড',
+    statDivisions: 'অসম বোৰ্ড বিভাগ',
+    statStudents: 'ছাত্ৰ-ছাত্ৰী',
+    statPlans: 'পৰিকল্পনা',
+  },
+};
+
+export default function HeroSection({ contentLang = 'en' }) {
   const publicStats = usePublicStats();
   const userCount = publicStats?.total_users || 100;
+  const t = _t[contentLang] || _t.en;
 
   const stats = [
-    { value: '3',               label: 'AssamBoard Divisions', icon: BookOpen   },
-    { value: `${userCount}+`,   label: 'Students',              icon: Users      },
-    { value: '3',               label: 'Plans',                 icon: TrendingUp },
+    { value: '3',               label: t.statDivisions, icon: BookOpen   },
+    { value: `${userCount}+`,   label: t.statStudents,  icon: Users      },
+    { value: '3',               label: t.statPlans,     icon: TrendingUp },
   ];
   const [browserPath, setBrowserPath] = useState('chat');
   const handleUrlChange = useCallback((path) => setBrowserPath(path), []);
@@ -39,16 +67,17 @@ export default function HeroSection() {
 
         <div className="relative z-10 max-w-5xl mx-auto px-5 text-center py-24">
           <motion.h1
+            key={contentLang + '-h1'}
             initial={{ opacity: 0, y: 32 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
             className="mb-6"
             style={{ fontSize: 'clamp(1.75rem,5vw,5rem)', fontWeight: 900, lineHeight: 1.06, letterSpacing: '-0.03em' }}
           >
-            <span className="text-foreground">Educational Browser</span>
+            <span className="text-foreground">{t.heroLine1}</span>
             <br />
             <span>
-              <span className="text-foreground">For </span>
+              {t.heroLine2Pre && <span className="text-foreground">{t.heroLine2Pre}</span>}
               <span style={{
                 background: 'linear-gradient(135deg,#7c3aed 0%,#a78bfa 40%,#6d28d9 80%)',
                 WebkitBackgroundClip: 'text',
@@ -56,20 +85,20 @@ export default function HeroSection() {
                 backgroundClip: 'text',
                 filter: 'drop-shadow(0 0 30px rgba(139,92,246,0.20))',
               }}>
-                AssamBoard Students
+                {t.heroLine2Highlight}
               </span>
             </span>
           </motion.h1>
 
           <motion.p
+            key={contentLang + '-sub'}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7, ease: [0.16, 1, 0.3, 1], delay: 0.35 }}
             className="max-w-2xl mx-auto mb-8 leading-relaxed text-muted-foreground"
             style={{ fontSize: 'clamp(1rem,2vw,1.18rem)', letterSpacing: '0.01em' }}
           >
-            Syrabit gives AssamBoard students (AHSEC, DEGREE &amp; SEBA) instant, syllabus-aligned AI answers,
-            PYQ insights, and structured subject notes — all in one place.
+            {t.subtitle}
           </motion.p>
 
           <motion.div
@@ -95,7 +124,7 @@ export default function HeroSection() {
                 data-testid="landing-hero-primary-cta-button"
               >
                 <Sparkles size={18} className="flex-shrink-0" />
-                <span>Start for Free — No Card Needed</span>
+                <span>{t.ctaPrimary}</span>
               </Link>
             </motion.div>
             <motion.div whileHover={{ scale: 1.03, y: -2 }} whileTap={{ scale: 0.97 }}>
@@ -114,7 +143,7 @@ export default function HeroSection() {
                 data-testid="landing-hero-secondary-cta-button"
               >
                 <Play size={15} />
-                See how it works
+                {t.ctaSecondary}
               </a>
             </motion.div>
           </motion.div>
@@ -125,7 +154,7 @@ export default function HeroSection() {
             transition={{ duration: 0.8, delay: 0.7 }}
             className="text-sm mt-7 text-muted-foreground"
           >
-            Free plan · No credits needed to browse · Upgrade from ₹99
+            {t.freeNote}
           </motion.p>
 
           <motion.div
