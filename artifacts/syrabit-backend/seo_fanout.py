@@ -13,7 +13,7 @@ Signals fired per page:
   3. Synthetic Googlebot-UA GET to populate BOT_HTML_CACHE — bot_discovery
   4. Google Indexing API URL_UPDATED (Phase C)           — google_indexing_client
 
-All three run as fire-and-forget background tasks; failures are logged
+All four run as fire-and-forget background tasks; failures are logged
 but never raise back to the generator.
 
 A ring buffer of the most recent fan-outs is exposed via
