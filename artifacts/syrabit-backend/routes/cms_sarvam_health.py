@@ -341,6 +341,12 @@ async def publish_cms_document(doc_id: str, admin: dict = Depends(get_admin_user
         if doc.get("thumbnail_url"):
             updates["json_ld_article"]["image"] = doc["thumbnail_url"]
     await db.cms_documents.update_one({"id": doc_id}, {"$set": updates})
+    if new_status == "published" and doc.get("slug"):
+        try:
+            from routes.admin_advanced import _indexnow_notify_background, INDEXNOW_HOST
+            _indexnow_notify_background([f"{INDEXNOW_HOST}/learn/{doc['slug']}"])
+        except Exception:
+            pass
     return {"status": new_status}
 
 

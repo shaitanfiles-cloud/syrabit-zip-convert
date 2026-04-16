@@ -12,7 +12,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { useAuth } from '@/context/AuthContext';
 import { useContentLang } from '@/context/LanguageContext';
 import {
-  useLibraryBundle, useSavedSubjects,
+  useLibraryBundle, useLibraryBundleSlim, useSavedSubjects,
 } from '@/hooks/useContent';
 import { useToggleSavedSubject } from '@/hooks/useUser';
 import SubjectCard from './library/SubjectCard';
@@ -115,12 +115,17 @@ export default function LibraryPage() {
   const [searchQuery, setSearchQuery]   = useState('');
   const [activeFilter, setActiveFilter] = useState('all');
 
-  const { data: bundle, isLoading: bundleLoading, isError: bundleError, isFetching, refetch: refetchBundle } = useLibraryBundle();
+  const { data: slimBundle, isLoading: slimLoading } = useLibraryBundleSlim();
+  const { data: fullBundle, isFetching, refetch: refetchBundle } = useLibraryBundle();
+
+  const bundle = fullBundle || slimBundle;
+  const bundleLoading = slimLoading;
+  const bundleError = !bundle && !slimLoading;
   const subjects    = bundle?.subjects  || [];
   const boards      = bundle?.boards    || [];
   const classes     = bundle?.classes   || [];
   const streams     = bundle?.streams   || [];
-  const allChapters = bundle?.chapters  || [];
+  const allChapters = fullBundle?.chapters || [];
   const { data: savedSubjects = [] } = useSavedSubjects(user);
   const toggleSaved = useToggleSavedSubject();
   const handleToggleSave = useCallback((id) => toggleSaved.mutate(id), [toggleSaved]);

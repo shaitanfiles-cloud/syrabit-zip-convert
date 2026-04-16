@@ -1447,7 +1447,7 @@ async def _pipeline_generate_chapter_notes(chapter: dict, subject_name: str, cla
     topics = chapter.get("topics") or []
     chapter_id = chapter.get("id", "")
 
-    cache_key = f"pipeline_notes:{chapter_id}:{hash(title + subject_name)}"
+    cache_key = f"pipeline_notes:{chapter_id}:{hashlib.md5((title + subject_name).lower().encode()).hexdigest()}"
     cached = _redis_get("pipeline_notes", cache_key)
     if cached and len(cached.strip()) > 100:
         return cached
@@ -3102,6 +3102,19 @@ async def _indexnow_submit(urls: List[str]) -> dict:
     except Exception as e:
         logger.warning(f"IndexNow error: {e}")
         return {"ok": False, "error": str(e)}
+
+def _indexnow_notify_background(urls: List[str]):
+    import asyncio
+    async def _fire():
+        try:
+            await _indexnow_submit(urls)
+        except Exception as e:
+            logger.debug(f"IndexNow background notify failed: {e}")
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_fire())
+    except RuntimeError:
+        pass
 
 
 @router.post("/admin/indexnow/ping")
