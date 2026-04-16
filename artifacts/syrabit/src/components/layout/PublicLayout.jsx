@@ -27,6 +27,7 @@ export const PublicLayout = ({ children }) => {
               <span className="text-foreground font-bold shimmer-text">Syrabit<span className="text-violet-600">.ai</span></span>
             </div>
             <div className="flex items-center gap-4 text-sm text-muted-foreground">
+              <Link to="/technology" className="hover:text-foreground transition-colors py-2 px-1 min-h-[44px] flex items-center">Technology</Link>
               <Link to="/terms"   className="hover:text-foreground transition-colors py-2 px-1 min-h-[44px] flex items-center">Terms</Link>
               <Link to="/privacy" className="hover:text-foreground transition-colors py-2 px-1 min-h-[44px] flex items-center">Privacy</Link>
               <Link to="/pricing" className="hover:text-foreground transition-colors py-2 px-1 min-h-[44px] flex items-center">Pricing</Link>
