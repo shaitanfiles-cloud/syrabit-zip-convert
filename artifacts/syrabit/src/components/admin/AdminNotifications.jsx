@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Bell, Send, Clock, Trash2, Users, Loader2, Info, CheckCircle2, AlertTriangle, XCircle, Zap, Plus, ToggleLeft, ToggleRight } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
+import { Bell, Send, Clock, Trash2, Users, Loader2, Info, CheckCircle2, AlertTriangle, XCircle, Zap, Plus, ToggleLeft, ToggleRight, BarChart3, Smartphone, RefreshCw, ChevronDown, ChevronUp, Eye } from 'lucide-react';
 import AdminQuickLinks from './AdminQuickLinks';
 import { toast } from 'sonner';
 import axios from 'axios';
@@ -51,6 +51,16 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
   const [triggers, setTriggers] = useState([]);
   const [trigLoading, setTrigLoading] = useState(false);
   const [newTrig, setNewTrig]   = useState({ name: '', event: 'signup', channel: 'push', message: '', subject: '', enabled: true });
+  const [deliveryStats, setDeliveryStats] = useState(null);
+  const [deliveryLogs, setDeliveryLogs] = useState([]);
+  const [deliveryLogsTotal, setDeliveryLogsTotal] = useState(0);
+  const [deliveryLoading, setDeliveryLoading] = useState(false);
+  const [subscriptions, setSubscriptions] = useState([]);
+  const [subsTotal, setSubsTotal] = useState(0);
+  const [expandedDispatch, setExpandedDispatch] = useState(null);
+  const [dispatchDetail, setDispatchDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [statsDays, setStatsDays] = useState(7);
 
   useEffect(() => {
     axios.get(`${API_BASE}/admin/notifications`, {
@@ -124,6 +134,58 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
     } catch { toast.error('Failed to delete'); }
   };
 
+  const adminAxios = useCallback((url) => axios.get(url, {
+    headers: adminHeaders(adminToken),
+    withCredentials: true,
+  }), [adminToken]);
+
+  const loadDeliveryData = useCallback(async () => {
+    setDeliveryLoading(true);
+    try {
+      const [statsRes, logsRes, subsRes] = await Promise.allSettled([
+        adminAxios(`${API_BASE}/admin/push/delivery-stats?days=${statsDays}`),
+        adminAxios(`${API_BASE}/admin/push/delivery-log?limit=50`),
+        adminAxios(`${API_BASE}/admin/push/subscriptions`),
+      ]);
+      if (statsRes.status === 'fulfilled') setDeliveryStats(statsRes.value.data);
+      if (logsRes.status === 'fulfilled') {
+        setDeliveryLogs(logsRes.value.data.logs || []);
+        setDeliveryLogsTotal(logsRes.value.data.total || 0);
+      }
+      if (subsRes.status === 'fulfilled') {
+        setSubscriptions(subsRes.value.data.subscriptions || []);
+        setSubsTotal(subsRes.value.data.total || 0);
+      }
+    } catch {}
+    finally { setDeliveryLoading(false); }
+  }, [adminAxios, statsDays]);
+
+  useEffect(() => {
+    if (mainTab === 'delivery') loadDeliveryData();
+  }, [mainTab, loadDeliveryData]);
+
+  const loadDispatchDetail = useCallback(async (dispatchId) => {
+    if (expandedDispatch === dispatchId) {
+      setExpandedDispatch(null);
+      setDispatchDetail(null);
+      return;
+    }
+    setExpandedDispatch(dispatchId);
+    setDispatchDetail(null);
+    setDetailLoading(true);
+    try {
+      const res = await adminAxios(`${API_BASE}/admin/push/delivery-log/${dispatchId}`);
+      setDispatchDetail(res.data);
+    } catch { toast.error('Failed to load dispatch details'); }
+    finally { setDetailLoading(false); }
+  }, [adminAxios, expandedDispatch]);
+
+  const formatTime = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
   const currentType = NOTIF_TYPES.find((t) => t.id === type) || NOTIF_TYPES[0];
   const TypeIcon = currentType.icon;
 
@@ -132,10 +194,11 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
 
   return (
     <div className="space-y-4 max-w-5xl">
-      <div style={{ display: 'flex', gap: 4, padding: '4px' }}>
+      <div style={{ display: 'flex', gap: 4, padding: '4px', flexWrap: 'wrap' }}>
         {[
-          { id: 'broadcast', label: '📢 Broadcast' },
-          { id: 'triggers',  label: `⚡ Automation Triggers (${triggers.length})` },
+          { id: 'broadcast', label: 'Broadcast' },
+          { id: 'triggers',  label: `Automation (${triggers.length})` },
+          { id: 'delivery',  label: 'Push Delivery' },
         ].map(t => (
           <button key={t.id} onClick={() => setMainTab(t.id)}
             style={{ padding: '6px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: 'pointer', border: mainTab === t.id ? '1px solid #c4b5fd' : '1px solid #e5e7eb', background: mainTab === t.id ? '#7c3aed' : '#ffffff', color: mainTab === t.id ? '#fff' : '#6b7280' }}>
@@ -357,6 +420,218 @@ export default function AdminNotifications({ adminToken, onNavigate }) {
         </div>
       </div>
     </div>
+      )}
+
+      {mainTab === 'delivery' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 size={15} className="text-violet-500" />
+              <span className="text-sm font-bold text-gray-900">Push Delivery Status</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <select
+                value={statsDays}
+                onChange={e => setStatsDays(Number(e.target.value))}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-700"
+              >
+                <option value={7}>Last 7 days</option>
+                <option value={14}>Last 14 days</option>
+                <option value={30}>Last 30 days</option>
+              </select>
+              <button
+                onClick={loadDeliveryData}
+                disabled={deliveryLoading}
+                className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"
+              >
+                <RefreshCw size={11} className={deliveryLoading ? 'animate-spin' : ''} /> Refresh
+              </button>
+            </div>
+          </div>
+
+          {deliveryLoading && !deliveryStats ? (
+            <div className="flex justify-center py-12">
+              <Loader2 size={20} className="animate-spin text-gray-300" />
+            </div>
+          ) : (
+            <>
+              {deliveryStats && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Dispatches</p>
+                    <p className="text-xl font-bold text-gray-900 mt-1">{deliveryStats.total_dispatches}</p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
+                    <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-wider">Sent</p>
+                    <p className="text-xl font-bold text-emerald-700 mt-1">{deliveryStats.total_sent}</p>
+                  </div>
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
+                    <p className="text-[10px] font-bold text-red-400 uppercase tracking-wider">Failed</p>
+                    <p className="text-xl font-bold text-red-700 mt-1">{deliveryStats.total_failed}</p>
+                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 shadow-sm">
+                    <p className="text-[10px] font-bold text-amber-500 uppercase tracking-wider">Expired</p>
+                    <p className="text-xl font-bold text-amber-700 mt-1">{deliveryStats.total_expired}</p>
+                  </div>
+                </div>
+              )}
+
+              {deliveryStats?.daily?.length > 0 && (
+                <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                  <p className="text-xs font-bold text-gray-600 mb-3">Daily Breakdown</p>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-gray-400 border-b border-gray-100">
+                          <th className="text-left py-2 px-2 font-medium">Date</th>
+                          <th className="text-right py-2 px-2 font-medium">Dispatches</th>
+                          <th className="text-right py-2 px-2 font-medium">Sent</th>
+                          <th className="text-right py-2 px-2 font-medium">Failed</th>
+                          <th className="text-right py-2 px-2 font-medium">Expired</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {deliveryStats.daily.map(d => (
+                          <tr key={d.date} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="py-2 px-2 text-gray-700 font-medium">{d.date}</td>
+                            <td className="py-2 px-2 text-right text-gray-600">{d.dispatches}</td>
+                            <td className="py-2 px-2 text-right text-emerald-600 font-medium">{d.sent}</td>
+                            <td className="py-2 px-2 text-right text-red-500 font-medium">{d.failed}</td>
+                            <td className="py-2 px-2 text-right text-amber-500 font-medium">{d.expired}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                  <p className="text-sm font-bold text-gray-900">Dispatch History</p>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                    {deliveryLogsTotal} total
+                  </span>
+                </div>
+                <div className="overflow-y-auto" style={{ maxHeight: 400 }}>
+                  {deliveryLogs.length === 0 ? (
+                    <div className="text-center py-12 space-y-2">
+                      <Send size={24} className="mx-auto text-gray-200" />
+                      <p className="text-sm text-gray-400">No push dispatches recorded yet</p>
+                    </div>
+                  ) : deliveryLogs.map(log => (
+                    <div key={log.dispatch_id} className="border-b border-gray-50">
+                      <button
+                        onClick={() => loadDispatchDetail(log.dispatch_id)}
+                        className="w-full p-3 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left"
+                      >
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 bg-violet-50">
+                          <Send size={12} className="text-violet-500" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium text-gray-900 truncate">
+                            {log.payload_title || 'Push notification'}
+                          </p>
+                          <p className="text-[10px] text-gray-400 mt-0.5">
+                            {formatTime(log.dispatched_at)} &middot; {log.target}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-600">{log.sent} sent</span>
+                          {log.failed > 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red-50 text-red-500">{log.failed} fail</span>}
+                          {log.expired > 0 && <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-500">{log.expired} exp</span>}
+                          {expandedDispatch === log.dispatch_id ? <ChevronUp size={12} className="text-gray-400" /> : <ChevronDown size={12} className="text-gray-400" />}
+                        </div>
+                      </button>
+                      {expandedDispatch === log.dispatch_id && (
+                        <div className="px-4 pb-3">
+                          {detailLoading ? (
+                            <div className="flex justify-center py-4"><Loader2 size={14} className="animate-spin text-gray-300" /></div>
+                          ) : dispatchDetail?.results?.length > 0 ? (
+                            <div className="rounded-lg border border-gray-100 overflow-hidden">
+                              <table className="w-full text-[11px]">
+                                <thead>
+                                  <tr className="bg-gray-50 text-gray-400">
+                                    <th className="text-left py-1.5 px-2 font-medium">User</th>
+                                    <th className="text-left py-1.5 px-2 font-medium">Role</th>
+                                    <th className="text-left py-1.5 px-2 font-medium">Status</th>
+                                    <th className="text-left py-1.5 px-2 font-medium">Error</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {dispatchDetail.results.map((r, i) => (
+                                    <tr key={i} className="border-t border-gray-50">
+                                      <td className="py-1.5 px-2 text-gray-700 font-mono truncate" style={{ maxWidth: 120 }}>{r.user_id || '-'}</td>
+                                      <td className="py-1.5 px-2 text-gray-500">{r.role}</td>
+                                      <td className="py-1.5 px-2">
+                                        <span className={`font-bold ${
+                                          r.status === 'sent' ? 'text-emerald-600' :
+                                          r.status === 'expired' ? 'text-amber-500' : 'text-red-500'
+                                        }`}>{r.status}</span>
+                                      </td>
+                                      <td className="py-1.5 px-2 text-gray-400 truncate" style={{ maxWidth: 200 }}>{r.error || '-'}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-gray-400 py-2">No per-subscription results available</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-gray-200 bg-white shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Smartphone size={14} className="text-gray-500" />
+                    <p className="text-sm font-bold text-gray-900">Active Subscriptions</p>
+                  </div>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                    {subsTotal} total
+                  </span>
+                </div>
+                <div className="overflow-y-auto" style={{ maxHeight: 300 }}>
+                  {subscriptions.length === 0 ? (
+                    <div className="text-center py-8">
+                      <Smartphone size={24} className="mx-auto text-gray-200 mb-2" />
+                      <p className="text-sm text-gray-400">No active push subscriptions</p>
+                    </div>
+                  ) : (
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="text-gray-400 border-b border-gray-100 bg-gray-50">
+                          <th className="text-left py-2 px-3 font-medium">User ID</th>
+                          <th className="text-left py-2 px-3 font-medium">Role</th>
+                          <th className="text-left py-2 px-3 font-medium">Push Service</th>
+                          <th className="text-left py-2 px-3 font-medium">Subscribed</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {subscriptions.map((s, i) => (
+                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                            <td className="py-2 px-3 text-gray-700 font-mono truncate" style={{ maxWidth: 140 }}>{s.user_id || '-'}</td>
+                            <td className="py-2 px-3">
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                s.role === 'admin' ? 'bg-violet-50 text-violet-600' : 'bg-gray-100 text-gray-500'
+                              }`}>{s.role || 'unknown'}</span>
+                            </td>
+                            <td className="py-2 px-3 text-gray-500 truncate" style={{ maxWidth: 160 }}>{s.endpoint_domain || '-'}</td>
+                            <td className="py-2 px-3 text-gray-400">{formatTime(s.subscribed_at)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       )}
       <AdminQuickLinks links={['users','conversations','settings','activitylog']} onNavigate={onNavigate} />
     </div>

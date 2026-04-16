@@ -118,7 +118,10 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
     """Core push dispatcher. When admin_only=True, sends only to subscriptions
     with role='admin', filtered by per-admin notification prefs
     (push_enabled + push_severities). Uses the admin_id stored directly on
-    each subscription document to avoid joining the users collection."""
+    each subscription document to avoid joining the users collection.
+    Persists per-subscription delivery results to db.push_delivery_log."""
+    dispatch_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
     try:
         from pywebpush import webpush, WebPushException
         vapid = await _get_or_create_vapid_keys()
@@ -180,8 +183,12 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
             ]
         else:
             subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
-        sent = failed = 0
+        sent = failed = expired = 0
+        delivery_results = []
         for sub in subs:
+            endpoint = sub.get("endpoint", "")
+            user_id = sub.get("user_id", "")
+            role = sub.get("role", "unknown")
             try:
                 webpush(
                     subscription_info=sub["subscription_info"],
@@ -190,14 +197,62 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
                     vapid_claims={"sub": "mailto:admin@syrabit.ai"},
                 )
                 sent += 1
+                delivery_results.append({
+                    "endpoint": endpoint,
+                    "user_id": user_id,
+                    "role": role,
+                    "status": "sent",
+                    "error": None,
+                })
             except WebPushException as e:
-                if e.response and e.response.status_code in (404, 410):
-                    await db.push_subscriptions.delete_one({"endpoint": sub.get("endpoint")})
+                status_code = e.response.status_code if e.response else None
+                if status_code in (404, 410):
+                    await db.push_subscriptions.delete_one({"endpoint": endpoint})
+                    expired += 1
+                    delivery_results.append({
+                        "endpoint": endpoint,
+                        "user_id": user_id,
+                        "role": role,
+                        "status": "expired",
+                        "error": f"HTTP {status_code}",
+                    })
+                else:
+                    failed += 1
+                    delivery_results.append({
+                        "endpoint": endpoint,
+                        "user_id": user_id,
+                        "role": role,
+                        "status": "failed",
+                        "error": str(e)[:200],
+                    })
+            except Exception as exc:
                 failed += 1
-            except Exception:
-                failed += 1
+                delivery_results.append({
+                    "endpoint": endpoint,
+                    "user_id": user_id,
+                    "role": role,
+                    "status": "failed",
+                    "error": str(exc)[:200],
+                })
         label = "admin-only" if admin_only else "all"
-        logger.info(f"Push dispatch ({label}): sent={sent} failed={failed} total={len(subs)}")
+        logger.info(f"Push dispatch ({label}): sent={sent} failed={failed} expired={expired} total={len(subs)}")
+        try:
+            log_doc = {
+                "dispatch_id": dispatch_id,
+                "dispatched_at": now_iso,
+                "target": label,
+                "payload_title": payload.get("title", ""),
+                "payload_body": payload.get("body", "")[:500],
+                "alert_type": payload.get("alert_type", ""),
+                "total": len(subs),
+                "sent": sent,
+                "failed": failed,
+                "expired": expired,
+                "results": delivery_results,
+            }
+            await db.push_delivery_log.insert_one(log_doc)
+        except Exception as log_exc:
+            logger.warning(f"Failed to persist push delivery log: {log_exc}")
     except Exception as e:
         logger.error(f"Push dispatch error: {e}")
 
@@ -283,6 +338,94 @@ async def admin_backfill_push_roles(admin: dict = Depends(get_admin_user)):
         )
         updated += 1
     return {"backfilled": updated}
+
+
+# ─────────────────────────────────────────────
+# PUSH DELIVERY STATUS TRACKING
+# ─────────────────────────────────────────────
+
+@router.get("/admin/push/delivery-log")
+async def admin_push_delivery_log(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    admin: dict = Depends(get_admin_user),
+):
+    """Return recent push delivery log entries, newest first."""
+    docs = await db.push_delivery_log.find(
+        {}, {"_id": 0}
+    ).sort("dispatched_at", -1).skip(offset).to_list(limit)
+    total = await db.push_delivery_log.count_documents({})
+    for d in docs:
+        d.pop("results", None)
+    return {"logs": docs, "total": total}
+
+
+@router.get("/admin/push/delivery-log/{dispatch_id}")
+async def admin_push_delivery_detail(
+    dispatch_id: str = Path(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Return full delivery detail for a single dispatch, including per-subscription results."""
+    doc = await db.push_delivery_log.find_one(
+        {"dispatch_id": dispatch_id}, {"_id": 0}
+    )
+    if not doc:
+        raise HTTPException(404, "Delivery log not found")
+    return doc
+
+
+@router.get("/admin/push/subscriptions")
+async def admin_push_subscriptions(
+    admin: dict = Depends(get_admin_user),
+):
+    """Return all active push subscriptions with metadata (no keys exposed)."""
+    subs = await db.push_subscriptions.find(
+        {}, {"_id": 0, "subscription_info.keys": 0}
+    ).to_list(10000)
+    for s in subs:
+        si = s.get("subscription_info", {})
+        s["endpoint_domain"] = ""
+        try:
+            from urllib.parse import urlparse
+            s["endpoint_domain"] = urlparse(si.get("endpoint", "")).netloc
+        except Exception:
+            pass
+        s.pop("subscription_info", None)
+    return {"subscriptions": subs, "total": len(subs)}
+
+
+@router.get("/admin/push/delivery-stats")
+async def admin_push_delivery_stats(
+    days: int = Query(7, ge=1, le=90),
+    admin: dict = Depends(get_admin_user),
+):
+    """Aggregate push delivery stats for the last N days."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    docs = await db.push_delivery_log.find(
+        {"dispatched_at": {"$gte": cutoff}},
+        {"_id": 0, "sent": 1, "failed": 1, "expired": 1, "total": 1, "dispatched_at": 1}
+    ).sort("dispatched_at", -1).to_list(5000)
+    total_sent = sum(d.get("sent", 0) for d in docs)
+    total_failed = sum(d.get("failed", 0) for d in docs)
+    total_expired = sum(d.get("expired", 0) for d in docs)
+    total_dispatches = len(docs)
+    daily = {}
+    for d in docs:
+        day = d.get("dispatched_at", "")[:10]
+        if day not in daily:
+            daily[day] = {"date": day, "sent": 0, "failed": 0, "expired": 0, "dispatches": 0}
+        daily[day]["sent"] += d.get("sent", 0)
+        daily[day]["failed"] += d.get("failed", 0)
+        daily[day]["expired"] += d.get("expired", 0)
+        daily[day]["dispatches"] += 1
+    return {
+        "period_days": days,
+        "total_dispatches": total_dispatches,
+        "total_sent": total_sent,
+        "total_failed": total_failed,
+        "total_expired": total_expired,
+        "daily": sorted(daily.values(), key=lambda x: x["date"]),
+    }
 
 
 # ─────────────────────────────────────────────

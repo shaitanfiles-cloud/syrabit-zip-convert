@@ -280,6 +280,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [notifPrefs, setNotifPrefs] = useState(null);
   const [notifPrefsSaving, setNotifPrefsSaving] = useState(false);
   const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
+  const [pushDeliverySummary, setPushDeliverySummary] = useState(null);
   const prevAlertIdsRef = useRef(new Set());
   const audioCtxRef = useRef(null);
   const customAudioRef = useRef(null);
@@ -320,6 +321,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         push_severities: ['high_error_rate', 'spoofed_bot_surge', 'endpoint_down', 'auto_block_expired'],
       });
     }
+    try {
+      const statsRes = await axios.get(`${API_BASE}/admin/push/delivery-stats?days=7`, adminHdr(adminToken));
+      setPushDeliverySummary(statsRes.data);
+    } catch {}
   }, [adminToken]);
 
   const saveNotifPrefs = useCallback(async (updates) => {
@@ -1305,6 +1310,38 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   Reset to Defaults
                 </button>
               </div>
+
+              {pushDeliverySummary && (
+                <div className="mt-3 pt-3 border-t border-gray-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Push Delivery (7d)</span>
+                    <button
+                      onClick={() => onNavigate && onNavigate('notifications')}
+                      className="text-[10px] text-violet-600 hover:text-violet-700 font-medium"
+                    >
+                      View Details
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    <div className="text-center">
+                      <p className="text-sm font-bold text-gray-900">{pushDeliverySummary.total_dispatches}</p>
+                      <p className="text-[9px] text-gray-400">Dispatches</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-bold text-emerald-600">{pushDeliverySummary.total_sent}</p>
+                      <p className="text-[9px] text-gray-400">Sent</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-bold text-red-500">{pushDeliverySummary.total_failed}</p>
+                      <p className="text-[9px] text-gray-400">Failed</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-bold text-amber-500">{pushDeliverySummary.total_expired}</p>
+                      <p className="text-[9px] text-gray-400">Expired</p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
