@@ -559,6 +559,76 @@ async def admin_update_notification_prefs(
     return prefs
 
 
+_CHIME_BUCKET = "study-materials"
+_CHIME_PREFIX = "admin-chimes"
+_CHIME_MAX_BYTES = 500 * 1024
+_CHIME_ALLOWED_MIMES = {"audio/mpeg", "audio/wav", "audio/wave", "audio/x-wav", "audio/mp3"}
+
+
+def _chime_supabase_upload(raw: bytes, storage_path: str, mime: str) -> str:
+    from deps import supa
+    supa.storage.from_(_CHIME_BUCKET).upload(
+        path=storage_path,
+        file=raw,
+        file_options={"content-type": mime, "upsert": "true"},
+    )
+    return supa.storage.from_(_CHIME_BUCKET).get_public_url(storage_path)
+
+
+@router.post("/admin/notification-prefs/upload-chime")
+async def admin_upload_custom_chime(
+    file: UploadFile = File(...),
+    admin: dict = Depends(get_admin_user),
+):
+    from deps import supa
+    raw = await file.read()
+    mime = (file.content_type or "").lower()
+    if mime not in _CHIME_ALLOWED_MIMES:
+        raise HTTPException(400, "Only MP3 and WAV files are supported")
+    if len(raw) > _CHIME_MAX_BYTES:
+        raise HTTPException(413, f"File exceeds {_CHIME_MAX_BYTES // 1024} KB limit")
+
+    admin_id = admin.get("sub") or admin.get("email") or "default"
+    ext = "mp3" if "mp3" in mime or "mpeg" in mime else "wav"
+    safe_id = str(uuid.uuid4())
+    storage_path = f"{_CHIME_PREFIX}/{admin_id}/{safe_id}.{ext}"
+    original_name = (file.filename or f"chime.{ext}")[:100]
+
+    url = None
+    if supa:
+        try:
+            url = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: _chime_supabase_upload(raw, storage_path, mime),
+            )
+        except Exception as e:
+            logger.warning(f"Custom chime Supabase upload failed: {e}")
+
+    if not url:
+        b64 = base64.b64encode(raw).decode()
+        url = f"data:{mime};base64,{b64}"
+
+    prefs = await upsert_admin_notification_prefs(admin_id, {
+        "chime_tone": "custom",
+        "custom_chime_url": url,
+        "custom_chime_filename": original_name,
+    })
+    return prefs
+
+
+@router.delete("/admin/notification-prefs/custom-chime")
+async def admin_delete_custom_chime(
+    admin: dict = Depends(get_admin_user),
+):
+    admin_id = admin.get("sub") or admin.get("email") or "default"
+    prefs = await upsert_admin_notification_prefs(admin_id, {
+        "chime_tone": "default",
+        "custom_chime_url": None,
+        "custom_chime_filename": None,
+    })
+    return prefs
+
+
 @router.get("/admin/alert-settings")
 async def admin_get_alert_settings(admin: dict = Depends(get_admin_user)):
     import metrics as _metrics_mod

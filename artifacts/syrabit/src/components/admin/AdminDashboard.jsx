@@ -8,7 +8,7 @@ import {
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
-  Volume2, VolumeX, Bell, BellOff, RotateCcw,
+  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music,
 } from 'lucide-react';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
@@ -282,6 +282,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
   const prevAlertIdsRef = useRef(new Set());
   const audioCtxRef = useRef(null);
+  const customAudioRef = useRef(null);
+  const chimeFileInputRef = useRef(null);
+  const [chimeUploading, setChimeUploading] = useState(false);
   const pushNotif = usePushNotifications({
     serverPushEnabled: notifPrefs?.push_enabled,
   });
@@ -339,12 +342,24 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
 
   const playAlertChime = useCallback((tone) => {
     try {
+      const activeTone = tone || chimeTone;
+      if (activeTone === 'custom' && notifPrefs?.custom_chime_url) {
+        if (customAudioRef.current) {
+          customAudioRef.current.pause();
+          customAudioRef.current.currentTime = 0;
+        }
+        const audio = new Audio(notifPrefs.custom_chime_url);
+        audio.volume = 0.5;
+        customAudioRef.current = audio;
+        audio.play().catch(() => {});
+        return;
+      }
       if (!audioCtxRef.current) {
         audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
       }
       const ctx = audioCtxRef.current;
       const now = ctx.currentTime;
-      const toneConfig = CHIME_TONES[tone || chimeTone] || CHIME_TONES.default;
+      const toneConfig = CHIME_TONES[activeTone] || CHIME_TONES.default;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.connect(gain);
@@ -357,7 +372,48 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       osc.start(now);
       osc.stop(now + toneConfig.dur);
     } catch {}
-  }, [chimeTone]);
+  }, [chimeTone, notifPrefs?.custom_chime_url]);
+
+  const handleChimeUpload = useCallback(async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const validTypes = ['audio/mpeg', 'audio/wav', 'audio/wave', 'audio/x-wav', 'audio/mp3'];
+    if (!validTypes.includes(file.type)) {
+      toast.error('Only MP3 and WAV files are supported');
+      return;
+    }
+    if (file.size > 500 * 1024) {
+      toast.error('File must be under 500 KB');
+      return;
+    }
+    setChimeUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await axios.post(`${API_BASE}/admin/notification-prefs/upload-chime`, formData, {
+        ...adminHdr(adminToken),
+        headers: { ...adminHdr(adminToken).headers, 'Content-Type': 'multipart/form-data' },
+      });
+      setNotifPrefs(res.data);
+      toast.success('Custom chime uploaded');
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Upload failed';
+      toast.error(msg);
+    } finally {
+      setChimeUploading(false);
+      if (chimeFileInputRef.current) chimeFileInputRef.current.value = '';
+    }
+  }, [adminToken]);
+
+  const handleDeleteCustomChime = useCallback(async () => {
+    try {
+      const res = await axios.delete(`${API_BASE}/admin/notification-prefs/custom-chime`, adminHdr(adminToken));
+      setNotifPrefs(res.data);
+      toast.success('Custom chime removed');
+    } catch {
+      toast.error('Failed to remove custom chime');
+    }
+  }, [adminToken]);
 
   useEffect(() => {
     if (!alertHistory?.alerts || !alertSoundEnabled) return;
@@ -1142,6 +1198,53 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                       {tone.label}
                     </button>
                   ))}
+                  {notifPrefs?.custom_chime_url && (
+                    <button
+                      onClick={() => { playAlertChime('custom'); saveNotifPrefs({ chime_tone: 'custom' }); }}
+                      className={`text-[10px] px-2.5 py-1 rounded-md border transition-colors font-medium flex items-center gap-1 ${
+                        chimeTone === 'custom'
+                          ? 'bg-violet-100 text-violet-700 border-violet-300'
+                          : 'bg-white text-gray-500 border-gray-200 hover:bg-violet-50 hover:text-violet-600'
+                      }`}
+                    >
+                      <Music size={10} /> Custom
+                    </button>
+                  )}
+                </div>
+                <div className="mt-2">
+                  {notifPrefs?.custom_chime_url ? (
+                    <div className="flex items-center gap-2 text-[10px]">
+                      <Music size={10} className="text-violet-500" />
+                      <span className="text-gray-600 truncate max-w-[140px]">{notifPrefs.custom_chime_filename || 'Custom chime'}</span>
+                      <button
+                        onClick={() => playAlertChime('custom')}
+                        className="text-violet-600 hover:text-violet-700 font-medium"
+                      >
+                        Preview
+                      </button>
+                      <button
+                        onClick={handleDeleteCustomChime}
+                        className="text-red-400 hover:text-red-600 ml-1"
+                        title="Remove custom chime"
+                      >
+                        <Trash2 size={10} />
+                      </button>
+                    </div>
+                  ) : (
+                    <label className="inline-flex items-center gap-1.5 text-[10px] text-violet-600 hover:text-violet-700 cursor-pointer font-medium">
+                      {chimeUploading ? <Loader2 size={10} className="animate-spin" /> : <Upload size={10} />}
+                      {chimeUploading ? 'Uploading...' : 'Upload custom sound'}
+                      <input
+                        ref={chimeFileInputRef}
+                        type="file"
+                        accept=".mp3,.wav"
+                        className="hidden"
+                        onChange={handleChimeUpload}
+                        disabled={chimeUploading}
+                      />
+                    </label>
+                  )}
+                  <p className="text-[9px] text-gray-400 mt-0.5">MP3 or WAV, max 500 KB</p>
                 </div>
               </div>
 

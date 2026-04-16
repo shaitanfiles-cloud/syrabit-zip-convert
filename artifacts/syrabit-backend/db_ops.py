@@ -886,6 +886,8 @@ _ADMIN_NOTIF_PREFS_DEFAULTS = {
     "sound_enabled": True,
     "push_enabled": False,
     "chime_tone": "default",
+    "custom_chime_url": None,
+    "custom_chime_filename": None,
     "sound_severities": ["high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate", "endpoint_down", "auto_block_expired"],
     "push_severities": ["high_error_rate", "spoofed_bot_surge", "endpoint_down", "auto_block_expired"],
 }
@@ -906,7 +908,7 @@ async def get_admin_notification_prefs(admin_id: str) -> dict:
 
 
 async def upsert_admin_notification_prefs(admin_id: str, prefs: dict) -> dict:
-    valid_tones = {"default", "soft", "urgent", "bell"}
+    valid_tones = {"default", "soft", "urgent", "bell", "custom"}
     valid_severities = {"high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate", "endpoint_down", "auto_block_expired"}
 
     doc = {"admin_id": admin_id, "updated_at": datetime.now(timezone.utc).isoformat()}
@@ -918,6 +920,12 @@ async def upsert_admin_notification_prefs(admin_id: str, prefs: dict) -> dict:
     if "chime_tone" in prefs:
         tone = str(prefs["chime_tone"]).strip()
         doc["chime_tone"] = tone if tone in valid_tones else "default"
+    if "custom_chime_url" in prefs:
+        val = prefs["custom_chime_url"]
+        doc["custom_chime_url"] = str(val).strip() if val else None
+    if "custom_chime_filename" in prefs:
+        val = prefs["custom_chime_filename"]
+        doc["custom_chime_filename"] = str(val).strip()[:100] if val else None
     if "sound_severities" in prefs:
         doc["sound_severities"] = [s for s in prefs["sound_severities"] if s in valid_severities]
     if "push_severities" in prefs:
