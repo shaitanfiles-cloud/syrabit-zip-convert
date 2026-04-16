@@ -2711,13 +2711,26 @@ _CF_BOT_REPORT_FILE_PREFIX = "cloudflare-search-bots-per-ua-"
 
 
 def _cf_bot_report_dir() -> str:
+    """Resolve the target dir for the dated markdown drop.
+
+    Resolution order:
+      1. ``CF_BOT_REPORT_DIR`` env var (explicit override).
+      2. Walk up from this file looking for a ``.local`` sibling — robust
+         to deploy layouts that don't preserve the `routes/` →
+         `syrabit-backend/` → `artifacts/` → repo nesting.
+      3. Fall back to ``$PWD/.local/reports`` so the path resolution
+         itself never raises (any actual write failure is then caught
+         by ``_write_cf_report_to_disk``).
+    """
     import pathlib
     override = os.getenv("CF_BOT_REPORT_DIR", "").strip()
     if override:
         return override
-    # Walk up from this file: routes/ → syrabit-backend/ → artifacts/ → repo
-    repo_root = pathlib.Path(__file__).resolve().parents[3]
-    return str(repo_root / ".local" / "reports")
+    here = pathlib.Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / ".local").is_dir():
+            return str(parent / ".local" / "reports")
+    return str(pathlib.Path.cwd() / ".local" / "reports")
 
 
 def _write_cf_report_to_disk(markdown: str, raw_data: dict, now_utc: datetime) -> Optional[str]:
