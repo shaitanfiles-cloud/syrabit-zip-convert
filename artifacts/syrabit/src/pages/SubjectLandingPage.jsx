@@ -39,7 +39,7 @@ export default function SubjectLandingPage() {
   const chapterCount = chapters?.length || 0;
 
   const contentTypes = useMemo(
-    () => new Set(chapters.map((ch) => ch.content_type).filter(Boolean)),
+    () => new Set(chapters.map((ch) => (ch.content_type || '').toLowerCase()).filter(Boolean)),
     [chapters],
   );
 
@@ -54,7 +54,7 @@ export default function SubjectLandingPage() {
         : `Syrabit.ai provides comprehensive study material for ${boardName} ${className} ${subjectName}, covering the full syllabus with notes and AI-powered tutoring.`,
     });
 
-    if (contentTypes.has('pyq') || contentTypes.has('PYQ') || contentTypes.has('important_questions')) {
+    if (contentTypes.has('pyq') || contentTypes.has('important_questions')) {
       qa.push({
         q: `Where can I find ${boardName} ${subjectName} previous year questions?`,
         a: `You can find previous year questions (PYQs) for ${boardName} ${className} ${subjectName} on Syrabit.ai. Each chapter includes mark-wise important questions from past exams to help you prepare effectively.`,
@@ -67,8 +67,8 @@ export default function SubjectLandingPage() {
     });
 
     const features = ['AI-powered explanations', 'chapter-wise notes'];
-    if (contentTypes.has('mcq') || contentTypes.has('MCQ')) features.push('MCQs');
-    if (contentTypes.has('pyq') || contentTypes.has('PYQ')) features.push('previous year questions');
+    if (contentTypes.has('mcq')) features.push('MCQs');
+    if (contentTypes.has('pyq')) features.push('previous year questions');
     qa.push({
       q: `How does Syrabit.ai help with ${subjectName} exam preparation?`,
       a: `Syrabit.ai provides ${features.join(', ')} for ${boardName} ${className} ${subjectName}. The AI tutor can answer specific questions with source citations from your syllabus.`,
