@@ -1,9 +1,4 @@
-/**
- * usePushNotifications — Syrabit.ai
- * Manages Web Push permission, VAPID key fetching, and subscription storage.
- * Requires the service worker to be registered (sw.js handles push events).
- */
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { API_BASE } from '@/utils/api';
 
@@ -14,13 +9,14 @@ function urlBase64ToUint8Array(base64String) {
   return Uint8Array.from([...raw].map((c) => c.charCodeAt(0)));
 }
 
-export function usePushNotifications() {
+export function usePushNotifications({ serverPushEnabled } = {}) {
   const [permission, setPermission] = useState(
     typeof Notification !== 'undefined' ? Notification.permission : 'default'
   );
   const [subscribed, setSubscribed] = useState(false);
   const [loading, setLoading]       = useState(false);
   const [error, setError]           = useState(null);
+  const syncingRef = useRef(false);
 
   const isSupported =
     typeof window !== 'undefined' &&
@@ -28,7 +24,6 @@ export function usePushNotifications() {
     'PushManager' in window &&
     typeof Notification !== 'undefined';
 
-  // On mount, check if already subscribed
   useEffect(() => {
     if (!isSupported) return;
     navigator.serviceWorker.ready.then((reg) => {
@@ -46,7 +41,6 @@ export function usePushNotifications() {
     setLoading(true);
     setError(null);
     try {
-      // 1. Request permission
       const perm = await Notification.requestPermission();
       setPermission(perm);
       if (perm !== 'granted') {
@@ -55,18 +49,15 @@ export function usePushNotifications() {
         return false;
       }
 
-      // 2. Fetch VAPID public key
       const { data } = await axios.get(`${API_BASE}/push/vapid-public-key`);
       const applicationServerKey = urlBase64ToUint8Array(data.public_key);
 
-      // 3. Subscribe via PushManager
       const reg = await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey,
       });
 
-      // 4. Send subscription to backend
       await axios.post(
         `${API_BASE}/push/subscribe`,
         { subscription: sub.toJSON() },
@@ -104,6 +95,16 @@ export function usePushNotifications() {
       setLoading(false);
     }
   }, [isSupported]);
+
+  useEffect(() => {
+    if (!isSupported || serverPushEnabled === undefined || serverPushEnabled === null) return;
+    if (syncingRef.current) return;
+
+    if (serverPushEnabled && !subscribed && Notification.permission === 'granted') {
+      syncingRef.current = true;
+      subscribe().finally(() => { syncingRef.current = false; });
+    }
+  }, [isSupported, serverPushEnabled, subscribed, subscribe]);
 
   return { isSupported, permission, subscribed, loading, error, subscribe, unsubscribe };
 }

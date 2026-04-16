@@ -116,7 +116,9 @@ async def _dispatch_push_to_admins(payload: dict):
 
 async def _dispatch_push(payload: dict, admin_only: bool = False):
     """Core push dispatcher. When admin_only=True, sends only to subscriptions
-    with role='admin', filtered by per-admin notification prefs."""
+    with role='admin', filtered by per-admin notification prefs
+    (push_enabled + push_severities). Uses the admin_id stored directly on
+    each subscription document to avoid joining the users collection."""
     try:
         from pywebpush import webpush, WebPushException
         vapid = await _get_or_create_vapid_keys()
@@ -126,31 +128,31 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
             return
         if admin_only:
             admin_subs = await db.push_subscriptions.find(
-                {"role": "admin"}, {"_id": 0}
+                {"$or": [{"role": "admin"}, {"is_admin": True}]}, {"_id": 0}
             ).to_list(10000)
+            if not admin_subs:
+                admin_docs = await db.users.find(
+                    {"is_admin": True}, {"_id": 0, "id": 1}
+                ).to_list(500)
+                legacy_admin_ids = [str(d["id"]) for d in admin_docs if d.get("id")]
+                if legacy_admin_ids:
+                    admin_subs = await db.push_subscriptions.find(
+                        {"user_id": {"$in": legacy_admin_ids}}, {"_id": 0}
+                    ).to_list(10000)
             if not admin_subs:
                 logger.info("Push dispatch (admin-only): no admin subscriptions found, skipping")
                 return
 
-            admin_ids = {s["user_id"] for s in admin_subs if s.get("user_id")}
-
-            id_to_email = {}
-            if admin_ids:
-                admin_docs = await db.users.find(
-                    {"id": {"$in": list(admin_ids)}}, {"_id": 0, "id": 1, "email": 1}
-                ).to_list(500)
-                for d in admin_docs:
-                    uid = str(d.get("id", ""))
-                    email = str(d.get("email", "")).lower().strip()
-                    if uid and email:
-                        id_to_email[uid] = email
+            admin_ids_in_subs = {
+                sub.get("admin_id") or sub.get("user_id") for sub in admin_subs
+            }
+            admin_ids_in_subs.discard("")
 
             alert_type = payload.get("alert_type", "")
             admin_prefs_map = {}
             try:
-                all_admin_keys = list(admin_ids | set(id_to_email.values()))
                 prefs_cursor = db.admin_notification_prefs.find(
-                    {"admin_id": {"$in": all_admin_keys}}, {"_id": 0}
+                    {"admin_id": {"$in": list(admin_ids_in_subs)}}, {"_id": 0}
                 )
                 async for pref_doc in prefs_cursor:
                     admin_prefs_map[pref_doc["admin_id"]] = pref_doc
@@ -158,9 +160,8 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
                 logger.debug(f"Failed to load admin notification prefs for push filter: {exc}")
 
             eligible_admin_ids = set()
-            for aid in admin_ids:
-                email_key = id_to_email.get(aid, "")
-                prefs = admin_prefs_map.get(aid) or admin_prefs_map.get(email_key, {})
+            for aid in admin_ids_in_subs:
+                prefs = admin_prefs_map.get(aid, {})
                 push_enabled = prefs.get("push_enabled", _ADMIN_NOTIF_PREFS_DEFAULTS.get("push_enabled", False))
                 push_severities = prefs.get("push_severities", _ADMIN_NOTIF_PREFS_DEFAULTS.get("push_severities", []))
                 if not push_enabled:
@@ -173,7 +174,10 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
                 logger.info("Push dispatch (admin-only): no admins with push enabled for this alert type, skipping")
                 return
 
-            subs = [s for s in admin_subs if s.get("user_id") in eligible_admin_ids]
+            subs = [
+                sub for sub in admin_subs
+                if (sub.get("admin_id") or sub.get("user_id")) in eligible_admin_ids
+            ]
         else:
             subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
         sent = failed = 0
@@ -210,18 +214,24 @@ async def push_vapid_public_key():
 
 @router.post("/push/subscribe")
 async def push_subscribe(data: dict, user: dict = Depends(get_current_user)):
-    """Store a browser push subscription for the authenticated user."""
+    """Store a browser push subscription for the authenticated user.
+    Stores admin_id alongside user_id so push dispatch can filter
+    by per-admin notification preferences without joining the users collection."""
     subscription_info = data.get("subscription")
     if not subscription_info or not subscription_info.get("endpoint"):
         raise HTTPException(400, "Missing subscription object")
     endpoint = subscription_info["endpoint"]
-    role = "admin" if user.get("is_admin") else "student"
+    is_admin = bool(user.get("is_admin"))
+    role = "admin" if is_admin else "student"
+    admin_id = str(user.get("id", "")) if is_admin else ""
     doc = {
         "user_id":           str(user["id"]),
         "endpoint":          endpoint,
         "subscription_info": subscription_info,
         "role":              role,
         "subscribed_at":     datetime.now(timezone.utc).isoformat(),
+        "is_admin":          is_admin,
+        "admin_id":          admin_id,
     }
     await db.push_subscriptions.update_one(
         {"endpoint": endpoint}, {"$set": doc}, upsert=True

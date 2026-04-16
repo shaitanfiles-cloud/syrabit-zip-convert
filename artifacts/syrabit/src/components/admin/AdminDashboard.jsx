@@ -282,7 +282,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [notifPrefsOpen, setNotifPrefsOpen] = useState(false);
   const prevAlertIdsRef = useRef(new Set());
   const audioCtxRef = useRef(null);
-  const pushNotif = usePushNotifications();
+  const pushNotif = usePushNotifications({
+    serverPushEnabled: notifPrefs?.push_enabled,
+  });
 
   const alertSoundEnabled = notifPrefs?.sound_enabled ?? true;
   const chimeTone = notifPrefs?.chime_tone ?? 'default';
@@ -920,7 +922,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               {pushNotif.isSupported && (
                 <button
                   onClick={async () => {
-                    if (pushNotif.subscribed) {
+                    const currentlyEnabled = notifPrefs?.push_enabled && pushNotif.subscribed;
+                    if (currentlyEnabled) {
                       await pushNotif.unsubscribe();
                       saveNotifPrefs({ push_enabled: false });
                     } else {
@@ -930,14 +933,14 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   }}
                   disabled={pushNotif.loading}
                   className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-md border transition-colors font-medium ${
-                    pushNotif.subscribed
+                    (notifPrefs?.push_enabled && pushNotif.subscribed)
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                       : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'
                   }`}
-                  title={pushNotif.subscribed ? 'Push notifications enabled — click to disable' : 'Enable browser push notifications for critical alerts'}
+                  title={(notifPrefs?.push_enabled && pushNotif.subscribed) ? 'Push notifications enabled — click to disable' : 'Enable browser push notifications for critical alerts'}
                 >
-                  {pushNotif.subscribed ? <Bell size={11} /> : <BellOff size={11} />}
-                  {pushNotif.loading ? 'Loading...' : pushNotif.subscribed ? 'Push On' : 'Push Off'}
+                  {(notifPrefs?.push_enabled && pushNotif.subscribed) ? <Bell size={11} /> : <BellOff size={11} />}
+                  {pushNotif.loading ? 'Loading...' : (notifPrefs?.push_enabled && pushNotif.subscribed) ? 'Push On' : 'Push Off'}
                 </button>
               )}
               <select
@@ -1111,6 +1114,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                       if (enabled && !pushNotif.subscribed) {
                         const success = await pushNotif.subscribe();
                         if (success === false) return;
+                      }
+                      if (!enabled && pushNotif.subscribed) {
+                        await pushNotif.unsubscribe();
                       }
                       saveNotifPrefs({ push_enabled: enabled });
                     }}
