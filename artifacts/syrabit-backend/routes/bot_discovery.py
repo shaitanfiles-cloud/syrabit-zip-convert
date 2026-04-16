@@ -22,6 +22,8 @@ _BACKOFF_MAX_SECONDS = 600
 _DEAD_LETTER_THRESHOLD = 5
 
 
+_HEALTH_STALE_SECONDS = 3600
+
 class _EndpointHealth:
     __slots__ = ("endpoint", "consecutive_failures", "last_failure_time",
                  "last_success_time", "total_successes", "total_failures",
@@ -38,12 +40,13 @@ class _EndpointHealth:
 
     def record_success(self):
         self.consecutive_failures = 0
-        self.last_success_time = time.monotonic()
+        self.last_success_time = time.time()
         self.total_successes += 1
         self.backoff_until = None
+        _schedule_persist(self)
 
     def record_failure(self):
-        now = time.monotonic()
+        now = time.time()
         self.consecutive_failures += 1
         self.total_failures += 1
         self.last_failure_time = now
@@ -63,14 +66,15 @@ class _EndpointHealth:
                 "IndexNow endpoint backoff: endpoint=%s consecutive_failures=%d backoff_seconds=%d",
                 self.endpoint, self.consecutive_failures, delay,
             )
+        _schedule_persist(self)
 
     def is_available(self) -> bool:
         if self.backoff_until is None:
             return True
-        return time.monotonic() >= self.backoff_until
+        return time.time() >= self.backoff_until
 
     def to_dict(self) -> dict:
-        now = time.monotonic()
+        now = time.time()
         remaining = 0.0
         if self.backoff_until and now < self.backoff_until:
             remaining = round(self.backoff_until - now, 1)
@@ -84,6 +88,29 @@ class _EndpointHealth:
             "is_dead_lettered": self.consecutive_failures >= _DEAD_LETTER_THRESHOLD,
         }
 
+    def to_persist_dict(self) -> dict:
+        return {
+            "endpoint": self.endpoint,
+            "consecutive_failures": self.consecutive_failures,
+            "last_failure_time": self.last_failure_time,
+            "last_success_time": self.last_success_time,
+            "total_successes": self.total_successes,
+            "total_failures": self.total_failures,
+            "backoff_until": self.backoff_until,
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+    @classmethod
+    def from_persist_dict(cls, data: dict) -> "_EndpointHealth":
+        h = cls(data["endpoint"])
+        h.consecutive_failures = data.get("consecutive_failures", 0)
+        h.last_failure_time = data.get("last_failure_time")
+        h.last_success_time = data.get("last_success_time")
+        h.total_successes = data.get("total_successes", 0)
+        h.total_failures = data.get("total_failures", 0)
+        h.backoff_until = data.get("backoff_until")
+        return h
+
 
 _endpoint_health: Dict[str, _EndpointHealth] = {}
 
@@ -92,6 +119,56 @@ def _get_health(endpoint: str) -> _EndpointHealth:
     if endpoint not in _endpoint_health:
         _endpoint_health[endpoint] = _EndpointHealth(endpoint)
     return _endpoint_health[endpoint]
+
+
+def _schedule_persist(health: _EndpointHealth):
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_persist_health(health))
+    except RuntimeError:
+        pass
+
+
+async def _persist_health(health: _EndpointHealth):
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return
+        await db.indexnow_endpoint_health.update_one(
+            {"endpoint": health.endpoint},
+            {"$set": health.to_persist_dict()},
+            upsert=True,
+        )
+    except Exception as e:
+        logger.debug("Failed to persist endpoint health for %s: %s", health.endpoint, e)
+
+
+async def load_endpoint_health_from_db():
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            logger.info("Skipping endpoint health load — database unavailable")
+            return
+        cutoff = time.time() - _HEALTH_STALE_SECONDS
+        await db.indexnow_endpoint_health.delete_many({
+            "updated_at": {"$lt": datetime.fromtimestamp(cutoff, tz=timezone.utc)}
+        })
+        docs = await db.indexnow_endpoint_health.find({}, {"_id": 0}).to_list(100)
+        loaded = 0
+        for doc in docs:
+            ep = doc.get("endpoint")
+            if not ep:
+                continue
+            h = _EndpointHealth.from_persist_dict(doc)
+            if h.backoff_until and h.backoff_until < cutoff:
+                h.consecutive_failures = 0
+                h.backoff_until = None
+            _endpoint_health[ep] = h
+            loaded += 1
+        if loaded:
+            logger.info("Loaded %d IndexNow endpoint health records from database", loaded)
+    except Exception as e:
+        logger.warning("Failed to load endpoint health from database: %s", e)
 
 
 def _xml_safe(text: str) -> str:

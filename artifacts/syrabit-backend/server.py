@@ -380,6 +380,10 @@ async def lifespan(app):
                 name="source_pushed_at",
             )
 
+            await db.indexnow_endpoint_health.create_index(
+                "endpoint", unique=True, name="endpoint_unique",
+            )
+
             await db.bot_spoof_attempts.create_index(
                 [("date", 1), ("claimed_bot", 1)],
                 name="date_claimed_bot",
@@ -412,6 +416,11 @@ async def lifespan(app):
             await _ensure_qa_indexes()
         except Exception as e:
             logger.warning(f"QA index creation skipped: {e}")
+    try:
+        from routes.bot_discovery import load_endpoint_health_from_db
+        await load_endpoint_health_from_db()
+    except Exception as _eh_err:
+        logger.warning("IndexNow endpoint health load skipped: %s", _eh_err)
     _deps_mod._rate_cleanup_task = asyncio.create_task(_rate_limiter_cleanup())
     if _is_leader:
         asyncio.create_task(_migrate_supabase_users_to_pg())
