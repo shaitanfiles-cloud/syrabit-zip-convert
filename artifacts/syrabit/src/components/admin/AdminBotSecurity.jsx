@@ -2,12 +2,13 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Shield, Bot, AlertTriangle, RefreshCw, Loader2,
   Hash, Globe, Clock, TrendingUp, Eye, Ban, Unlock,
+  Settings, Bell, Mail, Link2, Save, Check, RotateCcw,
 } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminBlockIp, adminUnblockIp } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings } from '@/utils/api';
 
 function GlassCard({ children, className = '' }) {
   return (
@@ -36,6 +37,211 @@ function StatCard({ label, value, icon: Icon, color, pulse }) {
         {typeof value === 'number' ? value.toLocaleString() : (value ?? '—')}
       </p>
     </div>
+  );
+}
+
+function AlertThresholdPanel({ adminToken }) {
+  const [settings, setSettings] = useState(null);
+  const [form, setForm] = useState({ spoof_rpm: 50, email: '', webhook_url: '' });
+  const [defaults, setDefaults] = useState(null);
+  const [loadingSettings, setLoadingSettings] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [settingsError, setSettingsError] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await adminGetAlertSettings(adminToken);
+        const d = res.data;
+        setSettings(d);
+        setDefaults(d.defaults);
+        setForm({
+          spoof_rpm: d.thresholds?.spoof_rpm ?? d.defaults?.thresholds?.spoof_rpm ?? 50,
+          email: d.notification_channels?.email ?? '',
+          webhook_url: d.notification_channels?.webhook_url ?? '',
+        });
+      } catch {
+        setSettingsError('Failed to load alert settings');
+      } finally {
+        setLoadingSettings(false);
+      }
+    })();
+  }, [adminToken]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setSettingsError(null);
+    setSaved(false);
+    try {
+      const rpmVal = Number(form.spoof_rpm);
+      if (!rpmVal || rpmVal <= 0) {
+        setSettingsError('RPM threshold must be a positive number');
+        setSaving(false);
+        return;
+      }
+      if (form.email && !form.email.includes('@')) {
+        setSettingsError('Please enter a valid email address');
+        setSaving(false);
+        return;
+      }
+      if (form.webhook_url && !form.webhook_url.startsWith('http')) {
+        setSettingsError('Webhook URL must start with http:// or https://');
+        setSaving(false);
+        return;
+      }
+      await adminUpdateAlertSettings(adminToken, {
+        thresholds: {
+          ...settings?.thresholds,
+          spoof_rpm: rpmVal,
+        },
+        expiration: settings?.expiration || {},
+        notification_channels: {
+          email: form.email.trim(),
+          webhook_url: form.webhook_url.trim(),
+        },
+      });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      setSettingsError(err.response?.data?.detail || 'Failed to save settings');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReset = () => {
+    if (defaults) {
+      setForm({
+        spoof_rpm: defaults.thresholds?.spoof_rpm ?? 50,
+        email: defaults.notification_channels?.email ?? '',
+        webhook_url: defaults.notification_channels?.webhook_url ?? '',
+      });
+    }
+  };
+
+  if (loadingSettings) {
+    return (
+      <GlassCard>
+        <div className="p-5 flex items-center gap-2 text-sm text-gray-400">
+          <Loader2 size={14} className="animate-spin" />
+          Loading alert settings...
+        </div>
+      </GlassCard>
+    );
+  }
+
+  return (
+    <GlassCard>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full p-5 flex items-center justify-between hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-amber-50">
+            <Bell size={16} className="text-amber-500" />
+          </div>
+          <div className="text-left">
+            <h3 className="text-sm font-semibold text-gray-900">Alert Threshold Controls</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              RPM threshold: {form.spoof_rpm} &middot; Notifications: {form.email || form.webhook_url ? 'configured' : 'not configured'}
+            </p>
+          </div>
+        </div>
+        <Settings size={14} className={`text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-100 p-5 space-y-5">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1.5">
+              Spoof RPM Alert Threshold
+            </label>
+            <p className="text-[10px] text-gray-400 mb-2">
+              An alert fires when spoofed bot requests per minute exceed this value (default: {defaults?.thresholds?.spoof_rpm ?? 50})
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="number"
+                min="1"
+                max="10000"
+                value={form.spoof_rpm}
+                onChange={(e) => setForm({ ...form, spoof_rpm: e.target.value })}
+                className="w-32 text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+              />
+              <span className="text-xs text-gray-400">requests/min</span>
+            </div>
+          </div>
+
+          <div className="border-t border-gray-100 pt-5">
+            <h4 className="text-xs font-medium text-gray-700 mb-3 flex items-center gap-1.5">
+              <Bell size={12} className="text-gray-400" />
+              Notification Channels
+            </h4>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[11px] font-medium text-gray-600 mb-1 flex items-center gap-1.5">
+                  <Mail size={11} className="text-gray-400" />
+                  Alert Email
+                </label>
+                <input
+                  type="email"
+                  placeholder="admin@example.com"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Receives email alerts via Resend when thresholds are exceeded
+                </p>
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-gray-600 mb-1 flex items-center gap-1.5">
+                  <Link2 size={11} className="text-gray-400" />
+                  Webhook URL
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://hooks.slack.com/services/..."
+                  value={form.webhook_url}
+                  onChange={(e) => setForm({ ...form, webhook_url: e.target.value })}
+                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Slack, Discord, or generic webhook endpoint for alert notifications
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {settingsError && (
+            <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+              <AlertTriangle size={12} />
+              {settingsError}
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:opacity-50"
+            >
+              {saving ? <Loader2 size={12} className="animate-spin" /> : saved ? <Check size={12} /> : <Save size={12} />}
+              {saving ? 'Saving...' : saved ? 'Saved' : 'Save Changes'}
+            </button>
+            <button
+              onClick={handleReset}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-gray-500 hover:bg-gray-100 transition-colors"
+            >
+              <RotateCcw size={12} />
+              Reset to Defaults
+            </button>
+          </div>
+        </div>
+      )}
+    </GlassCard>
   );
 }
 
@@ -201,6 +407,8 @@ export default function AdminBotSecurity({ adminToken }) {
           color="#dc2626"
         />
       </div>
+
+      <AlertThresholdPanel adminToken={adminToken} />
 
       <GlassCard>
         <div className="p-5 pb-2 flex items-center justify-between">

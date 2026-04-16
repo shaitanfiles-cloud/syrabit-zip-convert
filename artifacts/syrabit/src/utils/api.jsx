@@ -490,3 +490,9 @@ export const adminBlockIp = (token, ip_hash, reason = 'repeat_spoof_offender') =
 
 export const adminUnblockIp = (token, ip_hash) =>
   axios.post(`${API_BASE}/admin/security/unblock-ip`, { ip_hash }, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminGetAlertSettings = (token) =>
+  axios.get(`${API_BASE}/admin/alert-settings`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminUpdateAlertSettings = (token, data) =>
+  axios.put(`${API_BASE}/admin/alert-settings`, data, { headers: adminHeaders(token), withCredentials: true });

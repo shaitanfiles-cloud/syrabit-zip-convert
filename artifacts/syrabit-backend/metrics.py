@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "_ALERT_COOLDOWN_S", "_ALERT_THRESHOLDS", "_ALERT_THRESHOLDS_DEFAULT",
     "_ALERT_EXPIRATION_DEFAULT", "_alert_expiration",
+    "_NOTIFICATION_CHANNELS_DEFAULT", "_notification_channels",
     "_HEALTH_CACHE_TTL_S",
     "_METRICS_HISTORY_MAX", "_MetricsStore", "_alert_last_fired", "_alerting_loop",
     "_bg_health_loop", "_cache_stats_log_counter", "_check_health_deps",
@@ -261,13 +262,19 @@ _ALERT_EXPIRATION_DEFAULT = {
 }
 _ALERT_THRESHOLDS = dict(_ALERT_THRESHOLDS_DEFAULT)
 _alert_expiration = dict(_ALERT_EXPIRATION_DEFAULT)
+_NOTIFICATION_CHANNELS_DEFAULT = {
+    "email": "",
+    "webhook_url": "",
+}
+_notification_channels: dict = dict(_NOTIFICATION_CHANNELS_DEFAULT)
 
 async def _load_alert_settings():
-    """Load alert thresholds and expiration settings from db.api_config, falling back to defaults."""
-    global _ALERT_THRESHOLDS, _alert_expiration
+    """Load alert thresholds, expiration, and notification channel settings from db.api_config, falling back to defaults."""
+    global _ALERT_THRESHOLDS, _alert_expiration, _notification_channels
     try:
         new_thresholds = dict(_ALERT_THRESHOLDS_DEFAULT)
         new_expiration = dict(_ALERT_EXPIRATION_DEFAULT)
+        new_channels = dict(_NOTIFICATION_CHANNELS_DEFAULT)
         cfg = await db.api_config.find_one({}, {"_id": 0})
         if cfg and "alert_settings" in cfg:
             s = cfg["alert_settings"]
@@ -286,8 +293,14 @@ async def _load_alert_settings():
                     new_expiration["days"] = max(1, int(exp["days"]))
                 except (ValueError, TypeError):
                     pass
+            channels = s.get("notification_channels", {})
+            if isinstance(channels.get("email"), str):
+                new_channels["email"] = channels["email"].strip()
+            if isinstance(channels.get("webhook_url"), str):
+                new_channels["webhook_url"] = channels["webhook_url"].strip()
         _ALERT_THRESHOLDS = new_thresholds
         _alert_expiration = new_expiration
+        _notification_channels = new_channels
     except Exception as e:
         logger.debug(f"Failed to load alert settings from db: {e}")
 
@@ -317,7 +330,7 @@ async def _dispatch_alert(alert_type: str, title: str, body: str):
 
     # 1) Email alert via Resend (to admin)
     try:
-        admin_email = os.environ.get("ALERT_EMAIL", "").strip()
+        admin_email = (_notification_channels.get("email") or os.environ.get("ALERT_EMAIL", "")).strip()
         resend_key = os.environ.get("RESEND_API_KEY", "").strip()
         if admin_email and resend_key:
             import resend as _resend_sdk
@@ -333,7 +346,7 @@ async def _dispatch_alert(alert_type: str, title: str, body: str):
 
     # 2) Webhook alert (Slack / Discord / generic)
     try:
-        webhook_url = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
+        webhook_url = (_notification_channels.get("webhook_url") or os.environ.get("ALERT_WEBHOOK_URL", "")).strip()
         if webhook_url:
             async with httpx.AsyncClient(timeout=10) as client:
                 await client.post(webhook_url, json={

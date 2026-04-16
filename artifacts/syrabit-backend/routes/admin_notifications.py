@@ -438,9 +438,11 @@ async def admin_get_alert_settings(admin: dict = Depends(get_admin_user)):
         return {
             "thresholds": {k: _metrics_mod._ALERT_THRESHOLDS.get(k, v) for k, v in _metrics_mod._ALERT_THRESHOLDS_DEFAULT.items()},
             "expiration": {k: _metrics_mod._alert_expiration.get(k, v) for k, v in _metrics_mod._ALERT_EXPIRATION_DEFAULT.items()},
+            "notification_channels": {k: _metrics_mod._notification_channels.get(k, v) for k, v in _metrics_mod._NOTIFICATION_CHANNELS_DEFAULT.items()},
             "defaults": {
                 "thresholds": _metrics_mod._ALERT_THRESHOLDS_DEFAULT,
                 "expiration": _metrics_mod._ALERT_EXPIRATION_DEFAULT,
+                "notification_channels": _metrics_mod._NOTIFICATION_CHANNELS_DEFAULT,
             },
         }
     except Exception as exc:
@@ -456,6 +458,7 @@ async def admin_update_alert_settings(
     import metrics as _metrics_mod
     thresholds = data.get("thresholds", {})
     expiration = data.get("expiration", {})
+    notification_channels = data.get("notification_channels", {})
     validated_thresholds = {}
     for k, default_val in _metrics_mod._ALERT_THRESHOLDS_DEFAULT.items():
         if k in thresholds:
@@ -479,6 +482,17 @@ async def admin_update_alert_settings(
             validated_expiration["days"] = days
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail="Invalid value for expiration days (must be 1-365)")
+    validated_channels = {}
+    if "email" in notification_channels:
+        email_val = str(notification_channels["email"]).strip()
+        if email_val and "@" not in email_val:
+            raise HTTPException(status_code=400, detail="Invalid email address for notification channel")
+        validated_channels["email"] = email_val
+    if "webhook_url" in notification_channels:
+        wh_val = str(notification_channels["webhook_url"]).strip()
+        if wh_val and not wh_val.startswith(("http://", "https://")):
+            raise HTTPException(status_code=400, detail="Webhook URL must start with http:// or https://")
+        validated_channels["webhook_url"] = wh_val
     try:
         existing = await db.api_config.find_one({}, {"_id": 0})
         if existing is None:
@@ -486,6 +500,7 @@ async def admin_update_alert_settings(
         existing["alert_settings"] = {
             "thresholds": validated_thresholds,
             "expiration": validated_expiration,
+            "notification_channels": validated_channels,
         }
         await db.api_config.replace_one({}, existing, upsert=True)
         await _metrics_mod._load_alert_settings()
