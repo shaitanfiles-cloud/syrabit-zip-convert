@@ -906,6 +906,60 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             </div>
           )}
 
+          {indexNowStats.endpoint_health?.length > 0 && (
+            <div className="mt-4">
+              <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Endpoint Health</div>
+              <div className="space-y-1.5">
+                {indexNowStats.endpoint_health.map((ep, i) => {
+                  const host = ep.endpoint.replace(/https?:\/\//, '').split('/')[0];
+                  const statusColor = ep.is_dead_lettered
+                    ? 'bg-red-400'
+                    : ep.consecutive_failures > 0
+                      ? 'bg-amber-400'
+                      : 'bg-green-400';
+                  const statusBg = ep.is_dead_lettered
+                    ? 'bg-red-50 border-red-200'
+                    : ep.consecutive_failures > 0
+                      ? 'bg-amber-50 border-amber-200'
+                      : 'bg-green-50 border-green-200';
+                  return (
+                    <div key={i} className={`flex items-center gap-2 text-[10px] py-2 px-3 rounded-lg border ${statusBg}`}>
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColor}`} />
+                      <span className="text-gray-700 font-medium min-w-[120px]">{host}</span>
+                      <span className="text-gray-500">
+                        {ep.total_successes}&#x2F;{ep.total_successes + ep.total_failures} ok
+                      </span>
+                      {ep.consecutive_failures > 0 && (
+                        <span className="text-amber-600 flex items-center gap-0.5">
+                          <AlertTriangle size={10} />
+                          {ep.consecutive_failures} consecutive fail{ep.consecutive_failures !== 1 ? 's' : ''}
+                        </span>
+                      )}
+                      {!ep.is_available && ep.backoff_remaining_seconds > 0 && (
+                        <span className="text-orange-500 flex items-center gap-0.5">
+                          <Clock size={10} />
+                          backoff {Math.ceil(ep.backoff_remaining_seconds)}s
+                        </span>
+                      )}
+                      {ep.is_dead_lettered && (
+                        <span className="text-red-600 font-semibold flex items-center gap-0.5">
+                          <AlertCircle size={10} />
+                          dead-lettered
+                        </span>
+                      )}
+                      {ep.pending_retry_urls > 0 && (
+                        <span className="text-gray-500">{ep.pending_retry_urls} retry queued</span>
+                      )}
+                      <span className={`ml-auto text-[9px] px-1.5 py-0.5 rounded font-medium ${ep.is_dead_lettered ? 'text-red-700 bg-red-100' : ep.consecutive_failures > 0 ? 'text-amber-700 bg-amber-100' : 'text-green-700 bg-green-100'}`}>
+                        {ep.is_dead_lettered ? 'DOWN' : ep.consecutive_failures > 0 ? 'DEGRADED' : 'HEALTHY'}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {indexNowHistory?.pushes?.length > 0 && (
             <div className="mt-4">
               <div className="text-[10px] text-gray-400 font-semibold mb-2 uppercase tracking-wider">Recent Push History</div>
