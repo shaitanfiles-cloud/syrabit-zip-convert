@@ -1,7 +1,7 @@
 """Syrabit.ai — Bot discovery routes: RSS feeds, llms-full.txt, IndexNow, ai-plugin.json, bot analytics."""
-import asyncio, json, logging, os, uuid, hashlib
+import asyncio, json, logging, os, time, uuid, hashlib
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+from typing import Optional, List, Dict
 from xml.sax.saxutils import escape as xml_escape
 
 from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
@@ -16,6 +16,82 @@ INDEXNOW_KEY = os.environ.get("INDEXNOW_KEY", hashlib.sha256(b"syrabit-indexnow-
 
 _INDEXNOW_BATCH_SIZE = 500
 _INDEXNOW_COOLDOWN_SECONDS = 300
+
+_BACKOFF_BASE_SECONDS = 30
+_BACKOFF_MAX_SECONDS = 600
+_DEAD_LETTER_THRESHOLD = 5
+
+
+class _EndpointHealth:
+    __slots__ = ("endpoint", "consecutive_failures", "last_failure_time",
+                 "last_success_time", "total_successes", "total_failures",
+                 "backoff_until")
+
+    def __init__(self, endpoint: str):
+        self.endpoint = endpoint
+        self.consecutive_failures = 0
+        self.last_failure_time: Optional[float] = None
+        self.last_success_time: Optional[float] = None
+        self.total_successes = 0
+        self.total_failures = 0
+        self.backoff_until: Optional[float] = None
+
+    def record_success(self):
+        self.consecutive_failures = 0
+        self.last_success_time = time.monotonic()
+        self.total_successes += 1
+        self.backoff_until = None
+
+    def record_failure(self):
+        now = time.monotonic()
+        self.consecutive_failures += 1
+        self.total_failures += 1
+        self.last_failure_time = now
+        delay = min(
+            _BACKOFF_BASE_SECONDS * (2 ** (self.consecutive_failures - 1)),
+            _BACKOFF_MAX_SECONDS,
+        )
+        self.backoff_until = now + delay
+        if self.consecutive_failures >= _DEAD_LETTER_THRESHOLD:
+            logger.warning(
+                "IndexNow endpoint dead-lettered: endpoint=%s consecutive_failures=%d "
+                "total_failures=%d backoff_seconds=%d",
+                self.endpoint, self.consecutive_failures, self.total_failures, delay,
+            )
+        else:
+            logger.info(
+                "IndexNow endpoint backoff: endpoint=%s consecutive_failures=%d backoff_seconds=%d",
+                self.endpoint, self.consecutive_failures, delay,
+            )
+
+    def is_available(self) -> bool:
+        if self.backoff_until is None:
+            return True
+        return time.monotonic() >= self.backoff_until
+
+    def to_dict(self) -> dict:
+        now = time.monotonic()
+        remaining = 0.0
+        if self.backoff_until and now < self.backoff_until:
+            remaining = round(self.backoff_until - now, 1)
+        return {
+            "endpoint": self.endpoint,
+            "consecutive_failures": self.consecutive_failures,
+            "total_successes": self.total_successes,
+            "total_failures": self.total_failures,
+            "is_available": self.is_available(),
+            "backoff_remaining_seconds": remaining,
+            "is_dead_lettered": self.consecutive_failures >= _DEAD_LETTER_THRESHOLD,
+        }
+
+
+_endpoint_health: Dict[str, _EndpointHealth] = {}
+
+
+def _get_health(endpoint: str) -> _EndpointHealth:
+    if endpoint not in _endpoint_health:
+        _endpoint_health[endpoint] = _EndpointHealth(endpoint)
+    return _endpoint_health[endpoint]
 
 
 def _xml_safe(text: str) -> str:
@@ -411,12 +487,25 @@ async def _log_indexnow_push(urls: List[str], source: str, results: dict):
         logger.debug(f"IndexNow log write failed: {e}")
 
 
-async def push_indexnow(urls: list[str], source: str = "auto"):
+INDEXNOW_ENDPOINTS = [
+    "https://api.indexnow.org/indexnow",
+    "https://www.bing.com/indexnow",
+    "https://yandex.com/indexnow",
+]
+
+
+async def push_indexnow(
+    urls: list[str],
+    source: str = "auto",
+    target_endpoints: Optional[List[str]] = None,
+) -> Dict[str, bool]:
     if not urls:
-        return
+        return {}
     import httpx
     unique_urls = list(dict.fromkeys(urls))
+    endpoints_to_try = target_endpoints or INDEXNOW_ENDPOINTS
     all_results = []
+    endpoint_success: Dict[str, bool] = {ep: False for ep in endpoints_to_try}
     for i in range(0, len(unique_urls), 10000):
         batch = unique_urls[i:i + 10000]
         payload = {
@@ -425,32 +514,44 @@ async def push_indexnow(urls: list[str], source: str = "auto"):
             "keyLocation": f"{BASE_URL}/{INDEXNOW_KEY}.txt",
             "urlList": batch,
         }
-        endpoints = [
-            "https://api.indexnow.org/indexnow",
-            "https://www.bing.com/indexnow",
-            "https://yandex.com/indexnow",
-        ]
         chunk_results = {}
         async with httpx.AsyncClient(timeout=10.0) as client:
-            for endpoint in endpoints:
+            for endpoint in endpoints_to_try:
+                health = _get_health(endpoint)
+                if not health.is_available():
+                    chunk_results[endpoint] = "skipped:backoff"
+                    logger.info(
+                        "IndexNow push skipped (backoff): endpoint=%s consecutive_failures=%d",
+                        endpoint, health.consecutive_failures,
+                    )
+                    continue
                 try:
                     resp = await client.post(endpoint, json=payload)
+                    if resp.status_code < 400:
+                        health.record_success()
+                        endpoint_success[endpoint] = True
+                    else:
+                        health.record_failure()
                     chunk_results[endpoint] = resp.status_code
                     logger.info(f"IndexNow push to {endpoint}: {resp.status_code} ({len(batch)} URLs)")
                 except Exception as e:
+                    health.record_failure()
                     chunk_results[endpoint] = str(e)
                     logger.warning(f"IndexNow push to {endpoint} failed: {e}")
         all_results.append({"chunk_index": i // 10000, "url_count": len(batch), "endpoints": chunk_results})
     results_flat = all_results[0]["endpoints"] if len(all_results) == 1 else {"chunks": all_results}
     asyncio.create_task(_log_indexnow_push(unique_urls, source, results_flat))
+    return endpoint_success
 
 
 class IndexNowBatcher:
     def __init__(self):
         self._pending: List[str] = []
+        self._endpoint_retry: Dict[str, List[str]] = {}
         self._lock = asyncio.Lock()
         self._last_flush: Optional[datetime] = None
         self._deferred_task: Optional[asyncio.Task] = None
+        self._retry_task: Optional[asyncio.Task] = None
 
     async def queue(self, urls: List[str]):
         async with self._lock:
@@ -478,8 +579,17 @@ class IndexNowBatcher:
         for i in range(0, len(to_push), _INDEXNOW_BATCH_SIZE):
             batch = to_push[i:i + _INDEXNOW_BATCH_SIZE]
             try:
-                await push_indexnow(batch, source=source)
-                pushed += len(batch)
+                ep_results = await push_indexnow(batch, source=source)
+                failed_endpoints = [
+                    ep for ep, ok in ep_results.items() if not ok
+                ]
+                if failed_endpoints:
+                    async with self._lock:
+                        for ep in failed_endpoints:
+                            self._endpoint_retry.setdefault(ep, []).extend(batch)
+                    self._ensure_retry_loop()
+                if any(ep_results.values()):
+                    pushed += len(batch)
             except Exception as e:
                 logger.error(f"IndexNow batch flush failed ({len(batch)} URLs): {e}")
                 async with self._lock:
@@ -487,6 +597,60 @@ class IndexNowBatcher:
             if i + _INDEXNOW_BATCH_SIZE < len(to_push):
                 await asyncio.sleep(2)
         return pushed
+
+    def _ensure_retry_loop(self):
+        if self._retry_task is None or self._retry_task.done():
+            self._retry_task = asyncio.create_task(self._retry_failed_endpoints())
+        elif self._retry_task.cancelled():
+            self._retry_task = asyncio.create_task(self._retry_failed_endpoints())
+
+    async def _retry_failed_endpoints(self):
+        while True:
+            await asyncio.sleep(15)
+            async with self._lock:
+                if not self._endpoint_retry:
+                    return
+                retryable: Dict[str, List[str]] = {}
+                still_waiting: Dict[str, List[str]] = {}
+                for ep, urls in self._endpoint_retry.items():
+                    health = _get_health(ep)
+                    if health.is_available():
+                        retryable[ep] = list(dict.fromkeys(urls))
+                    else:
+                        still_waiting[ep] = urls
+                self._endpoint_retry = still_waiting
+
+            if not retryable:
+                async with self._lock:
+                    if not self._endpoint_retry:
+                        return
+                continue
+
+            for ep, urls in retryable.items():
+                for i in range(0, len(urls), _INDEXNOW_BATCH_SIZE):
+                    batch = urls[i:i + _INDEXNOW_BATCH_SIZE]
+                    try:
+                        ep_results = await push_indexnow(
+                            batch,
+                            source="endpoint_retry",
+                            target_endpoints=[ep],
+                        )
+                        if not ep_results.get(ep, False):
+                            async with self._lock:
+                                self._endpoint_retry.setdefault(ep, []).extend(batch)
+                    except Exception as e:
+                        logger.error(
+                            "IndexNow endpoint retry failed: endpoint=%s urls=%d error=%s",
+                            ep, len(batch), e,
+                        )
+                        async with self._lock:
+                            self._endpoint_retry.setdefault(ep, []).extend(batch)
+                    if i + _INDEXNOW_BATCH_SIZE < len(urls):
+                        await asyncio.sleep(2)
+
+            async with self._lock:
+                if not self._endpoint_retry:
+                    return
 
     async def _deferred_flush(self, delay: float, source: str):
         await asyncio.sleep(delay)
@@ -522,6 +686,10 @@ class IndexNowBatcher:
     async def get_pending_count(self) -> int:
         async with self._lock:
             return len(self._pending)
+
+    async def get_retry_counts(self) -> Dict[str, int]:
+        async with self._lock:
+            return {ep: len(urls) for ep, urls in self._endpoint_retry.items()}
 
 
 indexnow_batcher = IndexNowBatcher()
@@ -768,7 +936,8 @@ async def admin_indexnow_history(
 async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
     from deps import db, is_mongo_available
     if not await is_mongo_available():
-        return {"total_pushes": 0, "total_urls_pushed": 0, "last_push": None, "by_source": [], "pending": 0}
+        endpoint_health_list = [_get_health(ep).to_dict() for ep in INDEXNOW_ENDPOINTS]
+        return {"total_pushes": 0, "total_urls_pushed": 0, "last_push": None, "by_source": [], "pending": 0, "endpoint_health": endpoint_health_list}
     try:
         total_pushes = await db.indexnow_push_log.count_documents({})
         url_sum_pipeline = [
@@ -800,6 +969,13 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
         today_url_sum = await db.indexnow_push_log.aggregate(today_url_pipeline).to_list(1)
         today_urls = today_url_sum[0]["total"] if today_url_sum else 0
 
+        retry_counts = await indexnow_batcher.get_retry_counts()
+        endpoint_health_list = []
+        for ep in INDEXNOW_ENDPOINTS:
+            info = _get_health(ep).to_dict()
+            info["pending_retry_urls"] = retry_counts.get(ep, 0)
+            endpoint_health_list.append(info)
+
         return {
             "total_pushes": total_pushes,
             "total_urls_pushed": total_urls,
@@ -808,7 +984,8 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
             "today_pushes": today_pushes,
             "today_urls_pushed": today_urls,
             "pending": await indexnow_batcher.get_pending_count(),
+            "endpoint_health": endpoint_health_list,
         }
     except Exception as e:
         logger.error(f"IndexNow stats fetch failed: {e}")
-        return {"total_pushes": 0, "total_urls_pushed": 0, "last_push": None, "by_source": [], "pending": 0}
+        return {"total_pushes": 0, "total_urls_pushed": 0, "last_push": None, "by_source": [], "pending": 0, "endpoint_health": []}
