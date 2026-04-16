@@ -254,6 +254,29 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
     window.addEventListener('pointerup', onUp);
   }, [timeForClientX, trimStart, trimEnd, duration]);
 
+  const handleKeyDown = useCallback((e, handle) => {
+    const step = e.shiftKey ? 0.5 : 0.1;
+    let delta = 0;
+    if (e.key === 'ArrowRight') delta = step;
+    else if (e.key === 'ArrowLeft') delta = -step;
+    else return;
+    e.preventDefault();
+    setSizeError(null);
+    if (handle === 'start') {
+      setTrimStart((prev) => {
+        const next = prev + delta;
+        const maxStart = Math.max(0, trimEnd - MAX_DURATION);
+        return Math.max(maxStart, Math.max(0, Math.min(next, trimEnd - 0.1)));
+      });
+    } else {
+      setTrimEnd((prev) => {
+        const next = prev + delta;
+        const maxEnd = trimStart + MAX_DURATION;
+        return Math.min(maxEnd, Math.min(duration, Math.max(next, trimStart + 0.1)));
+      });
+    }
+  }, [trimStart, trimEnd, duration]);
+
   if (loading) {
     return (
       <div className="mt-2 p-3 rounded-lg border border-violet-200 bg-violet-50/50">
@@ -323,18 +346,34 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
         />
 
         <div
-          className="absolute top-0 bottom-0 w-3 cursor-col-resize z-10 group"
+          role="slider"
+          tabIndex={0}
+          aria-label="Trim start"
+          aria-valuemin={0}
+          aria-valuemax={duration}
+          aria-valuenow={Math.round(trimStart * 10) / 10}
+          aria-valuetext={`Trim start at ${formatTime(trimStart)}`}
+          className="absolute top-0 bottom-0 w-3 cursor-col-resize z-10 group outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 rounded-sm"
           style={{ left: `calc(${pctForTime(trimStart)}% - 6px)` }}
           onPointerDown={(e) => handlePointerDown(e, 'start')}
+          onKeyDown={(e) => handleKeyDown(e, 'start')}
         >
           <div className="absolute left-1.5 top-0 bottom-0 w-0.5 bg-violet-600 group-hover:bg-violet-700" />
           <div className="absolute left-0.5 top-1/2 -translate-y-1/2 w-2 h-4 rounded-sm bg-violet-600 group-hover:bg-violet-700" />
         </div>
 
         <div
-          className="absolute top-0 bottom-0 w-3 cursor-col-resize z-10 group"
+          role="slider"
+          tabIndex={0}
+          aria-label="Trim end"
+          aria-valuemin={0}
+          aria-valuemax={duration}
+          aria-valuenow={Math.round(trimEnd * 10) / 10}
+          aria-valuetext={`Trim end at ${formatTime(trimEnd)}`}
+          className="absolute top-0 bottom-0 w-3 cursor-col-resize z-10 group outline-none focus-visible:ring-2 focus-visible:ring-violet-400 focus-visible:ring-offset-1 rounded-sm"
           style={{ left: `calc(${pctForTime(trimEnd)}% - 6px)` }}
           onPointerDown={(e) => handlePointerDown(e, 'end')}
+          onKeyDown={(e) => handleKeyDown(e, 'end')}
         >
           <div className="absolute left-1.5 top-0 bottom-0 w-0.5 bg-violet-600 group-hover:bg-violet-700" />
           <div className="absolute left-0.5 top-1/2 -translate-y-1/2 w-2 h-4 rounded-sm bg-violet-600 group-hover:bg-violet-700" />
@@ -393,7 +432,7 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
       )}
 
       <p className="text-[9px] text-gray-400">
-        Drag the handles to trim. Max {MAX_DURATION}s. MP3/WAV, max 500 KB after trim.
+        Drag handles or use arrow keys to trim (Shift for larger steps). Max {MAX_DURATION}s. MP3/WAV, max 500 KB after trim.
       </p>
     </div>
   );
