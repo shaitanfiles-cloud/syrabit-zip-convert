@@ -276,9 +276,8 @@ async def admin_backfill_push_roles(admin: dict = Depends(get_admin_user)):
         update_fields = {
             "role": "admin" if is_admin else "student",
             "is_admin": is_admin,
+            "admin_id": uid if is_admin else "",
         }
-        if is_admin:
-            update_fields["admin_id"] = uid
         await db.push_subscriptions.update_one(
             {"_id": sub["_id"]}, {"$set": update_fields}
         )
