@@ -32,46 +32,14 @@ export default function SubjectLandingPage() {
 
   const basePath = `/${board}/${classSlug}/${subjectSlug}`;
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-background text-foreground">
-        <div className="max-w-4xl mx-auto px-4 py-8">
-          <Skeleton className="h-4 w-48 mb-6" />
-          <Skeleton className="h-10 w-full mb-4" />
-          <Skeleton className="h-4 w-64 mb-8" />
-          {[...Array(5)].map((_, i) => (
-            <Skeleton key={i} className="h-20 w-full mb-3 rounded-xl" />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (error || !subject) {
-    return (
-      <div className="min-h-screen bg-background text-foreground flex items-center justify-center">
-        <div className="text-center max-w-md px-6">
-          <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-5">
-            <BookOpen size={28} className="text-muted-foreground" />
-          </div>
-          <h1 className="text-2xl font-bold mb-3">{error || 'Subject not found'}</h1>
-          <p className="text-muted-foreground mb-6">We couldn't find this subject. It may not be available yet.</p>
-          <Link to="/library" className="inline-flex items-center gap-2 px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl text-white font-medium transition-colors">
-            <ArrowLeft size={16} />
-            Back to Browser
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const subjectName = subject.name || subjectSlug;
-  const boardName = subject.board_name || board;
-  const className = subject.class_name || classSlug;
-  const streamName = subject.stream_name || '';
-
+  const subjectName = subject?.name || subjectSlug;
+  const boardName = subject?.board_name || board;
+  const className = subject?.class_name || classSlug;
+  const streamName = subject?.stream_name || '';
   const chapterCount = chapters?.length || 0;
+
   const faqJsonLd = useMemo(() => {
+    if (!subjectName) return null;
     const qa = [
       {
         q: `What topics are covered in ${boardName} ${className} ${subjectName}?`,
@@ -106,6 +74,39 @@ export default function SubjectLandingPage() {
       })),
     };
   }, [subjectName, boardName, className, chapterCount]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-background text-foreground">
+        <div className="max-w-4xl mx-auto px-4 py-8">
+          <Skeleton className="h-4 w-48 mb-6" />
+          <Skeleton className="h-10 w-full mb-4" />
+          <Skeleton className="h-4 w-64 mb-8" />
+          {[...Array(5)].map((_, i) => (
+            <Skeleton key={i} className="h-20 w-full mb-3 rounded-xl" />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (error || !subject) {
+    return (
+      <div className="min-h-screen bg-background text-foreground flex items-center justify-center">
+        <div className="text-center max-w-md px-6">
+          <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-5">
+            <BookOpen size={28} className="text-muted-foreground" />
+          </div>
+          <h1 className="text-2xl font-bold mb-3">{error || 'Subject not found'}</h1>
+          <p className="text-muted-foreground mb-6">We couldn't find this subject. It may not be available yet.</p>
+          <Link to="/library" className="inline-flex items-center gap-2 px-6 py-3 bg-violet-600 hover:bg-violet-500 rounded-xl text-white font-medium transition-colors">
+            <ArrowLeft size={16} />
+            Back to Browser
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
