@@ -45,6 +45,7 @@ SUPABASE_DB_URL = "postgresql://postgres.czeznmqogtwecidhpysa:Rimjhimiya%405490@
 CLOUDFLARE_ACCOUNT_ID = "d66e40eac539fff1db270fddf384a5ec"
 
 [userenv.development]
+ENABLE_E2E_ADMIN = "true"
 
 [userenv.production]
 

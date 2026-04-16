@@ -50,7 +50,7 @@ The project is structured as a pnpm workspace monorepo, with a React + Vite fron
 ## External Dependencies
 
 - **Databases:** PostgreSQL (users/auth), MongoDB (content/RAG), Cloudflare D1 (edge replica for read-heavy content catalog).
-- **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers, Google OAuth. Dev-only e2e test admin account (`e2e-admin@syrabit.test` / `e2e-test-admin-2026`) is auto-injected when `REPLIT_DEV_DOMAIN` or `REPL_ID` is set; not available in production.
+- **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers, Google OAuth. E2e test admin account (`e2e-admin@syrabit.test` / `e2e-test-admin-2026`) enabled only when `ENABLE_E2E_ADMIN=true` env var is set (development only, never in production).
 - **Caching:** Redis, in-memory caching, Cloudflare Worker edge caching.
 - **LLM Providers:**
     - **Chat:** Groq, Cerebras, OpenRouter, Fireworks (SLM pool).

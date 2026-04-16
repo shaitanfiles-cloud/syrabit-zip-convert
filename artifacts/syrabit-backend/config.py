@@ -264,16 +264,16 @@ def _load_admin_accounts():
 
 ADMIN_ACCOUNTS = _load_admin_accounts()
 
-_is_dev = bool(os.environ.get('REPLIT_DEV_DOMAIN') or os.environ.get('REPL_ID'))
+_E2E_ADMIN_ENABLED = os.environ.get('ENABLE_E2E_ADMIN', '').strip().lower() in ('1', 'true', 'yes')
 _E2E_ADMIN = {
     "email": "e2e-admin@syrabit.test",
     "password": "e2e-test-admin-2026",
     "name": "E2E Test Admin",
 }
-if _is_dev and not any(a["email"] == _E2E_ADMIN["email"] for a in ADMIN_ACCOUNTS):
+if _E2E_ADMIN_ENABLED and not any(a["email"] == _E2E_ADMIN["email"] for a in ADMIN_ACCOUNTS):
     ADMIN_ACCOUNTS.append(_E2E_ADMIN)
     import logging as _adm_log
-    _adm_log.getLogger("config").info("Dev e2e test admin account added")
+    _adm_log.getLogger("config").info("E2E test admin account enabled (ENABLE_E2E_ADMIN=true)")
 
 ADMIN_EMAIL    = ADMIN_ACCOUNTS[0]["email"]    if ADMIN_ACCOUNTS else ""
 ADMIN_PASSWORD = ADMIN_ACCOUNTS[0]["password"] if ADMIN_ACCOUNTS else ""
