@@ -12,6 +12,8 @@ average TTFB, and the most recent cache-warm runs.
 """
 from __future__ import annotations
 
+import json
+import logging
 import threading
 from collections import deque
 from datetime import datetime, timezone, timedelta
@@ -27,52 +29,113 @@ __all__ = [
     "record_total_latency",
     "record_warm_run",
     "snapshot",
+    "load_from_store",
+    "flush_to_store",
+    "periodic_flush_loop",
 ]
+
+logger = logging.getLogger(__name__)
+
+# Redis key layout (v2 — atomic, multi-worker safe):
+#   chat_speedup:day:{YYYY-MM-DD}  hash of counter -> int / float
+#   chat_speedup:days              SET of date strings we've seen
+#   chat_speedup:warm_runs         LIST of JSON warm-run entries (newest at head)
+# Each chat event bumps an in-memory _delta dict on top of _daily; the
+# periodic flush atomically applies _delta to Redis via HINCRBY/HINCRBYFLOAT
+# (so multiple workers can flush concurrently without clobbering), then
+# resets the delta. On startup every worker rehydrates _daily from Redis so
+# the /admin/chat/speedups endpoint shows continuous history regardless of
+# which worker handles the request.
+_REDIS_PREFIX = "chat_speedup"
+_REDIS_DAY_KEY = _REDIS_PREFIX + ":day:{date}"
+_REDIS_DAYS_INDEX = _REDIS_PREFIX + ":days"
+_REDIS_WARM_RUNS_KEY = _REDIS_PREFIX + ":warm_runs"
+# TTL long enough to retain history through a multi-day outage (60 days).
+_REDIS_TTL = 60 * 24 * 3600
+_FLUSH_INTERVAL_SEC = 30
 
 _MAX_DAYS = 30
 _MAX_WARM_RUNS = 50
 
+# Field-type maps for stable serialization/deserialization.
+_INT_FIELDS = frozenset((
+    "chats_total", "early_cache_hits", "pre_sse_cache_hits", "instant_fastpath",
+    "speculative_web_started", "speculative_web_used", "speculative_web_discarded",
+    "ttfb_count", "total_count",
+))
+_FLOAT_FIELDS = frozenset(("ttfb_ms_sum", "total_ms_sum"))
+
 _lock = threading.Lock()
-# { "YYYY-MM-DD": {counter_name: int|float, ...} }
+# { "YYYY-MM-DD": {counter_name: int|float, ...} } — current view (loaded from
+# Redis at startup + this worker's local events since then).
 _daily: Dict[str, Dict[str, float]] = {}
+# { "YYYY-MM-DD": {counter_name: int|float, ...} } — delta accumulated since
+# the last successful flush. Cleared atomically on flush.
+_delta: Dict[str, Dict[str, float]] = {}
 _warm_runs: Deque[Dict[str, Any]] = deque(maxlen=_MAX_WARM_RUNS)
+# Warm-run entries recorded since the last flush.
+_warm_runs_pending: Deque[Dict[str, Any]] = deque(maxlen=_MAX_WARM_RUNS)
 
 
 def _today_key() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
+_DEFAULT_BUCKET = {
+    "chats_total": 0,
+    "early_cache_hits": 0,        # Redis/memory hit before any preprocessing
+    "pre_sse_cache_hits": 0,      # cache hit just before SSE stream begins
+    "instant_fastpath": 0,        # casual instant-response fast path
+    "speculative_web_started": 0, # how often we kicked off the speculative fetch
+    "speculative_web_used": 0,    # internal RAG missed → web results used
+    "speculative_web_discarded": 0, # internal RAG hit → web results dropped
+    "ttfb_ms_sum": 0.0,
+    "ttfb_count": 0,
+    "total_ms_sum": 0.0,
+    "total_count": 0,
+}
+
+
+def _new_bucket() -> Dict[str, float]:
+    return dict(_DEFAULT_BUCKET)
+
+
+def _trim_old_days(target: Dict[str, Dict[str, float]]) -> None:
+    if len(target) <= _MAX_DAYS:
+        return
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_MAX_DAYS)).strftime("%Y-%m-%d")
+    for k in list(target.keys()):
+        if k < cutoff:
+            target.pop(k, None)
+
+
 def _bucket() -> Dict[str, float]:
+    """Lock-held: return today's _daily bucket, creating it on first access."""
     key = _today_key()
     bucket = _daily.get(key)
     if bucket is None:
-        bucket = {
-            "chats_total": 0,
-            "early_cache_hits": 0,        # Redis/memory hit before any preprocessing
-            "pre_sse_cache_hits": 0,      # cache hit just before SSE stream begins
-            "instant_fastpath": 0,        # casual instant-response fast path
-            "speculative_web_started": 0, # how often we kicked off the speculative fetch
-            "speculative_web_used": 0,    # internal RAG missed → web results used
-            "speculative_web_discarded": 0, # internal RAG hit → web results dropped
-            "ttfb_ms_sum": 0.0,
-            "ttfb_count": 0,
-            "total_ms_sum": 0.0,
-            "total_count": 0,
-        }
+        bucket = _new_bucket()
         _daily[key] = bucket
-        # Trim oldest days
-        if len(_daily) > _MAX_DAYS:
-            cutoff = (datetime.now(timezone.utc) - timedelta(days=_MAX_DAYS)).strftime("%Y-%m-%d")
-            for k in list(_daily.keys()):
-                if k < cutoff:
-                    _daily.pop(k, None)
+        _trim_old_days(_daily)
+    return bucket
+
+
+def _delta_bucket() -> Dict[str, float]:
+    """Lock-held: return today's _delta bucket, creating it on first access."""
+    key = _today_key()
+    bucket = _delta.get(key)
+    if bucket is None:
+        bucket = {}
+        _delta[key] = bucket
     return bucket
 
 
 def _bump(name: str, delta: float = 1) -> None:
     with _lock:
         b = _bucket()
-        b[name] = b.get(name, 0) + delta
+        b[name] = (b.get(name, 0) or 0) + delta
+        d = _delta_bucket()
+        d[name] = (d.get(name, 0) or 0) + delta
 
 
 def record_chat_started() -> None:
@@ -94,11 +157,15 @@ def record_instant_fastpath() -> None:
 def record_speculative_web(*, used: bool, discarded: bool) -> None:
     with _lock:
         b = _bucket()
-        b["speculative_web_started"] = b.get("speculative_web_started", 0) + 1
+        d = _delta_bucket()
+        b["speculative_web_started"] = (b.get("speculative_web_started", 0) or 0) + 1
+        d["speculative_web_started"] = (d.get("speculative_web_started", 0) or 0) + 1
         if used:
-            b["speculative_web_used"] = b.get("speculative_web_used", 0) + 1
+            b["speculative_web_used"] = (b.get("speculative_web_used", 0) or 0) + 1
+            d["speculative_web_used"] = (d.get("speculative_web_used", 0) or 0) + 1
         if discarded:
-            b["speculative_web_discarded"] = b.get("speculative_web_discarded", 0) + 1
+            b["speculative_web_discarded"] = (b.get("speculative_web_discarded", 0) or 0) + 1
+            d["speculative_web_discarded"] = (d.get("speculative_web_discarded", 0) or 0) + 1
 
 
 def record_ttfb(ms: float) -> None:
@@ -106,8 +173,11 @@ def record_ttfb(ms: float) -> None:
         return
     with _lock:
         b = _bucket()
-        b["ttfb_ms_sum"] = b.get("ttfb_ms_sum", 0.0) + float(ms)
-        b["ttfb_count"] = b.get("ttfb_count", 0) + 1
+        d = _delta_bucket()
+        b["ttfb_ms_sum"] = (b.get("ttfb_ms_sum", 0.0) or 0.0) + float(ms)
+        b["ttfb_count"] = (b.get("ttfb_count", 0) or 0) + 1
+        d["ttfb_ms_sum"] = (d.get("ttfb_ms_sum", 0.0) or 0.0) + float(ms)
+        d["ttfb_count"] = (d.get("ttfb_count", 0) or 0) + 1
 
 
 def record_total_latency(ms: float) -> None:
@@ -115,8 +185,11 @@ def record_total_latency(ms: float) -> None:
         return
     with _lock:
         b = _bucket()
-        b["total_ms_sum"] = b.get("total_ms_sum", 0.0) + float(ms)
-        b["total_count"] = b.get("total_count", 0) + 1
+        d = _delta_bucket()
+        b["total_ms_sum"] = (b.get("total_ms_sum", 0.0) or 0.0) + float(ms)
+        b["total_count"] = (b.get("total_count", 0) or 0) + 1
+        d["total_ms_sum"] = (d.get("total_ms_sum", 0.0) or 0.0) + float(ms)
+        d["total_count"] = (d.get("total_count", 0) or 0) + 1
 
 
 def record_warm_run(result: Dict[str, Any]) -> None:
@@ -131,6 +204,7 @@ def record_warm_run(result: Dict[str, Any]) -> None:
     }
     with _lock:
         _warm_runs.append(entry)
+        _warm_runs_pending.append(entry)
 
 
 def _pct(numer: float, denom: float) -> float:
@@ -224,3 +298,176 @@ def snapshot(days: int = 7) -> Dict[str, Any]:
         "warm_runs": list(reversed(warm_runs_snapshot))[:20],
         "has_data": chats > 0,
     }
+
+
+# ── Persistence (Task #310) ────────────────────────────────────────────────────
+# Daily counters and warm-run history are flushed to Redis on a short interval
+# and on shutdown, then rehydrated from Redis on startup so historical days
+# survive deploys/restarts.
+#
+# Multi-worker safety:
+# Counters are stored as Redis hashes (one per day) and updated with atomic
+# HINCRBY / HINCRBYFLOAT against a per-worker delta of unflushed events. This
+# means N gunicorn workers can flush concurrently and their increments add
+# correctly instead of overwriting each other.
+
+def _coerce_field(field: str, raw: Any) -> Optional[float]:
+    """Decode a Redis hash value back to int or float based on field type."""
+    if raw is None:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="ignore")
+    try:
+        if field in _FLOAT_FIELDS:
+            return float(raw)
+        if field in _INT_FIELDS:
+            return int(float(raw))
+        # Unknown field: prefer int, fall back to float
+        try:
+            return int(float(raw))
+        except Exception:
+            return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def load_from_store() -> bool:
+    """Rehydrate _daily/_warm_runs from Redis. Safe to call on every worker
+    at startup; downstream flushes from each worker only push that worker's
+    own delta on top of the shared aggregate."""
+    try:
+        from deps import redis_client
+    except Exception:
+        return False
+    if not redis_client:
+        return False
+    try:
+        raw_dates = redis_client.smembers(_REDIS_DAYS_INDEX) or []
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=_MAX_DAYS)).strftime("%Y-%m-%d")
+        loaded_daily: Dict[str, Dict[str, float]] = {}
+        for raw_date in raw_dates:
+            d = raw_date.decode() if isinstance(raw_date, bytes) else raw_date
+            if not isinstance(d, str) or d < cutoff:
+                continue
+            h = redis_client.hgetall(_REDIS_DAY_KEY.format(date=d)) or {}
+            if not h:
+                continue
+            bucket = _new_bucket()
+            for field, raw_val in h.items():
+                f = field.decode() if isinstance(field, bytes) else field
+                coerced = _coerce_field(f, raw_val)
+                if coerced is not None:
+                    bucket[f] = coerced
+            loaded_daily[d] = bucket
+        raw_warm = redis_client.lrange(_REDIS_WARM_RUNS_KEY, 0, _MAX_WARM_RUNS - 1) or []
+        loaded_warm = []
+        seen_ts = set()
+        for raw in raw_warm:
+            r_str = raw.decode() if isinstance(raw, bytes) else raw
+            try:
+                entry = json.loads(r_str)
+            except Exception:
+                continue
+            if isinstance(entry, dict) and entry.get("ts") and entry["ts"] not in seen_ts:
+                seen_ts.add(entry["ts"])
+                loaded_warm.append(entry)
+        # Redis LIST is newest-first (we LPUSH); reverse so our deque ends up
+        # with newest at the right (matching local append() semantics).
+        loaded_warm.reverse()
+        with _lock:
+            # Replace in-place so concurrent counters added since startup
+            # (during the brief load window) are not stomped.
+            for d, bucket in loaded_daily.items():
+                if d not in _daily:
+                    _daily[d] = bucket
+                else:
+                    # Take the larger of each value — the in-memory bucket may
+                    # already contain a few local events recorded between the
+                    # smembers/hgetall calls and this point.
+                    existing = _daily[d]
+                    for k, v in bucket.items():
+                        existing[k] = max(existing.get(k, 0) or 0, v)
+            _trim_old_days(_daily)
+            existing_ts = {r.get("ts") for r in _warm_runs}
+            for r in loaded_warm:
+                if r.get("ts") not in existing_ts:
+                    _warm_runs.append(r)
+                    existing_ts.add(r.get("ts"))
+            day_count = len(_daily)
+            warm_count = len(_warm_runs)
+        logger.info(
+            "chat_speedup_metrics: rehydrated %d days, %d warm runs from Redis",
+            day_count, warm_count,
+        )
+        return True
+    except Exception as exc:
+        logger.warning("chat_speedup_metrics load_from_store failed: %s", exc)
+        return False
+
+
+def flush_to_store() -> bool:
+    """Apply this worker's pending delta to Redis using atomic HINCRBY /
+    HINCRBYFLOAT operations, then reset the delta. Safe to call concurrently
+    from multiple workers — deltas add instead of overwriting."""
+    try:
+        from deps import redis_client
+    except Exception:
+        return False
+    if not redis_client:
+        return False
+    # Snapshot + clear delta under the lock so further writes accumulate fresh.
+    with _lock:
+        delta_copy = {d: dict(b) for d, b in _delta.items() if b}
+        _delta.clear()
+        warm_copy = list(_warm_runs_pending)
+        _warm_runs_pending.clear()
+    if not delta_copy and not warm_copy:
+        return True
+    try:
+        for date, fields in delta_copy.items():
+            day_key = _REDIS_DAY_KEY.format(date=date)
+            for field, value in fields.items():
+                if not value:
+                    continue
+                if field in _FLOAT_FIELDS:
+                    redis_client.hincrbyfloat(day_key, field, float(value))
+                else:
+                    redis_client.hincrby(day_key, field, int(value))
+            redis_client.expire(day_key, _REDIS_TTL)
+            redis_client.sadd(_REDIS_DAYS_INDEX, date)
+        redis_client.expire(_REDIS_DAYS_INDEX, _REDIS_TTL)
+        if warm_copy:
+            for entry in warm_copy:
+                redis_client.lpush(_REDIS_WARM_RUNS_KEY, json.dumps(entry, default=str))
+            redis_client.ltrim(_REDIS_WARM_RUNS_KEY, 0, _MAX_WARM_RUNS - 1)
+            redis_client.expire(_REDIS_WARM_RUNS_KEY, _REDIS_TTL)
+        return True
+    except Exception as exc:
+        # Restore the delta so we don't lose increments on a transient failure.
+        with _lock:
+            for date, fields in delta_copy.items():
+                d = _delta.setdefault(date, {})
+                for field, value in fields.items():
+                    d[field] = (d.get(field, 0) or 0) + value
+            for entry in warm_copy:
+                _warm_runs_pending.appendleft(entry)
+        logger.debug("chat_speedup_metrics flush_to_store failed: %s", exc)
+        return False
+
+
+async def periodic_flush_loop(interval_sec: int = _FLUSH_INTERVAL_SEC) -> None:
+    """Background task: flush in-memory delta to Redis every ``interval_sec``."""
+    import asyncio
+    while True:
+        try:
+            await asyncio.sleep(max(5, int(interval_sec)))
+            await asyncio.to_thread(flush_to_store)
+        except asyncio.CancelledError:
+            # Final flush on shutdown
+            try:
+                await asyncio.to_thread(flush_to_store)
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            logger.debug("chat_speedup_metrics periodic_flush_loop tick failed: %s", exc)

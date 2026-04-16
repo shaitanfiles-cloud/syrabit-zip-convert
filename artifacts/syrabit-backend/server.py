@@ -575,10 +575,35 @@ async def lifespan(app):
     # and burn N× the LLM budget every 6h.
     if _is_leader:
         asyncio.create_task(_cache_warm_loop())
+
+    # Task #310 — rehydrate chat speed-up metrics from Redis and start the
+    # periodic flush so the per-day counters and warm-run history survive
+    # API restarts/redeploys. Runs on EVERY worker (not leader-gated) so any
+    # request that lands on any worker sees the historical aggregate; the
+    # underlying Redis ops are atomic HINCRBY/HINCRBYFLOAT against per-day
+    # hashes, so concurrent flushes from multiple workers add correctly.
+    import chat_speedup_metrics as _speedup
+    try:
+        await asyncio.to_thread(_speedup.load_from_store)
+    except Exception as _sp_load_err:
+        logger.warning(f"chat_speedup_metrics startup load failed: {_sp_load_err}")
+    _speedup_flush_task = asyncio.create_task(_speedup.periodic_flush_loop())
+
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")
     yield
+    # Task #310 — final flush of speed-up metrics before shutting down so the
+    # most recent counters survive the restart.
+    try:
+        _speedup_flush_task.cancel()
+        try:
+            await _speedup_flush_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        await asyncio.to_thread(_speedup.flush_to_store)
+    except Exception as _sp_shutdown_err:
+        logger.warning(f"chat_speedup_metrics shutdown flush failed: {_sp_shutdown_err}")
     if _deps_mod._rate_cleanup_task:
         _deps_mod._rate_cleanup_task.cancel()
     if sarvam_client:
