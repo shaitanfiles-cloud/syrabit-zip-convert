@@ -449,3 +449,106 @@ async def purge_all_content_cache() -> bool:
         zone_ok = await _purge_everything()
     worker_ok = await purge_worker_cache(purge_all=True)
     return zone_ok or worker_ok
+
+
+# ---------------------------------------------------------------------------
+# SEO Phase A — content-time cache purge fan-out.
+#
+# `purge_content_prefixes` (above) targets API JSON endpoints used by the
+# SPA shell. The crawler-facing assets are different: the public HTML page,
+# its parent subject hub, the library landing, and the two sitemap files
+# served at the public origin (`syrabit.ai`). When a brand-new chapter
+# lands, all of these still serve cached responses that omit the new URL,
+# which delays Googlebot from discovering it. `purge_for_content_change`
+# fans the purge out across that whole set.
+# ---------------------------------------------------------------------------
+
+_PUBLIC_ORIGIN = os.getenv("PUBLIC_ORIGIN", "https://syrabit.ai").strip().rstrip("/")
+_LIBRARY_LANDING_PATH = "/library"
+_SITEMAP_PATHS = ("/sitemap-chapters.xml", "/sitemap-index.xml")
+
+
+def _normalize_to_full_url(url_or_path: str) -> Optional[str]:
+    if not url_or_path:
+        return None
+    if url_or_path.startswith("http://") or url_or_path.startswith("https://"):
+        return url_or_path
+    if not url_or_path.startswith("/"):
+        url_or_path = "/" + url_or_path
+    return f"{_PUBLIC_ORIGIN}{url_or_path}"
+
+
+def urls_to_purge_for_content_change(
+    url: str,
+    page_type: str = "notes",
+    parent_subject_url: Optional[str] = None,
+) -> List[str]:
+    """Return the deduped list of public URLs that should be purged when
+    a content URL changes (the URL itself, parent subject hub, library
+    landing, both sitemap files). Pure function — no side effects.
+    Exported for testing and so callers can preview the purge set.
+    """
+    out: List[str] = []
+    seen: set = set()
+
+    def _add(candidate: Optional[str]):
+        full = _normalize_to_full_url(candidate) if candidate else None
+        if full and full not in seen:
+            seen.add(full)
+            out.append(full)
+
+    _add(url)
+    _add(parent_subject_url)
+    _add(_LIBRARY_LANDING_PATH)
+    for sp in _SITEMAP_PATHS:
+        _add(sp)
+    return out
+
+
+async def purge_for_content_change(
+    url: str,
+    page_type: str = "notes",
+    parent_subject_url: Optional[str] = None,
+) -> bool:
+    """Purge the page URL plus parent subject hub, library landing, and
+    sitemap files at the public origin. Best-effort: returns True if at
+    least one of the (zone, worker) layers acknowledged the purge.
+
+    Failures are logged but never raised — this is called from a
+    fire-and-forget fan-out task.
+    """
+    targets = urls_to_purge_for_content_change(url, page_type, parent_subject_url)
+    if not targets:
+        return False
+
+    zone_ok = False
+    if is_purge_configured():
+        try:
+            zone_ok = await _purge_by_files(targets)
+        except Exception as e:
+            logger.warning(f"purge_for_content_change zone purge error: {e}")
+
+    # Also purge the path-prefix list on the worker cache so the
+    # bot-render KV is invalidated for these public paths.
+    worker_ok = False
+    try:
+        prefixes = []
+        for t in targets:
+            try:
+                from urllib.parse import urlparse
+                p = urlparse(t).path
+                if p:
+                    prefixes.append(p)
+            except Exception:
+                continue
+        if prefixes:
+            worker_ok = await purge_worker_cache(prefixes=prefixes)
+    except Exception as e:
+        logger.warning(f"purge_for_content_change worker purge error: {e}")
+
+    if zone_ok or worker_ok:
+        logger.info(
+            "purge_for_content_change ok: url=%s targets=%d zone=%s worker=%s",
+            url, len(targets), zone_ok, worker_ok,
+        )
+    return zone_ok or worker_ok

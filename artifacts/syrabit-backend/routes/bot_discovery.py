@@ -633,6 +633,115 @@ def _page_doc_to_url(page_doc: dict) -> Optional[str]:
     return f"{BASE_URL}{path}"
 
 
+async def _schedule_indexnow_for_url(url: str, source: str = "fanout") -> bool:
+    """Generic IndexNow trigger for a single absolute URL or relative path.
+
+    Used by the SEO Phase A content-time fan-out (and intended as the
+    canonical helper for Phase C / Phase E too) so the AI generator does
+    not have to reconstruct a page document just to call IndexNow. Returns
+    True when the URL is queued + a flush was attempted; False when no URL
+    was provided.
+
+    Failures inside the batcher are swallowed by the batcher itself (it
+    logs and retries through its endpoint-retry loop), so this helper
+    deliberately returns True on a successful enqueue regardless of
+    downstream HTTP status.
+    """
+    if not url:
+        return False
+    try:
+        if url.startswith("http://") or url.startswith("https://"):
+            await indexnow_batcher.queue([url])
+        else:
+            # Defensively normalize: queue_raw_paths concatenates BASE_URL + path
+            # without enforcing a leading slash, so e.g. "ahsec/..." would become
+            # "https://syrabit.aiahsec/..." (a malformed URL silently dropped by
+            # IndexNow). Always send a leading-slash path here.
+            normalized = url if url.startswith("/") else f"/{url}"
+            await indexnow_batcher.queue_raw_paths([normalized])
+        await indexnow_batcher.flush(source=source)
+        return True
+    except Exception as e:
+        logger.warning(f"_schedule_indexnow_for_url failed url={url} source={source}: {e}")
+        return False
+
+
+# ---------------------------------------------------------------------------
+# SEO Phase A — synthetic Googlebot prewarm.
+#
+# After a new page is generated we fire one or two GETs through the public
+# origin with the canonical Googlebot user-agent so the edge BOT_HTML_CACHE
+# (KV) is populated before the real Googlebot arrives. Without this, the
+# first verified-bot crawl always misses the KV and pays the cold-render
+# tax — which is why the 7-day Googlebot cache-hit ratio sits at ~33.6%.
+# ---------------------------------------------------------------------------
+
+_PREWARM_USER_AGENT = (
+    "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html) "
+    "syrabit-prewarm/1.0"
+)
+_PREWARM_RPS = 1.5
+_PREWARM_TIMEOUT = 8.0
+_prewarm_lock = asyncio.Lock()
+_prewarm_last_at: float = 0.0
+
+
+async def prewarm_bot_cache(urls: list[str], rps: float = _PREWARM_RPS) -> bool:
+    """Fire one GET per URL through the public origin with the Googlebot
+    user-agent so the edge BOT_HTML_CACHE is populated. Rate-limited at
+    `rps` requests-per-second across all callers (not per-call) to avoid
+    self-DoS during bulk regeneration runs.
+
+    Best-effort: returns True if at least one URL responded with 2xx;
+    False otherwise. Never raises.
+    """
+    global _prewarm_last_at
+    if not urls:
+        return False
+    interval = 1.0 / max(rps, 0.1)
+    import httpx
+    success = 0
+    timeout = httpx.Timeout(_PREWARM_TIMEOUT)
+    headers = {
+        "User-Agent": _PREWARM_USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-IN,en;q=0.9,as;q=0.8",
+        "X-Syrabit-Prewarm": "1",
+    }
+    deduped = list(dict.fromkeys(u for u in urls if u))
+    if not deduped:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            for url in deduped:
+                async with _prewarm_lock:
+                    now = time.time()
+                    wait = interval - (now - _prewarm_last_at)
+                    if wait > 0:
+                        await asyncio.sleep(wait)
+                    _prewarm_last_at = time.time()
+                full_url = url if (url.startswith("http://") or url.startswith("https://")) else f"{BASE_URL}{url}"
+                try:
+                    resp = await client.get(full_url, headers=headers)
+                    if 200 <= resp.status_code < 300:
+                        success += 1
+                        logger.info(
+                            "prewarm_bot_cache hit: url=%s status=%d size=%d",
+                            full_url, resp.status_code, len(resp.content),
+                        )
+                    else:
+                        logger.info(
+                            "prewarm_bot_cache non-2xx: url=%s status=%d",
+                            full_url, resp.status_code,
+                        )
+                except Exception as e:
+                    logger.info(f"prewarm_bot_cache request failed url={full_url}: {e}")
+    except Exception as e:
+        logger.warning(f"prewarm_bot_cache outer error: {e}")
+        return False
+    return success > 0
+
+
 async def notify_indexnow_for_page(page_doc: dict):
     url = _page_doc_to_url(page_doc)
     if not url:
@@ -2277,6 +2386,28 @@ async def _seo_health_alert_loop():
             logger.debug(f"SEO health alert loop iteration error: {exc}")
 
         await asyncio.sleep(3600)
+
+
+@router.get("/admin/seo/fanout-recent")
+async def admin_seo_fanout_recent(
+    limit: int = Query(50, ge=1, le=200),
+    admin: dict = Depends(get_admin_user),
+):
+    """Return the most recent SEO Phase A content-time fan-out events for
+    debugging — what URL was generated, when, and whether IndexNow / cache
+    purge / bot prewarm each fired or were skipped. Newest last.
+
+    Also reports whether the killswitch (`SEO_FANOUT_ENABLED`) is on so the
+    admin UI can show "fan-out disabled" vs "no recent activity".
+    """
+    try:
+        from seo_fanout import recent_fanout_events, is_enabled
+    except Exception as e:
+        return {"enabled": False, "events": [], "error": str(e)}
+    return {
+        "enabled": is_enabled(),
+        "events": recent_fanout_events(limit=limit),
+    }
 
 
 @router.get("/admin/seo/health-history")

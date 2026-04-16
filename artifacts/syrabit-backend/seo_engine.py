@@ -1422,11 +1422,23 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         upsert=True,
     )
     if page_status == "published":
+        # SEO Phase A — content-time fan-out: IndexNow + edge cache purge
+        # + synthetic Googlebot prewarm. Runs as a fire-and-forget task so
+        # the generator returns immediately. Falls back gracefully when
+        # SEO_FANOUT_ENABLED is off or there's no event loop.
         try:
-            from routes.bot_discovery import indexnow_batcher
-            await indexnow_batcher.queue_page(page)
-        except Exception:
-            pass
+            from seo_fanout import fanout_for_page
+            fanout_for_page(page, source="seo_generate_single_page")
+        except Exception as e:
+            logger.debug(f"seo_fanout dispatch failed: {e}")
+            # Belt-and-braces: keep the legacy queue call as a fallback so
+            # the URL is still picked up by the next batched flush even if
+            # the fan-out module misbehaves.
+            try:
+                from routes.bot_discovery import indexnow_batcher
+                await indexnow_batcher.queue_page(page)
+            except Exception:
+                pass
     return page
 
 
