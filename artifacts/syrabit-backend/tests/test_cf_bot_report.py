@@ -195,8 +195,56 @@ def test_markdown_renders_summary_and_per_bot_table():
     assert "Googlebot" in md
     assert "## Per-crawler totals" in md
     assert "## HTTP status breakdown per crawler" in md
-    # No WoW section when wow=None
+    # No WoW section when wow=None (caller explicitly opted out)
     assert "Week-over-week changes" not in md
+
+
+def test_generate_per_ua_report_always_includes_wow_block_first_run():
+    """End-to-end: even on first-ever run (prior=None), the rendered
+    markdown should explicitly state there's no baseline rather than
+    silently omit the WoW section."""
+    fake_buckets = [_bucket("Googlebot/2.1", 50, 200)]
+
+    async def _run():
+        with patch("cf_bot_report._fetch_per_ua_buckets",
+                   new=AsyncMock(return_value=fake_buckets)), \
+             patch("cf_bot_report.is_configured", return_value=True), \
+             patch("cf_bot_report._cfg", return_value={"zone_id": "zone123", "api_token": "t"}):
+            return await cf_bot_report.generate_per_ua_report(
+                prior=None,
+                now=datetime(2026, 4, 13, 4, 0, tzinfo=timezone.utc),
+            )
+
+    result = asyncio.run(_run())
+    assert result is not None
+    assert result["wow"] is not None
+    assert result["wow"]["had_baseline"] is False
+    assert "## Week-over-week changes" in result["markdown"]
+    assert "No prior-week baseline" in result["markdown"]
+
+
+def test_generate_per_ua_report_renders_wow_when_baseline_exists():
+    """End-to-end: with a prior-week baseline, the WoW section should
+    surface a real signal (here: a >50% pace shift) in the markdown."""
+    fake_buckets = [_bucket("Googlebot/2.1", 300, 200)]
+    prior = _agg({"Googlebot": {"requests": 100}})
+
+    async def _run():
+        with patch("cf_bot_report._fetch_per_ua_buckets",
+                   new=AsyncMock(return_value=fake_buckets)), \
+             patch("cf_bot_report.is_configured", return_value=True), \
+             patch("cf_bot_report._cfg", return_value={"zone_id": "zone123", "api_token": "t"}):
+            return await cf_bot_report.generate_per_ua_report(
+                prior=prior,
+                now=datetime(2026, 4, 13, 4, 0, tzinfo=timezone.utc),
+            )
+
+    result = asyncio.run(_run())
+    assert result is not None
+    assert result["wow"]["had_baseline"] is True
+    assert any(s["name"] == "Googlebot" for s in result["wow"]["pace_shifts"])
+    assert "## Week-over-week changes" in result["markdown"]
+    assert "Pace shifts" in result["markdown"]
 
 
 def test_markdown_includes_wow_section_when_provided():

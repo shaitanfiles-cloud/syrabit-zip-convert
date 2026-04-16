@@ -411,7 +411,10 @@ async def generate_per_ua_report(*, days: int = 7,
     if buckets is None:
         return None
     data = aggregate_per_ua(buckets)
-    wow = compose_wow_diff(data, prior) if prior is not None else None
+    # Always compute the WoW block — when `prior` is None the diff carries
+    # `had_baseline=False` so the markdown explicitly notes "first run".
+    # This avoids the silent "missing section" surprise on first-ever runs.
+    wow = compose_wow_diff(data, prior)
     md = format_report_markdown(
         data, since_iso=since_iso, until_iso=until_iso,
         zone_id=zone_id, generated_at=end, wow=wow,
