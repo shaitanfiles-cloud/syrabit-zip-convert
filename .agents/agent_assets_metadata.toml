@@ -60,3 +60,9 @@ id = "OaDkMsD25K-hqmK8gc93z"
 uri = "file://.local/reports/cloudflare-search-bots-2026-04-16.md"
 type = "text"
 title = "Search Engine Crawler Traffic — syrabit.ai (Apr 9–16, 2026)"
+
+[[outputs]]
+id = "NGoa1qAjmIbi4r7Nf6GoG"
+uri = "file://.local/reports/cloudflare-search-bots-6h-vs-7d-2026-04-16.md"
+type = "text"
+title = "Search Bots: Last 6h vs Last 7d (syrabit.ai)"
