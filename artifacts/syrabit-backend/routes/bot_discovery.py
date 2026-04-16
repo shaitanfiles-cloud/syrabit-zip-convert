@@ -2976,6 +2976,17 @@ async def _cf_bot_report_catchup_if_missed(db, now_utc: datetime) -> dict:
         )
     except Exception as exc:
         logger.warning(f"[CF bot report] catch-up store failed: {exc}")
+        # Roll the lock marker back so a later poll (or next boot) can
+        # retry the catch-up after a transient Mongo write blip — same
+        # rollback policy used in `_try_run_cf_bot_report_once`.
+        try:
+            await db.job_locks.update_one(
+                {"_id": _CF_BOT_REPORT_LOCK_ID,
+                 _CF_BOT_REPORT_API_CONFIG_KEY: cur_iso_week},
+                {"$set": {_CF_BOT_REPORT_API_CONFIG_KEY: ""}},
+            )
+        except Exception:
+            pass
         return {"ran": False, "reason": "store_failed"}
     _write_cf_report_to_disk(result["markdown"], result["data"], now_utc)
     logger.info(f"[CF bot report] catch-up ran for missed week {cur_iso_week}")
