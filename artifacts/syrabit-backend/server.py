@@ -436,6 +436,44 @@ async def lifespan(app):
             )
 
             try:
+                from datetime import datetime as _dt2, timezone as _tz2
+                from pymongo import UpdateOne as _SpoofUpdateOne
+                _sp_cursor = db.bot_spoof_attempts.find(
+                    {"timestamp": {"$type": "string"}},
+                    {"_id": 1, "timestamp": 1},
+                )
+                _sp_batch: list = []
+                _sp_total = 0
+                _SP_BATCH_SIZE = 500
+                _sp_epoch = _dt2(2000, 1, 1, tzinfo=_tz2.utc)
+                async for doc in _sp_cursor:
+                    raw = doc.get("timestamp", "")
+                    try:
+                        cleaned = raw.replace("Z", "+00:00") if raw else ""
+                        parsed = _dt2.fromisoformat(cleaned) if cleaned else _sp_epoch
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=_tz2.utc)
+                    except (ValueError, TypeError):
+                        parsed = _sp_epoch
+                    _sp_batch.append(
+                        _SpoofUpdateOne({"_id": doc["_id"]}, {"$set": {"timestamp": parsed}})
+                    )
+                    if len(_sp_batch) >= _SP_BATCH_SIZE:
+                        await db.bot_spoof_attempts.bulk_write(_sp_batch)
+                        _sp_total += len(_sp_batch)
+                        _sp_batch = []
+                if _sp_batch:
+                    await db.bot_spoof_attempts.bulk_write(_sp_batch)
+                    _sp_total += len(_sp_batch)
+                if _sp_total:
+                    logger.info(f"Migrated timestamp string->datetime for {_sp_total} bot_spoof_attempts docs")
+                _sp_remaining = await db.bot_spoof_attempts.count_documents({"timestamp": {"$type": "string"}})
+                if _sp_remaining:
+                    logger.warning(f"bot_spoof_attempts: {_sp_remaining} docs still have string timestamp after migration")
+            except Exception as e:
+                logger.warning(f"bot_spoof_attempts timestamp migration skipped: {e}")
+
+            try:
                 await db.chapters.create_index(
                     [("title", "text"), ("content", "text")],
                     name="chapters_content_text",
