@@ -60,10 +60,17 @@ export default function PageMeta({
       <meta httpEquiv="content-language" content="en-IN" />
       <link rel="alternate" hrefLang="en-IN" href={url} />
 
-      {jsonLd && (
-        <script type="application/ld+json">
-          {JSON.stringify(jsonLd)}
-        </script>
+      {jsonLd && (Array.isArray(jsonLd)
+        ? jsonLd.map((ld, i) => (
+            <script key={i} type="application/ld+json">
+              {JSON.stringify(ld)}
+            </script>
+          ))
+        : (
+          <script type="application/ld+json">
+            {JSON.stringify(jsonLd)}
+          </script>
+        )
       )}
     </Helmet>
   );

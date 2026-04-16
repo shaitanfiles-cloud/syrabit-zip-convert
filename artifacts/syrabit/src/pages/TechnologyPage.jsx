@@ -360,6 +360,53 @@ function getJsonLd(lang) {
   };
 }
 
+const faqJsonLd = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'How much does it cost to build a platform like Syrabit.ai?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai was built with ₹7.5 lakh (approx. $9,000) in seed funding under the Assam Startup ecosystem. The platform integrates 6 LLM providers, 5 database systems, 2 payment gateways, and a Cloudflare edge network. A comparable build from scratch — covering AI pipeline, programmatic SEO engine (15,000+ pages), admin tooling, and bilingual support — would typically cost ₹25–50 lakh ($30,000–$60,000) if outsourced to a development agency, or 12–18 months of solo full-stack development.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What technology stack does Syrabit.ai use?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai uses React 18 with Vite and Tailwind CSS on the frontend, Python/FastAPI with Gunicorn on the backend, and a multi-LLM RAG pipeline across Groq, Cerebras, OpenRouter, Fireworks, Sarvam AI, and Google Gemini. Data is stored across MongoDB Atlas, PostgreSQL, Redis, Cloudflare D1, and Cloudflare Vectorize. The infrastructure runs on Cloudflare Workers (edge proxy), Cloudflare Pages (frontend CDN), and Railway (backend containers), managed as a pnpm monorepo with Docker deployment.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'How long did it take to build Syrabit.ai?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai was built by a solo full-stack developer over 12+ months of continuous development. The work spans frontend engineering (80+ React components), backend API design (120+ endpoints), AI/ML pipeline architecture with 6 LLM providers, infrastructure and DevOps, a programmatic SEO engine generating 15,000+ pages, payment integration with Razorpay and Stripe, and a comprehensive admin dashboard.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'How many pages does Syrabit.ai have and how are they generated?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai has over 15,000 auto-generated SEO pages created by a custom programmatic SEO engine (Generative Engine Optimization). The engine produces chapter-level study notes, MCQ pages, important question pages, PYQ HTML replicas (converted from PDF via Gemini Vision OCR), definition and example pages with FAQ schema, and dynamic sitemaps. Each page includes Schema.org structured data, OpenGraph tags, and geo-targeting meta tags for Assam (IN-AS) with board-specific keyword variants for AHSEC, SEBA, and Degree exams.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What makes Syrabit.ai different from other EdTech platforms?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Syrabit.ai is purpose-built for students in Assam, covering AHSEC (Class 11–12), SEBA (Class 9–10), and Degree programmes across 55+ subjects. It features bilingual AI tutoring in English and Assamese using a native Assamese LLM (Sarvam AI), a multi-provider RAG pipeline achieving sub-1-second response times through hedged LLM requests, source-cited answers grounded in 2,500+ indexed chapters, and a credit-based pricing model starting from free.',
+      },
+    },
+  ],
+};
+
 function LangToggle({ contentLang, switchLang }) {
   return (
     <div className="flex items-center gap-1 shrink-0 rounded-xl p-0.5" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
@@ -401,7 +448,7 @@ export default function TechnologyPage() {
         description={t.pageDescription}
         url="https://syrabit.ai/technology"
         keywords="Syrabit technology stack, AI education platform architecture, React FastAPI MongoDB, RAG pipeline, programmatic SEO, Cloudflare Workers, EdTech India, AHSEC SEBA Degree, Syrabit প্ৰযুক্তি, অসমীয়া AI শিক্ষা মঞ্চ"
-        jsonLd={jsonLd}
+        jsonLd={[jsonLd, faqJsonLd]}
       />
       <div className="min-h-screen pt-8 pb-24 px-4">
         <div className="max-w-4xl mx-auto">
