@@ -13,7 +13,7 @@ import {
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
-import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, API_BASE } from '@/utils/api';
+import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, API_BASE } from '@/utils/api';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
@@ -274,6 +274,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [alertHistory, setAlertHistory] = useState(null);
   const [seoHealth, setSeoHealth] = useState(null);
   const [seoHealthRefreshing, setSeoHealthRefreshing] = useState(false);
+  const [seoLive, setSeoLive] = useState(null);
+  const [seoLiveLoading, setSeoLiveLoading] = useState(false);
+  const [seoLiveError, setSeoLiveError] = useState(null);
   const [alertFilter, setAlertFilter] = useState('all');
   const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
   const [alertSettings, setAlertSettings] = useState(null);
@@ -499,6 +502,9 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       if (indexNowHistRes.status === 'fulfilled') setIndexNowHistory(indexNowHistRes.value.data); else setIndexNowHistory(null);
       if (alertHistRes.status === 'fulfilled') setAlertHistory(alertHistRes.value.data); else { failed.push('alerts'); setAlertHistory(null); }
       if (seoHealthRes.status === 'fulfilled') setSeoHealth(seoHealthRes.value.data); else { failed.push('seo-health'); setSeoHealth(null); }
+      seoHealthLive()
+        .then((r) => { setSeoLive(r.data); setSeoLiveError(null); })
+        .catch((e) => { setSeoLive(null); setSeoLiveError(e?.message || 'Failed to load SEO health'); });
       setFailedSections(failed);
       setLastRefresh(new Date());
     } catch (e) {
@@ -777,8 +783,7 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           </div>
         </div>
         );
-      })()
-      )}
+      })()}
 
       <GlassCard className="p-5">
         <div className="flex items-center gap-2 mb-4 flex-wrap">
@@ -1099,6 +1104,188 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           )}
         </GlassCard>
       )}
+
+      <GlassCard className="p-5" data-testid="seo-sitemap-health-card">
+        <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <FileCheck size={16} className="text-cyan-500" />
+          <h3 className="text-gray-700 font-semibold">SEO Sitemap Health</h3>
+          {seoLive?.status && (
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wider ${
+              seoLive.status === 'ok' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+              seoLive.status === 'degraded' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+              seoLive.status === 'critical' ? 'bg-red-50 text-red-700 border border-red-200' :
+              'bg-gray-50 text-gray-500 border border-gray-200'
+            }`} data-testid="seo-live-status">
+              {seoLive.status}
+            </span>
+          )}
+          {seoLive?.checked_at && (
+            <span className="text-[10px] text-gray-400">
+              checked {formatTimeAgo(seoLive.checked_at)}
+            </span>
+          )}
+          <button
+            onClick={async () => {
+              setSeoLiveLoading(true);
+              setSeoLiveError(null);
+              try {
+                const r = await seoHealthLive();
+                setSeoLive(r.data);
+              } catch (e) {
+                setSeoLiveError(e?.message || 'Failed');
+              } finally {
+                setSeoLiveLoading(false);
+              }
+            }}
+            disabled={seoLiveLoading}
+            className="ml-auto text-[11px] px-3 py-1 rounded-md border border-gray-200 text-gray-500 hover:text-gray-700 hover:bg-gray-50 disabled:opacity-50 inline-flex items-center gap-1"
+            data-testid="seo-live-refresh"
+          >
+            <RefreshCw size={11} className={seoLiveLoading ? 'animate-spin' : ''} />
+            {seoLiveLoading ? 'Probing…' : 'Probe now'}
+          </button>
+        </div>
+
+        {seoLiveError && !seoLive && (
+          <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-md px-3 py-2">
+            {seoLiveError}
+          </div>
+        )}
+
+        {!seoLive && !seoLiveError && (
+          <div className="flex items-center gap-2 text-xs text-gray-400 py-3">
+            <Loader2 size={14} className="animate-spin" /> Loading sitemap probes…
+          </div>
+        )}
+
+        {seoLive && (
+          <>
+            {seoLive.summary && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+                <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400">Sitemaps Valid</p>
+                  <p className="text-sm font-bold font-mono text-gray-800">
+                    {seoLive.summary.valid_sitemaps ?? 0}/{seoLive.summary.total_sitemaps ?? 0}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400">URL Checks OK</p>
+                  <p className="text-sm font-bold font-mono text-gray-800">
+                    {seoLive.summary.ok_url_checks ?? 0}/{seoLive.summary.total_url_checks ?? 0}
+                  </p>
+                </div>
+                <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400">Success Rate</p>
+                  <p className="text-sm font-bold font-mono text-gray-800">
+                    {seoLive.summary.url_check_success_rate ?? 0}%
+                  </p>
+                </div>
+                <div className="rounded-lg bg-gray-50 border border-gray-100 px-3 py-2">
+                  <p className="text-[10px] uppercase tracking-wider text-gray-400">Published Pages</p>
+                  <p className="text-sm font-bold font-mono text-gray-800">
+                    {(seoLive.content_stats?.published_pages ?? 0).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              {(seoLive.sitemaps || []).map((sm) => {
+                const checks = sm.sample_checks || [];
+                const okCount = checks.filter((c) => c.ok).length;
+                const totalCount = checks.length;
+                const allOk = sm.valid_xml && (totalCount === 0 || okCount === totalCount);
+                const partial = sm.valid_xml && totalCount > 0 && okCount > 0 && okCount < totalCount;
+                const broken = !sm.valid_xml || (totalCount > 0 && okCount === 0);
+                const dotCls = allOk ? 'bg-emerald-500' : partial ? 'bg-amber-500' : broken ? 'bg-red-500' : 'bg-gray-300';
+                return (
+                  <div
+                    key={sm.name}
+                    className="flex items-center gap-3 px-3 py-2 rounded-lg border border-gray-100 bg-white hover:bg-gray-50"
+                    data-testid={`seo-sitemap-${sm.name}`}
+                  >
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotCls}`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-mono text-gray-700 truncate">{sm.name}</p>
+                      {sm.error && (
+                        <p className="text-[10px] text-red-600 truncate" title={sm.error}>
+                          {sm.error}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-shrink-0">
+                      <span title="URLs in sitemap" className="font-mono">
+                        {(sm.url_count ?? 0).toLocaleString()} urls
+                      </span>
+                      <span
+                        className={`font-mono px-2 py-0.5 rounded ${
+                          allOk ? 'bg-emerald-50 text-emerald-700' :
+                          partial ? 'bg-amber-50 text-amber-700' :
+                          broken ? 'bg-red-50 text-red-700' :
+                          'bg-gray-50 text-gray-500'
+                        }`}
+                        title="Sample HEAD checks against random URLs"
+                      >
+                        {okCount}/{totalCount} ok
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+              {(!seoLive.sitemaps || seoLive.sitemaps.length === 0) && (
+                <p className="text-xs text-gray-400">No sitemaps reported.</p>
+              )}
+            </div>
+
+            <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-3 flex-wrap">
+              <Database size={14} className="text-gray-400" />
+              <span className="text-xs font-semibold text-gray-600">D1 Sync</span>
+              {(() => {
+                const d1 = seoLive.d1_sync || {};
+                const d1Status = (d1.status || 'unknown').toLowerCase();
+                const cls = d1Status === 'ok' || d1Status === 'fresh'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : d1Status === 'stale' || d1Status === 'degraded'
+                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : d1Status === 'error' || d1Status === 'critical'
+                  ? 'bg-red-50 text-red-700 border-red-200'
+                  : 'bg-gray-50 text-gray-500 border-gray-200';
+                const lastSync = d1.last_sync || d1.last_synced_at || d1.updated_at || d1.synced_at;
+                return (
+                  <>
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full border font-semibold uppercase tracking-wider ${cls}`} data-testid="d1-sync-status">
+                      {d1Status}
+                    </span>
+                    {lastSync && (
+                      <span className="text-[11px] text-gray-500">
+                        last sync {formatTimeAgo(lastSync)}
+                        <span className="text-gray-400"> · {new Date(lastSync).toLocaleString()}</span>
+                      </span>
+                    )}
+                    {d1.row_count != null && (
+                      <span className="text-[11px] text-gray-500 font-mono">
+                        rows: {Number(d1.row_count).toLocaleString()}
+                      </span>
+                    )}
+                    {d1.error && (
+                      <span className="text-[11px] text-red-600 truncate" title={d1.error}>
+                        {d1.error}
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
+              {seoLive.content_stats?.last_content_update && (
+                <span className="ml-auto text-[11px] text-gray-500">
+                  <Clock size={11} className="inline mr-1 -mt-0.5" />
+                  content updated {formatTimeAgo(seoLive.content_stats.last_content_update)}
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </GlassCard>
+      
 
       {alertHistory && (
         <GlassCard className="p-5">

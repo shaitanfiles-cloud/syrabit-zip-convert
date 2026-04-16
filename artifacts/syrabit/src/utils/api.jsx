@@ -146,6 +146,9 @@ export const adminSeoHealthSnapshotNow = (token) =>
     withCredentials: true,
   });
 
+export const seoHealthLive = () =>
+  axios.get(`${API_BASE}/seo/health`, { withCredentials: true });
+
 export const adminGetUsers = (token, params = {}) =>
   axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true, params });
 
