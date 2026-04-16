@@ -3,12 +3,13 @@ import {
   Shield, Bot, AlertTriangle, RefreshCw, Loader2,
   Hash, Globe, Clock, TrendingUp, Eye, Ban, Unlock,
   Settings, Bell, Mail, Link2, Save, Check, RotateCcw,
+  Calendar, Filter, CheckCheck, History,
 } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 function GlassCard({ children, className = '' }) {
@@ -606,6 +607,280 @@ function TtlMonitorPanel({ adminToken }) {
   );
 }
 
+const ALERT_TYPE_OPTIONS = [
+  { label: 'All Types', value: '' },
+  { label: 'Spoofed Bot Surge', value: 'spoofed_bot_surge' },
+  { label: 'High Error Rate', value: 'high_error_rate' },
+  { label: 'High Latency', value: 'high_latency' },
+  { label: 'High Fallback Rate', value: 'high_fallback_rate' },
+];
+
+const DATE_RANGE_OPTIONS = [
+  { label: 'All Time', value: '' },
+  { label: 'Last 24 hours', value: '1' },
+  { label: 'Last 7 days', value: '7' },
+  { label: 'Last 30 days', value: '30' },
+  { label: 'Last 90 days', value: '90' },
+];
+
+function AlertHistoryPanel({ adminToken }) {
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [expanded, setExpanded] = useState(false);
+  const [typeFilter, setTypeFilter] = useState('');
+  const [dateRange, setDateRange] = useState('');
+  const [ackFilter, setAckFilter] = useState(null);
+  const [ackingId, setAckingId] = useState(null);
+  const [ackingAll, setAckingAll] = useState(false);
+  const [ackError, setAckError] = useState(null);
+  const [unacknowledgedCount, setUnacknowledgedCount] = useState(0);
+
+  const fetchAlerts = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = { limit: 100 };
+      if (typeFilter) params.type = typeFilter;
+      if (ackFilter !== null) params.acknowledged = ackFilter;
+      if (dateRange) {
+        const now = new Date();
+        const from = new Date(now.getTime() - Number(dateRange) * 86400000);
+        params.date_from = from.toISOString();
+      }
+      const res = await adminGetAlerts(adminToken, params);
+      const fetched = res.data?.alerts || [];
+      setAlerts(fetched);
+      setUnacknowledgedCount(fetched.filter(a => !a.acknowledged).length);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to load alert history');
+    } finally {
+      setLoading(false);
+    }
+  }, [adminToken, typeFilter, dateRange, ackFilter]);
+
+  useEffect(() => {
+    if (expanded) fetchAlerts();
+  }, [expanded, fetchAlerts]);
+
+  const handleAcknowledge = async (alertId) => {
+    setAckingId(alertId);
+    setAckError(null);
+    try {
+      await adminAcknowledgeAlert(adminToken, alertId);
+      setAlerts(prev => prev.map(a => a._id === alertId ? { ...a, acknowledged: true, acknowledged_at: new Date().toISOString() } : a));
+      setUnacknowledgedCount(prev => Math.max(0, prev - 1));
+    } catch (err) {
+      setAckError(err.response?.data?.detail || 'Failed to acknowledge alert');
+    } finally {
+      setAckingId(null);
+    }
+  };
+
+  const handleAcknowledgeAll = async () => {
+    setAckingAll(true);
+    setAckError(null);
+    try {
+      await adminAcknowledgeAllAlerts(adminToken);
+      setAlerts(prev => prev.map(a => ({ ...a, acknowledged: true, acknowledged_at: a.acknowledged_at || new Date().toISOString() })));
+      setUnacknowledgedCount(0);
+    } catch (err) {
+      setAckError(err.response?.data?.detail || 'Failed to acknowledge alerts');
+    } finally {
+      setAckingAll(false);
+    }
+  };
+
+  const alertTypeColor = (type) => {
+    switch (type) {
+      case 'spoofed_bot_surge': return { bg: 'bg-red-50', text: 'text-red-700', border: 'border-red-100' };
+      case 'high_error_rate': return { bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-100' };
+      case 'high_latency': return { bg: 'bg-yellow-50', text: 'text-yellow-700', border: 'border-yellow-100' };
+      case 'high_fallback_rate': return { bg: 'bg-purple-50', text: 'text-purple-700', border: 'border-purple-100' };
+      default: return { bg: 'bg-gray-50', text: 'text-gray-700', border: 'border-gray-100' };
+    }
+  };
+
+  const formatType = (type) => {
+    return (type || 'unknown').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+  };
+
+  return (
+    <GlassCard>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full p-5 flex items-center justify-between hover:bg-gray-50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-red-50">
+            <History size={16} className="text-red-500" />
+          </div>
+          <div className="text-left">
+            <h3 className="text-sm font-semibold text-gray-900">Alert History</h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              {loading && expanded ? 'Loading...' : `${alerts.length} alerts${unacknowledgedCount > 0 ? ` · ${unacknowledgedCount} unacknowledged` : ''}`}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {unacknowledgedCount > 0 && !expanded && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-700">
+              {unacknowledgedCount} new
+            </span>
+          )}
+          <AlertTriangle size={14} className={`text-gray-400 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-100">
+          <div className="p-4 flex flex-wrap items-center gap-2 border-b border-gray-50">
+            <div className="flex items-center gap-1.5">
+              <Filter size={12} className="text-gray-400" />
+              <select
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value)}
+                className="text-[11px] border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-violet-200"
+              >
+                {ALERT_TYPE_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Calendar size={12} className="text-gray-400" />
+              <select
+                value={dateRange}
+                onChange={(e) => setDateRange(e.target.value)}
+                className="text-[11px] border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-violet-200"
+              >
+                {DATE_RANGE_OPTIONS.map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <select
+                value={ackFilter === null ? '' : ackFilter ? 'true' : 'false'}
+                onChange={(e) => setAckFilter(e.target.value === '' ? null : e.target.value === 'true')}
+                className="text-[11px] border border-gray-200 rounded-lg px-2 py-1 bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-violet-200"
+              >
+                <option value="">All Status</option>
+                <option value="false">Unacknowledged</option>
+                <option value="true">Acknowledged</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-1.5 ml-auto">
+              {unacknowledgedCount > 0 && (
+                <button
+                  onClick={handleAcknowledgeAll}
+                  disabled={ackingAll}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-medium bg-violet-50 text-violet-600 hover:bg-violet-100 transition-colors disabled:opacity-50"
+                >
+                  {ackingAll ? <Loader2 size={10} className="animate-spin" /> : <CheckCheck size={10} />}
+                  Acknowledge All
+                </button>
+              )}
+              <button
+                onClick={fetchAlerts}
+                disabled={loading}
+                className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+              >
+                <RefreshCw size={12} className={`text-gray-400 ${loading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+          </div>
+
+          {(error || ackError) && (
+            <div className="p-4 space-y-2">
+              {error && (
+                <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  <AlertTriangle size={12} />
+                  {error}
+                </div>
+              )}
+              {ackError && (
+                <div className="flex items-center gap-2 text-xs text-red-600 bg-red-50 rounded-lg px-3 py-2">
+                  <AlertTriangle size={12} />
+                  {ackError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {loading ? (
+            <div className="p-5 flex items-center gap-2 text-sm text-gray-400">
+              <Loader2 size={14} className="animate-spin" />
+              Loading alert history...
+            </div>
+          ) : alerts.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-gray-400">
+              No alerts found matching the current filters
+            </div>
+          ) : (
+            <div className="max-h-[500px] overflow-y-auto divide-y divide-gray-50">
+              {alerts.map((alert) => {
+                const colors = alertTypeColor(alert.type);
+                const isAcking = ackingId === alert._id;
+                return (
+                  <div key={alert._id} className={`p-4 hover:bg-gray-50 transition-colors ${!alert.acknowledged ? 'bg-red-50/30' : ''}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap mb-1">
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider ${colors.bg} ${colors.text}`}>
+                            {formatType(alert.type)}
+                          </span>
+                          {!alert.acknowledged && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 text-[9px] font-semibold">
+                              New
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs font-medium text-gray-900 mt-1">{alert.title}</p>
+                        <p className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">{alert.body}</p>
+                        {alert.threshold_snapshot && (
+                          <div className="mt-2 flex items-center gap-3 text-[10px] text-gray-400">
+                            <span>Metric: {alert.threshold_snapshot.metric}</span>
+                            {alert.threshold_snapshot.value !== undefined && <span>Threshold: {alert.threshold_snapshot.value}</span>}
+                            {alert.threshold_snapshot.actual !== undefined && <span>Actual: {alert.threshold_snapshot.actual}</span>}
+                          </div>
+                        )}
+                        <div className="mt-2 flex items-center gap-3 text-[10px] text-gray-400">
+                          <span className="flex items-center gap-1">
+                            <Clock size={10} />
+                            {alert.fired_at ? new Date(alert.fired_at).toLocaleString() : '—'}
+                          </span>
+                          {alert.acknowledged && alert.acknowledged_at && (
+                            <span className="flex items-center gap-1">
+                              <Check size={10} className="text-emerald-500" />
+                              Ack'd {new Date(alert.acknowledged_at).toLocaleString()}
+                              {alert.acknowledged_by ? ` by ${alert.acknowledged_by}` : ''}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {!alert.acknowledged && (
+                        <button
+                          onClick={() => handleAcknowledge(alert._id)}
+                          disabled={isAcking}
+                          className="flex-shrink-0 flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                        >
+                          {isAcking ? <Loader2 size={10} className="animate-spin" /> : <Check size={10} />}
+                          Acknowledge
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </GlassCard>
+  );
+}
+
 const PERIOD_OPTIONS = [
   { label: '7 days', value: 7 },
   { label: '14 days', value: 14 },
@@ -789,6 +1064,8 @@ export default function AdminBotSecurity({ adminToken }) {
       </div>
 
       <AlertThresholdPanel adminToken={adminToken} />
+
+      <AlertHistoryPanel adminToken={adminToken} />
 
       <TtlMonitorPanel adminToken={adminToken} />
 

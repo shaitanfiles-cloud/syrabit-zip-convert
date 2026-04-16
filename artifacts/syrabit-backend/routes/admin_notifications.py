@@ -828,12 +828,25 @@ async def admin_update_alert_settings(
 async def admin_get_alerts(
     limit: int = Query(50, ge=1, le=200),
     acknowledged: Optional[bool] = Query(None),
+    alert_type: Optional[str] = Query(None, alias="type"),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
     admin: dict = Depends(get_admin_user),
 ):
     try:
         query: Dict[str, Any] = {}
         if acknowledged is not None:
             query["acknowledged"] = acknowledged
+        if alert_type:
+            query["type"] = alert_type
+        if date_from or date_to:
+            date_filter: Dict[str, str] = {}
+            if date_from:
+                date_filter["$gte"] = date_from
+            if date_to:
+                date_filter["$lte"] = date_to
+            if date_filter:
+                query["fired_at"] = date_filter
         cursor = db.alerts.find(query).sort("fired_at", -1).limit(limit)
         alerts = []
         async for doc in cursor:

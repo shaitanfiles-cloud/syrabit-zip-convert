@@ -499,3 +499,18 @@ export const adminGetAlertSettings = (token) =>
 
 export const adminUpdateAlertSettings = (token, data) =>
   axios.put(`${API_BASE}/admin/alert-settings`, data, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminGetAlerts = (token, { limit = 50, acknowledged, type, date_from, date_to } = {}) => {
+  const params = { limit };
+  if (acknowledged !== undefined && acknowledged !== null) params.acknowledged = acknowledged;
+  if (type) params.type = type;
+  if (date_from) params.date_from = date_from;
+  if (date_to) params.date_to = date_to;
+  return axios.get(`${API_BASE}/admin/alerts`, { headers: adminHeaders(token), withCredentials: true, params });
+};
+
+export const adminAcknowledgeAlert = (token, alertId) =>
+  axios.patch(`${API_BASE}/admin/alerts/${alertId}/acknowledge`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminAcknowledgeAllAlerts = (token) =>
+  axios.patch(`${API_BASE}/admin/alerts/acknowledge-all`, {}, { headers: adminHeaders(token), withCredentials: true });
