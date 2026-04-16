@@ -186,6 +186,13 @@ async def _check_auto_block(db, ip_hash: str, now: datetime):
                 "threshold_at_block": threshold,
                 "spoof_count_24h": count,
             }
+            try:
+                from metrics import _ALERT_THRESHOLDS
+                expiry_h = float(_ALERT_THRESHOLDS.get("auto_block_expiry_hours", 168))
+            except Exception:
+                expiry_h = 168
+            if expiry_h > 0:
+                doc["expires_at"] = now + timedelta(hours=expiry_h)
             await db.blocked_ips.insert_one(doc)
             await _refresh_blocked_ip_cache()
             logger.warning(
