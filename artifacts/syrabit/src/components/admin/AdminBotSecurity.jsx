@@ -48,6 +48,7 @@ function AlertThresholdPanel({ adminToken }) {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [settingsError, setSettingsError] = useState(null);
+  const [fieldErrors, setFieldErrors] = useState({});
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
@@ -70,31 +71,88 @@ function AlertThresholdPanel({ adminToken }) {
     })();
   }, [adminToken]);
 
+  const validateField = (field, value) => {
+    if (field === 'spoof_rpm') {
+      const num = Number(value);
+      if (isNaN(num) || !num) return 'RPM threshold is required';
+      if (num <= 0) return 'Must be a positive number';
+      if (num > 10000) return 'Maximum allowed value is 10,000';
+      if (!Number.isInteger(num)) return 'Must be a whole number';
+      return null;
+    }
+    if (field === 'email') {
+      if (!value) return null;
+      if (!value.includes('@') || !value.includes('.')) return 'Enter a valid email (e.g. admin@example.com)';
+      return null;
+    }
+    if (field === 'webhook_url') {
+      if (!value) return null;
+      if (!value.startsWith('http://') && !value.startsWith('https://')) return 'Must start with http:// or https://';
+      try { new URL(value); } catch { return 'Enter a valid URL'; }
+      return null;
+    }
+    return null;
+  };
+
+  const handleFieldChange = (field, value) => {
+    setForm(prev => ({ ...prev, [field]: value }));
+    const err = validateField(field, value);
+    setFieldErrors(prev => ({ ...prev, [field]: err }));
+    if (settingsError) setSettingsError(null);
+  };
+
+  const parseBackendError = (err) => {
+    const resp = err.response;
+    if (!resp) return { general: 'Network error — could not reach server' };
+    const detail = resp.data?.detail;
+    if (resp.status === 422 && Array.isArray(detail)) {
+      const errors = {};
+      for (const item of detail) {
+        const loc = item.loc || [];
+        const field = loc[loc.length - 1] || 'general';
+        const mapped = field === 'spoof_rpm' ? 'spoof_rpm'
+          : field === 'email' ? 'email'
+          : field === 'webhook_url' ? 'webhook_url'
+          : null;
+        if (mapped) {
+          errors[mapped] = item.msg || 'Invalid value';
+        } else {
+          errors.general = item.msg || 'Validation error';
+        }
+      }
+      return Object.keys(errors).length ? errors : { general: 'Validation failed' };
+    }
+    if (typeof detail === 'string') {
+      const lower = detail.toLowerCase();
+      if (lower.includes('threshold') || lower.includes('rpm') || lower.includes('spoof_rpm')) return { spoof_rpm: detail };
+      if (lower.includes('email')) return { email: detail };
+      if (lower.includes('webhook')) return { webhook_url: detail };
+      return { general: detail };
+    }
+    return { general: detail || `Server error (${resp.status})` };
+  };
+
   const handleSave = async () => {
+    const errors = {};
+    errors.spoof_rpm = validateField('spoof_rpm', form.spoof_rpm);
+    errors.email = validateField('email', form.email);
+    errors.webhook_url = validateField('webhook_url', form.webhook_url);
+    const cleaned = {};
+    for (const [k, v] of Object.entries(errors)) { if (v) cleaned[k] = v; }
+    setFieldErrors(cleaned);
+    if (Object.keys(cleaned).length) {
+      setSettingsError(null);
+      setSaving(false);
+      return;
+    }
     setSaving(true);
     setSettingsError(null);
     setSaved(false);
     try {
-      const rpmVal = Number(form.spoof_rpm);
-      if (!rpmVal || rpmVal <= 0) {
-        setSettingsError('RPM threshold must be a positive number');
-        setSaving(false);
-        return;
-      }
-      if (form.email && !form.email.includes('@')) {
-        setSettingsError('Please enter a valid email address');
-        setSaving(false);
-        return;
-      }
-      if (form.webhook_url && !form.webhook_url.startsWith('http')) {
-        setSettingsError('Webhook URL must start with http:// or https://');
-        setSaving(false);
-        return;
-      }
       await adminUpdateAlertSettings(adminToken, {
         thresholds: {
           ...settings?.thresholds,
-          spoof_rpm: rpmVal,
+          spoof_rpm: Number(form.spoof_rpm),
         },
         expiration: settings?.expiration || {},
         notification_channels: {
@@ -102,10 +160,15 @@ function AlertThresholdPanel({ adminToken }) {
           webhook_url: form.webhook_url.trim(),
         },
       });
+      setFieldErrors({});
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     } catch (err) {
-      setSettingsError(err.response?.data?.detail || 'Failed to save settings');
+      const parsed = parseBackendError(err);
+      const { general, ...fields } = parsed;
+      if (Object.keys(fields).length) setFieldErrors(prev => ({ ...prev, ...fields }));
+      if (general) setSettingsError(general);
+      else if (!Object.keys(fields).length) setSettingsError('Failed to save settings');
     } finally {
       setSaving(false);
     }
@@ -118,8 +181,12 @@ function AlertThresholdPanel({ adminToken }) {
         email: defaults.notification_channels?.email ?? '',
         webhook_url: defaults.notification_channels?.webhook_url ?? '',
       });
+      setFieldErrors({});
+      setSettingsError(null);
     }
   };
+
+  const hasErrors = Object.values(fieldErrors).some(Boolean);
 
   if (loadingSettings) {
     return (
@@ -167,11 +234,18 @@ function AlertThresholdPanel({ adminToken }) {
                 min="1"
                 max="10000"
                 value={form.spoof_rpm}
-                onChange={(e) => setForm({ ...form, spoof_rpm: e.target.value })}
-                className="w-32 text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+                onChange={(e) => handleFieldChange('spoof_rpm', e.target.value)}
+                className={`w-32 text-sm border rounded-lg px-3 py-2 bg-white text-gray-900 focus:outline-none focus:ring-2 ${
+                  fieldErrors.spoof_rpm
+                    ? 'border-red-300 focus:ring-red-200 focus:border-red-300'
+                    : 'border-gray-200 focus:ring-violet-200 focus:border-violet-300'
+                }`}
               />
               <span className="text-xs text-gray-400">requests/min</span>
             </div>
+            {fieldErrors.spoof_rpm && (
+              <p className="text-[11px] text-red-500 mt-1">{fieldErrors.spoof_rpm}</p>
+            )}
           </div>
 
           <div className="border-t border-gray-100 pt-5">
@@ -189,12 +263,20 @@ function AlertThresholdPanel({ adminToken }) {
                   type="email"
                   placeholder="admin@example.com"
                   value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+                  onChange={(e) => handleFieldChange('email', e.target.value)}
+                  className={`w-full text-sm border rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 ${
+                    fieldErrors.email
+                      ? 'border-red-300 focus:ring-red-200 focus:border-red-300'
+                      : 'border-gray-200 focus:ring-violet-200 focus:border-violet-300'
+                  }`}
                 />
-                <p className="text-[10px] text-gray-400 mt-1">
-                  Receives email alerts via Resend when thresholds are exceeded
-                </p>
+                {fieldErrors.email ? (
+                  <p className="text-[11px] text-red-500 mt-1">{fieldErrors.email}</p>
+                ) : (
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Receives email alerts via Resend when thresholds are exceeded
+                  </p>
+                )}
               </div>
               <div>
                 <label className="block text-[11px] font-medium text-gray-600 mb-1 flex items-center gap-1.5">
@@ -205,12 +287,20 @@ function AlertThresholdPanel({ adminToken }) {
                   type="url"
                   placeholder="https://hooks.slack.com/services/..."
                   value={form.webhook_url}
-                  onChange={(e) => setForm({ ...form, webhook_url: e.target.value })}
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 focus:ring-violet-200 focus:border-violet-300"
+                  onChange={(e) => handleFieldChange('webhook_url', e.target.value)}
+                  className={`w-full text-sm border rounded-lg px-3 py-2 bg-white text-gray-900 placeholder-gray-300 focus:outline-none focus:ring-2 ${
+                    fieldErrors.webhook_url
+                      ? 'border-red-300 focus:ring-red-200 focus:border-red-300'
+                      : 'border-gray-200 focus:ring-violet-200 focus:border-violet-300'
+                  }`}
                 />
-                <p className="text-[10px] text-gray-400 mt-1">
-                  Slack, Discord, or generic webhook endpoint for alert notifications
-                </p>
+                {fieldErrors.webhook_url ? (
+                  <p className="text-[11px] text-red-500 mt-1">{fieldErrors.webhook_url}</p>
+                ) : (
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Slack, Discord, or generic webhook endpoint for alert notifications
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -225,8 +315,8 @@ function AlertThresholdPanel({ adminToken }) {
           <div className="flex items-center gap-2 pt-1">
             <button
               onClick={handleSave}
-              disabled={saving}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:opacity-50"
+              disabled={saving || hasErrors}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {saving ? <Loader2 size={12} className="animate-spin" /> : saved ? <Check size={12} /> : <Save size={12} />}
               {saving ? 'Saving...' : saved ? 'Saved' : 'Save Changes'}
