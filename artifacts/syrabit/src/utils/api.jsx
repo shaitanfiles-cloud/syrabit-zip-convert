@@ -526,3 +526,9 @@ export const adminAcknowledgeAllAlerts = (token) =>
 
 export const adminBackfillThresholds = (token) =>
   axios.post(`${API_BASE}/admin/alerts/backfill-thresholds`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminIndexNowPing = (token, urls = []) =>
+  axios.post(`${API_BASE}/admin/indexnow/ping`, { urls }, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminIndexNowStatus = (token) =>
+  axios.get(`${API_BASE}/admin/indexnow/status`, { headers: adminHeaders(token), withCredentials: true });

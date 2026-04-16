@@ -211,7 +211,7 @@ def _get_content_cache(key: str):
 
 def _invalidate_content_cache(prefix: str):
     _CHAPTER_PREFIXES = ("ch-slug:", "ch-topic-content:", "ch-topic-summary:", "chunks:", "topic-pyqs:", "topic-page:", "flashcards:")
-    _LIB_BUNDLE_KEYS = ("library-bundle", "library-bundle:seo")
+    _LIB_BUNDLE_KEYS = ("library-bundle", "library-bundle:seo", "library-bundle:slim")
     if prefix == "chapters":
         keys_to_del = [k for k in list(_content_cache.keys())
                        if k == prefix or k.startswith(f"{prefix}:")
@@ -271,6 +271,11 @@ async def _debounced_cf_purge(fn):
             logger.info(f"CF edge purge triggered for prefixes: {prefixes}")
         else:
             logger.warning(f"CF edge purge returned false for prefixes: {prefixes}")
+        try:
+            from cloudflare_client import purge_worker_cache
+            await purge_worker_cache(purge_all=True)
+        except Exception as we:
+            logger.debug(f"Worker cache purge in debounced flow: {we}")
     except Exception as e:
         logger.warning(f"CF edge purge background error: {e}")
     finally:

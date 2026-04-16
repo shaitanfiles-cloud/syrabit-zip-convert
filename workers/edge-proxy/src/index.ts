@@ -2,7 +2,7 @@ import {
   isD1Synced, resetD1SyncedCache, isTablePopulated,
   getBoards, getClasses, getStreams, getAllSubjects, getSubjectsByStream,
   getSubjectsByClassId, getSubjectById, getChaptersBySubject,
-  getTopicsByChapter, getSitemapEntries, getLibraryBundle,
+  getTopicsByChapter, getSitemapEntries, getLibraryBundle, getLibraryBundleSlim,
   getSeoPageBySlugs, getSeoPageTypes, getSeoPageBundle,
   getSeoPagesByType, getPublishedPageTypes,
   getSubjectSitemapEntries, getChapterSitemapEntries,
@@ -464,11 +464,14 @@ async function tryD1Route(
   if (!await isD1Synced(db)) return null;
 
   if (pathname === "/api/content/library-bundle") {
-    const requiredTables = ["boards", "classes", "streams", "subjects", "chapters"];
+    const slim = searchParams.get("slim") === "1";
+    const requiredTables = slim
+      ? ["boards", "classes", "streams", "subjects"]
+      : ["boards", "classes", "streams", "subjects", "chapters"];
     for (const table of requiredTables) {
       if (!await isTablePopulated(db, table)) return null;
     }
-    const data = await getLibraryBundle(db);
+    const data = slim ? await getLibraryBundleSlim(db) : await getLibraryBundle(db);
     if (data === null) return null;
     return { type: "json", data };
   }
@@ -766,6 +769,65 @@ async function handleSyncStatus(
   });
 }
 
+async function handleEdgePurge(
+  request: Request,
+  env: Env,
+  cors: Record<string, string>,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const authHeader = request.headers.get("Authorization");
+  const expectedToken = env.D1_SYNC_SECRET;
+  if (!expectedToken || !authHeader || authHeader !== `Bearer ${expectedToken}`) {
+    return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      status: 401,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
+  }
+
+  try {
+    const body = await request.json() as { prefixes?: string[]; purge_all?: boolean; urls?: string[] };
+    const cache = caches.default;
+    let purgedCount = 0;
+    const baseUrl = new URL(request.url).origin;
+
+    if (body.purge_all) {
+      for (const prefix of CACHEABLE_PREFIXES) {
+        const cacheKey = new Request(`${baseUrl}${prefix}`, { method: "GET" });
+        const deleted = await cache.delete(cacheKey);
+        if (deleted) purgedCount++;
+      }
+    }
+
+    if (body.prefixes && Array.isArray(body.prefixes)) {
+      for (const prefix of body.prefixes) {
+        const cacheKey = new Request(`${baseUrl}${prefix}`, { method: "GET" });
+        const deleted = await cache.delete(cacheKey);
+        if (deleted) purgedCount++;
+      }
+    }
+
+    if (body.urls && Array.isArray(body.urls)) {
+      for (const url of body.urls) {
+        const fullUrl = url.startsWith("http") ? url : `${baseUrl}${url}`;
+        const cacheKey = new Request(fullUrl, { method: "GET" });
+        const deleted = await cache.delete(cacheKey);
+        if (deleted) purgedCount++;
+      }
+    }
+
+    return new Response(
+      JSON.stringify({ ok: true, purged: purgedCount }),
+      { status: 200, headers: { ...cors, "Content-Type": "application/json" } },
+    );
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : "Unknown error";
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
+  }
+}
+
 async function handleScheduledSync(env: Env): Promise<void> {
   if (!env.CONTENT_DB || !env.BACKEND_URL) return;
 
@@ -838,6 +900,10 @@ export default {
 
     if (pathname === "/api/edge/d1-status" && request.method === "GET") {
       return handleSyncStatus(env, cors);
+    }
+
+    if (pathname === "/api/edge/purge" && request.method === "POST") {
+      return handleEdgePurge(request, env, cors, ctx);
     }
 
     const clientIp =

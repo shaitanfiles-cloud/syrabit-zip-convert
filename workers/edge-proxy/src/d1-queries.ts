@@ -449,6 +449,43 @@ export async function getLibraryBundle(db: D1Database): Promise<Record<string, u
   }
 }
 
+export async function getLibraryBundleSlim(db: D1Database): Promise<Record<string, unknown> | null> {
+  try {
+    const [boardsRes, classesRes, streamsRes, subjectsRes, chaptersRes] = await db.batch([
+      db.prepare("SELECT id, name, slug FROM boards"),
+      db.prepare("SELECT id, name, slug, board_id FROM classes"),
+      db.prepare("SELECT id, name, slug, class_id FROM streams"),
+      db.prepare("SELECT id, name, slug, stream_id, status, description, icon, tags, thumbnail_url, extra_json FROM subjects WHERE status = 'published'"),
+      db.prepare("SELECT subject_id, COUNT(*) as total, SUM(CASE WHEN notes_generated = 1 THEN 1 ELSE 0 END) as notes_count FROM chapters GROUP BY subject_id"),
+    ]);
+
+    const subjects = ((subjectsRes.results || []) as SubjectRow[]).map(normalizeSubject);
+
+    const chapterStats = (chaptersRes.results || []) as Array<{ subject_id: string; total: number; notes_count: number }>;
+    const statsMap: Record<string, { total: number; notes: number }> = {};
+    for (const s of chapterStats) {
+      statsMap[s.subject_id] = { total: s.total, notes: s.notes_count };
+    }
+
+    for (const s of subjects) {
+      const sid = s.id as string;
+      const st = statsMap[sid] || { total: 0, notes: 0 };
+      s.chapter_count = st.total;
+      s.notes_count = st.notes;
+      s.notes_pct = st.total > 0 ? Math.round((st.notes / st.total) * 100) : 0;
+    }
+
+    return {
+      boards: boardsRes.results || [],
+      classes: classesRes.results || [],
+      streams: streamsRes.results || [],
+      subjects,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeSubject(row: SubjectRow): Record<string, unknown> {
   const result: Record<string, unknown> = { ...row };
   if (row.thumbnail_url) {

@@ -39,8 +39,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/content/library-bundle", response_model=LibraryBundleOut)
-async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optional[str] = None, response: Response = None):
-    cache_key = "library-bundle:seo" if include_seo else "library-bundle"
+async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optional[str] = None, slim: Optional[str] = None, response: Response = None):
+    cache_key = "library-bundle:slim" if slim == "1" else ("library-bundle:seo" if include_seo else "library-bundle")
     if not nocache:
         cached = _get_content_cache(cache_key)
         if cached:
@@ -179,7 +179,9 @@ async def get_library_bundle(nocache: Optional[str] = None, include_seo: Optiona
             s["flash_count"]   = fc_total_by_subject.get(sid, 0)
             s["seo_stats"]     = seo_stats_by_subject.get(sid, {})
 
-        bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data, "chapters": chapters_data}
+        bundle = {"boards": boards_data, "classes": classes_data, "streams": streams_data, "subjects": subjects_data}
+        if slim != "1":
+            bundle["chapters"] = chapters_data
         _set_content_cache(cache_key, bundle)
         if response:
             response.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600, stale-while-revalidate=86400"

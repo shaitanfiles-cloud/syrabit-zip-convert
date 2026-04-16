@@ -1514,6 +1514,10 @@ async def _pipeline_web_search_pyqs(subject_name: str, chapter_title: str, class
     return ""
 
 
+def _pipeline_content_hash(content: str, subject: str, chapter: str, kind: str) -> str:
+    raw = f"{kind}|{subject}|{chapter}|{content[:2000]}".lower()
+    return hashlib.md5(raw.encode()).hexdigest()
+
 async def _pipeline_generate_mark_wise_pyq(
     content: str, subject_name: str, chapter_title: str, class_name: str, paper_type: str = "",
     topics: list = None,
@@ -1526,6 +1530,16 @@ async def _pipeline_generate_mark_wise_pyq(
     import re as _re
     if not content or len(content.strip()) < 100:
         return {}
+
+    cache_key = f"pipeline_mwpyq:{_pipeline_content_hash(content, subject_name, chapter_title, 'mwpyq')}"
+    cached = _redis_get("pipeline_mwpyq", cache_key)
+    if cached:
+        try:
+            cached_data = json.loads(cached) if isinstance(cached, str) else cached
+            if cached_data.get("pyqs"):
+                return cached_data
+        except Exception:
+            pass
     topic_block = ", ".join(str(t) for t in (topics or [])[:15]) if topics else chapter_title
 
     web_pyq_context = await _pipeline_web_search_pyqs(subject_name, chapter_title, class_name)
@@ -1628,7 +1642,7 @@ Chapter content for context:
                     })
         if not flat_questions:
             return {}
-        return {
+        result_data = {
             "pyqs": flat_questions,
             "mark_wise": {k: [
                 (q.get("question", q) if isinstance(q, dict) else q)
@@ -1636,6 +1650,8 @@ Chapter content for context:
             ] for k, v in mark_wise.items()},
             "total": len(flat_questions),
         }
+        _redis_set("pipeline_mwpyq", cache_key, json.dumps(result_data, default=str), ttl=7200)
+        return result_data
     except Exception:
         return {}
 
@@ -1646,6 +1662,17 @@ async def _pipeline_generate_topic_pyq(
     """Generate topic-wise Previous Year Questions with year tags for AHSEC/SEBA/Degree boards."""
     if not content or len(content.strip()) < 100:
         return []
+
+    cache_key = f"pipeline_tpyq:{_pipeline_content_hash(content, subject_name, chapter_title, 'tpyq')}"
+    cached = _redis_get("pipeline_tpyq", cache_key)
+    if cached:
+        try:
+            cached_data = json.loads(cached) if isinstance(cached, str) else cached
+            if isinstance(cached_data, list) and cached_data:
+                return cached_data
+        except Exception:
+            pass
+
     prompt = f"""You are an expert exam question analyst for AHSEC, SEBA, and Degree board exams in Assam.
 
 Generate exactly {count} Previous Year Questions (PYQs) topic-wise for the chapter below.
@@ -1684,7 +1711,10 @@ Chapter content:
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
         data = json.loads(cleaned)
-        return data.get("pyqs", [])
+        pyqs = data.get("pyqs", [])
+        if pyqs:
+            _redis_set("pipeline_tpyq", cache_key, json.dumps(pyqs, default=str), ttl=7200)
+        return pyqs
     except Exception:
         return []
 
@@ -1699,6 +1729,16 @@ async def _pipeline_generate_flashcards(
     """
     if not content or len(content.strip()) < 100:
         return []
+
+    cache_key = f"pipeline_fc:{_pipeline_content_hash(content, subject_name, chapter_title, 'fc')}"
+    cached = _redis_get("pipeline_fc", cache_key)
+    if cached:
+        try:
+            cached_data = json.loads(cached) if isinstance(cached, str) else cached
+            if isinstance(cached_data, list) and cached_data:
+                return cached_data
+        except Exception:
+            pass
     topic_instruction = ""
     if topics:
         topic_list = ", ".join(str(t) for t in topics[:15])
@@ -1746,7 +1786,10 @@ Chapter content to base cards on:
             if cleaned.startswith("json"):
                 cleaned = cleaned[4:]
         data = json.loads(cleaned)
-        return data.get("flashcards", [])
+        flashcards = data.get("flashcards", [])
+        if flashcards:
+            _redis_set("pipeline_fc", cache_key, json.dumps(flashcards, default=str), ttl=7200)
+        return flashcards
     except Exception:
         return []
 
@@ -3033,6 +3076,60 @@ async def admin_block_ip(
     await _refresh_blocked_ip_cache()
     logger.info(f"BLOCK_IP ip_hash={ip_hash} expires_in={expires_in}h by={admin.get('email')}")
     return {"ok": True, "ip_hash": ip_hash}
+
+
+INDEXNOW_KEY = os.environ.get("INDEXNOW_KEY", "syrabit-indexnow-2026-key").strip()
+INDEXNOW_HOST = "https://syrabit.ai"
+
+async def _indexnow_submit(urls: List[str]) -> dict:
+    if not urls:
+        return {"ok": False, "error": "No URLs provided"}
+    payload = {
+        "host": "syrabit.ai",
+        "key": INDEXNOW_KEY,
+        "keyLocation": f"{INDEXNOW_HOST}/{INDEXNOW_KEY}.txt",
+        "urlList": urls[:10000],
+    }
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.post("https://api.indexnow.org/indexnow", json=payload)
+            ok = resp.status_code in (200, 202)
+            if ok:
+                logger.info(f"IndexNow submitted {len(urls)} URLs — status {resp.status_code}")
+            else:
+                logger.warning(f"IndexNow failed — status {resp.status_code}: {resp.text[:200]}")
+            return {"ok": ok, "status": resp.status_code, "count": len(urls)}
+    except Exception as e:
+        logger.warning(f"IndexNow error: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+@router.post("/admin/indexnow/ping")
+async def admin_indexnow_ping(
+    body: dict = Body({}),
+    admin: dict = Depends(get_admin_user),
+):
+    urls = body.get("urls", [])
+    if not urls:
+        try:
+            published = await db.seo_pages.find(
+                {"status": "published"},
+                {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1, "topic_slug": 1, "page_type": 1, "updated_at": 1},
+            ).sort("updated_at", -1).to_list(500)
+            for p in published:
+                path = f"/{p['board_slug']}/{p['class_slug']}/{p['subject_slug']}/{p['topic_slug']}"
+                if p.get("page_type") and p["page_type"] != "notes":
+                    path += f"/{p['page_type']}"
+                urls.append(f"{INDEXNOW_HOST}{path}")
+        except Exception as e:
+            raise HTTPException(500, f"Failed to fetch published pages: {e}")
+    result = await _indexnow_submit(urls)
+    return result
+
+
+@router.get("/admin/indexnow/status")
+async def admin_indexnow_status(admin: dict = Depends(get_admin_user)):
+    return {"key": INDEXNOW_KEY, "host": INDEXNOW_HOST, "configured": True}
 
 
 @router.post("/admin/security/unblock-ip")

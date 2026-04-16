@@ -408,7 +408,44 @@ async def purge_content_prefixes(prefixes: List[str]) -> bool:
     return file_ok
 
 
-async def purge_all_content_cache() -> bool:
-    if not is_purge_configured():
+async def purge_worker_cache(prefixes: list = None, purge_all: bool = False) -> bool:
+    edge_url = os.getenv("CF_EDGE_PROXY_URL", "https://api.syrabit.ai").strip().rstrip("/")
+    sync_secret = os.getenv("D1_SYNC_SECRET", "").strip()
+    if not sync_secret:
+        logger.debug("Worker cache purge skipped — D1_SYNC_SECRET not set")
         return False
-    return await _purge_everything()
+    try:
+        payload = {}
+        if purge_all:
+            payload["purge_all"] = True
+        elif prefixes:
+            payload["prefixes"] = prefixes
+        else:
+            return False
+        client = _get_cf_client()
+        resp = await client.post(
+            f"{edge_url}/api/edge/purge",
+            json=payload,
+            headers={
+                "Authorization": f"Bearer {sync_secret}",
+                "Content-Type": "application/json",
+            },
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            logger.info(f"Worker cache purge OK: purged={data.get('purged', 0)}")
+            return True
+        logger.warning(f"Worker cache purge HTTP {resp.status_code}: {resp.text[:200]}")
+        return False
+    except Exception as e:
+        logger.warning(f"Worker cache purge error: {e}")
+        return False
+
+
+async def purge_all_content_cache() -> bool:
+    zone_ok = False
+    if is_purge_configured():
+        zone_ok = await _purge_everything()
+    worker_ok = await purge_worker_cache(purge_all=True)
+    return zone_ok or worker_ok

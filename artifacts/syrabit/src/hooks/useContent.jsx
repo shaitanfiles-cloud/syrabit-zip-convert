@@ -21,6 +21,9 @@ const fetchSubjects = () =>
 const fetchLibraryBundle = () =>
   apiClient().get('/content/library-bundle').then((r) => r.data);
 
+const fetchLibraryBundleSlim = () =>
+  apiClient().get('/content/library-bundle?slim=1').then((r) => r.data);
+
 const fetchSubject = (id) =>
   apiClient().get(`/content/subjects/${id}`).then((r) => r.data);
 
@@ -107,6 +110,14 @@ export const useLibraryBundle = () =>
   useQuery({
     queryKey: ['library-bundle'],
     queryFn: fetchLibraryBundle,
+    staleTime: 30 * 60 * 1000,
+    gcTime: 60 * 60 * 1000,
+  });
+
+export const useLibraryBundleSlim = () =>
+  useQuery({
+    queryKey: ['library-bundle-slim'],
+    queryFn: fetchLibraryBundleSlim,
     staleTime: 30 * 60 * 1000,
     gcTime: 60 * 60 * 1000,
   });
