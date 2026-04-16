@@ -2968,7 +2968,9 @@ async def _cf_bot_report_catchup_if_missed(db, now_utc: datetime) -> dict:
         "iso_week": cur_iso_week, "generated_at": now_utc,
         "since": result["since"], "until": result["until"],
         "zone_id": result["zone_id"], "data": result["data"],
-        "wow": result["wow"], "markdown": result["markdown"],
+        "wow": result["wow"],
+        "crosscheck": result.get("crosscheck"),
+        "markdown": result["markdown"],
         "catch_up": True,
     }
     try:
