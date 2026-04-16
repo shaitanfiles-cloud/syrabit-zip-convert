@@ -6,10 +6,10 @@ import {
   Calendar, Filter, CheckCheck, History,
 } from 'lucide-react';
 import {
-  LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
-  ResponsiveContainer, CartesianGrid,
+  LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 function GlassCard({ children, className = '' }) {
@@ -895,6 +895,7 @@ export default function AdminBotSecurity({ adminToken }) {
   const [days, setDays] = useState(7);
   const [blockedIps, setBlockedIps] = useState([]);
   const [durationBreakdown, setDurationBreakdown] = useState(null);
+  const [blockTrends, setBlockTrends] = useState([]);
   const [actionLoading, setActionLoading] = useState({});
   const [blockDurationMenu, setBlockDurationMenu] = useState(null);
 
@@ -908,13 +909,15 @@ export default function AdminBotSecurity({ adminToken }) {
     setLoading(true);
     setError(null);
     try {
-      const [spoofRes, blockedRes] = await Promise.all([
+      const [spoofRes, blockedRes, trendsRes] = await Promise.all([
         adminGetSpoofedBots(adminToken, days),
         adminGetBlockedIps(adminToken),
+        adminGetBlockTrends(adminToken, 30),
       ]);
       setData(spoofRes.data);
       setBlockedIps(blockedRes.data?.blocked_ips || []);
       setDurationBreakdown(blockedRes.data?.duration_breakdown || null);
+      setBlockTrends(trendsRes.data?.series || []);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to load spoofed bot data');
     } finally {
@@ -1108,6 +1111,45 @@ export default function AdminBotSecurity({ adminToken }) {
                 );
               })}
             </div>
+          </div>
+        </GlassCard>
+      )}
+
+      {blockTrends.length > 0 && blockTrends.some(d => d['1h'] + d['6h'] + d['24h'] + d['7d'] + d['30d'] + d.permanent > 0) && (
+        <GlassCard>
+          <div className="p-5 pb-2 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+              <TrendingUp size={14} className="text-violet-500" />
+              Block Duration Trends
+            </h3>
+            <span className="text-[10px] text-gray-400 uppercase tracking-wider">Last 30 days</span>
+          </div>
+          <div className="px-3 pb-4" style={{ height: 280 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={blockTrends} margin={{ top: 5, right: 10, bottom: 0, left: -15 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10, fill: '#94a3b8' }}
+                  tickFormatter={(v) => {
+                    const d = new Date(v);
+                    return `${d.getMonth() + 1}/${d.getDate()}`;
+                  }}
+                />
+                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} allowDecimals={false} />
+                <Tooltip
+                  contentStyle={{ fontSize: 11, borderRadius: 8, border: '1px solid #e2e8f0' }}
+                  labelFormatter={(v) => new Date(v).toLocaleDateString()}
+                />
+                <Legend wrapperStyle={{ fontSize: 10 }} />
+                <Area type="monotone" dataKey="1h" stackId="1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.6} name="1 Hour" />
+                <Area type="monotone" dataKey="6h" stackId="1" stroke="#6366f1" fill="#6366f1" fillOpacity={0.6} name="6 Hours" />
+                <Area type="monotone" dataKey="24h" stackId="1" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.6} name="24 Hours" />
+                <Area type="monotone" dataKey="7d" stackId="1" stroke="#f59e0b" fill="#f59e0b" fillOpacity={0.6} name="7 Days" />
+                <Area type="monotone" dataKey="30d" stackId="1" stroke="#ef4444" fill="#ef4444" fillOpacity={0.6} name="30 Days" />
+                <Area type="monotone" dataKey="permanent" stackId="1" stroke="#dc2626" fill="#dc2626" fillOpacity={0.6} name="Permanent" />
+              </AreaChart>
+            </ResponsiveContainer>
           </div>
         </GlassCard>
       )}

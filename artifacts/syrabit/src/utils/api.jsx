@@ -485,6 +485,9 @@ export const adminGetSpoofedBots = (token, days = 7) =>
 export const adminGetBlockedIps = (token) =>
   axios.get(`${API_BASE}/admin/security/blocked-ips`, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminGetBlockTrends = (token, days = 30) =>
+  axios.get(`${API_BASE}/admin/security/block-trends`, { params: { days }, headers: adminHeaders(token), withCredentials: true });
+
 export const adminBlockIp = (token, ip_hash, reason = 'repeat_spoof_offender', expires_in = null) =>
   axios.post(`${API_BASE}/admin/security/block-ip`, { ip_hash, reason, expires_in }, { headers: adminHeaders(token), withCredentials: true });
 

@@ -2893,6 +2893,53 @@ async def admin_list_blocked_ips(
     return {"blocked_ips": blocked, "duration_breakdown": duration_breakdown}
 
 
+@router.get("/admin/security/block-trends")
+async def admin_block_trends(
+    days: int = Query(30, ge=7, le=90),
+    admin: dict = Depends(get_admin_user),
+):
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(days=days)
+    try:
+        blocks = await db.blocked_ips.find(
+            {"blocked_at": {"$gte": start}},
+            {"_id": 0, "blocked_at": 1, "expires_at": 1},
+        ).to_list(5000)
+    except Exception:
+        blocks = []
+
+    date_map = {}
+    for d in range(days):
+        dt = (start + timedelta(days=d)).strftime("%Y-%m-%d")
+        date_map[dt] = {"date": dt, "1h": 0, "6h": 0, "24h": 0, "7d": 0, "30d": 0, "permanent": 0}
+
+    for b in blocks:
+        ba = b.get("blocked_at")
+        if not ba:
+            continue
+        day_key = ba.strftime("%Y-%m-%d")
+        if day_key not in date_map:
+            continue
+        ea = b.get("expires_at")
+        if ea and ba:
+            diff_hours = (ea - ba).total_seconds() / 3600
+            if diff_hours <= 1.5:
+                date_map[day_key]["1h"] += 1
+            elif diff_hours <= 9:
+                date_map[day_key]["6h"] += 1
+            elif diff_hours <= 36:
+                date_map[day_key]["24h"] += 1
+            elif diff_hours <= 336:
+                date_map[day_key]["7d"] += 1
+            else:
+                date_map[day_key]["30d"] += 1
+        else:
+            date_map[day_key]["permanent"] += 1
+
+    series = sorted(date_map.values(), key=lambda x: x["date"])
+    return {"series": series}
+
+
 @router.post("/admin/security/block-ip")
 async def admin_block_ip(
     ip_hash: str = Body(..., embed=True),
