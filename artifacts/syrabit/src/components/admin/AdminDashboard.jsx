@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { toast } from 'sonner';
 import { log } from '@/utils/logger';
 import AdminQuickLinks from './AdminQuickLinks';
 import {
@@ -510,11 +511,18 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const handleRetryEndpoint = async (endpoint) => {
     setRetryingEndpoint(endpoint);
     try {
-      await axios.post(`${API_BASE}/admin/indexnow/endpoint/retry`, { endpoint }, adminHdr(adminToken));
-      const statsRes = await axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken));
-      setIndexNowStats(statsRes.data);
+      const retryRes = await axios.post(`${API_BASE}/admin/indexnow/endpoint/retry`, { endpoint }, adminHdr(adminToken));
+      const requeued = Number(retryRes.data?.requeued ?? retryRes.data?.count ?? 0);
+      toast.success(`Endpoint reset — ${requeued} URL${requeued === 1 ? '' : 's'} re-queued`);
+      try {
+        const statsRes = await axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken));
+        setIndexNowStats(statsRes.data);
+      } catch (statsErr) {
+        log.error('Stats refresh failed after retry', { endpoint, error: statsErr.message });
+      }
     } catch (e) {
       log.error('Endpoint retry failed', { endpoint, error: e.message });
+      toast.error(`Retry failed: ${e.response?.data?.error || e.message}`);
     } finally {
       setRetryingEndpoint(null);
     }
