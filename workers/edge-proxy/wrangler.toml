@@ -24,8 +24,8 @@ preview_id = "c7d531ef4b9a4cd980134251f5739556"
 # Then replace the IDs below with the output values.
 [[kv_namespaces]]
 binding = "BOT_HTML_CACHE"
-id = "REPLACE_WITH_KV_ID"
-preview_id = "REPLACE_WITH_PREVIEW_KV_ID"
+id = "a92591899d544ddb8ac61c54d2b40180"
+preview_id = "2c67fcc51dbf430391602e11d7a5e9fe"
 
 [[d1_databases]]
 binding = "CONTENT_DB"
