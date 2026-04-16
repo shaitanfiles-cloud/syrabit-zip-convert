@@ -512,8 +512,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         ...prev,
         alerts: prev.alerts.map(a => a._id === alertId ? { ...a, acknowledged: true } : a),
       }));
+      toast.success('Alert acknowledged');
     } catch (e) {
       log.error('Failed to acknowledge alert', { error: e.message });
+      toast.error(`Failed to acknowledge alert: ${e.response?.data?.error || e.message}`);
     }
   };
 
@@ -524,8 +526,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         ...prev,
         alerts: prev.alerts.map(a => ({ ...a, acknowledged: true })),
       }));
+      toast.success('All alerts acknowledged');
     } catch (e) {
       log.error('Failed to acknowledge all alerts', { error: e.message });
+      toast.error(`Failed to acknowledge alerts: ${e.response?.data?.error || e.message}`);
     }
   };
 
@@ -546,8 +550,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       await axios.put(`${API_BASE}/admin/alert-settings`, alertSettingsDraft, adminHdr(adminToken));
       setAlertSettings({ ...alertSettings, thresholds: { ...alertSettingsDraft.thresholds }, expiration: { ...alertSettingsDraft.expiration } });
       setAlertSettingsOpen(false);
+      toast.success('Alert settings saved');
     } catch (e) {
       log.error('Failed to save alert settings', { error: e.message });
+      toast.error(`Failed to save alert settings: ${e.response?.data?.error || e.message}`);
     } finally {
       setAlertSettingsSaving(false);
     }
