@@ -1462,7 +1462,17 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                     min="1"
                     max="100"
                     value={alertSettingsDraft.thresholds.url_404_spike_pct ?? ''}
-                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, url_404_spike_pct: parseFloat(e.target.value) || 0 } }))}
+                    onChange={e => {
+                      const raw = e.target.value;
+                      const parsed = parseFloat(raw);
+                      // Keep the previous value if input is blank/invalid so
+                      // an empty field never silently coerces to 0% (which
+                      // would alert on the slightest failure).
+                      const next = (raw === '' || Number.isNaN(parsed))
+                        ? alertSettingsDraft.thresholds.url_404_spike_pct
+                        : parsed;
+                      setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, url_404_spike_pct: next } }));
+                    }}
                     className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
                   />
                 </div>
