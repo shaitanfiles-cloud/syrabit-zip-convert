@@ -226,6 +226,99 @@ async def get_historical_daily(days: int = 90) -> Optional[list]:
         return None
 
 
+async def get_verified_bot_traffic_cf(since: datetime, until: datetime) -> Optional[dict]:
+    """Pull Cloudflare's verified-bot breakdown for the zone between ``since``
+    and ``until`` (both UTC-aware datetimes). Used by the Monday weekly
+    bot-traffic report (Task #314) — see ``routes/bot_traffic_report.py``.
+
+    Returns ``{"by_category": {...}, "bot_total": int, "bot_5xx": int,
+    "source": "cloudflare"}``. Returns ``None`` if Cloudflare is not
+    configured or the query fails (the caller treats ``None`` as a signal
+    to fire a fallback admin alert)."""
+    if not is_configured():
+        return None
+
+    zone_id = _cfg()["zone_id"]
+    # Normalize both naive and timezone-aware inputs to UTC before
+    # formatting, so a caller passing IST/PST times still produces a
+    # correct UTC ISO string for Cloudflare.
+    if since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
+    else:
+        since = since.astimezone(timezone.utc)
+    if until.tzinfo is None:
+        until = until.replace(tzinfo=timezone.utc)
+    else:
+        until = until.astimezone(timezone.utc)
+    since_str = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+    until_str = until.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    query = """
+    query VerifiedBots($zoneTag: String!, $since: Time!, $until: Time!) {
+      viewer {
+        zones(filter: { zoneTag: $zoneTag }) {
+          categories: httpRequestsAdaptiveGroups(
+            filter: {
+              datetime_geq: $since,
+              datetime_lt: $until,
+              verifiedBotCategory_neq: ""
+            }
+            limit: 50
+            orderBy: [count_DESC]
+          ) {
+            count
+            dimensions { verifiedBotCategory }
+          }
+          bot_5xx: httpRequestsAdaptiveGroups(
+            filter: {
+              datetime_geq: $since,
+              datetime_lt: $until,
+              verifiedBotCategory_neq: "",
+              edgeResponseStatus_geq: 500,
+              edgeResponseStatus_lt: 600
+            }
+            limit: 1
+          ) {
+            count
+          }
+        }
+      }
+    }
+    """
+    variables = {"zoneTag": zone_id, "since": since_str, "until": until_str}
+    data = await _graphql_query(query, variables)
+    if not data:
+        return None
+    try:
+        zones = data.get("viewer", {}).get("zones", [])
+        if not zones:
+            return None
+        zone = zones[0]
+        by_category: dict = {}
+        total = 0
+        for row in zone.get("categories", []) or []:
+            name = (row.get("dimensions", {}) or {}).get("verifiedBotCategory") or ""
+            count = int(row.get("count", 0) or 0)
+            if not name:
+                continue
+            by_category[name] = by_category.get(name, 0) + count
+            total += count
+        bot_5xx = 0
+        for row in zone.get("bot_5xx", []) or []:
+            bot_5xx += int(row.get("count", 0) or 0)
+        return {
+            "by_category": by_category,
+            "bot_total": total,
+            "bot_5xx": bot_5xx,
+            "window_start": since_str,
+            "window_end": until_str,
+            "source": "cloudflare",
+        }
+    except Exception as e:
+        logger.warning(f"CF verified-bot parsing failed: {e}")
+        return None
+
+
 async def get_top_pages_cf(days: int = 30, limit: int = 20) -> Optional[list]:
     if not is_configured():
         return None

@@ -119,6 +119,7 @@ from seed import ensure_seeded
 from db_ops import _supa, supa_insert_activity_log
 from metrics import _bg_health_loop, _alerting_loop
 from routes.bot_discovery import _endpoint_health_alert_loop, _seo_health_alert_loop, _seo_weekly_digest_loop, _cf_bot_report_loop
+from routes.bot_traffic_report import _bot_traffic_report_loop
 
 from prompts import build_system_prompt, _classify_question
 from syllabus_embedder import SyllabusEmbedder
@@ -570,6 +571,9 @@ async def lifespan(app):
         # Single-leader: only one replica should query the CF GraphQL API
         # and write the per-UA report each Monday.
         asyncio.create_task(_cf_bot_report_loop())
+    # Task #314 uses atomic Mongo CAS via db.job_locks for dedup across
+    # replicas, so it does not need a leader gate.
+    asyncio.create_task(_bot_traffic_report_loop())
     from middleware import _init_blocked_ip_cache
     asyncio.create_task(_init_blocked_ip_cache())
     from routes.admin_advanced import _collection_size_snapshot_loop, _cache_warm_loop
@@ -740,6 +744,8 @@ api.include_router(qa_admin_router)
 
 from routes.bot_discovery import router as bot_discovery_router
 api.include_router(bot_discovery_router)
+from routes.bot_traffic_report import router as bot_traffic_report_router
+api.include_router(bot_traffic_report_router)
 
 app.include_router(api)
 
