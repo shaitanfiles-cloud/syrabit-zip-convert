@@ -12,7 +12,6 @@ const CATEGORIES = [
   {
     icon: Brain,
     color: '#7c3aed',
-    featureCount: 13,
     en: {
       title: 'AI Study Assistant',
       description: 'Ask Syra anything about your syllabus and get instant, source-cited answers grounded in your actual chapter content. Supports both English and Assamese.',
@@ -27,7 +26,6 @@ const CATEGORIES = [
   {
     icon: BookOpen,
     color: '#2563eb',
-    featureCount: 8,
     en: {
       title: 'Smart Content Library',
       description: 'Browse 55+ subjects organized by board, class, and stream. Each subject is a structured knowledge hub with chapter-wise notes, summaries, and study guides.',
@@ -42,7 +40,6 @@ const CATEGORIES = [
   {
     icon: GraduationCap,
     color: '#059669',
-    featureCount: 21,
     en: {
       title: 'Exam Preparation Tools',
       description: 'Previous year questions with solutions, mark-wise question banks (1, 2, 3, 5, 10 marks), MCQs, important questions, flashcards, and memory tricks — all aligned to your board syllabus.',
@@ -57,7 +54,6 @@ const CATEGORIES = [
   {
     icon: Smartphone,
     color: '#d97706',
-    featureCount: 6,
     en: {
       title: 'Offline & Mobile Ready',
       description: 'Install Syrabit.ai on your phone like a native app. Access cached study materials even without internet — perfect for students in areas with limited connectivity.',
@@ -72,7 +68,6 @@ const CATEGORIES = [
   {
     icon: Sparkles,
     color: '#ec4899',
-    featureCount: 18,
     en: {
       title: 'Personalized Learning',
       description: 'Set your board, class, and stream during onboarding and get a tailored experience. Your AI tutor adapts to your academic context, showing only relevant content.',
@@ -87,7 +82,6 @@ const CATEGORIES = [
   {
     icon: Search,
     color: '#0891b2',
-    featureCount: 9,
     en: {
       title: 'Smart Search & Discovery',
       description: 'Find any topic instantly with intelligent search across all subjects. Deep-topic landing pages help you explore concepts with structured explanations and related questions.',
@@ -102,7 +96,6 @@ const CATEGORIES = [
   {
     icon: Languages,
     color: '#6366f1',
-    featureCount: 4,
     en: {
       title: 'Bilingual Support',
       description: 'Full English and Assamese (অসমীয়া) support across the entire platform — from AI answers to study notes to the interface itself. Switch languages anytime with one tap.',
@@ -117,7 +110,6 @@ const CATEGORIES = [
   {
     icon: CreditCard,
     color: '#dc2626',
-    featureCount: 12,
     en: {
       title: 'Flexible Plans & Payments',
       description: 'Start free with 30 daily credits. Upgrade to Starter or Pro for more credits and premium content. Pay via UPI, cards, or international methods.',
@@ -132,7 +124,6 @@ const CATEGORIES = [
   {
     icon: Shield,
     color: '#475569',
-    featureCount: 8,
     en: {
       title: 'Trust & Accuracy',
       description: 'Every AI answer includes source citations so you can verify the information. Syra never makes things up — if it can\'t find relevant content with high confidence, it tells you.',
@@ -147,7 +138,6 @@ const CATEGORIES = [
   {
     icon: Bell,
     color: '#7c2d12',
-    featureCount: 8,
     en: {
       title: 'Notifications & Updates',
       description: 'Get push notifications for exam schedules, new content, and important updates. Stay informed about board exam routines, result dates, and study reminders.',
@@ -204,7 +194,6 @@ const _t = {
     ctaHeading: 'Start Learning for Free',
     ctaSubtext: 'No credit card required. Get 30 free credits every day.',
     ctaButton: 'Try Syrabit.ai',
-    features: 'features',
   },
   as: {
     pageTitle: 'প্ৰযুক্তি আৰু বৈশিষ্ট্য',
@@ -233,7 +222,6 @@ const _t = {
     ctaHeading: 'বিনামূলীয়াকৈ শিকিবলৈ আৰম্ভ কৰক',
     ctaSubtext: 'কোনো ক্ৰেডিট কাৰ্ডৰ প্ৰয়োজন নাই। প্ৰতিদিনে ৩০ টা বিনামূলীয়া ক্ৰেডিট পাওক।',
     ctaButton: 'Syrabit.ai চেষ্টা কৰক',
-    features: 'বৈশিষ্ট্য',
   },
 };
 
@@ -252,11 +240,6 @@ function getJsonLd(lang) {
         ? 'অসমৰ AHSEC, SEBA আৰু ডিগ্ৰী ছাত্ৰ-ছাত্ৰীৰ বাবে ১৫৯ টা বৈশিষ্ট্যৰে চালিত AI পৰীক্ষা প্ৰস্তুতি মঞ্চ।'
         : 'AI exam preparation platform with 159 features for AHSEC, SEBA and Degree students in Assam.',
       featureList,
-      offers: [
-        { '@type': 'Offer', name: 'Free Plan', price: '0', priceCurrency: 'INR' },
-        { '@type': 'Offer', name: 'Starter Plan', price: '99', priceCurrency: 'INR' },
-        { '@type': 'Offer', name: 'Pro Plan', price: '999', priceCurrency: 'INR' },
-      ],
       aggregateRating: {
         '@type': 'AggregateRating',
         ratingValue: '4.8',
@@ -323,7 +306,7 @@ function StatCard({ value, label }) {
   );
 }
 
-function CategoryCard({ category, lang, t }) {
+function CategoryCard({ category, lang }) {
   const Icon = category.icon;
   const c = category[lang] || category.en;
   return (
@@ -337,7 +320,6 @@ function CategoryCard({ category, lang, t }) {
         </div>
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-foreground text-base leading-snug">{c.title}</h3>
-          <p className="text-xs text-muted-foreground mt-0.5">{category.featureCount} {t.features}</p>
         </div>
       </div>
       <p className="text-sm text-foreground/70 leading-relaxed mb-4">{c.description}</p>
@@ -388,7 +370,7 @@ export default function TechnologyPage() {
             <p className="text-muted-foreground text-sm mb-6">{t.categoriesSubtext}</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {CATEGORIES.map((cat, i) => (
-                <CategoryCard key={i} category={cat} lang={contentLang} t={t} />
+                <CategoryCard key={i} category={cat} lang={contentLang} />
               ))}
             </div>
           </div>
