@@ -1129,8 +1129,8 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
                     if isinstance(ts, datetime):
                         evt["timestamp"] = ts.isoformat()
                 endpoint_health_history[ep] = events
-        except Exception:
-            pass
+        except Exception as hist_err:
+            logger.debug("Health history aggregation failed: %s", hist_err)
 
         return {
             "total_pushes": total_pushes,
