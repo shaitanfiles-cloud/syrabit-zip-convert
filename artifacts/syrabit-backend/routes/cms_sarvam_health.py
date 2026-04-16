@@ -1919,6 +1919,59 @@ def _track_bot_render(page_type: str, success: bool):
     key = f"{page_type}:{'ok' if success else 'fail'}"
     _bot_render_by_type[key] = _bot_render_by_type.get(key, 0) + 1
 
+
+_BOT_KNOWN_BOARDS = {"ahsec", "seba", "degree", "cbse", "nep"}
+
+
+def derive_bot_cache_key(path: str):
+    """Derive the bot-render cache key for a given URL path.
+
+    Returns a string cache key for supported page types, or None when the
+    middleware should fall through to the regular handler.
+    """
+    path = (path or "/").rstrip("/") or "/"
+    if "." in path.split("/")[-1]:
+        return None
+    parts = [p for p in path.split("/") if p]
+    n = len(parts)
+
+    if n == 0 or (n == 1 and parts[0] == "library"):
+        return "_homepage_"
+    if n == 1 and parts[0] == "pricing":
+        return "_pricing_"
+    if n == 1 and parts[0] == "terms":
+        return "_terms_"
+    if n == 1 and parts[0] == "privacy":
+        return "_privacy_"
+    if n == 1 and parts[0] == "about":
+        return "_about_"
+    if n == 1 and parts[0] == "chat":
+        return "_chat_"
+    if n == 1 and parts[0] == "curriculum":
+        return "_curriculum_"
+    if n == 1 and parts[0] == "exam-routine":
+        return "_exam_routine_"
+    if n == 1 and parts[0] in _BOT_KNOWN_BOARDS:
+        return f"_board_/{parts[0]}"
+    if n == 2 and parts[0] == "learn":
+        return f"_learn_/{parts[1]}"
+    if n == 2 and parts[0] == "pyq":
+        return f"_pyq_/{parts[1]}"
+    if n == 2 and parts[0] == "subject":
+        return f"_subject_id_/{parts[1]}"
+    if n == 2 and parts[0] in _BOT_KNOWN_BOARDS:
+        return f"_board_class_/{parts[0]}/{parts[1]}"
+    if n == 3:
+        return f"_subj_/{parts[0]}/{parts[1]}/{parts[2]}"
+    if n in (4, 5):
+        page_type_part = parts[4] if n == 5 else None
+        if page_type_part and page_type_part not in _VALID_PAGE_TYPES:
+            return None
+        current_type = page_type_part or "notes"
+        return f"{parts[0]}/{parts[1]}/{parts[2]}/{parts[3]}/{current_type}"
+    return None
+
+
 class BotRenderMiddleware(BaseHTTPMiddleware):
     """Intercept requests from bot user-agents and return pre-rendered HTML.
 
@@ -2028,47 +2081,11 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
         if "." in path.split("/")[-1]:
             return await self._safe_call_next(request, call_next)
 
+        cache_key = derive_bot_cache_key(path)
+        if cache_key is None:
+            return await self._safe_call_next(request, call_next)
         parts = [p for p in path.split("/") if p]
         n = len(parts)
-
-        _KNOWN_BOARDS = {"ahsec", "seba", "degree", "cbse", "nep"}
-
-        if n == 0 or (n == 1 and parts[0] == "library"):
-            cache_key = "_homepage_"
-        elif n == 1 and parts[0] == "pricing":
-            cache_key = "_pricing_"
-        elif n == 1 and parts[0] == "terms":
-            cache_key = "_terms_"
-        elif n == 1 and parts[0] == "privacy":
-            cache_key = "_privacy_"
-        elif n == 1 and parts[0] == "about":
-            cache_key = "_about_"
-        elif n == 1 and parts[0] == "chat":
-            cache_key = "_chat_"
-        elif n == 1 and parts[0] == "curriculum":
-            cache_key = "_curriculum_"
-        elif n == 1 and parts[0] == "exam-routine":
-            cache_key = "_exam_routine_"
-        elif n == 1 and parts[0] in _KNOWN_BOARDS:
-            cache_key = f"_board_/{parts[0]}"
-        elif n == 2 and parts[0] == "learn":
-            cache_key = f"_learn_/{parts[1]}"
-        elif n == 2 and parts[0] == "pyq":
-            cache_key = f"_pyq_/{parts[1]}"
-        elif n == 2 and parts[0] == "subject":
-            cache_key = f"_subject_id_/{parts[1]}"
-        elif n == 2 and parts[0] in _KNOWN_BOARDS:
-            cache_key = f"_board_class_/{parts[0]}/{parts[1]}"
-        elif n == 3:
-            cache_key = f"_subj_/{parts[0]}/{parts[1]}/{parts[2]}"
-        elif n in (4, 5):
-            page_type_part = parts[4] if n == 5 else None
-            if page_type_part and page_type_part not in _VALID_PAGE_TYPES:
-                return await self._safe_call_next(request, call_next)
-            current_type = page_type_part or "notes"
-            cache_key = f"{parts[0]}/{parts[1]}/{parts[2]}/{parts[3]}/{current_type}"
-        else:
-            return await self._safe_call_next(request, call_next)
 
         cached_html = _bot_html_cache.get(cache_key)
         if cached_html:

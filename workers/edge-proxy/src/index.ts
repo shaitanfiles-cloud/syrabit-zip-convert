@@ -856,7 +856,7 @@ const BOT_SKIP_EXTENSIONS = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|e
 const BOT_CACHE_TTL_CONTENT = 3600;
 const BOT_CACHE_TTL_STATIC = 86400;
 
-function getBotPageCacheKey(pathname: string): string | null {
+export function getBotPageCacheKey(pathname: string): string | null {
   const clean = pathname.replace(/\/+$/, "") || "/";
 
   if (BOT_SKIP_EXTENSIONS.test(clean)) return null;
@@ -878,7 +878,7 @@ function getBotPageCacheKey(pathname: string): string | null {
   return null;
 }
 
-function getBotCacheTtl(cacheKey: string): number {
+export function getBotCacheTtl(cacheKey: string): number {
   return cacheKey.startsWith("bot:static:") ? BOT_CACHE_TTL_STATIC : BOT_CACHE_TTL_CONTENT;
 }
 
