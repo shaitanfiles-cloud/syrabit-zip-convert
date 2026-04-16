@@ -40,6 +40,48 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _schedule_indexnow_for_chapter_ids(chapter_ids: List[str], source: str = "admin_bulk"):
+    """Resolve chapter IDs to public URLs and queue them with the IndexNow
+    batcher. Used by bulk import / regeneration endpoints so that newly
+    generated or refreshed pages get notified to search engines on
+    completion of the batch (instead of relying on per-row hooks that
+    don't fire for bulk paths)."""
+    if not chapter_ids:
+        return 0
+    try:
+        from routes.bot_discovery import indexnow_batcher
+        chapters = await db.chapters.find(
+            {"id": {"$in": chapter_ids}},
+            {"_id": 0, "id": 1, "slug": 1, "subject_id": 1},
+        ).to_list(len(chapter_ids))
+        subject_ids = list({ch.get("subject_id", "") for ch in chapters if ch.get("subject_id")})
+        subjects = {}
+        if subject_ids:
+            subj_docs = await db.subjects.find(
+                {"id": {"$in": subject_ids}},
+                {"_id": 0, "id": 1, "board_slug": 1, "class_slug": 1, "slug": 1},
+            ).to_list(len(subject_ids))
+            subjects = {s["id"]: s for s in subj_docs}
+        paths = []
+        for ch in chapters:
+            sid = ch.get("subject_id", "")
+            ch_slug = ch.get("slug", "")
+            subj = subjects.get(sid, {})
+            bs = subj.get("board_slug", "")
+            cs = subj.get("class_slug", "")
+            ss = subj.get("slug", "")
+            if bs and cs and ss and ch_slug:
+                paths.append(f"/{bs}/{cs}/{ss}/{ch_slug}")
+        if not paths:
+            return 0
+        await indexnow_batcher.queue_raw_paths(paths)
+        await indexnow_batcher.flush_force(source=source)
+        return len(paths)
+    except Exception as e:
+        logger.debug(f"Bulk IndexNow notify failed ({source}): {e}")
+        return 0
+
+
 def _extract_content_topics(content: str) -> list[str]:
     topics = []
     skip = {"summary", "introduction", "conclusion", "key points", "key facts"}
@@ -816,12 +858,16 @@ async def admin_bulk_translate_subject(data: dict = Body(...), admin: dict = Dep
             results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "failed", "reason": str(e)[:100]})
 
     _invalidate_content_cache("chapters")
+    touched_ids = [r["chapter_id"] for r in results if r["status"] == "translated"]
+    indexnow_notified = await _schedule_indexnow_for_chapter_ids(
+        touched_ids, source="admin_bulk_translate_subject")
     return {
         "subject_id": subject_id,
         "total": len(chapters),
         "translated": sum(1 for r in results if r["status"] == "translated"),
         "skipped": sum(1 for r in results if r["status"] == "skipped"),
         "failed": sum(1 for r in results if r["status"] == "failed"),
+        "indexnow_notified": indexnow_notified,
         "results": results,
     }
 
@@ -872,11 +918,15 @@ async def admin_bulk_translate_all(data: dict = Body(default={}), admin: dict = 
             results.append({"chapter_id": ch["id"], "title": ch.get("title", ""), "status": "failed", "reason": str(e)[:100]})
 
     _invalidate_content_cache("chapters")
+    touched_ids = [r["chapter_id"] for r in results if r["status"] == "translated"]
+    indexnow_notified = await _schedule_indexnow_for_chapter_ids(
+        touched_ids, source="admin_bulk_translate_all")
     return {
         "total": len(chapters),
         "translated": sum(1 for r in results if r["status"] == "translated"),
         "skipped": sum(1 for r in results if r["status"] == "skipped"),
         "failed": sum(1 for r in results if r["status"] == "failed"),
+        "indexnow_notified": indexnow_notified,
         "results": results,
     }
 
@@ -923,10 +973,14 @@ async def admin_bulk_regenerate_all_notes(admin: dict = Depends(get_admin_user))
             await asyncio.sleep(2)
 
     _invalidate_content_cache("chapters")
+    touched_ids = [r["chapter_id"] for r in results if r.get("status") == "ok"]
+    indexnow_notified = await _schedule_indexnow_for_chapter_ids(
+        touched_ids, source="admin_bulk_regenerate_notes")
     return {
         "total": total,
         "succeeded": ok,
         "failed": fail,
+        "indexnow_notified": indexnow_notified,
         "results": results,
     }
 

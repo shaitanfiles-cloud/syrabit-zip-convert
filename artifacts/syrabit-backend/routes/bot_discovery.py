@@ -660,6 +660,33 @@ async def _log_indexnow_push(urls: List[str], source: str, results: dict):
         logger.debug(f"IndexNow log write failed: {e}")
 
 
+async def _record_submitted_urls(urls: List[str], source: str):
+    """Persist the full set of URLs successfully submitted to at least one
+    IndexNow endpoint, so the nightly diff job can identify URLs that have
+    never been submitted before."""
+    if not urls:
+        return
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return
+        now = datetime.now(timezone.utc)
+        ops = []
+        from pymongo import UpdateOne
+        for u in dict.fromkeys(urls):
+            ops.append(UpdateOne(
+                {"url": u},
+                {"$set": {"url": u, "last_submitted_at": now, "last_source": source},
+                 "$inc": {"submit_count": 1}},
+                upsert=True,
+            ))
+        if ops:
+            for i in range(0, len(ops), 1000):
+                await db.indexnow_submitted_urls.bulk_write(ops[i:i + 1000], ordered=False)
+    except Exception as e:
+        logger.debug(f"IndexNow submitted-url record failed: {e}")
+
+
 INDEXNOW_ENDPOINTS = [
     "https://api.indexnow.org/indexnow",
     "https://www.bing.com/indexnow",
@@ -714,6 +741,8 @@ async def push_indexnow(
         all_results.append({"chunk_index": i // 10000, "url_count": len(batch), "endpoints": chunk_results})
     results_flat = all_results[0]["endpoints"] if len(all_results) == 1 else {"chunks": all_results}
     asyncio.create_task(_log_indexnow_push(unique_urls, source, results_flat))
+    if any(endpoint_success.values()):
+        asyncio.create_task(_record_submitted_urls(unique_urls, source))
     return endpoint_success
 
 
@@ -866,6 +895,190 @@ class IndexNowBatcher:
 
 
 indexnow_batcher = IndexNowBatcher()
+
+
+_SITEMAP_DIFF_INTERVAL_S = 24 * 3600
+_SITEMAP_DIFF_INITIAL_DELAY_S = 600
+_SITEMAP_DIFF_MAX_QUEUE = 5000
+
+
+async def _collect_current_sitemap_urls() -> List[str]:
+    """Build the canonical set of URLs we expect search engines to know about
+    by mirroring the sitemap generation in `seo_engine.py` exactly:
+    STATIC_PAGES, sitemap-subjects, sitemap-chapters, sitemap-learn, and
+    every published seo_page (notes/mcqs/pyqs/examples/definition).
+
+    Reusing the seo_engine helpers (rather than re-implementing the queries
+    here) guarantees parity with what is actually served at /sitemap*.xml."""
+    urls: List[str] = []
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return urls
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # Static pages — same set served by /sitemap-pages.xml
+        try:
+            from seo_engine import STATIC_PAGES
+            for path, _freq, _pri in STATIC_PAGES:
+                urls.append(f"{BASE_URL}{path}")
+        except Exception as e:
+            logger.debug(f"sitemap diff: STATIC_PAGES import failed: {e}")
+
+        # Subjects — same logic as /sitemap-subjects.xml
+        try:
+            lib_subjects = await db.subjects.find({"status": "published"}, {"_id": 0}).to_list(500)
+            lib_streams = {s["id"]: s for s in await db.streams.find({}, {"_id": 0}).to_list(500)}
+            lib_classes = {c["id"]: c for c in await db.classes.find({}, {"_id": 0}).to_list(500)}
+            lib_boards = {b["id"]: b for b in await db.boards.find({}, {"_id": 0}).to_list(500)}
+            sub_map: Dict[str, dict] = {}
+            for sub in lib_subjects:
+                stream = lib_streams.get(sub.get("stream_id", ""))
+                cls = lib_classes.get(stream.get("class_id", "")) if stream else None
+                board = lib_boards.get(cls.get("board_id", "")) if cls else None
+                if not (board and cls and sub.get("slug")):
+                    continue
+                b_slug = board.get("slug", "")
+                c_slug = cls.get("slug", "")
+                if not b_slug or not c_slug:
+                    continue
+                urls.append(f"{BASE_URL}/{b_slug}/{c_slug}/{sub['slug']}")
+                sub_map[sub["id"]] = {"b": b_slug, "c": c_slug, "s": sub["slug"]}
+
+            # Chapters — same logic as /sitemap-chapters.xml
+            try:
+                import re as _re
+                chapters = await db.chapters.find(
+                    {}, {"_id": 0, "subject_id": 1, "slug": 1, "title": 1},
+                ).to_list(5000)
+                for ch in chapters:
+                    sub = sub_map.get(ch.get("subject_id", ""))
+                    if not sub:
+                        continue
+                    ch_slug = ch.get("slug") or _re.sub(
+                        r"[^a-z0-9]+", "-",
+                        (ch.get("title") or "").lower(),
+                    ).strip("-")
+                    if not ch_slug:
+                        continue
+                    urls.append(f"{BASE_URL}/{sub['b']}/{sub['c']}/{sub['s']}/{ch_slug}")
+            except Exception as e:
+                logger.debug(f"sitemap diff: chapter fetch failed: {e}")
+        except Exception as e:
+            logger.debug(f"sitemap diff: subjects fetch failed: {e}")
+
+        # CMS / learn pages — same query as _fetch_learn_entries
+        try:
+            docs = await db.cms_documents.find(
+                {"status": "published", "doc_type": {"$ne": "personalized"}},
+                {"_id": 0, "seo_slug": 1, "id": 1},
+            ).to_list(5000)
+            for d in docs:
+                slug = (d.get("seo_slug") or d.get("id") or "").strip()
+                if slug:
+                    urls.append(f"{BASE_URL}/learn/{slug}")
+        except Exception as e:
+            logger.debug(f"sitemap diff: cms_documents fetch failed: {e}")
+
+        # Notes / MCQs / PYQs / examples / definitions — every published seo_page
+        try:
+            valid_chains: Optional[set] = None
+            try:
+                from seo_engine import _build_valid_slug_chains
+                valid_chains = await _build_valid_slug_chains()
+            except Exception as e:
+                logger.debug(f"sitemap diff: valid_chains load failed: {e}")
+            allowed_types = {"notes", "mcqs", "important-questions", "examples", "definition"}
+            pages = await db.seo_pages.find(
+                {"status": "published"},
+                {"_id": 0, "board_slug": 1, "class_slug": 1,
+                 "subject_slug": 1, "topic_slug": 1, "page_type": 1},
+            ).to_list(50000)
+            for p in pages:
+                if p.get("page_type", "notes") not in allowed_types:
+                    continue
+                if valid_chains is not None and (
+                    p.get("board_slug"), p.get("class_slug"), p.get("subject_slug")
+                ) not in valid_chains:
+                    continue
+                u = _page_doc_to_url(p)
+                if u:
+                    urls.append(u)
+        except Exception as e:
+            logger.debug(f"sitemap diff: seo_pages fetch failed: {e}")
+    except Exception as e:
+        logger.warning(f"sitemap diff URL collection failed: {e}")
+
+    return list(dict.fromkeys(urls))
+
+
+async def diff_sitemap_against_submitted(source: str = "sitemap_diff") -> dict:
+    """Find URLs in the current sitemap that have never been pushed to
+    IndexNow and queue them for batched submission. Returns a small summary
+    suitable for logging or admin display."""
+    from deps import db, is_mongo_available
+    summary = {"sitemap_total": 0, "already_submitted": 0, "new_queued": 0,
+               "skipped_capacity": 0, "ran_at": datetime.now(timezone.utc).isoformat()}
+
+    candidates = await _collect_current_sitemap_urls()
+    summary["sitemap_total"] = len(candidates)
+    if not candidates:
+        return summary
+
+    submitted: set = set()
+    try:
+        if await is_mongo_available():
+            cursor = db.indexnow_submitted_urls.find(
+                {"url": {"$in": candidates}},
+                {"_id": 0, "url": 1},
+            )
+            async for doc in cursor:
+                u = doc.get("url")
+                if u:
+                    submitted.add(u)
+    except Exception as e:
+        logger.warning(f"sitemap diff: submitted-url lookup failed: {e}")
+
+    new_urls = [u for u in candidates if u not in submitted]
+    summary["already_submitted"] = len(candidates) - len(new_urls)
+
+    if len(new_urls) > _SITEMAP_DIFF_MAX_QUEUE:
+        summary["skipped_capacity"] = len(new_urls) - _SITEMAP_DIFF_MAX_QUEUE
+        new_urls = new_urls[:_SITEMAP_DIFF_MAX_QUEUE]
+
+    if new_urls:
+        await indexnow_batcher.queue(new_urls)
+        await indexnow_batcher.flush_force(source=source)
+    summary["new_queued"] = len(new_urls)
+
+    try:
+        if await is_mongo_available():
+            await db.indexnow_sitemap_diff_log.insert_one({
+                **summary,
+                "ran_at": datetime.now(timezone.utc),
+            })
+    except Exception as e:
+        logger.debug(f"sitemap diff log write failed: {e}")
+
+    logger.info(
+        "IndexNow sitemap diff: total=%d submitted=%d new_queued=%d skipped=%d",
+        summary["sitemap_total"], summary["already_submitted"],
+        summary["new_queued"], summary["skipped_capacity"],
+    )
+    return summary
+
+
+async def _sitemap_indexnow_diff_loop():
+    """Background loop: nightly compare the live sitemap against the set of
+    URLs we have already pushed to IndexNow and queue any missing URLs."""
+    await asyncio.sleep(_SITEMAP_DIFF_INITIAL_DELAY_S)
+    while True:
+        try:
+            await diff_sitemap_against_submitted(source="nightly_sitemap_diff")
+        except Exception as exc:
+            logger.warning("Sitemap-diff IndexNow loop iteration failed: %s", exc)
+        await asyncio.sleep(_SITEMAP_DIFF_INTERVAL_S)
 
 
 from auth_deps import get_admin_user
@@ -1972,6 +2185,39 @@ async def admin_indexnow_push(admin: dict = Depends(get_admin_user)):
         await push_indexnow(urls, source="admin_manual")
 
     return {"status": "ok", "urls_pushed": len(urls)}
+
+
+@router.post("/admin/indexnow/resubmit-recent")
+async def admin_indexnow_resubmit_recent(admin: dict = Depends(get_admin_user)):
+    """Force a full re-submission cycle: push the most recently updated
+    pages immediately, run a sitemap diff to capture any URLs that have
+    never been submitted, and flush the batcher queue."""
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    pages = await db.seo_pages.find(
+        {"status": "published"},
+        {"_id": 0, "board_slug": 1, "class_slug": 1, "subject_slug": 1,
+         "topic_slug": 1, "page_type": 1}
+    ).sort("updated_at", -1).limit(500).to_list(500)
+    recent_urls = []
+    for p in pages:
+        u = _page_doc_to_url(p)
+        if u:
+            recent_urls.append(u)
+    if recent_urls:
+        await push_indexnow(recent_urls, source="admin_resubmit_recent")
+
+    diff_summary = await diff_sitemap_against_submitted(source="admin_resubmit_recent")
+    flushed = await indexnow_batcher.flush_force(source="admin_resubmit_recent")
+
+    return {
+        "status": "ok",
+        "recent_urls_pushed": len(recent_urls),
+        "sitemap_diff": diff_summary,
+        "batcher_flushed": flushed,
+    }
 
 
 @router.get("/admin/indexnow/history")

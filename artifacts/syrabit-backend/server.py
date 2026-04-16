@@ -561,6 +561,9 @@ async def lifespan(app):
     asyncio.create_task(_exam_reminder_loop())
     asyncio.create_task(_alerting_loop())
     asyncio.create_task(_endpoint_health_alert_loop())
+    if _is_leader:
+        from routes.bot_discovery import _sitemap_indexnow_diff_loop
+        asyncio.create_task(_sitemap_indexnow_diff_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
     from middleware import _init_blocked_ip_cache

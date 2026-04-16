@@ -85,6 +85,38 @@ def save_progress(progress):
     with open(PROGRESS_FILE, "w") as f:
         json.dump(progress, f)
 
+async def notify_indexnow(db, translated_chapter_ids):
+    if not translated_chapter_ids:
+        return
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from routes.bot_discovery import push_indexnow, BASE_URL
+        chapters = await db.chapters.find(
+            {"id": {"$in": translated_chapter_ids}},
+            {"_id": 0, "id": 1, "slug": 1, "subject_id": 1},
+        ).to_list(len(translated_chapter_ids))
+        subject_ids = list({c.get("subject_id", "") for c in chapters if c.get("subject_id")})
+        subj_map = {}
+        if subject_ids:
+            subj_docs = await db.subjects.find(
+                {"id": {"$in": subject_ids}},
+                {"_id": 0, "id": 1, "board_slug": 1, "class_slug": 1, "slug": 1},
+            ).to_list(len(subject_ids))
+            subj_map = {s["id"]: s for s in subj_docs}
+        urls = []
+        for ch in chapters:
+            subj = subj_map.get(ch.get("subject_id", ""), {})
+            bs, cs, ss = subj.get("board_slug", ""), subj.get("class_slug", ""), subj.get("slug", "")
+            ch_slug = ch.get("slug", "")
+            if bs and cs and ss and ch_slug:
+                urls.append(f"{BASE_URL}/{bs}/{cs}/{ss}/{ch_slug}")
+        if urls:
+            print(f"IndexNow: pushing {len(urls)} URLs", flush=True)
+            await push_indexnow(urls, source="cli_bulk_translate")
+    except Exception as e:
+        print(f"IndexNow notify failed: {e}", flush=True)
+
+
 async def main():
     mongo = AsyncIOMotorClient(MONGO_URL, serverSelectionTimeoutMS=5000)
     db = mongo[DB_NAME]
@@ -109,6 +141,7 @@ async def main():
         return
 
     progress = {"ok": 0, "fail": 0, "skip": 0, "total": len(needs)}
+    translated_ids = []
 
     async with httpx.AsyncClient() as client:
         for i, ch in enumerate(needs):
@@ -129,6 +162,7 @@ async def main():
                         {"$set": {"content_as": translated, "content_as_generated_at": datetime.now(timezone.utc).isoformat()}}
                     )
                     progress["ok"] += 1
+                    translated_ids.append(ch["id"])
                     print(f"[{i+1}/{len(needs)}] OK {title} ({len(chunks)}ch, {len(translated.split())}w, {elapsed:.1f}s)", flush=True)
                 else:
                     progress["fail"] += 1
@@ -142,6 +176,7 @@ async def main():
 
     print(f"\n=== COMPLETE: {progress['ok']} ok, {progress['skip']} skip, {progress['fail']} fail ===", flush=True)
     save_progress(progress)
+    await notify_indexnow(db, translated_ids)
     mongo.close()
 
 if __name__ == "__main__":

@@ -271,6 +271,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [indexNowStats, setIndexNowStats] = useState(null);
   const [indexNowHistory, setIndexNowHistory] = useState(null);
   const [retryingEndpoint, setRetryingEndpoint] = useState(null);
+  const [resubmittingIndexNow, setResubmittingIndexNow] = useState(false);
+  const [resubmitMessage, setResubmitMessage] = useState('');
   const [alertHistory, setAlertHistory] = useState(null);
   const [seoHealth, setSeoHealth] = useState(null);
   const [seoHealthRefreshing, setSeoHealthRefreshing] = useState(false);
@@ -1811,8 +1813,41 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           <div className="flex items-center gap-2 mb-4">
             <Search size={16} className="text-green-500" />
             <h3 className="text-gray-700 font-semibold">IndexNow Push Status</h3>
-            <span className="ml-auto text-[10px] text-gray-400">auto-push active</span>
+            <button
+              onClick={async () => {
+                if (resubmittingIndexNow) return;
+                setResubmittingIndexNow(true);
+                try {
+                  const res = await axios.post(`${API_BASE}/admin/indexnow/resubmit-recent`, {}, adminHdr(adminToken));
+                  const d = res.data || {};
+                  const sd = d.sitemap_diff || {};
+                  setResubmitMessage(
+                    `Pushed ${d.recent_urls_pushed ?? 0} recent · sitemap diff: ${sd.new_queued ?? 0} new (${sd.sitemap_total ?? 0} total)`
+                  );
+                  try {
+                    const statsRes = await axios.get(`${API_BASE}/admin/indexnow/stats`, adminHdr(adminToken));
+                    setIndexNowStats(statsRes.data);
+                  } catch {}
+                } catch (e) {
+                  setResubmitMessage(`Re-submit failed: ${e?.response?.data?.detail || e.message || 'unknown error'}`);
+                } finally {
+                  setResubmittingIndexNow(false);
+                  setTimeout(() => setResubmitMessage(''), 8000);
+                }
+              }}
+              disabled={resubmittingIndexNow}
+              className="ml-auto text-[10px] px-2.5 py-1 rounded-md bg-green-600 text-white hover:bg-green-700 transition-colors font-medium flex items-center gap-1 disabled:opacity-50"
+              title="Re-submit recent URLs and any new sitemap entries to IndexNow"
+            >
+              <RotateCcw size={10} className={resubmittingIndexNow ? 'animate-spin' : ''} />
+              {resubmittingIndexNow ? 'Re-submitting…' : 'Re-submit recent URLs to search engines'}
+            </button>
           </div>
+          {resubmitMessage && (
+            <div className="mb-3 text-[11px] text-gray-600 bg-green-50 border border-green-200 rounded-md px-3 py-1.5">
+              {resubmitMessage}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
             <div className="rounded-lg p-3 bg-green-50 border border-green-200 text-center">
