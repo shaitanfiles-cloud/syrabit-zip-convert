@@ -575,6 +575,37 @@ def _chime_supabase_upload(raw: bytes, storage_path: str, mime: str) -> str:
     return supa.storage.from_(_CHIME_BUCKET).get_public_url(storage_path)
 
 
+def _chime_storage_path_from_url(url: str) -> str | None:
+    if not url or url.startswith("data:"):
+        return None
+    prefix = f"/object/public/{_CHIME_BUCKET}/"
+    idx = url.find(prefix)
+    if idx == -1:
+        return None
+    return url[idx + len(prefix):]
+
+
+def _chime_supabase_delete(storage_path: str):
+    from deps import supa
+    try:
+        supa.storage.from_(_CHIME_BUCKET).remove([storage_path])
+    except Exception as e:
+        logger.debug(f"Failed to delete old chime from storage ({storage_path}): {e}")
+
+
+async def _cleanup_old_chime(admin_id: str):
+    from deps import supa
+    if not supa:
+        return
+    prefs = await get_admin_notification_prefs(admin_id)
+    old_url = prefs.get("custom_chime_url") or ""
+    old_path = _chime_storage_path_from_url(old_url)
+    if old_path:
+        await asyncio.get_event_loop().run_in_executor(
+            None, lambda: _chime_supabase_delete(old_path)
+        )
+
+
 @router.post("/admin/notification-prefs/upload-chime")
 async def admin_upload_custom_chime(
     file: UploadFile = File(...),
@@ -589,6 +620,9 @@ async def admin_upload_custom_chime(
         raise HTTPException(413, f"File exceeds {_CHIME_MAX_BYTES // 1024} KB limit")
 
     admin_id = admin.get("sub") or admin.get("email") or "default"
+
+    await _cleanup_old_chime(admin_id)
+
     ext = "mp3" if "mp3" in mime or "mpeg" in mime else "wav"
     safe_id = str(uuid.uuid4())
     storage_path = f"{_CHIME_PREFIX}/{admin_id}/{safe_id}.{ext}"
@@ -621,6 +655,9 @@ async def admin_delete_custom_chime(
     admin: dict = Depends(get_admin_user),
 ):
     admin_id = admin.get("sub") or admin.get("email") or "default"
+
+    await _cleanup_old_chime(admin_id)
+
     prefs = await upsert_admin_notification_prefs(admin_id, {
         "chime_tone": "default",
         "custom_chime_url": None,
