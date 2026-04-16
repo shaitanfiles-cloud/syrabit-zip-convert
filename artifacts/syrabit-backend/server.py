@@ -565,8 +565,13 @@ async def lifespan(app):
     asyncio.create_task(_seo_weekly_digest_loop())
     from middleware import _init_blocked_ip_cache
     asyncio.create_task(_init_blocked_ip_cache())
-    from routes.admin_advanced import _collection_size_snapshot_loop
+    from routes.admin_advanced import _collection_size_snapshot_loop, _cache_warm_loop
     asyncio.create_task(_collection_size_snapshot_loop())
+    # Auto pre-warm AI response cache for the most common queries (Task #282 T004)
+    # Leader-gated so multi-worker deployments don't run the warm cycle N times
+    # and burn N× the LLM budget every 6h.
+    if _is_leader:
+        asyncio.create_task(_cache_warm_loop())
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")

@@ -189,7 +189,10 @@ if _GROQ_KEY:
 if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
     _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b-versatile"})
+    # Upgraded from llama-3.3-70b-versatile (Task #282 T002): Llama-4 Scout
+    # is faster on Cerebras (~2600 tok/s vs 2200), has a 10M context window,
+    # and noticeably better instruction-following for chat workloads.
+    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-4-scout-17b-16e-instruct"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -203,7 +206,7 @@ _LLM_PROVIDERS_CHAT: list[dict] = []
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b-versatile"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-4-scout-17b-16e-instruct"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
 
@@ -227,6 +230,7 @@ _MODEL_PROVIDER_MAP = {
     "meta-llama/llama-4-scout": "openrouter",
     "meta-llama/llama-4-scout-17b-16e-instruct": "groq",
     "llama-3.3-70b-versatile": "cerebras",
+    "llama-4-scout-17b-16e-instruct": "cerebras",
 }
 
 _MODEL_ALIAS_MAP = {
@@ -241,7 +245,7 @@ _MODEL_ALIAS_MAP = {
 #
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 0),
-    ("cerebras",    "llama-3.3-70b-versatile",                             4, 1),
+    ("cerebras",    "llama-4-scout-17b-16e-instruct",                      4, 1),
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
 ]
 

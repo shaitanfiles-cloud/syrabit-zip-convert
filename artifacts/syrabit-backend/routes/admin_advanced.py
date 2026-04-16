@@ -3161,13 +3161,19 @@ async def admin_unblock_ip(
     return {"ok": True, "ip_hash": ip_hash}
 
 
-@router.post("/admin/cache/warm")
-async def admin_cache_warm(
-    top_n: int = Body(default=20, embed=True),
-    admin: dict = Depends(get_admin_user),
-):
+async def _perform_cache_warm(top_n: int = 20, *, source: str = "manual") -> dict:
+    """Core cache-warming routine, callable from both the admin endpoint and
+    the background scheduler (Task #282 T004).
+
+    1. Aggregates the top-N most frequent user queries from db.conversations.
+    2. Skips queries that already have an AI cache entry.
+    3. Generates answers for the rest in batches and writes them to Redis.
+
+    Returns the same shape used by the admin endpoint so the response is
+    interchangeable.
+    """
     if top_n < 1 or top_n > 500:
-        raise HTTPException(400, "top_n must be 1-500")
+        raise ValueError("top_n must be 1-500")
 
     try:
         pipeline = [
@@ -3187,9 +3193,11 @@ async def admin_cache_warm(
         top_queries = []
 
     if not top_queries:
-        return {"ok": True, "warmed": 0, "message": "No queries found to warm"}
+        return {"ok": True, "warmed": 0, "already_cached": 0, "failed": 0,
+                "total_queries": 0, "source": source,
+                "message": "No queries found to warm"}
 
-    from cache import _cache_key, _redis_get_ai_cache, _redis_set, _ai_response_cache
+    from cache import _cache_key, _redis_get_ai_cache, _redis_set
     from config import REDIS_AI_CACHE_TTL
 
     already_cached = 0
@@ -3241,13 +3249,56 @@ async def admin_cache_warm(
         batch = to_warm[i:i + batch_size]
         await asyncio.gather(*[_warm_single(q) for q in batch])
 
-    logger.info(f"[CACHE_WARM] Done: warmed={warmed}, already_cached={already_cached}, failed={failed} (by {admin.get('email')})")
+    logger.info(f"[CACHE_WARM] Done ({source}): warmed={warmed}, already_cached={already_cached}, failed={failed}")
     return {
         "ok": True,
         "warmed": warmed,
         "already_cached": already_cached,
         "failed": failed,
         "total_queries": len(top_queries),
+        "source": source,
     }
+
+
+@router.post("/admin/cache/warm")
+async def admin_cache_warm(
+    top_n: int = Body(default=20, embed=True),
+    admin: dict = Depends(get_admin_user),
+):
+    try:
+        result = await _perform_cache_warm(top_n, source=f"manual:{admin.get('email','')}")
+    except ValueError as ve:
+        raise HTTPException(400, str(ve))
+    return result
+
+
+# ── Background auto-warm loop (Task #282 T004) ────────────────────────────────
+# Periodically re-runs the cache warmer so the top common questions always
+# have a near-instant answer waiting in Redis. The loop is registered from
+# server.py lifespan alongside the other long-running background loops.
+#
+# Cadence: warm every 6h with the top 30 queries. We sleep 15 minutes after
+# startup so warming doesn't compete with the boot rush; the warming itself
+# runs entirely off the request path.
+_CACHE_WARM_LOOP_INTERVAL_S = 6 * 3600
+_CACHE_WARM_LOOP_TOP_N = 30
+_CACHE_WARM_LOOP_STARTUP_DELAY_S = 15 * 60
+
+
+async def _cache_warm_loop():
+    """Auto-warm the AI response cache every ``_CACHE_WARM_LOOP_INTERVAL_S``
+    seconds. Failures are swallowed and logged so a single bad iteration
+    never tears down the loop."""
+    from deps import is_mongo_available
+    await asyncio.sleep(_CACHE_WARM_LOOP_STARTUP_DELAY_S)
+    while True:
+        try:
+            if await is_mongo_available():
+                await _perform_cache_warm(_CACHE_WARM_LOOP_TOP_N, source="auto_loop")
+            else:
+                logger.debug("[CACHE_WARM] Skipping auto warm — Mongo unavailable")
+        except Exception as exc:
+            logger.warning(f"[CACHE_WARM] auto loop iteration error: {exc}")
+        await asyncio.sleep(_CACHE_WARM_LOOP_INTERVAL_S)
 
 

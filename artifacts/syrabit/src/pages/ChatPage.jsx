@@ -42,7 +42,16 @@ export default function ChatPage() {
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
   const [responseLang, setResponseLang]   = useState(() => localStorage.getItem('syrabit_response_lang') || 'en');
-  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled } = useTurnstile();
+  // Skip Turnstile entirely for authenticated users — backend never verifies a
+  // captcha for them, so loading the CF script + invisible widget is pure
+  // overhead. (Task #282 T001)
+  // Wait until the auth check has resolved before deciding whether to load
+  // the Cloudflare script. Otherwise a logged-in user briefly sees `user=null`
+  // during initial /me hydration and we'd inject the script anyway, defeating
+  // the optimization. (Task #282 T001)
+  const { authChecked } = useAuth();
+  const skipTurnstile = !authChecked || !!user;
+  const { getToken: getTurnstileToken, ready: turnstileReady, enabled: turnstileEnabled } = useTurnstile({ skip: skipTurnstile });
   const handleCopy = useCallback((msgId) => setCopiedMsgId(msgId), []);
 
 

@@ -22,7 +22,14 @@ function loadTurnstileScript() {
   return scriptLoadPromise;
 }
 
-export function useTurnstile() {
+/**
+ * @param {{ skip?: boolean }} [opts]
+ *   skip — when true, do NOT load the Turnstile script or render the widget.
+ *          Used to avoid an extra ~50KB script + invisible-widget for
+ *          authenticated users (who never have to solve a challenge).
+ *          Task #282 T001.
+ */
+export function useTurnstile({ skip = false } = {}) {
   const widgetIdRef = useRef(null);
   const containerRef = useRef(null);
   const tokenRef = useRef('');
@@ -30,6 +37,7 @@ export function useTurnstile() {
 
   useEffect(() => {
     if (!SITE_KEY) return;
+    if (skip) return;
     let cancelled = false;
 
     loadTurnstileScript().then(() => {
@@ -60,7 +68,7 @@ export function useTurnstile() {
         try { containerRef.current.remove(); } catch {}
       }
     };
-  }, []);
+  }, [skip]);
 
   const getToken = useCallback(async () => {
     if (!SITE_KEY || !window.turnstile || widgetIdRef.current == null) return '';
@@ -80,5 +88,10 @@ export function useTurnstile() {
     }
   }, []);
 
+  // When skipped (authenticated user), report ready=true and enabled=false
+  // so call sites don't gate their UX on a widget that was never loaded.
+  if (skip) {
+    return { getToken: async () => '', ready: true, enabled: false };
+  }
   return { getToken, ready: SITE_KEY ? ready : true, enabled: !!SITE_KEY };
 }

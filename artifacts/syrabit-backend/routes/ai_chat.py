@@ -960,31 +960,81 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             logger.warning(f"[STREAM] History prefetch failed (non-fatal): {_hist_err}")
         return None
 
+    # ── Speculative parallel web-search (Task #282 T003 + T005) ──────────────
+    # We kick this off in Phase 0 in PARALLEL with internal chapter fetch so
+    # the wall-clock cost of a network round-trip overlaps the Mongo lookup.
+    # After Phase 0 completes we apply an internal-first policy:
+    #   • If internal chapters were found → discard web results (saves tokens
+    #     and keeps answers grounded in Syrabit's curated content).
+    #   • If internal returned nothing AND it's a content-seeking query →
+    #     hand the web results to the prompt builder as a fallback so the
+    #     model has *some* context instead of falling back to bare LLM
+    #     general knowledge.
+    # Web search only runs for content-seeking intents where the user
+    # actually has a subject context to search within. Casual chats,
+    # follow-ups on uploaded documents, and unscoped queries all skip it
+    # because the cost wouldn't pay back.
+    _stream_skip_web = (
+        _is_casual
+        or _is_card_context
+        or bool(msg.document_id)
+        or not (msg.subject_id or msg.subject_name)
+    )
+
     async def _early_web_search():
-        return []
+        if _stream_skip_web:
+            return []
+        try:
+            return await asyncio.wait_for(
+                web_search_with_fallback(
+                    msg.message,
+                    board_name=msg.board_name or "",
+                    class_name=msg.class_name or "",
+                    subject_name=msg.subject_name or "",
+                    chapter_name=msg.chapter_name or "",
+                    enrich_top_n=2,
+                ),
+                # Hard cap so Phase-0 budget (_PRE_LLM_BUDGET) can still
+                # cancel us cleanly. The outer asyncio.wait already enforces
+                # this, but a per-call timeout protects the speculative
+                # fetch from a stuck DDG socket.
+                timeout=1.5,
+            )
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            return []
+        except Exception as _ws_err:
+            logger.warning(f"[STREAM] Speculative web search failed (non-fatal): {_ws_err}")
+            return []
 
     _skip_semester = _is_casual or is_anon
 
     _PRE_LLM_BUDGET = 0.15
 
+    # Speculative web search runs OUTSIDE the Phase-0 budget so the 150ms cap
+    # doesn't kill it before HTTP can return (Task #282 T003/T005). It still
+    # has its own internal 1.5s wait_for inside _early_web_search, so it
+    # cannot block the request indefinitely. We await it later, only if RAG
+    # actually misses, so the common (internal-hit) path doesn't pay for it.
+    _early_web_task: Optional[asyncio.Task] = None
+
     if _is_casual and not msg.subject_id and not msg.document_id and not msg.conversation_id and not _is_card_context:
         _tasks_pre = []
         _defaults_pre = []
         _pre_results = []
-        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web, _s_prefetched_chapters = None, None, None, None, None, [], []
+        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _s_prefetched_chapters = None, None, None, None, None, []
         _done_pre, _pending_pre = set(), set()
         logger.info("[STREAM] Casual fast-path: skipping Phase 0 entirely")
     else:
+        _early_web_task = asyncio.create_task(_early_web_search())
         _tasks_pre = [
             asyncio.create_task(_resolve_subject_context(msg.subject_id)),
             asyncio.create_task(_resolve_semester_class_id(msg.message, msg.board_id) if (msg.board_id and not _skip_semester) else asyncio.sleep(0)),
             asyncio.create_task(_fetch_doc()),
             asyncio.create_task(_fetch_followup_info()),
             asyncio.create_task(_prefetch_history()),
-            asyncio.create_task(_early_web_search()),
             asyncio.create_task(_fetch_internal_chapters(msg.message, subject_id=msg.subject_id, subject_name=msg.subject_name) if (msg.subject_id or msg.subject_name) else asyncio.sleep(0)),
         ]
-        _defaults_pre = [None, None, None, None, None, [], []]
+        _defaults_pre = [None, None, None, None, None, []]
 
         _done_pre, _pending_pre = await asyncio.wait(_tasks_pre, timeout=_PRE_LLM_BUDGET, return_when=asyncio.ALL_COMPLETED)
     if _pending_pre:
@@ -1003,7 +1053,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _pre_results.append(_defaults_pre[_i])
 
     if _pre_results:
-        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web, _s_prefetched_chapters = _pre_results
+        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _s_prefetched_chapters = _pre_results
 
     _s_topic_meta = None
     if _stage1_task:
@@ -1122,7 +1172,41 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     if _s1_subject_str:
         rag_ctx["_stage1_subject"] = _s1_subject_str
 
-    web_results = []
+    # ── Internal-first web fallback (Task #282 T003 + T005) ──────────────────
+    # Phase 0 already kicked off web search in parallel with the internal
+    # chapter fetch. Now that we know whether RAG found anything, pick:
+    #   • internal hit  → discard the speculative web results entirely.
+    #   • internal miss → use them so the LLM has *some* grounding.
+    _has_internal_stream = (
+        rag_ctx.get("_has_internal_content")
+        or rag_ctx.get("source") in ("document", "internal")
+    )
+    if _has_internal_stream or _stream_skip_web or _early_web_task is None:
+        # Internal RAG hit — discard the speculative search and cancel the
+        # task so we don't waste an outbound HTTP round-trip.
+        web_results = []
+        if _early_web_task is not None and not _early_web_task.done():
+            _early_web_task.cancel()
+    else:
+        # Internal RAG missed → wait briefly for the speculative web fetch
+        # we kicked off in Phase 0. It runs OUTSIDE the 150ms pre-LLM budget
+        # so it has had ~RAG-resolve time to produce results already; we add
+        # a small extra grace window to let it finish if it's almost done.
+        try:
+            _early_web = await asyncio.wait_for(_early_web_task, timeout=1.2)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            _early_web = []
+            if not _early_web_task.done():
+                _early_web_task.cancel()
+        except Exception as _ew_err:
+            logger.warning(f"[STREAM] Awaiting speculative web search failed: {_ew_err}")
+            _early_web = []
+        web_results = _early_web or []
+        if web_results:
+            logger.info(
+                f"[STREAM] Using {len(web_results)} web result(s) as fallback "
+                f"(internal RAG returned source={rag_ctx.get('source','none')})"
+            )
 
     if _syllabus_task.done():
         try:
