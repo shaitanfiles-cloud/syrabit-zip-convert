@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Play, Pause, Scissors, X, Upload, Loader2, AlertTriangle } from 'lucide-react';
+import lamejs from 'lamejs';
 
 const MAX_DURATION = 5;
 const WAVEFORM_BARS = 80;
 const BAR_WIDTH = 3;
 const BAR_GAP = 1;
+const MP3_BITRATE = 128;
 
 function formatTime(s) {
   const sec = Math.max(0, s || 0);
@@ -100,6 +102,36 @@ function writeString(view, offset, str) {
   for (let i = 0; i < str.length; i++) {
     view.setUint8(offset + i, str.charCodeAt(i));
   }
+}
+
+function floatTo16BitPCM(float32Array) {
+  const int16 = new Int16Array(float32Array.length);
+  for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return int16;
+}
+
+function audioBufferToMp3(buffer) {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const encoder = new lamejs.Mp3Encoder(numChannels, sampleRate, MP3_BITRATE);
+  const blockSize = 1152;
+  const left = floatTo16BitPCM(buffer.getChannelData(0));
+  const right = numChannels > 1 ? floatTo16BitPCM(buffer.getChannelData(1)) : null;
+  const chunks = [];
+  for (let i = 0; i < left.length; i += blockSize) {
+    const leftChunk = left.subarray(i, i + blockSize);
+    const rightChunk = right ? right.subarray(i, i + blockSize) : null;
+    const mp3buf = numChannels === 1
+      ? encoder.encodeBuffer(leftChunk)
+      : encoder.encodeBuffer(leftChunk, rightChunk);
+    if (mp3buf.length > 0) chunks.push(mp3buf);
+  }
+  const end = encoder.flush();
+  if (end.length > 0) chunks.push(end);
+  return new Blob(chunks, { type: 'audio/mpeg' });
 }
 
 export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading }) {
@@ -209,12 +241,10 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
   const estimatedSizeKB = useMemo(() => {
     if (!audioBuffer) return 0;
     if (!needsTrim) return file.size / 1024;
-    const bitsPerSample = 16;
-    const bytesPerSample = bitsPerSample / 8;
-    const headerBytes = 44;
-    const dataBytes = Math.floor(clipDuration * audioBuffer.sampleRate) * audioBuffer.numberOfChannels * bytesPerSample;
-    return (headerBytes + dataBytes) / 1024;
+    return (MP3_BITRATE * 1000 / 8 * clipDuration) / 1024;
   }, [audioBuffer, clipDuration, needsTrim, file.size]);
+
+  const outputFormat = needsTrim ? 'mp3' : (file.name.match(/\.(\w+)$/)?.[1]?.toLowerCase() || 'wav');
 
   const sizeExceedsLimit = estimatedSizeKB > 500;
 
@@ -223,12 +253,12 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
     setSizeError(null);
     if (needsTrim) {
       const trimmed = trimAudioBuffer(audioBuffer, trimStart, trimEnd);
-      const blob = audioBufferToWav(trimmed);
+      const blob = audioBufferToMp3(trimmed);
       if (blob.size > 500 * 1024) {
         setSizeError(`Trimmed file is ${Math.round(blob.size / 1024)} KB — exceeds the 500 KB limit. Try a shorter selection.`);
         return;
       }
-      const trimmedFile = new File([blob], file.name.replace(/\.\w+$/, '.wav'), { type: 'audio/wav' });
+      const trimmedFile = new File([blob], file.name.replace(/\.\w+$/, '.mp3'), { type: 'audio/mpeg' });
       onConfirm(trimmedFile);
     } else {
       onConfirm(file);
@@ -412,7 +442,7 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
           )}
           <span className="mx-0.5">·</span>
           <span className={sizeExceedsLimit ? 'text-red-500 font-medium' : ''}>
-            ~{Math.round(estimatedSizeKB)} KB
+            ~{Math.round(estimatedSizeKB)} KB {outputFormat.toUpperCase()}
           </span>
         </span>
         <span>{formatTime(trimEnd)}</span>
@@ -422,8 +452,7 @@ export default function AudioTrimPreview({ file, onConfirm, onCancel, uploading 
         <div className="flex items-start gap-1.5 text-[9px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           <AlertTriangle size={10} className="flex-shrink-0 mt-px" />
           <span>
-            Estimated size (~{Math.round(estimatedSizeKB)} KB) exceeds the 500 KB limit.
-            Shorten the selection{file.name.match(/\.wav$/i) ? ' or convert to MP3 before uploading' : ''}.
+            Estimated size (~{Math.round(estimatedSizeKB)} KB) exceeds the 500 KB limit. Shorten the selection.
           </span>
         </div>
       )}
