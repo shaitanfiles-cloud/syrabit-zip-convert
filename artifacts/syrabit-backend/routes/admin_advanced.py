@@ -3166,8 +3166,8 @@ async def admin_cache_warm(
     top_n: int = Body(default=20, embed=True),
     admin: dict = Depends(get_admin_user),
 ):
-    if top_n < 1 or top_n > 100:
-        raise HTTPException(400, "top_n must be 1-100")
+    if top_n < 1 or top_n > 500:
+        raise HTTPException(400, "top_n must be 1-500")
 
     try:
         pipeline = [
