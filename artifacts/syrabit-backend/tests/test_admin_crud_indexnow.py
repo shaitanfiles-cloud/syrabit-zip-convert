@@ -188,3 +188,67 @@ def test_admin_update_chapter_404_does_not_fire_indexnow():
         assert flush_calls == []
 
     asyncio.run(run())
+
+
+def test_update_page_status_bumps_updated_at_and_fires_indexnow():
+    """Phase B / Plan 6: exercise a real AI-rewrite-adjacent endpoint
+    (`update_page_status` flipping a draft page to published — the same
+    helper called from the admin review queue and from quality rescore
+    paths) and assert (a) the persisted `$set` includes a fresh
+    `updated_at` and (b) `notify_indexnow_for_page` is scheduled with
+    the correct slug fields. Together with `test_diff_repushes_seo_page_
+    after_ai_rewrite` in test_indexnow_sitemap_diff.py, this covers both
+    halves of the rewrite → IndexNow loop required by Phase B.
+    """
+    import asyncio as _asyncio
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from tests._deps_stub import install_deps_stub
+    install_deps_stub()
+    import seo_engine
+
+    captured_set: dict = {}
+
+    fake_db = MagicMock()
+    async def _update_one(_q, payload):
+        captured_set.update(payload["$set"])
+        return MagicMock(matched_count=1)
+    fake_db.seo_pages.update_one = AsyncMock(side_effect=_update_one)
+
+    page_doc = {
+        "board_slug": "ahsec", "class_slug": "class-12",
+        "subject_slug": "physics", "topic_slug": "newtons-laws",
+        "page_type": "notes",
+    }
+    fake_db.seo_pages.find_one = AsyncMock(return_value=page_doc)
+    seo_engine._db = fake_db
+
+    notified: list[dict] = []
+    async def _fake_notify(p):
+        notified.append(p)
+
+    with patch("routes.bot_discovery.notify_indexnow_for_page", side_effect=_fake_notify):
+        before = datetime.now(timezone.utc)
+        result = _asyncio.run(
+            seo_engine.update_page_status(
+                page_id="page-xyz", status="published", _admin={"sub": "admin"}
+            )
+        )
+        # Drain the asyncio.create_task scheduled inside update_page_status
+        async def _drain():
+            for _ in range(20):
+                await _asyncio.sleep(0)
+        _asyncio.run(_drain())
+
+    assert result == {"message": "Status updated to published"}
+    # (a) updated_at was bumped to a fresh ISO 8601 timestamp ≥ before
+    assert "updated_at" in captured_set, "publish must bump updated_at"
+    bumped = datetime.fromisoformat(captured_set["updated_at"])
+    assert bumped >= before, "updated_at must be >= test start"
+    assert captured_set["status"] == "published"
+    assert captured_set["in_sitemap"] is True
+    # (b) notify_indexnow_for_page was scheduled with the page slug fields
+    assert len(notified) == 1
+    n = notified[0]
+    assert n["board_slug"] == "ahsec" and n["topic_slug"] == "newtons-laws"

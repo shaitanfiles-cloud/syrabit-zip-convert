@@ -81,13 +81,25 @@ def test_no_worker_robots_override_diverges():
         return
     src = WORKER_FILE.read_text(encoding="utf-8")
 
-    # Detect a worker-side robots.txt response by looking for an inlined
-    # `User-agent:` block inside a string literal — that is the only way
-    # the worker would author its own robots body. Bare path references
-    # like `/api/robots.txt` (a backend route the worker proxies) do not
-    # count: the worker only proxies them, it does not synthesize a body.
+    # Detect a worker-side robots.txt response. Three independent signals,
+    # ANY of which means the worker is on the hook for /robots.txt:
+    #   1. An inlined `User-agent:` block inside a string literal (the
+    #      worker is authoring its own body).
+    #   2. A pathname comparison/route literal targeting `/robots.txt`
+    #      exactly (e.g. `pathname === "/robots.txt"`,
+    #      `url.pathname == '/robots.txt'`, or `/robots.txt'` at the end
+    #      of a route literal). Excludes `/api/robots.txt` (a backend
+    #      route the worker only proxies).
+    #   3. A `text/plain` Response constructor whose body string starts
+    #      with a `User-agent:` line.
     has_inlined_block = bool(re.search(r'["`]\s*User-agent:\s', src))
-    if not has_inlined_block:
+    has_route_literal = bool(re.search(
+        r'(?<!api)["\']/robots\.txt["\']', src
+    ))
+    has_response_with_robots = bool(re.search(
+        r'new\s+Response\s*\(\s*[`"\']\s*User-agent:', src
+    ))
+    if not (has_inlined_block or has_route_literal or has_response_with_robots):
         return  # worker is silent on robots.txt — Pages serves the static file
 
     static_body = _read_robots()
