@@ -12,6 +12,7 @@ import {
 import { AppLayout } from '@/components/layout/AppLayout';
 import { apiClient, API_BASE } from '@/utils/api';
 import { useShare } from '@/hooks/useShare';
+import StickyToc from '@/components/ui/StickyToc';
 
 function buildToc(headingsJson) {
   try {
@@ -79,37 +80,6 @@ function SchemaOrg({ doc }) {
   );
 }
 
-function TocSidebar({ toc, activeId }) {
-  if (!toc.length) return null;
-  return (
-    <nav className="sticky top-6 w-56 flex-shrink-0 hidden xl:block">
-      <div className="rounded-2xl border border-border/20 overflow-hidden" style={{ background: 'hsl(var(--card))' }}>
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-border/20">
-          <List size={13} className="text-primary" />
-          <span className="text-xs font-semibold text-muted-foreground/60 uppercase tracking-wider">On this page</span>
-        </div>
-        <ul className="py-2 max-h-[70vh] overflow-y-auto">
-          {toc.map(h => (
-            <li key={h.anchor}>
-              <a
-                href={`#${h.anchor}`}
-                className={`block py-1.5 pr-4 text-xs transition-colors leading-snug ${
-                  h.level === 1 ? 'pl-4 font-medium' : h.level === 2 ? 'pl-6' : 'pl-8'
-                } ${
-                  activeId === h.anchor
-                    ? 'text-violet-400 border-r-2 border-violet-500'
-                    : 'text-muted-foreground/50 hover:text-foreground/70'
-                }`}
-              >
-                {h.text}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </nav>
-  );
-}
 
 function injectHeadingIds(html) {
   return html.replace(/<(h[1-3])>(.*?)<\/h[1-3]>/gi, (_, tag, text) => {
@@ -390,7 +360,13 @@ export default function LearnPage() {
             </article>
 
             {/* TOC */}
-            <TocSidebar toc={toc} activeId={activeId} />
+            <StickyToc
+                headings={toc}
+                activeId={activeId}
+                variant="card"
+                labelIcon={<List size={13} className="text-primary" />}
+                minItems={1}
+              />
           </div>
 
           {/* Important Questions (mark-wise) */}
