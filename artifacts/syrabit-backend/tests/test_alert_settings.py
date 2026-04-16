@@ -504,3 +504,112 @@ class TestGetAlertSettings:
         data = resp.json()
         assert data["notification_channels"]["email"] == "stored@example.com"
         assert data["notification_channels"]["webhook_url"] == "https://stored-hook.com/x"
+
+
+class _InMemoryCollection:
+    def __init__(self):
+        self._store = None
+
+    async def find_one(self, query=None, projection=None):
+        return dict(self._store) if self._store else None
+
+    async def replace_one(self, query, doc, upsert=False):
+        self._store = dict(doc)
+
+
+class TestAlertSettingsRoundTrip:
+    @pytest.fixture
+    def mock_admin(self):
+        return {"id": "admin-rt", "email": "admin@rt.test", "is_admin": True}
+
+    @pytest.fixture
+    def in_memory_db(self):
+        coll = _InMemoryCollection()
+        fake_db = MagicMock()
+        fake_db.api_config = coll
+        return fake_db
+
+    @pytest.fixture
+    def app_client(self, mock_admin):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routes.admin_notifications import router
+        from auth_deps import get_admin_user
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_admin_user] = lambda: mock_admin
+        return TestClient(app)
+
+    def test_put_then_get_reflects_saved_values(self, app_client, in_memory_db):
+        with patch.object(_metrics_mod, "db", in_memory_db), \
+             patch("routes.admin_notifications.db", in_memory_db):
+            put_resp = app_client.put("/admin/alert-settings", json={
+                "thresholds": {"latency_p95_ms": 4000, "error_rate_pct": 8.5},
+                "expiration": {"enabled": True, "days": 14},
+                "notification_channels": {
+                    "email": "roundtrip@example.com",
+                    "webhook_url": "https://hooks.test/rt",
+                },
+            })
+            assert put_resp.status_code == 200
+
+            get_resp = app_client.get("/admin/alert-settings")
+            assert get_resp.status_code == 200
+            data = get_resp.json()
+
+        assert data["thresholds"]["latency_p95_ms"] == 4000
+        assert data["thresholds"]["error_rate_pct"] == 8.5
+        assert data["expiration"]["enabled"] is True
+        assert data["expiration"]["days"] == 14
+        assert data["notification_channels"]["email"] == "roundtrip@example.com"
+        assert data["notification_channels"]["webhook_url"] == "https://hooks.test/rt"
+
+    def test_overwrite_existing_settings(self, app_client, in_memory_db):
+        with patch.object(_metrics_mod, "db", in_memory_db), \
+             patch("routes.admin_notifications.db", in_memory_db):
+            app_client.put("/admin/alert-settings", json={
+                "thresholds": {"latency_p95_ms": 2000},
+                "notification_channels": {"email": "first@example.com"},
+            })
+
+            app_client.put("/admin/alert-settings", json={
+                "thresholds": {"latency_p95_ms": 9000, "error_rate_pct": 15.0},
+                "notification_channels": {"email": "second@example.com", "webhook_url": "https://hooks.test/v2"},
+            })
+
+            get_resp = app_client.get("/admin/alert-settings")
+            data = get_resp.json()
+
+        assert data["thresholds"]["latency_p95_ms"] == 9000
+        assert data["thresholds"]["error_rate_pct"] == 15.0
+        assert data["notification_channels"]["email"] == "second@example.com"
+        assert data["notification_channels"]["webhook_url"] == "https://hooks.test/v2"
+
+    def test_load_alert_settings_reads_persisted_data(self, in_memory_db, app_client):
+        with patch.object(_metrics_mod, "db", in_memory_db), \
+             patch("routes.admin_notifications.db", in_memory_db):
+            app_client.put("/admin/alert-settings", json={
+                "thresholds": {"error_rate_pct": 12.0},
+                "expiration": {"enabled": False},
+                "notification_channels": {"email": "load-test@example.com"},
+            })
+
+        _metrics_mod._ALERT_THRESHOLDS = dict(_metrics_mod._ALERT_THRESHOLDS_DEFAULT)
+        _metrics_mod._alert_expiration = dict(_metrics_mod._ALERT_EXPIRATION_DEFAULT)
+        _metrics_mod._notification_channels = dict(_metrics_mod._NOTIFICATION_CHANNELS_DEFAULT)
+
+        with patch.object(_metrics_mod, "db", in_memory_db):
+            _run(_metrics_mod._load_alert_settings())
+
+        assert _metrics_mod._ALERT_THRESHOLDS["error_rate_pct"] == 12.0
+        assert _metrics_mod._alert_expiration["enabled"] is False
+        assert _metrics_mod._notification_channels["email"] == "load-test@example.com"
+
+    def test_empty_db_returns_defaults(self, app_client, in_memory_db):
+        with patch.object(_metrics_mod, "db", in_memory_db), \
+             patch("routes.admin_notifications.db", in_memory_db):
+            get_resp = app_client.get("/admin/alert-settings")
+            data = get_resp.json()
+
+        assert data["thresholds"] == data["defaults"]["thresholds"]
