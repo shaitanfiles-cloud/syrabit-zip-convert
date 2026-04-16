@@ -295,6 +295,8 @@ async def lifespan(app):
             await db.sessions.create_index([("last_ping", -1)])
             await db.sessions.create_index([("start_time", -1)])
 
+            await db.blocked_ips.create_index("ip_hash", unique=True)
+
             await db.server_hits.create_index([("date", 1), ("is_bot", 1)])
             await db.server_hits.create_index([("ip_hash", 1), ("date", 1)])
             await db.server_hits.create_index([("is_bot", 1), ("ip_hash", 1)])
@@ -516,6 +518,8 @@ async def lifespan(app):
     from routes.admin_notifications import _exam_reminder_loop
     asyncio.create_task(_exam_reminder_loop())
     asyncio.create_task(_alerting_loop())
+    from middleware import _init_blocked_ip_cache
+    asyncio.create_task(_init_blocked_ip_cache())
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")

@@ -83,6 +83,46 @@ from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE, _TRAINING_SCRAPER_U
 
 _BOT_RATE_LIMIT = 1200
 
+_blocked_ip_hashes: set[str] = set()
+_blocked_ip_lock = __import__("threading").Lock()
+
+
+async def _refresh_blocked_ip_cache():
+    try:
+        from deps import db, is_mongo_available
+        if await is_mongo_available():
+            docs = await db.blocked_ips.find({}, {"ip_hash": 1, "_id": 0}).to_list(10000)
+            new_set = {d["ip_hash"] for d in docs if d.get("ip_hash")}
+            with _blocked_ip_lock:
+                changed = new_set != _blocked_ip_hashes
+                _blocked_ip_hashes.clear()
+                _blocked_ip_hashes.update(new_set)
+            if changed:
+                logger.info(f"Blocked IP cache updated: {len(new_set)} entries")
+    except Exception as e:
+        logger.debug(f"blocked IP cache refresh failed: {e}")
+
+
+_BLOCKED_IP_REFRESH_INTERVAL = 10
+
+async def _blocked_ip_refresh_loop():
+    while True:
+        try:
+            await _refresh_blocked_ip_cache()
+        except Exception as e:
+            logger.debug(f"blocked IP refresh loop error: {e}")
+        await asyncio.sleep(_BLOCKED_IP_REFRESH_INTERVAL)
+
+
+async def _init_blocked_ip_cache():
+    await _refresh_blocked_ip_cache()
+    asyncio.create_task(_blocked_ip_refresh_loop())
+
+
+def _is_ip_blocked(ip_hash: str) -> bool:
+    with _blocked_ip_lock:
+        return ip_hash in _blocked_ip_hashes
+
 _spoof_counter_lock = __import__("threading").Lock()
 _spoof_minute_counts: dict[str, int] = {}
 _SPOOF_ALERT_THRESHOLD = 50
@@ -125,6 +165,21 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         ua_claims_bot = bool(ua and _SEARCH_BOT_UA_RE.search(ua) and not _ABUSIVE_SCRAPER_UA_RE.search(ua) and not _TRAINING_SCRAPER_UA_RE.search(ua))
         request.state.is_search_bot = False
 
+        cf_ip = request.headers.get("cf-connecting-ip", "")
+        xff = request.headers.get("x-forwarded-for", "")
+        client_ip = cf_ip or (xff.split(",")[0].strip() if xff else "") or (request.client.host if request.client else "unknown")
+
+        ip_hash_check = _hash_ip_stable(client_ip)
+        if _is_ip_blocked(ip_hash_check):
+            from fastapi.responses import JSONResponse
+            _metrics.record_request(path, 403)
+            logger.warning(f"BLOCKED_IP ip_hash={ip_hash_check} path={path} rid={rid}")
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Access denied."},
+                headers={"X-Request-Id": rid},
+            )
+
         exempt = any(path.startswith(p) for p in self._RATE_LIMIT_EXEMPT_PREFIXES)
         if exempt:
             _metrics.inc_active()
@@ -158,9 +213,6 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
         except Exception:
             pass
 
-        cf_ip = request.headers.get("cf-connecting-ip", "")
-        xff = request.headers.get("x-forwarded-for", "")
-        client_ip = cf_ip or (xff.split(",")[0].strip() if xff else "") or (request.client.host if request.client else "unknown")
         is_legit_bot = False
         if ua_claims_bot:
             try:

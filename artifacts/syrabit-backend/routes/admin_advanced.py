@@ -2753,3 +2753,56 @@ async def admin_spoofed_bots_dashboard(
     }
 
 
+@router.get("/admin/security/blocked-ips")
+async def admin_list_blocked_ips(
+    admin: dict = Depends(get_admin_user),
+):
+    try:
+        blocked = await db.blocked_ips.find(
+            {}, {"_id": 0}
+        ).sort("blocked_at", -1).to_list(500)
+    except Exception:
+        blocked = []
+    return {"blocked_ips": blocked}
+
+
+@router.post("/admin/security/block-ip")
+async def admin_block_ip(
+    ip_hash: str = Body(..., embed=True),
+    reason: str = Body("repeat_spoof_offender", embed=True),
+    admin: dict = Depends(get_admin_user),
+):
+    if not ip_hash or len(ip_hash) < 4:
+        raise HTTPException(400, "Invalid ip_hash")
+    existing = await db.blocked_ips.find_one({"ip_hash": ip_hash})
+    if existing:
+        raise HTTPException(409, "IP already blocked")
+    doc = {
+        "ip_hash": ip_hash,
+        "reason": reason,
+        "blocked_at": datetime.now(timezone.utc),
+        "blocked_by": admin.get("email", "admin"),
+    }
+    await db.blocked_ips.insert_one(doc)
+    from middleware import _refresh_blocked_ip_cache
+    await _refresh_blocked_ip_cache()
+    logger.info(f"BLOCK_IP ip_hash={ip_hash} by={admin.get('email')}")
+    return {"ok": True, "ip_hash": ip_hash}
+
+
+@router.post("/admin/security/unblock-ip")
+async def admin_unblock_ip(
+    ip_hash: str = Body(..., embed=True),
+    admin: dict = Depends(get_admin_user),
+):
+    if not ip_hash or len(ip_hash) < 4:
+        raise HTTPException(400, "Invalid ip_hash")
+    result = await db.blocked_ips.delete_one({"ip_hash": ip_hash})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "IP not found in block list")
+    from middleware import _refresh_blocked_ip_cache
+    await _refresh_blocked_ip_cache()
+    logger.info(f"UNBLOCK_IP ip_hash={ip_hash} by={admin.get('email')}")
+    return {"ok": True, "ip_hash": ip_hash}
+
+

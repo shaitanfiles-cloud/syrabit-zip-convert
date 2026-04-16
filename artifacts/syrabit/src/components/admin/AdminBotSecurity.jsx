@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   Shield, Bot, AlertTriangle, RefreshCw, Loader2,
-  Hash, Globe, Clock, TrendingUp, Eye,
+  Hash, Globe, Clock, TrendingUp, Eye, Ban, Unlock,
 } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid,
 } from 'recharts';
-import { adminGetSpoofedBots } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminBlockIp, adminUnblockIp } from '@/utils/api';
 
 function GlassCard({ children, className = '' }) {
   return (
@@ -51,13 +51,21 @@ export default function AdminBotSecurity({ adminToken }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [days, setDays] = useState(7);
+  const [blockedIps, setBlockedIps] = useState([]);
+  const [actionLoading, setActionLoading] = useState({});
+
+  const blockedSet = new Set(blockedIps.map((b) => b.ip_hash));
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await adminGetSpoofedBots(adminToken, days);
-      setData(res.data);
+      const [spoofRes, blockedRes] = await Promise.all([
+        adminGetSpoofedBots(adminToken, days),
+        adminGetBlockedIps(adminToken),
+      ]);
+      setData(spoofRes.data);
+      setBlockedIps(blockedRes.data?.blocked_ips || []);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to load spoofed bot data');
     } finally {
@@ -68,6 +76,30 @@ export default function AdminBotSecurity({ adminToken }) {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  const handleBlock = async (ipHash) => {
+    setActionLoading((prev) => ({ ...prev, [ipHash]: 'blocking' }));
+    try {
+      await adminBlockIp(adminToken, ipHash);
+      setBlockedIps((prev) => [...prev, { ip_hash: ipHash, blocked_at: new Date().toISOString(), reason: 'repeat_spoof_offender' }]);
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to block IP');
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [ipHash]: null }));
+    }
+  };
+
+  const handleUnblock = async (ipHash) => {
+    setActionLoading((prev) => ({ ...prev, [ipHash]: 'unblocking' }));
+    try {
+      await adminUnblockIp(adminToken, ipHash);
+      setBlockedIps((prev) => prev.filter((b) => b.ip_hash !== ipHash));
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Failed to unblock IP');
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [ipHash]: null }));
+    }
+  };
 
   if (loading && !data) {
     return (
@@ -136,7 +168,7 @@ export default function AdminBotSecurity({ adminToken }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <StatCard
           label="Spoof RPM"
           value={realtime.spoof_rpm ?? 0}
@@ -161,6 +193,12 @@ export default function AdminBotSecurity({ adminToken }) {
           value={offenders.length}
           icon={Hash}
           color="#ef4444"
+        />
+        <StatCard
+          label="Blocked IPs"
+          value={blockedIps.length}
+          icon={Ban}
+          color="#dc2626"
         />
       </div>
 
@@ -275,37 +313,63 @@ export default function AdminBotSecurity({ adminToken }) {
                     <th className="text-left px-5 py-2 font-medium">IP Hash</th>
                     <th className="text-right px-5 py-2 font-medium">Attempts</th>
                     <th className="text-left px-5 py-2 font-medium">Claimed Bots</th>
+                    <th className="text-center px-5 py-2 font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {offenders.map((o, i) => (
-                    <tr key={i} className="border-t border-gray-50 hover:bg-gray-50">
-                      <td className="px-5 py-2 text-gray-600 font-mono text-[11px]">
-                        {o.ip_hash ? `${o.ip_hash.slice(0, 12)}...` : '—'}
-                      </td>
-                      <td className="px-5 py-2 text-right">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                          o.attempts >= 50 ? 'bg-red-100 text-red-700' :
-                          o.attempts >= 20 ? 'bg-amber-100 text-amber-700' :
-                          'bg-gray-100 text-gray-600'
-                        }`}>
-                          {o.attempts ?? 0}
-                        </span>
-                      </td>
-                      <td className="px-5 py-2">
-                        <div className="flex flex-wrap gap-1">
-                          {(o.claimed_bots || []).slice(0, 3).map((bot, j) => (
-                            <span key={j} className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-50 text-violet-600 text-[10px]">
-                              {bot}
-                            </span>
-                          ))}
-                          {(o.claimed_bots || []).length > 3 && (
-                            <span className="text-[10px] text-gray-400">+{o.claimed_bots.length - 3}</span>
+                  {offenders.map((o, i) => {
+                    const isBlocked = blockedSet.has(o.ip_hash);
+                    const busy = actionLoading[o.ip_hash];
+                    return (
+                      <tr key={i} className="border-t border-gray-50 hover:bg-gray-50">
+                        <td className="px-5 py-2 text-gray-600 font-mono text-[11px]">
+                          {o.ip_hash ? `${o.ip_hash.slice(0, 12)}...` : '—'}
+                        </td>
+                        <td className="px-5 py-2 text-right">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                            o.attempts >= 50 ? 'bg-red-100 text-red-700' :
+                            o.attempts >= 20 ? 'bg-amber-100 text-amber-700' :
+                            'bg-gray-100 text-gray-600'
+                          }`}>
+                            {o.attempts ?? 0}
+                          </span>
+                        </td>
+                        <td className="px-5 py-2">
+                          <div className="flex flex-wrap gap-1">
+                            {(o.claimed_bots || []).slice(0, 3).map((bot, j) => (
+                              <span key={j} className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-50 text-violet-600 text-[10px]">
+                                {bot}
+                              </span>
+                            ))}
+                            {(o.claimed_bots || []).length > 3 && (
+                              <span className="text-[10px] text-gray-400">+{o.claimed_bots.length - 3}</span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-5 py-2 text-center">
+                          {isBlocked ? (
+                            <button
+                              onClick={() => handleUnblock(o.ip_hash)}
+                              disabled={!!busy}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                            >
+                              {busy === 'unblocking' ? <Loader2 size={10} className="animate-spin" /> : <Unlock size={10} />}
+                              Unblock
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleBlock(o.ip_hash)}
+                              disabled={!!busy}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-red-50 text-red-700 hover:bg-red-100 transition-colors disabled:opacity-50"
+                            >
+                              {busy === 'blocking' ? <Loader2 size={10} className="animate-spin" /> : <Ban size={10} />}
+                              Block
+                            </button>
                           )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -314,6 +378,58 @@ export default function AdminBotSecurity({ adminToken }) {
           )}
         </GlassCard>
       </div>
+
+      {blockedIps.length > 0 && (
+        <GlassCard>
+          <div className="p-5 pb-3">
+            <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+              <Ban size={14} className="text-red-500" />
+              Blocked IPs
+            </h3>
+            <p className="text-[10px] text-gray-400 mt-0.5">{blockedIps.length} IP{blockedIps.length !== 1 ? 's' : ''} currently blocked</p>
+          </div>
+          <div className="border-t border-gray-100 max-h-[300px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-gray-400 uppercase tracking-wider">
+                  <th className="text-left px-5 py-2 font-medium">IP Hash</th>
+                  <th className="text-left px-5 py-2 font-medium">Reason</th>
+                  <th className="text-left px-5 py-2 font-medium">Blocked At</th>
+                  <th className="text-left px-5 py-2 font-medium">Blocked By</th>
+                  <th className="text-center px-5 py-2 font-medium">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {blockedIps.map((b, i) => {
+                  const busy = actionLoading[b.ip_hash];
+                  return (
+                    <tr key={i} className="border-t border-gray-50 hover:bg-gray-50">
+                      <td className="px-5 py-2 text-gray-600 font-mono text-[11px]">
+                        {b.ip_hash ? `${b.ip_hash.slice(0, 12)}...` : '—'}
+                      </td>
+                      <td className="px-5 py-2 text-gray-500">{b.reason || '—'}</td>
+                      <td className="px-5 py-2 text-gray-500 whitespace-nowrap">
+                        {b.blocked_at ? new Date(b.blocked_at).toLocaleString() : '—'}
+                      </td>
+                      <td className="px-5 py-2 text-gray-500">{b.blocked_by || '—'}</td>
+                      <td className="px-5 py-2 text-center">
+                        <button
+                          onClick={() => handleUnblock(b.ip_hash)}
+                          disabled={!!busy}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                        >
+                          {busy === 'unblocking' ? <Loader2 size={10} className="animate-spin" /> : <Unlock size={10} />}
+                          Unblock
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </GlassCard>
+      )}
 
       <GlassCard>
         <div className="p-5 pb-3 flex items-center justify-between">
