@@ -894,6 +894,7 @@ export default function AdminBotSecurity({ adminToken }) {
   const [error, setError] = useState(null);
   const [days, setDays] = useState(7);
   const [blockedIps, setBlockedIps] = useState([]);
+  const [durationBreakdown, setDurationBreakdown] = useState(null);
   const [actionLoading, setActionLoading] = useState({});
   const [blockDurationMenu, setBlockDurationMenu] = useState(null);
 
@@ -913,6 +914,7 @@ export default function AdminBotSecurity({ adminToken }) {
       ]);
       setData(spoofRes.data);
       setBlockedIps(blockedRes.data?.blocked_ips || []);
+      setDurationBreakdown(blockedRes.data?.duration_breakdown || null);
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to load spoofed bot data');
     } finally {
@@ -943,6 +945,9 @@ export default function AdminBotSecurity({ adminToken }) {
         entry.expires_at = new Date(Date.now() + expiresIn * 3600000).toISOString();
       }
       setBlockedIps((prev) => [...prev, entry]);
+      adminGetBlockedIps(adminToken).then(res => {
+        setDurationBreakdown(res.data?.duration_breakdown || null);
+      }).catch(() => {});
     } catch (err) {
       alert(err.response?.data?.detail || 'Failed to block IP');
     } finally {
@@ -955,6 +960,9 @@ export default function AdminBotSecurity({ adminToken }) {
     try {
       await adminUnblockIp(adminToken, ipHash);
       setBlockedIps((prev) => prev.filter((b) => b.ip_hash !== ipHash));
+      adminGetBlockedIps(adminToken).then(res => {
+        setDurationBreakdown(res.data?.duration_breakdown || null);
+      }).catch(() => {});
     } catch (err) {
       alert(err.response?.data?.detail || 'Failed to unblock IP');
     } finally {
@@ -1062,6 +1070,47 @@ export default function AdminBotSecurity({ adminToken }) {
           color="#dc2626"
         />
       </div>
+
+      {durationBreakdown && Object.values(durationBreakdown).some(v => v > 0) && (
+        <GlassCard>
+          <div className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                <Clock size={14} className="text-violet-500" />
+                Block Duration Breakdown
+              </h3>
+              <span className="text-[10px] text-gray-400 uppercase tracking-wider">Active blocks only</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              {[
+                { key: '1h', label: '1 Hour', color: '#3b82f6' },
+                { key: '6h', label: '6 Hours', color: '#6366f1' },
+                { key: '24h', label: '24 Hours', color: '#8b5cf6' },
+                { key: '7d', label: '7 Days', color: '#f59e0b' },
+                { key: '30d', label: '30 Days', color: '#ef4444' },
+                { key: 'permanent', label: 'Permanent', color: '#dc2626' },
+              ].map(({ key, label, color }) => {
+                const count = durationBreakdown[key] || 0;
+                const total = Object.values(durationBreakdown).reduce((a, b) => a + b, 0);
+                const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+                return (
+                  <div key={key} className="rounded-xl border border-gray-100 p-3 bg-gray-50">
+                    <p className="text-[10px] text-gray-400 uppercase tracking-wider">{label}</p>
+                    <p className="text-lg font-bold text-gray-900 mt-1">{count}</p>
+                    <div className="mt-2 h-1.5 rounded-full bg-gray-200 overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{ width: `${pct}%`, background: color }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1">{pct}%</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </GlassCard>
+      )}
 
       <AlertThresholdPanel adminToken={adminToken} />
 

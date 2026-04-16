@@ -2867,7 +2867,30 @@ async def admin_list_blocked_ips(
         ).sort("blocked_at", -1).to_list(500)
     except Exception:
         blocked = []
-    return {"blocked_ips": blocked}
+
+    duration_breakdown = {"1h": 0, "6h": 0, "24h": 0, "7d": 0, "30d": 0, "permanent": 0}
+    now = datetime.now(timezone.utc)
+    for b in blocked:
+        expires_at = b.get("expires_at")
+        blocked_at = b.get("blocked_at")
+        if expires_at and blocked_at:
+            if expires_at <= now:
+                continue
+            diff_hours = (expires_at - blocked_at).total_seconds() / 3600
+            if diff_hours <= 1.5:
+                duration_breakdown["1h"] += 1
+            elif diff_hours <= 9:
+                duration_breakdown["6h"] += 1
+            elif diff_hours <= 36:
+                duration_breakdown["24h"] += 1
+            elif diff_hours <= 336:
+                duration_breakdown["7d"] += 1
+            else:
+                duration_breakdown["30d"] += 1
+        elif not expires_at:
+            duration_breakdown["permanent"] += 1
+
+    return {"blocked_ips": blocked, "duration_breakdown": duration_breakdown}
 
 
 @router.post("/admin/security/block-ip")
