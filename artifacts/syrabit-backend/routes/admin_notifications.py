@@ -116,7 +116,7 @@ async def _dispatch_push_to_admins(payload: dict):
 
 async def _dispatch_push(payload: dict, admin_only: bool = False):
     """Core push dispatcher. When admin_only=True, sends only to subscriptions
-    belonging to users with is_admin=True, filtered by per-admin notification prefs."""
+    with role='admin', filtered by per-admin notification prefs."""
     try:
         from pywebpush import webpush, WebPushException
         vapid = await _get_or_create_vapid_keys()
@@ -125,20 +125,25 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
             logger.warning("Push dispatch skipped — VAPID private key missing")
             return
         if admin_only:
-            admin_docs = await db.users.find(
-                {"is_admin": True}, {"_id": 0, "id": 1, "email": 1}
-            ).to_list(500)
-            admin_ids = {str(d["id"]) for d in admin_docs if d.get("id")}
-            if not admin_ids:
-                logger.info("Push dispatch (admin-only): no admin users found, skipping")
+            admin_subs = await db.push_subscriptions.find(
+                {"role": "admin"}, {"_id": 0}
+            ).to_list(10000)
+            if not admin_subs:
+                logger.info("Push dispatch (admin-only): no admin subscriptions found, skipping")
                 return
 
+            admin_ids = {s["user_id"] for s in admin_subs if s.get("user_id")}
+
             id_to_email = {}
-            for d in admin_docs:
-                uid = str(d.get("id", ""))
-                email = str(d.get("email", "")).lower().strip()
-                if uid and email:
-                    id_to_email[uid] = email
+            if admin_ids:
+                admin_docs = await db.users.find(
+                    {"id": {"$in": list(admin_ids)}}, {"_id": 0, "id": 1, "email": 1}
+                ).to_list(500)
+                for d in admin_docs:
+                    uid = str(d.get("id", ""))
+                    email = str(d.get("email", "")).lower().strip()
+                    if uid and email:
+                        id_to_email[uid] = email
 
             alert_type = payload.get("alert_type", "")
             admin_prefs_map = {}
@@ -168,9 +173,7 @@ async def _dispatch_push(payload: dict, admin_only: bool = False):
                 logger.info("Push dispatch (admin-only): no admins with push enabled for this alert type, skipping")
                 return
 
-            subs = await db.push_subscriptions.find(
-                {"user_id": {"$in": list(eligible_admin_ids)}}, {"_id": 0}
-            ).to_list(10000)
+            subs = [s for s in admin_subs if s.get("user_id") in eligible_admin_ids]
         else:
             subs = await db.push_subscriptions.find({}, {"_id": 0}).to_list(10000)
         sent = failed = 0
@@ -212,10 +215,12 @@ async def push_subscribe(data: dict, user: dict = Depends(get_current_user)):
     if not subscription_info or not subscription_info.get("endpoint"):
         raise HTTPException(400, "Missing subscription object")
     endpoint = subscription_info["endpoint"]
+    role = "admin" if user.get("is_admin") else "student"
     doc = {
         "user_id":           str(user["id"]),
         "endpoint":          endpoint,
         "subscription_info": subscription_info,
+        "role":              role,
         "subscribed_at":     datetime.now(timezone.utc).isoformat(),
     }
     await db.push_subscriptions.update_one(
@@ -231,6 +236,32 @@ async def push_unsubscribe(data: dict, user: dict = Depends(get_current_user)):
     if endpoint:
         await db.push_subscriptions.delete_one({"endpoint": endpoint, "user_id": str(user["id"])})
     return {"ok": True}
+
+
+@router.post("/admin/push/backfill-roles")
+async def admin_backfill_push_roles(admin: dict = Depends(get_admin_user)):
+    """One-shot backfill: set the 'role' field on every push_subscriptions doc
+    that is missing it, by looking up the user's is_admin flag in db.users."""
+    subs_without_role = await db.push_subscriptions.find(
+        {"role": {"$exists": False}}, {"_id": 1, "user_id": 1}
+    ).to_list(50000)
+    if not subs_without_role:
+        return {"backfilled": 0, "message": "All subscriptions already have a role"}
+
+    user_ids = list({s["user_id"] for s in subs_without_role if s.get("user_id")})
+    admin_users = await db.users.find(
+        {"id": {"$in": user_ids}, "is_admin": True}, {"_id": 0, "id": 1}
+    ).to_list(10000)
+    admin_id_set = {str(u["id"]) for u in admin_users}
+
+    updated = 0
+    for sub in subs_without_role:
+        role = "admin" if sub.get("user_id") in admin_id_set else "student"
+        await db.push_subscriptions.update_one(
+            {"_id": sub["_id"]}, {"$set": {"role": role}}
+        )
+        updated += 1
+    return {"backfilled": updated}
 
 
 # ─────────────────────────────────────────────
