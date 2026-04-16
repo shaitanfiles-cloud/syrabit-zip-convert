@@ -2692,3 +2692,64 @@ async def admin_content_version_history(chapter_id: str, admin: dict = Depends(g
     }
 
 
+@router.get("/admin/security/spoofed-bots")
+async def admin_spoofed_bots_dashboard(
+    days: int = Query(7, ge=1, le=90),
+    admin: dict = Depends(get_admin_user),
+):
+    from metrics import _metrics
+    spoof_stats = _metrics.get_spoof_stats()
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    daily_pipeline = [
+        {"$match": {"date": {"$gte": cutoff}}},
+        {"$group": {"_id": "$date", "count": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+    ]
+    bot_pipeline = [
+        {"$match": {"date": {"$gte": cutoff}}},
+        {"$group": {"_id": "$claimed_bot", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 20},
+    ]
+    repeat_ip_pipeline = [
+        {"$match": {"date": {"$gte": cutoff}}},
+        {"$group": {"_id": "$ip_hash", "count": {"$sum": 1}, "bots": {"$addToSet": "$claimed_bot"}}},
+        {"$match": {"count": {"$gte": 5}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 20},
+    ]
+    recent_pipeline = [
+        {"$match": {"date": {"$gte": cutoff}}},
+        {"$sort": {"timestamp": -1}},
+        {"$limit": 50},
+        {"$project": {"_id": 0, "ip_hash": 1, "claimed_bot": 1, "user_agent": 1, "path": 1, "timestamp": 1, "date": 1}},
+    ]
+
+    try:
+        daily = await db.bot_spoof_attempts.aggregate(daily_pipeline).to_list(90)
+        by_bot = await db.bot_spoof_attempts.aggregate(bot_pipeline).to_list(20)
+        repeat_ips = await db.bot_spoof_attempts.aggregate(repeat_ip_pipeline).to_list(20)
+        recent = await db.bot_spoof_attempts.aggregate(recent_pipeline).to_list(50)
+        total_period = await db.bot_spoof_attempts.count_documents({"date": {"$gte": cutoff}})
+    except Exception:
+        daily, by_bot, repeat_ips, recent, total_period = [], [], [], [], 0
+
+    return {
+        "period_days": days,
+        "realtime": {
+            "spoof_rpm": spoof_stats["rpm"],
+            "session_total": spoof_stats["total"],
+            "session_by_bot": spoof_stats["by_bot"],
+        },
+        "period_total": total_period,
+        "daily_counts": [{"date": d["_id"], "count": d["count"]} for d in daily],
+        "by_claimed_bot": [{"bot": b["_id"], "count": b["count"]} for b in by_bot],
+        "repeat_offender_ips": [
+            {"ip_hash": r["_id"], "attempts": r["count"], "claimed_bots": r["bots"]}
+            for r in repeat_ips
+        ],
+        "recent_attempts": recent,
+    }
+
+

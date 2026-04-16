@@ -83,6 +83,10 @@ from utils import _SEARCH_BOT_UA_RE, _ABUSIVE_SCRAPER_UA_RE, _TRAINING_SCRAPER_U
 
 _BOT_RATE_LIMIT = 1200
 
+_spoof_counter_lock = __import__("threading").Lock()
+_spoof_minute_counts: dict[str, int] = {}
+_SPOOF_ALERT_THRESHOLD = 50
+
 _BOT_OPEN_PREFIXES = (
     "/api/content/library-bundle",
     "/api/content/boards",
@@ -164,6 +168,44 @@ class GlobalRateLimitMiddleware(BaseHTTPMiddleware):
             except Exception:
                 is_legit_bot = False
         request.state.is_search_bot = is_legit_bot
+        if ua_claims_bot and not is_legit_bot:
+            ip_hash = _hash_ip_stable(client_ip)
+            bot_match = _SEARCH_BOT_UA_RE.search(ua)
+            claimed_bot = bot_match.group(0).lower() if bot_match else "unknown"
+            logger.warning(
+                f"SPOOFED_BOT ip_hash={ip_hash} claimed={claimed_bot} "
+                f"ua=\"{ua[:150]}\" path={path} rid={rid}"
+            )
+            _metrics.record_spoof(claimed_bot)
+            minute_key = datetime.now(timezone.utc).strftime("%Y%m%d%H%M")
+            with _spoof_counter_lock:
+                _spoof_minute_counts[minute_key] = _spoof_minute_counts.get(minute_key, 0) + 1
+                count = _spoof_minute_counts[minute_key]
+                if len(_spoof_minute_counts) > 10:
+                    stale = [k for k in _spoof_minute_counts if k < minute_key]
+                    for k in stale:
+                        _spoof_minute_counts.pop(k, None)
+            if count == _SPOOF_ALERT_THRESHOLD:
+                logger.error(
+                    f"SPOOF_ALERT threshold={_SPOOF_ALERT_THRESHOLD}/min reached | "
+                    f"minute={minute_key}"
+                )
+            async def _bg_persist_spoof():
+                try:
+                    from deps import db, is_mongo_available
+                    if await is_mongo_available():
+                        await db.bot_spoof_attempts.insert_one({
+                            "ip_hash": ip_hash,
+                            "claimed_bot": claimed_bot,
+                            "user_agent": ua[:500],
+                            "path": path,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+                            "request_id": rid,
+                        })
+                except Exception as e:
+                    logger.debug(f"spoof persist failed: {e}")
+            asyncio.create_task(_bg_persist_spoof())
         if not is_legit_bot:
             if not check_rate_limit(f"ip:{client_ip}", max_requests=ip_limit, window_seconds=60):
                 from fastapi.responses import JSONResponse

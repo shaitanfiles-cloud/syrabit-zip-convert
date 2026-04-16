@@ -171,16 +171,66 @@ const BOT_UA_RANGES: Array<[RegExp, CidrRange[]]> = [
   [/applebot/i, APPLE_BOT_RANGES],
 ];
 
-function isVerifiedSearchBot(ua: string, request: Request, clientIp: string): boolean {
-  if (!SEARCH_BOT_UA.test(ua)) return false;
+interface BotVerifyResult {
+  verified: boolean;
+  claimsBot: boolean;
+  spoofed: boolean;
+}
+
+function hashIp(ip: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < ip.length; i++) {
+    h ^= ip.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+function verifySearchBot(ua: string, request: Request, clientIp: string): BotVerifyResult {
+  if (!SEARCH_BOT_UA.test(ua)) return { verified: false, claimsBot: false, spoofed: false };
   const cf = (request as unknown as { cf?: { verifiedBot?: boolean } }).cf;
-  if (cf && cf.verifiedBot === true) return true;
+  if (cf && cf.verifiedBot === true) return { verified: true, claimsBot: true, spoofed: false };
   for (const [pattern, ranges] of BOT_UA_RANGES) {
     if (pattern.test(ua)) {
-      return ipInRanges(clientIp, ranges);
+      const matched = ipInRanges(clientIp, ranges);
+      return { verified: matched, claimsBot: true, spoofed: !matched };
     }
   }
-  return false;
+  return { verified: false, claimsBot: true, spoofed: true };
+}
+
+async function logSpoofedBot(
+  kv: KVNamespace,
+  ipHash: string,
+  ua: string,
+  clientIp: string,
+  colo: string,
+): Promise<void> {
+  const now = Date.now();
+  const windowKey = `spoof:count:${Math.floor(now / 60000)}`;
+  try {
+    const raw = await kv.get(windowKey);
+    const count = raw ? parseInt(raw, 10) + 1 : 1;
+    await kv.put(windowKey, String(count), { expirationTtl: 3600 });
+
+    if (count === 50 || count === 200 || count === 500) {
+      console.warn(
+        `SPOOF_ALERT threshold=${count}/min | ` +
+        `window=${new Date(Math.floor(now / 60000) * 60000).toISOString()}`
+      );
+    }
+  } catch {}
+
+  const botMatch = ua.match(SEARCH_BOT_UA);
+  const claimedBot = botMatch ? botMatch[0].toLowerCase() : "unknown";
+  console.log(
+    `SPOOFED_BOT ip_hash=${ipHash} claimed=${claimedBot} ` +
+    `ua="${ua.slice(0, 150)}" colo=${colo} ts=${new Date(now).toISOString()}`
+  );
+}
+
+function isVerifiedSearchBot(ua: string, request: Request, clientIp: string): boolean {
+  return verifySearchBot(ua, request, clientIp).verified;
 }
 
 const BASE_URL = "https://syrabit.ai";
@@ -796,8 +846,15 @@ export default {
       "unknown";
 
     const ua = request.headers.get("User-Agent") || "";
-    const isSearchBot = isVerifiedSearchBot(ua, request, clientIp);
+    const botResult = verifySearchBot(ua, request, clientIp);
+    const isSearchBot = botResult.verified;
     let remaining = 999999;
+
+    if (botResult.spoofed) {
+      const ipH = hashIp(clientIp);
+      const colo = (request as unknown as { cf?: { colo?: string } }).cf?.colo || "unknown";
+      ctx.waitUntil(logSpoofedBot(env.RATE_LIMIT, ipH, ua, clientIp, colo));
+    }
 
     if (!isSearchBot) {
       const rl = await checkRateLimit(clientIp, env.RATE_LIMIT, RATE_LIMIT_RPM);

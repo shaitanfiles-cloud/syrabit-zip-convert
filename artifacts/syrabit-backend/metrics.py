@@ -42,6 +42,9 @@ class _MetricsStore:
         self.endpoint_counts: Dict[str, int] = _defaultdict(int)
         self.status_counts: Dict[int, int] = _defaultdict(int)
         self._rps_window: list = []
+        self.spoof_count = 0
+        self.spoof_by_bot: Dict[str, int] = _defaultdict(int)
+        self._spoof_window: list = []
 
     def record_request(self, path: str, status: int, user_id: str = None):
         now = _time_mod.time()
@@ -85,6 +88,31 @@ class _MetricsStore:
         with self._lock:
             return sorted(self.endpoint_counts.items(), key=lambda x: -x[1])[:n]
 
+    def record_spoof(self, claimed_bot: str = "unknown"):
+        now = _time_mod.time()
+        with self._lock:
+            self.spoof_count += 1
+            self.spoof_by_bot[claimed_bot] += 1
+            self._spoof_window.append(now)
+
+    def get_spoof_rpm(self) -> float:
+        now = _time_mod.time()
+        cutoff = now - 60
+        with self._lock:
+            self._spoof_window = [t for t in self._spoof_window if t > cutoff]
+            return float(len(self._spoof_window))
+
+    def get_spoof_stats(self) -> dict:
+        now = _time_mod.time()
+        cutoff = now - 60
+        with self._lock:
+            self._spoof_window = [t for t in self._spoof_window if t > cutoff]
+            return {
+                "total": self.spoof_count,
+                "by_bot": dict(self.spoof_by_bot),
+                "rpm": float(len(self._spoof_window)),
+            }
+
 _metrics = _MetricsStore()
 
 _METRICS_HISTORY_MAX = 1440
@@ -97,6 +125,7 @@ def _snapshot_metrics():
     from llm import _llm_batcher
     now = datetime.datetime.utcnow()
     batch_s = _llm_batcher.stats
+    spoof_stats = _metrics.get_spoof_stats()
     snap = {
         "t": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "ts": int(_time_mod.time()),
@@ -111,6 +140,8 @@ def _snapshot_metrics():
         "llm_batched": batch_s["batched"],
         "llm_deduped": batch_s["deduped"],
         "llm_pending": batch_s["pending"],
+        "spoof_total": spoof_stats["total"],
+        "spoof_rpm": spoof_stats["rpm"],
     }
     with _metrics_history_lock:
         _metrics_history.append(snap)
@@ -219,6 +250,7 @@ _ALERT_THRESHOLDS = {
     "latency_p95_ms": 2000,
     "error_rate_pct": 5.0,
     "fallback_rate_pct": 50.0,
+    "spoof_rpm": 50,
 }
 
 async def _dispatch_alert(alert_type: str, title: str, body: str):
@@ -312,7 +344,20 @@ async def _alerting_loop():
             except Exception:
                 pass
 
-            # ── 3. Fallback rate (from cost log provider != primary) ──
+            # ── 3. Spoofed bot UA rate ──
+            spoof_rpm = _metrics.get_spoof_rpm()
+            if spoof_rpm >= _ALERT_THRESHOLDS["spoof_rpm"]:
+                spoof_stats = _metrics.get_spoof_stats()
+                top_bots = sorted(spoof_stats["by_bot"].items(), key=lambda x: -x[1])[:5]
+                top_str = ", ".join(f"{b}={c}" for b, c in top_bots)
+                await _dispatch_alert(
+                    "spoofed_bot_surge",
+                    "Spoofed bot UA surge detected",
+                    f"{spoof_rpm:.0f} spoofed requests/min (threshold: {_ALERT_THRESHOLDS['spoof_rpm']}). "
+                    f"Total lifetime: {spoof_stats['total']}. Top claimed bots: {top_str}",
+                )
+
+            # ── 4. Fallback rate (from cost log provider != primary) ──
             from routes.admin_advanced import _llm_cost_log
             recent_cost = _llm_cost_log[-100:]
             if len(recent_cost) >= 10:
