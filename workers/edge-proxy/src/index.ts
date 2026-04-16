@@ -948,18 +948,18 @@ async function fetchBotRenderedHtml(
             const fbody = await fallbackResp.text();
             if (fbody && fbody.length >= 100) {
               const fbTtl = _botResponseCacheTtl(pathname);
-              return new Response(fbody, {
-                status: 200,
-                headers: {
-                  "Content-Type": "text/html; charset=utf-8",
-                  "Cache-Control": `public, max-age=${fbTtl}, s-maxage=${fbTtl * 2}`,
-                  "X-Bot-Rendered": "1",
-                  "X-Source": "bot-prerender-fallback",
-                  "Vary": "User-Agent",
-                  "X-Robots-Tag": "index, follow",
-                  "Content-Language": "en-IN",
-                },
-              });
+              const fbHeaders: Record<string, string> = {
+                "Content-Type": "text/html; charset=utf-8",
+                "Cache-Control": `public, max-age=${fbTtl}, s-maxage=${fbTtl * 2}`,
+                "X-Bot-Rendered": "1",
+                "X-Source": "bot-prerender-fallback",
+                "Vary": "User-Agent",
+                "X-Robots-Tag": "index, follow",
+                "Content-Language": "en-IN",
+              };
+              const fbLm = fallbackResp.headers.get("Last-Modified");
+              if (fbLm) fbHeaders["Last-Modified"] = fbLm;
+              return new Response(fbody, { status: 200, headers: fbHeaders });
             }
           }
         }
@@ -976,18 +976,21 @@ async function fetchBotRenderedHtml(
     if (!body || body.length < 100) return null;
 
     const respTtl = _botResponseCacheTtl(pathname);
-    return new Response(body, {
-      status: 200,
-      headers: {
-        "Content-Type": "text/html; charset=utf-8",
-        "Cache-Control": `public, max-age=${respTtl}, s-maxage=${respTtl * 2}`,
-        "X-Bot-Rendered": "1",
-        "X-Source": "bot-prerender",
-        "Vary": "User-Agent",
-        "X-Robots-Tag": "index, follow",
-        "Content-Language": "en-IN",
-      },
-    });
+    const respHeaders: Record<string, string> = {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": `public, max-age=${respTtl}, s-maxage=${respTtl * 2}`,
+      "X-Bot-Rendered": "1",
+      "X-Source": "bot-prerender",
+      "Vary": "User-Agent",
+      "X-Robots-Tag": "index, follow",
+      "Content-Language": "en-IN",
+    };
+    // Carry the backend's authoritative Last-Modified (sourced from
+    // seo_pages.updated_at) up to the bot-cache layer so it can store it
+    // in KV and emit it to crawlers — this is what makes 304s correct.
+    const upstreamLm = resp.headers.get("Last-Modified");
+    if (upstreamLm) respHeaders["Last-Modified"] = upstreamLm;
+    return new Response(body, { status: 200, headers: respHeaders });
   } catch {
     return null;
   }
@@ -1083,7 +1086,7 @@ function buildBotCacheHeaders(
   };
 }
 
-async function handleBotContentRequest(
+export async function handleBotContentRequest(
   env: Env,
   pathname: string,
   clientIp: string,
@@ -1123,7 +1126,14 @@ async function handleBotContentRequest(
 
   const htmlBody = await rendered.clone().text();
   const etag = await computeEtag(htmlBody);
-  const lastmod = formatRfc7231(new Date());
+  // Prefer the page's authoritative `updated_at` carried by the backend in
+  // the upstream `Last-Modified` header (RFC 7231). Only fall back to "now"
+  // if the upstream omits it or the value can't be parsed — in which case
+  // the timestamp is still monotonic across the page's lifetime within KV.
+  const upstreamLm = rendered.headers.get("Last-Modified");
+  const lastmod = upstreamLm && parseHttpDate(upstreamLm) !== null
+    ? upstreamLm
+    : formatRfc7231(new Date());
 
   if (env.BOT_HTML_CACHE) {
     const entry: BotCacheEntry = { body: htmlBody, lastmod, etag };

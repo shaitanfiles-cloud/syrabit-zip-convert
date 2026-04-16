@@ -18,7 +18,35 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from pydantic import BaseModel
 from typing import Any, Callable, Coroutine, List, Optional
 from datetime import datetime, timezone
+from email.utils import format_datetime as _email_format_datetime
 import asyncio, uuid, re, logging, json, html as html_mod, hashlib
+
+
+def _iso_to_rfc7231(value) -> Optional[str]:
+    """Convert a Mongo `updated_at` (ISO 8601 string or datetime) into the
+    RFC 7231 IMF-fixdate format ("Thu, 16 Apr 2026 12:30:45 GMT") used by
+    HTTP `Last-Modified` / `If-Modified-Since` headers. Returns None when
+    the input is missing or unparseable so callers can omit the header.
+    """
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    elif isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        return None
+    return _email_format_datetime(dt.astimezone(timezone.utc), usegmt=True)
 
 logger = logging.getLogger(__name__)
 
@@ -3602,6 +3630,9 @@ async def get_seo_html_default(board: str, class_slug: str, subject_slug: str, t
     resp.headers["X-Topic-Keywords"] = kw_header[:500]
     resp.headers["X-Content-Source"] = "Syrabit Browser"
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    _lm = _iso_to_rfc7231(page.get("updated_at") or page.get("generated_at"))
+    if _lm:
+        resp.headers["Last-Modified"] = _lm
     return resp
 
 
@@ -3633,6 +3664,9 @@ async def get_seo_html_typed(board: str, class_slug: str, subject_slug: str, top
     resp.headers["X-Topic-Keywords"] = kw_header[:500]
     resp.headers["X-Content-Source"] = "Syrabit Browser"
     resp.headers["Cache-Control"] = "public, max-age=3600, s-maxage=86400, stale-while-revalidate=86400"
+    _lm = _iso_to_rfc7231(page.get("updated_at") or page.get("generated_at"))
+    if _lm:
+        resp.headers["Last-Modified"] = _lm
     return resp
 
 

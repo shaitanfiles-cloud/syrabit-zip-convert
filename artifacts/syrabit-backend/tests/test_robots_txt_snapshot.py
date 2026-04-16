@@ -68,28 +68,36 @@ def test_sitemap_index_line_present():
 
 
 def test_no_worker_robots_override_diverges():
-    """If the edge worker inlines a robots.txt body, it must equal the
-    static file byte-for-byte. Today the worker does not serve /robots.txt
-    (Cloudflare Pages does), so this test passes trivially.
+    """If the edge worker ever inlines a /robots.txt response, the bytes
+    must match the static `artifacts/syrabit/public/robots.txt` exactly.
+
+    Today the worker does not serve /robots.txt (Cloudflare Pages serves
+    the static file), so this test guards against future drift: as soon as
+    a `/robots.txt` route OR an inlined `User-agent:` block appears in the
+    worker source, the worker source must contain the static file's bytes
+    verbatim. No heuristic substring/containment fallbacks.
     """
     if not WORKER_FILE.exists():
         return
     src = WORKER_FILE.read_text(encoding="utf-8")
-    # Heuristic: an inlined robots body would contain a literal
-    # "User-agent: " inside a string. Flag any such occurrence so the
-    # author can ensure it stays in sync.
-    matches = re.findall(r'["`]\s*User-agent:\s', src)
-    if not matches:
-        return  # no inlined override
-    static = _read_robots()
-    # If there's an inlined body, it must contain every expected rule.
-    for required in (
-        "User-agent: AppleBot", "User-agent: PetalBot",
-        "User-agent: MojeekBot", "User-agent: SeznamBot", "User-agent: Yeti",
-        "User-agent: GPTBot", "User-agent: CCBot", "User-agent: ClaudeBot",
-        "User-agent: Google-Extended", "User-agent: anthropic-ai",
-        "Sitemap: https://syrabit.ai/sitemap-index.xml",
-    ):
-        assert required in src or required in static, (
-            f"worker inlines /robots.txt but is missing {required!r}"
-        )
+
+    # Detect a worker-side robots.txt response by looking for an inlined
+    # `User-agent:` block inside a string literal — that is the only way
+    # the worker would author its own robots body. Bare path references
+    # like `/api/robots.txt` (a backend route the worker proxies) do not
+    # count: the worker only proxies them, it does not synthesize a body.
+    has_inlined_block = bool(re.search(r'["`]\s*User-agent:\s', src))
+    if not has_inlined_block:
+        return  # worker is silent on robots.txt — Pages serves the static file
+
+    static_body = _read_robots()
+    # Strict byte-for-byte parity: the worker source must literally embed
+    # the entire static robots.txt body. If you add a /robots.txt handler,
+    # build it by reading this file at build time or by embedding the
+    # exact bytes — do NOT hand-roll a parallel rule set.
+    assert static_body in src, (
+        "worker references /robots.txt or inlines a User-agent block but does "
+        "not embed the exact bytes of artifacts/syrabit/public/robots.txt — "
+        "this drift is the bug Phase B is designed to prevent. Either remove "
+        "the worker-side handler or embed the static file verbatim."
+    )

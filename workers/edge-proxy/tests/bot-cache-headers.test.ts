@@ -133,3 +133,126 @@ describe("shouldReturn304", () => {
     expect(shouldReturn304(req, "abc", lastmod)).toBe(false);
   });
 });
+
+import { handleBotContentRequest } from "../src/index";
+
+function makeKv() {
+  const store = new Map<string, string>();
+  return {
+    store,
+    async get(k: string) { return store.get(k) ?? null; },
+    async put(k: string, v: string, _opts?: unknown) { store.set(k, v); },
+    async delete(k: string) { store.delete(k); },
+  };
+}
+
+function makeEnv(kv: ReturnType<typeof makeKv>) {
+  return {
+    BACKEND_URL: "https://backend.test",
+    RATE_LIMIT: makeKv() as unknown,
+    BOT_HTML_CACHE: kv as unknown,
+    CONTENT_DB: {} as unknown,
+    D1_SYNC_SECRET: "x",
+  } as unknown as Parameters<typeof handleBotContentRequest>[0];
+}
+
+const ctxNoop = { waitUntil: (p: Promise<unknown>) => { void p; }, passThroughOnException: () => {} } as unknown as ExecutionContext;
+
+describe("handleBotContentRequest end-to-end", () => {
+  const PATH = "/ahsec/class-12/physics/electric-field";
+  const FAKE_HTML = "<html>" + "x".repeat(500) + "</html>";
+  const BACKEND_LM = "Mon, 13 Apr 2026 09:00:00 GMT";
+
+  function installFetchMock() {
+    const orig = globalThis.fetch;
+    (globalThis as unknown as { fetch: typeof fetch }).fetch = (async (_url: string) => {
+      return new Response(FAKE_HTML, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Last-Modified": BACKEND_LM,
+        },
+      });
+    }) as typeof fetch;
+    return () => { (globalThis as unknown as { fetch: typeof fetch }).fetch = orig; };
+  }
+
+  it("first request: 200 with backend Last-Modified + ETag, populates KV", async () => {
+    const kv = makeKv();
+    const env = makeEnv(kv);
+    const restore = installFetchMock();
+    try {
+      const req = new Request(`https://syrabit.ai${PATH}`, { headers: { "user-agent": "Googlebot" } });
+      const resp = await handleBotContentRequest(env, PATH, "1.2.3.4", req, ctxNoop);
+      expect(resp).not.toBeNull();
+      expect(resp!.status).toBe(200);
+      expect(resp!.headers.get("Last-Modified")).toBe(BACKEND_LM);
+      const etag = resp!.headers.get("ETag");
+      expect(etag).toMatch(/^"[0-9a-f]{12}"$/);
+      const body = await resp!.text();
+      expect(body).toBe(FAKE_HTML);
+      // KV populated with the JSON wrapper carrying backend lastmod.
+      const kvKeys = Array.from(kv.store.keys());
+      expect(kvKeys.length).toBe(1);
+      const stored = JSON.parse(kv.store.get(kvKeys[0])!);
+      expect(stored.lastmod).toBe(BACKEND_LM);
+      expect(stored.body).toBe(FAKE_HTML);
+    } finally { restore(); }
+  });
+
+  it("repeat request with matching If-None-Match returns 304 with no body", async () => {
+    const kv = makeKv();
+    const env = makeEnv(kv);
+    const restore = installFetchMock();
+    try {
+      const req1 = new Request(`https://syrabit.ai${PATH}`, { headers: { "user-agent": "Googlebot" } });
+      const r1 = await handleBotContentRequest(env, PATH, "1.2.3.4", req1, ctxNoop);
+      const etag = r1!.headers.get("ETag")!;
+
+      const req2 = new Request(`https://syrabit.ai${PATH}`, {
+        headers: { "user-agent": "Googlebot", "If-None-Match": etag },
+      });
+      const r2 = await handleBotContentRequest(env, PATH, "1.2.3.4", req2, ctxNoop);
+      expect(r2!.status).toBe(304);
+      expect(r2!.headers.get("Last-Modified")).toBe(BACKEND_LM);
+      expect(r2!.headers.get("ETag")).toBe(etag);
+      const body = await r2!.text();
+      expect(body).toBe("");
+    } finally { restore(); }
+  });
+
+  it("repeat request with non-matching If-None-Match returns 200 with body", async () => {
+    const kv = makeKv();
+    const env = makeEnv(kv);
+    const restore = installFetchMock();
+    try {
+      const req1 = new Request(`https://syrabit.ai${PATH}`, { headers: { "user-agent": "Googlebot" } });
+      await handleBotContentRequest(env, PATH, "1.2.3.4", req1, ctxNoop);
+
+      const req2 = new Request(`https://syrabit.ai${PATH}`, {
+        headers: { "user-agent": "Googlebot", "If-None-Match": '"deadbeef0000"' },
+      });
+      const r2 = await handleBotContentRequest(env, PATH, "1.2.3.4", req2, ctxNoop);
+      expect(r2!.status).toBe(200);
+      const body = await r2!.text();
+      expect(body).toBe(FAKE_HTML);
+    } finally { restore(); }
+  });
+
+  it("If-Modified-Since after backend lastmod returns 304", async () => {
+    const kv = makeKv();
+    const env = makeEnv(kv);
+    const restore = installFetchMock();
+    try {
+      const req1 = new Request(`https://syrabit.ai${PATH}`, { headers: { "user-agent": "Googlebot" } });
+      await handleBotContentRequest(env, PATH, "1.2.3.4", req1, ctxNoop);
+
+      // BACKEND_LM = Mon, 13 Apr 2026 09:00:00 GMT — give IMS one day later.
+      const req2 = new Request(`https://syrabit.ai${PATH}`, {
+        headers: { "user-agent": "Googlebot", "If-Modified-Since": "Tue, 14 Apr 2026 09:00:00 GMT" },
+      });
+      const r2 = await handleBotContentRequest(env, PATH, "1.2.3.4", req2, ctxNoop);
+      expect(r2!.status).toBe(304);
+    } finally { restore(); }
+  });
+});
