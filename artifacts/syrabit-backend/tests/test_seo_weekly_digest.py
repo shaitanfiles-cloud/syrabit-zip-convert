@@ -207,6 +207,74 @@ def test_scheduler_dedups_same_iso_week():
     assert bot_discovery._should_send_weekly_digest_now(on_time, "2025-W52")
 
 
+# ── _claim_weekly_digest_slot: atomic dedup across replicas ────────────────
+
+def test_claim_succeeds_when_marker_is_stale():
+    """CAS path: doc exists with an older ISO week → exactly one CAS update
+    succeeds, returning the previous doc, so we win the claim."""
+    api_config = MagicMock()
+    api_config.find_one_and_update = AsyncMock(return_value={
+        "_id": bot_discovery._SEO_WEEKLY_DIGEST_LOCK_ID,
+        bot_discovery._SEO_WEEKLY_DIGEST_API_CONFIG_KEY: "2026-W14",
+    })
+    api_config.insert_one = AsyncMock()
+    fake_db = MagicMock(api_config=api_config)
+    won = asyncio.run(bot_discovery._claim_weekly_digest_slot(fake_db, "2026-W15"))
+    assert won is True
+    api_config.find_one_and_update.assert_awaited_once()
+    api_config.insert_one.assert_not_awaited()  # CAS path won, no need to insert
+
+
+def test_claim_fails_when_marker_already_current():
+    """The losing worker in a race: doc already at cur_iso_week → CAS filter
+    matches nothing (returns None), insert raises DuplicateKeyError → False."""
+    from pymongo.errors import DuplicateKeyError
+
+    api_config = MagicMock()
+    api_config.find_one_and_update = AsyncMock(return_value=None)
+    api_config.insert_one = AsyncMock(side_effect=DuplicateKeyError("dup _id"))
+    fake_db = MagicMock(api_config=api_config)
+    won = asyncio.run(bot_discovery._claim_weekly_digest_slot(fake_db, "2026-W15"))
+    assert won is False
+
+
+def test_claim_bootstraps_when_doc_missing():
+    """First-ever run: doc doesn't exist → CAS returns None, insert succeeds
+    → we own the claim. Verifies the bootstrap path can't multi-send because
+    only one insert can win on the unique _id."""
+    api_config = MagicMock()
+    api_config.find_one_and_update = AsyncMock(return_value=None)
+    api_config.insert_one = AsyncMock(return_value=None)
+    fake_db = MagicMock(api_config=api_config)
+    won = asyncio.run(bot_discovery._claim_weekly_digest_slot(fake_db, "2026-W15"))
+    assert won is True
+    api_config.insert_one.assert_awaited_once()
+    inserted_doc = api_config.insert_one.await_args.args[0]
+    assert inserted_doc["_id"] == bot_discovery._SEO_WEEKLY_DIGEST_LOCK_ID
+    assert inserted_doc[bot_discovery._SEO_WEEKLY_DIGEST_API_CONFIG_KEY] == "2026-W15"
+
+
+def test_try_send_skips_when_already_sent_this_week():
+    """End-to-end iteration: pre-gate sees marker == cur_iso_week, so we
+    bail out before claim/send. No email, no rollback."""
+    on_time = datetime(2026, 4, 13, 3, 30, tzinfo=timezone.utc)
+    cur_week = bot_discovery._iso_week_tag(on_time)
+    api_config = MagicMock()
+    api_config.find_one = AsyncMock(return_value={
+        bot_discovery._SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_week,
+    })
+    api_config.find_one_and_update = AsyncMock()
+    api_config.insert_one = AsyncMock()
+    fake_db = MagicMock(api_config=api_config)
+    with patch.object(bot_discovery, "_send_seo_weekly_digest_email", AsyncMock()) as snd:
+        out = asyncio.run(bot_discovery._try_send_weekly_digest_once(fake_db, on_time))
+    assert out["claimed"] is False
+    assert out["sent"] is False
+    snd.assert_not_awaited()
+    api_config.find_one_and_update.assert_not_awaited()
+    api_config.insert_one.assert_not_awaited()
+
+
 def test_gather_inputs_pulls_history_and_alert_count():
     history_docs = [_snap("ok", hours_ago=h) for h in (1, 2, 3)]
 

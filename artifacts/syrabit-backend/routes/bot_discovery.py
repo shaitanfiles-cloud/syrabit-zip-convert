@@ -1244,6 +1244,7 @@ _SEO_HEALTH_HISTORY_RETENTION_DAYS = 30
 # email lands close to 09:00 IST instead of drifting across an hour.
 _SEO_WEEKLY_DIGEST_DASHBOARD_URL = "https://syrabit.ai/admin/seo"
 _SEO_WEEKLY_DIGEST_API_CONFIG_KEY = "seo_weekly_digest_last_iso_week"
+_SEO_WEEKLY_DIGEST_LOCK_ID = "seo_weekly_digest_lock"
 _SEO_WEEKLY_DIGEST_TARGET_WEEKDAY = 0        # Monday
 _SEO_WEEKLY_DIGEST_TARGET_HOUR_UTC = 3       # 03:xx UTC
 _SEO_WEEKLY_DIGEST_TARGET_MINUTE_UTC = 30    # 03:30 UTC = 09:00 IST
@@ -1630,65 +1631,92 @@ async def _seo_weekly_digest_loop():
         try:
             now_utc = datetime.now(timezone.utc)
             if await is_mongo_available():
-                cur_iso_week = _iso_week_tag(now_utc)
-                # First, cheap read to gate before doing extra work — avoids
-                # one find_one_and_update per worker per poll outside the
-                # window.
-                try:
-                    cfg = await db.api_config.find_one(
-                        {}, {"_id": 0, _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: 1}
-                    ) or {}
-                except Exception:
-                    cfg = {}
-                last_sent = cfg.get(_SEO_WEEKLY_DIGEST_API_CONFIG_KEY, "")
-                if _should_send_weekly_digest_now(now_utc, last_sent):
-                    # Atomic claim: only the worker whose update modified a
-                    # document proceeds to send. Others see updated_existing
-                    # is False (no doc matched the != filter) and skip.
-                    claimed = False
-                    try:
-                        res = await db.api_config.find_one_and_update(
-                            {"$or": [
-                                {_SEO_WEEKLY_DIGEST_API_CONFIG_KEY: {"$ne": cur_iso_week}},
-                                {_SEO_WEEKLY_DIGEST_API_CONFIG_KEY: {"$exists": False}},
-                            ]},
-                            {"$set": {_SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_iso_week}},
-                            upsert=True,
-                        )
-                        # When the doc didn't exist, find_one_and_update with
-                        # upsert=True returns None — that worker is the one
-                        # that just inserted it, so it owns the claim too.
-                        # Otherwise, we own the claim only when the prior
-                        # marker differed from cur_iso_week.
-                        if res is None:
-                            claimed = True
-                        else:
-                            prior = (res or {}).get(_SEO_WEEKLY_DIGEST_API_CONFIG_KEY, "")
-                            claimed = prior != cur_iso_week
-                    except Exception as exc:
-                        logger.debug(f"[SEO digest] atomic claim failed: {exc}")
-
-                    if claimed:
-                        stats = await _gather_weekly_digest_inputs(now_utc)
-                        result = await _send_seo_weekly_digest_email(stats)
-                        if not result.get("sent"):
-                            # Roll back the claim so a subsequent poll inside
-                            # the same window can retry (e.g. transient
-                            # Resend outage).
-                            logger.info(
-                                f"[SEO digest] send failed for {cur_iso_week} "
-                                f"(reason={result.get('reason','unknown')}); rolling back claim"
-                            )
-                            try:
-                                await db.api_config.update_one(
-                                    {_SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_iso_week},
-                                    {"$set": {_SEO_WEEKLY_DIGEST_API_CONFIG_KEY: last_sent or ""}},
-                                )
-                            except Exception:
-                                pass
+                await _try_send_weekly_digest_once(db, now_utc)
         except Exception as exc:
             logger.debug(f"[SEO digest] loop iteration error: {exc}")
         await asyncio.sleep(_SEO_WEEKLY_DIGEST_LOOP_SLEEP_S)
+
+
+async def _claim_weekly_digest_slot(db, cur_iso_week: str) -> bool:
+    """Atomic compare-and-set on a dedicated singleton lock document
+    (``_id`` = ``_SEO_WEEKLY_DIGEST_LOCK_ID``). Returns True iff this caller
+    successfully advanced the marker from ``!= cur_iso_week`` to
+    ``cur_iso_week``. Concurrent callers race on the unique ``_id`` so at
+    most one wins per ISO week — no duplicate emails even with multiple
+    Railway replicas."""
+    from pymongo.errors import DuplicateKeyError
+
+    # Path A: doc already exists for an older week — atomic compare-and-set.
+    try:
+        res = await db.api_config.find_one_and_update(
+            {
+                "_id": _SEO_WEEKLY_DIGEST_LOCK_ID,
+                _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: {"$ne": cur_iso_week},
+            },
+            {"$set": {_SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_iso_week}},
+            upsert=False,
+        )
+        if res is not None:
+            return True  # we flipped a stale marker → we own the claim
+    except Exception as exc:
+        logger.debug(f"[SEO digest] CAS update failed: {exc}")
+        return False
+
+    # Path B: doc may not exist yet — try a one-shot insert. The unique
+    # `_id` constraint guarantees only one worker's insert succeeds; the
+    # rest get DuplicateKeyError and bail out as losers.
+    try:
+        await db.api_config.insert_one({
+            "_id": _SEO_WEEKLY_DIGEST_LOCK_ID,
+            _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_iso_week,
+        })
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception as exc:
+        logger.debug(f"[SEO digest] bootstrap insert failed: {exc}")
+        return False
+
+
+async def _try_send_weekly_digest_once(db, now_utc: datetime) -> dict:
+    """One iteration of the digest loop, factored out for testability."""
+    cur_iso_week = _iso_week_tag(now_utc)
+    # Cheap pre-gate read so we don't hammer api_config with CAS calls
+    # outside the Monday window.
+    try:
+        cfg = await db.api_config.find_one(
+            {"_id": _SEO_WEEKLY_DIGEST_LOCK_ID},
+            {"_id": 0, _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: 1},
+        ) or {}
+    except Exception:
+        cfg = {}
+    last_sent = cfg.get(_SEO_WEEKLY_DIGEST_API_CONFIG_KEY, "")
+    if not _should_send_weekly_digest_now(now_utc, last_sent):
+        return {"claimed": False, "sent": False, "reason": "outside_window_or_dedup"}
+
+    if not await _claim_weekly_digest_slot(db, cur_iso_week):
+        return {"claimed": False, "sent": False, "reason": "lost_race"}
+
+    stats = await _gather_weekly_digest_inputs(now_utc)
+    result = await _send_seo_weekly_digest_email(stats)
+    if not result.get("sent"):
+        # Roll the marker back so a subsequent poll inside the same window
+        # can retry (transient Resend outage, etc.).
+        logger.info(
+            f"[SEO digest] send failed for {cur_iso_week} "
+            f"(reason={result.get('reason','unknown')}); rolling back claim"
+        )
+        try:
+            await db.api_config.update_one(
+                {
+                    "_id": _SEO_WEEKLY_DIGEST_LOCK_ID,
+                    _SEO_WEEKLY_DIGEST_API_CONFIG_KEY: cur_iso_week,
+                },
+                {"$set": {_SEO_WEEKLY_DIGEST_API_CONFIG_KEY: last_sent or ""}},
+            )
+        except Exception:
+            pass
+    return {"claimed": True, "sent": result.get("sent", False), "reason": result.get("reason")}
 
 
 async def _seo_health_alert_loop():
