@@ -38,32 +38,47 @@ export default function SubjectLandingPage() {
   const streamName = subject?.stream_name || '';
   const chapterCount = chapters?.length || 0;
 
+  const contentTypes = useMemo(
+    () => new Set(chapters.map((ch) => ch.content_type).filter(Boolean)),
+    [chapters],
+  );
+
   const faqJsonLd = useMemo(() => {
     if (!subjectName) return null;
-    const qa = [
-      {
-        q: `What topics are covered in ${boardName} ${className} ${subjectName}?`,
-        a: chapterCount > 0
-          ? `Syrabit.ai covers ${chapterCount} chapters for ${boardName} ${className} ${subjectName}, including detailed notes, key concepts, and exam-focused summaries for each chapter.`
-          : `Syrabit.ai provides comprehensive study material for ${boardName} ${className} ${subjectName}, covering the full syllabus with notes and AI-powered tutoring.`,
-      },
-      {
+    const qa = [];
+
+    qa.push({
+      q: `What topics are covered in ${boardName} ${className} ${subjectName}?`,
+      a: chapterCount > 0
+        ? `Syrabit.ai covers ${chapterCount} chapters for ${boardName} ${className} ${subjectName}, including detailed notes, key concepts, and exam-focused summaries for each chapter.`
+        : `Syrabit.ai provides comprehensive study material for ${boardName} ${className} ${subjectName}, covering the full syllabus with notes and AI-powered tutoring.`,
+    });
+
+    if (contentTypes.has('pyq') || contentTypes.has('PYQ') || contentTypes.has('important_questions')) {
+      qa.push({
         q: `Where can I find ${boardName} ${subjectName} previous year questions?`,
         a: `You can find previous year questions (PYQs) for ${boardName} ${className} ${subjectName} on Syrabit.ai. Each chapter includes mark-wise important questions from past exams to help you prepare effectively.`,
-      },
-      {
-        q: `Is ${subjectName} study material on Syrabit.ai free?`,
-        a: `Yes, Syrabit.ai offers 30 free AI-powered study credits per day. You can browse ${subjectName} notes, ask questions to the AI tutor, and access chapter summaries without creating an account.`,
-      },
-      {
-        q: `How does Syrabit.ai help with ${subjectName} exam preparation?`,
-        a: `Syrabit.ai provides AI-powered explanations, chapter-wise notes, MCQs, and previous year questions for ${boardName} ${className} ${subjectName}. The AI tutor can answer specific questions with source citations from your syllabus.`,
-      },
-      {
-        q: `Can I study ${subjectName} in Assamese on Syrabit.ai?`,
-        a: `Yes, Syrabit.ai supports bilingual study in both English and Assamese. You can switch languages anytime while studying ${subjectName} to better understand concepts in your preferred language.`,
-      },
-    ];
+      });
+    }
+
+    qa.push({
+      q: `Is ${subjectName} study material on Syrabit.ai free?`,
+      a: `Yes, Syrabit.ai offers 30 free AI-powered study credits per day. You can browse ${subjectName} notes, ask questions to the AI tutor, and access chapter summaries without creating an account.`,
+    });
+
+    const features = ['AI-powered explanations', 'chapter-wise notes'];
+    if (contentTypes.has('mcq') || contentTypes.has('MCQ')) features.push('MCQs');
+    if (contentTypes.has('pyq') || contentTypes.has('PYQ')) features.push('previous year questions');
+    qa.push({
+      q: `How does Syrabit.ai help with ${subjectName} exam preparation?`,
+      a: `Syrabit.ai provides ${features.join(', ')} for ${boardName} ${className} ${subjectName}. The AI tutor can answer specific questions with source citations from your syllabus.`,
+    });
+
+    qa.push({
+      q: `Can I study ${subjectName} in Assamese on Syrabit.ai?`,
+      a: `Yes, Syrabit.ai supports bilingual study in both English and Assamese. You can switch languages anytime while studying ${subjectName} to better understand concepts in your preferred language.`,
+    });
+
     return {
       '@context': 'https://schema.org',
       '@type': 'FAQPage',
@@ -73,7 +88,7 @@ export default function SubjectLandingPage() {
         acceptedAnswer: { '@type': 'Answer', text: a },
       })),
     };
-  }, [subjectName, boardName, className, chapterCount]);
+  }, [subjectName, boardName, className, chapterCount, contentTypes]);
 
   if (loading) {
     return (
@@ -114,7 +129,7 @@ export default function SubjectLandingPage() {
         title={`${subjectName} — ${boardName} ${className} Notes & Study Material`}
         description={subject.description || `Complete ${subjectName} study material for ${boardName} ${className} students. Notes, MCQs, important questions, and AI-powered tutoring.`}
         url={`https://syrabit.ai${basePath}`}
-        jsonLd={faqJsonLd}
+        jsonLd={faqJsonLd ? [faqJsonLd] : undefined}
       />
 
       <header className="border-b border-border/30" style={{ background: 'rgba(255,255,255,0.80)', backdropFilter: 'blur(12px)' }}>
