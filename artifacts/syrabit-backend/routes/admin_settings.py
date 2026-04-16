@@ -44,12 +44,21 @@ router = APIRouter()
 async def admin_get_settings(admin: dict = Depends(get_admin_user)):
     settings = await supa_get_settings()
     if not settings:
-        settings = {"registrations_open": True, "maintenance_mode": False, "app_name": "Syrabit.ai", "tagline": "AI-Powered AHSEC Exam Prep"}
+        settings = {"registrations_open": True, "maintenance_mode": False, "app_name": "Syrabit.ai", "tagline": "AI-Powered AHSEC Exam Prep", "crawl_coverage_red": 30, "crawl_coverage_yellow": 50, "bot_missing_days": 3}
+    settings.setdefault("crawl_coverage_red", 30)
+    settings.setdefault("crawl_coverage_yellow", 50)
+    settings.setdefault("bot_missing_days", 3)
     return settings
 
 @router.patch("/admin/settings")
 async def admin_update_settings(data: SettingsUpdate, admin: dict = Depends(get_admin_user)):
     update = {k: v for k, v in data.model_dump().items() if v is not None}
+    if "crawl_coverage_red" in update or "crawl_coverage_yellow" in update:
+        current = await supa_get_settings() or {}
+        red = update.get("crawl_coverage_red", current.get("crawl_coverage_red", 30))
+        yellow = update.get("crawl_coverage_yellow", current.get("crawl_coverage_yellow", 50))
+        if red > yellow:
+            raise HTTPException(status_code=400, detail="Crawl coverage red threshold must be less than or equal to yellow threshold")
     if update:
         await supa_update_settings(update)
     return {"message": "Settings updated"}
@@ -59,6 +68,9 @@ async def get_public_settings():
     settings = await supa_get_settings()
     if not settings:
         settings = {"registrations_open": True, "maintenance_mode": False, "app_name": "Syrabit.ai", "tagline": "AI-Powered AHSEC Exam Prep"}
+    settings.pop("crawl_coverage_red", None)
+    settings.pop("crawl_coverage_yellow", None)
+    settings.pop("bot_missing_days", None)
     return settings
 
 # ─────────────────────────────────────────────

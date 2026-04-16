@@ -206,6 +206,7 @@ _ALLOWED_CONV_COLUMNS = frozenset({
 
 _ALLOWED_SETTINGS_COLUMNS = frozenset({
     "registrations_open", "maintenance_mode", "app_name", "tagline",
+    "crawl_coverage_red", "crawl_coverage_yellow", "bot_missing_days",
 })
 
 def _quote_ident(name: str) -> str:
@@ -665,7 +666,7 @@ async def supa_get_all_conversations(limit: int = 200):
 # ─────────────────────────────────────────────
 
 async def supa_get_settings():
-    defaults = {"registrations_open": True, "maintenance_mode": False, "app_name": "Syrabit.ai", "tagline": "AI-Powered Exam Prep"}
+    defaults = {"registrations_open": True, "maintenance_mode": False, "app_name": "Syrabit.ai", "tagline": "AI-Powered Exam Prep", "crawl_coverage_red": 30, "crawl_coverage_yellow": 50, "bot_missing_days": 3}
     if _deps_mod.pg_pool:
         try:
             async with _deps_mod.pg_pool.acquire() as conn:

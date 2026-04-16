@@ -2,7 +2,7 @@
 Syrabit.ai — Pydantic request/response models.
 Imported by server.py and any future router modules.
 """
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import List, Literal, Optional
 
 VALID_CATEGORIES = ("notes", "important_questions", "question_paper")
@@ -188,6 +188,9 @@ class SettingsUpdate(BaseModel):
     maintenance_mode: Optional[bool] = None
     app_name: Optional[str] = None
     tagline: Optional[str] = None
+    crawl_coverage_red: Optional[int] = Field(None, ge=0, le=100)
+    crawl_coverage_yellow: Optional[int] = Field(None, ge=0, le=100)
+    bot_missing_days: Optional[int] = Field(None, ge=1, le=90)
 
 
 class RoadmapItemCreate(BaseModel):

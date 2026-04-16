@@ -176,6 +176,9 @@ CREATE TABLE IF NOT EXISTS app_settings (
     app_name TEXT NOT NULL DEFAULT 'Syrabit.ai',
     tagline TEXT NOT NULL DEFAULT 'AI-Powered Exam Prep'
 );
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS crawl_coverage_red INTEGER NOT NULL DEFAULT 30;
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS crawl_coverage_yellow INTEGER NOT NULL DEFAULT 50;
+ALTER TABLE app_settings ADD COLUMN IF NOT EXISTS bot_missing_days INTEGER NOT NULL DEFAULT 3;
 INSERT INTO app_settings(id) VALUES(1) ON CONFLICT(id) DO NOTHING;
 CREATE TABLE IF NOT EXISTS password_resets (
     token TEXT PRIMARY KEY,

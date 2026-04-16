@@ -14,6 +14,9 @@ export default function AdminSettings({ adminToken, onNavigate }) {
     maintenance_mode: false,
     app_name: 'Syrabit.ai',
     tagline: 'AI-Powered AHSEC Exam Prep',
+    crawl_coverage_red: 30,
+    crawl_coverage_yellow: 50,
+    bot_missing_days: 3,
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -31,8 +34,9 @@ export default function AdminSettings({ adminToken, onNavigate }) {
     try {
       await adminUpdateSettings(adminToken, settings);
       toast.success('Settings saved');
-    } catch {
-      toast.error('Failed to save settings');
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      toast.error(detail || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
@@ -83,6 +87,50 @@ export default function AdminSettings({ adminToken, onNavigate }) {
             checked={settings.maintenance_mode}
             onCheckedChange={(v) => setSettings((s) => ({ ...s, maintenance_mode: v }))}
           />
+        </div>
+      </div>
+
+      <div className="rounded-2xl p-5 space-y-5 bg-white border border-gray-200 shadow-sm">
+        <h3 className="text-gray-700 text-sm font-medium">Bot Alert Thresholds</h3>
+        <p className="text-gray-400 text-xs">Configure when bot traffic alerts trigger on the dashboard.</p>
+
+        <div className="space-y-1.5">
+          <Label className="text-gray-500 text-sm">Crawl Coverage Red (%)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={100}
+            value={settings.crawl_coverage_red}
+            onChange={(e) => setSettings((s) => ({ ...s, crawl_coverage_red: parseInt(e.target.value, 10) || 0 }))}
+            className="bg-gray-50 border-gray-200 text-gray-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-500/20"
+          />
+          <p className="text-gray-400 text-xs">Coverage below this % triggers a red alert</p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-gray-500 text-sm">Crawl Coverage Yellow (%)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={100}
+            value={settings.crawl_coverage_yellow}
+            onChange={(e) => setSettings((s) => ({ ...s, crawl_coverage_yellow: parseInt(e.target.value, 10) || 0 }))}
+            className="bg-gray-50 border-gray-200 text-gray-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-500/20"
+          />
+          <p className="text-gray-400 text-xs">Coverage below this % triggers a yellow alert</p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label className="text-gray-500 text-sm">Bot Inactivity Window (days)</Label>
+          <Input
+            type="number"
+            min={1}
+            max={90}
+            value={settings.bot_missing_days}
+            onChange={(e) => setSettings((s) => ({ ...s, bot_missing_days: parseInt(e.target.value, 10) || 1 }))}
+            className="bg-gray-50 border-gray-200 text-gray-900 focus:border-violet-400 focus:ring-2 focus:ring-violet-500/20"
+          />
+          <p className="text-gray-400 text-xs">Days without key bot activity before alerting</p>
         </div>
       </div>
 

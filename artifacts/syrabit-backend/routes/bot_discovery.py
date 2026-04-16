@@ -758,9 +758,25 @@ async def admin_bot_traffic(
         ]
         per_bot_pages = await db.server_hits.aggregate(per_bot_pages_pipeline).to_list(15)
 
-        CRAWL_COVERAGE_RED = 30
-        CRAWL_COVERAGE_YELLOW = 50
-        BOT_MISSING_DAYS = 3
+        try:
+            from db_ops import supa_get_settings
+            _bot_settings = await supa_get_settings()
+        except Exception as _settings_err:
+            logger.warning("Failed to load bot alert settings, using defaults: %s", _settings_err)
+            _bot_settings = {}
+
+        def _safe_int(val, default, lo=0, hi=100):
+            try:
+                v = int(val)
+                return max(lo, min(hi, v))
+            except (TypeError, ValueError):
+                return default
+
+        CRAWL_COVERAGE_RED = _safe_int(_bot_settings.get("crawl_coverage_red"), 30)
+        CRAWL_COVERAGE_YELLOW = _safe_int(_bot_settings.get("crawl_coverage_yellow"), 50)
+        if CRAWL_COVERAGE_RED > CRAWL_COVERAGE_YELLOW:
+            CRAWL_COVERAGE_RED, CRAWL_COVERAGE_YELLOW = CRAWL_COVERAGE_YELLOW, CRAWL_COVERAGE_RED
+        BOT_MISSING_DAYS = _safe_int(_bot_settings.get("bot_missing_days"), 3, 1, 90)
 
         alerts = []
         alert_level = "green"
