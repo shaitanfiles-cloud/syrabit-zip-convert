@@ -40,6 +40,7 @@ mistune==3.2.0
 razorpay==2.0.1
 resend==2.26.0
 duckduckgo_search==8.1.1
+dnspython==2.7.0
 
 pywebpush==2.3.0
 py-vapid==1.9.4
