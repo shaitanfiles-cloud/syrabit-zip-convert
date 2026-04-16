@@ -1069,6 +1069,7 @@ async def admin_vector_stats(admin: dict = Depends(get_admin_user)):
 
 # ── Telemetry ring buffers — imported from rag.py (single source of truth) ────
 from rag import _rag_telemetry, _chat_latencies
+import chat_speedup_metrics as _chat_speedup
 
 
 @router.get("/admin/rag/accuracy")
@@ -1150,6 +1151,20 @@ async def admin_chat_fallbacks(days: int = 7, admin: dict = Depends(get_admin_us
         "daily": daily,
         "has_data": total > 0,
     }
+
+
+@router.get("/admin/chat/speedups")
+async def admin_chat_speedups(days: int = 7, admin: dict = Depends(get_admin_user)):
+    """Track how often the Task #282 chat speed-ups actually help (Task #303).
+
+    Reports per-day:
+      • cache hit rate (early + pre-SSE)
+      • % of chats served by warmed cache (early hits)
+      • % of chats where speculative web fallback was used vs discarded
+      • average TTFB / total chat latency (in milliseconds)
+      • the most recent cache-warm runs so the 6-hour pre-warm cycle is visible
+    """
+    return _chat_speedup.snapshot(days=days)
 
 
 @router.get("/admin/perf/latency")
@@ -3250,7 +3265,7 @@ async def _perform_cache_warm(top_n: int = 20, *, source: str = "manual") -> dic
         await asyncio.gather(*[_warm_single(q) for q in batch])
 
     logger.info(f"[CACHE_WARM] Done ({source}): warmed={warmed}, already_cached={already_cached}, failed={failed}")
-    return {
+    result = {
         "ok": True,
         "warmed": warmed,
         "already_cached": already_cached,
@@ -3258,6 +3273,11 @@ async def _perform_cache_warm(top_n: int = 20, *, source: str = "manual") -> dic
         "total_queries": len(top_queries),
         "source": source,
     }
+    try:
+        _chat_speedup.record_warm_run(result)
+    except Exception:
+        pass
+    return result
 
 
 @router.post("/admin/cache/warm")

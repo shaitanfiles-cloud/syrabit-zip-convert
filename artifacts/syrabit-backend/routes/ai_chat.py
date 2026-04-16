@@ -84,6 +84,7 @@ def _safe_metadata(raw) -> dict:
     return {}
 from qa_engine import log_chat_message as _log_chat_message
 from guardrails.prompt_safety import evaluate_prompt_safety, validate_llm_output
+import chat_speedup_metrics as _speedup
 
 logger = logging.getLogger(__name__)
 
@@ -753,6 +754,7 @@ async def _persist_chat_turn(
 @router.post("/ai/chat/stream")
 async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] = Depends(rate_limit_chat_optional)):
     _stream_t0 = _time_mod.time()
+    _speedup.record_chat_started()
     is_anon = user is None
     user_id = user["id"] if user else None
     anon_id = None
@@ -827,6 +829,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             except Exception:
                 pass
         logger.info(f"[STREAM] INSTANT casual fast-path: '{msg.message[:30]}' → {len(_instant_s)} chars (0 LLM calls)")
+        _speedup.record_instant_fastpath()
+        _speedup.record_ttfb((_time_mod.time() - _stream_t0) * 1000)
+        _speedup.record_total_latency((_time_mod.time() - _stream_t0) * 1000)
         async def _instant_stream():
             nonlocal _instant_s
             yield f"data: {json.dumps({'conversation_id': msg.conversation_id or '', 'rag_source': 'none', 'rag_quality': 'none', 'rag_chunks': 0})}\n\n"
@@ -848,6 +853,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _early_cached_answer = _ai_response_cache[_cache_key_early]
     if _early_cached_answer:
         logger.info(f"[STREAM] EARLY cache HIT — skipping all preprocessing (key={_cache_key_early})")
+        _speedup.record_early_cache_hit()
         _conv_id_early = msg.conversation_id
         if not _conv_id_early and (user_id or anon_id):
             _conv_id_early = str(uuid.uuid4())
@@ -886,7 +892,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
 
         async def _early_cache_stream():
             yield f"data: {json.dumps({'conversation_id': _conv_id_early or '', 'rag_source': 'cache', 'rag_quality': 'none', 'rag_chunks': 0, 'web_search_used': False, 'ctx_board_name': msg.board_name or '', 'ctx_class_name': msg.class_name or ''})}\n\n"
-            logger.info(f"[STREAM][TIMING] TTFT (early cache): {_time_mod.time() - _stream_t0:.3f}s")
+            _ttfb_early_ms = (_time_mod.time() - _stream_t0) * 1000
+            logger.info(f"[STREAM][TIMING] TTFT (early cache): {_ttfb_early_ms / 1000:.3f}s")
+            try:
+                _speedup.record_ttfb(_ttfb_early_ms)
+            except Exception:
+                pass
             _CHUNK_SIZE = 300
             for _ci in range(0, len(_early_cached_answer), _CHUNK_SIZE):
                 yield f"data: {json.dumps({'content': _early_cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
@@ -897,7 +908,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             yield "data: [DONE]\n\n"
             asyncio.create_task(_early_cache_persist())
             try:
-                _record_chat_latency((_time_mod.time() - _stream_t0) * 1000)
+                _final_ms_e = (_time_mod.time() - _stream_t0) * 1000
+                _record_chat_latency(_final_ms_e)
+                _speedup.record_total_latency(_final_ms_e)
             except Exception:
                 pass
         if not is_anon and credits_info:
@@ -1187,6 +1200,16 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         web_results = []
         if _early_web_task is not None and not _early_web_task.done():
             _early_web_task.cancel()
+        # Only count this as a "discarded" speculative fetch when the
+        # search was actually eligible to run. When _stream_skip_web is
+        # true, _early_web_search() short-circuits to [] without making
+        # any network call, so counting it would distort the
+        # used/discarded ratio.
+        if _early_web_task is not None and not _stream_skip_web:
+            try:
+                _speedup.record_speculative_web(used=False, discarded=True)
+            except Exception:
+                pass
     else:
         # Internal RAG missed → wait briefly for the speculative web fetch
         # we kicked off in Phase 0. It runs OUTSIDE the 150ms pre-LLM budget
@@ -1207,6 +1230,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 f"[STREAM] Using {len(web_results)} web result(s) as fallback "
                 f"(internal RAG returned source={rag_ctx.get('source','none')})"
             )
+        try:
+            _speedup.record_speculative_web(used=bool(web_results), discarded=False)
+        except Exception:
+            pass
 
     if _syllabus_task.done():
         try:
@@ -1437,6 +1464,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _cached_answer = await _redis_get_ai_cache_async(_cache_key_val)
         if _cached_answer:
             logger.info(f"Redis cache HIT (pre-SSE): {_cache_key_val}")
+    if _cached_answer:
+        try:
+            _speedup.record_pre_sse_cache_hit()
+        except Exception:
+            pass
 
     async def event_stream():
         nonlocal full_response
@@ -1452,7 +1484,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             cached_answer = _cached_answer
             _stream_provider = "unknown"
             if cached_answer:
-                logger.info(f"[STREAM][TIMING] TTFT (cache hit): {_time_mod.time() - _stream_t0:.3f}s")
+                _ttfb_cache_ms = (_time_mod.time() - _stream_t0) * 1000
+                logger.info(f"[STREAM][TIMING] TTFT (cache hit): {_ttfb_cache_ms / 1000:.3f}s")
+                try:
+                    _speedup.record_ttfb(_ttfb_cache_ms)
+                except Exception:
+                    pass
                 _CHUNK_SIZE = 300
                 for _ci in range(0, len(cached_answer), _CHUNK_SIZE):
                     yield f"data: {json.dumps({'content': cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
@@ -1480,7 +1517,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                             pass
                     if '"content"' in chunk:
                         if not _first_token_logged:
-                            logger.info(f"[STREAM][TIMING] TTFT (first LLM token): {_time_mod.time() - _stream_t0:.3f}s")
+                            _ttfb_llm_ms = (_time_mod.time() - _stream_t0) * 1000
+                            logger.info(f"[STREAM][TIMING] TTFT (first LLM token): {_ttfb_llm_ms / 1000:.3f}s")
+                            try:
+                                _speedup.record_ttfb(_ttfb_llm_ms)
+                            except Exception:
+                                pass
                             _first_token_logged = True
                         try:
                             data = json.loads(chunk[6:])
@@ -1588,7 +1630,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             )
 
             try:
-                _record_chat_latency((_time_mod.time() - _stream_t0) * 1000)
+                _final_total_ms = (_time_mod.time() - _stream_t0) * 1000
+                _record_chat_latency(_final_total_ms)
+                _speedup.record_total_latency(_final_total_ms)
             except Exception:
                 pass
 
