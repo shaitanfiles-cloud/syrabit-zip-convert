@@ -885,8 +885,8 @@ _ADMIN_NOTIF_PREFS_DEFAULTS = {
     "sound_enabled": True,
     "push_enabled": False,
     "chime_tone": "default",
-    "sound_severities": ["high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate", "endpoint_down"],
-    "push_severities": ["high_error_rate", "spoofed_bot_surge", "endpoint_down"],
+    "sound_severities": ["high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate", "endpoint_down", "auto_block_expired"],
+    "push_severities": ["high_error_rate", "spoofed_bot_surge", "endpoint_down", "auto_block_expired"],
 }
 
 
@@ -906,7 +906,7 @@ async def get_admin_notification_prefs(admin_id: str) -> dict:
 
 async def upsert_admin_notification_prefs(admin_id: str, prefs: dict) -> dict:
     valid_tones = {"default", "soft", "urgent", "bell"}
-    valid_severities = {"high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate", "endpoint_down"}
+    valid_severities = {"high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate", "endpoint_down", "auto_block_expired"}
 
     doc = {"admin_id": admin_id, "updated_at": datetime.now(timezone.utc).isoformat()}
 

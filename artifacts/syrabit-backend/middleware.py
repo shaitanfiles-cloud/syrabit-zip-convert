@@ -121,9 +121,29 @@ async def _cleanup_expired_blocked_ips():
         if await is_mongo_available():
             from datetime import datetime as _dt, timezone as _tz
             now = _dt.now(_tz.utc)
-            result = await db.blocked_ips.delete_many({"expires_at": {"$lte": now}})
-            if result.deleted_count > 0:
-                logger.info(f"Cleaned up {result.deleted_count} expired IP block(s)")
+            expired_docs = await db.blocked_ips.find(
+                {"expires_at": {"$lte": now}, "auto_blocked": True},
+                {"ip_hash": 1, "_id": 1},
+            ).to_list(500)
+            if expired_docs:
+                ids = [d["_id"] for d in expired_docs]
+                result = await db.blocked_ips.delete_many({"_id": {"$in": ids}})
+                count = result.deleted_count
+                if count > 0:
+                    logger.info(f"Cleaned up {count} expired auto-blocked IP(s)")
+                    await _refresh_blocked_ip_cache()
+                    try:
+                        from metrics import _dispatch_alert
+                        hashes = ", ".join(d.get("ip_hash", "?")[:12] + "..." for d in expired_docs[:5])
+                        suffix = f" and {count - 5} more" if count > 5 else ""
+                        await _dispatch_alert(
+                            "auto_block_expired",
+                            "Auto-blocked IPs expired",
+                            f"{count} auto-blocked IP(s) have been automatically unblocked after their cooldown expired: {hashes}{suffix}.",
+                            {"count": count, "ip_hashes": [d.get("ip_hash") for d in expired_docs[:10]]},
+                        )
+                    except Exception as e:
+                        logger.debug(f"auto-block expiry alert dispatch failed: {e}")
     except Exception as e:
         logger.debug(f"expired IP cleanup failed: {e}")
 
