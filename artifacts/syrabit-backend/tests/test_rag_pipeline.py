@@ -1,82 +1,160 @@
-import pytest
+"""Tests for `resolve_rag_context`, the public RAG entry point.
 
-# See test_chunking.py — the private helpers _split_into_sections and
-# _sentence_split_with_overlap were removed during the RAG refactor and
-# now live behind higher-level entry points. Skip the module so the rest
-# of the suite can run; rewriting these tests is tracked separately.
-pytest.skip(
-    "Obsolete: rag._split_into_sections / _sentence_split_with_overlap were "
-    "removed during the RAG refactor. Tests need to be rewritten against the "
-    "current chunking pipeline.",
-    allow_module_level=True,
-)
+The previous version targeted private chunking helpers
+(`_split_into_sections`, `_sentence_split_with_overlap`) that were
+removed when the RAG pipeline was retired. The current public surface
+is `resolve_rag_context`, which selects between three branches:
 
+  1. Document-attached → `_extract_relevant_sections` over the user
+     document, returns `source="document"`, `quality="tier0"`.
+  2. Subject + non-casual intent → `_fetch_internal_chapters`
+     (Mongo). When chapters are found, returns `source="internal"`,
+     `quality="tier1"`, `_has_internal_content=True`.
+  3. Otherwise → empty context with `_general_knowledge_fallback=True`.
 
-class TestSectionSplitting:
-    def test_split_into_sections_with_headings(self):
-        content = "## Introduction\n\nSome text here.\n\n### Details\n\nMore details."
-        sections = _split_into_sections(content)
-        assert len(sections) >= 1
-        has_heading = any(s.get("heading") for s in sections)
-        assert has_heading, "Sections should capture heading text"
+These tests pin all three branches without touching the network or DB.
+"""
+from __future__ import annotations
 
-    def test_split_into_sections_captures_heading_text(self):
-        content = "## Financial Planning Basics\n\nFinancial planning is important.\n\n### Key Steps\n\nStep 1: Set goals."
-        sections = _split_into_sections(content)
-        headings = [s.get("heading", "") for s in sections if s.get("heading")]
-        assert any("Financial Planning" in h for h in headings), f"Should capture heading text, got: {headings}"
+import asyncio
+import os
+import sys
 
-    def test_split_into_sections_no_headings(self):
-        content = "Just plain text without any markdown headings. Another sentence."
-        sections = _split_into_sections(content)
-        assert len(sections) >= 1
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-    def test_split_into_sections_empty_content(self):
-        sections = _split_into_sections("")
-        assert isinstance(sections, list)
+from tests._deps_stub import install_deps_stub  # noqa: E402
 
-    def test_split_preserves_all_content(self):
-        content = "## Part A\n\nContent A here.\n\n## Part B\n\nContent B here."
-        sections = _split_into_sections(content)
-        all_text = " ".join(s.get("text", "") for s in sections)
-        assert "Content A" in all_text
-        assert "Content B" in all_text
+install_deps_stub()
+
+import rag  # noqa: E402
+from rag import resolve_rag_context  # noqa: E402
 
 
-class TestSentenceOverlap:
-    def test_basic_chunking(self):
-        text = "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence."
-        chunks = _sentence_split_with_overlap(text, target=50, max_len=80, overlap=1)
-        assert len(chunks) >= 2
+def _run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
-    def test_overlap_shares_content(self):
-        text = "Alpha. Beta. Gamma. Delta. Epsilon. Zeta."
-        chunks = _sentence_split_with_overlap(text, target=20, max_len=40, overlap=1)
-        if len(chunks) >= 2:
-            assert any(word in chunks[1] for word in chunks[0].split()), "Overlap should share some content"
 
-    def test_single_sentence(self):
-        text = "Solo sentence."
-        chunks = _sentence_split_with_overlap(text, target=100, max_len=200, overlap=1)
-        assert len(chunks) == 1
+class TestDocumentBranch:
+    def test_returns_tier0_document_source_when_text_provided(self):
+        document = (
+            "Photosynthesis is how plants make food.\n"
+            "Chlorophyll absorbs light energy.\n"
+            "The cell wall is rigid in plants."
+        )
+        ctx = _run(resolve_rag_context(query="explain photosynthesis", document_text=document))
+        assert ctx["source"] == "document"
+        assert ctx["quality"] == "tier0"
+        assert ctx["chunks"] == []
+        assert ctx["chapters"] == []
+        assert "photosynthesis" in ctx["document_text"].lower()
+        # document_full is the raw doc capped at 5000 chars.
+        assert ctx["document_full"].startswith("Photosynthesis")
 
-    def test_empty_input(self):
-        chunks = _sentence_split_with_overlap("", target=100, max_len=200, overlap=1)
-        assert chunks == [] or chunks == [""]
+    def test_document_branch_caps_full_at_5000_chars(self):
+        document = "x" * 10_000
+        ctx = _run(resolve_rag_context(query="anything", document_text=document))
+        assert len(ctx["document_full"]) == 5000
 
-    def test_deterministic_output(self):
-        text = "One. Two. Three. Four. Five. Six. Seven. Eight. Nine. Ten."
-        c1 = _sentence_split_with_overlap(text, target=30, max_len=50, overlap=1)
-        c2 = _sentence_split_with_overlap(text, target=30, max_len=50, overlap=1)
-        assert c1 == c2, "Same input should produce same output"
+    def test_document_branch_propagates_intent(self):
+        ctx = _run(resolve_rag_context(query="q", document_text="some content", intent="notes"))
+        assert ctx["intent"] == "notes"
 
-    def test_no_empty_chunks(self):
-        text = "A. B. C. D. E. F. G. H. I. J."
-        chunks = _sentence_split_with_overlap(text, target=10, max_len=20, overlap=1)
-        for chunk in chunks:
-            assert chunk.strip(), "No empty chunks should be produced"
+    def test_document_branch_defaults_intent_to_general(self):
+        ctx = _run(resolve_rag_context(query="q", document_text="some content"))
+        assert ctx["intent"] == "general"
 
-    def test_large_overlap_doesnt_hang(self):
-        text = "Short. Text. Here."
-        chunks = _sentence_split_with_overlap(text, target=10, max_len=20, overlap=10)
-        assert len(chunks) >= 1
+    def test_blank_document_text_does_not_take_document_branch(self):
+        # Whitespace-only document should fall through to the no-context branch.
+        ctx = _run(resolve_rag_context(query="q", document_text="   \n  "))
+        assert ctx["source"] == "none"
+
+
+class TestInternalBranch:
+    def test_uses_prefetched_chapters_without_calling_db(self, monkeypatch):
+        prefetched = [
+            {"title": "Photosynthesis", "content": "Plants convert light to chemical energy.",
+             "slug": "photosynthesis", "subject_id": "bio-101", "type": "chapter"},
+        ]
+
+        async def _should_not_run(*a, **kw):
+            raise AssertionError("_fetch_internal_chapters must not be called when prefetched is provided")
+
+        monkeypatch.setattr(rag, "_fetch_internal_chapters", _should_not_run)
+        ctx = _run(resolve_rag_context(
+            query="photosynthesis",
+            subject_id="bio-101",
+            intent="notes",
+            prefetched_chapters=prefetched,
+        ))
+        assert ctx["source"] == "internal"
+        assert ctx["quality"] == "tier1"
+        assert ctx["_has_internal_content"] is True
+        assert ctx["chunks"] == prefetched
+        assert ctx["chapters"] == prefetched
+        assert ctx["intent"] == "notes"
+
+    def test_falls_back_when_prefetched_chapters_empty(self, monkeypatch):
+        async def _empty(*a, **kw):
+            return []
+
+        monkeypatch.setattr(rag, "_fetch_internal_chapters", _empty)
+        ctx = _run(resolve_rag_context(
+            query="photosynthesis",
+            subject_id="bio-101",
+            intent="notes",
+            prefetched_chapters=[],  # explicit empty
+        ))
+        assert ctx["source"] == "none"
+        assert ctx["_general_knowledge_fallback"] is True
+
+    def test_casual_intent_skips_internal_branch(self, monkeypatch):
+        async def _should_not_run(*a, **kw):
+            raise AssertionError("internal chapter fetch must be skipped for casual intent")
+
+        monkeypatch.setattr(rag, "_fetch_internal_chapters", _should_not_run)
+        ctx = _run(resolve_rag_context(
+            query="hello there",
+            subject_id="bio-101",
+            intent="casual",
+        ))
+        assert ctx["source"] == "none"
+        assert ctx["intent"] == "casual"
+
+    def test_general_intent_skips_internal_branch(self, monkeypatch):
+        async def _should_not_run(*a, **kw):
+            raise AssertionError("internal chapter fetch must be skipped for general intent")
+
+        monkeypatch.setattr(rag, "_fetch_internal_chapters", _should_not_run)
+        ctx = _run(resolve_rag_context(
+            query="what is life",
+            subject_id="bio-101",
+            intent="general",
+        ))
+        assert ctx["source"] == "none"
+
+    def test_no_subject_skips_internal_branch(self, monkeypatch):
+        async def _should_not_run(*a, **kw):
+            raise AssertionError("internal chapter fetch must be skipped without a subject")
+
+        monkeypatch.setattr(rag, "_fetch_internal_chapters", _should_not_run)
+        ctx = _run(resolve_rag_context(query="explain cells", intent="notes"))
+        assert ctx["source"] == "none"
+        assert ctx["_general_knowledge_fallback"] is True
+
+
+class TestNoContextBranch:
+    def test_returns_general_knowledge_fallback_marker(self):
+        ctx = _run(resolve_rag_context(query="anything"))
+        assert ctx["source"] == "none"
+        assert ctx["quality"] == "none"
+        assert ctx["chunks"] == []
+        assert ctx["chapters"] == []
+        assert ctx["_general_knowledge_fallback"] is True
+
+    def test_default_intent_is_general_when_omitted(self):
+        ctx = _run(resolve_rag_context(query="anything"))
+        assert ctx["intent"] == "general"

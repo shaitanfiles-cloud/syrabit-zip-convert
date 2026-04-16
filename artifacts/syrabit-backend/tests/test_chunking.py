@@ -1,121 +1,92 @@
-import pytest
+"""Tests for the document-extraction "chunking" surface in rag.py.
 
-# The internal chunking helpers (_split_into_sections, _merge_short_sections,
-# _sentence_split_with_overlap) were removed from rag.py in a refactor —
-# chunking now lives behind the resolve_rag_context / _fetch_internal_chapters
-# entry points. These granular unit tests therefore target a private API that
-# no longer exists. Skip the entire module at collection time so the rest of
-# the suite still runs cleanly. Tracked under follow-up: rewrite chunking
-# tests against whatever helper currently produces section boundaries.
-pytest.skip(
-    "Obsolete: rag._split_into_sections / _merge_short_sections / "
-    "_sentence_split_with_overlap were removed during the RAG refactor. "
-    "Tests need to be rewritten against the current chunking pipeline.",
-    allow_module_level=True,
-)
+The previous version of this file targeted private helpers
+(`_split_into_sections`, `_merge_short_sections`,
+`_sentence_split_with_overlap`) that were removed when the heavy RAG /
+chunking pipeline was retired (see `rag.py` module docstring: "web
+search and RAG removed"). The only chunking-shaped behavior that
+remains in production today is `_extract_relevant_sections`: given a
+user document and a query, score every line by keyword overlap and
+return a contiguous selection capped at `char_limit`.
 
+These tests pin down that public surface so the document-attachment
+flow stays correct.
+"""
+from __future__ import annotations
 
-class TestSplitIntoSections:
-    def test_basic_heading_split(self):
-        content = "### Intro\n\nSome text.\n\n### Details\n\nMore text."
-        sections = _split_into_sections(content)
-        assert len(sections) == 2
-        assert sections[0]["heading"] == "Intro"
-        assert "Some text" in sections[0]["text"]
-        assert sections[1]["heading"] == "Details"
-        assert "More text" in sections[1]["text"]
+import os
+import sys
 
-    def test_captures_heading_text(self):
-        content = "### Introduction to Photosynthesis\n\nContent here."
-        sections = _split_into_sections(content)
-        assert sections[0]["heading"] == "Introduction to Photosynthesis"
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-    def test_multi_level_headings(self):
-        content = "## Chapter 1\n\nText.\n\n### Section A\n\nMore text.\n\n#### Subsection\n\nDeep text."
-        sections = _split_into_sections(content)
-        assert len(sections) == 3
-        assert sections[0]["heading"] == "Chapter 1"
-        assert sections[1]["heading"] == "Section A"
-        assert sections[2]["heading"] == "Subsection"
+from tests._deps_stub import install_deps_stub  # noqa: E402
 
-    def test_no_headings(self):
-        content = "Just plain text with no headings at all."
-        sections = _split_into_sections(content)
-        assert len(sections) == 1
-        assert sections[0]["heading"] == ""
-        assert "Just plain text" in sections[0]["text"]
+install_deps_stub()
 
-    def test_empty_content(self):
-        assert _split_into_sections("") == []
-        assert _split_into_sections("   ") == []
-
-    def test_leading_text_before_first_heading(self):
-        content = "Preamble text.\n\n### First Section\n\nSection content."
-        sections = _split_into_sections(content)
-        assert len(sections) == 2
-        assert sections[0]["heading"] == ""
-        assert "Preamble" in sections[0]["text"]
-        assert sections[1]["heading"] == "First Section"
+from rag import _extract_relevant_sections  # noqa: E402
 
 
-class TestMergeShortSections:
-    def test_merges_short_sections(self):
-        sections = [
-            {"heading": "A", "text": "Short."},
-            {"heading": "B", "text": "Also short."},
-        ]
-        merged = _merge_short_sections(sections, target=600)
-        assert len(merged) == 1
+class TestExtractRelevantSections:
+    def test_returns_lines_matching_query_keywords(self):
+        document = (
+            "Photosynthesis is the process plants use to make food.\n"
+            "The mitochondrion is the powerhouse of the cell.\n"
+            "Chlorophyll captures light energy in photosynthesis.\n"
+            "Ribosomes synthesize proteins."
+        )
+        out = _extract_relevant_sections(document, "explain photosynthesis")
+        assert "photosynthesis" in out.lower()
+        assert "chlorophyll" in out.lower()
+        # The unrelated ribosome line should not be the focus.
+        assert "ribosome" not in out.lower() or out.lower().index("photosynthesis") < out.lower().index("ribosome")
 
-    def test_keeps_long_sections_separate(self):
-        sections = [
-            {"heading": "A", "text": "x" * 400},
-            {"heading": "B", "text": "y" * 400},
-        ]
-        merged = _merge_short_sections(sections, target=600)
-        assert len(merged) == 2
+    def test_includes_neighbor_lines_for_context(self):
+        # The scorer pulls a small window (idx-1 .. idx+2) around each match
+        # so adjacent context survives even if it has no keyword overlap.
+        document = (
+            "Intro line with no keyword.\n"
+            "Photosynthesis converts CO2 and water into glucose.\n"
+            "This happens inside the chloroplast.\n"
+            "Final unrelated line about geography."
+        )
+        out = _extract_relevant_sections(document, "photosynthesis")
+        # Both the matched line AND its neighbors should be present.
+        assert "Intro line" in out
+        assert "Photosynthesis converts" in out
+        assert "chloroplast" in out
 
-    def test_empty_input(self):
-        assert _merge_short_sections([]) == []
+    def test_respects_char_limit(self):
+        document = "photosynthesis " * 1000  # ~15k chars, all matching
+        out = _extract_relevant_sections(document, "photosynthesis", char_limit=200)
+        assert len(out) <= 200
 
-    def test_single_section(self):
-        sections = [{"heading": "A", "text": "Content."}]
-        merged = _merge_short_sections(sections)
-        assert len(merged) == 1
+    def test_falls_back_to_document_prefix_when_no_keyword_match(self):
+        document = "Alpha beta gamma delta epsilon zeta eta theta."
+        out = _extract_relevant_sections(document, "nothing matches here", char_limit=20)
+        # No keyword overlap → return a prefix of the original document.
+        assert out == document[:20]
 
+    def test_handles_empty_query_gracefully(self):
+        document = "Some content here about anything."
+        out = _extract_relevant_sections(document, "", char_limit=100)
+        # Empty query → no keywords → fall back to document prefix.
+        assert out.startswith("Some content")
 
-class TestSentenceSplitWithOverlap:
-    def test_basic_split(self):
-        text = "First sentence. Second sentence. Third sentence. Fourth sentence. Fifth sentence."
-        chunks = _sentence_split_with_overlap(text, target=50, max_len=100, overlap=1)
-        assert len(chunks) >= 2
+    def test_handles_empty_document(self):
+        assert _extract_relevant_sections("", "photosynthesis") == ""
 
-    def test_overlap_produces_shared_content(self):
-        text = "A. B. C. D. E. F. G. H."
-        chunks = _sentence_split_with_overlap(text, target=10, max_len=20, overlap=1)
-        assert len(chunks) >= 3
-        for i in range(len(chunks) - 1):
-            words_i = set(chunks[i].split())
-            words_next = set(chunks[i + 1].split())
-            assert words_i & words_next, f"No overlap between chunk {i} and {i+1}"
+    def test_strips_blank_lines_in_output(self):
+        document = (
+            "Photosynthesis is key.\n"
+            "\n"
+            "   \n"
+            "Chloroplasts contain chlorophyll."
+        )
+        out = _extract_relevant_sections(document, "photosynthesis chlorophyll")
+        # No blank-line runs in output.
+        assert "\n\n" not in out
 
-    def test_single_sentence(self):
-        text = "Just one sentence."
-        chunks = _sentence_split_with_overlap(text, target=100)
-        assert len(chunks) == 1
-        assert chunks[0] == text
-
-    def test_empty_text(self):
-        assert _sentence_split_with_overlap("") == []
-        assert _sentence_split_with_overlap("   ") == []
-
-    def test_no_infinite_loop(self):
-        text = "A. B. C. D. E."
-        chunks = _sentence_split_with_overlap(text, target=5, max_len=10, overlap=2)
-        assert len(chunks) < 50
-
-    def test_respects_max_len(self):
-        text = "Short. " * 20
-        chunks = _sentence_split_with_overlap(text.strip(), target=30, max_len=60, overlap=1)
-        for c in chunks:
-            assert len(c) <= 70  # some tolerance for sentence boundaries
+    def test_default_char_limit_is_3000(self):
+        document = "photosynthesis " * 1000
+        out = _extract_relevant_sections(document, "photosynthesis")
+        assert len(out) <= 3000
