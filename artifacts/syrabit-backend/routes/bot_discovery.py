@@ -1245,6 +1245,10 @@ _SEO_HEALTH_HISTORY_RETENTION_DAYS = 30
 _SEO_WEEKLY_DIGEST_DASHBOARD_URL = "https://syrabit.ai/admin/seo"
 _SEO_WEEKLY_DIGEST_API_CONFIG_KEY = "seo_weekly_digest_last_iso_week"
 _SEO_WEEKLY_DIGEST_LOCK_ID = "seo_weekly_digest_lock"
+# Alert type names that count as "SEO incidents" for the digest. Keep in sync
+# with the alert_type strings passed to metrics._dispatch_alert from the SEO
+# health/spike loops below (seo_health_degraded, seo_url_spike).
+_SEO_DIGEST_ALERT_TYPES = ("seo_health_degraded", "seo_url_spike")
 _SEO_WEEKLY_DIGEST_TARGET_WEEKDAY = 0        # Monday
 _SEO_WEEKLY_DIGEST_TARGET_HOUR_UTC = 3       # 03:xx UTC
 _SEO_WEEKLY_DIGEST_TARGET_MINUTE_UTC = 30    # 03:30 UTC = 09:00 IST
@@ -1557,9 +1561,13 @@ async def _gather_weekly_digest_inputs(now: Optional[datetime] = None) -> dict:
         logger.debug(f"[SEO digest] history fetch failed: {exc}")
         history = []
     try:
-        recent_alerts = await db.alerts.count_documents(
-            {"fired_at": {"$gte": cutoff.isoformat()}}
-        )
+        # Only SEO-related alert types so the digest's "alerts fired this
+        # week" reflects actual SEO incidents rather than every system alert
+        # (endpoint_down, billing, etc.) that happened to fire in the window.
+        recent_alerts = await db.alerts.count_documents({
+            "fired_at": {"$gte": cutoff.isoformat()},
+            "type": {"$in": _SEO_DIGEST_ALERT_TYPES},
+        })
     except Exception:
         recent_alerts = 0
     return _compose_seo_weekly_digest(history, recent_alerts=recent_alerts)
@@ -1619,11 +1627,11 @@ async def _seo_weekly_digest_loop():
     ``_should_send_weekly_digest_now``.
 
     Dedup is atomic across replicas: we issue a conditional
-    ``find_one_and_update`` that swaps
-    ``db.api_config.seo_weekly_digest_last_iso_week`` from any prior value to
-    the current ISO-week tag. Only the worker whose update touches a row
-    actually sends the email; all other replicas observe the marker has
-    already moved and skip.
+    ``find_one_and_update`` (with an ``insert_one`` bootstrap fallback) on a
+    dedicated singleton lock document inside ``db.job_locks`` (``_id`` =
+    ``_SEO_WEEKLY_DIGEST_LOCK_ID``). Only the worker whose write touches a
+    row actually sends the email; all other replicas observe the marker has
+    already advanced to the current ISO week and skip.
     """
     from deps import db, is_mongo_available
     await asyncio.sleep(600)  # let the app warm up
