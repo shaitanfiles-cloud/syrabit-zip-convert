@@ -10,6 +10,7 @@ import { AppLayout } from '@/components/layout/AppLayout';
 import { PageTitle } from '@/components/PageTitle';
 import PageMeta from '@/components/seo/PageMeta';
 import { useContentLang } from '@/context/LanguageContext';
+import LangToggle from '@/components/ui/LangToggle';
 
 function cn(...classes) { return classes.filter(Boolean).join(' '); }
 
@@ -172,29 +173,6 @@ function CountdownBanner({ date, units }) {
   );
 }
 
-function LangToggle({ contentLang, switchLang }) {
-  return (
-    <div className="flex items-center gap-1 rounded-xl p-0.5" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
-      <button
-        onClick={() => switchLang('en')}
-        className={`h-7 px-2 rounded-lg text-xs font-semibold transition-all ${
-          contentLang === 'en' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-400 hover:bg-violet-500/10'
-        }`}
-      >
-        EN
-      </button>
-      <button
-        onClick={() => switchLang('as')}
-        className={`h-7 px-2 rounded-lg text-xs font-semibold transition-all ${
-          contentLang === 'as' ? 'text-white bg-violet-600 shadow-sm' : 'text-violet-400 hover:bg-violet-500/10'
-        }`}
-      >
-        অসমীয়া
-      </button>
-    </div>
-  );
-}
-
 export default function ExamRoutinePage() {
   const [activeFilter, setActiveFilter] = useState('all');
   const { contentLang, switchLang } = useContentLang();
@@ -251,7 +229,7 @@ export default function ExamRoutinePage() {
               <Calendar size={15} />
               <span>{t.headerBadge}</span>
             </div>
-            <LangToggle contentLang={contentLang} switchLang={switchLang} />
+            <LangToggle contentLang={contentLang} switchLang={switchLang} variant="compact" />
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold text-foreground">
             {t.heading}

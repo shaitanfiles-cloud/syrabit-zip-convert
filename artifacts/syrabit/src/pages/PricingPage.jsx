@@ -7,6 +7,7 @@ import { DOC_ACCESS_CONFIG } from '@/utils/plans';
 import { useAuth } from '@/context/AuthContext';
 import PageMeta from '@/components/seo/PageMeta';
 import { useContentLang } from '@/context/LanguageContext';
+import LangToggle from '@/components/ui/LangToggle';
 
 const faqJsonLd = {
   '@context': 'https://schema.org',
@@ -269,33 +270,6 @@ function getJsonLd(lang) {
       ],
     },
   };
-}
-
-function LangToggle({ contentLang, switchLang }) {
-  return (
-    <div className="flex items-center gap-1 shrink-0 rounded-xl p-0.5" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
-      <button
-        onClick={() => switchLang('en')}
-        className={`h-9 px-3 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-          contentLang === 'en'
-            ? 'text-white bg-violet-600 shadow-sm'
-            : 'text-violet-600 hover:bg-violet-50'
-        }`}
-      >
-        English
-      </button>
-      <button
-        onClick={() => switchLang('as')}
-        className={`h-9 px-3 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-          contentLang === 'as'
-            ? 'text-white bg-violet-600 shadow-sm'
-            : 'text-violet-600 hover:bg-violet-50'
-        }`}
-      >
-        অসমীয়া
-      </button>
-    </div>
-  );
 }
 
 export default function PricingPage() {

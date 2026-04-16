@@ -2,6 +2,7 @@ import { PublicLayout } from '@/components/layout/PublicLayout';
 import { Link } from 'react-router-dom';
 import PageMeta from '@/components/seo/PageMeta';
 import { useContentLang } from '@/context/LanguageContext';
+import LangToggle from '@/components/ui/LangToggle';
 import {
   Brain, BookOpen, GraduationCap, Smartphone, Sparkles,
   Shield, CreditCard, Search, Bell, Languages,
@@ -270,32 +271,6 @@ function getJsonLd(lang) {
   ];
 }
 
-function LangToggle({ contentLang, switchLang }) {
-  return (
-    <div className="flex items-center gap-1 shrink-0 rounded-xl p-0.5" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>
-      <button
-        onClick={() => switchLang('en')}
-        className={`h-9 px-3 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-          contentLang === 'en'
-            ? 'text-white bg-violet-600 shadow-sm'
-            : 'text-violet-600 hover:bg-violet-50'
-        }`}
-      >
-        English
-      </button>
-      <button
-        onClick={() => switchLang('as')}
-        className={`h-9 px-3 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${
-          contentLang === 'as'
-            ? 'text-white bg-violet-600 shadow-sm'
-            : 'text-violet-600 hover:bg-violet-50'
-        }`}
-      >
-        অসমীয়া
-      </button>
-    </div>
-  );
-}
 
 function StatCard({ value, label }) {
   return (
