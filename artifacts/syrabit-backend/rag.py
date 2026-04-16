@@ -17,6 +17,7 @@ __all__ = [
     "_LATENCY_MAX", "_RAG_TELEM_MAX",
     "_chat_latencies",
     "_extract_relevant_sections",
+    "split_into_sections", "merge_short_sections", "sentence_split_with_overlap",
     "_rag_telemetry", "_record_chat_latency",
     "_record_rag_event", "_sources_from_rag_ctx", "_trim_history",
     "build_rag_system_prompt",
@@ -316,6 +317,119 @@ async def syrabit_library_search(query: str, *, board_name: str = "", class_name
     except Exception as e:
         logger.warning(f"syrabit_library_search web fallback failed: {e}")
         return []
+
+
+# ─────────────────────────────────────────────
+# Public chunking adapter (heading split / short-section merge / sentence
+# overlap). The heavy ingestion pipeline that USED to call these was
+# retired (see module docstring). The pure helpers are kept as a stable
+# public adapter so any future ingestion / re-chunking work has a tested
+# entry point and so the chunking quality contract is enforced by CI.
+# ─────────────────────────────────────────────
+
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+
+
+def split_into_sections(content: str) -> List[Dict[str, str]]:
+    """Split a markdown document on `#`-prefixed headings.
+
+    Returns a list of `{"heading": str, "text": str}` records. Text that
+    appears before the first heading is captured as a leading section
+    with `heading == ""`. Empty / whitespace-only input returns `[]`.
+    """
+    if not content or not content.strip():
+        return []
+    matches = list(_HEADING_RE.finditer(content))
+    if not matches:
+        return [{"heading": "", "text": content.strip()}]
+    sections: List[Dict[str, str]] = []
+    leading = content[: matches[0].start()].strip()
+    if leading:
+        sections.append({"heading": "", "text": leading})
+    for i, m in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+        body = content[m.end():end].strip()
+        sections.append({"heading": m.group(2).strip(), "text": body})
+    return sections
+
+
+def merge_short_sections(
+    sections: List[Dict[str, str]],
+    target: int = 600,
+) -> List[Dict[str, str]]:
+    """Coalesce consecutive sections whose combined text is below `target`.
+
+    Sections already at or above `target` chars are kept as-is. Headings
+    of merged sections are joined with " / ". Empty input → `[]`.
+    """
+    if not sections:
+        return []
+    merged: List[Dict[str, str]] = []
+    for sec in sections:
+        if merged and len(merged[-1]["text"]) < target:
+            prev = merged[-1]
+            heading = " / ".join(h for h in (prev["heading"], sec["heading"]) if h)
+            prev["heading"] = heading
+            prev["text"] = (prev["text"] + "\n\n" + sec["text"]).strip()
+        else:
+            merged.append({"heading": sec.get("heading", ""), "text": sec.get("text", "")})
+    return merged
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def sentence_split_with_overlap(
+    text: str,
+    target: int = 600,
+    max_len: int = 1000,
+    overlap: int = 1,
+) -> List[str]:
+    """Split text into sentence-aligned chunks with N-sentence overlap.
+
+    - Each chunk grows to roughly `target` chars, hard-capped at `max_len`.
+    - Successive chunks share the trailing `overlap` sentences of the
+      previous chunk so context isn't lost at boundaries.
+    - Single-sentence input returns a single chunk.
+    - Empty / whitespace input returns `[]`.
+    - The loop is bounded (advances by at least one sentence per iteration)
+      so pathological `overlap >= chunk_size` configs cannot hang.
+    """
+    if not text or not text.strip():
+        return []
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text.strip()) if s.strip()]
+    if not sentences:
+        return []
+    if len(sentences) == 1:
+        return [sentences[0]]
+    chunks: List[str] = []
+    i = 0
+    n = len(sentences)
+    safety = 0
+    while i < n and safety < n * 4:
+        safety += 1
+        cur: List[str] = []
+        cur_len = 0
+        j = i
+        while j < n:
+            s = sentences[j]
+            extra = (1 if cur else 0) + len(s)
+            if cur and cur_len + extra > max_len:
+                break
+            cur.append(s)
+            cur_len += extra
+            j += 1
+            if cur_len >= target:
+                break
+        if not cur:
+            break
+        chunks.append(" ".join(cur))
+        if j >= n:
+            break
+        # Step forward by at least 1 sentence; clamp overlap so we always advance.
+        step = max(1, len(cur) - max(0, overlap))
+        i += step
+    return chunks
 
 
 def _extract_relevant_sections(document_text: str, query: str, char_limit: int = 3000) -> str:
