@@ -63,6 +63,16 @@ export default function LandingPage() {
   const year = new Date().getFullYear();
   const m = _meta[contentLang] || _meta.en;
 
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@type': 'WebPage',
+    name: m.title,
+    url: 'https://syrabit.ai/',
+    inLanguage: contentLang === 'as' ? ['as', 'en'] : ['en', 'as'],
+    description: m.description,
+    isPartOf: { '@type': 'WebSite', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+  };
+
   return (
     <div className="min-h-screen text-foreground overflow-x-hidden bg-background">
       <PageMeta
@@ -70,6 +80,7 @@ export default function LandingPage() {
         description={m.description}
         url="https://syrabit.ai/"
         keywords="AssamBoard educational browser, AHSEC study app, SEBA study tool, Class 11 12 exam prep, AHSEC syllabus browser, degree exam prep Assam, B.Com B.A B.Sc notes, AssamBoard 2025 study tool, free educational browser India"
+        jsonLd={jsonLd}
       />
       <PublicNavbar />
       <LangToggle contentLang={contentLang} switchLang={switchLang} />

@@ -3,8 +3,52 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { GraduationCap, ExternalLink, BookOpen, ArrowLeft, Clock, Share2, MousePointer2 } from 'lucide-react';
 import { LogoMark } from '@/components/Logo';
 
-const STUDENT_MESSAGE = 'Explain the photoelectric effect and Einstein\'s equation';
-const AI_SHORT_ANSWER = 'The photoelectric effect is the emission of electrons from a metal surface when light of sufficient frequency strikes it.';
+const _demo = {
+  en: {
+    studentMsg: "Explain the photoelectric effect and Einstein's equation",
+    aiAnswer: 'The photoelectric effect is the emission of electrons from a metal surface when light of sufficient frequency strikes it.',
+    thinking: 'Thinking',
+    sourceBadge: 'Chapter 11 · Wave Optics',
+    backToChat: 'Back to chat',
+    pageTitle: 'Photoelectric Effect',
+    pageSub: 'AHSEC Class 12 · Physics · Chapter 11',
+    syllabusBadge: 'AHSEC Syllabus',
+    pageDesc: 'The photoelectric effect occurs when electromagnetic radiation (light) of sufficient frequency strikes a metallic surface, causing the emission of electrons. This phenomenon was first explained by Albert Einstein in 1905 using the quantum theory of light.',
+    eqTitle: "Einstein's Photoelectric Equation",
+    eqLabels: [
+      ['E', 'energy of incident photon'],
+      ['h', "Planck's constant (6.626 × 10⁻³⁴ J·s)"],
+      ['ν', 'frequency of incident light'],
+      ['φ', 'work function of the metal'],
+      ['½mv²', 'max kinetic energy of photoelectron'],
+    ],
+    creditsUsed: '2 credits used',
+    tag1: 'Wave Optics',
+    tag2: 'Quantum Theory',
+  },
+  as: {
+    studentMsg: 'ফটোইলেক্ট্ৰিক প্ৰভাৱ আৰু আইনষ্টাইনৰ সমীকৰণ ব্যাখ্যা কৰক',
+    aiAnswer: 'ফটোইলেক্ট্ৰিক প্ৰভাৱ হৈছে যেতিয়া পৰ্যাপ্ত কম্পাংকৰ পোহৰ ধাতুৰ পৃষ্ঠত আঘাত কৰে তেতিয়া ইলেক্ট্ৰন নিৰ্গমন হোৱা পৰিঘটনা।',
+    thinking: 'চিন্তা কৰি আছে',
+    sourceBadge: 'অধ্যায় ১১ · তৰংগ আলোকবিজ্ঞান',
+    backToChat: 'চেটলৈ উভতি যাওক',
+    pageTitle: 'ফটোইলেক্ট্ৰিক প্ৰভাৱ',
+    pageSub: 'AHSEC দ্বাদশ শ্ৰেণী · পদাৰ্থ বিজ্ঞান · অধ্যায় ১১',
+    syllabusBadge: 'AHSEC পাঠ্যক্ৰম',
+    pageDesc: 'ফটোইলেক্ট্ৰিক প্ৰভাৱ ঘটে যেতিয়া পৰ্যাপ্ত কম্পাংকৰ বিদ্যুৎচুম্বকীয় বিকিৰণ (পোহৰ) ধাতুৰ পৃষ্ঠত আঘাত কৰে, যাৰ ফলত ইলেক্ট্ৰন নিৰ্গমন হয়। এই পৰিঘটনা প্ৰথমে আলবাৰ্ট আইনষ্টাইনে ১৯০৫ চনত পোহৰৰ কোৱান্টাম তত্ত্ব ব্যৱহাৰ কৰি ব্যাখ্যা কৰিছিল।',
+    eqTitle: 'আইনষ্টাইনৰ ফটোইলেক্ট্ৰিক সমীকৰণ',
+    eqLabels: [
+      ['E', 'আপতিত ফটনৰ শক্তি'],
+      ['h', 'প্লাংকৰ ধ্ৰুৱক (6.626 × 10⁻³⁴ J·s)'],
+      ['ν', 'আপতিত পোহৰৰ কম্পাংক'],
+      ['φ', 'ধাতুৰ কাৰ্য-ফলন'],
+      ['½mv²', 'ফটোইলেক্ট্ৰনৰ সৰ্বোচ্চ গতিশক্তি'],
+    ],
+    creditsUsed: '২ ক্ৰেডিট ব্যৱহৃত',
+    tag1: 'তৰংগ আলোকবিজ্ঞান',
+    tag2: 'কোৱান্টাম তত্ত্ব',
+  },
+};
 
 const TYPING_SPEED = 35;
 const THINKING_DURATION = 3000;
@@ -36,7 +80,7 @@ function TypingCursor() {
   );
 }
 
-function ThinkingIndicator() {
+function ThinkingIndicator({ label }) {
   return (
     <div className="space-y-2 py-1" style={{ width: '100%', maxWidth: 180 }}>
       <div className="flex items-center gap-1.5 mb-2">
@@ -49,7 +93,7 @@ function ThinkingIndicator() {
             transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15, ease: 'easeInOut' }}
           />
         ))}
-        <span className="text-xs ml-1" style={{ color: 'rgba(255,255,255,0.60)' }}>Thinking</span>
+        <span className="text-xs ml-1" style={{ color: 'rgba(255,255,255,0.60)' }}>{label}</span>
       </div>
       {[1, 0.7, 0.4].map((widthFrac, i) => (
         <motion.div
@@ -69,7 +113,7 @@ function ThinkingIndicator() {
   );
 }
 
-function SourceBadge({ pulsing, clicking }) {
+function SourceBadge({ pulsing, clicking, label }) {
   return (
     <motion.div
       className="relative flex items-center gap-1.5 mt-2"
@@ -100,7 +144,7 @@ function SourceBadge({ pulsing, clicking }) {
         }}
       >
         <BookOpen size={9} />
-        Chapter 11 · Wave Optics
+        {label}
         {clicking && (
           <motion.span
             className="absolute inset-0 rounded-full"
@@ -128,7 +172,7 @@ function SourceBadge({ pulsing, clicking }) {
   );
 }
 
-function ContentPageView() {
+function ContentPageView({ t }) {
   return (
     <div className="p-5 space-y-4">
       <motion.div
@@ -138,7 +182,7 @@ function ContentPageView() {
         className="flex items-center gap-2"
       >
         <ArrowLeft size={14} style={{ color: 'rgba(255,255,255,0.60)' }} />
-        <span className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>Back to chat</span>
+        <span className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{t.backToChat}</span>
       </motion.div>
 
       <motion.div
@@ -148,15 +192,15 @@ function ContentPageView() {
         className="flex items-start justify-between"
       >
         <div>
-          <h3 className="text-sm font-bold text-white mb-1">Photoelectric Effect</h3>
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>AHSEC Class 12 · Physics · Chapter 11</p>
+          <h3 className="text-sm font-bold text-white mb-1">{t.pageTitle}</h3>
+          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{t.pageSub}</p>
         </div>
         <div className="flex items-center gap-2">
           <span
             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full"
             style={{ fontSize: 12, background: 'rgba(34,197,94,0.12)', color: 'rgba(34,197,94,0.7)', border: '1px solid rgba(34,197,94,0.15)' }}
           >
-            AHSEC Syllabus
+            {t.syllabusBadge}
           </span>
           <Share2 size={11} style={{ color: 'rgba(255,255,255,0.60)' }} />
         </div>
@@ -175,7 +219,7 @@ function ContentPageView() {
         transition={{ delay: 0.3, duration: 0.35 }}
       >
         <p className="text-xs leading-relaxed mb-3" style={{ color: 'rgba(255,255,255,0.65)' }}>
-          The photoelectric effect occurs when electromagnetic radiation (light) of sufficient frequency strikes a metallic surface, causing the emission of electrons. This phenomenon was first explained by Albert Einstein in 1905 using the quantum theory of light.
+          {t.pageDesc}
         </p>
       </motion.div>
 
@@ -186,7 +230,7 @@ function ContentPageView() {
         className="rounded-lg p-3"
         style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}
       >
-        <p className="text-xs font-semibold mb-2" style={{ color: 'rgba(255,255,255,0.60)' }}>Einstein's Photoelectric Equation</p>
+        <p className="text-xs font-semibold mb-2" style={{ color: 'rgba(255,255,255,0.60)' }}>{t.eqTitle}</p>
         <code
           className="text-sm font-mono block text-center py-1"
           style={{ color: '#c4b5fd' }}
@@ -194,11 +238,9 @@ function ContentPageView() {
           E = hν = φ + ½mv²
         </code>
         <div className="mt-2 space-y-0.5">
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>E</span> = energy of incident photon</p>
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>h</span> = Planck's constant (6.626 × 10⁻³⁴ J·s)</p>
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>ν</span> = frequency of incident light</p>
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>φ</span> = work function of the metal</p>
-          <p className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>½mv²</span> = max kinetic energy of photoelectron</p>
+          {t.eqLabels.map(([sym, desc]) => (
+            <p key={sym} className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>{sym}</span> = {desc}</p>
+          ))}
         </div>
       </motion.div>
 
@@ -213,19 +255,19 @@ function ContentPageView() {
           style={{ fontSize: 12, background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.18)' }}
         >
           <Clock size={10} />
-          2 credits used
+          {t.creditsUsed}
         </span>
         <span
           className="px-2 py-0.5 rounded-full"
           style={{ fontSize: 12, background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.60)', border: '1px solid rgba(255,255,255,0.06)' }}
         >
-          Wave Optics
+          {t.tag1}
         </span>
         <span
           className="px-2 py-0.5 rounded-full"
           style={{ fontSize: 12, background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.60)', border: '1px solid rgba(255,255,255,0.06)' }}
         >
-          Quantum Theory
+          {t.tag2}
         </span>
       </motion.div>
     </div>
@@ -237,7 +279,10 @@ const fadeSlide = {
   visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' } },
 };
 
-export default function AnimatedChatDemo({ onUrlChange }) {
+export default function AnimatedChatDemo({ onUrlChange, contentLang = 'en' }) {
+  const t = _demo[contentLang] || _demo.en;
+  const STUDENT_MESSAGE = t.studentMsg;
+  const AI_SHORT_ANSWER = t.aiAnswer;
   const [phase, setPhase] = useState(PHASES.IDLE);
   const [typedCount, setTypedCount] = useState(0);
   const [shortAnswerTyped, setShortAnswerTyped] = useState(0);
@@ -260,6 +305,10 @@ export default function AnimatedChatDemo({ onUrlChange }) {
     setContainerOpacity(1);
     onUrlChange?.('chat');
   }, [clearTimers, onUrlChange]);
+
+  useEffect(() => {
+    resetState();
+  }, [contentLang, resetState]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -414,7 +463,7 @@ export default function AnimatedChatDemo({ onUrlChange }) {
                     <LogoMark size="xs" style={{ filter: 'none' }} />
                   </div>
                   <div className="px-4 py-3 text-sm max-w-sm" style={aiBubbleStyle}>
-                    <ThinkingIndicator />
+                    <ThinkingIndicator label={t.thinking} />
                   </div>
                 </motion.div>
               )}
@@ -443,7 +492,7 @@ export default function AnimatedChatDemo({ onUrlChange }) {
                     <AnimatePresence>
                       {shortAnswerTyped >= AI_SHORT_ANSWER.length && (
                         <motion.div variants={fadeSlide} initial="hidden" animate="visible">
-                          <SourceBadge pulsing={showShortAnswer} clicking={showClicking} />
+                          <SourceBadge pulsing={showShortAnswer} clicking={showClicking} label={t.sourceBadge} />
                         </motion.div>
                       )}
                     </AnimatePresence>
@@ -460,7 +509,7 @@ export default function AnimatedChatDemo({ onUrlChange }) {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
           >
-            <ContentPageView />
+            <ContentPageView t={t} />
           </motion.div>
         )}
       </AnimatePresence>

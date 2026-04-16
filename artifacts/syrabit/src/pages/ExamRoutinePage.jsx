@@ -232,6 +232,15 @@ export default function ExamRoutinePage() {
         description={t.metaDesc}
         url="https://syrabit.ai/exam-routine"
         keywords="AHSEC exam routine 2026, HS final exam timetable, Assam Board class 12 exam schedule, AHSEC date sheet 2026"
+        jsonLd={{
+          '@context': 'https://schema.org',
+          '@type': 'WebPage',
+          name: t.metaTitle,
+          url: 'https://syrabit.ai/exam-routine',
+          inLanguage: contentLang === 'as' ? ['as', 'en'] : ['en', 'as'],
+          description: t.metaDesc,
+          isPartOf: { '@type': 'WebSite', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+        }}
       />
 
       <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">

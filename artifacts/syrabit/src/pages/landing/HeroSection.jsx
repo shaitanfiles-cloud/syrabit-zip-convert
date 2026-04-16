@@ -199,7 +199,7 @@ export default function HeroSection({ contentLang = 'en' }) {
                 </div>
               </div>
 
-              <AnimatedChatDemo onUrlChange={handleUrlChange} />
+              <AnimatedChatDemo onUrlChange={handleUrlChange} contentLang={contentLang} />
             </motion.div>
           </motion.div>
         </div>
