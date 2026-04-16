@@ -349,6 +349,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const latencyAlert = failedSections.includes('latency') ? 'yellow' : (latency?.alert || 'green');
   const vectorAlert = failedSections.includes('vector') ? 'yellow'
     : (vectorStats?.overall_coverage_pct ?? 100) < 90 ? 'yellow' : 'green';
+  const botAlert = failedSections.includes('bot-analytics') ? 'yellow'
+    : (botAnalytics?.alert_level || 'green');
 
   const hasRagIssue = ragAlert === 'red' || latencyAlert === 'red';
 
@@ -591,8 +593,30 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           <div className="flex items-center gap-2 mb-4">
             <Bot size={16} className="text-amber-500" />
             <h3 className="text-gray-700 font-semibold">Bot Traffic Analytics</h3>
-            <span className="ml-auto text-[10px] text-gray-400">{botAnalytics.period_days}-day window</span>
+            <div className="ml-auto flex items-center gap-2">
+              <AlertBadge alert={botAlert} />
+              <span className="text-[10px] text-gray-400">{botAnalytics.period_days}-day window</span>
+            </div>
           </div>
+
+          {botAnalytics.alerts?.length > 0 && (
+            <div className="mb-4 space-y-1.5">
+              {botAnalytics.alerts.map((a, i) => (
+                <div
+                  key={i}
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
+                  style={{
+                    background: a.severity === 'red' ? '#fef2f2' : '#fffbeb',
+                    border: `1px solid ${a.severity === 'red' ? '#fecaca' : '#fde68a'}`,
+                    color: a.severity === 'red' ? '#991b1b' : '#92400e',
+                  }}
+                >
+                  {a.severity === 'red' ? <AlertCircle size={13} /> : <AlertTriangle size={13} />}
+                  <span>{a.message}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
             <div className="rounded-lg p-3 bg-blue-50 border border-blue-200 text-center">
@@ -603,8 +627,16 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
               <p className="text-green-700 font-bold text-lg">{(botAnalytics.bot_vs_human?.total_human ?? 0).toLocaleString()}</p>
               <p className="text-[10px] text-gray-500">Human Hits</p>
             </div>
-            <div className="rounded-lg p-3 bg-violet-50 border border-violet-200 text-center">
-              <p className="text-violet-700 font-bold text-lg">{botAnalytics.crawl_coverage ?? 0}%</p>
+            <div className={`rounded-lg p-3 text-center ${
+              botAlert === 'red' ? 'bg-red-50 border border-red-300' :
+              botAlert === 'yellow' ? 'bg-yellow-50 border border-yellow-300' :
+              'bg-violet-50 border border-violet-200'
+            }`}>
+              <p className={`font-bold text-lg ${
+                botAlert === 'red' ? 'text-red-700' :
+                botAlert === 'yellow' ? 'text-yellow-700' :
+                'text-violet-700'
+              }`}>{botAnalytics.crawl_coverage ?? 0}%</p>
               <p className="text-[10px] text-gray-500">Crawl Coverage</p>
             </div>
             <div className="rounded-lg p-3 bg-amber-50 border border-amber-200 text-center">

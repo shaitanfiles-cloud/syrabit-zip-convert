@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from xml.sax.saxutils import escape as xml_escape
 
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from fastapi.responses import Response
 
 logger = logging.getLogger(__name__)
@@ -530,10 +530,21 @@ indexnow_batcher = IndexNowBatcher()
 from auth_deps import get_admin_user
 
 @router.get("/admin/analytics/bot-traffic")
-async def admin_bot_traffic(days: int = Query(30, ge=1, le=90), admin: dict = Depends(get_admin_user)):
+async def admin_bot_traffic(
+    background_tasks: BackgroundTasks,
+    days: int = Query(30, ge=1, le=90),
+    admin: dict = Depends(get_admin_user),
+):
     from deps import db, is_mongo_available
     if not await is_mongo_available():
-        return {"daily_bot_hits": [], "top_bots": [], "crawl_coverage": 0, "bot_vs_human": {}}
+        return {
+            "daily_bot_hits": [], "top_bots": [], "per_bot_pages": [],
+            "crawl_coverage": 0, "pages_crawled": 0, "total_sitemap_pages": 0,
+            "bot_vs_human": {"total_bot": 0, "total_human": 0, "bot_ratio_pct": 0},
+            "period_days": days,
+            "alerts": [{"type": "data_unavailable", "severity": "yellow", "message": "Database unavailable — bot analytics data could not be loaded"}],
+            "alert_level": "yellow",
+        }
 
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -579,6 +590,104 @@ async def admin_bot_traffic(days: int = Query(30, ge=1, le=90), admin: dict = De
         ]
         per_bot_pages = await db.server_hits.aggregate(per_bot_pages_pipeline).to_list(15)
 
+        CRAWL_COVERAGE_RED = 30
+        CRAWL_COVERAGE_YELLOW = 50
+        BOT_MISSING_DAYS = 3
+
+        alerts = []
+        alert_level = "green"
+
+        if crawl_coverage < CRAWL_COVERAGE_RED:
+            alerts.append({
+                "type": "crawl_coverage",
+                "severity": "red",
+                "message": f"Crawl coverage critically low at {crawl_coverage}% (threshold: {CRAWL_COVERAGE_RED}%)",
+            })
+            alert_level = "red"
+        elif crawl_coverage < CRAWL_COVERAGE_YELLOW:
+            alerts.append({
+                "type": "crawl_coverage",
+                "severity": "yellow",
+                "message": f"Crawl coverage below target at {crawl_coverage}% (threshold: {CRAWL_COVERAGE_YELLOW}%)",
+            })
+            if alert_level != "red":
+                alert_level = "yellow"
+
+        missing_bots = []
+        absent_bots = []
+        recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=BOT_MISSING_DAYS)).strftime("%Y-%m-%d")
+        for key_bot in ["Googlebot", "Bingbot"]:
+            total_key = await db.server_hits.count_documents({
+                "is_bot": True,
+                "bot_name": {"$regex": f"^{key_bot}$", "$options": "i"},
+                "date": {"$gte": start_date},
+            })
+            if total_key == 0:
+                absent_bots.append(key_bot)
+                continue
+            if days > BOT_MISSING_DAYS:
+                recent_hits = await db.server_hits.count_documents({
+                    "is_bot": True,
+                    "bot_name": {"$regex": f"^{key_bot}$", "$options": "i"},
+                    "date": {"$gte": recent_cutoff},
+                })
+                if recent_hits == 0:
+                    missing_bots.append(key_bot)
+
+        if len(absent_bots) == 2 and total_bot > 0:
+            alerts.append({
+                "type": "key_bot_missing",
+                "severity": "red",
+                "message": "No Googlebot or Bingbot activity detected in this period",
+            })
+            alert_level = "red"
+        elif absent_bots:
+            for ab in absent_bots:
+                alerts.append({
+                    "type": "key_bot_missing",
+                    "severity": "yellow",
+                    "message": f"{ab} has no activity in this period",
+                })
+                if alert_level == "green":
+                    alert_level = "yellow"
+
+        for mb in missing_bots:
+            alerts.append({
+                "type": "bot_inactive",
+                "severity": "red",
+                "message": f"{mb} was previously active but hasn't crawled in {BOT_MISSING_DAYS}+ days",
+            })
+            alert_level = "red"
+
+        if len(daily_bot_hits) >= 7:
+            first_half = daily_bot_hits[:len(daily_bot_hits)//2]
+            second_half = daily_bot_hits[len(daily_bot_hits)//2:]
+            avg_first = sum(d["bot_hits"] for d in first_half) / max(len(first_half), 1)
+            avg_second = sum(d["bot_hits"] for d in second_half) / max(len(second_half), 1)
+            if avg_first > 0 and avg_second < avg_first * 0.5:
+                drop_pct = round((1 - avg_second / avg_first) * 100, 1)
+                alerts.append({
+                    "type": "traffic_drop",
+                    "severity": "yellow",
+                    "message": f"Bot traffic dropped {drop_pct}% compared to earlier in the period",
+                })
+                if alert_level == "green":
+                    alert_level = "yellow"
+
+        if alerts:
+            try:
+                from metrics import _dispatch_alert
+                for a in alerts:
+                    if a["severity"] == "red":
+                        background_tasks.add_task(
+                            _dispatch_alert,
+                            f"bot_{a['type']}",
+                            f"Bot Alert: {a['type'].replace('_', ' ').title()}",
+                            a["message"],
+                        )
+            except ImportError:
+                pass
+
         return {
             "daily_bot_hits": daily_bot_hits,
             "top_bots": top_bots,
@@ -592,10 +701,19 @@ async def admin_bot_traffic(days: int = Query(30, ge=1, le=90), admin: dict = De
                 "bot_ratio_pct": bot_ratio,
             },
             "period_days": days,
+            "alerts": alerts,
+            "alert_level": alert_level,
         }
     except Exception as e:
         logger.error(f"bot-traffic analytics failed: {e}")
-        return {"daily_bot_hits": [], "top_bots": [], "crawl_coverage": 0, "bot_vs_human": {}}
+        return {
+            "daily_bot_hits": [], "top_bots": [], "per_bot_pages": [],
+            "crawl_coverage": 0, "pages_crawled": 0, "total_sitemap_pages": 0,
+            "bot_vs_human": {"total_bot": 0, "total_human": 0, "bot_ratio_pct": 0},
+            "period_days": days,
+            "alerts": [{"type": "data_error", "severity": "yellow", "message": "Bot analytics failed to load — data may be incomplete"}],
+            "alert_level": "yellow",
+        }
 
 
 @router.post("/admin/indexnow/push")
