@@ -424,6 +424,15 @@ async def lifespan(app):
                 "endpoint", unique=True, name="endpoint_unique",
             )
 
+            await db.indexnow_health_log.create_index(
+                "timestamp", expireAfterSeconds=30 * 24 * 3600,
+                name="timestamp_ttl_30d",
+            )
+            await db.indexnow_health_log.create_index(
+                [("endpoint", 1), ("timestamp", -1)],
+                name="endpoint_timestamp",
+            )
+
             await db.bot_spoof_attempts.create_index(
                 [("date", 1), ("claimed_bot", 1)],
                 name="date_claimed_bot",

@@ -271,33 +271,6 @@ function getJsonLd(lang) {
   };
 }
 
-const faqJsonLd = {
-  '@context': 'https://schema.org',
-  '@type': 'FAQPage',
-  mainEntity: [
-    {
-      '@type': 'Question',
-      name: 'What are credits?',
-      acceptedAnswer: { '@type': 'Answer', text: 'Each AI response costs 1 credit. Free users get 30/day, Starter 500/day, Pro 4,000/day. All credits reset at midnight UTC.' },
-    },
-    {
-      '@type': 'Question',
-      name: 'Do credits expire?',
-      acceptedAnswer: { '@type': 'Answer', text: 'All plan credits reset daily at midnight UTC. You get a fresh allowance every day based on your plan.' },
-    },
-    {
-      '@type': 'Question',
-      name: 'Can I upgrade later?',
-      acceptedAnswer: { '@type': 'Answer', text: 'Yes! You can upgrade anytime. Your existing credits will be preserved.' },
-    },
-    {
-      '@type': 'Question',
-      name: 'Which AHSEC classes are supported?',
-      acceptedAnswer: { '@type': 'Answer', text: 'We support both Class 11 and Class 12 for Science (PCM, PCB) and Arts streams.' },
-    },
-  ],
-};
-
 function LangToggle({ contentLang, switchLang }) {
   return (
     <div className="flex items-center gap-1 shrink-0 rounded-xl p-0.5" style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}>

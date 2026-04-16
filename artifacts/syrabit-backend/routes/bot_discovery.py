@@ -39,11 +39,15 @@ class _EndpointHealth:
         self.backoff_until: Optional[float] = None
 
     def record_success(self):
+        was_failing = self.consecutive_failures > 0
+        prev_failures = self.consecutive_failures
         self.consecutive_failures = 0
         self.last_success_time = time.time()
         self.total_successes += 1
         self.backoff_until = None
         _schedule_persist(self)
+        if was_failing:
+            _schedule_health_log(self.endpoint, "recovered", {"previous_consecutive_failures": prev_failures})
 
     def record_failure(self):
         now = time.time()
@@ -61,11 +65,14 @@ class _EndpointHealth:
                 "total_failures=%d backoff_seconds=%d",
                 self.endpoint, self.consecutive_failures, self.total_failures, delay,
             )
+            _schedule_health_log(self.endpoint, "dead_lettered", {"consecutive_failures": self.consecutive_failures, "backoff_seconds": delay})
         else:
             logger.info(
                 "IndexNow endpoint backoff: endpoint=%s consecutive_failures=%d backoff_seconds=%d",
                 self.endpoint, self.consecutive_failures, delay,
             )
+            if self.consecutive_failures == 1:
+                _schedule_health_log(self.endpoint, "failure_started", {"backoff_seconds": delay})
         _schedule_persist(self)
 
     def is_available(self) -> bool:
@@ -141,6 +148,30 @@ async def _persist_health(health: _EndpointHealth):
         )
     except Exception as e:
         logger.debug("Failed to persist endpoint health for %s: %s", health.endpoint, e)
+
+
+def _schedule_health_log(endpoint: str, event: str, details: Optional[dict] = None):
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_log_health_event(endpoint, event, details))
+    except RuntimeError:
+        pass
+
+
+async def _log_health_event(endpoint: str, event: str, details: Optional[dict] = None):
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return
+        doc = {
+            "endpoint": endpoint,
+            "event": event,
+            "timestamp": datetime.now(timezone.utc),
+            "details": details or {},
+        }
+        await db.indexnow_health_log.insert_one(doc)
+    except Exception as e:
+        logger.debug("Failed to log health event for %s: %s", endpoint, e)
 
 
 async def load_endpoint_health_from_db():
@@ -1069,6 +1100,19 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
             info["pending_retry_urls"] = retry_counts.get(ep, 0)
             endpoint_health_list.append(info)
 
+        health_history = []
+        try:
+            history_docs = await db.indexnow_health_log.find(
+                {}, {"_id": 0}
+            ).sort("timestamp", -1).limit(50).to_list(50)
+            for doc in history_docs:
+                ts = doc.get("timestamp")
+                if isinstance(ts, datetime):
+                    doc["timestamp"] = ts.isoformat()
+                health_history.append(doc)
+        except Exception:
+            pass
+
         return {
             "total_pushes": total_pushes,
             "total_urls_pushed": total_urls,
@@ -1078,6 +1122,7 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
             "today_urls_pushed": today_urls,
             "pending": await indexnow_batcher.get_pending_count(),
             "endpoint_health": endpoint_health_list,
+            "health_history": health_history,
         }
     except Exception as e:
         logger.error(f"IndexNow stats fetch failed: {e}")
