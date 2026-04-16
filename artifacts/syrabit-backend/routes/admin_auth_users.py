@@ -280,6 +280,21 @@ async def admin_get_users(
         result.append({**u, "credits_used": credits_info["used"], "credits_limit": credits_info["limit"]})
     return {"users": result, "total": total, "limit": limit, "offset": offset}
 
+async def _sync_push_subscription_role(user_id: str, is_admin: bool):
+    try:
+        role = "admin" if is_admin else "student"
+        result = await db.push_subscriptions.update_many(
+            {"user_id": user_id},
+            {"$set": {"role": role}},
+        )
+        if result.modified_count > 0:
+            logging.getLogger(__name__).info(
+                f"Synced {result.modified_count} push subscription(s) role to '{role}' for user {user_id}"
+            )
+    except Exception as e:
+        logging.getLogger(__name__).debug(f"push subscription role sync failed for {user_id}: {e}")
+
+
 @router.patch("/admin/users/{user_id}/status")
 async def admin_update_user_status(user_id: str, data: UserStatusUpdate, admin: dict = Depends(get_admin_user)):
     user = await supa_get_user_by_id(user_id)
@@ -287,6 +302,23 @@ async def admin_update_user_status(user_id: str, data: UserStatusUpdate, admin: 
         raise HTTPException(status_code=404, detail="User not found")
     await supa_update_user(user_id, {"status": data.status})
     return {"message": "Updated"}
+
+
+@router.patch("/admin/users/{user_id}/admin")
+async def admin_toggle_user_admin(
+    user_id: str,
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    user = await supa_get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    is_admin = bool(data.get("is_admin", False))
+    await supa_update_user(user_id, {"is_admin": is_admin})
+    _redis_invalidate_session(user_id)
+    await _sync_push_subscription_role(user_id, is_admin)
+    return {"message": f"User {'promoted to admin' if is_admin else 'demoted to student'}"}
+
 
 @router.patch("/admin/users/{user_id}/plan")
 async def admin_update_user_plan(user_id: str, data: UserPlanUpdate, admin: dict = Depends(get_admin_user)):
