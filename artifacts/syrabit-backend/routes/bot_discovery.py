@@ -208,9 +208,12 @@ _ENDPOINT_ALERT_COOLDOWN_S = 1800
 
 
 def _get_endpoint_down_thresholds():
-    from metrics import _ALERT_THRESHOLDS
-    down_min = int(_ALERT_THRESHOLDS.get("endpoint_down_minutes", 60))
-    check_min = int(_ALERT_THRESHOLDS.get("endpoint_down_check_minutes", 15))
+    try:
+        from metrics import _ALERT_THRESHOLDS
+        down_min = int(_ALERT_THRESHOLDS.get("endpoint_down_minutes", 60))
+        check_min = int(_ALERT_THRESHOLDS.get("endpoint_down_check_minutes", 15))
+    except Exception:
+        down_min, check_min = 60, 15
     return max(down_min, 1) * 60, max(check_min, 1) * 60
 
 
