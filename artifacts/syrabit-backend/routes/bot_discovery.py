@@ -1376,12 +1376,15 @@ async def admin_seo_health_history(
                     consecutive += 1
                 else:
                     break
-            banner = {
-                "severity": latest_status,
-                "consecutive": consecutive,
-                "checked_at": latest.get("checked_at"),
-                "summary": latest.get("summary", {}),
-            }
+            # Per task spec: banner only appears after two consecutive bad
+            # checks (same gate as the alert email) to avoid flapping noise.
+            if consecutive >= 2:
+                banner = {
+                    "severity": latest_status,
+                    "consecutive": consecutive,
+                    "checked_at": latest.get("checked_at"),
+                    "summary": latest.get("summary", {}),
+                }
 
     history_asc = list(reversed(docs))
     for d in history_asc:
