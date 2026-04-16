@@ -304,16 +304,20 @@ async def admin_update_user_status(user_id: str, data: UserStatusUpdate, admin: 
     return {"message": "Updated"}
 
 
+class AdminToggleUpdate(BaseModel):
+    is_admin: bool
+
+
 @router.patch("/admin/users/{user_id}/admin")
 async def admin_toggle_user_admin(
     user_id: str,
-    data: dict = Body(...),
+    data: AdminToggleUpdate,
     admin: dict = Depends(get_admin_user),
 ):
     user = await supa_get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    is_admin = bool(data.get("is_admin", False))
+    is_admin = data.is_admin
     await supa_update_user(user_id, {"is_admin": is_admin})
     _redis_invalidate_session(user_id)
     await _sync_push_subscription_role(user_id, is_admin)
