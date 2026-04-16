@@ -119,10 +119,11 @@ export default function LibraryPage() {
   const [chaptersReady, setChaptersReady] = useState(false);
   useEffect(() => {
     if (!slimBundle) return;
-    const id = requestIdleCallback
-      ? requestIdleCallback(() => setChaptersReady(true), { timeout: 2000 })
+    const hasRIC = typeof window !== 'undefined' && 'requestIdleCallback' in window;
+    const id = hasRIC
+      ? window.requestIdleCallback(() => setChaptersReady(true), { timeout: 2000 })
       : setTimeout(() => setChaptersReady(true), 500);
-    return () => (requestIdleCallback ? cancelIdleCallback(id) : clearTimeout(id));
+    return () => { hasRIC ? window.cancelIdleCallback(id) : clearTimeout(id); };
   }, [slimBundle]);
   const { data: fullBundle, isFetching, refetch: refetchBundle } = useLibraryBundle(chaptersReady);
 
