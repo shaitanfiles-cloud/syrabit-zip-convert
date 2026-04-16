@@ -351,7 +351,11 @@ export default function AdminBotSecurity({ adminToken }) {
   const [actionLoading, setActionLoading] = useState({});
   const [blockDurationMenu, setBlockDurationMenu] = useState(null);
 
-  const blockedSet = new Set(blockedIps.map((b) => b.ip_hash));
+  const blockedSet = new Set(
+    blockedIps
+      .filter((b) => !b.expires_at || new Date(b.expires_at) > new Date())
+      .map((b) => b.ip_hash)
+  );
 
   const fetchData = useCallback(async () => {
     setLoading(true);

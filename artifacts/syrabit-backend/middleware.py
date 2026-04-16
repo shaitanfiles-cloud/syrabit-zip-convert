@@ -92,7 +92,8 @@ async def _refresh_blocked_ip_cache():
         from deps import db, is_mongo_available
         if await is_mongo_available():
             docs = await db.blocked_ips.find({}, {"ip_hash": 1, "expires_at": 1, "_id": 0}).to_list(10000)
-            now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            from datetime import datetime as _dt, timezone as _tz
+            now = _dt.now(_tz.utc)
             new_set = set()
             for d in docs:
                 if not d.get("ip_hash"):
@@ -118,7 +119,8 @@ async def _cleanup_expired_blocked_ips():
     try:
         from deps import db, is_mongo_available
         if await is_mongo_available():
-            now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            from datetime import datetime as _dt, timezone as _tz
+            now = _dt.now(_tz.utc)
             result = await db.blocked_ips.delete_many({"expires_at": {"$lte": now}})
             if result.deleted_count > 0:
                 logger.info(f"Cleaned up {result.deleted_count} expired IP block(s)")

@@ -2777,7 +2777,11 @@ async def admin_block_ip(
         raise HTTPException(400, "Invalid ip_hash")
     existing = await db.blocked_ips.find_one({"ip_hash": ip_hash})
     if existing:
-        raise HTTPException(409, "IP already blocked")
+        ea = existing.get("expires_at")
+        if ea and ea <= datetime.now(timezone.utc):
+            await db.blocked_ips.delete_one({"ip_hash": ip_hash})
+        else:
+            raise HTTPException(409, "IP already blocked")
     now = datetime.now(timezone.utc)
     doc = {
         "ip_hash": ip_hash,
