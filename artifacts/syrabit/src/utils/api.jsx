@@ -323,6 +323,40 @@ export const adminSeoBulkReviewAction = (token, action, pageIds = [], minScore =
 export const adminSeoFlagLowQuality = (token) =>
   axios.post(`${API_BASE}/seo/flag-low-quality`, {}, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminSeoQualityAudit = (token, { unpublishBelow = 90, dryRun = false } = {}) =>
+  axios.post(`${API_BASE}/seo/quality-audit`, null, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { unpublish_below: unpublishBelow, dry_run: dryRun },
+  });
+
+export const adminSeoQualitySummary = (token) =>
+  axios.get(`${API_BASE}/seo/quality-summary`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminSeoDuplicateScan = (token, { similarityThreshold = 0.8, scope = 'subject' } = {}) =>
+  axios.post(`${API_BASE}/seo/duplicate-scan`, null, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { similarity_threshold: similarityThreshold, scope },
+  });
+
+export const adminSeoDuplicatePairs = (token, status = 'open', limit = 100) =>
+  axios.get(`${API_BASE}/seo/duplicate-pairs`, {
+    headers: adminHeaders(token), withCredentials: true,
+    params: { status, limit },
+  });
+
+export const adminSeoResolveDuplicate = (token, pairId, action = 'ignore') =>
+  axios.post(`${API_BASE}/seo/duplicate-pairs/${pairId}/resolve`, null, {
+    headers: adminHeaders(token), withCredentials: true,
+    params: { action },
+  });
+
+export const seoRelatedByChapter = (chapterId, excludeTopicId = null, limit = 5) =>
+  axios.get(`${API_BASE}/seo/related-by-chapter/${chapterId}`, {
+    params: { limit, ...(excludeTopicId ? { exclude_topic_id: excludeTopicId } : {}) },
+  });
+
 
 
 // ── Payments ─────────────────────────────────────────────────────────────────

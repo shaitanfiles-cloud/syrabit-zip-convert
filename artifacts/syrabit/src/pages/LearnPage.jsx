@@ -10,7 +10,7 @@ import {
   FlipHorizontal, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { AppLayout } from '@/components/layout/AppLayout';
-import { apiClient, API_BASE } from '@/utils/api';
+import { apiClient, API_BASE, seoRelatedByChapter } from '@/utils/api';
 import { useShare } from '@/hooks/useShare';
 import StickyToc from '@/components/ui/StickyToc';
 
@@ -34,9 +34,9 @@ function SchemaOrg({ doc }) {
       '@type': 'Article',
       headline: doc.title,
       description,
-      author: { '@type': 'Organization', name: 'Syrabit.ai', url: 'https://syrabit.ai' },
+      author: { '@type': ['Organization', 'EducationalOrganization'], name: 'Syrabit.ai', url: 'https://syrabit.ai' },
       publisher: {
-        '@type': 'Organization',
+        '@type': ['Organization', 'EducationalOrganization'],
         name: 'Syrabit.ai',
         url: 'https://syrabit.ai',
         logo: { '@type': 'ImageObject', url: 'https://syrabit.ai/icons/icon-192x192.png' },
@@ -63,7 +63,7 @@ function SchemaOrg({ doc }) {
       '@type': 'LearningResource',
       name: `${doc.title} — ${eduLevel}`,
       description: description || `Study material for ${doc.title}`,
-      provider: { '@type': 'Organization', name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
+      provider: { '@type': ['Organization', 'EducationalOrganization'], name: 'Syrabit.ai', sameAs: 'https://syrabit.ai' },
       educationalLevel: eduLevel,
       url: pageUrl,
       inLanguage: 'en-IN',
@@ -99,6 +99,7 @@ export default function LearnPage() {
   const [pyqs, setPyqs]               = useState([]);
   const [markWise, setMarkWise]       = useState({});
   const [flashcards, setFlashcards]   = useState([]);
+  const [relatedTopics, setRelatedTopics] = useState([]);
   const [showAllPyqs, setShowAllPyqs] = useState(false);
   const [flippedCards, setFlippedCards] = useState(new Set());
   const articleRef = useRef(null);
@@ -109,6 +110,7 @@ export default function LearnPage() {
     setPyqs([]);
     setMarkWise({});
     setFlashcards([]);
+    setRelatedTopics([]);
     setShowAllPyqs(false);
     setFlippedCards(new Set());
     apiClient().get(`/content/cms-documents/${slug}`)
@@ -124,6 +126,9 @@ export default function LearnPage() {
             .catch(() => {});
           apiClient().get(`/content/chapters/${chId}/flashcards?limit=10`)
             .then(fr => setFlashcards(fr.data?.flashcards || []))
+            .catch(() => {});
+          seoRelatedByChapter(chId, r.data?.linked_topic_id || null, 5)
+            .then(rr => setRelatedTopics(rr.data?.related || []))
             .catch(() => {});
         }
       })
@@ -236,7 +241,7 @@ export default function LearnPage() {
           <nav className="flex items-center gap-1 text-xs text-muted-foreground/50 mb-6" aria-label="Breadcrumb">
             <Link to="/" className="hover:text-foreground/70 transition-colors">Home</Link>
             <ChevronRight size={11} className="flex-shrink-0" />
-            <Link to="/library" className="hover:text-foreground/70 transition-colors">Browser</Link>
+            <Link to="/library" className="hover:text-foreground/70 transition-colors">Library</Link>
             <ChevronRight size={11} className="flex-shrink-0" />
             <span className="text-foreground/60 truncate max-w-xs">{doc?.title}</span>
           </nav>
@@ -518,6 +523,38 @@ export default function LearnPage() {
                 })}
               </div>
             </div>
+          )}
+
+          {/* Related topics for internal linking & SEO */}
+          {relatedTopics.length > 0 && (
+            <nav
+              aria-label="Related topics"
+              className="mt-6 rounded-2xl border border-violet-500/15 overflow-hidden"
+            >
+              <div className="px-5 py-3.5 border-b border-violet-500/10 flex items-center gap-2"
+                style={{ background: 'rgba(139,92,246,0.05)' }}>
+                <Layers size={15} className="text-violet-400" />
+                <span className="text-sm font-bold text-foreground">Related Topics in this Chapter</span>
+                <span className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                  style={{ background: 'rgba(139,92,246,0.12)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.20)' }}>
+                  {relatedTopics.length} links
+                </span>
+              </div>
+              <ul className="p-3 grid grid-cols-1 sm:grid-cols-2 gap-2"
+                style={{ background: 'hsl(var(--card))' }}>
+                {relatedTopics.map((rt) => (
+                  <li key={rt.id}>
+                    <Link
+                      to={rt.seo_path || `/learn/${rt.slug}`}
+                      className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border border-border/30 hover:border-violet-400/40 hover:bg-violet-500/5 transition-colors text-sm text-foreground"
+                    >
+                      <span className="truncate">{rt.title}</span>
+                      <ChevronRight size={14} className="text-muted-foreground/50 flex-shrink-0" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </nav>
           )}
 
           {/* Footer CTA */}

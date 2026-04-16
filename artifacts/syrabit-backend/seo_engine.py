@@ -2112,7 +2112,7 @@ _ASSAM_GEO = {
 }
 
 _ORG_NODE = {
-    "@type": "Organization",
+    "@type": ["Organization", "EducationalOrganization"],
     "name": "Syrabit.ai",
     "url": "https://syrabit.ai",
     "logo": {"@type": "ImageObject", "url": "https://syrabit.ai/icons/icon-192x192.png"},
@@ -5002,3 +5002,406 @@ async def _expand_board_bg(job_id: str, board: dict, page_types: list):
     except Exception as e:
         logger.error(f"Expand board error: {e}")
         _job_update(job_id, status="error", current=str(e)[:200], finished_at=datetime.now(timezone.utc).isoformat())
+
+
+# ─── Content Quality Audit & Near-Duplicate Detection ───────────────────────
+
+def _content_shingles(text: str, k: int = 5) -> set:
+    """Generate word-level k-shingles from text for similarity comparison."""
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    if len(words) < k:
+        return set(words)
+    return {" ".join(words[i:i + k]) for i in range(len(words) - k + 1)}
+
+
+def _content_fingerprint(text: str, k: int = 5, num_hashes: int = 64) -> list[int]:
+    """MinHash-style fingerprint for fast near-duplicate detection across pages."""
+    shingles = _content_shingles(text, k)
+    if not shingles:
+        return [0] * num_hashes
+    sigs = [(1 << 63) - 1] * num_hashes
+    for s in shingles:
+        base = int(hashlib.md5(s.encode("utf-8")).hexdigest(), 16)
+        for i in range(num_hashes):
+            h = (base * (i * 2654435761 + 1)) & ((1 << 63) - 1)
+            if h < sigs[i]:
+                sigs[i] = h
+    return sigs
+
+
+def _fingerprint_similarity(a: list[int], b: list[int]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    matches = sum(1 for x, y in zip(a, b) if x == y)
+    return round(matches / len(a), 4)
+
+
+def _quality_histogram(scores: list[int]) -> dict:
+    """Bucket scores into 10-point bins."""
+    buckets = {f"{lo}-{lo+9}": 0 for lo in range(0, 100, 10)}
+    buckets["100"] = 0
+    for s in scores:
+        s = max(0, min(100, int(s or 0)))
+        if s == 100:
+            buckets["100"] += 1
+        else:
+            lo = (s // 10) * 10
+            buckets[f"{lo}-{lo+9}"] += 1
+    return buckets
+
+
+@router.post("/quality-audit")
+async def run_quality_audit(
+    unpublish_below: int = _QUALITY_PUBLISH_THRESHOLD,
+    dry_run: bool = False,
+    _admin: dict = Depends(_require_admin),
+):
+    """Rescore every published SEO page; unpublish pages scoring below threshold.
+    Stores summary in seo_quality_audits collection. Returns histogram + counts."""
+    cursor = _db.seo_pages.find(
+        {"status": "published"},
+        {"_id": 0, "id": 1, "content": 1, "page_type": 1,
+         "board_name": 1, "subject_name": 1, "chapter_title": 1,
+         "topic_title": 1, "subject_id": 1, "subject_slug": 1},
+    )
+    rescored = 0
+    unpublished = 0
+    scores: list[int] = []
+    flagged_ids: list[str] = []
+    by_subject: dict = {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    async for p in cursor:
+        ctx = {
+            "board_name":   p.get("board_name", ""),
+            "subject_name": p.get("subject_name", ""),
+            "chapter_title": p.get("chapter_title", ""),
+        }
+        qs = _compute_quality_score(p.get("content", ""), p.get("page_type", "notes"), context=ctx)
+        score = int(qs.get("score", 0))
+        scores.append(score)
+        rescored += 1
+
+        sid = p.get("subject_slug") or p.get("subject_id") or "unknown"
+        bucket = by_subject.setdefault(sid, {"subject": p.get("subject_name", sid), "total": 0, "below": 0, "min": 100, "max": 0})
+        bucket["total"] += 1
+        bucket["min"] = min(bucket["min"], score)
+        bucket["max"] = max(bucket["max"], score)
+        if score < unpublish_below:
+            bucket["below"] += 1
+
+        updates = {"quality_score": qs, "updated_at": now_iso}
+        if score < unpublish_below:
+            unpublished += 1
+            flagged_ids.append(p["id"])
+            if not dry_run:
+                updates["status"] = "draft"
+                updates["in_sitemap"] = False
+                updates["unpublish_reason"] = f"quality_audit:{score}<{unpublish_below}"
+
+        if not dry_run:
+            await _db.seo_pages.update_one({"id": p["id"]}, {"$set": updates})
+
+    histogram = _quality_histogram(scores)
+    avg_score = round(sum(scores) / len(scores), 1) if scores else 0.0
+
+    summary = {
+        "id": f"audit-{uuid.uuid4().hex[:10]}",
+        "run_at": now_iso,
+        "threshold": unpublish_below,
+        "dry_run": dry_run,
+        "rescored": rescored,
+        "unpublished": unpublished,
+        "avg_score": avg_score,
+        "histogram": histogram,
+        "flagged_ids_sample": flagged_ids[:50],
+        "by_subject": list(by_subject.values()),
+    }
+
+    try:
+        await _db.seo_quality_audits.insert_one(dict(summary))
+        await _db.seo_quality_audits.create_index([("run_at", -1)])
+    except Exception as exc:
+        logger.warning(f"Failed to persist quality audit: {exc}")
+
+    await _seo_log(
+        "seo:quality_audit",
+        f"Rescored {rescored} pages, unpublished {unpublished} below {unpublish_below} (dry_run={dry_run})",
+    )
+
+    summary.pop("_id", None)
+    return summary
+
+
+@router.get("/quality-summary")
+async def get_quality_summary(_admin: dict = Depends(_require_admin)):
+    """Return current quality distribution + last audit + duplicate count for the dashboard widget."""
+    pipeline = [
+        {"$match": {"status": "published"}},
+        {"$project": {
+            "_id": 0,
+            "score": {"$ifNull": ["$quality_score.score", {"$ifNull": ["$quality.score", 0]}]},
+        }},
+    ]
+    scores: list[int] = []
+    async for d in _db.seo_pages.aggregate(pipeline):
+        try:
+            scores.append(int(d.get("score") or 0))
+        except (TypeError, ValueError):
+            scores.append(0)
+
+    total_published = len(scores)
+    flagged = sum(1 for s in scores if s < _QUALITY_PUBLISH_THRESHOLD)
+    histogram = _quality_histogram(scores)
+    avg_score = round(sum(scores) / len(scores), 1) if scores else 0.0
+    total_pages = await _db.seo_pages.count_documents({})
+    drafts = total_pages - total_published
+
+    last_audit = await _db.seo_quality_audits.find_one(
+        {}, {"_id": 0}, sort=[("run_at", -1)]
+    )
+    duplicate_pairs = await _db.seo_duplicate_pairs.count_documents({"status": {"$ne": "resolved"}})
+    last_dup_scan = await _db.seo_duplicate_scans.find_one(
+        {}, {"_id": 0}, sort=[("run_at", -1)]
+    )
+
+    return {
+        "threshold": _QUALITY_PUBLISH_THRESHOLD,
+        "total_published": total_published,
+        "total_drafts": drafts,
+        "avg_score": avg_score,
+        "below_threshold": flagged,
+        "histogram": histogram,
+        "last_audit": last_audit,
+        "duplicate_pairs_open": duplicate_pairs,
+        "last_duplicate_scan": last_dup_scan,
+    }
+
+
+@router.post("/duplicate-scan")
+async def run_duplicate_scan(
+    similarity_threshold: float = 0.80,
+    scope: str = "subject",  # "subject" | "global"
+    _admin: dict = Depends(_require_admin),
+):
+    """Compute MinHash fingerprints for every published page and flag pairs above
+    the similarity threshold. Pairs are bucketed by subject by default to keep
+    O(n²) tractable. Stores results in seo_duplicate_pairs."""
+    if similarity_threshold < 0.5 or similarity_threshold > 1.0:
+        raise HTTPException(status_code=400, detail="similarity_threshold must be in [0.5, 1.0]")
+
+    pages = await _db.seo_pages.find(
+        {"status": "published"},
+        {"_id": 0, "id": 1, "content": 1, "subject_id": 1, "subject_slug": 1,
+         "subject_name": 1, "topic_title": 1, "page_type": 1,
+         "board_slug": 1, "class_slug": 1, "topic_slug": 1,
+         "content_fingerprint": 1, "content_hash": 1},
+    ).to_list(length=None)
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    fingerprints_written = 0
+
+    # Recompute fingerprints every scan so stale content can't hide near-duplicates.
+    # We persist the new fingerprint along with a content hash to skip rewrites
+    # when the page content hasn't changed since the last scan.
+    for p in pages:
+        content = p.get("content", "") or ""
+        content_hash = hashlib.md5(content.encode("utf-8")).hexdigest()
+        fp = _content_fingerprint(content)
+        prev_hash = (p.get("content_hash") if isinstance(p.get("content_hash"), str) else None)
+        if prev_hash != content_hash or not isinstance(p.get("content_fingerprint"), list):
+            await _db.seo_pages.update_one(
+                {"id": p["id"]},
+                {"$set": {
+                    "content_fingerprint": fp,
+                    "content_hash": content_hash,
+                    "fingerprint_at": now_iso,
+                }},
+            )
+            fingerprints_written += 1
+        p["_fp"] = fp
+
+    # Bucket pages for pairwise comparison
+    buckets: dict = {}
+    if scope == "global":
+        buckets["__all__"] = pages
+    else:
+        for p in pages:
+            key = (p.get("subject_slug") or p.get("subject_id") or "unknown")
+            buckets.setdefault(key, []).append(p)
+
+    pairs_found: list[dict] = []
+    compared = 0
+    for key, group in buckets.items():
+        n = len(group)
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = group[i], group[j]
+                # Same topic+type pair is the same page; skip identical (board,class,subject,topic,page_type)
+                if (a.get("topic_slug") == b.get("topic_slug")
+                        and a.get("page_type") == b.get("page_type")
+                        and a.get("board_slug") == b.get("board_slug")
+                        and a.get("class_slug") == b.get("class_slug")):
+                    continue
+                sim = _fingerprint_similarity(a["_fp"], b["_fp"])
+                compared += 1
+                if sim >= similarity_threshold:
+                    pairs_found.append({
+                        "id":            f"dup-{uuid.uuid4().hex[:10]}",
+                        "page_a_id":     a["id"],
+                        "page_b_id":     b["id"],
+                        "page_a_title":  a.get("topic_title", ""),
+                        "page_b_title":  b.get("topic_title", ""),
+                        "page_a_type":   a.get("page_type", ""),
+                        "page_b_type":   b.get("page_type", ""),
+                        "subject_name":  a.get("subject_name", ""),
+                        "subject_slug":  a.get("subject_slug", ""),
+                        "similarity":    sim,
+                        "scope":         scope,
+                        "status":        "open",
+                        "detected_at":   now_iso,
+                    })
+
+    # Persist pairs (replace any existing open pair with same id-pair signature)
+    inserted = 0
+    if pairs_found:
+        try:
+            await _db.seo_duplicate_pairs.create_index(
+                [("page_a_id", 1), ("page_b_id", 1)], unique=False,
+            )
+        except Exception:
+            pass
+        for pair in pairs_found:
+            sig_filter = {
+                "$or": [
+                    {"page_a_id": pair["page_a_id"], "page_b_id": pair["page_b_id"]},
+                    {"page_a_id": pair["page_b_id"], "page_b_id": pair["page_a_id"]},
+                ],
+                "status": {"$ne": "resolved"},
+            }
+            existing = await _db.seo_duplicate_pairs.find_one(sig_filter, {"_id": 0, "id": 1})
+            if existing:
+                await _db.seo_duplicate_pairs.update_one(
+                    {"id": existing["id"]},
+                    {"$set": {"similarity": pair["similarity"], "detected_at": now_iso}},
+                )
+            else:
+                await _db.seo_duplicate_pairs.insert_one(dict(pair))
+                inserted += 1
+
+    summary = {
+        "id":                f"dscan-{uuid.uuid4().hex[:10]}",
+        "run_at":            now_iso,
+        "threshold":         similarity_threshold,
+        "scope":             scope,
+        "pages_scanned":     len(pages),
+        "fingerprints_built": fingerprints_written,
+        "pairs_compared":    compared,
+        "pairs_found":       len(pairs_found),
+        "pairs_inserted":    inserted,
+    }
+    try:
+        await _db.seo_duplicate_scans.insert_one(dict(summary))
+        await _db.seo_duplicate_scans.create_index([("run_at", -1)])
+    except Exception as exc:
+        logger.warning(f"Failed to persist duplicate scan: {exc}")
+
+    await _seo_log(
+        "seo:duplicate_scan",
+        f"Scanned {len(pages)} pages, found {len(pairs_found)} pairs ≥ {similarity_threshold}",
+    )
+
+    summary.pop("_id", None)
+    return summary
+
+
+@router.get("/duplicate-pairs")
+async def list_duplicate_pairs(
+    status: str = "open",
+    limit: int = 100,
+    _admin: dict = Depends(_require_admin),
+):
+    """List near-duplicate page pairs detected by the most recent scan(s)."""
+    query: dict = {}
+    if status and status != "all":
+        query["status"] = status
+    pairs = await _db.seo_duplicate_pairs.find(query, {"_id": 0}).sort(
+        [("similarity", -1), ("detected_at", -1)]
+    ).limit(limit).to_list(limit)
+    total = await _db.seo_duplicate_pairs.count_documents(query)
+    return {"pairs": pairs, "total": total, "status": status}
+
+
+@router.post("/duplicate-pairs/{pair_id}/resolve")
+async def resolve_duplicate_pair(
+    pair_id: str,
+    action: str = "ignore",  # "ignore" | "unpublish_a" | "unpublish_b"
+    _admin: dict = Depends(_require_admin),
+):
+    """Mark a duplicate pair as resolved. Optionally unpublish one of the pages."""
+    pair = await _db.seo_duplicate_pairs.find_one({"id": pair_id}, {"_id": 0})
+    if not pair:
+        raise HTTPException(status_code=404, detail="Pair not found")
+    now_iso = datetime.now(timezone.utc).isoformat()
+    target_id = None
+    if action == "unpublish_a":
+        target_id = pair["page_a_id"]
+    elif action == "unpublish_b":
+        target_id = pair["page_b_id"]
+    elif action != "ignore":
+        raise HTTPException(status_code=400, detail="action must be ignore | unpublish_a | unpublish_b")
+
+    if target_id:
+        await _db.seo_pages.update_one(
+            {"id": target_id},
+            {"$set": {"status": "draft", "in_sitemap": False,
+                      "unpublish_reason": f"duplicate_pair:{pair_id}", "updated_at": now_iso}},
+        )
+
+    await _db.seo_duplicate_pairs.update_one(
+        {"id": pair_id},
+        {"$set": {"status": "resolved", "resolved_action": action,
+                  "resolved_at": now_iso}},
+    )
+    await _seo_log("seo:duplicate_resolve", f"Pair {pair_id} resolved via {action}")
+    return {"resolved": True, "pair_id": pair_id, "action": action}
+
+
+# ─── Public: Related topics for a CMS document (same chapter) ────────────────
+
+@router.get("/related-by-chapter/{chapter_id}")
+async def related_topics_by_chapter(
+    chapter_id: str,
+    exclude_topic_id: Optional[str] = None,
+    limit: int = 5,
+):
+    """Return up to `limit` published topics from the same chapter for internal
+    linking on /learn pages and other content surfaces. Used by the React
+    LearnPage to render a 'Related Topics' section."""
+    try:
+        limit = max(1, min(int(limit), 20))
+    except (TypeError, ValueError):
+        limit = 5
+    query: dict = {"chapter_id": chapter_id, "status": "published"}
+    if exclude_topic_id:
+        query["id"] = {"$ne": exclude_topic_id}
+    topics = await _db.topics.find(
+        query, {"_id": 0, "id": 1, "title": 1, "slug": 1,
+                "chapter_id": 1, "subject_id": 1}
+    ).sort("order", 1).limit(limit).to_list(limit)
+    enriched = []
+    for t in topics:
+        h = await _resolve_hierarchy(t)
+        seo_path = ""
+        if h:
+            seo_path = f"/{h.get('board_slug','')}/{h.get('class_slug','')}/{h.get('subject_slug','')}/{t['slug']}"
+        enriched.append({
+            "id":       t.get("id"),
+            "title":    t.get("title", ""),
+            "slug":     t.get("slug", ""),
+            "seo_path": seo_path,
+        })
+    from starlette.responses import JSONResponse
+    resp = JSONResponse({"related": enriched, "chapter_id": chapter_id})
+    resp.headers["Cache-Control"] = "public, max-age=600, s-maxage=3600"
+    return resp

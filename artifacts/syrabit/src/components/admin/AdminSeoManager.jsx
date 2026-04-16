@@ -13,6 +13,7 @@ import LinksTab from './seo-manager/LinksTab';
 import SchemaTab from './seo-manager/SchemaTab';
 import SitemapTab from './seo-manager/SitemapTab';
 import PipelineTab from './seo-manager/PipelineTab';
+import QualityTab from './seo-manager/QualityTab';
 import useSeoManager from './seo-manager/useSeoManager';
 
 export default function AdminSeoManager({ adminToken, onNavigate }) {
@@ -29,6 +30,7 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
     { id: 'links',    label: '🔗 Int. Links', count: null },
     { id: 'schema',   label: '🧬 Schema',  count: null },
     { id: 'sitemap',  label: '🗺 Sitemap', count: null },
+    { id: 'quality',  label: '🛡 Quality', count: null },
   ];
 
   return (
@@ -165,6 +167,10 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
           handleRunSubject={s.handleRunSubject} handleAutoRun={s.handleAutoRun}
           activeJob={s.activeJob} setActiveJob={s.setActiveJob}
           pipelineSearch={s.pipelineSearch} setPipelineSearch={s.setPipelineSearch} />
+      )}
+
+      {s.tab === 'quality' && (
+        <QualityTab adminToken={adminToken} />
       )}
 
       <AdminQuickLinks links={['content','vertex','analytics','dashboard','editor']} onNavigate={onNavigate} />
