@@ -430,6 +430,73 @@ async def admin_get_rate_stats(admin: dict = Depends(get_admin_user)):
     }
 
 
+@router.get("/admin/alert-settings")
+async def admin_get_alert_settings(admin: dict = Depends(get_admin_user)):
+    import metrics as _metrics_mod
+    try:
+        await _metrics_mod._load_alert_settings()
+        return {
+            "thresholds": {k: _metrics_mod._ALERT_THRESHOLDS.get(k, v) for k, v in _metrics_mod._ALERT_THRESHOLDS_DEFAULT.items()},
+            "expiration": {k: _metrics_mod._alert_expiration.get(k, v) for k, v in _metrics_mod._ALERT_EXPIRATION_DEFAULT.items()},
+            "defaults": {
+                "thresholds": _metrics_mod._ALERT_THRESHOLDS_DEFAULT,
+                "expiration": _metrics_mod._ALERT_EXPIRATION_DEFAULT,
+            },
+        }
+    except Exception as exc:
+        logger.error(f"Failed to get alert settings: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to get alert settings")
+
+
+@router.put("/admin/alert-settings")
+async def admin_update_alert_settings(
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    import metrics as _metrics_mod
+    thresholds = data.get("thresholds", {})
+    expiration = data.get("expiration", {})
+    validated_thresholds = {}
+    for k, default_val in _metrics_mod._ALERT_THRESHOLDS_DEFAULT.items():
+        if k in thresholds:
+            try:
+                val = float(thresholds[k])
+                if val <= 0:
+                    raise ValueError("Must be positive")
+                validated_thresholds[k] = val
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail=f"Invalid value for threshold '{k}'")
+    validated_expiration = {}
+    if "enabled" in expiration:
+        if not isinstance(expiration["enabled"], bool):
+            raise HTTPException(status_code=400, detail="expiration.enabled must be a boolean")
+        validated_expiration["enabled"] = expiration["enabled"]
+    if "days" in expiration:
+        try:
+            days = int(expiration["days"])
+            if days < 1 or days > 365:
+                raise ValueError("Days must be 1-365")
+            validated_expiration["days"] = days
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="Invalid value for expiration days (must be 1-365)")
+    try:
+        existing = await db.api_config.find_one({}, {"_id": 0})
+        if existing is None:
+            existing = {}
+        existing["alert_settings"] = {
+            "thresholds": validated_thresholds,
+            "expiration": validated_expiration,
+        }
+        await db.api_config.replace_one({}, existing, upsert=True)
+        await _metrics_mod._load_alert_settings()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Failed to update alert settings: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to update alert settings")
+
+
 @router.get("/admin/alerts")
 async def admin_get_alerts(
     limit: int = Query(50, ge=1, le=200),

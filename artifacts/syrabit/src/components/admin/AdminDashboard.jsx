@@ -268,6 +268,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   const [indexNowHistory, setIndexNowHistory] = useState(null);
   const [alertHistory, setAlertHistory] = useState(null);
   const [alertFilter, setAlertFilter] = useState('all');
+  const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
+  const [alertSettings, setAlertSettings] = useState(null);
+  const [alertSettingsDraft, setAlertSettingsDraft] = useState(null);
+  const [alertSettingsSaving, setAlertSettingsSaving] = useState(false);
   const [failedSections, setFailedSections] = useState([]);
 
   const headers = { withCredentials: true };
@@ -366,6 +370,44 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       }));
     } catch (e) {
       log.error('Failed to acknowledge all alerts', { error: e.message });
+    }
+  };
+
+  const loadAlertSettings = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/admin/alert-settings`, adminHdr(adminToken));
+      setAlertSettings(res.data);
+      setAlertSettingsDraft({ thresholds: { ...res.data.thresholds }, expiration: { ...res.data.expiration } });
+    } catch (e) {
+      log.error('Failed to load alert settings', { error: e.message });
+    }
+  };
+
+  const handleSaveAlertSettings = async () => {
+    if (!alertSettingsDraft) return;
+    setAlertSettingsSaving(true);
+    try {
+      await axios.put(`${API_BASE}/admin/alert-settings`, alertSettingsDraft, adminHdr(adminToken));
+      setAlertSettings({ ...alertSettings, thresholds: { ...alertSettingsDraft.thresholds }, expiration: { ...alertSettingsDraft.expiration } });
+      setAlertSettingsOpen(false);
+    } catch (e) {
+      log.error('Failed to save alert settings', { error: e.message });
+    } finally {
+      setAlertSettingsSaving(false);
+    }
+  };
+
+  const handleOpenAlertSettings = () => {
+    if (!alertSettings) loadAlertSettings();
+    setAlertSettingsOpen(prev => !prev);
+  };
+
+  const handleResetAlertSettings = () => {
+    if (alertSettings?.defaults) {
+      setAlertSettingsDraft({
+        thresholds: { ...alertSettings.defaults.thresholds },
+        expiration: { ...alertSettings.defaults.expiration },
+      });
     }
   };
 
@@ -762,8 +804,100 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   Acknowledge All
                 </button>
               )}
+              <button
+                onClick={handleOpenAlertSettings}
+                className="text-[10px] px-2.5 py-1 rounded-md bg-gray-50 text-gray-600 border border-gray-200 hover:bg-violet-50 hover:text-violet-600 hover:border-violet-200 transition-colors font-medium flex items-center gap-1"
+              >
+                <Settings size={10} />
+                Settings
+              </button>
             </div>
           </div>
+
+          {alertSettingsOpen && alertSettingsDraft && (
+            <div className="mb-4 p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-xs font-semibold text-gray-700">Alert Thresholds & Expiration</h4>
+                <div className="flex gap-2">
+                  <button onClick={handleResetAlertSettings} className="text-[10px] px-2 py-0.5 rounded bg-white border border-gray-200 text-gray-500 hover:bg-gray-100 transition-colors">Reset Defaults</button>
+                  <button
+                    onClick={handleSaveAlertSettings}
+                    disabled={alertSettingsSaving}
+                    className="text-[10px] px-3 py-0.5 rounded bg-violet-600 text-white hover:bg-violet-700 transition-colors disabled:opacity-50 font-medium"
+                  >
+                    {alertSettingsSaving ? 'Saving...' : 'Save'}
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1">Error Rate (%)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={alertSettingsDraft.thresholds.error_rate_pct ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, error_rate_pct: parseFloat(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1">Latency p95 (ms)</label>
+                  <input
+                    type="number"
+                    step="100"
+                    min="100"
+                    value={alertSettingsDraft.thresholds.latency_p95_ms ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, latency_p95_ms: parseInt(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1">Fallback Rate (%)</label>
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={alertSettingsDraft.thresholds.fallback_rate_pct ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, fallback_rate_pct: parseFloat(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[10px] text-gray-500 font-medium block mb-1">Spoof RPM</label>
+                  <input
+                    type="number"
+                    step="1"
+                    min="1"
+                    value={alertSettingsDraft.thresholds.spoof_rpm ?? ''}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, thresholds: { ...prev.thresholds, spoof_rpm: parseInt(e.target.value) || 0 } }))}
+                    className="w-full text-xs border border-gray-200 rounded-md px-2 py-1.5 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-4 pt-2 border-t border-gray-200">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={alertSettingsDraft.expiration.enabled || false}
+                    onChange={e => setAlertSettingsDraft(prev => ({ ...prev, expiration: { ...prev.expiration, enabled: e.target.checked } }))}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                  />
+                  <span className="text-[11px] text-gray-600 font-medium">Auto-acknowledge after</span>
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="365"
+                  value={alertSettingsDraft.expiration.days ?? 7}
+                  onChange={e => setAlertSettingsDraft(prev => ({ ...prev, expiration: { ...prev.expiration, days: parseInt(e.target.value) || 7 } }))}
+                  disabled={!alertSettingsDraft.expiration.enabled}
+                  className="w-16 text-xs border border-gray-200 rounded-md px-2 py-1 bg-white focus:ring-1 focus:ring-violet-300 focus:border-violet-300 outline-none disabled:opacity-40"
+                />
+                <span className="text-[11px] text-gray-500">days</span>
+              </div>
+            </div>
+          )}
 
           {(!alertHistory.alerts || alertHistory.alerts.length === 0) && (
             <p className="text-center text-[11px] text-gray-400 py-6">No alerts have been triggered yet. Alerts appear here when system thresholds are exceeded.</p>

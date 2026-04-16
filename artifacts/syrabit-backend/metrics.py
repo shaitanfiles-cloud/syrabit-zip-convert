@@ -2,7 +2,7 @@
 import time as _time_mod, threading as _threading, logging, asyncio, os
 from typing import Dict
 from collections import defaultdict as _defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import httpx
 import deps as _deps_mod
 from deps import db, redis_client, supa, logger as _dep_logger
@@ -13,10 +13,13 @@ from cache import _redis_get_search
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "_ALERT_COOLDOWN_S", "_ALERT_THRESHOLDS", "_HEALTH_CACHE_TTL_S",
+    "_ALERT_COOLDOWN_S", "_ALERT_THRESHOLDS", "_ALERT_THRESHOLDS_DEFAULT",
+    "_ALERT_EXPIRATION_DEFAULT", "_alert_expiration",
+    "_HEALTH_CACHE_TTL_S",
     "_METRICS_HISTORY_MAX", "_MetricsStore", "_alert_last_fired", "_alerting_loop",
     "_bg_health_loop", "_cache_stats_log_counter", "_check_health_deps",
     "_dispatch_alert", "_health_deps_cache", "_health_deps_cache_at",
+    "_load_alert_settings", "_auto_expire_alerts",
     "_metrics", "_metrics_history", "_metrics_history_lock",
     "_snapshot_metrics", "_start_metrics_collector", "_startup_time",
 ]
@@ -246,12 +249,63 @@ async def _bg_health_loop():
 
 _ALERT_COOLDOWN_S = 1800   # 30 min between same alert type
 _alert_last_fired: dict = {}   # { "alert_key": timestamp }
-_ALERT_THRESHOLDS = {
+_ALERT_THRESHOLDS_DEFAULT = {
     "latency_p95_ms": 2000,
     "error_rate_pct": 5.0,
     "fallback_rate_pct": 50.0,
     "spoof_rpm": 50,
 }
+_ALERT_EXPIRATION_DEFAULT = {
+    "enabled": False,
+    "days": 7,
+}
+_ALERT_THRESHOLDS = dict(_ALERT_THRESHOLDS_DEFAULT)
+_alert_expiration = dict(_ALERT_EXPIRATION_DEFAULT)
+
+async def _load_alert_settings():
+    """Load alert thresholds and expiration settings from db.api_config, falling back to defaults."""
+    global _ALERT_THRESHOLDS, _alert_expiration
+    try:
+        new_thresholds = dict(_ALERT_THRESHOLDS_DEFAULT)
+        new_expiration = dict(_ALERT_EXPIRATION_DEFAULT)
+        cfg = await db.api_config.find_one({}, {"_id": 0})
+        if cfg and "alert_settings" in cfg:
+            s = cfg["alert_settings"]
+            thresholds = s.get("thresholds", {})
+            for k in _ALERT_THRESHOLDS_DEFAULT:
+                if k in thresholds:
+                    try:
+                        new_thresholds[k] = float(thresholds[k])
+                    except (ValueError, TypeError):
+                        pass
+            exp = s.get("expiration", {})
+            if "enabled" in exp and isinstance(exp["enabled"], bool):
+                new_expiration["enabled"] = exp["enabled"]
+            if "days" in exp:
+                try:
+                    new_expiration["days"] = max(1, int(exp["days"]))
+                except (ValueError, TypeError):
+                    pass
+        _ALERT_THRESHOLDS = new_thresholds
+        _alert_expiration = new_expiration
+    except Exception as e:
+        logger.debug(f"Failed to load alert settings from db: {e}")
+
+async def _auto_expire_alerts():
+    """Auto-acknowledge alerts older than the configured expiration period."""
+    if not _alert_expiration.get("enabled"):
+        return
+    days = _alert_expiration.get("days", 7)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        result = await db.alerts.update_many(
+            {"acknowledged": False, "fired_at": {"$lt": cutoff}},
+            {"$set": {"acknowledged": True, "acknowledged_at": datetime.now(timezone.utc).isoformat(), "acknowledged_by": "auto-expiration"}},
+        )
+        if result.modified_count > 0:
+            logger.info(f"Auto-expired {result.modified_count} alerts older than {days} days")
+    except Exception as e:
+        logger.debug(f"Alert auto-expiration error: {e}")
 
 async def _dispatch_alert(alert_type: str, title: str, body: str):
     """Send alert via email (Resend) and/or webhook. Respects cooldown."""
@@ -310,8 +364,15 @@ async def _alerting_loop():
     _prev_requests = 0
     _prev_fallbacks = 0
     _prev_llm_calls = 0
+    _expire_counter = 0
     while True:
         try:
+            await _load_alert_settings()
+
+            _expire_counter += 1
+            if _expire_counter >= 15:
+                await _auto_expire_alerts()
+                _expire_counter = 0
             # ── 1. Error rate in last window ──
             curr_errors = _metrics.error_count
             curr_requests = _metrics.request_count
