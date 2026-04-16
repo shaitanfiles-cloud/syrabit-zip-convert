@@ -118,7 +118,7 @@ from auth_deps import _rate_limiter_cleanup
 from seed import ensure_seeded
 from db_ops import _supa, supa_insert_activity_log
 from metrics import _bg_health_loop, _alerting_loop
-from routes.bot_discovery import _endpoint_health_alert_loop, _seo_health_alert_loop, _seo_weekly_digest_loop
+from routes.bot_discovery import _endpoint_health_alert_loop, _seo_health_alert_loop, _seo_weekly_digest_loop, _cf_bot_report_loop
 
 from prompts import build_system_prompt, _classify_question
 from syllabus_embedder import SyllabusEmbedder
@@ -566,6 +566,10 @@ async def lifespan(app):
         asyncio.create_task(_sitemap_indexnow_diff_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
+    if _is_leader:
+        # Single-leader: only one replica should query the CF GraphQL API
+        # and write the per-UA report each Monday.
+        asyncio.create_task(_cf_bot_report_loop())
     from middleware import _init_blocked_ip_cache
     asyncio.create_task(_init_blocked_ip_cache())
     from routes.admin_advanced import _collection_size_snapshot_loop, _cache_warm_loop

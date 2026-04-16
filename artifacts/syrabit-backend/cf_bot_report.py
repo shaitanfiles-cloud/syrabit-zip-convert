@@ -1,0 +1,427 @@
+"""Cloudflare per-UA crawler report generator (Task #315 / Phase B).
+
+Pure data + rendering helpers used by both:
+  * the weekly background loop in `routes/bot_discovery.py`
+    (`_cf_bot_report_loop`) which stores the report in the
+    `cf_bot_reports` Mongo collection so admin dashboards can read it; and
+  * the local CLI wrapper at `.local/scripts/cf_bot_report_per_ua.py`
+    which writes a dated markdown file to `.local/reports/` for the
+    SEO/crawl-budget review workflow.
+
+Splitting the generator out of `cloudflare_client.py` keeps the
+analytics-API plumbing in one module and the report shape (which is
+specific to the per-bot crawl-budget review) in another.
+
+Design constraints:
+  * Returns None on missing credentials or upstream failure — callers
+    decide how to surface it (the loop logs and skips; the CLI prints
+    a clear error).
+  * Pure functions where possible (`compose_wow_diff`,
+    `format_report_markdown`, `_classify_ua`) so unit tests don't need
+    network access.
+  * The week-over-week diff highlights only signals an SEO operator
+    cares about: new bots that started crawling, pace deltas above
+    `WOW_PACE_DELTA_THRESHOLD`, error-rate spikes above
+    `WOW_ERROR_RATE_THRESHOLD`, and disappearance of previously-active
+    bots.
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+from cloudflare_client import _cfg, _graphql_query, is_configured
+
+logger = logging.getLogger(__name__)
+
+
+# ── User-agent classification ────────────────────────────────────────────────
+# Maps UA substrings → canonical crawler name. Order matters: more specific
+# patterns first so e.g. "Googlebot-Image" maps to "Googlebot-Image" not
+# "Googlebot". Matching is case-insensitive.
+_UA_PATTERNS: list[tuple[str, str]] = [
+    ("googlebot-image", "Googlebot-Image"),
+    ("googlebot-news", "Googlebot-News"),
+    ("googlebot-video", "Googlebot-Video"),
+    ("adsbot-google", "AdsBot-Google"),
+    ("googlebot", "Googlebot"),
+    ("bingbot", "Bingbot"),
+    ("yandexbot", "YandexBot"),
+    ("duckduckbot", "DuckDuckBot"),
+    ("baiduspider", "Baiduspider"),
+    ("applebot", "Applebot"),
+    ("petalbot", "PetalBot"),
+    ("seznambot", "SeznamBot"),
+    ("mojeekbot", "MojeekBot"),
+    ("yeti", "Yeti"),
+]
+
+
+def _classify_ua(ua: str) -> Optional[str]:
+    """Return the canonical crawler name for a raw user-agent string, or
+    None if it doesn't match any known search-engine bot."""
+    if not ua:
+        return None
+    low = ua.lower()
+    for needle, name in _UA_PATTERNS:
+        if needle in low:
+            return name
+    return None
+
+
+# Thresholds for the week-over-week alerting section. Tuned for low noise:
+# we want operators to see real shifts, not normal weekly variance.
+WOW_PACE_DELTA_THRESHOLD = 0.50   # ±50% req/hr change
+WOW_ERROR_RATE_THRESHOLD = 0.05   # 5% absolute jump in (4xx+5xx)/total
+WOW_MIN_SAMPLE = 20               # ignore bots with < 20 req either week
+
+
+# ── Cloudflare data fetch ────────────────────────────────────────────────────
+
+async def _fetch_per_ua_buckets(zone_id: str, since_iso: str, until_iso: str,
+                                 limit: int = 1000) -> Optional[list[dict]]:
+    """Fetch verified-search-bot request buckets grouped by user-agent +
+    edge-cache + status. Returns the raw GraphQL bucket list or None.
+
+    We pull a relatively wide bucket (one row per UA × cache-status × HTTP
+    code combination) and aggregate client-side so the report code stays
+    a pure function over a known shape.
+    """
+    query = """
+    query PerUaBots($zoneTag: String!, $since: String!, $until: String!, $limit: Int!) {
+      viewer {
+        zones(filter: { zoneTag: $zoneTag }) {
+          httpRequestsAdaptiveGroups(
+            filter: {
+              datetime_geq: $since
+              datetime_leq: $until
+              verifiedBotCategory: "Search Engine Crawler"
+            }
+            limit: $limit
+            orderBy: [count_DESC]
+          ) {
+            count
+            sum { edgeResponseBytes }
+            dimensions {
+              userAgent
+              cacheStatus
+              edgeResponseStatus
+            }
+          }
+        }
+      }
+    }
+    """
+    variables = {
+        "zoneTag": zone_id,
+        "since": since_iso,
+        "until": until_iso,
+        "limit": limit,
+    }
+    data = await _graphql_query(query, variables)
+    if not data:
+        return None
+    try:
+        zones = data.get("viewer", {}).get("zones", [])
+        if not zones:
+            return []
+        return zones[0].get("httpRequestsAdaptiveGroups", []) or []
+    except Exception as exc:
+        logger.warning(f"CF per-UA parse failed: {exc}")
+        return None
+
+
+# ── Aggregation ──────────────────────────────────────────────────────────────
+
+def aggregate_per_ua(buckets: list[dict]) -> dict:
+    """Roll the raw GraphQL buckets up into a per-bot summary.
+
+    Returns:
+      {
+        "totals": {"requests": N, "bytes": N, "bots": M},
+        "per_bot": {
+          "Googlebot": {
+            "requests": int, "bytes": int,
+            "by_status": {"2xx": N, "3xx": N, "4xx": N, "5xx": N},
+            "by_cache": {"HIT": N, "MISS": N, "DYNAMIC": N, ...},
+            "hit_pct": float,
+            "error_rate": float,  # (4xx+5xx)/total, 0.0 if total==0
+          },
+          ...
+        }
+      }
+    """
+    per_bot: dict[str, dict] = {}
+    for b in buckets or []:
+        dims = b.get("dimensions") or {}
+        ua = dims.get("userAgent", "") or ""
+        name = _classify_ua(ua)
+        if not name:
+            continue
+        bot = per_bot.setdefault(name, {
+            "requests": 0,
+            "bytes": 0,
+            "by_status": {"2xx": 0, "3xx": 0, "4xx": 0, "5xx": 0},
+            "by_cache": {},
+        })
+        cnt = int(b.get("count") or 0)
+        bot["requests"] += cnt
+        bot["bytes"] += int((b.get("sum") or {}).get("edgeResponseBytes") or 0)
+        try:
+            status = int(dims.get("edgeResponseStatus") or 0)
+        except (TypeError, ValueError):
+            status = 0
+        if 200 <= status < 300:
+            bot["by_status"]["2xx"] += cnt
+        elif 300 <= status < 400:
+            bot["by_status"]["3xx"] += cnt
+        elif 400 <= status < 500:
+            bot["by_status"]["4xx"] += cnt
+        elif 500 <= status < 600:
+            bot["by_status"]["5xx"] += cnt
+        cache = dims.get("cacheStatus") or "unknown"
+        bot["by_cache"][cache] = bot["by_cache"].get(cache, 0) + cnt
+
+    for name, bot in per_bot.items():
+        total = bot["requests"]
+        hit = bot["by_cache"].get("hit", 0) + bot["by_cache"].get("HIT", 0)
+        bot["hit_pct"] = round(100.0 * hit / total, 1) if total else 0.0
+        errs = bot["by_status"]["4xx"] + bot["by_status"]["5xx"]
+        bot["error_rate"] = round(errs / total, 4) if total else 0.0
+
+    totals = {
+        "requests": sum(b["requests"] for b in per_bot.values()),
+        "bytes": sum(b["bytes"] for b in per_bot.values()),
+        "bots": len(per_bot),
+    }
+    return {"totals": totals, "per_bot": per_bot}
+
+
+# ── Week-over-week diff ──────────────────────────────────────────────────────
+
+def compose_wow_diff(this_week: dict, last_week: Optional[dict]) -> dict:
+    """Compute notable week-over-week changes.
+
+    Returns a dict with four lists (`new_bots`, `disappeared_bots`,
+    `pace_shifts`, `error_spikes`) plus `had_baseline` so callers can
+    distinguish "no baseline" from "baseline showed nothing notable".
+    """
+    out = {
+        "new_bots": [],
+        "disappeared_bots": [],
+        "pace_shifts": [],
+        "error_spikes": [],
+        "had_baseline": bool(last_week and (last_week.get("per_bot") or {})),
+    }
+    cur_per = (this_week or {}).get("per_bot") or {}
+    prev_per = (last_week or {}).get("per_bot") or {}
+
+    if not out["had_baseline"]:
+        # First-ever run — every active bot is "new" but flagging them all
+        # as alerts would be noisy. Just record that the baseline is empty
+        # so the renderer can say so; populate `new_bots` with the headline
+        # active list for context.
+        for name, bot in cur_per.items():
+            if bot["requests"] >= WOW_MIN_SAMPLE:
+                out["new_bots"].append({"name": name, "requests": bot["requests"]})
+        out["new_bots"].sort(key=lambda x: -x["requests"])
+        return out
+
+    for name, bot in cur_per.items():
+        cur_req = bot["requests"]
+        prev = prev_per.get(name)
+        if prev is None and cur_req >= WOW_MIN_SAMPLE:
+            out["new_bots"].append({"name": name, "requests": cur_req})
+            continue
+        if prev is None:
+            continue
+        prev_req = prev["requests"]
+        if max(cur_req, prev_req) < WOW_MIN_SAMPLE:
+            continue
+        # Pace shift: pace = req / hours_in_window. Use raw req ratio since
+        # both windows are 7 days (168 h).
+        if prev_req == 0:
+            ratio = float("inf") if cur_req > 0 else 0.0
+        else:
+            ratio = (cur_req - prev_req) / prev_req
+        if abs(ratio) >= WOW_PACE_DELTA_THRESHOLD:
+            out["pace_shifts"].append({
+                "name": name,
+                "this_week": cur_req,
+                "last_week": prev_req,
+                "delta_pct": round(ratio * 100.0, 1),
+            })
+        # Error-rate spike: difference in (4xx+5xx)/total above threshold.
+        err_delta = bot["error_rate"] - prev["error_rate"]
+        if err_delta >= WOW_ERROR_RATE_THRESHOLD:
+            out["error_spikes"].append({
+                "name": name,
+                "this_week_pct": round(bot["error_rate"] * 100.0, 2),
+                "last_week_pct": round(prev["error_rate"] * 100.0, 2),
+                "delta_pp": round(err_delta * 100.0, 2),
+            })
+
+    for name, prev in prev_per.items():
+        if name in cur_per:
+            continue
+        if prev["requests"] >= WOW_MIN_SAMPLE:
+            out["disappeared_bots"].append({
+                "name": name,
+                "last_week_requests": prev["requests"],
+            })
+
+    out["new_bots"].sort(key=lambda x: -x["requests"])
+    out["pace_shifts"].sort(key=lambda x: -abs(x["delta_pct"]))
+    out["error_spikes"].sort(key=lambda x: -x["delta_pp"])
+    out["disappeared_bots"].sort(key=lambda x: -x["last_week_requests"])
+    return out
+
+
+# ── Markdown rendering ───────────────────────────────────────────────────────
+
+def _fmt_bytes(n: int) -> str:
+    if n < 1024:
+        return f"{n} B"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    if n < 1024 * 1024 * 1024:
+        return f"{n / (1024 * 1024):.1f} MB"
+    return f"{n / (1024 * 1024 * 1024):.2f} GB"
+
+
+def format_report_markdown(data: dict, *, since_iso: str, until_iso: str,
+                            zone_id: str, generated_at: datetime,
+                            wow: Optional[dict] = None) -> str:
+    """Render the per-UA report as the same markdown shape as the hand-run
+    reports in `.local/reports/`."""
+    totals = data.get("totals") or {"requests": 0, "bytes": 0, "bots": 0}
+    per_bot = data.get("per_bot") or {}
+    sorted_bots = sorted(per_bot.items(), key=lambda kv: -kv[1]["requests"])
+
+    lines: list[str] = []
+    lines.append("# Search Engine Crawler Traffic — Per User-Agent")
+    lines.append(f"_Window: {since_iso} → {until_iso}_")
+    lines.append(f"_Zone: `{zone_id}`_")
+    lines.append(f"_Generated: {generated_at.isoformat()}_")
+    lines.append("")
+    lines.append("## Summary")
+    lines.append(f"- **Total verified search-bot requests:** {totals['requests']:,}")
+    lines.append(f"- **Bytes served to search bots:** {_fmt_bytes(totals['bytes'])}")
+    lines.append(f"- **Distinct crawlers detected:** {totals['bots']}")
+    if sorted_bots:
+        top_name, top_bot = sorted_bots[0]
+        pct = (100.0 * top_bot["requests"] / totals["requests"]) if totals["requests"] else 0.0
+        lines.append(f"- **Top crawler:** **{top_name}** — {top_bot['requests']:,} req ({pct:.1f}%)")
+    lines.append("")
+
+    if wow is not None:
+        lines.append("## Week-over-week changes")
+        if not wow.get("had_baseline"):
+            lines.append("_No prior-week baseline found — this is the first stored run._")
+            if wow["new_bots"]:
+                lines.append("")
+                lines.append("**Currently active crawlers:**")
+                for b in wow["new_bots"]:
+                    lines.append(f"- {b['name']} — {b['requests']:,} req")
+        else:
+            had_anything = False
+            if wow["new_bots"]:
+                had_anything = True
+                lines.append("**New crawlers this week:**")
+                for b in wow["new_bots"]:
+                    lines.append(f"- {b['name']} — {b['requests']:,} req (no traffic last week)")
+                lines.append("")
+            if wow["disappeared_bots"]:
+                had_anything = True
+                lines.append("**Crawlers that stopped this week:**")
+                for b in wow["disappeared_bots"]:
+                    lines.append(f"- {b['name']} — {b['last_week_requests']:,} req last week → 0 this week")
+                lines.append("")
+            if wow["pace_shifts"]:
+                had_anything = True
+                lines.append(f"**Pace shifts > ±{int(WOW_PACE_DELTA_THRESHOLD * 100)}%:**")
+                for s in wow["pace_shifts"]:
+                    arrow = "▲" if s["delta_pct"] > 0 else "▼"
+                    lines.append(
+                        f"- {s['name']}: {s['last_week']:,} → {s['this_week']:,} "
+                        f"({arrow} {s['delta_pct']:+.1f}%)"
+                    )
+                lines.append("")
+            if wow["error_spikes"]:
+                had_anything = True
+                lines.append(f"**4xx/5xx spikes ≥ {int(WOW_ERROR_RATE_THRESHOLD * 100)}pp:**")
+                for s in wow["error_spikes"]:
+                    lines.append(
+                        f"- {s['name']}: {s['last_week_pct']}% → {s['this_week_pct']}% "
+                        f"(▲ {s['delta_pp']:+.2f}pp)"
+                    )
+                lines.append("")
+            if not had_anything:
+                lines.append("_No notable changes vs prior week (within thresholds)._")
+        lines.append("")
+
+    lines.append("## Per-crawler totals")
+    lines.append("")
+    lines.append("| Crawler | Requests | % of search bots | Bytes served | Cache hit % | Error rate |")
+    lines.append("|---|---:|---:|---:|---:|---:|")
+    for name, bot in sorted_bots:
+        pct = (100.0 * bot["requests"] / totals["requests"]) if totals["requests"] else 0.0
+        lines.append(
+            f"| {name} | {bot['requests']:,} | {pct:.1f}% | {_fmt_bytes(bot['bytes'])} "
+            f"| {bot['hit_pct']}% | {bot['error_rate'] * 100:.2f}% |"
+        )
+    lines.append(f"| **Total** | **{totals['requests']:,}** | **100.0%** | **{_fmt_bytes(totals['bytes'])}** | — | — |")
+    lines.append("")
+
+    lines.append("## HTTP status breakdown per crawler")
+    lines.append("")
+    lines.append("| Crawler | 2xx | 3xx | 4xx | 5xx |")
+    lines.append("|---|---:|---:|---:|---:|")
+    for name, bot in sorted_bots:
+        bs = bot["by_status"]
+        lines.append(f"| {name} | {bs['2xx']} | {bs['3xx']} | {bs['4xx']} | {bs['5xx']} |")
+    lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+# ── Top-level entry ──────────────────────────────────────────────────────────
+
+async def generate_per_ua_report(*, days: int = 7,
+                                  prior: Optional[dict] = None,
+                                  now: Optional[datetime] = None) -> Optional[dict]:
+    """End-to-end report generation. Returns
+    ``{"data": agg, "wow": diff, "markdown": str, "since": iso, "until": iso}``
+    or None when the Cloudflare credentials are missing/the API call fails.
+
+    ``prior`` should be the previous run's ``data`` dict (i.e. the
+    ``aggregate_per_ua`` shape) if available; passing None disables the
+    week-over-week diff section.
+    """
+    if not is_configured():
+        return None
+    cfg = _cfg()
+    zone_id = cfg["zone_id"]
+    end = now or datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    since_iso = start.strftime("%Y-%m-%dT%H:%M:%SZ")
+    until_iso = end.strftime("%Y-%m-%dT%H:%M:%SZ")
+    buckets = await _fetch_per_ua_buckets(zone_id, since_iso, until_iso)
+    if buckets is None:
+        return None
+    data = aggregate_per_ua(buckets)
+    wow = compose_wow_diff(data, prior) if prior is not None else None
+    md = format_report_markdown(
+        data, since_iso=since_iso, until_iso=until_iso,
+        zone_id=zone_id, generated_at=end, wow=wow,
+    )
+    return {
+        "data": data,
+        "wow": wow,
+        "markdown": md,
+        "since": since_iso,
+        "until": until_iso,
+        "zone_id": zone_id,
+        "generated_at": end.isoformat(),
+    }

@@ -2682,3 +2682,297 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
     except Exception as e:
         logger.error(f"IndexNow stats fetch failed: {e}")
         return {"total_pushes": 0, "total_urls_pushed": 0, "last_push": None, "by_source": [], "pending": 0, "endpoint_health": []}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cloudflare per-UA crawler report (Task #315)
+# Weekly job that snapshots verified-search-bot traffic per crawler and
+# stores the markdown + raw aggregates in `db.cf_bot_reports` (one doc per
+# ISO week). Mirrors the same Mon 03:30 UTC ±15min window pattern as the
+# SEO weekly digest, offset by 30 minutes (04:00 UTC) so the two jobs
+# don't pile onto the same five-minute poll tick.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CF_BOT_REPORT_LOCK_ID = "cf_bot_report_lock"
+_CF_BOT_REPORT_API_CONFIG_KEY = "cf_bot_report_last_iso_week"
+_CF_BOT_REPORT_COLLECTION = "cf_bot_reports"
+_CF_BOT_REPORT_TARGET_WEEKDAY = 0       # Monday
+_CF_BOT_REPORT_TARGET_HOUR_UTC = 4      # 04:00 UTC ≈ 09:30 IST
+_CF_BOT_REPORT_TARGET_MINUTE_UTC = 0
+_CF_BOT_REPORT_TOLERANCE_MINUTES = 15
+_CF_BOT_REPORT_LOOP_SLEEP_S = 300       # 5 min poll
+_CF_BOT_REPORT_WARMUP_S = 900           # 15 min after boot before first tick
+# Where the loop drops the dated markdown file (matches the existing
+# hand-run report layout in `.local/reports/`). Overridable via
+# CF_BOT_REPORT_DIR for tests / non-Replit environments. We resolve the
+# default lazily so production deployments without a writable `.local/`
+# don't fail the whole loop — `_write_cf_report_to_disk` swallows IOErrors.
+_CF_BOT_REPORT_FILE_PREFIX = "cloudflare-search-bots-per-ua-"
+
+
+def _cf_bot_report_dir() -> str:
+    import pathlib
+    override = os.getenv("CF_BOT_REPORT_DIR", "").strip()
+    if override:
+        return override
+    # Walk up from this file: routes/ → syrabit-backend/ → artifacts/ → repo
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    return str(repo_root / ".local" / "reports")
+
+
+def _write_cf_report_to_disk(markdown: str, raw_data: dict, now_utc: datetime) -> Optional[str]:
+    """Write the markdown + JSON sidecar to `.local/reports/`. Returns the
+    absolute path on success, None on any IOError (so the loop never
+    crashes when running on a read-only deploy)."""
+    import pathlib
+    try:
+        target_dir = pathlib.Path(_cf_bot_report_dir())
+        target_dir.mkdir(parents=True, exist_ok=True)
+        date_tag = now_utc.strftime("%Y-%m-%d")
+        md_path = target_dir / f"{_CF_BOT_REPORT_FILE_PREFIX}{date_tag}.md"
+        md_path.write_text(markdown, encoding="utf-8")
+        sidecar = md_path.with_suffix(".json")
+        sidecar.write_text(json.dumps(raw_data, indent=2), encoding="utf-8")
+        return str(md_path)
+    except OSError as exc:
+        logger.info(f"[CF bot report] disk write skipped ({exc.__class__.__name__}: {exc})")
+        return None
+    except Exception as exc:
+        logger.warning(f"[CF bot report] unexpected disk-write error: {exc}")
+        return None
+
+
+def _should_run_cf_bot_report_now(now_utc: datetime, last_iso_week: str) -> bool:
+    """Pure gate predicate (mirror of `_should_send_weekly_digest_now`).
+
+    Returns True iff `now_utc` is inside Monday 04:00 UTC ±15 min and we
+    have not already produced a report for the current ISO week.
+    """
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    if now_utc.weekday() != _CF_BOT_REPORT_TARGET_WEEKDAY:
+        return False
+    target = now_utc.replace(
+        hour=_CF_BOT_REPORT_TARGET_HOUR_UTC,
+        minute=_CF_BOT_REPORT_TARGET_MINUTE_UTC,
+        second=0, microsecond=0,
+    )
+    delta_minutes = abs((now_utc - target).total_seconds()) / 60.0
+    if delta_minutes > _CF_BOT_REPORT_TOLERANCE_MINUTES:
+        return False
+    return _iso_week_tag(now_utc) != (last_iso_week or "")
+
+
+async def _claim_cf_bot_report_slot(db, cur_iso_week: str) -> bool:
+    """Atomic compare-and-set on `db.job_locks[_CF_BOT_REPORT_LOCK_ID]`.
+
+    Identical pattern to `_claim_weekly_digest_slot` — separate doc id so
+    the two weekly jobs don't collide.
+    """
+    from pymongo.errors import DuplicateKeyError
+
+    try:
+        res = await db.job_locks.find_one_and_update(
+            {
+                "_id": _CF_BOT_REPORT_LOCK_ID,
+                _CF_BOT_REPORT_API_CONFIG_KEY: {"$ne": cur_iso_week},
+            },
+            {"$set": {_CF_BOT_REPORT_API_CONFIG_KEY: cur_iso_week}},
+            upsert=False,
+        )
+        if res is not None:
+            return True
+    except Exception as exc:
+        logger.debug(f"[CF bot report] CAS update failed: {exc}")
+        return False
+
+    try:
+        await db.job_locks.insert_one({
+            "_id": _CF_BOT_REPORT_LOCK_ID,
+            _CF_BOT_REPORT_API_CONFIG_KEY: cur_iso_week,
+        })
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception as exc:
+        logger.debug(f"[CF bot report] bootstrap insert failed: {exc}")
+        return False
+
+
+async def _load_prior_cf_bot_report(db) -> Optional[dict]:
+    """Fetch the most recent stored report's `data` block so the next run
+    can compute a week-over-week diff against it. Returns None on miss."""
+    try:
+        doc = await db[_CF_BOT_REPORT_COLLECTION].find_one(
+            {}, sort=[("generated_at", -1)],
+        )
+    except Exception as exc:
+        logger.debug(f"[CF bot report] prior load failed: {exc}")
+        return None
+    if not doc:
+        return None
+    return doc.get("data") or None
+
+
+async def _try_run_cf_bot_report_once(db, now_utc: datetime) -> dict:
+    """One iteration of the report loop, factored out for testability.
+
+    Returns a small status dict so tests can assert on the outcome
+    without inspecting Mongo state.
+    """
+    cur_iso_week = _iso_week_tag(now_utc)
+    try:
+        cfg = await db.job_locks.find_one(
+            {"_id": _CF_BOT_REPORT_LOCK_ID},
+            {"_id": 0, _CF_BOT_REPORT_API_CONFIG_KEY: 1},
+        ) or {}
+    except Exception:
+        cfg = {}
+    last_run = cfg.get(_CF_BOT_REPORT_API_CONFIG_KEY, "")
+    if not _should_run_cf_bot_report_now(now_utc, last_run):
+        return {"claimed": False, "stored": False, "reason": "outside_window_or_dedup"}
+
+    if not await _claim_cf_bot_report_slot(db, cur_iso_week):
+        return {"claimed": False, "stored": False, "reason": "lost_race"}
+
+    from cf_bot_report import generate_per_ua_report
+
+    prior = await _load_prior_cf_bot_report(db)
+    try:
+        result = await generate_per_ua_report(prior=prior, now=now_utc)
+    except Exception as exc:
+        logger.warning(f"[CF bot report] generation crashed: {exc}")
+        result = None
+
+    if not result:
+        # Roll the marker back so a later poll inside the same window can
+        # retry (Cloudflare API blip, missing creds being added, etc.).
+        try:
+            await db.job_locks.update_one(
+                {
+                    "_id": _CF_BOT_REPORT_LOCK_ID,
+                    _CF_BOT_REPORT_API_CONFIG_KEY: cur_iso_week,
+                },
+                {"$set": {_CF_BOT_REPORT_API_CONFIG_KEY: last_run or ""}},
+            )
+        except Exception:
+            pass
+        return {"claimed": True, "stored": False, "reason": "generate_failed"}
+
+    doc = {
+        "iso_week": cur_iso_week,
+        "generated_at": now_utc,
+        "since": result["since"],
+        "until": result["until"],
+        "zone_id": result["zone_id"],
+        "data": result["data"],
+        "wow": result["wow"],
+        "markdown": result["markdown"],
+    }
+    try:
+        await db[_CF_BOT_REPORT_COLLECTION].update_one(
+            {"iso_week": cur_iso_week},
+            {"$set": doc},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.warning(f"[CF bot report] store failed: {exc}")
+        return {"claimed": True, "stored": False, "reason": f"store_error:{type(exc).__name__}"}
+
+    # Also drop a dated markdown + JSON sidecar into `.local/reports/` so
+    # the SEO/crawl-budget review workflow can keep using the file-based
+    # artifact path. No-op (logged at INFO) on read-only deploys.
+    disk_path = _write_cf_report_to_disk(result["markdown"], result["data"], now_utc)
+
+    logger.info(
+        f"[CF bot report] stored weekly report for {cur_iso_week} "
+        f"({result['data']['totals']['requests']} req, "
+        f"{result['data']['totals']['bots']} crawlers)"
+        + (f" → {disk_path}" if disk_path else "")
+    )
+    return {"claimed": True, "stored": True, "iso_week": cur_iso_week,
+            "totals": result["data"]["totals"], "file_path": disk_path}
+
+
+async def _cf_bot_report_loop():
+    """Background loop for the weekly Cloudflare per-UA crawler report.
+
+    Polls every 5 min, fires inside Mon 04:00 UTC ±15 min, dedup'd via
+    `_claim_cf_bot_report_slot`. Boots after a 15-min warmup so we don't
+    contend for resources during deploy churn.
+    """
+    from deps import db, is_mongo_available
+    await asyncio.sleep(_CF_BOT_REPORT_WARMUP_S)
+    while True:
+        try:
+            now_utc = datetime.now(timezone.utc)
+            if await is_mongo_available():
+                await _try_run_cf_bot_report_once(db, now_utc)
+        except Exception as exc:
+            logger.debug(f"[CF bot report] loop iteration error: {exc}")
+        await asyncio.sleep(_CF_BOT_REPORT_LOOP_SLEEP_S)
+
+
+@router.get("/admin/cf-bot-report/latest")
+async def admin_cf_bot_report_latest(admin: dict = Depends(get_admin_user)):
+    """Return the most recent stored weekly Cloudflare crawler report.
+
+    Useful for the admin SEO dashboard and for the `.local/scripts/`
+    CLI to fetch the latest production-generated report without
+    re-querying Cloudflare.
+    """
+    from deps import db
+    try:
+        doc = await db[_CF_BOT_REPORT_COLLECTION].find_one(
+            {}, sort=[("generated_at", -1)],
+        )
+    except Exception as exc:
+        logger.warning(f"cf_bot_report fetch failed: {exc}")
+        raise HTTPException(status_code=500, detail="report_fetch_failed")
+    if not doc:
+        return {"available": False}
+    doc.pop("_id", None)
+    gen = doc.get("generated_at")
+    if isinstance(gen, datetime):
+        doc["generated_at"] = gen.isoformat()
+    return {"available": True, "report": doc}
+
+
+@router.post("/admin/cf-bot-report/run")
+async def admin_cf_bot_report_run(admin: dict = Depends(get_admin_user)):
+    """Manually trigger a per-UA report generation. Useful for QA and for
+    operators who want to refresh the snapshot outside the weekly slot.
+    Bypasses the schedule gate but still goes through the same store +
+    WoW-diff path so the resulting doc looks identical to the cron run.
+    """
+    from deps import db
+    from cf_bot_report import generate_per_ua_report
+
+    now_utc = datetime.now(timezone.utc)
+    prior = await _load_prior_cf_bot_report(db)
+    result = await generate_per_ua_report(prior=prior, now=now_utc)
+    if not result:
+        raise HTTPException(status_code=503, detail="cloudflare_unavailable")
+    cur_iso_week = _iso_week_tag(now_utc)
+    doc = {
+        "iso_week": cur_iso_week,
+        "generated_at": now_utc,
+        "since": result["since"],
+        "until": result["until"],
+        "zone_id": result["zone_id"],
+        "data": result["data"],
+        "wow": result["wow"],
+        "markdown": result["markdown"],
+        "manual": True,
+    }
+    await db[_CF_BOT_REPORT_COLLECTION].update_one(
+        {"iso_week": cur_iso_week}, {"$set": doc}, upsert=True,
+    )
+    disk_path = _write_cf_report_to_disk(result["markdown"], result["data"], now_utc)
+    return {
+        "stored": True,
+        "iso_week": cur_iso_week,
+        "totals": result["data"]["totals"],
+        "wow": result["wow"],
+        "file_path": disk_path,
+    }
