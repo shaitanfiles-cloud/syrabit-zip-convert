@@ -371,6 +371,15 @@ async def lifespan(app):
 
             await db.analytics_daily_totals.create_index([("date", 1), ("source", 1)], unique=True)
 
+            await db.indexnow_push_log.create_index(
+                "pushed_at", expireAfterSeconds=90 * 24 * 3600,
+                name="pushed_at_ttl_90d",
+            )
+            await db.indexnow_push_log.create_index(
+                [("source", 1), ("pushed_at", -1)],
+                name="source_pushed_at",
+            )
+
             try:
                 await db.chapters.create_index(
                     [("title", "text"), ("content", "text")],

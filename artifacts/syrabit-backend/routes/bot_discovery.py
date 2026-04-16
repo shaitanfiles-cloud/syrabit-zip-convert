@@ -481,7 +481,7 @@ async def _log_indexnow_push(urls: List[str], source: str, results: dict):
             "urls_sample": urls[:20],
             "source": source,
             "results": results,
-            "pushed_at": datetime.now(timezone.utc).isoformat(),
+            "pushed_at": datetime.now(timezone.utc),
         })
     except Exception as e:
         logger.debug(f"IndexNow log write failed: {e}")
@@ -958,12 +958,12 @@ async def admin_indexnow_stats(admin: dict = Depends(get_admin_user)):
         ]
         by_source = await db.indexnow_push_log.aggregate(by_source_pipeline).to_list(20)
 
-        today_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         today_pushes = await db.indexnow_push_log.count_documents(
-            {"pushed_at": {"$gte": today_iso}}
+            {"pushed_at": {"$gte": today_start}}
         )
         today_url_pipeline = [
-            {"$match": {"pushed_at": {"$gte": today_iso}}},
+            {"$match": {"pushed_at": {"$gte": today_start}}},
             {"$group": {"_id": None, "total": {"$sum": "$url_count"}}},
         ]
         today_url_sum = await db.indexnow_push_log.aggregate(today_url_pipeline).to_list(1)
