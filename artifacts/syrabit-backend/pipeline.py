@@ -122,7 +122,7 @@ def _pick_stage1_providers() -> list:
     from config import _CEREBRAS_KEY, _GROQ_KEY
     providers = []
     if _CEREBRAS_KEY:
-        providers.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
+        providers.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b-versatile"})
     if _GROQ_KEY:
         providers.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
     for p in _LLM_PROVIDERS:

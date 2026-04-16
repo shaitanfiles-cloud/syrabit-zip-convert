@@ -173,7 +173,7 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
     _chat_t0 = _time_mod.time()
     is_anon = user is None
 
-    if CF_TURNSTILE_ENABLED:
+    if CF_TURNSTILE_ENABLED and is_anon:
         _ts_tok = request.headers.get("x-turnstile-token", "")
         _ts_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "")
         if not _ts_tok:
@@ -256,6 +256,7 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
         _ns_fetch_stage1_early(),
         _ns_fetch_followup(),
         _ns_prefetch_history(),
+        _fetch_internal_chapters(msg.message, subject_id=msg.subject_id, subject_name=msg.subject_name) if (msg.subject_id or msg.subject_name) else asyncio.sleep(0),
         return_exceptions=True,
     )
     _subj_ctx_result = _phase0_results[0] if not isinstance(_phase0_results[0], BaseException) else {}
@@ -264,6 +265,7 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
     _topic_metadata = _phase0_results[3] if not isinstance(_phase0_results[3], BaseException) else None
     _followup_info = _phase0_results[4] if not isinstance(_phase0_results[4], BaseException) else None
     _prefetched_conv = _phase0_results[5] if not isinstance(_phase0_results[5], BaseException) else None
+    _prefetched_chapters = _phase0_results[6] if not isinstance(_phase0_results[6], BaseException) else []
     for _i, _r in enumerate(_phase0_results):
         if isinstance(_r, BaseException):
             logger.warning(f"[NON-STREAM] Phase 0 task {_i} failed (degrading gracefully): {_r}")
@@ -284,6 +286,8 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
     _syl_class_id = _sem_class_result or ctx_class_id
     if _sem_class_result:
         logger.info(f"Chat [NON-STREAM]: Semester override class_id={_sem_class_result} (from query)")
+
+    _original_message = msg.message
 
     if _followup_info:
         _detected_intent = _followup_info["prev_intent"]
@@ -370,14 +374,19 @@ async def chat(msg: ChatMessage, request: Request, user: Optional[dict] = Depend
     if _s1_subject_str:
         rag_ctx["_stage1_subject"] = _s1_subject_str
 
-    if document_text:
-        rag_ctx = await resolve_rag_context(
-            _rag_query, subject_id=msg.subject_id, subject_name=msg.subject_name,
-            document_text=document_text, intent=_detected_intent,
-        )
+    _use_prefetched = _prefetched_chapters if (_prefetched_chapters and _rag_query == _original_message) else None
+    rag_ctx = await resolve_rag_context(
+        _rag_query, subject_id=msg.subject_id, subject_name=msg.subject_name,
+        document_text=document_text, intent=_detected_intent,
+        prefetched_chapters=_use_prefetched,
+    )
+    if _s1_subject_str:
+        rag_ctx["_stage1_subject"] = _s1_subject_str
+
+    _has_internal = rag_ctx.get("_has_internal_content") or rag_ctx.get("source") in ("document", "internal")
 
     async def _ns_fetch_web():
-        if _is_casual_sync or document_text:
+        if _is_casual_sync or document_text or _has_internal:
             return []
         try:
             return await web_search_with_fallback(
@@ -752,7 +761,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         if _raw_anon and re.match(r"^anon_[a-f0-9]{32}$", _raw_anon):
             anon_id = _raw_anon
 
-    if CF_TURNSTILE_ENABLED:
+    if CF_TURNSTILE_ENABLED and is_anon:
         _ts_tok = request.headers.get("x-turnstile-token", "")
         _ts_ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() if request.headers.get("x-forwarded-for") else (request.client.host if request.client else "")
         if not _ts_tok:
@@ -962,7 +971,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         _tasks_pre = []
         _defaults_pre = []
         _pre_results = []
-        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web = None, None, None, None, None, []
+        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web, _s_prefetched_chapters = None, None, None, None, None, [], []
         _done_pre, _pending_pre = set(), set()
         logger.info("[STREAM] Casual fast-path: skipping Phase 0 entirely")
     else:
@@ -973,8 +982,9 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             asyncio.create_task(_fetch_followup_info()),
             asyncio.create_task(_prefetch_history()),
             asyncio.create_task(_early_web_search()),
+            asyncio.create_task(_fetch_internal_chapters(msg.message, subject_id=msg.subject_id, subject_name=msg.subject_name) if (msg.subject_id or msg.subject_name) else asyncio.sleep(0)),
         ]
-        _defaults_pre = [None, None, None, None, None, []]
+        _defaults_pre = [None, None, None, None, None, [], []]
 
         _done_pre, _pending_pre = await asyncio.wait(_tasks_pre, timeout=_PRE_LLM_BUDGET, return_when=asyncio.ALL_COMPLETED)
     if _pending_pre:
@@ -993,7 +1003,7 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             _pre_results.append(_defaults_pre[_i])
 
     if _pre_results:
-        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web = _pre_results
+        _subj_ctx_result, _sem_class_result, document_text, _stream_followup_info, _prefetched_conv, _early_web, _s_prefetched_chapters = _pre_results
 
     _s_topic_meta = None
     if _stage1_task:
@@ -1005,6 +1015,8 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         else:
             logger.info("[STREAM] Stage 1 still pending after gather — proceeding without it (non-blocking)")
             _s_topic_meta = None
+
+    _s_original_message = msg.message
 
     _is_followup_s = False
     if _stream_followup_info:
@@ -1101,11 +1113,14 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
         rag_ctx["_stage1_subject"] = _s1_subject_str
     raw_conv = _prefetched_conv
 
-    if document_text:
-        rag_ctx = await resolve_rag_context(
-            _s_rag_query, subject_id=msg.subject_id, subject_name=msg.subject_name,
-            document_text=document_text, intent=_stream_intent,
-        )
+    _s_use_prefetched = _s_prefetched_chapters if (_s_prefetched_chapters and _s_rag_query == _s_original_message) else None
+    rag_ctx = await resolve_rag_context(
+        _s_rag_query, subject_id=msg.subject_id, subject_name=msg.subject_name,
+        document_text=document_text, intent=_stream_intent,
+        prefetched_chapters=_s_use_prefetched,
+    )
+    if _s1_subject_str:
+        rag_ctx["_stage1_subject"] = _s1_subject_str
 
     web_results = []
 

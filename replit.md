@@ -46,7 +46,7 @@ The project is structured as a pnpm workspace monorepo, with a React + Vite fron
 - **Security:** Uses ASGI-native `SecurityHeadersMiddleware` and prompt safety guardrails. Spoofed bot UA monitoring tracks failed bot verification attempts across both edge proxy (KV-based counters with `SPOOF_ALERT` console warnings at thresholds 50/200/500 per minute) and backend (MongoDB `bot_spoof_attempts` collection with in-memory metrics). Admin dashboard at `GET /api/admin/security/spoofed-bots` shows daily trends, top claimed bots, repeat offender IPs, and real-time RPM. Alerting via `_dispatch_alert("spoofed_bot_surge")` fires when spoof RPM exceeds threshold (default 50). Auto-block: IPs exceeding a configurable spoof threshold (default 100 attempts in 24h) are automatically added to `blocked_ips` with reason `auto_threshold` and `blocked_by: system/auto-block`. Threshold is configurable via admin alert settings (`auto_block_threshold` in `_ALERT_THRESHOLDS`). Auto-blocks trigger `_dispatch_alert("auto_block_ip")` notifications and are visually distinguished in the admin UI with an "Auto" badge.
 - **Privacy:** Tracks DPDP Act consent per-user.
 - **Performance Optimizations:** Includes bounded content caching (in-memory + Redis), efficient JWT decoding, thread pooling, MongoDB compound indexes, hierarchy caching, AsyncOpenAI client pooling, fully parallelized chat pre-processing, and throttled LLM health probes.
-- **Chat Latency:** Achieves sub-1s TTFT for English queries via hedged requests (TTFT timeout: 0.35s, Phase 0 budget: 150ms). Casual queries skip Phase 0 entirely when no context is provided. Redis cache check is async (non-blocking via run_in_executor). Assamese queries around 1.4-2.1s.
+- **Chat Latency:** Achieves sub-1s TTFT for English queries via hedged requests (TTFT timeout: 0.35s, Phase 0 budget: 150ms). Casual queries skip Phase 0 entirely when no context is provided. Redis cache check is async (non-blocking via run_in_executor). Assamese queries around 1.4-2.1s. Authenticated users bypass Turnstile verification (~200-400ms saved). Internal MongoDB chapter lookup runs in Phase 0 parallel gather, with query-rewrite invalidation for correctness. Web search is skipped when internal content is found.
 - **Response Length:** Concise by default (30-60 words), hard limit 200 words, with specific prompt guidelines for various query types.
 
 ## External Dependencies
@@ -55,7 +55,7 @@ The project is structured as a pnpm workspace monorepo, with a React + Vite fron
 - **Authentication:** Supabase (mirror for PostgreSQL), JWT helpers, Google OAuth. E2e test admin account (`e2e-admin@syrabit.test` / `e2e-test-admin-2026`) enabled only when `ENABLE_E2E_ADMIN=true` env var is set (development only, never in production).
 - **Caching:** Redis, in-memory caching, Cloudflare Worker edge caching.
 - **LLM Providers:**
-    - **Chat:** Groq, Cerebras, OpenRouter, Fireworks (SLM pool).
+    - **Chat:** Groq (Llama 4 Scout), Cerebras (llama-3.3-70b-versatile), OpenRouter (Llama 4 Scout) — SLM pool.
     - **Content Generation:** Cerebras (primary), Sarvam (fallback), Gemini 2.5-flash (last resort), Gemini Vision, gemini-embedding-001.
 - **Cloudflare AI Gateway:** Routes LLM traffic, provides caching, analytics, and graceful degradation. Gateway 401 auth errors trigger automatic fallback to direct provider URLs with a 5-minute cooldown before retrying the gateway.
 - **Payment Gateways:** Razorpay (INR), Stripe (USD).

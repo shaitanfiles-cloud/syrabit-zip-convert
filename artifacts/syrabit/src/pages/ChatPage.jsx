@@ -200,7 +200,7 @@ export default function ChatPage() {
   }, []);
 
   const sendMsg = async (text) => {
-    if (!text.trim() || isLoading || isOutOfCredits || (turnstileEnabled && !turnstileReady)) return;
+    if (!text.trim() || isLoading || isOutOfCredits || (!user && turnstileEnabled && !turnstileReady)) return;
     const msgId = Date.now().toString();
     const userMsg = { id: msgId + '_u', role: 'user', content: text, timestamp: new Date().toISOString() };
     const aiMsgId = msgId + '_a';
@@ -224,9 +224,11 @@ export default function ChatPage() {
     };
     try {
       const fetchHeaders = { 'Content-Type': 'application/json' };
-      if (!user) fetchHeaders['x-anon-id'] = getAnonId();
-      const _tsToken = await getTurnstileToken();
-      if (_tsToken) fetchHeaders['x-turnstile-token'] = _tsToken;
+      if (!user) {
+        fetchHeaders['x-anon-id'] = getAnonId();
+        const _tsToken = await getTurnstileToken();
+        if (_tsToken) fetchHeaders['x-turnstile-token'] = _tsToken;
+      }
       const response = await fetch(`${API_BASE}/ai/chat/stream`, {
         method: 'POST', headers: fetchHeaders,
         credentials: 'include', body: JSON.stringify(payload), signal: controller.signal,

@@ -189,7 +189,7 @@ if _GROQ_KEY:
 if _GROQ_KEY_2 and _GROQ_KEY_2 != _GROQ_KEY:
     _LLM_PROVIDERS.append({"provider": "groq",         "key": _GROQ_KEY_2,     "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama3.1-8b"})
+    _LLM_PROVIDERS.append({"provider": "cerebras",    "key": _CEREBRAS_KEY,   "default_model": "llama-3.3-70b-versatile"})
 if _GEMINI_KEY:
     _LLM_PROVIDERS.append({"provider": "gemini",      "key": _GEMINI_KEY,     "default_model": "gemini-2.5-flash"})
 if _GEMINI_KEY_2 and _GEMINI_KEY_2 != _GEMINI_KEY:
@@ -203,7 +203,7 @@ _LLM_PROVIDERS_CHAT: list[dict] = []
 if _GROQ_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "groq", "key": _GROQ_KEY, "default_model": "meta-llama/llama-4-scout-17b-16e-instruct"})
 if _CEREBRAS_KEY:
-    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama3.1-8b"})
+    _LLM_PROVIDERS_CHAT.append({"provider": "cerebras", "key": _CEREBRAS_KEY, "default_model": "llama-3.3-70b-versatile"})
 if _OPENROUTER_KEY:
     _LLM_PROVIDERS_CHAT.append({"provider": "openrouter", "key": _OPENROUTER_KEY, "default_model": "meta-llama/llama-4-scout"})
 
@@ -226,13 +226,12 @@ _MODEL_PROVIDER_MAP = {
     "meta-llama/llama-4-maverick": "openrouter",
     "meta-llama/llama-4-scout": "openrouter",
     "meta-llama/llama-4-scout-17b-16e-instruct": "groq",
-    "llama-3.3-70b-versatile": "groq",
+    "llama-3.3-70b-versatile": "cerebras",
 }
 
 _MODEL_ALIAS_MAP = {
     "openai/gpt-oss-20b": "deepseek/deepseek-chat-v3-0324",
     "openai/gpt-oss-120b": "qwen-3-235b-a22b-instruct-2507",
-    "llama-3.3-70b-versatile": "deepseek/deepseek-chat-v3-0324",
 }
 
 # ── SLM slot table ────────────────────────────────────────────────────────────
@@ -242,7 +241,7 @@ _MODEL_ALIAS_MAP = {
 #
 _SLM_SLOT_CANDIDATES = [
     ("groq",        "meta-llama/llama-4-scout-17b-16e-instruct",         4, 0),
-    ("cerebras",    "llama3.1-8b",                                       4, 1),
+    ("cerebras",    "llama-3.3-70b-versatile",                             4, 1),
     ("openrouter",  "meta-llama/llama-4-scout",                          4, 2),
 ]
 

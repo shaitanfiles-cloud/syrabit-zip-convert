@@ -3161,3 +3161,93 @@ async def admin_unblock_ip(
     return {"ok": True, "ip_hash": ip_hash}
 
 
+@router.post("/admin/cache/warm")
+async def admin_cache_warm(
+    top_n: int = Body(default=20, embed=True),
+    admin: dict = Depends(get_admin_user),
+):
+    if top_n < 1 or top_n > 100:
+        raise HTTPException(400, "top_n must be 1-100")
+
+    try:
+        pipeline = [
+            {"$unwind": "$messages"},
+            {"$match": {"messages.role": "user"}},
+            {"$group": {
+                "_id": {"query": "$messages.content", "subject_id": "$metadata.subject_id", "board_id": "$metadata.board_id"},
+                "count": {"$sum": 1},
+            }},
+            {"$sort": {"count": -1}},
+            {"$limit": top_n},
+        ]
+        cursor = db.conversations.aggregate(pipeline)
+        top_queries = await cursor.to_list(length=top_n)
+    except Exception as e:
+        logger.warning(f"[CACHE_WARM] Failed to fetch top queries: {e}")
+        top_queries = []
+
+    if not top_queries:
+        return {"ok": True, "warmed": 0, "message": "No queries found to warm"}
+
+    from cache import _cache_key, _redis_get_ai_cache, _redis_set, _ai_response_cache
+    from config import REDIS_AI_CACHE_TTL
+
+    already_cached = 0
+    to_warm = []
+    for q in top_queries:
+        _qid = q.get("_id", {})
+        query_text = (_qid.get("query") or "").strip() if isinstance(_qid, dict) else str(_qid).strip()
+        subject_id = (_qid.get("subject_id") or "") if isinstance(_qid, dict) else ""
+        board_id = (_qid.get("board_id") or "") if isinstance(_qid, dict) else ""
+        if not query_text or len(query_text) < 3:
+            continue
+        ck = _cache_key(query_text, subject_id=subject_id, board_id=board_id)
+        existing = _redis_get_ai_cache(ck)
+        if existing:
+            already_cached += 1
+        else:
+            to_warm.append({"query": query_text, "subject_id": subject_id, "board_id": board_id})
+
+    warmed = 0
+    failed = 0
+
+    async def _warm_single(item: dict):
+        nonlocal warmed, failed
+        query_text = item["query"]
+        try:
+            from prompts import build_system_prompt
+            system_prompt = build_system_prompt({}, query=query_text)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": query_text},
+            ]
+            answer = await asyncio.wait_for(
+                _call_llm_raw(messages, max_tokens=1024),
+                timeout=15.0,
+            )
+            if answer and len(str(answer)) > 10:
+                ck = _cache_key(query_text, subject_id=item.get("subject_id", ""), board_id=item.get("board_id", ""))
+                _redis_set("ai_cache", ck, str(answer), REDIS_AI_CACHE_TTL)
+                warmed += 1
+                logger.info(f"[CACHE_WARM] Warmed: '{query_text[:50]}' ({len(str(answer))} chars)")
+            else:
+                failed += 1
+        except Exception as e:
+            failed += 1
+            logger.warning(f"[CACHE_WARM] Failed for '{query_text[:50]}': {e}")
+
+    batch_size = 3
+    for i in range(0, len(to_warm), batch_size):
+        batch = to_warm[i:i + batch_size]
+        await asyncio.gather(*[_warm_single(q) for q in batch])
+
+    logger.info(f"[CACHE_WARM] Done: warmed={warmed}, already_cached={already_cached}, failed={failed} (by {admin.get('email')})")
+    return {
+        "ok": True,
+        "warmed": warmed,
+        "already_cached": already_cached,
+        "failed": failed,
+        "total_queries": len(top_queries),
+    }
+
+

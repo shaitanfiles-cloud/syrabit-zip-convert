@@ -27,6 +27,7 @@ __all__ = [
     "rag_search", "rechunk_chapter", "vector_rag_search",
     "syrabit_library_search",
     "_fetch_content_card", "_fetch_enrichment_blocks",
+    "_fetch_internal_chapters",
     "_embed_and_store_chapter", "_embed_and_store_page", "_embed_cms_document",
     "web_search_with_fallback",
     "_sources_from_web_results",
@@ -336,6 +337,55 @@ def _extract_relevant_sections(document_text: str, query: str, char_limit: int =
     return document_text[:char_limit]
 
 
+async def _fetch_internal_chapters(
+    query: str,
+    subject_id: Optional[str] = None,
+    subject_name: Optional[str] = None,
+    limit: int = 3,
+    max_content_chars: int = 4000,
+) -> list:
+    if not is_mongo_available():
+        return []
+    try:
+        keywords = _extract_keywords(query)
+        if not keywords:
+            return []
+        filters: dict = {"status": "published"}
+        if subject_id:
+            filters["subject_id"] = subject_id
+        regex_pattern = "|".join(re.escape(kw) for kw in keywords[:6])
+        filters["$or"] = [
+            {"title": {"$regex": regex_pattern, "$options": "i"}},
+            {"content": {"$regex": regex_pattern, "$options": "i"}},
+        ]
+        cursor = db.chapters.find(filters, {"_id": 0, "id": 1, "title": 1, "content": 1, "slug": 1, "subject_id": 1, "description": 1}).limit(limit)
+        chapters = await cursor.to_list(length=limit)
+        result = []
+        total_chars = 0
+        for ch in chapters:
+            content = (ch.get("content") or ch.get("description") or "").strip()
+            if not content or len(content) < 30:
+                continue
+            if total_chars + len(content) > max_content_chars:
+                content = content[:max(500, max_content_chars - total_chars)]
+            total_chars += len(content)
+            result.append({
+                "title": ch.get("title", ""),
+                "content": content,
+                "slug": ch.get("slug", ""),
+                "subject_id": ch.get("subject_id", ""),
+                "type": "chapter",
+            })
+            if total_chars >= max_content_chars:
+                break
+        if result:
+            logger.info(f"[INTERNAL_RAG] Found {len(result)} chapter(s) for '{query[:50]}' (subject={subject_id or 'any'}, {total_chars} chars)")
+        return result
+    except Exception as e:
+        logger.warning(f"[INTERNAL_RAG] Chapter fetch failed: {e}")
+        return []
+
+
 async def resolve_rag_context(
     query: str,
     subject_id: Optional[str] = None,
@@ -345,6 +395,7 @@ async def resolve_rag_context(
     db_category: Optional[str] = None,
     pre_syl_match=None,
     topic_metadata: Optional[dict] = None,
+    prefetched_chapters: Optional[list] = None,
 ) -> dict:
     if document_text and document_text.strip():
         relevant = _extract_relevant_sections(document_text, query)
@@ -355,6 +406,15 @@ async def resolve_rag_context(
             "source": "document", "quality": "tier0",
             "intent": intent or "general",
         }
+    if intent not in ("casual", "general") and (subject_id or subject_name):
+        internal_chapters = prefetched_chapters if prefetched_chapters is not None else await _fetch_internal_chapters(query, subject_id=subject_id, subject_name=subject_name)
+        if internal_chapters:
+            return {
+                "chunks": internal_chapters, "chapters": internal_chapters, "subjects": [],
+                "vector_hits": [], "source": "internal", "quality": "tier1",
+                "intent": intent or "notes",
+                "_has_internal_content": True,
+            }
     return {
         "chunks": [], "chapters": [], "subjects": [],
         "vector_hits": [], "source": "none", "quality": "none",
@@ -558,6 +618,29 @@ def build_rag_system_prompt(
                 f"{document_text[:lib_budget]}\n\n"
                 "---\n"
             )
+            return _cap_and_return(base_prompt, grounding)
+
+    if source == "internal":
+        _internal_chapters = rag_context.get("chapters", [])
+        if _internal_chapters:
+            _int_budget = max(2000, 8000 - len(grounding))
+            grounding += (
+                "\n\n---\n"
+                "**REFERENCE MATERIAL (Internal Chapter Content):**\n"
+                "The following chapter excerpts are from the student's curriculum. "
+                "Use them as your primary factual base. Supplement with your knowledge for explanations.\n\n"
+            )
+            _int_chars = 0
+            for _ic in _internal_chapters:
+                _ic_title = _ic.get("title", "")
+                _ic_content = _ic.get("content", "")
+                if _ic_title:
+                    grounding += f"**{_ic_title}:**\n"
+                if _ic_content and _int_chars < _int_budget:
+                    _remaining = _int_budget - _int_chars
+                    grounding += f"{_ic_content[:_remaining]}\n\n"
+                    _int_chars += min(len(_ic_content), _remaining)
+            grounding += "---\n"
             return _cap_and_return(base_prompt, grounding)
 
     _extraction_rules = get_intent_extraction_rules(_intent)
