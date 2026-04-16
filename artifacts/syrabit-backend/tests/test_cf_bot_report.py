@@ -429,6 +429,54 @@ def test_try_run_writes_to_disk_after_storing(tmp_path, monkeypatch):
     assert expected.read_text() == "# disk write test\n"
 
 
+def test_catchup_skips_when_week_already_stored():
+    from routes import bot_discovery
+
+    db = MagicMock()
+    reports_coll = MagicMock()
+    reports_coll.find_one = AsyncMock(return_value={"_id": "exists"})
+    db.__getitem__.return_value = reports_coll
+
+    now = datetime(2026, 4, 16, 12, 0, tzinfo=timezone.utc)
+    result = asyncio.run(bot_discovery._cf_bot_report_catchup_if_missed(db, now))
+    assert result == {"ran": False, "reason": "already_have_week"}
+
+
+def test_catchup_runs_when_no_report_for_current_week(tmp_path, monkeypatch):
+    from routes import bot_discovery
+
+    monkeypatch.setenv("CF_BOT_REPORT_DIR", str(tmp_path))
+
+    fake_data = _agg({"Googlebot": {"requests": 50}})
+    fake_result = {
+        "data": fake_data,
+        "wow": compose_wow_diff(fake_data, None),
+        "markdown": "# catchup\n",
+        "since": "x", "until": "y", "zone_id": "z", "generated_at": "g",
+    }
+
+    db = MagicMock()
+    reports_coll = MagicMock()
+    # No existing doc for this week → catch-up should fire.
+    reports_coll.find_one = AsyncMock(return_value=None)
+    reports_coll.update_one = AsyncMock()
+    db.__getitem__.return_value = reports_coll
+    db.job_locks.find_one_and_update = AsyncMock(return_value=None)
+    db.job_locks.insert_one = AsyncMock()  # claim wins via path B
+    db.job_locks.update_one = AsyncMock()
+
+    # Wednesday — well outside the Monday window, exactly the catch-up case.
+    wed = datetime(2026, 4, 15, 12, 0, tzinfo=timezone.utc)
+    with patch("cf_bot_report.generate_per_ua_report",
+               new=AsyncMock(return_value=fake_result)):
+        result = asyncio.run(bot_discovery._cf_bot_report_catchup_if_missed(db, wed))
+
+    assert result["ran"] is True
+    reports_coll.update_one.assert_awaited_once()
+    args, _ = reports_coll.update_one.call_args
+    assert args[1]["$set"]["catch_up"] is True
+
+
 def test_try_run_rolls_back_marker_on_generate_failure():
     from routes import bot_discovery
 

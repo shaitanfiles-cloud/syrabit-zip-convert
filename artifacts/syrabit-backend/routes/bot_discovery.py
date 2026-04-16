@@ -2920,15 +2920,84 @@ async def _try_run_cf_bot_report_once(db, now_utc: datetime) -> dict:
             "totals": result["data"]["totals"], "file_path": disk_path}
 
 
+async def _cf_bot_report_catchup_if_missed(db, now_utc: datetime) -> dict:
+    """One-shot recovery: if we missed the Monday 04:00 window for the
+    current ISO week (e.g. service was down then), run the report once
+    on boot so the week isn't silently skipped.
+
+    Bypasses `_should_run_cf_bot_report_now`'s window check, but still
+    requires the dedup lock — so multiple replicas booting concurrently
+    can't double-fire. Only runs if no report exists for this ISO week.
+    """
+    cur_iso_week = _iso_week_tag(now_utc)
+    try:
+        existing = await db[_CF_BOT_REPORT_COLLECTION].find_one(
+            {"iso_week": cur_iso_week}, {"_id": 1},
+        )
+    except Exception as exc:
+        logger.debug(f"[CF bot report] catch-up lookup failed: {exc}")
+        return {"ran": False, "reason": "lookup_failed"}
+    if existing:
+        return {"ran": False, "reason": "already_have_week"}
+
+    if not await _claim_cf_bot_report_slot(db, cur_iso_week):
+        return {"ran": False, "reason": "lost_race"}
+
+    from cf_bot_report import generate_per_ua_report
+
+    prior = await _load_prior_cf_bot_report(db)
+    try:
+        result = await generate_per_ua_report(prior=prior, now=now_utc)
+    except Exception as exc:
+        logger.warning(f"[CF bot report] catch-up generate crashed: {exc}")
+        result = None
+    if not result:
+        # Roll back so a normal Monday-window poll can still run later.
+        try:
+            await db.job_locks.update_one(
+                {"_id": _CF_BOT_REPORT_LOCK_ID,
+                 _CF_BOT_REPORT_API_CONFIG_KEY: cur_iso_week},
+                {"$set": {_CF_BOT_REPORT_API_CONFIG_KEY: ""}},
+            )
+        except Exception:
+            pass
+        return {"ran": False, "reason": "generate_failed"}
+
+    doc = {
+        "iso_week": cur_iso_week, "generated_at": now_utc,
+        "since": result["since"], "until": result["until"],
+        "zone_id": result["zone_id"], "data": result["data"],
+        "wow": result["wow"], "markdown": result["markdown"],
+        "catch_up": True,
+    }
+    try:
+        await db[_CF_BOT_REPORT_COLLECTION].update_one(
+            {"iso_week": cur_iso_week}, {"$set": doc}, upsert=True,
+        )
+    except Exception as exc:
+        logger.warning(f"[CF bot report] catch-up store failed: {exc}")
+        return {"ran": False, "reason": "store_failed"}
+    _write_cf_report_to_disk(result["markdown"], result["data"], now_utc)
+    logger.info(f"[CF bot report] catch-up ran for missed week {cur_iso_week}")
+    return {"ran": True, "iso_week": cur_iso_week}
+
+
 async def _cf_bot_report_loop():
     """Background loop for the weekly Cloudflare per-UA crawler report.
 
-    Polls every 5 min, fires inside Mon 04:00 UTC ±15 min, dedup'd via
-    `_claim_cf_bot_report_slot`. Boots after a 15-min warmup so we don't
-    contend for resources during deploy churn.
+    On boot (after a 15-min warmup) runs `_cf_bot_report_catchup_if_missed`
+    once so a service outage during the Monday window doesn't silently
+    skip a week. Then polls every 5 min and fires inside Mon 04:00 UTC
+    ±15 min, dedup'd via `_claim_cf_bot_report_slot`.
     """
     from deps import db, is_mongo_available
     await asyncio.sleep(_CF_BOT_REPORT_WARMUP_S)
+    # Boot-time catch-up: heal any missed Monday window.
+    try:
+        if await is_mongo_available():
+            await _cf_bot_report_catchup_if_missed(db, datetime.now(timezone.utc))
+    except Exception as exc:
+        logger.debug(f"[CF bot report] catch-up error: {exc}")
     while True:
         try:
             now_utc = datetime.now(timezone.utc)
