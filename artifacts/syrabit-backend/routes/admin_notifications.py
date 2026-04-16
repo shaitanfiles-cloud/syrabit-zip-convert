@@ -712,8 +712,8 @@ async def admin_cleanup_orphan_chimes(admin: dict = Depends(get_admin_user)):
                         sf_name = sf.get("name", "") if isinstance(sf, dict) else str(sf)
                         if sf_name and sf.get("id") is not None:
                             all_paths.append(f"{_CHIME_PREFIX}/{name}/{sf_name}")
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Failed to list subfolder {_CHIME_PREFIX}/{name}: {e}")
             else:
                 all_paths.append(full_path)
 
