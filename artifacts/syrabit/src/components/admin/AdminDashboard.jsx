@@ -2334,6 +2334,47 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 </div>
               </div>
 
+              <div className="rounded-xl border border-gray-100 bg-gray-50 overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-gray-100">
+                  <span className="text-xs text-gray-500 font-medium">Per-day breakdown</span>
+                  <span className="text-xs text-gray-400">{daily.length} day{daily.length === 1 ? '' : 's'}</span>
+                </div>
+                {hasData && daily.length > 0 ? (
+                  <div className="overflow-x-auto max-h-[260px]" data-testid="speedup-daily-table">
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-100 text-gray-500 sticky top-0">
+                        <tr>
+                          <th className="text-left px-3 py-1.5 font-medium">Date</th>
+                          <th className="text-right px-3 py-1.5 font-medium">Chats</th>
+                          <th className="text-right px-3 py-1.5 font-medium">Cache %</th>
+                          <th className="text-right px-3 py-1.5 font-medium">Warmed %</th>
+                          <th className="text-right px-3 py-1.5 font-medium">Spec-web %</th>
+                          <th className="text-right px-3 py-1.5 font-medium">TTFB ms</th>
+                          <th className="text-right px-3 py-1.5 font-medium">Total ms</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {[...daily].reverse().map(d => (
+                          <tr key={d.date} className="border-t border-gray-100 hover:bg-white">
+                            <td className="px-3 py-1.5 font-mono text-gray-600">{d.date}</td>
+                            <td className="px-3 py-1.5 text-right text-gray-700">{d.chats_total ?? 0}</td>
+                            <td className="px-3 py-1.5 text-right" style={{ color: '#10b981' }}>{d.cache_hit_pct ?? 0}%</td>
+                            <td className="px-3 py-1.5 text-right" style={{ color: '#7c3aed' }}>{d.warmed_cache_hit_pct ?? 0}%</td>
+                            <td className="px-3 py-1.5 text-right" style={{ color: '#f59e0b' }}>{d.speculative_web_used_pct ?? 0}%</td>
+                            <td className="px-3 py-1.5 text-right" style={{ color: '#3b82f6' }}>{d.avg_ttfb_ms ?? 0}</td>
+                            <td className="px-3 py-1.5 text-right text-gray-500">{d.avg_total_ms ?? 0}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-[120px] text-gray-400 text-xs gap-1">
+                    <span>No per-day data in window</span>
+                  </div>
+                )}
+              </div>
+
               <p className="text-xs text-gray-400">
                 Window: last {chatSpeedups?.period_days ?? speedupDays} day{(chatSpeedups?.period_days ?? speedupDays) === 1 ? '' : 's'}
                 {totals.avg_total_ms ? <> &middot; Avg full chat: {totals.avg_total_ms}ms</> : null}
