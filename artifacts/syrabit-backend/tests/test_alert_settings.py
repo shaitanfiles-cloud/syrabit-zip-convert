@@ -8,6 +8,7 @@ Covers:
 - Validation rejects invalid email and webhook URL formats
 """
 import asyncio
+import contextlib
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -633,3 +634,123 @@ class TestAlertSettingsRoundTrip:
         assert settings["expiration"]["enabled"] is True
         assert settings["expiration"]["days"] == 7
         assert settings["notification_channels"]["email"] == "shape@test.com"
+
+
+class TestDispatchAlertWithMongomock:
+    @pytest.fixture
+    def mongo_db(self):
+        from mongomock_motor import AsyncMongoMockClient
+        client = AsyncMongoMockClient()
+        return client["test_dispatch"]
+
+    def _dispatch(self, mongo_db, alert_type, title, body, threshold_snapshot=None, extra_patches=None):
+        patches = [
+            patch.object(_metrics_mod, "db", mongo_db),
+            patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock),
+        ]
+        if extra_patches:
+            patches.extend(extra_patches)
+        with contextlib.ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            _run(_metrics_mod._dispatch_alert(alert_type, title, body, threshold_snapshot=threshold_snapshot))
+
+    def test_persist_alert_document_shape(self, mongo_db):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}):
+            self._dispatch(mongo_db, "shape_test", "Alert Title", "Alert body text")
+
+        doc = _run(mongo_db.alerts.find_one({"type": "shape_test"}))
+        assert doc is not None
+        assert doc["type"] == "shape_test"
+        assert doc["title"] == "Alert Title"
+        assert doc["body"] == "Alert body text"
+        assert doc["acknowledged"] is False
+        assert "fired_at" in doc
+        assert "threshold_snapshot" not in doc
+
+    def test_persist_with_threshold_snapshot(self, mongo_db):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        snapshot = {"metric": "error_rate_pct", "value": 5, "actual": 12.3}
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}):
+            self._dispatch(mongo_db, "thresh_persist", "Rate spike", "High errors", threshold_snapshot=snapshot)
+
+        doc = _run(mongo_db.alerts.find_one({"type": "thresh_persist"}))
+        assert doc is not None
+        assert doc["threshold_snapshot"] == snapshot
+        assert doc["threshold_snapshot"]["metric"] == "error_rate_pct"
+        assert isinstance(doc["threshold_snapshot"]["value"], (int, float))
+        assert isinstance(doc["threshold_snapshot"]["actual"], (int, float))
+
+    def test_email_dispatch_persists_to_mongo(self, mongo_db):
+        _metrics_mod._notification_channels["email"] = "admin@example.com"
+        mock_resend = MagicMock()
+        mock_resend.Emails.send = MagicMock()
+        snapshot = {"metric": "latency_p95_ms", "value": 3000, "actual": 5500}
+        with patch.dict(os.environ, {"RESEND_API_KEY": "re_test_key"}):
+            self._dispatch(
+                mongo_db, "email_persist", "Latency spike", "p95 is high",
+                threshold_snapshot=snapshot,
+                extra_patches=[patch.dict("sys.modules", {"resend": mock_resend})],
+            )
+
+        mock_resend.Emails.send.assert_called_once()
+
+        doc = _run(mongo_db.alerts.find_one({"type": "email_persist"}))
+        assert doc is not None
+        assert doc["title"] == "Latency spike"
+        assert doc["threshold_snapshot"]["metric"] == "latency_p95_ms"
+        assert doc["threshold_snapshot"]["actual"] == 5500
+        assert doc["acknowledged"] is False
+
+    def test_webhook_dispatch_persists_to_mongo(self, mongo_db):
+        _metrics_mod._notification_channels["webhook_url"] = "https://hooks.test/dispatch"
+        _metrics_mod._notification_channels["email"] = ""
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=MagicMock(status_code=200))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        snapshot = {"metric": "spoof_rpm", "value": 50, "actual": 120}
+        with patch.dict(os.environ, {"RESEND_API_KEY": ""}):
+            self._dispatch(
+                mongo_db, "webhook_persist", "Spoof surge", "High spoof rate",
+                threshold_snapshot=snapshot,
+                extra_patches=[patch("httpx.AsyncClient", return_value=mock_client)],
+            )
+
+        mock_client.post.assert_awaited_once()
+
+        doc = _run(mongo_db.alerts.find_one({"type": "webhook_persist"}))
+        assert doc is not None
+        assert doc["title"] == "Spoof surge"
+        assert doc["threshold_snapshot"] == snapshot
+        assert doc["acknowledged"] is False
+        assert "fired_at" in doc
+
+    def test_cooldown_prevents_second_persist(self, mongo_db):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}):
+            self._dispatch(mongo_db, "cooldown_mongo", "First", "Body 1")
+            self._dispatch(mongo_db, "cooldown_mongo", "Second", "Body 2")
+
+        count = _run(mongo_db.alerts.count_documents({"type": "cooldown_mongo"}))
+        assert count == 1
+        doc = _run(mongo_db.alerts.find_one({"type": "cooldown_mongo"}))
+        assert doc["title"] == "First"
+
+    def test_multiple_alert_types_stored_independently(self, mongo_db):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}):
+            self._dispatch(mongo_db, "type_a", "Alert A", "Body A")
+            self._dispatch(mongo_db, "type_b", "Alert B", "Body B")
+
+        count = _run(mongo_db.alerts.count_documents({}))
+        assert count == 2
+        doc_a = _run(mongo_db.alerts.find_one({"type": "type_a"}))
+        doc_b = _run(mongo_db.alerts.find_one({"type": "type_b"}))
+        assert doc_a["title"] == "Alert A"
+        assert doc_b["title"] == "Alert B"
