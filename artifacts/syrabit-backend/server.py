@@ -417,6 +417,19 @@ async def lifespan(app):
                 _remaining = await db.indexnow_push_log.count_documents({"pushed_at": {"$type": "string"}})
                 if _remaining:
                     logger.warning(f"indexnow_push_log: {_remaining} docs still have string pushed_at after migration")
+
+                _null_filter = {"$or": [
+                    {"pushed_at": None},
+                    {"pushed_at": {"$exists": False}},
+                ]}
+                _null_count = await db.indexnow_push_log.count_documents(_null_filter)
+                if _null_count:
+                    _now = _dt.now(_tz.utc)
+                    await db.indexnow_push_log.update_many(
+                        _null_filter,
+                        {"$set": {"pushed_at": _now}},
+                    )
+                    logger.info(f"Set pushed_at to now for {_null_count} indexnow_push_log docs with missing/null pushed_at")
             except Exception as e:
                 logger.warning(f"indexnow_push_log pushed_at migration skipped: {e}")
 
