@@ -1,12 +1,145 @@
-import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle } from 'lucide-react';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle, Send } from 'lucide-react';
+import { adminSeoGoogleIndexingStats } from '@/utils/api';
+
+const INDEXING_FIELDS = [
+  { key: 'sent',               label: 'Submitted' },
+  { key: 'status_2xx',         label: 'Accepted (2xx)' },
+  { key: 'status_4xx',         label: 'Client errors (4xx)' },
+  { key: 'status_5xx',         label: 'Server errors (5xx)' },
+  { key: 'quota_blocks',       label: 'Quota blocks' },
+  { key: 'sitemap_ping_sent',  label: 'Sitemap pings' },
+];
+
+function IndexingStatsCard({ adminToken }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(async () => {
+    if (!adminToken) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const r = await adminSeoGoogleIndexingStats(adminToken);
+      setData(r.data);
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Failed to load Google indexing stats');
+    } finally {
+      setLoading(false);
+    }
+  }, [adminToken]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const today = data || null;
+  const yesterday = data?.yesterday ?? null;
+  const dailyLimit = today?.daily_limit ?? 200;
+  const remaining = today?.quota_remaining;
+
+  return (
+    <div className="rounded-xl border p-5 space-y-4" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <p className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+            <Send size={14} className="text-violet-500" />
+            Google Indexing API — Daily Usage
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: '#9ca3af' }}>
+            Submissions to Google's Indexing API + sitemap pings, persisted across restarts. Cap is {dailyLimit} URLs/day.
+          </p>
+        </div>
+        <button onClick={load} disabled={loading}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border disabled:opacity-40"
+          style={{ borderColor: '#e5e7eb', color: '#4b5563', background: '#fff' }}>
+          {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          Refresh
+        </button>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 p-2.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.06)' }}>
+          <AlertTriangle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+          <span className="text-xs" style={{ color: '#dc2626' }}>{error}</span>
+        </div>
+      )}
+
+      {today?.enabled === false && !error && (
+        <div className="p-3 rounded-lg text-xs" style={{ background: 'rgba(245,158,11,0.08)', color: '#92400e' }}>
+          Google Indexing API integration is disabled
+          {today?.error ? ` — ${today.error}` : ' (set GOOGLE_INDEXING_ENABLED=true and provide GOOGLE_INDEXING_SERVICE_ACCOUNT)'}.
+        </div>
+      )}
+
+      {today && today.enabled !== false && (
+        <>
+          {typeof remaining === 'number' && (
+            <div className="flex items-center justify-between text-xs" style={{ color: '#6b7280' }}>
+              <span>
+                <span className="font-semibold text-gray-900">{remaining}</span> of {dailyLimit} submissions remaining today
+              </span>
+              <span style={{ color: '#9ca3af' }}>UTC day {today.day}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <DayColumn title="Today" tone="violet" day={today} />
+            <DayColumn title="Yesterday" tone="gray" day={yesterday} />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DayColumn({ title, tone, day }) {
+  const tones = {
+    violet: { bg: 'rgba(124,58,237,0.06)', border: 'rgba(124,58,237,0.20)', label: '#7c3aed' },
+    gray:   { bg: '#ffffff',                border: '#e5e7eb',               label: '#6b7280' },
+  };
+  const t = tones[tone] || tones.gray;
+  const empty = !day;
+
+  return (
+    <div className="rounded-lg border p-3.5" style={{ background: t.bg, borderColor: t.border }}>
+      <div className="flex items-center justify-between mb-2.5">
+        <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: t.label }}>
+          {title}
+        </p>
+        {!empty && day.day && (
+          <p className="text-[10px] font-mono" style={{ color: '#9ca3af' }}>{day.day}</p>
+        )}
+      </div>
+      {empty ? (
+        <p className="text-xs italic py-3 text-center" style={{ color: '#9ca3af' }}>
+          No prior-day data
+        </p>
+      ) : (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+          {INDEXING_FIELDS.map(f => (
+            <div key={f.key} className="flex flex-col">
+              <span className="text-base font-bold text-gray-900 leading-none">
+                {Number(day[f.key] ?? 0).toLocaleString()}
+              </span>
+              <span className="text-[10px] mt-0.5" style={{ color: '#9ca3af' }}>{f.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function SitemapTab({
   sitemapData, sitemapValidating, handleSitemapValidate,
   refreshingMeta, handleRefreshMeta,
   sitemap, handleRegenerateSitemap,
+  adminToken,
 }) {
   return (
     <div className="space-y-5">
+      <IndexingStatsCard adminToken={adminToken} />
+
       <div className="rounded-xl border p-5 space-y-4" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
         <div className="flex items-center justify-between">
           <div>

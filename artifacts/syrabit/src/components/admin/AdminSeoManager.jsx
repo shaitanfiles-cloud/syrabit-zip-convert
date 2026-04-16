@@ -158,7 +158,8 @@ export default function AdminSeoManager({ adminToken, onNavigate }) {
         <SitemapTab sitemapData={s.sitemapData} sitemapValidating={s.sitemapValidating}
           handleSitemapValidate={s.handleSitemapValidate} refreshingMeta={s.refreshingMeta}
           handleRefreshMeta={s.handleRefreshMeta} sitemap={s.sitemap}
-          handleRegenerateSitemap={s.handleRegenerateSitemap} />
+          handleRegenerateSitemap={s.handleRegenerateSitemap}
+          adminToken={adminToken} />
       )}
 
       {s.tab === 'pipeline' && (

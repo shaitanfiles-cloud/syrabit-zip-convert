@@ -323,6 +323,9 @@ export const adminSeoRunSubject = (token, subjectId, force = false, pageTypes = 
 export const adminSeoRefreshMeta = (token) =>
   axios.post(`${API_BASE}/seo/refresh-meta`, {}, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminSeoGoogleIndexingStats = (token) =>
+  axios.get(`${API_BASE}/admin/seo/google-indexing-stats`, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminSeoReviewQueue = (token, status = 'draft', limit = 200) =>
   axios.get(`${API_BASE}/seo/review-queue`, { headers: adminHeaders(token), withCredentials: true, params: { status, limit } });
 
