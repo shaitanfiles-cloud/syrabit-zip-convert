@@ -460,7 +460,13 @@ function backendPreconnectPlugin() {
         // Preload the slim library bundle ONLY when the current request is for
         // /library — site-wide preload would waste bandwidth on every page.
         const tags = [
-          `<link rel="preconnect" href="${origin}" crossorigin />`,
+          // Task #391: drop crossorigin on the same-host API preconnect.
+          // The API responds same-origin (api.syrabit.ai shares eTLD+1
+          // with syrabit.ai for cookie/credential purposes only — the
+          // preconnect itself is plain), and Lighthouse flags the
+          // crossorigin attribute as "preconnect misuse" when no
+          // crossorigin request follows.
+          `<link rel="preconnect" href="${origin}" />`,
           `<link rel="dns-prefetch" href="${origin}" />`,
           `<script>(function(){if(/^\\/library(\\/|$)/.test(location.pathname)){var l=document.createElement('link');l.rel='preload';l.as='fetch';l.crossOrigin='anonymous';l.href=${JSON.stringify(`${origin}/api/content/library-bundle?slim=1`)};document.head.appendChild(l);}})();</script>`,
         ].join('\n    ');
