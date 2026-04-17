@@ -300,27 +300,22 @@
       <script type="module" src="/src/index.jsx"></script>
       <script>
         (function deferThirdParty(){
-          // Task #391: gate ALL third-party loaders behind LCP so they
-          // never appear in the Lighthouse main-thread trace before the
-          // largest contentful paint fires. Order of triggers:
+          // Task #391: gate ALL third-party loaders strictly behind LCP.
+          // No interaction-triggered load path — early scrolls/taps must
+          // not race ahead of the largest-contentful-paint entry, since
+          // those would still compete for bandwidth/main-thread during
+          // the critical render window. Triggers, in order:
           //   1. PerformanceObserver fires on the largest-contentful-paint entry
-          //   2. First user interaction (pointerdown/keydown/scroll/touch)
-          //   3. Hard 4 s fallback for headless tools and bounce visitors
-          var loaded=false;
+          //   2. Hard 4 s fallback for headless tools / no-LCP cases
+          var loaded=false,po=null,timer=null;
           function load(){
             if(loaded)return;loaded=true;
             window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);
             var em=document.createElement("script");em.src="https://assets.emergent.sh/scripts/emergent-main.js";em.async=true;document.body.appendChild(em);
             var ad=document.createElement("script");ad.src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8958003374183515";ad.async=true;ad.crossOrigin="anonymous";document.body.appendChild(ad);
-            cleanup();
-          }
-          var events=["pointerdown","keydown","scroll","touchstart"];
-          function cleanup(){
-            events.forEach(function(ev){window.removeEventListener(ev,load,{passive:true,capture:true})});
             if(po){try{po.disconnect()}catch(e){}}
+            if(timer){clearTimeout(timer);timer=null;}
           }
-          events.forEach(function(ev){window.addEventListener(ev,load,{passive:true,capture:true,once:true})});
-          var po=null;
           if('PerformanceObserver' in window){
             try{
               po=new PerformanceObserver(function(list){
@@ -330,28 +325,22 @@
             }catch(e){}
           }
           // Hard fallback for headless / no-LCP cases.
-          setTimeout(load,4000);
+          timer=setTimeout(load,4000);
         })();
       </script>
       <script>
-        // Task #391: hold PostHog until after LCP too — the array.js
-        // download was firing on requestIdleCallback (~1.5 s) which beat
-        // LCP on slow 3G mobile and inflated TBT. The deferral wrapper
-        // here mirrors the third-party loader above.
         (function deferPosthog(){
-          var loaded=false;
+          // Task #391: PostHog gated strictly by LCP — no interaction
+          // trigger. The array.js download (~50 KB gzip + execution)
+          // previously fired on rIC ~1.5 s and consistently beat LCP
+          // on slow 3G mobile, inflating TBT and pushing LCP past 2.5 s.
+          var loaded=false,po=null,timer=null;
           function load(){
             if(loaded)return;loaded=true;
             try{ initPosthog(); }catch(e){}
-            cleanup();
-          }
-          var events=["pointerdown","keydown","scroll","touchstart"];
-          function cleanup(){
-            events.forEach(function(ev){window.removeEventListener(ev,load,{passive:true,capture:true})});
             if(po){try{po.disconnect()}catch(e){}}
+            if(timer){clearTimeout(timer);timer=null;}
           }
-          events.forEach(function(ev){window.addEventListener(ev,load,{passive:true,capture:true,once:true})});
-          var po=null;
           if('PerformanceObserver' in window){
             try{
               po=new PerformanceObserver(function(list){
@@ -360,7 +349,7 @@
               po.observe({type:'largest-contentful-paint',buffered:true});
             }catch(e){}
           }
-          setTimeout(load,5000);
+          timer=setTimeout(load,5000);
         })();
         function initPosthog(){
             !(function (t, e) {
