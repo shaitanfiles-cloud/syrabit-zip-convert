@@ -1230,30 +1230,32 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 const partial = sm.valid_xml && totalCount > 0 && okCount > 0 && okCount < totalCount;
                 const broken = !sm.valid_xml || (totalCount > 0 && okCount === 0);
                 const dotCls = allOk ? 'bg-emerald-500' : partial ? 'bg-amber-500' : broken ? 'bg-red-500' : 'bg-gray-300';
-                // Task #299: surface the exact failing URLs (with status
-                // code) inline so admins don't have to re-run the probe to
-                // discover which URLs are 404ing.
-                const sampleFailing = checks.filter((c) => !c.ok && c.url).slice(0, 10);
+                // Task #298: surface the raw sample probe results inline so
+                // admins can see the exact URL, HTTP status, and error for
+                // every sampled URL without re-running the probe.
+                const sampleRows = checks.filter((c) => c.url).slice(0, 25);
+                const failingCount = checks.filter((c) => !c.ok).length;
                 const isExpanded = expandedSitemap === sm.name;
-                // Task #345: deep-scan results (when present) replace
-                // the sample-based view. After a deep scan we know the
-                // EXACT failing count; before, we can only guess from
-                // the live probe's 10-URL sample.
+                // Task #345: deep-scan results (when present) replace the
+                // sample-based view. After a deep scan we know the EXACT
+                // failing count; before, we can only guess from the live
+                // probe's 10-URL sample.
                 const deepScan = sitemapDeepScans[sm.name];
                 const usingDeepScan = !!deepScan?.data;
-                const failing = usingDeepScan ? deepScan.data.failing : sampleFailing;
+                // In deep-scan mode the failing list is authoritative.
+                // Otherwise we render the raw sample probes as rows
+                // (Task #298), which include both ok and failing results.
+                const deepScanFailing = usingDeepScan ? (deepScan.data.failing || []) : [];
                 // Show the "Show all failing URLs" control whenever the
                 // sitemap could plausibly have more than 10 broken pages.
                 // The /seo/health endpoint only probes a 10-URL random
                 // sample per sitemap, so as soon as we see ANY failures
-                // and the sitemap has more URLs than we sampled, the
-                // true failing count is unknown and may exceed 10.
-                // (Once a deep scan has run, this becomes irrelevant —
-                // the deep-scan response is authoritative.)
+                // and the sitemap has more URLs than we sampled, the true
+                // failing count is unknown and may exceed 10.
                 const mayHaveMoreFailures =
-                  sampleFailing.length > 0
+                  failingCount > 0
                   && (sm.url_count ?? 0) > checks.length;
-                const canExpand = failing.length > 0 || mayHaveMoreFailures;
+                const canExpand = sampleRows.length > 0 || usingDeepScan || mayHaveMoreFailures;
                 return (
                   <div
                     key={sm.name}
@@ -1299,18 +1301,29 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                     </button>
                     {canExpand && isExpanded && (
                       <div
-                        className="px-4 pb-3 pt-1 border-t border-red-100 bg-red-50/50"
-                        data-testid={`seo-sitemap-${sm.name}-failing`}
+                        className="px-4 pb-3 pt-2 border-t border-gray-100 bg-gray-50/60"
+                        data-testid={`seo-sitemap-${sm.name}-samples`}
                       >
                         <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-                          <p className="text-[10px] uppercase tracking-wider text-red-700 font-semibold">
-                            Failing URLs ({failing.length}
-                            {usingDeepScan && deepScan.data.truncated
-                              ? ` of ${deepScan.data.total_urls}+`
-                              : usingDeepScan
-                              ? ` of ${deepScan.data.checked} scanned`
-                              : mayHaveMoreFailures ? '+ in sample' : ''})
-                          </p>
+                          {usingDeepScan ? (
+                            <p className="text-[10px] uppercase tracking-wider text-red-700 font-semibold">
+                              Failing URLs ({deepScanFailing.length}
+                              {deepScan.data.truncated
+                                ? ` of ${deepScan.data.total_urls}+`
+                                : ` of ${deepScan.data.checked} scanned`})
+                            </p>
+                          ) : (
+                            <>
+                              <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+                                Sample probes ({sampleRows.length})
+                              </p>
+                              {failingCount > 0 && (
+                                <p className="text-[10px] uppercase tracking-wider text-red-600 font-semibold">
+                                  {failingCount} failing{mayHaveMoreFailures ? '+ in sample' : ''}
+                                </p>
+                              )}
+                            </>
+                          )}
                           {/* Task #345: deep-scan button. Only shown when
                               the sample probe hit its 10-URL cap, since
                               that's the only situation where the displayed
@@ -1388,31 +1401,57 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                             Scan failed: {deepScan.error}
                           </div>
                         )}
-                        <ul className="space-y-1 max-h-48 overflow-y-auto">
-                          {failing.map((f, i) => {
+                        <ul className="space-y-1 max-h-64 overflow-y-auto">
+                          {/* Deep-scan results contain only failing URLs;
+                              treat each as `ok: false` so styling matches
+                              the Task #298 sample-row renderer. */}
+                          {(usingDeepScan
+                            ? deepScanFailing.map((f) => ({ ...f, ok: false }))
+                            : sampleRows
+                          ).map((c, i) => {
                             // Defense-in-depth: only render <a> for http(s) URLs
                             // so a poisoned `javascript:` payload in Mongo can
                             // never become a clickable link in the admin UI.
-                            const safeHref = typeof f.url === 'string'
-                              && /^https?:\/\//i.test(f.url) ? f.url : null;
+                            const safeHref = typeof c.url === 'string'
+                              && /^https?:\/\//i.test(c.url) ? c.url : null;
+                            const failed = !c.ok;
+                            const badgeCls = failed
+                              ? 'bg-red-100 text-red-700'
+                              : 'bg-emerald-100 text-emerald-700';
+                            const rowCls = failed
+                              ? 'bg-red-50 border-red-200'
+                              : 'bg-white border-gray-100';
+                            const statusLabel = c.status === 0 || c.status == null
+                              ? 'ERR' : c.status;
                             return (
-                              <li key={`${sm.name}-${i}`} className="flex items-center gap-2 text-[11px] font-mono">
-                                <span className="px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-semibold flex-shrink-0">
-                                  {f.status === 0 || f.status == null ? 'ERR' : f.status}
+                              <li
+                                key={`${sm.name}-${i}`}
+                                className={`flex items-start gap-2 text-[11px] font-mono px-2 py-1.5 rounded border ${rowCls}`}
+                                data-testid={`seo-sample-row${failed ? '-failed' : ''}`}
+                              >
+                                <span className={`px-1.5 py-0.5 rounded font-semibold flex-shrink-0 ${badgeCls}`}>
+                                  {statusLabel}
                                 </span>
-                                {safeHref ? (
-                                  <a
-                                    href={safeHref}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-gray-700 hover:text-blue-600 truncate"
-                                    title={f.url}
-                                  >
-                                    {f.url}
-                                  </a>
-                                ) : (
-                                  <span className="text-gray-700 truncate" title={f.url}>{f.url}</span>
-                                )}
+                                <div className="min-w-0 flex-1">
+                                  {safeHref ? (
+                                    <a
+                                      href={safeHref}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className={`truncate block ${failed ? 'text-red-900 hover:text-red-700' : 'text-gray-700 hover:text-blue-600'}`}
+                                      title={c.url}
+                                    >
+                                      {c.url}
+                                    </a>
+                                  ) : (
+                                    <span className="text-gray-700 truncate block" title={c.url}>{c.url}</span>
+                                  )}
+                                  {c.error && (
+                                    <p className="text-[10px] text-red-600 mt-0.5 truncate" title={c.error}>
+                                      {c.error}
+                                    </p>
+                                  )}
+                                </div>
                               </li>
                             );
                           })}
