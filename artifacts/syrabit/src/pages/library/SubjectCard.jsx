@@ -8,6 +8,7 @@ import {
 import { useShare } from '@/hooks/useShare';
 import { prefetchSubjectData } from '@/hooks/useContent';
 import { useContentLang } from '@/context/LanguageContext';
+import { cdnImage, cdnSrcSet } from '@/utils/imageCdn';
 
 const THUMB_GRADIENTS = {
   math:      ['#4f46e5', '#7c3aed'],
@@ -86,7 +87,8 @@ const SubjectCard = memo(function SubjectCard({ sub, chapters = [], isSaved, onT
       {sub.thumbnailUrl && (
         <div className="absolute inset-0 pointer-events-none overflow-hidden rounded-2xl" style={{ zIndex: 1, aspectRatio: '4 / 3' }}>
           <img
-            src={sub.thumbnailUrl}
+            src={cdnImage(sub.thumbnailUrl, { width: 640 })}
+            srcSet={cdnSrcSet(sub.thumbnailUrl, [320, 640, 960])}
             alt=""
             loading={index === 0 ? 'eager' : 'lazy'}
             fetchpriority={index === 0 ? 'high' : 'low'}
