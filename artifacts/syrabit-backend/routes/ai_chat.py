@@ -938,39 +938,38 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
             if _resp_lang == "as":
                 from lang_sanitizer import (
                     sanitize_assamese_with_optional_regenerate as _sanitize_asm_early,
-                    get_behaviour as _asm_behaviour_early,
                 )
-                if _asm_behaviour_early() != "off":
-                    _cleaned_early, _early_diag = await _sanitize_asm_early(
-                        _early_emit,
-                        translate_callable=_make_assamese_translate_callable("as-IN"),
-                    )
-                    # Per-Task #419: emit one diagnostic line per Assamese
-                    # reply (even no-op) so we can monitor leakage rates in
-                    # production logs.
-                    _early_action = _early_diag.get("action") or "noop"
-                    _early_log = (
-                        f"[INDIC-SANITIZE][EARLY-CACHE] action={_early_action} "
-                        f"ratio={_early_diag.get('ratio', 0):.3f} "
-                        f"threshold={_early_diag.get('threshold', 0):.3f} "
-                        f"behaviour={_early_diag.get('behaviour')} "
-                        f"translated={_early_diag.get('translated', False)} "
-                        f"regenerated={_early_diag.get('regenerated', False)} "
-                        f"sample_tokens={_early_diag.get('suspicious_tokens', [])[:6]}"
-                    )
-                    if _early_action == "noop":
-                        logger.info(_early_log)
-                    else:
-                        logger.warning(_early_log)
-                    if _early_action != "noop":
-                        _early_emit = _cleaned_early
-                        # Refresh cache so subsequent hits are clean.
-                        try:
-                            _redis_set("ai_cache", _cache_key_early, _early_emit, REDIS_AI_CACHE_TTL)
-                            if not redis_client:
-                                _ai_response_cache[_cache_key_early] = _early_emit
-                        except Exception:
-                            pass
+                # Always run the sanitiser (even when behaviour="off" it
+                # short-circuits to measure-only) so we ALWAYS get the
+                # per-reply diagnostic log line and the live leakage
+                # ratio for monitoring (Task #419).
+                _cleaned_early, _early_diag = await _sanitize_asm_early(
+                    _early_emit,
+                    translate_callable=_make_assamese_translate_callable("as-IN"),
+                )
+                _early_action = _early_diag.get("action") or "noop"
+                _early_log = (
+                    f"[INDIC-SANITIZE][EARLY-CACHE] action={_early_action} "
+                    f"ratio={_early_diag.get('ratio', 0):.3f} "
+                    f"threshold={_early_diag.get('threshold', 0):.3f} "
+                    f"behaviour={_early_diag.get('behaviour')} "
+                    f"translated={_early_diag.get('translated', False)} "
+                    f"regenerated={_early_diag.get('regenerated', False)} "
+                    f"sample_tokens={_early_diag.get('suspicious_tokens', [])[:6]}"
+                )
+                if _early_action == "noop":
+                    logger.info(_early_log)
+                else:
+                    logger.warning(_early_log)
+                if _early_action != "noop":
+                    _early_emit = _cleaned_early
+                    # Refresh cache so subsequent hits are clean.
+                    try:
+                        _redis_set("ai_cache", _cache_key_early, _early_emit, REDIS_AI_CACHE_TTL)
+                        if not redis_client:
+                            _ai_response_cache[_cache_key_early] = _early_emit
+                    except Exception:
+                        pass
             _CHUNK_SIZE = 300
             for _ci in range(0, len(_early_emit), _CHUNK_SIZE):
                 yield f"data: {json.dumps({'content': _early_emit[_ci:_ci + _CHUNK_SIZE]})}\n\n"
@@ -1573,35 +1572,34 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 if _want_translate and _resp_lang == "as":
                     from lang_sanitizer import (
                         sanitize_assamese_with_optional_regenerate as _sanitize_asm_cache,
-                        get_behaviour as _asm_behaviour_cache,
                     )
-                    if _asm_behaviour_cache() != "off":
-                        _cleaned_cache, _cache_diag = await _sanitize_asm_cache(
-                            cached_answer,
-                            translate_callable=_make_assamese_translate_callable("as-IN"),
-                        )
-                        # Per-Task #419: emit one diagnostic line per
-                        # Assamese reply (even no-op).
-                        _cache_action = _cache_diag.get("action") or "noop"
-                        _cache_log = (
-                            f"[INDIC-SANITIZE][CACHE] action={_cache_action} "
-                            f"ratio={_cache_diag.get('ratio', 0):.3f} "
-                            f"threshold={_cache_diag.get('threshold', 0):.3f} "
-                            f"behaviour={_cache_diag.get('behaviour')} "
-                            f"translated={_cache_diag.get('translated', False)} "
-                            f"regenerated={_cache_diag.get('regenerated', False)} "
-                            f"sample_tokens={_cache_diag.get('suspicious_tokens', [])[:6]}"
-                        )
-                        if _cache_action == "noop":
-                            logger.info(_cache_log)
-                        else:
-                            logger.warning(_cache_log)
-                        if _cache_action != "noop":
-                            cached_answer = _cleaned_cache
-                            # Refresh cache entry so subsequent hits are clean.
-                            _redis_set("ai_cache", _cache_key_val, cached_answer, _cache_ttl_val)
-                            if not redis_client:
-                                _ai_response_cache[_cache_key_val] = cached_answer
+                    # Always run sanitiser (off mode short-circuits to
+                    # measure-only) so the diagnostic line is always
+                    # emitted (Task #419).
+                    _cleaned_cache, _cache_diag = await _sanitize_asm_cache(
+                        cached_answer,
+                        translate_callable=_make_assamese_translate_callable("as-IN"),
+                    )
+                    _cache_action = _cache_diag.get("action") or "noop"
+                    _cache_log = (
+                        f"[INDIC-SANITIZE][CACHE] action={_cache_action} "
+                        f"ratio={_cache_diag.get('ratio', 0):.3f} "
+                        f"threshold={_cache_diag.get('threshold', 0):.3f} "
+                        f"behaviour={_cache_diag.get('behaviour')} "
+                        f"translated={_cache_diag.get('translated', False)} "
+                        f"regenerated={_cache_diag.get('regenerated', False)} "
+                        f"sample_tokens={_cache_diag.get('suspicious_tokens', [])[:6]}"
+                    )
+                    if _cache_action == "noop":
+                        logger.info(_cache_log)
+                    else:
+                        logger.warning(_cache_log)
+                    if _cache_action != "noop":
+                        cached_answer = _cleaned_cache
+                        # Refresh cache entry so subsequent hits are clean.
+                        _redis_set("ai_cache", _cache_key_val, cached_answer, _cache_ttl_val)
+                        if not redis_client:
+                            _ai_response_cache[_cache_key_val] = cached_answer
                 _CHUNK_SIZE = 300
                 for _ci in range(0, len(cached_answer), _CHUNK_SIZE):
                     yield f"data: {json.dumps({'content': cached_answer[_ci:_ci + _CHUNK_SIZE]})}\n\n"
@@ -1680,7 +1678,12 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     _indic_pending_chunks = []
                     yield f"data: {json.dumps({'content': _fallback})}\n\n"
 
-                if _indic_buffer_mode and not _output_violation and full_response:
+                # Always measure+log Assamese leakage at end of stream
+                # (Task #419) — even when behaviour="off" we still emit the
+                # per-reply diagnostic line so production can monitor live
+                # leakage rates. Only mutate the user-visible stream when
+                # `_indic_buffer_mode` is on (i.e. behaviour != "off").
+                if bool(_want_translate) and not _output_violation and full_response:
                     _raw_indic = "".join(full_response)
 
                     async def _regenerate_indic():

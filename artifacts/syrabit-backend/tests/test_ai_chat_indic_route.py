@@ -254,6 +254,59 @@ def test_translate_plus_regenerate_runs_regenerate_when_translate_insufficient()
     assert "একেলগে" in cleaned
 
 
+def test_chat_stream_off_mode_still_logs_and_passes_through_unchanged(monkeypatch, caplog):
+    """Per reviewer feedback on Task #419: when ASSAMESE_LEAK_BEHAVIOUR=off
+    the chat route MUST still measure leakage and emit one
+    [INDIC-SANITIZE] diagnostic log per Assamese reply, but MUST leave
+    the response bytes untouched."""
+    import logging as _logging
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setenv("ASSAMESE_LEAK_BEHAVIOUR", "off")
+
+    app, chat_mod = _build_chat_app()
+    chat_mod.supa_upsert_conversation = AsyncMock(return_value=None)
+    chat_mod._persist_chat_turn = AsyncMock(return_value=None)
+    chat_mod._record_chat_latency = lambda *_a, **_kw: None
+    chat_mod._refund_credit = AsyncMock(return_value=None)
+    chat_mod.redis_client = None
+    chat_mod._redis_get_ai_cache = lambda _k: None
+
+    msg_text = "uruka কি"
+    cache_key_msg = f"{msg_text}::lang=as"
+    cache_key = chat_mod._cache_key(
+        cache_key_msg, subject_id="", board_id="", conversation_id=""
+    )
+    chat_mod._ai_response_cache[cache_key] = LEAKY_ASSAMESE_CACHED
+
+    client = TestClient(app)
+    body = {
+        "message": msg_text,
+        "response_lang": "as",
+        "subject_id": "",
+        "board_id": "",
+        "conversation_id": "",
+    }
+    with caplog.at_level(_logging.INFO, logger="routes.ai_chat"):
+        emitted = _post_chat_stream(client, body)
+
+    # 1. Diagnostic line MUST still appear in `off` mode.
+    indic_logs = [r for r in caplog.records if "[INDIC-SANITIZE]" in r.getMessage()]
+    assert indic_logs, (
+        "[INDIC-SANITIZE] diagnostic line must be emitted even when "
+        "ASSAMESE_LEAK_BEHAVIOUR=off"
+    )
+    msg = indic_logs[-1].getMessage()
+    assert "behaviour=off" in msg
+    assert "ratio=" in msg
+    # 2. The response stream MUST be byte-identical to the leaky cached
+    #    answer — `off` is measure-only, never mutate.
+    assert "me uses" in emitted, (
+        "off mode must NOT mutate the response — the leaky text "
+        "should pass through to the user untouched"
+    )
+
+
 def test_chat_stream_english_cache_hit_passes_through_unchanged(monkeypatch):
     """For non-Assamese requests the sanitiser must be a no-op so we
     don't accidentally strip legitimate English answers."""
