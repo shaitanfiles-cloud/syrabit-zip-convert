@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Search, Layers, ChevronRight, Trash2, Loader2, Edit2, AlignLeft } from 'lucide-react';
+import { Search, Layers, ChevronRight, Trash2, Loader2, Edit2, AlignLeft, X, CheckCircle, Circle, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 import { isDegreeBoard } from '@/utils/courseTypes';
@@ -53,6 +53,9 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
   const [subjectSortByStatus, setSubjectSortByStatus] = useState(false);
   const [chapterStatusFilter, setChapterStatusFilter] = useState('all');
   const [chapterSortByStatus, setChapterSortByStatus] = useState(false);
+  const [selectedSubjectIds, setSelectedSubjectIds] = useState(() => new Set());
+  const [selectedChapterIds, setSelectedChapterIds] = useState(() => new Set());
+  const [bulkUpdating, setBulkUpdating] = useState(false);
 
   const subjectData = subjects.find(s => s.id === selSubject);
   const boardData = boards.find(b => b.id === selBoard);
@@ -288,6 +291,70 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     } finally { setGeneratingNotes(prev => { const next = new Set(prev); next.delete(chapterId); return next; }); }
   };
 
+  const toggleSubjectSelect = (id) => {
+    setSelectedSubjectIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleSubjectSelectAll = (ids, checked) => {
+    setSelectedSubjectIds(prev => {
+      const next = new Set(prev);
+      if (checked) ids.forEach(id => next.add(id)); else ids.forEach(id => next.delete(id));
+      return next;
+    });
+  };
+  const toggleChapterSelect = (id) => {
+    setSelectedChapterIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const toggleChapterSelectAll = (ids, checked) => {
+    setSelectedChapterIds(prev => {
+      const next = new Set(prev);
+      if (checked) ids.forEach(id => next.add(id)); else ids.forEach(id => next.delete(id));
+      return next;
+    });
+  };
+
+  const handleBulkStatusChange = async (scope, nextStatus) => {
+    const idSet = scope === 'subjects' ? selectedSubjectIds : selectedChapterIds;
+    const ids = Array.from(idSet);
+    if (ids.length === 0) return;
+    const prevSubjects = subjects;
+    const prevChapters = chapters;
+    if (scope === 'subjects') {
+      setSubjects(p => p.map(s => idSet.has(s.id) ? { ...s, status: nextStatus } : s));
+    } else {
+      setChapters(p => p.map(c => idSet.has(c.id) ? { ...c, status: nextStatus } : c));
+    }
+    setBulkUpdating(true);
+    try {
+      const res = await axios.post(
+        `${API}/admin/content/bulk-status`,
+        { scope, ids, status: nextStatus },
+        authHeaders(adminToken),
+      );
+      const modified = res.data?.modified ?? ids.length;
+      toast.success(`${modified} ${scope === 'subjects' ? 'subject' : 'chapter'}${modified === 1 ? '' : 's'} set to ${nextStatus}`);
+      if (scope === 'subjects') setSelectedSubjectIds(new Set());
+      else setSelectedChapterIds(new Set());
+    } catch (e) {
+      if (scope === 'subjects') setSubjects(prevSubjects);
+      else setChapters(prevChapters);
+      toast.error(e?.response?.data?.detail || 'Bulk update failed');
+    } finally {
+      setBulkUpdating(false);
+    }
+  };
+
+  // Clear selection when navigation context changes
+  useEffect(() => { setSelectedSubjectIds(new Set()); }, [selStream]);
+  useEffect(() => { setSelectedChapterIds(new Set()); }, [selSubject]);
+
   const handleSubjectStatusChange = async (subjectId, nextStatus) => {
     const prev = subjects;
     setSubjects(p => p.map(s => s.id === subjectId ? { ...s, status: nextStatus } : s));
@@ -352,6 +419,51 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
     } finally {
       setBulkGenerating(false);
     }
+  };
+
+  const renderBulkBar = (scope) => {
+    const count = scope === 'subjects' ? selectedSubjectIds.size : selectedChapterIds.size;
+    if (count === 0) return null;
+    const label = scope === 'subjects' ? 'subject' : 'chapter';
+    const clearSelection = () => {
+      if (scope === 'subjects') setSelectedSubjectIds(new Set());
+      else setSelectedChapterIds(new Set());
+    };
+    const ActionBtn = ({ status, icon: Icon, color, children }) => (
+      <button
+        onClick={() => handleBulkStatusChange(scope, status)}
+        disabled={bulkUpdating}
+        className={`flex items-center gap-1.5 h-8 px-3 rounded-lg text-xs font-semibold border transition-colors disabled:opacity-50 ${color}`}
+        data-testid={`bulk-${scope}-${status}`}
+      >
+        {bulkUpdating ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+        {children}
+      </button>
+    );
+    return (
+      <div
+        className="sticky top-0 z-30 -mx-6 px-6 py-2.5 border-b border-violet-200 bg-violet-50/95 backdrop-blur flex items-center justify-between gap-3 flex-wrap shadow-sm"
+        data-testid={`bulk-action-bar-${scope}`}
+      >
+        <div className="flex items-center gap-2 text-xs font-semibold text-violet-900">
+          <span className="inline-flex items-center justify-center min-w-[1.5rem] h-6 px-2 rounded-full bg-violet-600 text-white">{count}</span>
+          {label}{count === 1 ? '' : 's'} selected
+          <button
+            onClick={clearSelection}
+            disabled={bulkUpdating}
+            className="ml-1 inline-flex items-center gap-1 text-violet-600 hover:text-violet-800 disabled:opacity-50"
+            data-testid={`bulk-${scope}-clear`}
+          >
+            <X size={11} /> Clear
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <ActionBtn status="published" icon={CheckCircle} color="bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100">Publish</ActionBtn>
+          <ActionBtn status="draft" icon={Circle} color="bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100">Draft</ActionBtn>
+          <ActionBtn status="unpublished" icon={EyeOff} color="bg-gray-100 text-gray-700 border-gray-300 hover:bg-gray-200">Unpublish</ActionBtn>
+        </div>
+      </div>
+    );
   };
 
   const breadcrumb = [];
@@ -433,12 +545,31 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                 </div>
               ) : selStream && !selSubject ? (
                 <div className="p-6 max-w-4xl mx-auto space-y-4">
+                  {renderBulkBar('subjects')}
                   <div className="mb-2">
                     <h3 className="text-xl font-bold text-gray-900">{streamData?.icon} {streamData?.name}</h3>
                     <p className="text-sm text-gray-400">{streamData?.description}</p>
                   </div>
                   <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <p className="text-sm font-semibold text-gray-500">Subjects ({filteredSubjects.length}{filteredSubjects.length !== baseSubjects.length ? ` of ${baseSubjects.length}` : ''})</p>
+                    <div className="flex items-center gap-2">
+                      {filteredSubjects.length > 0 && (() => {
+                        const visibleIds = filteredSubjects.map(s => s.id);
+                        const allSel = visibleIds.every(id => selectedSubjectIds.has(id));
+                        const someSel = visibleIds.some(id => selectedSubjectIds.has(id));
+                        return (
+                          <input
+                            type="checkbox"
+                            checked={allSel}
+                            ref={el => { if (el) el.indeterminate = !allSel && someSel; }}
+                            onChange={() => toggleSubjectSelectAll(visibleIds, !allSel)}
+                            className="h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-400 cursor-pointer"
+                            title={allSel ? 'Clear selection' : 'Select all visible subjects'}
+                            data-testid="subject-select-all"
+                          />
+                        );
+                      })()}
+                      <p className="text-sm font-semibold text-gray-500">Subjects ({filteredSubjects.length}{filteredSubjects.length !== baseSubjects.length ? ` of ${baseSubjects.length}` : ''})</p>
+                    </div>
                     <div className="flex items-center gap-2">
                       <select
                         value={subjectStatusFilter}
@@ -501,6 +632,7 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                 </div>
               ) : selSubject ? (
                 <div className="p-6 max-w-5xl mx-auto space-y-5">
+                  {renderBulkBar('chapters')}
                   <div className="flex items-start justify-between">
                     {editingSubject === selSubject ? (
                       <div className="flex-1 max-w-md space-y-2">
@@ -542,6 +674,9 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                     generatingNotes={generatingNotes}
                     onGenerateNotes={handleGenerateNotes} onDeleteChapter={handleDeleteChapter}
                     onChangeChapterStatus={handleChapterStatusChange}
+                    selectedIds={selectedChapterIds}
+                    onToggleSelect={toggleChapterSelect}
+                    onToggleSelectAll={toggleChapterSelectAll}
                     onViewChapter={(ch) => setViewerItem(ch)}
                     onEditChapter={(ch) => { setEditTarget(ch); setContentForm({ title: ch.title, slug: ch.slug || '', description: ch.description || '', content: ch.content || '', content_type: ch.content_type || 'notes', order: ch.order || 1, topics: ch.topics || [], content_as: ch.content_as || '' }); setEditView('edit-chapter'); loadChapterStats(ch.id); }}
                     selSubject={selSubject} subjectData={subjectData}

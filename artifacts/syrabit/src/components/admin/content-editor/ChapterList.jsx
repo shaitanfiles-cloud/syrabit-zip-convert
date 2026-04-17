@@ -25,9 +25,14 @@ export default function ChapterList({
   onGenerateNotes, onDeleteChapter, onChangeChapterStatus,
   onViewChapter, onEditChapter,
   selSubject, subjectData, onCreateNew,
+  selectedIds, onToggleSelect, onToggleSelectAll,
 }) {
   const total = typeof totalChapters === 'number' ? totalChapters : chapters.length;
   const [expandedCard, setExpandedCard] = useState(null);
+  const selectionEnabled = !!onToggleSelect;
+  const visibleIds = chapters.map(c => c.id);
+  const allVisibleSelected = selectionEnabled && visibleIds.length > 0 && visibleIds.every(id => selectedIds?.has(id));
+  const someVisibleSelected = selectionEnabled && visibleIds.some(id => selectedIds?.has(id));
   return (
     <>
       <button
@@ -41,7 +46,20 @@ export default function ChapterList({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3 flex-wrap">
-          <p className="text-sm font-semibold text-gray-900">Chapters ({chapters.length}{chapters.length !== total ? ` of ${total}` : ''})</p>
+          <div className="flex items-center gap-2">
+            {selectionEnabled && (
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                ref={el => { if (el) el.indeterminate = !allVisibleSelected && someVisibleSelected; }}
+                onChange={() => onToggleSelectAll && onToggleSelectAll(visibleIds, !allVisibleSelected)}
+                className="h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-400 cursor-pointer"
+                title={allVisibleSelected ? 'Clear selection' : 'Select all visible chapters'}
+                data-testid="chapter-select-all"
+              />
+            )}
+            <p className="text-sm font-semibold text-gray-900">Chapters ({chapters.length}{chapters.length !== total ? ` of ${total}` : ''})</p>
+          </div>
           {(setStatusFilter || setSortByStatus) && (
             <div className="flex items-center gap-2">
               {setStatusFilter && (
@@ -91,6 +109,16 @@ export default function ChapterList({
                 background:  '#f9fafb',
               }}>
               <div className="flex items-start gap-2 p-3 pb-2">
+                {selectionEnabled && (
+                  <input
+                    type="checkbox"
+                    checked={selectedIds?.has(ch.id) || false}
+                    onChange={() => onToggleSelect(ch.id)}
+                    className="mt-1 h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-400 cursor-pointer flex-shrink-0"
+                    title="Select chapter for bulk actions"
+                    data-testid={`chapter-select-${ch.id}`}
+                  />
+                )}
                 <div className="flex-shrink-0 mt-1">
                   {hasNotes
                     ? <div className="w-2 h-2 rounded-full bg-emerald-400" title="Notes generated" />

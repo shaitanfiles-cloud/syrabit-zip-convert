@@ -588,6 +588,64 @@ async def admin_update_subject(subject_id: str, data: dict, admin: dict = Depend
         _schedule_indexnow_for_subject(updated_subj)
     return {"message": "Updated"}
 
+_ALLOWED_BULK_STATUSES = {"published", "draft", "unpublished", "archived"}
+_ALLOWED_BULK_SCOPES = {"subjects", "chapters"}
+
+
+@router.post("/admin/content/bulk-status")
+async def admin_bulk_status_update(data: dict, admin: dict = Depends(get_admin_user)):
+    """Bulk-update the `status` field of many subjects or chapters in one call.
+
+    Body: { "scope": "subjects"|"chapters", "ids": [str, ...], "status": "published"|"draft"|"unpublished"|"archived" }
+    Returns: { "matched": int, "modified": int, "scope": str, "status": str }
+    """
+    scope = (data.get("scope") or "").strip().lower()
+    new_status = (data.get("status") or "").strip().lower()
+    raw_ids = data.get("ids") or []
+
+    if scope not in _ALLOWED_BULK_SCOPES:
+        raise HTTPException(status_code=400, detail=f"scope must be one of {sorted(_ALLOWED_BULK_SCOPES)}")
+    if new_status not in _ALLOWED_BULK_STATUSES:
+        raise HTTPException(status_code=400, detail=f"status must be one of {sorted(_ALLOWED_BULK_STATUSES)}")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="ids must be a non-empty list")
+
+    ids = [str(i) for i in raw_ids if i]
+    if len(ids) > 500:
+        raise HTTPException(status_code=400, detail="ids cannot exceed 500 per request")
+
+    coll = db.subjects if scope == "subjects" else db.chapters
+    now_iso = datetime.now(timezone.utc).isoformat()
+    try:
+        result = await coll.update_many(
+            {"id": {"$in": ids}},
+            {"$set": {"status": new_status, "updated_at": now_iso}},
+        )
+    except Exception as e:
+        logger.exception("bulk-status update failed")
+        raise HTTPException(status_code=503, detail=f"Database error: {e}")
+
+    _invalidate_content_cache(scope)
+    _schedule_d1_sync_fire(scope)
+
+    if scope == "subjects":
+        try:
+            async for subj in db.subjects.find(
+                {"id": {"$in": ids}},
+                {"_id": 0, "board_slug": 1, "class_slug": 1, "slug": 1},
+            ):
+                _schedule_indexnow_for_subject(subj)
+        except Exception:
+            pass
+
+    return {
+        "scope": scope,
+        "status": new_status,
+        "matched": result.matched_count,
+        "modified": result.modified_count,
+    }
+
+
 @router.patch("/admin/content/subjects/{subject_id}")
 async def admin_patch_subject(subject_id: str, data: dict, admin: dict = Depends(get_admin_user)):
     """Update subject (PATCH method)"""
