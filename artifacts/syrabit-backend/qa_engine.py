@@ -340,11 +340,16 @@ async def promote_qa_to_seo_faq(_admin: dict = Depends(_require_admin)):
             "updated_at": now,
         }
 
-        await _db.seo_pages.update_one(
+        # Task #349: route through the shared helper so created_at /
+        # updated_at are guaranteed. The freshly-minted FAQ id stays in
+        # $setOnInsert so it is stamped exactly once.
+        from seo_writes import upsert_seo_page
+        await upsert_seo_page(
+            _db,
             {"topic_slug": topic_slug, "page_type": "faq", "board_slug": board_slug,
              "class_slug": class_slug, "subject_slug": subject_slug},
-            {"$set": page, "$setOnInsert": {"id": f"faq-{uuid.uuid4().hex[:8]}"}},
-            upsert=True,
+            page,
+            set_on_insert_extra={"id": f"faq-{uuid.uuid4().hex[:8]}"},
         )
         promoted += 1
 

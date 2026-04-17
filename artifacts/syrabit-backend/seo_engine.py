@@ -1444,10 +1444,13 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    await _db.seo_pages.replace_one(
+    # Task #349: route through the shared helper so created_at /
+    # updated_at are guaranteed and preserved across re-generations.
+    from seo_writes import upsert_seo_page
+    await upsert_seo_page(
+        _db,
         {"topic_id": topic["id"], "page_type": page_type},
         page,
-        upsert=True,
     )
     if page_status == "published":
         # SEO Phase A — content-time fan-out: IndexNow + edge cache purge

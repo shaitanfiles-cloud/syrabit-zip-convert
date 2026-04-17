@@ -2856,10 +2856,11 @@ async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends
         topic_doc["subject_id"] = body.subject_id
     if hasattr(body, "chapter_id") and body.chapter_id:
         topic_doc["chapter_id"] = body.chapter_id
-    existing_topic = await db.seo_topics.find_one({"slug": body.slug}, {"_id": 0, "created_at": 1})
-    if not existing_topic:
-        topic_doc["created_at"] = now_iso
-    await db.seo_topics.update_one({"slug": body.slug}, {"$set": topic_doc}, upsert=True)
+    # Task #349: route through the shared helper so created_at is
+    # stamped exactly once (via $setOnInsert) and updated_at is always
+    # refreshed. The previous find-then-set dance is no longer needed.
+    from seo_writes import upsert_seo_topic
+    await upsert_seo_topic(db, {"slug": body.slug}, topic_doc)
 
     # ── 4. Upsert SEO page (or create revision copy) ───────────────────────────
     page_doc = {
@@ -2874,6 +2875,12 @@ async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends
         "updated_at": now_iso,
         "source": "studio",
     }
+    # Task #349: route every seo_pages write through the shared helper
+    # so created_at / updated_at are guaranteed. Revision rows have a
+    # unique `topic_slug` (date-stamped) so an upsert on that slug is
+    # equivalent to an insert without risking the missing-publish-date
+    # regression that motivated this task.
+    from seo_writes import upsert_seo_page
     if body.is_revision and body.parent_revision_id:
         from datetime import date as _date
         rev_slug = f"{body.slug}-rev-{_date.today().isoformat()}"
@@ -2882,18 +2889,16 @@ async def admin_studio_publish(body: StudioPublishRequest, admin: dict = Depends
             "topic_slug": rev_slug,
             "is_revision": True,
             "parent_revision_id": body.parent_revision_id,
-            "created_at": now_iso,
         }
-        await db.seo_pages.insert_one(revision_doc)
+        await upsert_seo_page(
+            db, {"topic_slug": rev_slug}, revision_doc,
+        )
         logger.info(f"Studio revision created: {rev_slug} ← {body.parent_revision_id}")
     else:
-        existing_page = await db.seo_pages.find_one({"topic_slug": body.slug, "page_type": "notes"}, {"_id": 0, "created_at": 1})
-        if not existing_page:
-            page_doc["created_at"] = now_iso
-        await db.seo_pages.update_one(
+        await upsert_seo_page(
+            db,
             {"topic_slug": body.slug, "page_type": "notes"},
-            {"$set": page_doc},
-            upsert=True,
+            page_doc,
         )
 
     try:
@@ -4003,17 +4008,20 @@ async def admin_automation_auto_generate(admin: dict = Depends(get_admin_user)):
                 "FAQs (3 common student questions)",
             ],
         }
-        await db.seo_topics.update_one(
+        # Task #349: route through the shared helper. Note that
+        # `created_at` is dropped from the $set payload — the helper
+        # promotes it to $setOnInsert so it survives later upserts.
+        from seo_writes import upsert_seo_topic
+        await upsert_seo_topic(
+            db,
             {"slug": slug},
-            {"$set": {
+            {
                 "title": title,
                 "slug": slug,
                 "status": "draft",
                 "source": "auto-generated",
                 "geo_meta": geo_meta,
-                "created_at": now_iso,
-            }},
-            upsert=True,
+            },
         )
         generated.append({"slug": slug, "title": title, "geo_meta": geo_meta})
     return {"generated": generated, "count": len(generated)}

@@ -377,16 +377,18 @@ Generate **topic-wise study notes** for the chapter below.
 
             try:
                 for kw in new_topics[:25]:
-                    await db.seo_topics.update_one(
+                    # Task #349: route through the shared helper so
+                    # created_at is stamped exactly once via $setOnInsert.
+                    from seo_writes import upsert_seo_topic
+                    await upsert_seo_topic(
+                        db,
                         {"linked_chapter_id": chapter_id, "topic": kw},
-                        {"$set": {
+                        {
                             "linked_chapter_id": chapter_id,
                             "topic": kw,
                             "primary_keyword": kw,
                             "source": "ai_notes",
-                            "created_at": datetime.now(timezone.utc).isoformat(),
-                        }},
-                        upsert=True,
+                        },
                     )
             except Exception:
                 pass
@@ -1861,16 +1863,18 @@ async def admin_extract_keywords(admin: dict = Depends(get_admin_user)):
         if not keywords:
             continue
         for kw in keywords[:25]:
-            await db.seo_topics.update_one(
+            # Task #349: route through the shared helper so created_at
+            # is stamped exactly once via $setOnInsert.
+            from seo_writes import upsert_seo_topic
+            await upsert_seo_topic(
+                db,
                 {"linked_chapter_id": ch_id, "topic": kw},
-                {"$set": {
+                {
                     "linked_chapter_id": ch_id,
                     "topic": kw,
                     "primary_keyword": kw,
                     "source": "content_extraction",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }},
-                upsert=True,
+                },
             )
             stats["keywords_extracted"] += 1
         stats["chapters"] += 1
