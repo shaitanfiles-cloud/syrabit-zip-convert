@@ -3849,6 +3849,316 @@ async def _bing_submit_daily_loop():
         await asyncio.sleep(_BING_SUBMIT_LOOP_INTERVAL_S)
 
 
+# ============================================================
+# Plan 11 / Task #333: Monthly Bing Keyword Research refresh
+# ============================================================
+#
+# Bing's free Keyword Research API returns India-specific search-volume
+# data for any seed term. We use it to ground each chapter's `<meta
+# keywords>` and meta description in what students actually search for
+# rather than the static "{title} notes / {title} MCQ" template.
+#
+# Strategy: a leader-elected hourly loop runs once per UTC day in a
+# 30-minute window around 04:00 UTC, claims a Mongo CAS lock for today,
+# picks the next `_BING_KEYWORD_REFRESH_DAILY_BUDGET` chapters whose
+# `bing_keywords_updated_at` is oldest (or missing), and refreshes
+# their cached top-related-keywords list. Spreading the catalog across
+# ~30 days keeps us well inside the free quota.
+
+_BING_KEYWORD_REFRESH_LOCK_ID = "bing_keyword_refresh_daily"
+_BING_KEYWORD_REFRESH_LAST_RUN_KEY = "last_run_date"
+_BING_KEYWORD_REFRESH_TARGET_HOUR_UTC = 4
+_BING_KEYWORD_REFRESH_TOLERANCE_MINUTES = 30
+_BING_KEYWORD_REFRESH_LOOP_INTERVAL_S = 600
+_BING_KEYWORD_REFRESH_DAILY_BUDGET = 50
+_BING_KEYWORD_REFRESH_STATS_COLLECTION = "bing_keyword_refresh_runs"
+
+
+def _bing_keyword_today_tag(now_utc: datetime) -> str:
+    return now_utc.strftime("%Y-%m-%d")
+
+
+def _should_run_bing_keyword_refresh_now(now_utc: datetime, last_run_date: str) -> bool:
+    """Run once per UTC day in a 30-minute window around 04:00 UTC."""
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    target = now_utc.replace(
+        hour=_BING_KEYWORD_REFRESH_TARGET_HOUR_UTC,
+        minute=0, second=0, microsecond=0,
+    )
+    delta_minutes = abs((now_utc - target).total_seconds()) / 60.0
+    if delta_minutes > _BING_KEYWORD_REFRESH_TOLERANCE_MINUTES:
+        return False
+    return _bing_keyword_today_tag(now_utc) != (last_run_date or "")
+
+
+async def _claim_bing_keyword_refresh_slot(db, today_tag: str) -> bool:
+    """Mongo CAS so only one Railway/gunicorn worker runs the refresh
+    per UTC day. Mirrors `_claim_bing_submit_slot`."""
+    from pymongo.errors import DuplicateKeyError
+    try:
+        res = await db.job_locks.find_one_and_update(
+            {"_id": _BING_KEYWORD_REFRESH_LOCK_ID,
+             _BING_KEYWORD_REFRESH_LAST_RUN_KEY: {"$ne": today_tag}},
+            {"$set": {_BING_KEYWORD_REFRESH_LAST_RUN_KEY: today_tag}},
+            upsert=False,
+        )
+        if res is not None:
+            return True
+    except Exception as exc:
+        logger.debug(f"[Bing keyword refresh] CAS update failed: {exc}")
+        return False
+    try:
+        await db.job_locks.insert_one({
+            "_id": _BING_KEYWORD_REFRESH_LOCK_ID,
+            _BING_KEYWORD_REFRESH_LAST_RUN_KEY: today_tag,
+        })
+        return True
+    except DuplicateKeyError:
+        return False
+    except Exception as exc:
+        logger.debug(f"[Bing keyword refresh] bootstrap insert failed: {exc}")
+        return False
+
+
+async def _select_chapters_for_keyword_refresh(db, budget: int) -> list:
+    """Pick up to `budget` chapters whose Bing keyword cache is oldest or
+    missing. Mongo sorts missing fields first when ascending, which is
+    exactly the priority we want (never-refreshed first, then stalest)."""
+    try:
+        cursor = (
+            db.chapters
+            .find(
+                {"slug": {"$exists": True, "$ne": ""},
+                 "title": {"$exists": True, "$ne": ""}},
+                {"_id": 0, "id": 1, "title": 1, "slug": 1,
+                 "subject_id": 1, "bing_keywords_updated_at": 1},
+            )
+            .sort("bing_keywords_updated_at", 1)
+            .limit(max(1, int(budget)))
+        )
+        return await cursor.to_list(max(1, int(budget)))
+    except Exception as exc:
+        logger.warning(f"[Bing keyword refresh] chapter pick failed: {exc}")
+        return []
+
+
+async def _refresh_keywords_for_chapter(
+    db, chapter: dict, api_key: str, *, client=None, now: datetime = None,
+) -> dict:
+    """Fetch & persist `bing_keywords` for a single chapter doc.
+
+    On success the chapter doc is updated with both the keyword list and
+    `bing_keywords_updated_at` so it falls to the back of the refresh
+    queue for the next month.
+    """
+    from bing_keyword_client import fetch_top_keywords
+    title = (chapter.get("title") or "").strip()
+    if not title:
+        return {"chapter_id": chapter.get("id"), "skipped": True, "reason": "no_title"}
+    now = now or datetime.now(timezone.utc)
+    res = await fetch_top_keywords(
+        api_key, title, db=db, client=client, now=now, force=True,
+    )
+    keywords = res.get("keywords") or []
+    source = res.get("source")
+
+    # Fallback safety: if Bing returned nothing useful (outage, quota
+    # exhaustion, validator-empty), do NOT wipe the chapter's existing
+    # keywords and do NOT bump `bing_keywords_updated_at` — leaving the
+    # timestamp untouched keeps this chapter at the front of the queue
+    # so the next refresh window retries it instead of waiting another
+    # ~30 days. Only `_bing_keywords_last_attempt_at` is recorded so
+    # ops can tell the worker did try.
+    if not keywords:
+        try:
+            await db.chapters.update_one(
+                {"id": chapter.get("id")},
+                {"$set": {"bing_keywords_last_attempt_at": now,
+                          "bing_keywords_last_attempt_source": source}},
+            )
+        except Exception as exc:
+            logger.debug(f"[Bing keyword refresh] no-op marker write failed: {exc}")
+        return {
+            "chapter_id": chapter.get("id"),
+            "title": title,
+            "keywords": 0,
+            "source": source,
+            "ok": False,
+            "skipped": True,
+            "reason": "empty_result_preserved_existing",
+        }
+
+    update = {
+        "bing_keywords": keywords,
+        "bing_keywords_primary": res.get("primary"),
+        "bing_keywords_updated_at": now,
+        "bing_keywords_source": source,
+    }
+    try:
+        await db.chapters.update_one(
+            {"id": chapter.get("id")}, {"$set": update},
+        )
+    except Exception as exc:
+        logger.debug(f"[Bing keyword refresh] chapter update failed: {exc}")
+        return {"chapter_id": chapter.get("id"), "ok": False,
+                "error": str(exc), "keywords": len(keywords)}
+    return {
+        "chapter_id": chapter.get("id"),
+        "title": title,
+        "keywords": len(keywords),
+        "source": source,
+        "ok": True,
+    }
+
+
+async def _try_run_bing_keyword_refresh_once(db, now_utc: datetime) -> dict:
+    """One iteration of the monthly Bing keyword refresh loop.
+
+    Factored out so tests can drive it directly without spinning up the
+    background loop.
+    """
+    import os as _os
+    api_key = _os.getenv("BING_WEBMASTER_API_KEY", "").strip()
+    if not api_key:
+        return {"claimed": False, "reason": "no_api_key"}
+
+    today_tag = _bing_keyword_today_tag(now_utc)
+    try:
+        cfg = await db.job_locks.find_one(
+            {"_id": _BING_KEYWORD_REFRESH_LOCK_ID},
+            {"_id": 0, _BING_KEYWORD_REFRESH_LAST_RUN_KEY: 1},
+        ) or {}
+    except Exception:
+        cfg = {}
+    last_run = cfg.get(_BING_KEYWORD_REFRESH_LAST_RUN_KEY, "")
+    if not _should_run_bing_keyword_refresh_now(now_utc, last_run):
+        return {"claimed": False, "reason": "outside_window_or_dedup"}
+
+    if not await _claim_bing_keyword_refresh_slot(db, today_tag):
+        return {"claimed": False, "reason": "lost_race"}
+
+    chapters = await _select_chapters_for_keyword_refresh(
+        db, _BING_KEYWORD_REFRESH_DAILY_BUDGET,
+    )
+
+    import httpx as _httpx
+    from bing_keyword_client import BING_KEYWORD_TIMEOUT_S
+    refreshed: list = []
+    skipped: list = []
+    async with _httpx.AsyncClient(timeout=BING_KEYWORD_TIMEOUT_S) as client:
+        for ch in chapters:
+            res = await _refresh_keywords_for_chapter(
+                db, ch, api_key, client=client, now=now_utc,
+            )
+            if res.get("skipped"):
+                skipped.append(res)
+            else:
+                refreshed.append(res)
+
+    summary = {
+        "date": today_tag,
+        "ts": now_utc.isoformat(),
+        "chapters_picked": len(chapters),
+        "refreshed": len(refreshed),
+        "skipped": len(skipped),
+        "budget": _BING_KEYWORD_REFRESH_DAILY_BUDGET,
+    }
+    try:
+        await db[_BING_KEYWORD_REFRESH_STATS_COLLECTION].update_one(
+            {"date": today_tag}, {"$set": summary}, upsert=True,
+        )
+    except Exception as exc:
+        logger.warning(f"[Bing keyword refresh] stats persist failed: {exc}")
+    logger.info(
+        "[Bing keyword refresh] day=%s picked=%d refreshed=%d skipped=%d",
+        today_tag, len(chapters), len(refreshed), len(skipped),
+    )
+    return {"claimed": True, **summary}
+
+
+async def _bing_keyword_refresh_loop():
+    """Leader-elected background loop: every 10 min check whether todays
+    monthly Bing keyword refresh should run."""
+    from deps import db, is_mongo_available
+    await asyncio.sleep(90)
+    while True:
+        try:
+            if await is_mongo_available():
+                now_utc = datetime.now(timezone.utc)
+                await _try_run_bing_keyword_refresh_once(db, now_utc)
+        except Exception as exc:
+            logger.debug(f"[Bing keyword refresh] loop iteration failed: {exc}")
+        await asyncio.sleep(_BING_KEYWORD_REFRESH_LOOP_INTERVAL_S)
+
+
+@router.get("/admin/seo/bing-keywords/{chapter_slug}")
+async def admin_bing_keywords(
+    chapter_slug: str,
+    refresh: int = Query(0, ge=0, le=1),
+    admin: dict = Depends(get_admin_user),
+):
+    """Inspect (and optionally force-refresh) the Bing keyword data for a
+    given chapter slug. Returns:
+
+    - `chapter`     — id/title/subject for the matched chapter (or null)
+    - `cached`      — the persisted `bing_keywords*` fields from the chapter doc
+    - `live`        — a fresh `fetch_top_keywords` call (always present;
+                      uses the in-memory cache unless `refresh=1`)
+    - `keywords`    — preferred top-N list (from `live` if non-empty,
+                      else from `cached`)
+    - `source`      — provenance of `keywords`
+    """
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        raise HTTPException(503, "Content database unavailable")
+    chapter = await db.chapters.find_one(
+        {"slug": chapter_slug},
+        {"_id": 0, "id": 1, "title": 1, "subject_id": 1, "slug": 1,
+         "bing_keywords": 1, "bing_keywords_primary": 1,
+         "bing_keywords_updated_at": 1, "bing_keywords_source": 1},
+    )
+    if not chapter:
+        raise HTTPException(404, "Chapter not found")
+
+    cached = {
+        "keywords": chapter.get("bing_keywords") or [],
+        "primary": chapter.get("bing_keywords_primary"),
+        "updated_at": chapter.get("bing_keywords_updated_at"),
+        "source": chapter.get("bing_keywords_source"),
+    }
+    if isinstance(cached["updated_at"], datetime):
+        cached["updated_at"] = cached["updated_at"].isoformat()
+
+    import os as _os
+    from bing_keyword_client import fetch_top_keywords
+    api_key = _os.getenv("BING_WEBMASTER_API_KEY", "").strip()
+    live = await fetch_top_keywords(
+        api_key, chapter.get("title", ""),
+        db=db, force=bool(refresh),
+    )
+
+    live_kw = live.get("keywords") or []
+    keywords = live_kw if live_kw else (cached["keywords"] or [])
+    source = live.get("source") if live_kw else (
+        "chapter_cache" if cached["keywords"] else "empty"
+    )
+
+    return {
+        "chapter": {
+            "id": chapter.get("id"),
+            "slug": chapter.get("slug"),
+            "title": chapter.get("title"),
+            "subject_id": chapter.get("subject_id"),
+        },
+        "cached": cached,
+        "live": live,
+        "keywords": keywords,
+        "source": source,
+        "api_key_set": bool(api_key),
+    }
+
+
 def _bing_submit_last_run_summary(rows: list) -> dict:
     """Derive a one-line status for the most recent submit run from the
     persisted daily docs. `status` is one of: never_run, rate_limited,

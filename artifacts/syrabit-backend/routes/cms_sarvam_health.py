@@ -2005,12 +2005,51 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 return None
             chapter = await db.chapters.find_one(
                 {"subject_id": subj["id"], "slug": chapter_slug},
-                {"_id": 0, "title": 1, "description": 1, "content": 1, "topics": 1, "content_as": 1},
+                {"_id": 0, "title": 1, "description": 1, "content": 1,
+                 "topics": 1, "content_as": 1, "bing_keywords": 1},
             )
             if not chapter:
                 return None
             ch_title = _html_mod.escape(chapter.get("title", chapter_slug))
             ch_desc = _html_mod.escape((chapter.get("description") or "")[:300])
+            # Task #333: prefer Bing-derived terms when the monthly
+            # refresh has run for this chapter; otherwise fall back to
+            # the same static template `ChapterPage.jsx` uses so brand-
+            # new chapters still ship a `<meta name="keywords">` tag
+            # (Google ignores it but Bing/Yandex still use it).
+            bing_kw_terms = []
+            bing_kw_list = chapter.get("bing_keywords") or []
+            if isinstance(bing_kw_list, list) and bing_kw_list:
+                for kw in bing_kw_list[:20]:
+                    term = (kw.get("keyword") if isinstance(kw, dict) else kw) or ""
+                    term = term.strip()
+                    if term:
+                        bing_kw_terms.append(term)
+
+            raw_title = chapter.get("title", chapter_slug) or chapter_slug
+            raw_subj = subj.get("name", subject_slug) or subject_slug
+            board_label = board.replace("-", " ").upper()
+            class_label = class_slug.replace("-", " ")
+            static_terms = [
+                raw_title,
+                f"{raw_title} notes",
+                f"{raw_title} {raw_subj}",
+                f"{raw_title} MCQ",
+                f"{raw_title} important questions",
+                f"{raw_subj} {class_label}",
+                f"{board_label} notes",
+                "AHSEC", "SEBA", "exam preparation",
+            ]
+            seen_kw = set()
+            merged_terms = []
+            for term in (*bing_kw_terms, *static_terms):
+                key_lower = term.strip().lower()
+                if not key_lower or key_lower in seen_kw:
+                    continue
+                seen_kw.add(key_lower)
+                merged_terms.append(term.strip())
+            kw_attr = _html_mod.escape(", ".join(merged_terms))
+            bing_kw_meta = f'<meta name="keywords" content="{kw_attr}">' if merged_terms else ""
             subj_name = _html_mod.escape(subj.get("name", subject_slug))
             page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{chapter_slug}"
             ch_has_as = bool((chapter.get("content_as") or "").strip())
@@ -2036,6 +2075,7 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{ch_title} | {subj_name} | Syrabit.ai</title>
 <meta name="description" content="{ch_desc}">
+{bing_kw_meta}
 <link rel="canonical" href="{page_url}">
 <meta property="og:title" content="{ch_title} | {subj_name} | Syrabit.ai">
 <meta property="og:description" content="{ch_desc}">

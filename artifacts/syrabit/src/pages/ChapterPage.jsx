@@ -641,9 +641,21 @@ export default function ChapterPage() {
         description={seoDesc}
         url={canonical}
         keywords={(() => {
+          // Task #333: when the monthly Bing keyword refresh has populated
+          // `data.bing_keywords` for this chapter, lead with what
+          // students actually search for (sorted by impressions). Always
+          // append the static template as a fallback so brand-new
+          // chapters that haven't been refreshed yet still get keyword
+          // coverage.
           const words = chapterTitle.split(/[\s,\-–—/&]+/).filter(w => w.length > 2);
           const base = [chapterTitle, subjectName, `${boardName} notes`, `${className} study material`, 'AHSEC', 'SEBA', 'exam preparation'];
-          const expanded = [...base, ...words, `${chapterTitle} notes`, `${chapterTitle} definition`, `${chapterTitle} MCQ`, `${chapterTitle} important questions`, `${chapterTitle} ${subjectName}`, `${subjectName} ${className}`, `${chapterTitle} ${boardName}`, `${chapterTitle} study notes`, `${chapterTitle} exam notes`];
+          const fallback = [...base, ...words, `${chapterTitle} notes`, `${chapterTitle} definition`, `${chapterTitle} MCQ`, `${chapterTitle} important questions`, `${chapterTitle} ${subjectName}`, `${subjectName} ${className}`, `${chapterTitle} ${boardName}`, `${chapterTitle} study notes`, `${chapterTitle} exam notes`];
+          const bingTerms = Array.isArray(data.bing_keywords)
+            ? data.bing_keywords
+                .map(k => (typeof k === 'string' ? k : (k && k.keyword) || ''))
+                .filter(Boolean)
+            : [];
+          const expanded = [...bingTerms, ...fallback];
           return [...new Set(expanded)].join(', ');
         })()}
         tags={[chapterTitle, subjectName, boardName, className, data.chapter_title || ''].filter(Boolean)}

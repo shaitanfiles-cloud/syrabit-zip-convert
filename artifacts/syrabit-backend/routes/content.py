@@ -717,6 +717,11 @@ async def get_chapter_by_slug(board_slug: str, class_slug: str, subject_slug: st
         "word_count": word_count, "generated_at": chapter.get("created_at", ""),
         "updated_at": chapter.get("updated_at", ""),
         "is_fallback": True,
+        # Task #333: Bing keyword data is refreshed monthly by the
+        # `_bing_keyword_refresh_loop`; surface it so ChapterPage.jsx
+        # can populate <meta keywords> with what students actually
+        # search for instead of a static template.
+        "bing_keywords": chapter.get("bing_keywords") or [],
     }
     _set_content_cache(ck, result)
     if response: response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=3600"

@@ -297,6 +297,23 @@ async def lifespan(app):
             await db.sessions.create_index([("last_ping", -1)])
             await db.sessions.create_index([("start_time", -1)])
 
+            # Task #333: Bing Keyword Research cache. TTL index expires
+            # cached entries 30 days after `cached_at` so the collection
+            # cannot grow unbounded — `bing_keyword_client` also re-fetches
+            # past TTL but the DB-level expiry is the durable guarantee.
+            try:
+                from bing_keyword_client import (
+                    BING_KEYWORD_CACHE_COLLECTION,
+                    BING_KEYWORD_CACHE_TTL_DAYS,
+                )
+                await db[BING_KEYWORD_CACHE_COLLECTION].create_index(
+                    "cached_at",
+                    expireAfterSeconds=BING_KEYWORD_CACHE_TTL_DAYS * 24 * 3600,
+                    name="cached_at_ttl",
+                )
+            except Exception as _idx_exc:
+                logger.debug(f"bing_keyword_cache TTL index ensure failed: {_idx_exc}")
+
             await db.blocked_ips.create_index("ip_hash", unique=True)
             await db.blocked_ips.create_index(
                 "expires_at", expireAfterSeconds=0,
@@ -583,6 +600,10 @@ async def lifespan(app):
         # gated so we don't spend our 10k/day quota N× across replicas.
         from routes.bot_discovery import _bing_submit_daily_loop
         asyncio.create_task(_bing_submit_daily_loop())
+        # Task #333: monthly Bing keyword refresh — leader-elected so we
+        # only spend the free Keyword Research quota on one replica.
+        from routes.bot_discovery import _bing_keyword_refresh_loop
+        asyncio.create_task(_bing_keyword_refresh_loop())
     asyncio.create_task(_seo_health_alert_loop())
     asyncio.create_task(_seo_weekly_digest_loop())
     if _is_leader:
