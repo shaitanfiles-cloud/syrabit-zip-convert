@@ -552,6 +552,248 @@ async def admin_hydrate_stats(
         return empty
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Task #412: alert ops when stale-build failures spike.
+#
+# Background loop ticks every HYDRATE_ALERT_INTERVAL_S; reads the last hour
+# of `hydrate_telemetry` and dispatches at most one alert per incident type
+# per HYDRATE_ALERT_COOLDOWN_S window (suppress dupes for ~60 min).
+#
+# Two independent alert types, both wired through metrics._dispatch_alert
+# (Resend email + persisted to db.alerts + Slack/webhook if configured):
+#
+#   1. ``hydrate_failure_spike`` — more than HYDRATE_FAILURE_THRESHOLD
+#      `hydrate_preload_failed` events in the last hour. Indicates a CDN
+#      mis-config / asset-upload gap.
+#   2. ``hydrate_recovery_low`` — auto-reload success rate below
+#      HYDRATE_RECOVERY_MIN_RATE_PCT with ≥ HYDRATE_RECOVERY_MIN_ATTEMPTS
+#      attempts in the last hour. Indicates the new build is also broken
+#      and the loop guard is firing.
+# ─────────────────────────────────────────────────────────────────────────────
+
+HYDRATE_FAILURE_THRESHOLD = 50          # hydrate_preload_failed events / hour
+HYDRATE_RECOVERY_MIN_ATTEMPTS = 10      # min auto-reload attempts before judging
+HYDRATE_RECOVERY_MIN_RATE_PCT = 50.0    # success rate floor (%)
+HYDRATE_ALERT_COOLDOWN_S = 60 * 60      # 60 min per incident type
+HYDRATE_ALERT_INTERVAL_S = 5 * 60       # poll every 5 min
+_HYDRATE_ALERT_DASHBOARD_URL = "https://syrabit.ai/admin/dashboard?tab=overview#hydrate-health"
+
+_HYDRATE_ALERT_LAST_FIRED: Dict[str, float] = {}
+
+
+async def _gather_hydrate_alert_window(window_seconds: int = 3600) -> Dict[str, Any]:
+    """Aggregate the last `window_seconds` of hydrate telemetry into the
+    counters required by the threshold check. Always returns a stable
+    shape; on Mongo failure returns zeros so the alert loop just no-ops.
+    """
+    out: Dict[str, Any] = {
+        "since": datetime.now(timezone.utc) - timedelta(seconds=window_seconds),
+        "preload_failed_total": 0,
+        "auto_reload_attempts": 0,
+        "auto_reload_recoveries": 0,
+        "success_rate_pct": None,
+        "top_kind": None,
+        "sample_message": None,
+    }
+    if not await is_mongo_available():
+        return out
+    try:
+        coll = db.hydrate_telemetry
+        base = {"created_at": {"$gte": out["since"]}}
+
+        out["preload_failed_total"] = await coll.count_documents({
+            **base, "event": "hydrate_preload_failed",
+        })
+        out["auto_reload_attempts"] = await coll.count_documents({
+            **base, "event": "hydrate_preload_failed", "auto_reload": True,
+        })
+        out["auto_reload_recoveries"] = await coll.count_documents({
+            **base, "event": "hydrate_recovered",
+        })
+        if out["auto_reload_attempts"] > 0:
+            out["success_rate_pct"] = round(
+                (out["auto_reload_recoveries"] / out["auto_reload_attempts"]) * 100, 1,
+            )
+
+        # Top failing chunk kind in the window (e.g. "chunk", "css").
+        try:
+            cur = coll.aggregate([
+                {"$match": {**base, "event": "hydrate_preload_failed",
+                            "kind": {"$nin": [None, ""]}}},
+                {"$group": {"_id": "$kind", "count": {"$sum": 1}}},
+                {"$sort": {"count": -1}},
+                {"$limit": 1},
+            ])
+            async for d in cur:
+                out["top_kind"] = {"value": d["_id"], "count": d["count"]}
+                break
+        except Exception:
+            pass
+
+        # Sample error message — most recent non-empty one in the window.
+        try:
+            sample = await coll.find_one(
+                {**base, "event": "hydrate_preload_failed",
+                 "message": {"$nin": [None, ""]}},
+                {"_id": 0, "message": 1, "name": 1, "path": 1, "created_at": 1},
+                sort=[("created_at", -1)],
+            )
+            if sample:
+                out["sample_message"] = sample
+        except Exception:
+            pass
+    except Exception as e:
+        logger.debug(f"hydrate alert window aggregation failed: {e}")
+    return out
+
+
+def _format_hydrate_sample(sample: Optional[dict]) -> str:
+    if not sample:
+        return ""
+    parts = []
+    if sample.get("name"):
+        parts.append(str(sample["name"]))
+    if sample.get("message"):
+        parts.append(str(sample["message"]))
+    line = ": ".join(parts) if parts else ""
+    if sample.get("path"):
+        line = f"{line} (path: {sample['path']})" if line else f"path: {sample['path']}"
+    return line[:300]
+
+
+async def _evaluate_hydrate_alerts(now_ts: Optional[float] = None) -> List[Dict[str, Any]]:
+    """Pure helper used by the loop and tests. Returns the list of alerts
+    that *should* be dispatched right now (after cooldown checks). Does
+    NOT mutate ``_HYDRATE_ALERT_LAST_FIRED`` — the loop is responsible for
+    marking cooldown only after a successful dispatch (so a transient
+    Resend/webhook failure doesn't suppress the next alert for 60 min).
+    Each entry is the kwargs dict for ``metrics._dispatch_alert``.
+    """
+    if now_ts is None:
+        now_ts = time.time()
+    snap = await _gather_hydrate_alert_window()
+    alerts: List[Dict[str, Any]] = []
+
+    sample_str = _format_hydrate_sample(snap.get("sample_message"))
+    top_kind = snap.get("top_kind") or {}
+    top_kind_str = (
+        f"{top_kind.get('value')} ({top_kind.get('count')} events)"
+        if top_kind else "n/a"
+    )
+    dashboard_line = f"Dashboard: {_HYDRATE_ALERT_DASHBOARD_URL}"
+
+    def _cooldown_ok(key: str) -> bool:
+        last = _HYDRATE_ALERT_LAST_FIRED.get(key)
+        return last is None or (now_ts - last) >= HYDRATE_ALERT_COOLDOWN_S
+
+    # ── (1) hydrate_failure_spike
+    failures = int(snap.get("preload_failed_total") or 0)
+    if failures > HYDRATE_FAILURE_THRESHOLD:
+        if _cooldown_ok("hydrate_failure_spike"):
+            body_lines = [
+                f"{failures} hydrate_preload_failed events in the last hour "
+                f"(threshold: {HYDRATE_FAILURE_THRESHOLD}).",
+                f"Top failing asset kind: {top_kind_str}.",
+            ]
+            if sample_str:
+                body_lines.append(f"Sample error: {sample_str}")
+            body_lines.append(dashboard_line)
+            alerts.append({
+                "alert_type": "hydrate_failure_spike",
+                "title": "Stale-build hydration failures spiked",
+                "body": "\n".join(body_lines),
+                "threshold_snapshot": {
+                    "metric": "hydrate_preload_failed_per_hour",
+                    "value": HYDRATE_FAILURE_THRESHOLD,
+                    "actual": failures,
+                    "top_kind": top_kind.get("value") if top_kind else None,
+                    "auto_reload_attempts": int(snap.get("auto_reload_attempts") or 0),
+                    "auto_reload_recoveries": int(snap.get("auto_reload_recoveries") or 0),
+                },
+            })
+
+    # ── (2) hydrate_recovery_low
+    attempts = int(snap.get("auto_reload_attempts") or 0)
+    rate = snap.get("success_rate_pct")
+    if attempts >= HYDRATE_RECOVERY_MIN_ATTEMPTS and rate is not None and rate < HYDRATE_RECOVERY_MIN_RATE_PCT:
+        if _cooldown_ok("hydrate_recovery_low"):
+            recoveries = int(snap.get("auto_reload_recoveries") or 0)
+            body_lines = [
+                f"Auto-reload success rate is {rate:.1f}% "
+                f"({recoveries}/{attempts}) over the last hour, below the "
+                f"{HYDRATE_RECOVERY_MIN_RATE_PCT:.0f}% floor with "
+                f"≥ {HYDRATE_RECOVERY_MIN_ATTEMPTS} attempts.",
+                "The new build may also be broken — clients are likely hitting "
+                "the loop guard.",
+                f"Top failing asset kind: {top_kind_str}.",
+            ]
+            if sample_str:
+                body_lines.append(f"Sample error: {sample_str}")
+            body_lines.append(dashboard_line)
+            alerts.append({
+                "alert_type": "hydrate_recovery_low",
+                "title": "Auto-reload recovery rate is low",
+                "body": "\n".join(body_lines),
+                "threshold_snapshot": {
+                    "metric": "auto_reload_success_rate_pct",
+                    "value": HYDRATE_RECOVERY_MIN_RATE_PCT,
+                    "actual": rate,
+                    "auto_reload_attempts": attempts,
+                    "auto_reload_recoveries": recoveries,
+                    "top_kind": top_kind.get("value") if top_kind else None,
+                },
+            })
+
+    return alerts
+
+
+async def _hydrate_alert_loop():
+    """Background loop: poll hydrate telemetry and fire admin alerts when
+    last-hour counters cross thresholds. Modeled on
+    ``routes.bot_discovery._seo_health_alert_loop``. Best-effort; swallows
+    its own errors so a flaky Mongo can't kill the task.
+    """
+    # Stagger start so we don't pile onto the boot-time burst alongside
+    # the other alert loops.
+    await asyncio.sleep(150)
+    while True:
+        try:
+            alerts = await _evaluate_hydrate_alerts()
+            if alerts:
+                try:
+                    from metrics import _dispatch_alert, _alert_last_fired, _load_alert_settings
+                    # Refresh notification channel config so admin email
+                    # changes apply within the next tick.
+                    try:
+                        await _load_alert_settings()
+                    except Exception:
+                        pass
+                    for a in alerts:
+                        # Bypass the shared 30-min metrics cooldown — we
+                        # already gate ourselves at 60 min per type.
+                        _alert_last_fired.pop(a["alert_type"], None)
+                        try:
+                            await _dispatch_alert(
+                                a["alert_type"], a["title"], a["body"],
+                                threshold_snapshot=a.get("threshold_snapshot"),
+                            )
+                        except Exception as dexc:
+                            # Don't advance our cooldown on failure — let
+                            # the next tick retry. Matches the per-alert
+                            # behaviour of _seo_health_alert_loop.
+                            logger.warning(
+                                f"hydrate alert {a['alert_type']} dispatch failed; "
+                                f"will retry next tick: {dexc}"
+                            )
+                            continue
+                        _HYDRATE_ALERT_LAST_FIRED[a["alert_type"]] = time.time()
+                except Exception as exc:
+                    logger.warning(f"hydrate alert dispatch failed: {exc}")
+        except Exception as exc:
+            logger.debug(f"hydrate alert loop error: {exc}")
+        await asyncio.sleep(HYDRATE_ALERT_INTERVAL_S)
+
+
 # ─────────────────────────────────────────────
 # ADMIN CONTENT MANAGEMENT — Boards / Classes / Streams
 # ─────────────────────────────────────────────

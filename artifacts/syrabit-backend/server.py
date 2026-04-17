@@ -590,6 +590,13 @@ async def lifespan(app):
     asyncio.create_task(_exam_reminder_loop())
     asyncio.create_task(_alerting_loop())
     asyncio.create_task(_endpoint_health_alert_loop())
+    # Task #412 — periodically check hydrate_telemetry and fire admin
+    # alerts (email + webhook + persisted) when stale-build failures
+    # spike or auto-reload recovery rate falls. Leader-gated so we don't
+    # double-fire across replicas.
+    if _is_leader:
+        from routes.analytics import _hydrate_alert_loop
+        asyncio.create_task(_hydrate_alert_loop())
     if _is_leader:
         from routes.bot_discovery import _sitemap_indexnow_diff_loop
         asyncio.create_task(_sitemap_indexnow_diff_loop())
