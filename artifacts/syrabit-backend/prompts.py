@@ -491,6 +491,20 @@ _ASSAMESE_ENFORCEMENT_BLOCK = (
     "  English equivalent in the middle of an Assamese sentence.\n"
     "- If you are unsure of the Assamese word, write the proper noun in Latin and\n"
     "  surround the explanation in Assamese. Never leave dangling English fragments.\n"
+    "\n"
+    "BAD vs GOOD examples (do NOT copy these — follow the pattern):\n"
+    "  BAD : 'উৰুকা হৈছে মাঘ বিহুৰ পূৰ্বৰ ৰাতিৰ উৎসৱ। me uses ssible terms চমুকৈ ক'লে…'\n"
+    "  GOOD: 'উৰুকা হৈছে মাঘ বিহুৰ পূৰ্বৰ ৰাতিৰ উৎসৱ। চমুকৈ ক'লে ই অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+    "\n"
+    "  BAD : 'জল 100°C ত boil হয়। This is a basic rule of physics.'\n"
+    "  GOOD: 'পানী 100°C ত উতলে। এইটো পদাৰ্থবিজ্ঞানৰ এটা মৌলিক নিয়ম।'\n"
+    "\n"
+    "  BAD : 'Newton ৰ first law of motion explains inertia ৰ concept।'\n"
+    "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তাৰ ধাৰণা ব্যাখ্যা কৰে।'\n"
+    "\n"
+    "Notice: in every GOOD example proper nouns/acronyms/units stay Latin, but every\n"
+    "single everyday verb and noun ('boil', 'rule', 'study', 'answer', 'use', 'make',\n"
+    "'concept', 'law') is written in Assamese script — never left in English.\n"
 )
 
 

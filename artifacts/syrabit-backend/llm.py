@@ -840,11 +840,20 @@ async def _stream_sarvam(messages: list, api_key: str, model: str, max_tokens: i
                 "Reply DIRECTLY in Assamese (অসমীয়া). Start your answer immediately.\n"
                 "STRICT LANGUAGE RULES:\n"
                 "- Every running word MUST be in Assamese script. NO mid-sentence English words.\n"
-                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible'.\n"
+                "- NEVER emit partial English fragments such as 'me uses', 'terms', 'ssible',\n"
+                "  'ble', 'tion', 'ssing'. If you start a word in English, you MUST switch\n"
+                "  back to Assamese for the rest of that sentence.\n"
                 "- Latin script is allowed ONLY for: pure numbers/dates, scientific units\n"
                 "  (cm, kg, Hz, °C, eV…), math symbols/equations, code, URLs, well-known\n"
                 "  proper nouns and acronyms (AHSEC, SEBA, NCERT, DNA, GDP, Magh Bihu, Newton).\n"
                 "- For everyday nouns/verbs, use the Assamese word — do NOT fall back to English.\n"
+                "BAD vs GOOD examples (follow the pattern, do not copy text):\n"
+                "  BAD : 'উৰুকা me uses ssible terms চমুকৈ ক'লে…'\n"
+                "  GOOD: 'উৰুকা চমুকৈ ক'লে অসমৰ এক প্ৰিয় উৎসৱ।'\n"
+                "  BAD : 'জল 100°C ত boil হয়।'\n"
+                "  GOOD: 'পানী 100°C ত উতলে।'\n"
+                "  BAD : 'Newton ৰ first law explains inertia।'\n"
+                "  GOOD: 'Newton ৰ গতিৰ প্ৰথম সূত্ৰে জড়তা ব্যাখ্যা কৰে।'\n"
             ) + patched[0]["content"]
         logger.info(f"[SARVAM-INDIC] No-think mode for {response_lang} — model={model}, api_max={api_max}")
     else:

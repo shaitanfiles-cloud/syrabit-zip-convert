@@ -141,7 +141,7 @@ class TestSanitizeAssamese:
 
     def test_env_behaviour_default(self):
         b = get_behaviour()
-        assert b in ("strip", "regenerate", "off")
+        assert b in ("off", "strip", "translate", "regenerate", "translate+regenerate")
 
 
 class TestPromptEnforcement:
@@ -339,3 +339,157 @@ class TestStreamPipelineEndToEnd:
         assert "me uses" not in emitted_text
         assert "ssible" not in emitted_text
         assert "উৎসৱ" in emitted_text
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Translate-fix behaviour (Task #419) — replaces leaked English runs with
+# their Assamese translation instead of deleting them. Verifies that a fake
+# translate_callable is invoked, that production-log fragments are caught,
+# and that allowed Latin tokens (numbers, units, acronyms) are preserved.
+# ────────────────────────────────────────────────────────────────────────────
+class TestTranslateBehaviour:
+    def test_translate_replaces_leaked_runs_not_deletes(self):
+        from lang_sanitizer import sanitize_assamese_with_optional_regenerate
+
+        called: list[str] = []
+
+        async def _fake_translate(fragment: str) -> str:
+            called.append(fragment)
+            # Pretend Sarvam translated the leaked English run to Assamese.
+            return "অসমীয়া অনুবাদ"
+
+        cleaned, diag = _run(sanitize_assamese_with_optional_regenerate(
+            LEAKY_ASSAMESE,
+            behaviour="translate",
+            translate_callable=_fake_translate,
+        ))
+        # The translate callable was actually invoked on the suspicious run.
+        assert called, "translate_callable should have been invoked"
+        assert any("me uses" in c or "ssible" in c or "terms" in c for c in called)
+        # Original leakage tokens are gone.
+        assert "me uses" not in cleaned
+        assert "ssible" not in cleaned
+        # The Assamese translation we returned was spliced back in
+        # (i.e. content REPLACED, not just stripped).
+        assert "অসমীয়া অনুবাদ" in cleaned
+        # Original Assamese context preserved.
+        assert "উৎসৱ" in cleaned
+        assert diag["behaviour"] == "translate"
+        assert diag["translated"] is True
+        assert diag["action"] in ("translated", "translated+stripped")
+
+    def test_translate_falls_back_to_strip_when_callable_returns_empty(self):
+        from lang_sanitizer import sanitize_assamese_with_optional_regenerate
+
+        async def _empty_translate(_fragment: str) -> str:
+            return ""
+
+        cleaned, diag = _run(sanitize_assamese_with_optional_regenerate(
+            LEAKY_ASSAMESE,
+            behaviour="translate",
+            translate_callable=_empty_translate,
+        ))
+        # All translations empty → must NOT silently drop to noop;
+        # sanitiser must still strip the leakage so user sees clean text.
+        assert "me uses" not in cleaned
+        assert "ssible" not in cleaned
+        assert "উৎসৱ" in cleaned
+        assert diag.get("translated") is False
+        assert diag["action"] == "stripped"
+
+    def test_translate_preserves_numbers_units_and_acronyms(self):
+        from lang_sanitizer import sanitize_assamese_with_optional_regenerate
+
+        async def _fake_translate(fragment: str) -> str:
+            return "[TR]"
+
+        # Math expressions must be wrapped in $...$ so the sanitiser knows
+        # to keep them untouched (matches how prompts instruct the model
+        # to emit math).
+        text = (
+            "পানী 100°C ত উতলে। NCERT ৰ DNA সম্পৰ্কীয় বিষয়ত $E=mc^2$ আছে। "
+            "me uses ssible terms ইয়াত নাই।"
+        )
+        cleaned, _diag = _run(sanitize_assamese_with_optional_regenerate(
+            text, behaviour="translate", translate_callable=_fake_translate,
+        ))
+        # Allowed Latin tokens MUST survive the translate pipeline.
+        assert "100°C" in cleaned
+        assert "NCERT" in cleaned
+        assert "DNA" in cleaned
+        assert "$E=mc^2$" in cleaned
+        # Leaked English is gone.
+        assert "me uses" not in cleaned
+        assert "ssible" not in cleaned
+
+    def test_production_log_fragments_caught(self):
+        """Fragments observed in real Railway logs (study, rule, value,
+        ssible, ble, tion) must be flagged by the expanded denylist."""
+        production_leaks = (
+            "উৰুকা হৈছে এটা উৎসৱ। study rule value ssible tion important "
+            "চমুকৈ ক'লে ই অসমীয়া সংস্কৃতিৰ অংশ।"
+        )
+        cleaned, diag = sanitize_assamese(production_leaks)
+        for frag in ("study", "rule", "value", "ssible", "tion", "important"):
+            assert frag not in cleaned, f"{frag!r} leaked through sanitiser"
+        assert diag["action"] == "stripped"
+        assert "উৎসৱ" in cleaned
+        assert "অসমীয়া" in cleaned
+
+    def test_translate_off_behaviour_is_pure_passthrough(self):
+        from lang_sanitizer import sanitize_assamese_with_optional_regenerate
+
+        async def _never_called(_fragment: str) -> str:
+            raise AssertionError("translate_callable must not run when behaviour=off")
+
+        cleaned, diag = _run(sanitize_assamese_with_optional_regenerate(
+            LEAKY_ASSAMESE,
+            behaviour="off",
+            translate_callable=_never_called,
+        ))
+        assert cleaned == LEAKY_ASSAMESE
+        assert diag["action"] == "noop"
+        assert diag["behaviour"] == "off"
+
+    def test_regenerate_rejects_english_only_retry(self):
+        """REGRESSION (architect review of #419): `measure_leakage` returns
+        ratio=0 when the text contains no Assamese script at all. Without
+        the `has_assamese` guard a model that ignored the directive and
+        replied entirely in English would always look "better" than a
+        leaky Assamese reply and would be emitted to the user. Verify the
+        sanitiser rejects pure-English retries even though their ratio is
+        zero, and falls back to the cleaned original instead."""
+        from lang_sanitizer import sanitize_assamese_with_optional_regenerate
+
+        english_only_retry = (
+            "Uruka is the night before Magh Bihu. People gather to feast "
+            "and celebrate together throughout Assam."
+        )
+
+        async def _english_retry():
+            return english_only_retry
+
+        cleaned, diag = _run(sanitize_assamese_with_optional_regenerate(
+            LEAKY_ASSAMESE,
+            behaviour="regenerate",
+            regenerate_callable=_english_retry,
+        ))
+        # The retry was inspected (we recorded its diagnostic).
+        assert "retry_has_assamese" in diag
+        assert diag["retry_has_assamese"] is False
+        # …but it was REJECTED — the user must NOT receive the English text.
+        assert cleaned != english_only_retry
+        assert "Uruka is the night" not in cleaned
+        # Original Assamese context survives in the cleaned output.
+        assert "উৎসৱ" in cleaned
+        # Reflects rejection (regenerated stays False, since we didn't pick it).
+        assert diag.get("regenerated") is False
+
+    def test_runtime_config_exposes_behaviour_and_threshold(self):
+        from lang_sanitizer import get_runtime_config
+        cfg = get_runtime_config()
+        assert "threshold" in cfg and isinstance(cfg["threshold"], float)
+        assert "behaviour" in cfg
+        assert cfg["behaviour"] in cfg["valid_behaviours"]
+        assert "translate" in cfg["valid_behaviours"]
+        assert "translate+regenerate" in cfg["valid_behaviours"]

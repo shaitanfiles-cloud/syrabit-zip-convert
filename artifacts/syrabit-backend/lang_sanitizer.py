@@ -8,19 +8,26 @@ provides:
   * `sanitize_assamese(text, threshold=...)` — strip stray Latin runs when the
     leakage ratio exceeds the threshold, while preserving allowed Latin
     fragments (numbers, units, acronyms, proper nouns, code, math, URLs).
+  * `sanitize_assamese_with_optional_regenerate(...)` — async wrapper that
+    additionally supports `translate`, `regenerate`, and `translate+regenerate`
+    behaviours, calling out to a Sarvam `/translate` callable to substitute
+    leaked English runs with their Assamese equivalents instead of just
+    deleting them.
 
 Behaviour and threshold are configurable via env so they can be tuned without
 a redeploy:
 
-  * `ASSAMESE_LEAK_THRESHOLD`   (float, default 0.08)
-  * `ASSAMESE_LEAK_BEHAVIOUR`   ("strip" | "regenerate" | "off", default "strip")
+  * `ASSAMESE_LEAK_THRESHOLD`   (float, default 0.05)
+  * `ASSAMESE_LEAK_BEHAVIOUR`   ("off" | "strip" | "translate" |
+                                 "regenerate" | "translate+regenerate",
+                                 default "translate")
 """
 from __future__ import annotations
 
 import os
 import re
 import logging
-from typing import Tuple
+from typing import Tuple, Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +80,26 @@ _COMMON_ENGLISH_DENYLIST = frozenset({
     "terms", "term", "thing", "things", "way", "ways", "time", "times",
     "year", "years", "day", "days", "month", "months", "week", "weeks",
     "people", "person", "man", "woman", "child", "children", "world",
+    # Production-log additions: short Latin fragments observed slipping
+    # past the previous threshold (Task #419).
+    "study", "studies", "studying", "studied", "learn", "learns",
+    "learning", "learned", "answer", "answers", "question", "questions",
+    "problem", "problems", "solution", "solutions", "example",
+    "examples", "definition", "definitions", "explanation", "topic",
+    "topics", "chapter", "chapters", "lesson", "lessons", "subject",
+    "subjects", "lesson", "true", "false", "correct", "incorrect",
+    "right", "wrong", "important", "main", "basic", "simple", "easy",
+    "hard", "difficult", "ssible", "ble", "tion", "tions", "ment",
+    "ments", "able", "ness", "ity", "ies", "ing", "ed", "er", "est",
+    "very", "really", "quite", "rather", "almost", "nearly", "about",
+    "around", "above", "below", "between", "among", "through", "across",
+    "before", "after", "during", "while", "until", "since", "because",
+    "although", "though", "however", "therefore", "moreover", "further",
+    "rule", "rules", "law", "laws", "method", "methods", "process",
+    "processes", "step", "steps", "part", "parts", "type", "types",
+    "kind", "kinds", "form", "forms", "list", "lists", "note", "notes",
+    "information", "info", "data", "result", "results", "value",
+    "values", "number", "numbers", "amount", "amounts",
 })
 
 
@@ -88,15 +115,45 @@ def _env_str(name: str, default: str) -> str:
     return (val or default).strip().lower()
 
 
+# Default behaviour after Task #419 is `translate` — calls Sarvam /translate
+# on the suspicious Latin runs and splices the Assamese translation back in
+# instead of deleting them. This adds at most one extra Sarvam round-trip
+# per leaky reply (only when leakage > threshold) and produces visibly
+# cleaner Assamese answers than `strip`. The stronger `translate+regenerate`
+# combo trades latency for purity and is opt-in via env.
+_VALID_BEHAVIOURS = ("off", "strip", "translate", "regenerate", "translate+regenerate")
+_DEFAULT_BEHAVIOUR = "translate"
+_DEFAULT_THRESHOLD = 0.05
+
+
 def get_threshold() -> float:
-    return _env_float("ASSAMESE_LEAK_THRESHOLD", 0.08)
+    return _env_float("ASSAMESE_LEAK_THRESHOLD", _DEFAULT_THRESHOLD)
 
 
 def get_behaviour() -> str:
-    b = _env_str("ASSAMESE_LEAK_BEHAVIOUR", "strip")
-    if b not in ("strip", "regenerate", "off"):
-        return "strip"
+    b = _env_str("ASSAMESE_LEAK_BEHAVIOUR", _DEFAULT_BEHAVIOUR)
+    if b not in _VALID_BEHAVIOURS:
+        return _DEFAULT_BEHAVIOUR
     return b
+
+
+def get_runtime_config() -> dict:
+    """Snapshot of the live Assamese-purity config for /sarvam/status."""
+    return {
+        "threshold": get_threshold(),
+        "behaviour": get_behaviour(),
+        "valid_behaviours": list(_VALID_BEHAVIOURS),
+        "default_threshold": _DEFAULT_THRESHOLD,
+        "default_behaviour": _DEFAULT_BEHAVIOUR,
+    }
+
+
+# Log the active config on import so admins can see it in the api boot log.
+logger.info(
+    "[INDIC-SANITIZE] startup config: behaviour=%s threshold=%.3f "
+    "(env ASSAMESE_LEAK_BEHAVIOUR / ASSAMESE_LEAK_THRESHOLD)",
+    get_behaviour(), get_threshold(),
+)
 
 
 def _is_allowed_latin_token(tok: str) -> bool:
@@ -200,6 +257,72 @@ def _strip_suspicious_latin(text: str) -> str:
     return cleaned.strip()
 
 
+def _suspicious_runs(text: str) -> list[tuple[int, int, str]]:
+    """Find contiguous suspicious Latin runs (multiple non-allowed Latin
+    tokens separated by short whitespace/punct), skipping protected spans
+    and allowed-Latin tokens. Returns (start, end, fragment) tuples in
+    document order. Used by the translate-fix path so we send Sarvam
+    coherent multi-word fragments instead of one word at a time.
+    """
+    spans = _protected_spans(text)
+    matches = list(LATIN_RUN_RE.finditer(text))
+    runs: list[tuple[int, int, str]] = []
+    j = 0
+    while j < len(matches):
+        m = matches[j]
+        if _in_spans(spans, m.start(), m.end()) or _is_allowed_latin_token(m.group(0)):
+            j += 1
+            continue
+        run_start, run_end = m.start(), m.end()
+        k = j + 1
+        while k < len(matches):
+            nxt = matches[k]
+            between = text[run_end:nxt.start()]
+            if (
+                re.fullmatch(r"[\s,'’\-]{0,4}", between)
+                and not _in_spans(spans, nxt.start(), nxt.end())
+                and not _is_allowed_latin_token(nxt.group(0))
+            ):
+                run_end = nxt.end()
+                k += 1
+            else:
+                break
+        runs.append((run_start, run_end, text[run_start:run_end]))
+        j = k
+    return runs
+
+
+async def _translate_runs(
+    text: str,
+    runs: list[tuple[int, int, str]],
+    *,
+    translate_callable: Callable[[str], Awaitable[str]],
+) -> Tuple[str, list[str]]:
+    """Translate each suspicious run via `translate_callable` and splice
+    the results back into `text`. Returns (new_text, translations).
+    Failures collapse to the empty string (caller decides whether to fall
+    back to strip)."""
+    translations: list[str] = []
+    for (_, _, frag) in runs:
+        try:
+            tr = await translate_callable(frag)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning(f"[INDIC-SANITIZE] translate callable failed for {frag!r}: {e}")
+            tr = ""
+        translations.append((tr or "").strip())
+    out: list[str] = []
+    last = 0
+    for (start, end, _), tr in zip(runs, translations):
+        out.append(text[last:start])
+        out.append(tr)
+        last = end
+    out.append(text[last:])
+    new_text = "".join(out)
+    new_text = re.sub(r"[ \t]{2,}", " ", new_text)
+    new_text = re.sub(r" +([,.!?।])", r"\1", new_text)
+    return new_text.strip(), translations
+
+
 def sanitize_assamese(text: str, threshold: float | None = None) -> Tuple[str, dict]:
     """Sanitise Assamese reply if leakage exceeds threshold.
 
@@ -225,31 +348,94 @@ async def sanitize_assamese_with_optional_regenerate(
     *,
     threshold: float | None = None,
     behaviour: str | None = None,
-    regenerate_callable=None,
+    regenerate_callable: Optional[Callable[[], Awaitable[Optional[str]]]] = None,
+    translate_callable: Optional[Callable[[str], Awaitable[str]]] = None,
 ) -> Tuple[str, dict]:
-    """Sanitise Assamese output, optionally retrying once via the LLM.
+    """Sanitise Assamese output using the active behaviour strategy.
 
-    `regenerate_callable` is an awaitable returning a fresh full reply
-    string. It is only invoked when `behaviour == "regenerate"` and the
-    initial leakage ratio exceeds the threshold. After regeneration the
-    cleaner of the two replies (lower leakage ratio) is sanitised and
-    returned. Diagnostics include `regenerated: bool` and `retry_ratio`.
+    Behaviours:
+      * `off` — return raw, only measure.
+      * `strip` — delete suspicious Latin runs (legacy, lossy).
+      * `translate` — call `translate_callable(fragment)` for each
+        suspicious Latin run and splice the Assamese translation back in;
+        falls back to `strip` if no translate_callable is provided or all
+        translations come back empty.
+      * `regenerate` — strip, then if `regenerate_callable` is provided
+        call the LLM once with a stronger directive and pick whichever
+        retry has lower leakage.
+      * `translate+regenerate` — translate first, and if leakage is still
+        above threshold afterwards, also try one regenerate pass.
+
+    Diagnostics include `regenerated`, `translated`, `behaviour`, and
+    `original_ratio` so callers can log the action taken per reply.
     """
     behaviour = (behaviour or get_behaviour()).strip().lower()
+    if behaviour not in _VALID_BEHAVIOURS:
+        behaviour = _DEFAULT_BEHAVIOUR
+    thr = threshold if threshold is not None else get_threshold()
+
     if behaviour == "off":
         diag = measure_leakage(raw)
-        diag.update({"action": "noop", "threshold": threshold or get_threshold(),
-                     "regenerated": False, "behaviour": behaviour})
+        diag.update({"action": "noop", "threshold": thr,
+                     "regenerated": False, "translated": False,
+                     "behaviour": behaviour})
         return raw, diag
 
-    cleaned, diag = sanitize_assamese(raw, threshold=threshold)
-    diag["regenerated"] = False
-    diag["behaviour"] = behaviour
-    if (
-        behaviour == "regenerate"
-        and diag.get("action") == "stripped"
-        and regenerate_callable is not None
-    ):
+    # Initial measure / decide whether to act at all.
+    initial_diag = measure_leakage(raw)
+    initial_diag["threshold"] = thr
+    initial_diag["behaviour"] = behaviour
+    initial_diag["regenerated"] = False
+    initial_diag["translated"] = False
+    if not initial_diag["has_assamese"] or initial_diag["ratio"] <= thr:
+        initial_diag["action"] = "noop"
+        return raw, initial_diag
+
+    cleaned = raw
+    diag = dict(initial_diag)
+    diag["original_ratio"] = initial_diag["ratio"]
+
+    # ── Step 1: translate-fix when requested ───────────────────────────────
+    wants_translate = behaviour in ("translate", "translate+regenerate")
+    if wants_translate and translate_callable is not None:
+        runs = _suspicious_runs(raw)
+        if runs:
+            translated_text, translations = await _translate_runs(
+                raw, runs, translate_callable=translate_callable,
+            )
+            non_empty = sum(1 for t in translations if t)
+            # Only accept the translated text if at least one fragment came
+            # back non-empty AND the result has lower leakage than before.
+            tr_diag = measure_leakage(translated_text)
+            if non_empty > 0 and tr_diag["ratio"] < diag["ratio"]:
+                cleaned = translated_text
+                diag["translated"] = True
+                diag["translated_runs"] = non_empty
+                diag["ratio"] = tr_diag["ratio"]
+                diag["suspicious_tokens"] = tr_diag["suspicious_tokens"]
+                diag["action"] = "translated"
+
+    # ── Step 2: strip whatever is still leaking ────────────────────────────
+    if diag.get("ratio", initial_diag["ratio"]) > thr:
+        stripped = _strip_suspicious_latin(cleaned)
+        st_diag = measure_leakage(stripped)
+        if st_diag["ratio"] < diag.get("ratio", initial_diag["ratio"]):
+            cleaned = stripped
+            diag["ratio"] = st_diag["ratio"]
+            diag["suspicious_tokens"] = st_diag["suspicious_tokens"]
+            diag["action"] = (
+                "translated+stripped" if diag.get("translated") else "stripped"
+            )
+
+    # ── Step 3: optional one-shot regenerate retry ─────────────────────────
+    # Triggered when the ORIGINAL reply was above threshold — the LLM had
+    # one bad turn, so we ask it to try again with a stronger directive
+    # and keep whichever version has lower leakage. This is independent of
+    # whether the strip/translate step already brought the post-cleanup
+    # ratio under threshold, because the regenerated reply may be much
+    # cleaner without needing destructive sanitisation at all.
+    wants_regenerate = behaviour in ("regenerate", "translate+regenerate")
+    if wants_regenerate and regenerate_callable is not None:
         try:
             retry_raw = await regenerate_callable()
         except Exception as e:  # pragma: no cover - defensive
@@ -258,12 +444,36 @@ async def sanitize_assamese_with_optional_regenerate(
         if retry_raw:
             retry_diag = measure_leakage(retry_raw)
             diag["retry_ratio"] = retry_diag["ratio"]
-            if retry_diag["ratio"] < diag["ratio"]:
-                cleaned, retry_clean_diag = sanitize_assamese(retry_raw, threshold=threshold)
+            diag["retry_has_assamese"] = retry_diag["has_assamese"]
+            # CRITICAL: `measure_leakage` returns ratio=0 when the text
+            # contains NO Assamese script at all (pure English short-
+            # circuit). Without this guard a model that ignored our
+            # directive and replied entirely in English would always look
+            # "better" than the original leaky Assamese reply and would
+            # be emitted to the user. Require the retry to contain
+            # Assamese script before considering it a candidate.
+            if (
+                retry_diag["has_assamese"]
+                and retry_diag["ratio"] < initial_diag["ratio"]
+            ):
+                # Re-run the same pipeline on the retry so it also gets
+                # translate/strip benefit, but skip another regenerate.
+                retry_clean, retry_clean_diag = await sanitize_assamese_with_optional_regenerate(
+                    retry_raw,
+                    threshold=thr,
+                    behaviour="translate" if translate_callable else "strip",
+                    translate_callable=translate_callable,
+                    regenerate_callable=None,
+                )
                 retry_clean_diag["regenerated"] = True
                 retry_clean_diag["behaviour"] = behaviour
-                retry_clean_diag["original_ratio"] = diag["ratio"]
-                return cleaned, retry_clean_diag
+                retry_clean_diag["original_ratio"] = initial_diag["ratio"]
+                return retry_clean, retry_clean_diag
+
+    if diag.get("action", "noop") == "noop":
+        # Nothing changed — surface that explicitly so callers can skip
+        # re-emitting the buffered text.
+        diag["action"] = "noop"
     return cleaned, diag
 
 
@@ -274,4 +484,5 @@ __all__ = [
     "sanitize_assamese_with_optional_regenerate",
     "get_threshold",
     "get_behaviour",
+    "get_runtime_config",
 ]

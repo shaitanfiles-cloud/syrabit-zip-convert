@@ -806,6 +806,36 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
     _auth_elapsed = _t_auth_done - _stream_t0
 
     _SARVAM_LANG_MAP = {"as": "as-IN"}
+
+    def _make_assamese_translate_callable(_target: str):
+        """Build an `async (str) -> str` callable that translates a single
+        English fragment to the requested Indic target language via the
+        Sarvam `/translate` endpoint. Used by the Assamese leakage
+        sanitiser to splice cleaned Assamese text in place of leaked
+        English runs (Task #419). Returns "" on any failure so the
+        sanitiser falls back to its existing `strip` path."""
+        async def _translate(fragment: str) -> str:
+            frag = (fragment or "").strip()
+            if not frag or sarvam_client is None:
+                return ""
+            try:
+                resp = await asyncio.wait_for(
+                    sarvam_client.post("/translate", json={
+                        "input": frag[:1000],
+                        "source_language_code": "en-IN",
+                        "target_language_code": _target,
+                        "mode": "formal",
+                        "model": "sarvam-translate:v1",
+                        "enable_preprocessing": False,
+                    }),
+                    timeout=2.5,
+                )
+                if resp.status_code == 200:
+                    return (resp.json().get("translated_text") or "").strip()
+            except Exception as _te:  # pragma: no cover - network defensive
+                logger.warning(f"[INDIC-SANITIZE] /translate failed for {frag[:40]!r}: {_te}")
+            return ""
+        return _translate
     _resp_lang = (msg.response_lang or "").lower().strip()
     _sarvam_target = _SARVAM_LANG_MAP.get(_resp_lang)
     _want_translate = bool(_sarvam_target and _resp_lang != "en")
@@ -901,20 +931,26 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 pass
             # Sanitise cached Assamese replies before emission so legacy
             # leaky cache entries (written before this filter existed) do
-            # not reach the user.
+            # not reach the user. Uses the same async pipeline as the
+            # streaming path so `translate` mode replaces leaked English
+            # runs with Assamese instead of just deleting them.
             _early_emit = _early_cached_answer
             if _resp_lang == "as":
                 from lang_sanitizer import (
-                    sanitize_assamese as _sanitize_asm_early,
+                    sanitize_assamese_with_optional_regenerate as _sanitize_asm_early,
                     get_behaviour as _asm_behaviour_early,
                 )
                 if _asm_behaviour_early() != "off":
-                    _cleaned_early, _early_diag = _sanitize_asm_early(_early_emit)
-                    if _early_diag.get("action") == "stripped":
+                    _cleaned_early, _early_diag = await _sanitize_asm_early(
+                        _early_emit,
+                        translate_callable=_make_assamese_translate_callable("as-IN"),
+                    )
+                    if _early_diag.get("action") not in (None, "noop"):
                         logger.warning(
-                            f"[INDIC-SANITIZE][EARLY-CACHE] Stripped Assamese leakage "
-                            f"ratio={_early_diag['ratio']:.3f} "
-                            f"sample_tokens={_early_diag['suspicious_tokens'][:6]}"
+                            f"[INDIC-SANITIZE][EARLY-CACHE] action={_early_diag.get('action')} "
+                            f"ratio={_early_diag.get('ratio', 0):.3f} "
+                            f"behaviour={_early_diag.get('behaviour')} "
+                            f"sample_tokens={_early_diag.get('suspicious_tokens', [])[:6]}"
                         )
                         _early_emit = _cleaned_early
                         # Refresh cache so subsequent hits are clean.
@@ -1523,18 +1559,22 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 # cache entries may have been written before the leakage
                 # filter existed. Re-run the strip if the response was meant
                 # for response_lang="as" and contains stray English.
-                if _want_translate:
+                if _want_translate and _resp_lang == "as":
                     from lang_sanitizer import (
-                        sanitize_assamese as _sanitize_asm_cache,
+                        sanitize_assamese_with_optional_regenerate as _sanitize_asm_cache,
                         get_behaviour as _asm_behaviour_cache,
                     )
                     if _asm_behaviour_cache() != "off":
-                        _cleaned_cache, _cache_diag = _sanitize_asm_cache(cached_answer)
-                        if _cache_diag.get("action") == "stripped":
+                        _cleaned_cache, _cache_diag = await _sanitize_asm_cache(
+                            cached_answer,
+                            translate_callable=_make_assamese_translate_callable("as-IN"),
+                        )
+                        if _cache_diag.get("action") not in (None, "noop"):
                             logger.warning(
-                                f"[INDIC-SANITIZE][CACHE] Stripped Assamese leakage "
-                                f"ratio={_cache_diag['ratio']:.3f} "
-                                f"sample_tokens={_cache_diag['suspicious_tokens'][:6]}"
+                                f"[INDIC-SANITIZE][CACHE] action={_cache_diag.get('action')} "
+                                f"ratio={_cache_diag.get('ratio', 0):.3f} "
+                                f"behaviour={_cache_diag.get('behaviour')} "
+                                f"sample_tokens={_cache_diag.get('suspicious_tokens', [])[:6]}"
                             )
                             cached_answer = _cleaned_cache
                             # Refresh cache entry so subsequent hits are clean.
@@ -1656,9 +1696,11 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         return "".join(retry_text_parts) or None
 
                     _cleaned_indic, _asm_diag = await _sanitize_asm_async(
-                        _raw_indic, regenerate_callable=_regenerate_indic,
+                        _raw_indic,
+                        regenerate_callable=_regenerate_indic,
+                        translate_callable=_make_assamese_translate_callable(_sarvam_target or "as-IN"),
                     )
-                    if _asm_diag.get("action") == "stripped" or _asm_diag.get("regenerated"):
+                    if _asm_diag.get("action") not in (None, "noop") or _asm_diag.get("regenerated"):
                         logger.warning(
                             f"[INDIC-SANITIZE] Cleaned Assamese leakage "
                             f"ratio={_asm_diag.get('ratio', 0):.3f} "

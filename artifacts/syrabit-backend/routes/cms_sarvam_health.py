@@ -1645,9 +1645,18 @@ def _sarvam_cache_key(op: str, payload: dict) -> str:
 
 @router.get("/sarvam/status")
 async def sarvam_status():
+    # Surface live Assamese-purity config so admins can verify which
+    # behaviour and threshold are in effect without grep'ing the api log
+    # (Task #419).
+    try:
+        from lang_sanitizer import get_runtime_config as _asm_cfg
+        assamese_purity = _asm_cfg()
+    except Exception:
+        assamese_purity = {}
     return {
         "enabled": sarvam_client is not None,
         "supported_languages": sorted(_SARVAM_LANG_CODES),
+        "assamese_purity": assamese_purity,
     }
 
 _LANG_LABELS = {
