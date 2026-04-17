@@ -86,7 +86,8 @@ def test_seo_health_degraded_when_some_url_checks_fail():
     # All HEAD checks fail with 404
     fake.head.return_value = _mock_response(404)
 
-    with patch("httpx.AsyncClient", lambda *a, **kw: fake):
+    with patch("httpx.AsyncClient", lambda *a, **kw: fake), \
+         patch.object(bot_discovery, "_SEO_HEALTH_RETRY_DELAY_S", 0):
         result = asyncio.run(bot_discovery.seo_health_check(request=None, deep_scan=None))
 
     assert result["status"] == "degraded"

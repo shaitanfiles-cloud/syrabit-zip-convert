@@ -1685,6 +1685,59 @@ SEO_SITEMAP_FILENAMES = (
     "sitemap-learn.xml",
 )
 
+# Task #344: when an initial URL probe returns non-200 we retry once after a
+# short delay. The vast majority of one-off failures we've seen in production
+# are transient network blips (DNS hiccups, momentary upstream 502s) that
+# recover within a second or two. Retrying once before recording the URL as
+# failing dramatically cuts false-positive 404 spike alerts. Exposed at module
+# scope so tests can monkeypatch it to 0 instead of actually sleeping.
+_SEO_HEALTH_RETRY_DELAY_S = 2.0
+
+
+async def _probe_sitemap_url(client, url: str) -> Dict:
+    """Single HEAD/GET probe of a sitemap URL. Returns a check dict shaped
+    like the entries appended to ``sample_checks`` (without the retry-only
+    ``recovered_on_retry`` / ``retry_status`` fields)."""
+    try:
+        resp = await client.head(url, follow_redirects=True, timeout=10.0)
+        if resp.status_code in (405, 403):
+            resp = await client.get(url, follow_redirects=True, timeout=10.0)
+        return {
+            "url": url,
+            "status": resp.status_code,
+            "ok": resp.status_code == 200,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "url": url,
+            "status": 0,
+            "ok": False,
+            "error": str(exc)[:100],
+        }
+
+
+async def _probe_sitemap_url_with_retry(client, url: str) -> Dict:
+    """Probe a sitemap URL once, then re-probe a single time after a short
+    delay if the first attempt failed (Task #344). URLs that recover on the
+    second probe are returned as ``ok=True`` with ``recovered_on_retry=True``
+    so they get filtered out of the failing-URL snapshot, while URLs that
+    are still bad on the second probe carry ``retry_status`` to make it
+    obvious this wasn't a one-off blip."""
+    check = await _probe_sitemap_url(client, url)
+    if check.get("ok"):
+        return check
+    if _SEO_HEALTH_RETRY_DELAY_S > 0:
+        await asyncio.sleep(_SEO_HEALTH_RETRY_DELAY_S)
+    retry = await _probe_sitemap_url(client, url)
+    if retry.get("ok"):
+        retry["recovered_on_retry"] = True
+        retry["first_status"] = check.get("status", 0)
+        return retry
+    check["retry_status"] = retry.get("status", 0)
+    if retry.get("error") and not check.get("error"):
+        check["error"] = retry["error"]
+    return check
+
 
 @router.get("/seo/health")
 async def seo_health_check(
@@ -1764,22 +1817,10 @@ async def seo_health_check(
 
                     sample_urls = random.sample(locs, min(10, len(locs))) if locs else []
                     for sample_url in sample_urls:
-                        try:
-                            check_resp = await client.head(sample_url, follow_redirects=True, timeout=10.0)
-                            if check_resp.status_code in (405, 403):
-                                check_resp = await client.get(sample_url, follow_redirects=True, timeout=10.0)
-                            sm_result["sample_checks"].append({
-                                "url": sample_url,
-                                "status": check_resp.status_code,
-                                "ok": check_resp.status_code == 200,
-                            })
-                        except Exception as check_err:
-                            sm_result["sample_checks"].append({
-                                "url": sample_url,
-                                "status": 0,
-                                "ok": False,
-                                "error": str(check_err)[:100],
-                            })
+                        # Task #344: probe with one retry so transient
+                        # network blips don't get recorded as failing URLs.
+                        check = await _probe_sitemap_url_with_retry(client, sample_url)
+                        sm_result["sample_checks"].append(check)
                 except ET.ParseError as parse_err:
                     sm_result["error"] = f"XML parse error: {str(parse_err)[:100]}"
             except Exception as sm_err:

@@ -556,3 +556,182 @@ def test_url_404_spike_pct_in_alert_thresholds_default():
         src = f.read()
     assert "_ALERT_THRESHOLDS_DEFAULT" in src
     assert '"url_404_spike_pct"' in src
+
+
+# -------- Task #344: re-probe failing URLs to filter network blips --------
+
+
+VALID_SITEMAP_XML_TWO_URLS = (
+    '<?xml version="1.0" encoding="UTF-8"?>'
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    "<url><loc>https://syrabit.ai/learn/topic-1</loc></url>"
+    "<url><loc>https://syrabit.ai/learn/topic-2</loc></url>"
+    "</urlset>"
+)
+
+
+def _resp(status, text=""):
+    r = MagicMock()
+    r.status_code = status
+    r.text = text
+    return r
+
+
+class _RetryFakeClient:
+    """httpx.AsyncClient stand-in that returns canned responses keyed by
+    URL, advancing through the list each time the URL is probed."""
+
+    def __init__(self, sitemap_xml, head_sequences):
+        self._sitemap_xml = sitemap_xml
+        self._head_sequences = {u: list(seq) for u, seq in head_sequences.items()}
+        self._head_calls = {}
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def get(self, url, *_a, **_kw):
+        if url.endswith(".xml"):
+            return _resp(200, self._sitemap_xml)
+        return _resp(200)
+
+    async def head(self, url, *_a, **_kw):
+        self._head_calls[url] = self._head_calls.get(url, 0) + 1
+        seq = self._head_sequences.get(url)
+        if seq:
+            status = seq.pop(0) if len(seq) > 1 else seq[0]
+        else:
+            status = 200
+        return _resp(status)
+
+
+def _run_seo_health_with_client(fake_client):
+    with patch("httpx.AsyncClient", lambda *a, **kw: fake_client), \
+         patch.object(bot_discovery, "_SEO_HEALTH_RETRY_DELAY_S", 0):
+        return asyncio.run(bot_discovery.seo_health_check(request=None, deep_scan=None))
+
+
+def test_url_check_recovers_on_retry_and_excluded_from_failing_urls():
+    """Task #344: a URL that returns 502 on the first probe but 200 on
+    the second probe must NOT end up as a failing check and must NOT
+    count against the success rate."""
+    fake = _RetryFakeClient(
+        VALID_SITEMAP_XML_TWO_URLS,
+        head_sequences={
+            "https://syrabit.ai/learn/topic-1": [502, 200],
+            "https://syrabit.ai/learn/topic-2": [200],
+        },
+    )
+    report = _run_seo_health_with_client(fake)
+
+    # Aggregate success rate stays at 100% — the 502 was a transient blip.
+    assert report["summary"]["url_check_success_rate"] == 100.0
+    assert report["summary"]["ok_url_checks"] == report["summary"]["total_url_checks"]
+    # No failing checks recorded for any sitemap.
+    for sm in report["sitemaps"]:
+        for check in sm.get("sample_checks", []):
+            assert check["ok"], f"transient blip leaked into sample_checks: {check}"
+    # Topic-1's first probe failed and triggered a retry; topic-2's first
+    # probe succeeded so it was probed only once per sitemap. Therefore
+    # topic-1 must have strictly more probe calls than topic-2.
+    assert (fake._head_calls["https://syrabit.ai/learn/topic-1"]
+            > fake._head_calls["https://syrabit.ai/learn/topic-2"])
+    # And the recovered check is annotated so dashboards can surface it.
+    recovered = [c for sm in report["sitemaps"] for c in sm.get("sample_checks", [])
+                 if c["url"].endswith("/topic-1")]
+    assert recovered and recovered[0].get("recovered_on_retry") is True
+    assert recovered[0].get("first_status") == 502
+
+
+def test_url_check_still_failing_on_retry_recorded_as_failing():
+    """Task #344: a URL that fails on BOTH probes is genuinely broken and
+    must be recorded as a failing check so the alert fires for real outages."""
+    fake = _RetryFakeClient(
+        VALID_SITEMAP_XML_TWO_URLS,
+        head_sequences={
+            "https://syrabit.ai/learn/topic-1": [404, 404],
+            "https://syrabit.ai/learn/topic-2": [200],
+        },
+    )
+    report = _run_seo_health_with_client(fake)
+
+    failing = [c for sm in report["sitemaps"] for c in sm.get("sample_checks", [])
+               if not c["ok"] and c["url"].endswith("/topic-1")]
+    assert failing, "still-failing URL must remain in sample_checks as a failure"
+    for f in failing:
+        assert f["status"] == 404
+        assert f.get("retry_status") == 404
+    # Both probes for topic-1 returned 404, so the helper records
+    # `retry_status` and stops (no third probe). Each sitemap samples
+    # both URLs, so topic-1 fires 2 calls per sitemap and topic-2 fires 1.
+    n_sitemaps = len(report["sitemaps"])
+    assert fake._head_calls["https://syrabit.ai/learn/topic-1"] == 2 * n_sitemaps
+    assert fake._head_calls["https://syrabit.ai/learn/topic-2"] == n_sitemaps
+
+    # And the snapshot extractor surfaces it under failing_urls.
+    by_sitemap = []
+    for sm in report["sitemaps"]:
+        checks = sm.get("sample_checks") or []
+        if not checks:
+            continue
+        failing_urls = [
+            {"url": c.get("url", ""), "status": int(c.get("status") or 0)}
+            for c in checks if not c.get("ok") and c.get("url")
+        ][:10]
+        by_sitemap.append({"name": sm.get("name"), "failing_urls": failing_urls})
+    assert any(any(f["url"].endswith("/topic-1") for f in row["failing_urls"])
+               for row in by_sitemap)
+
+
+def test_probe_with_retry_marks_recovered_check():
+    """Direct test of the helper: a URL that recovers comes back ok=True
+    with recovered_on_retry=True and the original status preserved."""
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def head(self, url, *_a, **_kw):
+            self.calls += 1
+            return _resp(503 if self.calls == 1 else 200)
+
+        async def get(self, url, *_a, **_kw):
+            return _resp(200)
+
+    client = _Client()
+    with patch.object(bot_discovery, "_SEO_HEALTH_RETRY_DELAY_S", 0):
+        result = asyncio.run(
+            bot_discovery._probe_sitemap_url_with_retry(client, "https://x/y")
+        )
+    assert result["ok"] is True
+    assert result["status"] == 200
+    assert result["recovered_on_retry"] is True
+    assert result["first_status"] == 503
+
+
+def test_probe_with_retry_records_retry_status_when_still_failing():
+    """When the second probe also fails, preserve both: the primary status
+    from the first probe and ``retry_status`` from the second."""
+    class _Client:
+        def __init__(self):
+            self.calls = 0
+
+        async def head(self, url, *_a, **_kw):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("connection reset")
+            return _resp(404)
+
+        async def get(self, url, *_a, **_kw):
+            return _resp(404)
+
+    client = _Client()
+    with patch.object(bot_discovery, "_SEO_HEALTH_RETRY_DELAY_S", 0):
+        result = asyncio.run(
+            bot_discovery._probe_sitemap_url_with_retry(client, "https://x/y")
+        )
+    assert result["ok"] is False
+    assert result["status"] == 0
+    assert result["retry_status"] == 404
+    assert "connection reset" in result.get("error", "")
