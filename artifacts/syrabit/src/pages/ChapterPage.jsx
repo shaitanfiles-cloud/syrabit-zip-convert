@@ -13,6 +13,7 @@ import { useShare, SerpPreviewModal } from '@/hooks/useShare';
 import Analytics from '@/utils/analytics';
 import { useContentLang } from '@/context/LanguageContext';
 import StickyToc from '@/components/ui/StickyToc';
+import InArticleAd from '@/components/InArticleAd';
 
 function ChapterJsonLd({ data, url, basePath }) {
   useEffect(() => {
@@ -808,6 +809,10 @@ export default function ChapterPage() {
                 </MarkdownRenderer>
               </Suspense>
             </div>
+
+            {typeof displayContent === 'string' && displayContent.length > 1500 && (
+              <InArticleAd adKey={data?.chapter_id || chapterSlug} />
+            )}
 
             <ImportantQuestions chapterTitle={chapterTitle} pyqData={pyqData} />
 
