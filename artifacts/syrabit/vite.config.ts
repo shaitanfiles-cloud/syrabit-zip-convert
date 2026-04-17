@@ -64,7 +64,6 @@ export default defineConfig(({ mode }) => ({
             has("markdown-table") || has("html-url-attributes")
           ) return "markdown";
           if (has("lucide-react")) return "icons";
-          if (has("framer-motion") || has("motion-dom") || has("motion-utils")) return "framer";
           if (has("react-syntax-highlighter") || has("refractor") || has("prismjs") || has("highlight.js")) return "syntax";
           // React runtime kept together to avoid `react-dom <-> vendor`
           // circular chunk warning.

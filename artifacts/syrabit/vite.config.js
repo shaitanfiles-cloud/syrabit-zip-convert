@@ -537,13 +537,13 @@ export default defineConfig(({ mode }) => ({
         //   entry     : 108 kB raw / 35 kB gzipped
         // dist/index.html modulepreload set is exactly the four chunks
         // the entry statically imports — react-dom, vendor, ui-utils,
-        // icons — with no syntax/framer/codemirror leakage onto the
+        // icons — with no syntax/codemirror leakage onto the
         // landing critical path.
         manualChunks(id) {
           if (!id.includes('node_modules')) return;
           // IMPORTANT: pnpm encodes peer-dep info in directory names
-          // (e.g. `framer-motion@12.35.1_react-dom@19.1.0_react@19.1.0`),
-          // so a naive `id.includes('react-dom')` matches every package
+          // (e.g. `<pkg>@x.y_react-dom@19.1.0_react@19.1.0`), so a
+          // naive `id.includes('react-dom')` matches every package
           // that has react-dom as a peer dep — pulling CodeMirror,
           // sandpack, lexical, radix, etc. into the react-dom chunk.
           // Match against the *actual* package directory instead:
@@ -566,7 +566,6 @@ export default defineConfig(({ mode }) => ({
             has('markdown-table') || has('html-url-attributes')
           ) return 'markdown';
           if (has('lucide-react')) return 'icons';
-          if (has('framer-motion') || has('motion-dom') || has('motion-utils')) return 'framer';
           if (has('react-syntax-highlighter') || has('refractor') || has('prismjs') || has('highlight.js')) return 'syntax';
           // React runtime — keep react + react-dom (client only) + scheduler
           // + react-is together in one chunk. Grouping them avoids the
@@ -606,7 +605,6 @@ export default defineConfig(({ mode }) => ({
       'react/jsx-runtime',
       'react-router-dom',
       '@tanstack/react-query',
-      'framer-motion',
       'react-markdown',
       'remark-gfm',
     ],
