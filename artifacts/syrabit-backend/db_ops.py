@@ -890,6 +890,12 @@ _ADMIN_NOTIF_PREFS_DEFAULTS = {
     "custom_chime_filename": None,
     "sound_severities": ["high_error_rate", "high_latency", "spoofed_bot_surge", "high_fallback_rate", "endpoint_down", "auto_block_expired"],
     "push_severities": ["high_error_rate", "spoofed_bot_surge", "endpoint_down", "auto_block_expired"],
+    # Task #348: when an admin-triggered SEO sitemap deep scan turns up
+    # more than 50 failing URLs, auto-email the full list as a CSV
+    # attachment to the configured alert channel so on-call admins can
+    # start triage from a phone. Default ON; per-admin opt-out via this
+    # toggle in notification preferences.
+    "email_failing_csv_enabled": True,
 }
 
 
@@ -930,6 +936,8 @@ async def upsert_admin_notification_prefs(admin_id: str, prefs: dict) -> dict:
         doc["sound_severities"] = [s for s in prefs["sound_severities"] if s in valid_severities]
     if "push_severities" in prefs:
         doc["push_severities"] = [s for s in prefs["push_severities"] if s in valid_severities]
+    if "email_failing_csv_enabled" in prefs:
+        doc["email_failing_csv_enabled"] = bool(prefs["email_failing_csv_enabled"])
 
     await db.admin_notification_prefs.update_one(
         {"admin_id": admin_id},

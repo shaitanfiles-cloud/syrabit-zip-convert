@@ -1817,6 +1817,21 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                   />
                   <span className="text-[11px] text-gray-600 font-medium">Push Enabled</span>
                 </label>
+                {/* Task #348: opt-out toggle for the deep-scan failing-URL
+                    CSV email. Default ON in the backend defaults so admins
+                    receive the email automatically; this exposes a way to
+                    opt out without editing the database. */}
+                <label className="flex items-center gap-2 cursor-pointer" data-testid="notif-prefs-email-failing-csv">
+                  <input
+                    type="checkbox"
+                    checked={notifPrefs.email_failing_csv_enabled ?? true}
+                    onChange={e => saveNotifPrefs({ email_failing_csv_enabled: e.target.checked })}
+                    className="w-3.5 h-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+                  />
+                  <span className="text-[11px] text-gray-600 font-medium">
+                    Email failing-URL CSV after deep scan
+                  </span>
+                </label>
               </div>
 
               <div className="mb-3">

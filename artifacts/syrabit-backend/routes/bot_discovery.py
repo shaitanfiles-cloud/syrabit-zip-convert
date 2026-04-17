@@ -1710,8 +1710,24 @@ async def seo_health_check(
     if deep_scan is not None:
         if deep_scan not in SEO_SITEMAP_FILENAMES:
             raise HTTPException(status_code=400, detail=f"Unknown sitemap: {deep_scan}")
-        await get_admin_user(request)
-        return await _deep_scan_sitemap(deep_scan)
+        admin = await get_admin_user(request)
+        scan_result = await _deep_scan_sitemap(deep_scan)
+        # Task #348: when the scan turns up more than 50 failing URLs,
+        # auto-email the full failing list as a CSV attachment to the
+        # configured alert channel so on-call admins can start triage
+        # from a phone instead of waiting until they're at a desk. The
+        # email is gated by the calling admin's per-account opt-out
+        # toggle (`email_failing_csv_enabled`, default True).
+        try:
+            admin_id = (admin or {}).get("sub") or (admin or {}).get("email") or "default"
+            email_result = await _maybe_email_failing_csv(
+                deep_scan, scan_result, admin_id=admin_id,
+            )
+            scan_result["email"] = email_result
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[SEO deep-scan email] unexpected error: {exc}")
+            scan_result["email"] = {"sent": False, "reason": f"error:{type(exc).__name__}"}
+        return scan_result
 
     results = {
         "status": "ok",
@@ -2630,6 +2646,157 @@ async def admin_seo_health_snapshot_now(admin: dict = Depends(get_admin_user)):
 # can show the full failing list on demand.
 SEO_DEEP_SCAN_MAX_URLS = 500
 SEO_DEEP_SCAN_CONCURRENCY = 20
+
+# Task #348: when a deep scan turns up MORE than this many failing URLs
+# we automatically email the full failing list as a CSV attachment to
+# the configured alert channel, gated by the calling admin's
+# `email_failing_csv_enabled` notification preference.
+SEO_DEEP_SCAN_EMAIL_THRESHOLD = 50
+
+
+def _build_failing_urls_csv(failing: List[Dict]) -> str:
+    """Render the deep-scan failing list as RFC-4180 CSV with columns
+    ``url,status,error``. Mirrors the frontend Task #346 implementation
+    (formula-injection guard + Excel BOM) so the file is byte-identical
+    whether the admin downloaded it or received it by email."""
+
+    def _esc(v) -> str:
+        s = "" if v is None else str(v)
+        # CSV formula-injection guard: a cell starting with =, +, -, or
+        # @ would be executed as a formula by Excel/Sheets. Since `url`
+        # and `error` can carry external content, prefix a single quote.
+        if s and s[0] in "=+-@":
+            s = "'" + s
+        if any(c in s for c in (",", '"', "\n", "\r")):
+            return '"' + s.replace('"', '""') + '"'
+        return s
+
+    lines = ["url,status,error"]
+    for f in failing:
+        lines.append(",".join((
+            _esc(f.get("url")),
+            _esc(f.get("status", "")),
+            _esc(f.get("error", "")),
+        )))
+    # Prepend UTF-8 BOM so Excel opens the file cleanly without
+    # mangling non-ASCII characters in URLs/error messages.
+    return "\ufeff" + "\n".join(lines)
+
+
+async def _maybe_email_failing_csv(
+    sitemap_name: str,
+    deep_scan_result: dict,
+    *,
+    admin_id: Optional[str],
+) -> dict:
+    """If the deep scan turned up more failing URLs than the threshold
+    AND the calling admin still wants the email, send the full failing
+    list as a CSV attachment to the global alert recipient.
+
+    Returns ``{sent, to, reason?}`` so the route can include the result
+    in its response payload (for testing and admin visibility)."""
+    failing = deep_scan_result.get("failing") or []
+    if len(failing) <= SEO_DEEP_SCAN_EMAIL_THRESHOLD:
+        return {"sent": False, "reason": "below_threshold", "failing_count": len(failing)}
+
+    # Per-admin opt-out. Default is ON so opt-in admins don't have to
+    # touch settings to start receiving these emails.
+    enabled = True
+    if admin_id:
+        try:
+            from db_ops import get_admin_notification_prefs
+            prefs = await get_admin_notification_prefs(admin_id)
+            enabled = bool(prefs.get("email_failing_csv_enabled", True))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"[SEO deep-scan email] failed to load prefs for {admin_id}: {exc}")
+    if not enabled:
+        return {"sent": False, "reason": "disabled_by_admin"}
+
+    # Resolve recipient via the same alert-channel plumbing the rest of
+    # the SEO alert pipeline uses, falling back to ALERT_EMAIL.
+    try:
+        from metrics import _notification_channels, _load_alert_settings
+        try:
+            await _load_alert_settings()
+        except Exception:
+            pass
+        admin_email = (_notification_channels.get("email")
+                       or os.environ.get("ALERT_EMAIL", "")).strip()
+    except Exception:
+        admin_email = os.environ.get("ALERT_EMAIL", "").strip()
+
+    resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+    if not admin_email:
+        return {"sent": False, "reason": "no_admin_email"}
+    if not resend_key:
+        return {"sent": False, "to": admin_email, "reason": "no_resend_key"}
+
+    try:
+        from email_templates import EMAIL_FROM
+    except Exception:
+        EMAIL_FROM = os.environ.get(
+            "EMAIL_FROM", "Syrabit.ai <noreply@syrabit.ai>"
+        ).strip()
+
+    csv_text = _build_failing_urls_csv(failing)
+    import base64
+    csv_bytes = csv_text.encode("utf-8")
+    csv_b64 = base64.b64encode(csv_bytes).decode("ascii")
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    sitemap_stem = sitemap_name[:-4] if sitemap_name.lower().endswith(".xml") else sitemap_name
+    filename = f"failing-urls-{sitemap_stem}-{ts}.csv"
+
+    failing_count = len(failing)
+    subject = (
+        f"[Syrabit SEO] {failing_count} URLs failing in {sitemap_name}"
+    )
+    truncated_note = (
+        " (deep scan was truncated at the URL cap, real number may be higher)"
+        if deep_scan_result.get("truncated") else ""
+    )
+    html = (
+        f"<p>An admin-triggered deep scan of <code>{sitemap_name}</code> "
+        f"found <b>{failing_count}</b> failing URLs"
+        f"{truncated_note}.</p>"
+        f"<p>Full list attached as <code>{filename}</code> "
+        f"(columns: <code>url</code>, <code>status</code>, "
+        f"<code>error</code>). Open in Excel or paste into a sheet to "
+        f"start triage.</p>"
+        f"<p style='color:#666;font-size:12px;margin-top:24px'>"
+        f"You're receiving this because your admin notification "
+        f"preferences have <i>Email failing-URL CSV after deep scan</i> "
+        f"turned on. Disable it from the admin dashboard's Notification "
+        f"preferences panel.</p>"
+    )
+
+    try:
+        import resend as _resend_sdk
+        _resend_sdk.api_key = resend_key
+        _resend_sdk.Emails.send({
+            "from": EMAIL_FROM,
+            "to": [admin_email],
+            "subject": subject,
+            "html": html,
+            "attachments": [{
+                "filename": filename,
+                "content": csv_b64,
+            }],
+        })
+        logger.info(
+            f"[SEO deep-scan email] sent failing CSV → {admin_email} "
+            f"({sitemap_name}, {failing_count} URLs)"
+        )
+        return {
+            "sent": True, "to": admin_email, "subject": subject,
+            "filename": filename, "failing_count": failing_count,
+        }
+    except Exception as exc:
+        logger.warning(f"[SEO deep-scan email] Resend send failed: {exc}")
+        return {
+            "sent": False, "to": admin_email,
+            "reason": f"send_error:{type(exc).__name__}",
+        }
 
 
 async def _deep_scan_sitemap(sitemap_name: str) -> dict:

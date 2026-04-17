@@ -263,3 +263,194 @@ def test_deep_scan_endpoint_requires_admin_auth():
             raised = e
     assert raised is not None, "expected anonymous deep-scan to be rejected"
     assert raised.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Task #348: auto-email failing-URL CSV after a deep scan
+# ---------------------------------------------------------------------------
+
+def _make_failing(n):
+    return [
+        {"url": f"https://syrabit.ai/learn/topic-{i}", "status": 404}
+        for i in range(n)
+    ]
+
+
+def test_csv_renderer_escapes_formula_injection_and_commas():
+    """The shared CSV renderer must escape formula leaders and quote
+    fields with commas/quotes so the email attachment is safe to open
+    in Excel even if a URL or error string was attacker-controlled."""
+    failing = [
+        {"url": "=cmd|'/c calc'", "status": 500, "error": "boom"},
+        {"url": "https://x/?a=1,b=2", "status": 404, "error": 'has "quote"'},
+        {"url": "https://x/normal", "status": 503, "error": None},
+    ]
+    csv = bot_discovery._build_failing_urls_csv(failing)
+    # Header + 3 data rows; BOM prefixed for Excel.
+    assert csv.startswith("\ufeff")
+    lines = csv.lstrip("\ufeff").splitlines()
+    assert lines[0] == "url,status,error"
+    # Formula-leading URL must be neutralized with a leading apostrophe.
+    assert lines[1].startswith("'=cmd")
+    # Comma-bearing URL must be quoted.
+    assert '"https://x/?a=1,b=2"' in lines[2]
+    # Embedded quotes are doubled per RFC 4180.
+    assert '"has ""quote"""' in lines[2]
+    # None error becomes empty string, not the literal "None".
+    assert lines[3].endswith(",")
+
+
+def test_email_skipped_below_threshold():
+    """≤50 failing URLs must NOT trigger an email — those are routine
+    blips and shouldn't spam the alert channel."""
+    result = asyncio.run(bot_discovery._maybe_email_failing_csv(
+        "sitemap-learn.xml",
+        {"failing": _make_failing(50)},
+        admin_id=None,
+    ))
+    assert result["sent"] is False
+    assert result["reason"] == "below_threshold"
+
+
+def test_email_skipped_when_disabled_by_admin():
+    """Per-admin opt-out: when the calling admin has the toggle off the
+    email must be suppressed even if the threshold is exceeded."""
+    async def _prefs(_admin_id):
+        return {"email_failing_csv_enabled": False}
+
+    fake_db_ops = types.SimpleNamespace(get_admin_notification_prefs=_prefs)
+    with patch.dict(sys.modules, {"db_ops": fake_db_ops}):
+        result = asyncio.run(bot_discovery._maybe_email_failing_csv(
+            "sitemap-learn.xml",
+            {"failing": _make_failing(60)},
+            admin_id="admin-1",
+        ))
+    assert result["sent"] is False
+    assert result["reason"] == "disabled_by_admin"
+
+
+def test_email_sent_with_csv_attachment_when_above_threshold(monkeypatch):
+    """>50 failing URLs + admin opted in + Resend key present + admin
+    email configured → Resend.Emails.send is called once with the CSV
+    payload as a base64 attachment, the right subject, and a filename
+    that includes the sitemap name and a timestamp."""
+    async def _prefs(_admin_id):
+        return {"email_failing_csv_enabled": True}
+
+    fake_db_ops = types.SimpleNamespace(get_admin_notification_prefs=_prefs)
+
+    async def _noop_load():
+        return None
+
+    fake_metrics = types.SimpleNamespace(
+        _notification_channels={"email": "oncall@syrabit.ai"},
+        _load_alert_settings=_noop_load,
+    )
+    fake_email_templates = types.SimpleNamespace(
+        EMAIL_FROM="Syrabit.ai <noreply@syrabit.ai>",
+    )
+
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_123")
+
+    sent_payloads = []
+    fake_resend = types.SimpleNamespace(
+        api_key=None,
+        Emails=types.SimpleNamespace(
+            send=lambda payload: sent_payloads.append(payload),
+        ),
+    )
+
+    with patch.dict(sys.modules, {
+        "db_ops": fake_db_ops,
+        "metrics": fake_metrics,
+        "email_templates": fake_email_templates,
+        "resend": fake_resend,
+    }):
+        result = asyncio.run(bot_discovery._maybe_email_failing_csv(
+            "sitemap-learn.xml",
+            {"failing": _make_failing(75)},
+            admin_id="admin-1",
+        ))
+
+    assert result["sent"] is True, result
+    assert result["to"] == "oncall@syrabit.ai"
+    assert "75" in result["subject"] and "sitemap-learn.xml" in result["subject"]
+    assert len(sent_payloads) == 1
+    payload = sent_payloads[0]
+    assert payload["to"] == ["oncall@syrabit.ai"]
+    # Exactly one attachment with the right shape and base64 content.
+    assert len(payload["attachments"]) == 1
+    att = payload["attachments"][0]
+    assert att["filename"].startswith("failing-urls-sitemap-learn-")
+    assert att["filename"].endswith(".csv")
+    import base64
+    decoded = base64.b64decode(att["content"]).decode("utf-8")
+    assert decoded.startswith("\ufeff")
+    assert "url,status,error" in decoded
+    # All 75 URLs are present in the attachment.
+    for i in range(75):
+        assert f"/topic-{i}" in decoded
+
+
+def test_deep_scan_route_invokes_email_helper_and_attaches_result():
+    """Route-level wiring: seo_health_check(deep_scan=...) must call the
+    email helper exactly once and surface its return value under
+    response['email'] so the dashboard can show send status to admins
+    and so we don't regress the helper integration silently."""
+    fake = _DeepScanFakeClient(_make_sitemap_xml([]), {})
+    captured_calls = []
+
+    async def _fake_email(sitemap_name, scan_result, *, admin_id):
+        captured_calls.append({
+            "sitemap": sitemap_name,
+            "admin_id": admin_id,
+            "failing_count": len(scan_result.get("failing", [])),
+        })
+        return {"sent": True, "to": "oncall@syrabit.ai", "reason": "stub"}
+
+    async def _fake_admin(_req):
+        return {"sub": "admin-42", "email": "admin@syrabit.ai"}
+
+    with patch.object(bot_discovery, "get_admin_user", new=_fake_admin), \
+         patch.object(bot_discovery, "_maybe_email_failing_csv", new=_fake_email), \
+         patch("httpx.AsyncClient", lambda *a, **kw: fake):
+        result = asyncio.run(bot_discovery.seo_health_check(
+            request=_fake_admin_request(), deep_scan="sitemap-learn.xml"))
+
+    assert "email" in result, "deep-scan response must include email metadata"
+    assert result["email"]["sent"] is True
+    assert result["email"]["to"] == "oncall@syrabit.ai"
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["sitemap"] == "sitemap-learn.xml"
+    # admin_id should prefer the JWT subject over the email so per-admin
+    # opt-out works even when an admin's email later changes.
+    assert captured_calls[0]["admin_id"] == "admin-42"
+
+
+def test_email_skipped_without_resend_key(monkeypatch):
+    """Missing RESEND_API_KEY must be a graceful no-op, not an
+    exception — the deep scan itself still succeeded and we don't want
+    email delivery problems to blow up the response."""
+    async def _prefs(_admin_id):
+        return {"email_failing_csv_enabled": True}
+
+    fake_db_ops = types.SimpleNamespace(get_admin_notification_prefs=_prefs)
+
+    async def _noop_load():
+        return None
+    fake_metrics = types.SimpleNamespace(
+        _notification_channels={"email": "oncall@syrabit.ai"},
+        _load_alert_settings=_noop_load,
+    )
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+    with patch.dict(sys.modules, {
+        "db_ops": fake_db_ops, "metrics": fake_metrics,
+    }):
+        result = asyncio.run(bot_discovery._maybe_email_failing_csv(
+            "sitemap-learn.xml",
+            {"failing": _make_failing(100)},
+            admin_id="admin-1",
+        ))
+    assert result["sent"] is False
+    assert result["reason"] == "no_resend_key"
