@@ -4,10 +4,6 @@ import "./index.css";
 import App from "./App";
 import { initWebVitals } from "./utils/webVitals";
 
-const isLibrary =
-  typeof window !== "undefined" &&
-  /^\/library(\/|$)/.test(window.location.pathname);
-
 const rootEl = document.getElementById("root");
 const tree = (
   <React.StrictMode>
@@ -15,14 +11,15 @@ const tree = (
   </React.StrictMode>
 );
 
-// /library ships a fully prerendered React tree inside #root. Hydrate
-// in place so React adopts the existing DOM (no remount, no flash).
-// Every other route still mounts the SPA via createRoot. (Task #382)
+// /library and /chat ship a fully prerendered React tree inside #root.
+// Hydrate in place so React adopts the existing DOM (no remount, no flash).
+// Every other route still mounts the SPA via createRoot.
+// (Task #382 for /library, Task #387 for /chat.)
 const hasPrerender =
-  isLibrary &&
   rootEl &&
   rootEl.firstElementChild != null &&
-  rootEl.dataset.hydrate === "library";
+  (rootEl.dataset.hydrate === "library" ||
+    rootEl.dataset.hydrate === "chat");
 
 if (hasPrerender) {
   ReactDOM.hydrateRoot(rootEl, tree);

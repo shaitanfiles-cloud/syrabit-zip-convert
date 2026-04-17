@@ -4,7 +4,7 @@
  * actions bar (copy / regenerate / timestamp / credit badge),
  * credit progress bar, sync indicator, source badge.
  */
-import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -17,8 +17,12 @@ import { InputBar } from './chat/InputBar';
 import { ModelSelector, MODELS } from './chat/ModelSelector';
 import { useTurnstile } from '@/hooks/useTurnstile';
 import { Analytics } from '@/utils/analytics';
+import { Helmet } from 'react-helmet-async';
 
-const EmptyState = lazy(() => import('./chat/EmptyState').then(m => ({ default: m.EmptyState })));
+// EmptyState is imported eagerly so its h2 ("Hi! I'm Syra…") — the LCP
+// element on /chat — renders in the SSR snapshot and on the very first
+// client paint, instead of waiting for an async chunk. (Task #387)
+import { EmptyState } from './chat/EmptyState';
 
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
@@ -40,7 +44,18 @@ export default function ChatPage() {
   const [syncState, setSyncState]         = useState('idle');
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [copiedMsgId, setCopiedMsgId]     = useState(null);
-  const [responseLang, setResponseLang]   = useState(() => localStorage.getItem('syrabit_response_lang') || 'en');
+  // IMPORTANT: initialize to a deterministic constant ('en') and rehydrate
+  // from localStorage in useEffect. Reading localStorage during render makes
+  // the SSR snapshot (always 'en') drift from the client first render
+  // (potentially 'as'), breaking hydration on the language toggle.
+  // (Task #387 — architect review.)
+  const [responseLang, setResponseLang] = useState('en');
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('syrabit_response_lang');
+      if (stored && stored !== 'en') setResponseLang(stored);
+    } catch {}
+  }, []);
   // Skip Turnstile entirely for authenticated users — backend never verifies a
   // captcha for them, so loading the CF script + invisible widget is pure
   // overhead. (Task #282 T001)
@@ -385,14 +400,36 @@ export default function ChatPage() {
       ];
 
   return (
-    <AppLayout pageTitle={
-      <ModelSelector
-        model={model} setModel={setModel}
-        showModelMenu={showModelMenu} setShowModelMenu={setShowModelMenu}
-        modelMenuRef={modelMenuRef} handleNewChat={handleNewChat}
-        responseLang={responseLang} setResponseLang={setResponseLang}
-      />
-    }>
+    <>
+      <Helmet>
+        <title>Syrabit AI Chat — Ask Anything About Your Syllabus</title>
+        <meta
+          name="description"
+          content="Ask Syrabit's AI tutor anything about AHSEC, SEBA and Degree subjects. Get instant explanations, MCQs, definitions and exam-ready answers in English or Assamese."
+        />
+        <link rel="canonical" href="https://syrabit.ai/chat" />
+        {/* /chat is auth-gated and personalized — keep it out of the index. */}
+        <meta name="robots" content="noindex, follow" />
+        <meta property="og:title" content="Syrabit AI Chat — Ask Anything About Your Syllabus" />
+        <meta
+          property="og:description"
+          content="AI-powered tutor for Assam Board (AHSEC, SEBA) and Degree students. Free to start, no card needed."
+        />
+        <meta property="og:url" content="https://syrabit.ai/chat" />
+        <meta name="twitter:title" content="Syrabit AI Chat — Ask Anything About Your Syllabus" />
+        <meta
+          name="twitter:description"
+          content="AI-powered tutor for Assam Board (AHSEC, SEBA) and Degree students. Free to start, no card needed."
+        />
+      </Helmet>
+      <AppLayout pageTitle={
+        <ModelSelector
+          model={model} setModel={setModel}
+          showModelMenu={showModelMenu} setShowModelMenu={setShowModelMenu}
+          modelMenuRef={modelMenuRef} handleNewChat={handleNewChat}
+          responseLang={responseLang} setResponseLang={setResponseLang}
+        />
+      }>
       <div className="flex flex-col chat-viewport-height">
         {isOutOfCredits && (
           <div
@@ -410,11 +447,9 @@ export default function ChatPage() {
         <div className="flex-1 overflow-y-auto min-h-0 pb-[calc(8rem+68px+env(safe-area-inset-bottom,0px))] md:pb-32" onClick={() => setShowModelMenu(false)} role="log" aria-label="Chat messages" aria-live="polite">
           <div className="max-w-3xl mx-auto px-4 md:px-6 py-4">
             {messages.length === 0 && (
-              <Suspense fallback={<div style={{ minHeight: '420px' }} aria-hidden="true" />}>
-                <div style={{ minHeight: '420px' }}>
-                  <EmptyState subject={subject} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
-                </div>
-              </Suspense>
+              <div style={{ minHeight: '420px' }}>
+                <EmptyState subject={subject} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
+              </div>
             )}
               {(() => {
                 let lastUIdx = -1;
@@ -436,6 +471,7 @@ export default function ChatPage() {
           textareaRef={textareaRef} adjustTextarea={adjustTextarea} sendMsg={sendMsg} handleStop={handleStop}
         />
       </div>
-    </AppLayout>
+      </AppLayout>
+    </>
   );
 }

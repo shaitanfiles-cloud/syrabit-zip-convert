@@ -55,7 +55,14 @@ const OnboardingPage     = lazy(() => import("@/pages/OnboardingPage"));
 // resolves on the client) and break hydration. (Task #382)
 import LibraryPage from "@/pages/LibraryPage";
 const SubjectPage        = lazy(() => import("@/pages/SubjectPage"));
-const ChatPage           = lazy(pageImports.chat);
+// ChatPage is imported eagerly so the server-rendered output for /chat is
+// byte-identical to React's first client render — lazy() would render a
+// Suspense fallback during SSR (or before its chunk resolves on the client)
+// and break hydration. /chat is also the default landing route (/ redirects
+// to /chat), so bundling it into the entry chunk removes the chunk-load
+// latency for the most common path. (Task #387 — same strategy as
+// LibraryPage in Task #382.)
+import ChatPage from "@/pages/ChatPage";
 const HistoryPage        = lazy(pageImports.history);
 const ProfilePage        = lazy(pageImports.profile);
 const PricingPage        = lazy(() => import("@/pages/PricingPage"));

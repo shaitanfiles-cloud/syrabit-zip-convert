@@ -1,8 +1,17 @@
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { BookOpen } from 'lucide-react';
 
 export function EmptyState({ subject, documentId, defaultPrompts, setInput, textareaRef }) {
   const navigate = useNavigate();
+  // Defer URL-search-param-dependent text until after hydration. The SSR
+  // snapshot is rendered for /chat with no query string, so reading
+  // `documentId` here on the first client render would drift if the user
+  // landed on /chat?document_id=… and break hydration. (Task #387 —
+  // architect review.)
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
+  const showDocumentText = mounted && documentId;
 
   return (
     <div className="flex flex-col items-center justify-center text-center space-y-5 py-8">
@@ -26,7 +35,7 @@ export function EmptyState({ subject, documentId, defaultPrompts, setInput, text
           {subject ? `Ask me about ${subject.name}` : <>Hi! I'm Syra — Educational Browser<br />For Assam Board Students</>}
         </h2>
         <p className="text-muted-foreground text-sm max-w-sm mx-auto">
-          {documentId
+          {showDocumentText
             ? 'Document loaded as primary source. Ask any question.'
             : subject
             ? 'Syllabus-first answers powered by web search.'

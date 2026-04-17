@@ -39,7 +39,7 @@
   },
   "scripts": {
     "dev": "vite --port ${PORT:-25144} --host 0.0.0.0",
-    "build": "vite build && vite build --ssr src/entry-server.jsx --outDir dist-ssr --emptyOutDir && node scripts/inject-modulepreload.mjs && node scripts/prerender-library.mjs && node scripts/verify-library-prerender.mjs && node scripts/generate-precache-manifest.mjs",
+    "build": "vite build && vite build --ssr src/entry-server.jsx --outDir dist-ssr --emptyOutDir && node scripts/inject-modulepreload.mjs && node scripts/prerender-library.mjs && node scripts/prerender-chat.mjs && node scripts/verify-library-prerender.mjs && node scripts/generate-precache-manifest.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "verify:jsonld": "node scripts/validate-jsonld.mjs"
