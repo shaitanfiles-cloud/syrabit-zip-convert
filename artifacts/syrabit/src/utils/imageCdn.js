@@ -46,7 +46,11 @@ export function cdnImage(src, { width, quality, format, fit } = {}) {
   const optString = Object.entries(opts)
     .map(([k, v]) => `${k}=${v}`)
     .join(',');
-  return `/cdn-cgi/image/${optString}/${src}`;
+  // encodeURI preserves the URL structure (protocol slashes, query separator)
+  // while escaping whitespace and other characters that would otherwise
+  // produce a malformed CDN URL on edge cases (e.g. spaces in CMS-uploaded
+  // filenames).
+  return `/cdn-cgi/image/${optString}/${encodeURI(src)}`;
 }
 
 /**
