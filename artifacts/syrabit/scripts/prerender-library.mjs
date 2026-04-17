@@ -247,6 +247,26 @@ async function main() {
 
   html = rewriteHead(html);
 
+  // Task #391: strip modulepreload links for chunks that /library does not
+  // need on the critical path. Vite auto-emits modulepreload hints for
+  // every static dep of the entry chunk, including chunks only used by
+  // /chat (sandpack-client) and /chapter (markdown). Removing them from
+  // the prerendered /library/index.html cuts ~80-150KB of speculative
+  // downloads on mobile first paint without affecting code-split fetches
+  // on later navigations (the imports still resolve, just on demand).
+  const NON_LIBRARY_PRELOAD_PATTERNS = [
+    /sandpack/i,    // chat code playground
+    /markdown/i,    // chapter content renderer
+    /framer/i,      // landing-only motion
+    /syntax/i,      // chat syntax highlighter
+  ];
+  html = html.replace(
+    /\s*<link rel="modulepreload"[^>]*href="\/assets\/([^"]+)"[^>]*>/g,
+    (match, file) => {
+      return NON_LIBRARY_PRELOAD_PATTERNS.some((re) => re.test(file)) ? "" : match;
+    },
+  );
+
   fs.mkdirSync(outDir, { recursive: true });
   fs.writeFileSync(outHtml, html);
 

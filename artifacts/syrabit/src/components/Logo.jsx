@@ -29,7 +29,6 @@ export const LogoMark = ({ size = 'md', className = '', style = {} }) => {
         alt="Syrabit.ai logo"
         width={px}
         height={px}
-        loading="lazy"
         decoding="async"
         style={{ width: px, height: px, borderRadius: px * 0.25, objectFit: 'cover', flexShrink: 0 }}
       />
@@ -65,7 +64,6 @@ export const LogoFull = ({
           alt="Syrabit.ai logo"
           width={px}
           height={px}
-          loading="lazy"
           decoding="async"
           style={{ width: px, height: px, borderRadius: px * 0.25, objectFit: 'cover', flexShrink: 0 }}
         />
