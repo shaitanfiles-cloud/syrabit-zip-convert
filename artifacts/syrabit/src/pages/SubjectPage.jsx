@@ -19,6 +19,7 @@ import { useShare } from '@/hooks/useShare';
 import { useSubject, useChapters } from '@/hooks/useContent';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
 import { toast } from 'sonner';
+import InArticleAd from '@/components/InArticleAd';
 
 
 const CONTENT_TYPE_ICONS = {
@@ -211,6 +212,12 @@ function BlogView({ subject, subjectId }) {
                 {post.merged_md || ''}
               </ReactMarkdown>
             </div>
+          )}
+
+          {/* In-article ad after the long-form blog content. Only renders for
+              non-trivial articles to avoid placing ads on near-empty pages. */}
+          {(post.word_count || 0) > 400 && (
+            <InArticleAd adKey={`subject-blog-${subjectId}`} />
           )}
 
           {/* AI Tutor CTA */}

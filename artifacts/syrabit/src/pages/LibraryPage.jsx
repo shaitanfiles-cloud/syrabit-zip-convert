@@ -13,6 +13,7 @@ import {
 import { useToggleSavedSubject } from '@/hooks/useUser';
 import SubjectCard from './library/SubjectCard';
 import VirtualSubjectGrid from './library/VirtualSubjectGrid';
+import InFeedAd from '@/components/InFeedAd';
 import LibrarySkeleton from './library/LibrarySkeleton';
 import FilterChip from './library/FilterChip';
 import ScrollableFilterRow from './library/ScrollableFilterRow';
@@ -547,17 +548,33 @@ export default function LibraryPage() {
                 data-testid="library-subject-grid"
                 style={{ contain: 'layout style', minHeight: '420px' }}
               >
-                {visibleSubjects.map((sub, index) => (
-                  <SubjectCard
-                    key={sub.id}
-                    sub={sub}
-                    chapters={chaptersBySubject.get(sub.id) || []}
-                    isSaved={savedSubjects.includes(sub.id)}
-                    onToggleSave={handleToggleSave}
-                    onAskAI={handleAskAI}
-                    index={index}
-                  />
-                ))}
+                {visibleSubjects.flatMap((sub, index) => {
+                  const card = (
+                    <SubjectCard
+                      key={sub.id}
+                      sub={sub}
+                      chapters={chaptersBySubject.get(sub.id) || []}
+                      isSaved={savedSubjects.includes(sub.id)}
+                      onToggleSave={handleToggleSave}
+                      onAskAI={handleAskAI}
+                      index={index}
+                    />
+                  );
+                  // Insert an in-feed native ad after every 6 subject cards.
+                  const shouldShowAd =
+                    (index + 1) % 6 === 0 && index < visibleSubjects.length - 1;
+                  return shouldShowAd
+                    ? [
+                        card,
+                        <div
+                          key={`infeed-ad-${index}`}
+                          className="col-span-1 md:col-span-2 xl:col-span-3"
+                        >
+                          <InFeedAd adKey={`library-${index}`} />
+                        </div>,
+                      ]
+                    : [card];
+                })}
               </div>
               {filteredSubjects.length > visibleSubjects.length && (
                 <div ref={sentinelRef} aria-hidden="true" style={{ height: 1 }} />

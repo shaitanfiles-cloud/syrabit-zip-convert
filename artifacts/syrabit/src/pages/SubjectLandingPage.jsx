@@ -8,6 +8,8 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useResolveSubject, useChapters } from '@/hooks/useContent';
+import InArticleAd from '@/components/InArticleAd';
+import InFeedAd from '@/components/InFeedAd';
 
 export default function SubjectLandingPage() {
   const { board, classSlug, subjectSlug } = useParams();
@@ -224,12 +226,12 @@ export default function SubjectLandingPage() {
               <p className="text-muted-foreground">{searchQuery ? 'No chapters match your search' : 'No chapters available yet'}</p>
             </div>
           ) : (
-            filteredChapters.map((ch, i) => {
+            filteredChapters.flatMap((ch, i) => {
               const chPath = ch.slug
                 ? `${basePath}/${ch.slug}`
                 : `${basePath}`;
 
-              return (
+              const card = (
                 <div
                   key={ch.id || i}
                   className="rounded-2xl overflow-hidden transition-all hover:border-violet-500/15 glass-card"
@@ -261,9 +263,19 @@ export default function SubjectLandingPage() {
                   </Link>
                 </div>
               );
+
+              // Insert an in-feed native ad after every 6 chapter cards.
+              const showAd = (i + 1) % 6 === 0 && i < filteredChapters.length - 1;
+              return showAd
+                ? [card, <InFeedAd key={`subj-landing-ad-${i}`} adKey={`subj-landing-${subjectId}-${i}`} />]
+                : [card];
             })
           )}
         </div>
+
+        {chapters.length > 0 && (
+          <InArticleAd adKey={`subj-landing-mid-${subjectId}`} />
+        )}
 
         {subject.tags?.length > 0 && (
           <div className="mt-8 p-5 rounded-2xl glass-card">
