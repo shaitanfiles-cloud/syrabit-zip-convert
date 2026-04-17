@@ -80,7 +80,7 @@ async def get_visitor_stats_cf(days: int = 7) -> Optional[dict]:
       viewer {
         zones(filter: { zoneTag: $zoneTag }) {
           todayData: httpRequests1dGroups(
-            filter: { date_eq: $today }
+            filter: { date_geq: $today, date_leq: $today }
             limit: 1
           ) {
             sum {

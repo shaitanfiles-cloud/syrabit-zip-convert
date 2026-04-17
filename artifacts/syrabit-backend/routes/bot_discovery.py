@@ -2079,7 +2079,11 @@ async def _record_seo_health_snapshot() -> Dict:
     from deps import db, is_mongo_available
 
     try:
-        report = await seo_health_check()
+        # Pass explicit kwargs — calling the FastAPI handler directly skips
+        # the request lifecycle, so the `Query(...)` default for `deep_scan`
+        # would otherwise leak through as a ParamFunctionInfo object and
+        # trip the "Unknown sitemap" guard below.
+        report = await seo_health_check(request=None, deep_scan=None)
     except Exception as exc:
         logger.warning(f"seo_health_check raised during snapshot: {exc}")
         report = {
