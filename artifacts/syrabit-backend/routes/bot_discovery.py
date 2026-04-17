@@ -2973,6 +2973,7 @@ async def _run_indexnow_backfill(run_id: str) -> None:
         _backfill_state["status"] = "done"
         _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
         final_status = "done"
+        await _persist_backfill_progress()
         logger.info(
             "IndexNow backfill run_id=%s complete: discovered=%d submitted=%d "
             "succeeded=%d failed=%d skipped=%d",
@@ -2987,6 +2988,7 @@ async def _run_indexnow_backfill(run_id: str) -> None:
             _backfill_state["status"] = "error"
             _backfill_state["error"] = str(e)
             _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            await _persist_backfill_progress()
         final_status = "error"
     finally:
         await _release_backfill_lock(run_id, final_status)

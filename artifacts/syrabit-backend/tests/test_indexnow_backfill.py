@@ -527,6 +527,76 @@ def test_admin_progress_endpoint_prefers_db_for_other_workers(monkeypatch):
     assert p["queued"] == 400  # 1000 - 600 - 0
 
 
+def test_run_backfill_persists_terminal_done_state_to_db(monkeypatch):
+    """Regression: a worker on replica A must write the final
+    `status=done` + `finished_at` to Mongo so a poll hitting replica B
+    sees completion. Verifies the last persisted snapshot has terminal
+    fields set."""
+    import deps as deps_mod
+    from routes import bot_discovery as bd
+
+    monkeypatch.setattr(deps_mod, "is_mongo_available", AsyncMock(return_value=True))
+    persisted: list[dict] = []
+
+    async def _capture_update(filt, update, upsert=False):
+        persisted.append(dict(update["$set"]))
+
+    fake_db = MagicMock()
+    fake_db[bd._BACKFILL_RUNS_COLLECTION].update_one = AsyncMock(side_effect=_capture_update)
+    fake_db.job_locks.update_one = AsyncMock()
+    monkeypatch.setattr(deps_mod, "db", fake_db)
+
+    fake_urls = [f"https://syrabit.ai/p/{i}" for i in range(5)]
+
+    async def _fake_collect():
+        return list(fake_urls), {}
+    monkeypatch.setattr(bd, "_collect_all_backfill_urls", _fake_collect)
+
+    async def _fake_push(urls, source="auto", target_endpoints=None):
+        return {ep: True for ep in bd.INDEXNOW_ENDPOINTS}
+    monkeypatch.setattr(bd, "push_indexnow", _fake_push)
+
+    bd._reset_backfill_state("term-done")
+    _run(bd._run_indexnow_backfill("term-done"))
+
+    assert persisted, "expected at least one persisted snapshot"
+    final = persisted[-1]
+    assert final["status"] == "done"
+    assert final["finished_at"] is not None
+    assert final["chunks_done"] == final["chunks_total"] == 1
+
+
+def test_run_backfill_persists_terminal_error_state_to_db(monkeypatch):
+    """Regression: an error must reach Mongo too so cross-worker polls
+    see the terminal failure state instead of hanging on `running`."""
+    import deps as deps_mod
+    from routes import bot_discovery as bd
+
+    monkeypatch.setattr(deps_mod, "is_mongo_available", AsyncMock(return_value=True))
+    persisted: list[dict] = []
+
+    async def _capture_update(filt, update, upsert=False):
+        persisted.append(dict(update["$set"]))
+
+    fake_db = MagicMock()
+    fake_db[bd._BACKFILL_RUNS_COLLECTION].update_one = AsyncMock(side_effect=_capture_update)
+    fake_db.job_locks.update_one = AsyncMock()
+    monkeypatch.setattr(deps_mod, "db", fake_db)
+
+    async def _broken():
+        raise RuntimeError("boom")
+    monkeypatch.setattr(bd, "_collect_all_backfill_urls", _broken)
+
+    bd._reset_backfill_state("term-err")
+    _run(bd._run_indexnow_backfill("term-err"))
+
+    assert persisted, "expected error state to be persisted"
+    final = persisted[-1]
+    assert final["status"] == "error"
+    assert "boom" in (final["error"] or "")
+    assert final["finished_at"] is not None
+
+
 def test_persist_backfill_progress_writes_run_doc(monkeypatch):
     import deps as deps_mod
     from routes import bot_discovery as bd
