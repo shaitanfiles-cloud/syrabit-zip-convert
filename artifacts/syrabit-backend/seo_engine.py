@@ -20,6 +20,7 @@ from typing import Any, Callable, Coroutine, List, Optional
 from datetime import datetime, timezone
 from email.utils import format_datetime as _email_format_datetime
 import asyncio, uuid, re, logging, json, html as html_mod, hashlib
+import d1_sync
 
 
 def _iso_to_rfc7231(value) -> Optional[str]:
@@ -1470,6 +1471,17 @@ async def _generate_single_page(topic: dict, page_type: str, hierarchy: dict):
                 await indexnow_batcher.queue_page(page)
             except Exception:
                 pass
+
+        # D1 edge sync — fire-and-forget so publish latency is unaffected.
+        if d1_sync.is_d1_configured():
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(
+                    d1_sync.trigger_d1_sync({"seo_pages": [page], "action": "publish_page"})
+                )
+            except Exception as _d1_err:
+                logger.debug(f"D1 sync task dispatch failed: {_d1_err}")
+
     return page
 
 
@@ -1789,6 +1801,49 @@ async def seo_stats(_admin: dict = Depends(_require_admin)):
         "topics": {"total": total_topics, "published": published_topics},
         "pages": {"total": total_pages, "published": published_pages, "by_type": by_type},
         "last_generation": last_log,
+    }
+
+
+# ─── ADMIN: D1 edge sync ─────────────────────────────────────────────────────
+
+class _D1SyncTablesRequest(BaseModel):
+    tables: List[str]
+
+
+@router.post("/d1/sync-full")
+async def d1_sync_full(_admin: dict = Depends(_require_admin)):
+    """Export the entire content catalog to D1 (boards, classes, streams,
+    subjects, chapters, topics, seo_pages). Returns row counts per table."""
+    result = await d1_sync.sync_full(_db)
+    return result
+
+
+@router.post("/d1/sync-tables")
+async def d1_sync_tables(
+    data: _D1SyncTablesRequest,
+    _admin: dict = Depends(_require_admin),
+):
+    """Sync a specific subset of tables to D1.
+    Body: ``{"tables": ["seo_pages", "topics", "chapters"]}``"""
+    result = await d1_sync.sync_tables(_db, data.tables)
+    return result
+
+
+@router.get("/d1/status")
+async def d1_sync_status(_admin: dict = Depends(_require_admin)):
+    """Return D1 configuration status and last-sync metadata."""
+    last_sync = None
+    try:
+        doc = await _db.d1_sync_log.find_one({}, {"_id": 0, "synced_at": 1}, sort=[("synced_at", -1)])
+        if doc:
+            last_sync = doc.get("synced_at")
+    except Exception:
+        pass
+    return {
+        "configured": d1_sync.is_d1_configured(),
+        "sync_secret_set": bool(d1_sync.D1_SYNC_SECRET),
+        "edge_worker_url": d1_sync.EDGE_WORKER_URL,
+        "last_sync": last_sync,
     }
 
 
