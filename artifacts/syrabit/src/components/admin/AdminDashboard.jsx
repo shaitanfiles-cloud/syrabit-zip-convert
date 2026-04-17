@@ -8,7 +8,7 @@ import {
   UserPlus, Globe, Search, Bot, BarChart2, Server, Clock,
   CheckCircle, AlertCircle, AlertTriangle, Wifi, Database, DollarSign, Crown,
   Layers, Link2, Code2, FileCheck, Target, Cpu, ShieldCheck, Smartphone,
-  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music,
+  Volume2, VolumeX, Bell, BellOff, RotateCcw, Upload, Trash2, Music, Cloud,
 } from 'lucide-react';
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -833,31 +833,34 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       <GlassCard className="p-5">
         <div className="flex items-center gap-2 mb-4 flex-wrap">
           <Globe size={14} style={{ color: '#0891b2' }} />
-          <span className="text-xs font-bold text-cyan-700">Traffic Sources</span>
+          <span className="text-xs font-bold text-cyan-700">Traffic (Cloudflare)</span>
           <span className="ml-auto text-[10px] text-gray-400 italic">
-            Server-side = Cloudflare-equivalent · JS-tracked = engaged users · Bot = crawlers
+            All visitor &amp; page-view counts come from Cloudflare
           </span>
         </div>
+
+        {data?.cf_connected === false && (
+          <div className="mb-3 flex items-start gap-2 p-3 rounded-xl bg-red-50 border border-red-200">
+            <Cloud size={13} className="text-red-500 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-red-600">Cloudflare analytics unavailable — check API token and Zone ID</p>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-3">
           <div className="rounded-xl p-3 bg-emerald-50 border border-emerald-200">
             <div className="flex items-center gap-1.5 mb-2">
-              <Server size={11} style={{ color: '#10b981' }} />
-              <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">All Traffic</span>
-              <span className="text-[9px] text-gray-400 ml-auto">server-side</span>
+              <Globe size={11} style={{ color: '#10b981' }} />
+              <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-wider">Visitors</span>
+              <span className="text-[9px] text-gray-400 ml-auto">Cloudflare</span>
             </div>
             <div className="flex gap-4">
               <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.server_side?.total_unique ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Unique</p>
+                <p className="text-gray-900 font-bold text-lg">{(vs.cloudflare?.total_visitors ?? vs.total_visitors ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-gray-400">Range</p>
               </div>
               <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.server_side?.unique_today ?? 0).toLocaleString()}</p>
+                <p className="text-gray-900 font-bold text-lg">{(vs.cloudflare?.visitors_today ?? vs.visitors_today ?? 0).toLocaleString()}</p>
                 <p className="text-[10px] text-gray-400">Today</p>
-              </div>
-              <div>
-                <p className="text-gray-500 font-bold text-lg">{(vs.server_side?.total_hits ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Hits</p>
               </div>
             </div>
           </div>
@@ -865,21 +868,17 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
           <div className="rounded-xl p-3 bg-violet-50 border border-violet-200">
             <div className="flex items-center gap-1.5 mb-2">
               <Eye size={11} style={{ color: '#8b5cf6' }} />
-              <span className="text-[10px] font-bold text-violet-700 uppercase tracking-wider">Engaged Visitors</span>
-              <span className="text-[9px] text-gray-400 ml-auto">JS-tracked</span>
+              <span className="text-[10px] font-bold text-violet-700 uppercase tracking-wider">Page Views</span>
+              <span className="text-[9px] text-gray-400 ml-auto">Cloudflare</span>
             </div>
             <div className="flex gap-4">
               <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.total_visitors ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">All-time</p>
+                <p className="text-gray-900 font-bold text-lg">{(vs.cloudflare?.total_page_views ?? vs.total_page_views ?? 0).toLocaleString()}</p>
+                <p className="text-[10px] text-gray-400">Range</p>
               </div>
               <div>
-                <p className="text-gray-900 font-bold text-lg">{(vs.visitors_today ?? 0).toLocaleString()}</p>
+                <p className="text-gray-900 font-bold text-lg">{(vs.cloudflare?.page_views_today ?? vs.page_views_today ?? 0).toLocaleString()}</p>
                 <p className="text-[10px] text-gray-400">Today</p>
-              </div>
-              <div>
-                <p className="text-gray-500 font-bold text-lg">{(vs.total_page_views ?? 0).toLocaleString()}</p>
-                <p className="text-[10px] text-gray-400">Views</p>
               </div>
             </div>
           </div>
@@ -908,25 +907,6 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             </div>
           )}
         </div>
-
-        {vs.server_side?.total_unique > 0 && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg flex-wrap bg-gray-50 border border-gray-100">
-            <span className="text-[10px] text-gray-400 font-semibold">TRACKING FUNNEL:</span>
-            <span className="text-[11px] text-emerald-600 font-bold">{(vs.server_side?.total_unique ?? 0).toLocaleString()}</span>
-            <span className="text-[10px] text-gray-400">server</span>
-            <span className="text-[10px] text-gray-300">&rarr;</span>
-            <span className="text-[11px] text-violet-600 font-bold">{(vs.total_visitors ?? 0).toLocaleString()}</span>
-            <span className="text-[10px] text-gray-400">JS-tracked</span>
-            <span className="text-[10px] text-gray-300">&rarr;</span>
-            <span className="text-[11px] text-amber-600 font-bold">{(vs.bot_traffic?.total_hits ?? 0).toLocaleString()}</span>
-            <span className="text-[10px] text-gray-400">bot hits</span>
-            {vs.total_visitors > 0 && vs.server_side?.total_unique > 0 && (
-              <span className="ml-auto text-[10px] text-gray-400">
-                JS capture rate: {Math.round((vs.total_visitors / vs.server_side.total_unique) * 100)}%
-              </span>
-            )}
-          </div>
-        )}
 
         {vs.bot_traffic?.top_bots?.length > 0 && (
           <div className="mt-3">
