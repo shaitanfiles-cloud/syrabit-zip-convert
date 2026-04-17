@@ -3,13 +3,13 @@ import {
   Shield, Bot, AlertTriangle, RefreshCw, Loader2,
   Hash, Globe, Clock, TrendingUp, Eye, Ban, Unlock,
   Settings, Bell, Mail, Link2, Save, Check, RotateCcw,
-  Calendar, Filter, CheckCheck, History,
+  Calendar, Filter, CheckCheck, History, Send, Inbox, Smartphone,
 } from 'lucide-react';
 import {
   LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, Tooltip,
   ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
-import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds } from '@/utils/api';
+import { adminGetSpoofedBots, adminGetBlockedIps, adminGetBlockTrends, adminBlockIp, adminUnblockIp, adminGetAlertSettings, adminUpdateAlertSettings, adminTestAlertDelivery, adminGetTtlMonitor, adminGetCollectionSizeHistory, adminGetAlerts, adminAcknowledgeAlert, adminAcknowledgeAllAlerts, adminBackfillThresholds } from '@/utils/api';
 import { Database, Activity, CheckCircle2, XCircle } from 'lucide-react';
 
 function GlassCard({ children, className = '' }) {
@@ -42,6 +42,125 @@ function StatCard({ label, value, icon: Icon, color, pulse }) {
   );
 }
 
+// Task #418: presents per-channel last-success/last-error timestamps next to a
+// "Test alert delivery" button so admins can verify their Slack/email/push
+// integrations actually work without waiting for a real incident.
+function _formatRelative(iso) {
+  if (!iso) return 'never';
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return 'never';
+  const diff = Date.now() - t;
+  const s = Math.round(diff / 1000);
+  if (s < 60) return `${s}s ago`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return `${d}d ago`;
+}
+
+const _CHANNEL_LABELS = {
+  email: { label: 'Email (Resend)', icon: Mail },
+  webhook: { label: 'Webhook (Slack/Discord)', icon: Link2 },
+  persisted: { label: 'Persisted alert (dashboard)', icon: Inbox },
+  push: { label: 'Browser push', icon: Smartphone },
+};
+
+function ChannelStatusRow({ channel, entry, outcome }) {
+  const meta = _CHANNEL_LABELS[channel] || { label: channel, icon: Bell };
+  const Icon = meta.icon;
+  const lastSuccess = entry?.last_success_at;
+  const lastError = entry?.last_error;
+  const lastAttempt = entry?.last_attempt_at;
+  let statusColor = 'bg-gray-100 text-gray-500';
+  let statusLabel = 'No attempts yet';
+  if (outcome) {
+    if (outcome.ok) {
+      statusColor = 'bg-emerald-50 text-emerald-700';
+      statusLabel = 'Test OK';
+    } else if (outcome.attempted) {
+      statusColor = 'bg-red-50 text-red-700';
+      statusLabel = `Test failed: ${outcome.error || 'unknown error'}`;
+    } else if (outcome.skipped_reason) {
+      statusColor = 'bg-amber-50 text-amber-700';
+      statusLabel = `Skipped: ${outcome.skipped_reason}`;
+    }
+  } else if (lastSuccess && !lastError) {
+    statusColor = 'bg-emerald-50 text-emerald-700';
+    statusLabel = `Last success ${_formatRelative(lastSuccess)}`;
+  } else if (lastError) {
+    statusColor = 'bg-red-50 text-red-700';
+    statusLabel = `Last error: ${lastError}`;
+  } else if (lastAttempt) {
+    statusColor = 'bg-amber-50 text-amber-700';
+    statusLabel = `Attempted ${_formatRelative(lastAttempt)}, no success recorded`;
+  }
+  return (
+    <div className="flex items-start justify-between gap-3 py-2 border-b border-gray-100 last:border-0">
+      <div className="flex items-start gap-2 min-w-0">
+        <Icon size={12} className="text-gray-400 mt-0.5 shrink-0" />
+        <div className="min-w-0">
+          <p className="text-[11px] font-medium text-gray-700">{meta.label}</p>
+          <p className="text-[10px] text-gray-400 mt-0.5">
+            Last success: {lastSuccess ? `${_formatRelative(lastSuccess)} (${new Date(lastSuccess).toLocaleString()})` : 'never'}
+          </p>
+        </div>
+      </div>
+      <span className={`text-[10px] px-2 py-0.5 rounded-full whitespace-nowrap ${statusColor}`}>{statusLabel}</span>
+    </div>
+  );
+}
+
+function ChannelStatusPanel({ status, testing, testResult, testError, onTest }) {
+  const channels = ['email', 'webhook', 'persisted', 'push'];
+  return (
+    <div className="mt-5 border-t border-gray-100 pt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h4 className="text-xs font-medium text-gray-700 flex items-center gap-1.5">
+            <Send size={12} className="text-gray-400" />
+            Delivery Status
+          </h4>
+          <p className="text-[10px] text-gray-400 mt-0.5">
+            Sends a synthetic <code>hydrate_failure_spike</code> alert to every configured channel and reports per-channel success/failure.
+          </p>
+        </div>
+        <button
+          onClick={onTest}
+          disabled={testing}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium border border-violet-200 text-violet-700 bg-white hover:bg-violet-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {testing ? <Loader2 size={11} className="animate-spin" /> : <Send size={11} />}
+          {testing ? 'Sending test...' : 'Test alert delivery'}
+        </button>
+      </div>
+      {testError && (
+        <div className="flex items-center gap-2 text-[11px] text-red-600 bg-red-50 rounded-lg px-2.5 py-1.5 mb-2">
+          <AlertTriangle size={11} />
+          {String(testError)}
+        </div>
+      )}
+      {testResult?.skipped_cooldown && (
+        <div className="flex items-center gap-2 text-[11px] text-amber-700 bg-amber-50 rounded-lg px-2.5 py-1.5 mb-2">
+          <AlertTriangle size={11} />
+          Test was rate-limited by cooldown. Try again shortly.
+        </div>
+      )}
+      <div className="rounded-lg border border-gray-100 px-3">
+        {channels.map((c) => (
+          <ChannelStatusRow
+            key={c}
+            channel={c}
+            entry={status?.[c]}
+            outcome={testResult?.[c]}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AlertThresholdPanel({ adminToken }) {
   const [settings, setSettings] = useState(null);
   const [form, setForm] = useState({ spoof_rpm: 50, auto_block_threshold: 100, auto_block_expiry_hours: 168, collection_growth_per_day: 500, email: '', webhook_url: '', seo_slack_enabled: true, hydrate_slack_enabled: true });
@@ -54,6 +173,10 @@ function AlertThresholdPanel({ adminToken }) {
   const [expanded, setExpanded] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState(null);
+  const [channelStatus, setChannelStatus] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+  const [testError, setTestError] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -62,6 +185,7 @@ function AlertThresholdPanel({ adminToken }) {
         const d = res.data;
         setSettings(d);
         setDefaults(d.defaults);
+        setChannelStatus(d.channel_status || null);
         setForm({
           spoof_rpm: d.thresholds?.spoof_rpm ?? d.defaults?.thresholds?.spoof_rpm ?? 50,
           auto_block_threshold: d.thresholds?.auto_block_threshold ?? d.defaults?.thresholds?.auto_block_threshold ?? 100,
@@ -214,6 +338,21 @@ function AlertThresholdPanel({ adminToken }) {
       else if (!Object.keys(fields).length) setSettingsError('Failed to save settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestDelivery = async () => {
+    setTesting(true);
+    setTestError(null);
+    setTestResult(null);
+    try {
+      const res = await adminTestAlertDelivery(adminToken);
+      setTestResult(res.data?.outcomes || null);
+      if (res.data?.channel_status) setChannelStatus(res.data.channel_status);
+    } catch (err) {
+      setTestError(err.response?.data?.detail || err.message || 'Failed to send test alert');
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -460,6 +599,15 @@ function AlertThresholdPanel({ adminToken }) {
                 </span>
               </span>
             </label>
+
+            {/* Task #418: Per-channel last-success status + test delivery button. */}
+            <ChannelStatusPanel
+              status={channelStatus}
+              testing={testing}
+              testResult={testResult}
+              testError={testError}
+              onTest={handleTestDelivery}
+            />
           </div>
 
           {settingsError && (

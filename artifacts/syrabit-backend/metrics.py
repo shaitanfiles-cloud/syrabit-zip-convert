@@ -16,6 +16,7 @@ __all__ = [
     "_ALERT_COOLDOWN_S", "_ALERT_THRESHOLDS", "_ALERT_THRESHOLDS_DEFAULT",
     "_ALERT_EXPIRATION_DEFAULT", "_alert_expiration",
     "_NOTIFICATION_CHANNELS_DEFAULT", "_notification_channels",
+    "_CHANNEL_STATUS_DEFAULT", "_channel_status",
     "_HEALTH_CACHE_TTL_S",
     "_METRICS_HISTORY_MAX", "_MetricsStore", "_alert_last_fired", "_alerting_loop",
     "_bg_health_loop", "_cache_stats_log_counter", "_check_health_deps",
@@ -291,14 +292,41 @@ _HYDRATE_WEBHOOK_ALERT_TYPES = ("hydrate_failure_spike", "hydrate_recovery_low")
 _HYDRATE_DASHBOARD_URL = "https://syrabit.ai/admin/dashboard?tab=overview#hydrate-health"
 _notification_channels: dict = dict(_NOTIFICATION_CHANNELS_DEFAULT)
 
+# Task #418: per-channel delivery status surfaced on the Alert Settings page so
+# admins can confirm their Slack/email/push integrations actually work without
+# having to wait for a real incident. Updated by ``_dispatch_alert`` after each
+# attempt and persisted to ``db.api_config["alert_channel_status"]`` so it
+# survives process restarts.
+_CHANNEL_STATUS_KEYS = ("email", "webhook", "persisted", "push")
+_CHANNEL_STATUS_DEFAULT = {
+    k: {
+        "last_attempt_at": None,
+        "last_success_at": None,
+        "last_error": None,
+        "last_alert_type": None,
+    } for k in _CHANNEL_STATUS_KEYS
+}
+_channel_status: dict = {k: dict(v) for k, v in _CHANNEL_STATUS_DEFAULT.items()}
+
 async def _load_alert_settings():
     """Load alert thresholds, expiration, and notification channel settings from db.api_config, falling back to defaults."""
-    global _ALERT_THRESHOLDS, _alert_expiration, _notification_channels
+    global _ALERT_THRESHOLDS, _alert_expiration, _notification_channels, _channel_status
     try:
         new_thresholds = dict(_ALERT_THRESHOLDS_DEFAULT)
         new_expiration = dict(_ALERT_EXPIRATION_DEFAULT)
         new_channels = dict(_NOTIFICATION_CHANNELS_DEFAULT)
         cfg = await db.api_config.find_one({}, {"_id": 0})
+        if cfg and "alert_channel_status" in cfg and isinstance(cfg["alert_channel_status"], dict):
+            saved_status = cfg["alert_channel_status"]
+            for k in _CHANNEL_STATUS_KEYS:
+                entry = saved_status.get(k)
+                if isinstance(entry, dict):
+                    _channel_status[k] = {
+                        "last_attempt_at": entry.get("last_attempt_at"),
+                        "last_success_at": entry.get("last_success_at"),
+                        "last_error": entry.get("last_error"),
+                        "last_alert_type": entry.get("last_alert_type"),
+                    }
         if cfg and "alert_settings" in cfg:
             s = cfg["alert_settings"]
             thresholds = s.get("thresholds", {})
@@ -471,11 +499,70 @@ def _build_hydrate_slack_payload(alert_type: str, title: str, body: str, snap: d
     }
 
 
-async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snapshot: dict = None):
-    """Send alert via email (Resend) and/or webhook. Respects cooldown."""
-    now = _time_mod.time()
-    if now - _alert_last_fired.get(alert_type, 0) < _ALERT_COOLDOWN_S:
+def _make_outcome():
+    return {"attempted": False, "ok": False, "error": None, "skipped_reason": None}
+
+
+async def _persist_channel_status():
+    """Best-effort write of in-memory _channel_status to db.api_config."""
+    try:
+        await db.api_config.update_one(
+            {},
+            {"$set": {"alert_channel_status": _channel_status}},
+            upsert=True,
+        )
+    except Exception as exc:
+        logger.debug(f"Failed to persist channel status: {exc}")
+
+
+def _record_outcome(channel: str, outcome: dict, alert_type: str, now_iso: str):
+    """Update in-memory _channel_status from a single channel outcome."""
+    if channel not in _channel_status:
         return
+    if not outcome.get("attempted"):
+        return
+    entry = _channel_status[channel]
+    entry["last_attempt_at"] = now_iso
+    entry["last_alert_type"] = alert_type
+    if outcome.get("ok"):
+        entry["last_success_at"] = now_iso
+        entry["last_error"] = None
+    else:
+        entry["last_error"] = outcome.get("error") or outcome.get("skipped_reason") or "unknown error"
+
+
+async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snapshot: dict = None,
+                          force: bool = False, mark_synthetic: bool = False):
+    """Send alert via email (Resend), webhook, persisted alert, and browser push.
+
+    Respects cooldown unless ``force=True`` (test deliveries from the admin
+    dashboard bypass cooldown so admins can re-test on demand).
+
+    When ``mark_synthetic=True`` the persisted alert and push notification are
+    tagged as test traffic so they can be filtered out and don't pollute the
+    real alert feed.
+
+    Returns a dict of per-channel outcomes::
+
+        {
+            "email":     {"attempted": bool, "ok": bool, "error": str|None, "skipped_reason": str|None},
+            "webhook":   {...},
+            "persisted": {...},
+            "push":      {...},
+            "skipped_cooldown": bool,
+        }
+
+    Also updates the in-memory ``_channel_status`` and persists it to
+    ``db.api_config["alert_channel_status"]`` so the Alert Settings UI can
+    surface per-channel last-success timestamps (Task #418).
+    """
+    outcomes = {k: _make_outcome() for k in _CHANNEL_STATUS_KEYS}
+    outcomes["skipped_cooldown"] = False
+
+    now = _time_mod.time()
+    if not force and now - _alert_last_fired.get(alert_type, 0) < _ALERT_COOLDOWN_S:
+        outcomes["skipped_cooldown"] = True
+        return outcomes
     _alert_last_fired[alert_type] = now
     logger.warning(f"ALERT [{alert_type}] {title}: {body}")
 
@@ -483,7 +570,12 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
     try:
         admin_email = (_notification_channels.get("email") or os.environ.get("ALERT_EMAIL", "")).strip()
         resend_key = os.environ.get("RESEND_API_KEY", "").strip()
+        if not admin_email:
+            outcomes["email"]["skipped_reason"] = "no admin email configured"
+        elif not resend_key:
+            outcomes["email"]["skipped_reason"] = "RESEND_API_KEY not set"
         if admin_email and resend_key:
+            outcomes["email"]["attempted"] = True
             import resend as _resend_sdk
             _resend_sdk.api_key = resend_key
             threshold_html = ""
@@ -524,7 +616,9 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
                 "subject": f"🚨 Syrabit Alert: {title}",
                 "html": f"<h2>{title}</h2><p>{body_html}</p>{threshold_html}{extra_html}<p style='color:#888'>Alert type: {alert_type}<br>Cooldown: {_ALERT_COOLDOWN_S // 60} min</p>",
             })
+            outcomes["email"]["ok"] = True
     except Exception as e:
+        outcomes["email"]["error"] = str(e)
         logger.debug(f"Alert email failed: {e}")
 
     # 2) Webhook alert (Slack / Discord / generic)
@@ -535,10 +629,15 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
         seo_slack_enabled = bool(_notification_channels.get("seo_slack_enabled", True))
         hydrate_slack_enabled = bool(_notification_channels.get("hydrate_slack_enabled", True))
         if alert_type in _SEO_WEBHOOK_ALERT_TYPES and not seo_slack_enabled:
+            outcomes["webhook"]["skipped_reason"] = "seo_slack_enabled disabled"
             webhook_url = ""
-        if alert_type in _HYDRATE_WEBHOOK_ALERT_TYPES and not hydrate_slack_enabled:
+        elif alert_type in _HYDRATE_WEBHOOK_ALERT_TYPES and not hydrate_slack_enabled:
+            outcomes["webhook"]["skipped_reason"] = "hydrate_slack_enabled disabled"
             webhook_url = ""
+        elif not webhook_url:
+            outcomes["webhook"]["skipped_reason"] = "no webhook URL configured"
         if webhook_url:
+            outcomes["webhook"]["attempted"] = True
             if alert_type in _SEO_WEBHOOK_ALERT_TYPES:
                 webhook_payload = _build_seo_slack_payload(
                     alert_type, title, body, threshold_snapshot or {}
@@ -561,12 +660,19 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
                         f"| Actual: *{threshold_snapshot.get('actual', 'N/A')}*"
                     )
             async with httpx.AsyncClient(timeout=10) as client:
-                await client.post(webhook_url, json=webhook_payload)
+                resp = await client.post(webhook_url, json=webhook_payload)
+                if 200 <= resp.status_code < 300:
+                    outcomes["webhook"]["ok"] = True
+                else:
+                    outcomes["webhook"]["error"] = f"HTTP {resp.status_code}"
+                    logger.debug(f"Alert webhook returned {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
+        outcomes["webhook"]["error"] = str(e)
         logger.debug(f"Alert webhook failed: {e}")
 
     # 3) Persist to db.alerts for admin dashboard visibility
     try:
+        outcomes["persisted"]["attempted"] = True
         doc = {
             "type": alert_type,
             "title": title,
@@ -576,12 +682,16 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
         }
         if threshold_snapshot:
             doc["threshold_snapshot"] = threshold_snapshot
+        if mark_synthetic:
+            doc["synthetic"] = True
         await db.alerts.insert_one(doc)
-    except Exception:
-        pass
+        outcomes["persisted"]["ok"] = True
+    except Exception as e:
+        outcomes["persisted"]["error"] = str(e)
 
     # 4) Browser push notification — filtered by per-admin prefs (push_enabled + push_severities)
     try:
+        outcomes["push"]["attempted"] = True
         from routes.admin_notifications import _dispatch_push_to_admins
         push_body = body
         if threshold_snapshot:
@@ -589,17 +699,42 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
             configured = threshold_snapshot.get("value", "N/A")
             actual = threshold_snapshot.get("actual", "N/A")
             push_body = f"{body}\n📊 {metric}: {actual} (threshold: {configured})"
-        asyncio.create_task(_dispatch_push_to_admins({
+        push_payload = {
             "title": f"\u26a0\ufe0f {title}",
             "body": push_body,
             "icon": "/icons/icon-192.png",
             "url": "/admin",
-            "tag": f"critical-alert-{alert_type}-{int(now)}",
+            "tag": f"{'test' if mark_synthetic else 'critical'}-alert-{alert_type}-{int(now)}",
             "severity": "critical",
             "alert_type": alert_type,
-        }))
+        }
+        if mark_synthetic:
+            push_payload["synthetic"] = True
+        if force:
+            # Test deliveries: await so we can surface failures synchronously.
+            try:
+                await _dispatch_push_to_admins(push_payload)
+                outcomes["push"]["ok"] = True
+            except Exception as e:
+                outcomes["push"]["error"] = str(e)
+        else:
+            asyncio.create_task(_dispatch_push_to_admins(push_payload))
+            # Real alerts dispatch fire-and-forget; record as ok=True since
+            # the task was successfully queued. Per-subscription delivery
+            # results are tracked separately in db.push_delivery_log.
+            outcomes["push"]["ok"] = True
     except Exception as e:
+        outcomes["push"]["error"] = str(e)
         logger.debug(f"Alert push dispatch failed: {e}")
+
+    # Record per-channel outcomes to in-memory + persisted status for the
+    # Alert Settings UI (Task #418).
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for ch in _CHANNEL_STATUS_KEYS:
+        _record_outcome(ch, outcomes[ch], alert_type, now_iso)
+    await _persist_channel_status()
+
+    return outcomes
 
 
 async def _alerting_loop():

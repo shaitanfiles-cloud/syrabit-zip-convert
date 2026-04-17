@@ -147,5 +147,48 @@ async def admin_clear_activity_log(admin: dict = Depends(get_admin_user)):
     return {"message": "Activity log cleared"}
 
 # ─────────────────────────────────────────────
+# ALERT DELIVERY TEST (Task #418)
+# ─────────────────────────────────────────────
+@router.post("/admin/alert-settings/test-delivery")
+async def admin_test_alert_delivery(admin: dict = Depends(get_admin_user)):
+    """Post a synthetic ``hydrate_failure_spike`` alert through every
+    configured delivery channel and report per-channel success/failure so
+    admins can confirm their Slack/email/push integrations actually work
+    without waiting for a real incident.
+
+    The synthetic alert is tagged with ``synthetic: True`` on the persisted
+    document and push payload so it can be filtered out of the normal alert
+    feed. Cooldown is bypassed (``force=True``) so admins can re-test on
+    demand.
+    """
+    import metrics as _metrics_mod
+    await _metrics_mod._load_alert_settings()
+    snapshot = {
+        "metric": "hydrate_failure_spike",
+        "value": 10,
+        "actual": 42,
+        "top_kind": "syllabus_chunk",
+        "auto_reload_attempts": 12,
+        "auto_reload_recoveries": 3,
+        "synthetic": True,
+    }
+    outcomes = await _metrics_mod._dispatch_alert(
+        "hydrate_failure_spike",
+        "[TEST] Synthetic stale-build alert",
+        f"This is a synthetic test triggered by {admin.get('email', 'admin')} from the Alert Settings page. "
+        "If you see this, your alert delivery is wired up correctly.",
+        threshold_snapshot=snapshot,
+        force=True,
+        mark_synthetic=True,
+    )
+    return {
+        "ok": True,
+        "alert_type": "hydrate_failure_spike",
+        "outcomes": outcomes,
+        "channel_status": {k: dict(v) for k, v in _metrics_mod._channel_status.items()},
+    }
+
+
+# ─────────────────────────────────────────────
 # NOTIFICATIONS
 # ─────────────────────────────────────────────

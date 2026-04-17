@@ -584,6 +584,9 @@ export const adminGetAlertSettings = (token) =>
 export const adminUpdateAlertSettings = (token, data) =>
   axios.put(`${API_BASE}/admin/alert-settings`, data, { headers: adminHeaders(token), withCredentials: true });
 
+export const adminTestAlertDelivery = (token) =>
+  axios.post(`${API_BASE}/admin/alert-settings/test-delivery`, {}, { headers: adminHeaders(token), withCredentials: true });
+
 export const adminGetAlerts = (token, { limit = 50, acknowledged, type, date_from, date_to } = {}) => {
   const params = { limit };
   if (acknowledged !== undefined && acknowledged !== null) params.acknowledged = acknowledged;

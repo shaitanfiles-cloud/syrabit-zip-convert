@@ -412,6 +412,180 @@ class TestDispatchAlert:
         assert doc["acknowledged"] is False
 
 
+class TestDispatchAlertOutcomes:
+    """Task #418: _dispatch_alert returns per-channel outcomes and persists
+    last-success/last-error timestamps."""
+
+    def test_returns_per_channel_outcomes_with_skipped_reasons(self):
+        # No email, no webhook configured -> both should be skipped, persisted
+        # and push should still be attempted.
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_api_config = MagicMock()
+        mock_api_config.update_one = AsyncMock(return_value=None)
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts, api_config=mock_api_config)), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            outcomes = _run(_metrics_mod._dispatch_alert("outcome_test", "T", "B", force=True))
+        assert outcomes["skipped_cooldown"] is False
+        assert outcomes["email"]["attempted"] is False
+        assert outcomes["email"]["skipped_reason"]
+        assert outcomes["webhook"]["attempted"] is False
+        assert outcomes["webhook"]["skipped_reason"]
+        assert outcomes["persisted"]["attempted"] is True
+        assert outcomes["persisted"]["ok"] is True
+        assert outcomes["push"]["attempted"] is True
+        assert outcomes["push"]["ok"] is True
+
+    def test_webhook_failure_recorded_in_outcome_and_status(self):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = "https://example.com/hook"
+        _metrics_mod._channel_status = {k: dict(v) for k, v in _metrics_mod._CHANNEL_STATUS_DEFAULT.items()}
+
+        class _FakeResp:
+            status_code = 500
+            text = "boom"
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=_FakeResp())
+        mock_client.__aenter__.return_value = mock_client
+        mock_client.__aexit__.return_value = None
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_api_config = MagicMock()
+        mock_api_config.update_one = AsyncMock(return_value=None)
+        with patch.object(_metrics_mod.httpx, "AsyncClient", return_value=mock_client), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts, api_config=mock_api_config)), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            outcomes = _run(_metrics_mod._dispatch_alert("wh_fail", "T", "B", force=True))
+        assert outcomes["webhook"]["attempted"] is True
+        assert outcomes["webhook"]["ok"] is False
+        assert "500" in (outcomes["webhook"]["error"] or "")
+        assert _metrics_mod._channel_status["webhook"]["last_error"]
+        assert _metrics_mod._channel_status["webhook"]["last_attempt_at"]
+        assert _metrics_mod._channel_status["webhook"]["last_success_at"] is None
+        # Persisted channel should have recorded last_success_at.
+        assert _metrics_mod._channel_status["persisted"]["last_success_at"]
+        # Status was persisted to db.api_config.
+        mock_api_config.update_one.assert_awaited()
+
+    def test_force_bypasses_cooldown(self):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        _metrics_mod._alert_last_fired["cd_test"] = _metrics_mod._time_mod.time()
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_api_config = MagicMock()
+        mock_api_config.update_one = AsyncMock(return_value=None)
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts, api_config=mock_api_config)), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            blocked = _run(_metrics_mod._dispatch_alert("cd_test", "T", "B"))
+            forced = _run(_metrics_mod._dispatch_alert("cd_test", "T", "B", force=True))
+        assert blocked["skipped_cooldown"] is True
+        assert forced["skipped_cooldown"] is False
+        assert forced["persisted"]["ok"] is True
+
+    def test_mark_synthetic_tags_persisted_alert(self):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_api_config = MagicMock()
+        mock_api_config.update_one = AsyncMock(return_value=None)
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", MagicMock(alerts=mock_alerts, api_config=mock_api_config)), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            _run(_metrics_mod._dispatch_alert("syn_test", "T", "B", force=True, mark_synthetic=True))
+        doc = mock_alerts.insert_one.call_args[0][0]
+        assert doc.get("synthetic") is True
+
+
+class TestTestDeliveryEndpoint:
+    """Task #418: integration test for POST /admin/alert-settings/test-delivery."""
+
+    @pytest.fixture
+    def mock_admin(self):
+        return {"id": "admin-123", "email": "admin@test.com", "is_admin": True}
+
+    @pytest.fixture
+    def app_client(self, mock_admin):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from routes.admin_settings import router
+
+        app = FastAPI()
+        app.include_router(router)
+        from auth_deps import get_admin_user
+        app.dependency_overrides[get_admin_user] = lambda: mock_admin
+        return TestClient(app)
+
+    def test_test_delivery_returns_outcomes_and_status(self, app_client):
+        _metrics_mod._notification_channels["email"] = ""
+        _metrics_mod._notification_channels["webhook_url"] = ""
+        _metrics_mod._channel_status = {k: dict(v) for k, v in _metrics_mod._CHANNEL_STATUS_DEFAULT.items()}
+
+        mock_alerts = MagicMock()
+        mock_alerts.insert_one = AsyncMock(return_value=None)
+        mock_api_config = MagicMock()
+        mock_api_config.find_one = AsyncMock(return_value=None)
+        mock_api_config.update_one = AsyncMock(return_value=None)
+        fake_db = MagicMock(alerts=mock_alerts, api_config=mock_api_config)
+
+        with patch.dict(os.environ, {"ALERT_EMAIL": "", "ALERT_WEBHOOK_URL": "", "RESEND_API_KEY": ""}), \
+             patch.object(_metrics_mod, "db", fake_db), \
+             patch("routes.admin_settings.db", fake_db, create=True), \
+             patch("routes.admin_notifications._dispatch_push_to_admins", new_callable=AsyncMock):
+            resp = app_client.post("/admin/alert-settings/test-delivery")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["alert_type"] == "hydrate_failure_spike"
+        assert "outcomes" in body and "channel_status" in body
+        # Email + webhook unconfigured -> attempted=False, skipped_reason set.
+        assert body["outcomes"]["email"]["attempted"] is False
+        assert body["outcomes"]["email"]["skipped_reason"]
+        assert body["outcomes"]["webhook"]["attempted"] is False
+        # Persisted alert was tagged synthetic so it can be filtered out.
+        doc = mock_alerts.insert_one.call_args[0][0]
+        assert doc.get("synthetic") is True
+        assert doc["type"] == "hydrate_failure_spike"
+
+
+class TestLoadChannelStatus:
+    """Task #418: channel_status round-trips through db.api_config."""
+
+    def test_loads_channel_status_from_db(self):
+        cfg = {
+            "alert_channel_status": {
+                "email": {
+                    "last_attempt_at": "2026-01-01T00:00:00+00:00",
+                    "last_success_at": "2026-01-01T00:00:00+00:00",
+                    "last_error": None,
+                    "last_alert_type": "hydrate_failure_spike",
+                },
+                "webhook": {
+                    "last_attempt_at": "2026-01-02T00:00:00+00:00",
+                    "last_success_at": None,
+                    "last_error": "HTTP 500",
+                    "last_alert_type": "hydrate_failure_spike",
+                },
+            }
+        }
+        mock_collection = MagicMock()
+        mock_collection.find_one = AsyncMock(return_value=cfg)
+        # Reset to defaults first so we can detect overwrite.
+        _metrics_mod._channel_status = {k: dict(v) for k, v in _metrics_mod._CHANNEL_STATUS_DEFAULT.items()}
+        with patch.object(_metrics_mod, "db", MagicMock(api_config=mock_collection)):
+            _run(_metrics_mod._load_alert_settings())
+        assert _metrics_mod._channel_status["email"]["last_success_at"] == "2026-01-01T00:00:00+00:00"
+        assert _metrics_mod._channel_status["webhook"]["last_error"] == "HTTP 500"
+        # Channels not in saved doc keep defaults.
+        assert _metrics_mod._channel_status["push"]["last_success_at"] is None
+
+
 class TestPutAlertSettingsValidation:
     @pytest.fixture
     def mock_admin(self):

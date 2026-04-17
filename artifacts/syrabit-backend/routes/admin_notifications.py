@@ -890,6 +890,10 @@ async def admin_get_alert_settings(admin: dict = Depends(get_admin_user)):
             "thresholds": {k: _metrics_mod._ALERT_THRESHOLDS.get(k, v) for k, v in _metrics_mod._ALERT_THRESHOLDS_DEFAULT.items()},
             "expiration": {k: _metrics_mod._alert_expiration.get(k, v) for k, v in _metrics_mod._ALERT_EXPIRATION_DEFAULT.items()},
             "notification_channels": {k: _metrics_mod._notification_channels.get(k, v) for k, v in _metrics_mod._NOTIFICATION_CHANNELS_DEFAULT.items()},
+            # Task #418: per-channel last-success/last-error so admins can
+            # confirm their integrations actually work without waiting for
+            # a real incident.
+            "channel_status": {k: dict(v) for k, v in _metrics_mod._channel_status.items()},
             "defaults": {
                 "thresholds": _metrics_mod._ALERT_THRESHOLDS_DEFAULT,
                 "expiration": _metrics_mod._ALERT_EXPIRATION_DEFAULT,
