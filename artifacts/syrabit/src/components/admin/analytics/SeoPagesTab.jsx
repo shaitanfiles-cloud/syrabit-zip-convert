@@ -121,8 +121,10 @@ export default function SeoPagesTab({
               <span className="text-gray-200 text-xs w-5 text-right">{i + 1}</span>
               <FileText size={11} className="text-violet-400 flex-shrink-0" />
               <span className="text-gray-500 text-xs flex-1 truncate font-mono">{pg.path}</span>
-              <span className="text-gray-300 text-xs flex-shrink-0">{pg.views} views</span>
-              <span className="text-gray-200 text-xs flex-shrink-0">{pg.unique_visitors} uniq</span>
+              <span className="text-gray-300 text-xs flex-shrink-0">{(pg.views ?? 0).toLocaleString()} views</span>
+              {pg.unique_visitors != null && (
+                <span className="text-gray-200 text-xs flex-shrink-0">{pg.unique_visitors.toLocaleString()} uniq</span>
+              )}
             </div>
           ))}
         </div>

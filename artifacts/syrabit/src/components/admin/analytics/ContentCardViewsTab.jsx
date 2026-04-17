@@ -35,7 +35,7 @@ export default function ContentCardViewsTab({ adminToken }) {
   const maxViews = cards[0]?.page_views || 1;
 
   return (
-    <Card title="Content Card Page Views"
+    <Card title="Content Card Opens (internal product analytics)"
       action={
         <div className="flex gap-1 rounded-lg p-0.5 bg-gray-100">
           {PERIODS.map(p => (
@@ -80,13 +80,13 @@ export default function ContentCardViewsTab({ adminToken }) {
                 </div>
               </div>
               <div className="flex items-center gap-3 flex-shrink-0">
-                <span className="flex items-center gap-1 text-gray-500 text-xs">
+                <span className="flex items-center gap-1 text-gray-500 text-xs" title="Card opens (internal product event)">
                   <Eye size={11} className="text-violet-400" />
-                  {c.page_views.toLocaleString()}
+                  {c.page_views.toLocaleString()} opens
                 </span>
-                <span className="flex items-center gap-1 text-gray-400 text-xs">
+                <span className="flex items-center gap-1 text-gray-400 text-xs" title="Unique users who opened this card">
                   <Users size={11} className="text-blue-400" />
-                  {c.unique_visitors.toLocaleString()}
+                  {c.unique_visitors.toLocaleString()} users
                 </span>
               </div>
             </div>
