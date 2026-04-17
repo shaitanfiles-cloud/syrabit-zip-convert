@@ -84,7 +84,7 @@ export function ModelSelector({ model, setModel, showModelMenu, setShowModelMenu
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold text-foreground hover:text-primary transition-all border border-border/50 hover:border-primary/30 hover:shadow-[0_0_12px_rgba(139,92,246,0.1)]"
         data-testid="model-selector-button"
       >
-        <img src="/logo.webp" alt="" width="16" height="16" className="w-4 h-4 rounded-sm" />
+        <img src="/logo-56.webp" alt="" width="16" height="16" className="w-4 h-4 rounded-sm" />
         <span>{modelLabel.label}</span>
         {!modelLabel.disabled && (
           <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-primary/10 text-primary font-medium">
@@ -116,7 +116,7 @@ export function ModelSelector({ model, setModel, showModelMenu, setShowModelMenu
                 model === m.value ? 'text-primary font-semibold bg-primary/5' : 'text-foreground'
               }`}
             >
-              <img src="/logo.webp" alt="" width="20" height="20" className="w-5 h-5 rounded-sm flex-shrink-0" />
+              <img src="/logo-56.webp" alt="" width="20" height="20" className="w-5 h-5 rounded-sm flex-shrink-0" />
               <div className="flex flex-col items-start flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="truncate">{m.label}</span>

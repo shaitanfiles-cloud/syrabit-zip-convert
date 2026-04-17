@@ -230,12 +230,12 @@ export default function AdminPage() {
         <div className="flex items-center px-4 border-b border-gray-100" style={{ height: 60 }}>
           {collapsed ? (
             <div className="w-9 h-9 rounded-xl flex items-center justify-center mx-auto bg-violet-50">
-              <img src="/logo.webp" alt="S" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
+              <img src="/logo-56.webp" alt="S" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
             </div>
           ) : (
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-violet-50">
-                <img src="/logo.webp" alt="Syrabit.ai" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
+                <img src="/logo-56.webp" alt="Syrabit.ai" width="24" height="24" className="w-6 h-6 rounded-lg object-cover" />
               </div>
               <div>
                 <p className="text-sm font-bold text-gray-900 tracking-tight" style={{ lineHeight: 1.2 }}>Syrabit.ai</p>
@@ -343,7 +343,7 @@ export default function AdminPage() {
             <h1 className="text-sm font-semibold text-gray-900">{activeLabel}</h1>
             <span className="text-gray-200">|</span>
             <span className="text-xs text-gray-400 flex items-center gap-1.5">
-              <img src="/logo.webp" alt="" width="14" height="14" className="w-3.5 h-3.5 rounded-sm inline-block opacity-60" />
+              <img src="/logo-56.webp" alt="" width="14" height="14" className="w-3.5 h-3.5 rounded-sm inline-block opacity-60" />
               Syrabit.ai
             </span>
           </div>

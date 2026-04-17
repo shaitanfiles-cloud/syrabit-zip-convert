@@ -37,7 +37,7 @@ export default function AdminLoginPage() {
       <div className="w-full max-w-sm space-y-4">
         <div className="text-center mb-8">
           <div className="inline-block mb-4">
-            <img src="/logo.webp" alt="Syrabit.ai" width="56" height="56"
+            <img src="/logo-144.webp" alt="Syrabit.ai" width="56" height="56"
               className="w-14 h-14 rounded-2xl mx-auto object-cover shadow-lg" />
           </div>
           <h1 className="text-lg font-semibold text-gray-900 tracking-tight">Administrator Access</h1>

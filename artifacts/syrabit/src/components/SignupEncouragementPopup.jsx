@@ -104,7 +104,7 @@ export default function SignupEncouragementPopup() {
               className="w-9 h-9 rounded-xl flex items-center justify-center overflow-hidden"
               style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' }}
             >
-              <img src="/logo.webp" alt="" width="36" height="36" className="w-9 h-9 object-cover" />
+              <img src="/logo-144.webp" alt="" width="36" height="36" className="w-9 h-9 object-cover" />
             </div>
             <h3 className="font-semibold text-foreground text-base">Welcome back!</h3>
           </div>

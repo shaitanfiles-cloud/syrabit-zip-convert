@@ -117,7 +117,7 @@ export const MessageBubble = memo(function MessageBubble({ msg, onCopy, onRegene
         <div className="w-full">
           <div className="flex items-center gap-2 mb-1">
             <div className="w-5 h-5 rounded-full overflow-hidden flex-shrink-0">
-              <img src="/logo.webp" alt="Syrabit.ai" width="20" height="20" className="w-full h-full object-cover" />
+              <img src="/logo-56.webp" alt="Syrabit.ai" width="20" height="20" className="w-full h-full object-cover" />
             </div>
             <span className="text-xs font-semibold text-foreground/70">Syrabit AI</span>
           </div>

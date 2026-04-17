@@ -397,7 +397,7 @@ export default function AdminConversations({ adminToken, onNavigate }) {
                     ) : (
                       <div className="w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-violet-600 flex items-center justify-center">
                         <img
-                          src={`${import.meta.env.BASE_URL}logo.webp`}
+                          src={`${import.meta.env.BASE_URL}logo-56.webp`}
                           alt="Syra"
                           className="w-full h-full object-cover"
                           onError={e => { e.currentTarget.style.display = 'none'; }}
