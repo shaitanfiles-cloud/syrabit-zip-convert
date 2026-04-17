@@ -52,6 +52,31 @@ The expected behaviour is full convergence inside the 20s budget.
 4. As a last resort, restart the api workers — boot reloads the
    persisted doc synchronously via `apply_persisted_assamese_purity_override`.
 
+**Alert: `assamese_override_refresh_stalled`**
+
+Each worker bumps an in-process heartbeat
+(`metrics._asm_last_refresh_at`) after every successful refresh tick.
+The alerting loop pages on-call (email + webhook + persisted alert
++ push) when the heartbeat falls behind
+`_ALERT_THRESHOLDS["assamese_refresh_stale_seconds"]` (default
+**60s** = 4 missed ticks). The alert body includes the offending
+worker's pid so you can target the restart.
+
+What to do when this alert fires:
+
+1. Tail api logs and look for `[INDIC-SANITIZE] refresh loop tick
+   failed` — the message after the colon names the underlying cause
+   (mongo auth, motor disconnect, etc.).
+2. Confirm mongo is reachable from the api host (`/admin/health`
+   `mongodb.status`). If mongo is the root cause, fix that first —
+   the loop will resume on its own once the next tick succeeds.
+3. If only one worker is stuck (its pid is in the alert body but
+   sibling workers stay quiet), restart just that worker — the
+   in-memory state will reload from the persisted doc on boot.
+4. Tune the threshold from the Alert Settings page if a known
+   maintenance window is going to exceed 60s of mongo unavailability,
+   then revert it after — leaving it loose hides real regressions.
+
 **Where it's tested**
 
 - `tests/test_admin_assamese_purity.py::TestCrossWorkerPropagation`

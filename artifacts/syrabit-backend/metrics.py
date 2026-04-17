@@ -24,9 +24,40 @@ __all__ = [
     "_load_alert_settings", "_auto_expire_alerts",
     "_metrics", "_metrics_history", "_metrics_history_lock",
     "_snapshot_metrics", "_start_metrics_collector", "_startup_time",
+    "record_assamese_refresh_success", "get_assamese_refresh_age_seconds",
+    "_asm_last_refresh_at",
 ]
 
 _startup_time = _time_mod.time()
+
+# ── Task #432: Assamese-purity override refresh heartbeat ─────────────────
+# Each gunicorn worker runs `_assamese_purity_refresh_loop` (15s cadence)
+# to pick up override PATCH/DELETE made on sibling workers. If that loop
+# silently dies (mongo auth error, motor exception spiral, etc.) the only
+# signal today is sporadic warnings — on-call won't notice until a
+# customer complains. We record a per-worker timestamp of the last
+# successful refresh tick and the alerting loop pages on-call when it
+# falls behind the configured budget (default 60s = 4× the poll cadence).
+#
+# Initialised to startup time so the staleness window starts ticking from
+# boot — that way a worker that crashes the loop on its very first tick
+# still trips the alarm after `assamese_refresh_stale_seconds`.
+_asm_last_refresh_at: float = _startup_time
+
+
+def record_assamese_refresh_success() -> None:
+    """Called by `_assamese_purity_refresh_loop` after each successful
+    mongo poll. Updates this worker's heartbeat timestamp so the
+    alerting loop can detect a stalled refresh loop."""
+    global _asm_last_refresh_at
+    _asm_last_refresh_at = _time_mod.time()
+
+
+def get_assamese_refresh_age_seconds() -> float:
+    """Seconds since this worker last successfully refreshed the
+    Assamese-purity override from mongo. Exposed for the admin
+    dashboard / health endpoint and consumed by `_alerting_loop`."""
+    return max(0.0, _time_mod.time() - _asm_last_refresh_at)
 
 # ── Background health-check cache ─────────────────────────────────────────────
 # _check_health_deps() costs ~500 ms per call (Supabase round-trip).
@@ -265,6 +296,10 @@ _ALERT_THRESHOLDS_DEFAULT = {
     "hydrate_failure_per_hour": 50,
     "hydrate_recovery_min_rate_pct": 50.0,
     "hydrate_recovery_min_attempts": 10,
+    # Task #432: page on-call when this worker's Assamese-purity override
+    # refresh loop hasn't ticked successfully in this many seconds. The
+    # poll cadence is 15s so 60s == 4 missed ticks before paging.
+    "assamese_refresh_stale_seconds": 60,
 }
 _ALERT_EXPIRATION_DEFAULT = {
     "enabled": False,
@@ -931,6 +966,35 @@ async def _alerting_loop():
                                         "actual": _daily_growth,
                                     },
                                 )
+            except Exception:
+                pass
+
+            # ── 6. Assamese-purity override refresh staleness (Task #432) ──
+            # Each gunicorn worker polls mongo every ~15s; a stalled loop
+            # means PATCH/DELETE on the override never propagates to
+            # this worker. Page on-call once we're 4× past the budget.
+            try:
+                _stale_threshold = float(_ALERT_THRESHOLDS.get("assamese_refresh_stale_seconds", 60) or 0)
+                if _stale_threshold > 0:
+                    _age = get_assamese_refresh_age_seconds()
+                    if _age > _stale_threshold:
+                        _worker_pid = os.getpid()
+                        await _dispatch_alert(
+                            "assamese_override_refresh_stalled",
+                            "Assamese override refresh loop stalled",
+                            f"Worker pid={_worker_pid} has not refreshed the Assamese-purity override "
+                            f"from mongo for {int(_age)}s (threshold: {int(_stale_threshold)}s, "
+                            f"poll cadence: 15s). PATCH/DELETE on /admin/assamese-purity will not "
+                            f"propagate to this worker until the loop recovers. Check api logs for "
+                            f"'[INDIC-SANITIZE] refresh loop tick failed' warnings and verify mongo "
+                            f"connectivity. See RUNBOOK.md › Assamese purity override propagation.",
+                            threshold_snapshot={
+                                "metric": "assamese_refresh_stale_seconds",
+                                "value": _stale_threshold,
+                                "actual": int(_age),
+                                "worker_pid": _worker_pid,
+                            },
+                        )
             except Exception:
                 pass
 

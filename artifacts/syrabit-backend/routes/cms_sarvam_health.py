@@ -23,6 +23,14 @@ from models import (
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
 from config import *
+# `from config import *` re-exports `pathlib.Path` (config does
+# `from pathlib import Path`) which shadows the FastAPI `Path`
+# parameter helper imported above. Re-bind `Path` to the FastAPI
+# helper so the route signatures further down (e.g. the audit
+# revert endpoint, `Path(..., min_length=1, max_length=64)`) still
+# work. Without this, importing this module fails at function-def
+# time with `TypeError: expected str, bytes or os.PathLike object`.
+from fastapi import Path  # noqa: E402,F811  — restore FastAPI Path after wildcard import
 from deps import *
 import deps
 from cache import *
@@ -1947,10 +1955,15 @@ async def _assamese_purity_refresh_loop() -> None:
     one worker propagates to all others within ~15s — without requiring
     pub/sub infra."""
     import asyncio
+    from metrics import record_assamese_refresh_success
     while True:
         try:
             await asyncio.sleep(_ASM_REFRESH_INTERVAL_SECONDS)
             await apply_persisted_assamese_purity_override()
+            # Task #432: heartbeat for the alerting loop. Only bumped on a
+            # successful tick — if mongo is down or the loader raises we
+            # leave the timestamp unchanged so the staleness alert fires.
+            record_assamese_refresh_success()
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -1963,12 +1976,28 @@ async def admin_get_assamese_purity(admin: dict = Depends(get_admin_user)):
     the admin UI can render the current state. Mirrors what
     `/sarvam/status` exposes but adds the persisted-doc audit fields."""
     from lang_sanitizer import get_runtime_config as _asm_cfg
+    from metrics import (
+        get_assamese_refresh_age_seconds as _asm_age,
+        _ALERT_THRESHOLDS as _asm_thresholds,
+    )
+    import os as _os
     cfg = _asm_cfg()
     persisted = await _load_persisted_assamese_purity_override()
+    # Task #432: surface this worker's refresh heartbeat so admins can
+    # spot-check propagation health without waiting for the alert.
+    refresh_age = _asm_age()
+    refresh_stale_threshold = float(_asm_thresholds.get("assamese_refresh_stale_seconds", 60) or 0)
     return {
         "config": cfg,
         "persisted": persisted or None,
         "test_sample": _ASM_TEST_FIRE_SAMPLE,
+        "refresh_health": {
+            "worker_pid": _os.getpid(),
+            "age_seconds": round(refresh_age, 1),
+            "stale_threshold_seconds": int(refresh_stale_threshold),
+            "stale": refresh_age > refresh_stale_threshold > 0,
+            "interval_seconds": _ASM_REFRESH_INTERVAL_SECONDS,
+        },
     }
 
 
