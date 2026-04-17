@@ -43,14 +43,32 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const savedToken = sessionStorage.getItem('syrabit_token');
+    setLoading(false);
     if (savedToken) {
       _inMemoryToken = savedToken;
       setAuthToken(savedToken);
-    } else {
-      setAuthChecked(true);
+      // Returning logged-in user this session — fetch immediately so
+      // user-gated UI (profile menu, credits) is correct on first paint.
+      fetchMe();
+      return;
     }
-    setLoading(false);
-    fetchMe();
+    // No in-memory token. Could be a brand-new anonymous visitor OR a
+    // returning visitor whose only credential is an httpOnly cookie
+    // (which we can't read from JS). The landing page UI does not need
+    // user state for first paint — only the navbar login/profile
+    // toggle does, and that can flip after LCP.
+    //
+    // So mark auth as checked synchronously (treat as anonymous) and
+    // probe /auth/me lazily after first paint. If a valid cookie
+    // exists, the navbar will hydrate to the logged-in state shortly
+    // after; if not, no extra round-trip was paid.
+    setAuthChecked(true);
+    const probe = () => { fetchMe(); };
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      window.requestIdleCallback(probe, { timeout: 1500 });
+    } else {
+      setTimeout(probe, 600);
+    }
   }, [fetchMe]);
 
   const _storeToken = (token) => {
