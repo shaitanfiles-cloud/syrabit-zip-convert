@@ -1327,10 +1327,28 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                                 }));
                                 try {
                                   const res = await seoHealthDeepScan(adminToken, sm.name);
-                                  setSitemapDeepScans((prev) => ({
-                                    ...prev,
-                                    [sm.name]: { loading: false, error: null, data: res.data },
-                                  }));
+                                  // The backend may return HTTP 200 with an
+                                  // in-band error (e.g. sitemap fetch/parse
+                                  // failure → `{ error, failing: [] }`).
+                                  // Treat that as an error state so the
+                                  // failure surfaces in red and the user
+                                  // can retry, instead of silently showing
+                                  // "Failing URLs (0)".
+                                  if (res?.data?.error) {
+                                    setSitemapDeepScans((prev) => ({
+                                      ...prev,
+                                      [sm.name]: {
+                                        loading: false,
+                                        error: res.data.error,
+                                        data: null,
+                                      },
+                                    }));
+                                  } else {
+                                    setSitemapDeepScans((prev) => ({
+                                      ...prev,
+                                      [sm.name]: { loading: false, error: null, data: res.data },
+                                    }));
+                                  }
                                 } catch (err) {
                                   const msg = err?.response?.data?.detail
                                     || err?.message
