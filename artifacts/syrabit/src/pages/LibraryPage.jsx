@@ -285,6 +285,11 @@ export default function LibraryPage() {
   const useVirtualGrid = filteredSubjects.length > VIRTUAL_CHUNK;
   useEffect(() => { setRenderLimit(VIRTUAL_CHUNK); }, [activeFilter, deferredQuery]);
   useEffect(() => {
+    // The legacy progressive-reveal sentinel is only needed for the
+    // non-virtualized path — when the true virtualizer is active it owns
+    // window/scroll behavior, so we skip the IntersectionObserver work
+    // entirely to cut redundant effects.
+    if (useVirtualGrid) return;
     if (filteredSubjects.length <= renderLimit) return;
     const el = sentinelRef.current;
     if (!el) return;
@@ -295,7 +300,7 @@ export default function LibraryPage() {
     }, { rootMargin: '600px' });
     io.observe(el);
     return () => io.disconnect();
-  }, [filteredSubjects.length, renderLimit]);
+  }, [filteredSubjects.length, renderLimit, useVirtualGrid]);
   const visibleSubjects = useMemo(
     () => filteredSubjects.slice(0, renderLimit),
     [filteredSubjects, renderLimit]

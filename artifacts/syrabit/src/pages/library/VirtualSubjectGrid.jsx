@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import SubjectCard from './SubjectCard';
 
@@ -46,6 +46,11 @@ export default function VirtualSubjectGrid({
 }) {
   const cols = useColumnCount();
   const rowCount = Math.ceil(subjects.length / cols);
+  // O(1) saved-subject lookup — avoids an Array#includes scan per card render.
+  const savedSet = useMemo(
+    () => (savedSubjects instanceof Set ? savedSubjects : new Set(savedSubjects || [])),
+    [savedSubjects]
+  );
 
   const rowVirtualizer = useVirtualizer({
     count: rowCount,
@@ -93,7 +98,7 @@ export default function VirtualSubjectGrid({
                 key={sub.id}
                 sub={sub}
                 chapters={chaptersBySubject.get(sub.id) || []}
-                isSaved={savedSubjects.includes(sub.id)}
+                isSaved={savedSet.has(sub.id)}
                 onToggleSave={onToggleSave}
                 onAskAI={onAskAI}
                 index={rowStart + i}
