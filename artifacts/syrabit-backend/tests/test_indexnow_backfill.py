@@ -473,13 +473,15 @@ def test_admin_progress_endpoint_returns_state_snapshot(monkeypatch):
     monkeypatch.setattr(deps_mod, "is_mongo_available", AsyncMock(return_value=False))
 
     bd._backfill_state["status"] = "done"
-    bd._backfill_state["discovered"] = 42
+    bd._backfill_state["discovered"] = 42  # already excludes skipped
     bd._backfill_state["submitted"] = 40
-    bd._backfill_state["skipped"] = 1
+    bd._backfill_state["skipped"] = 7      # validator-skipped URLs, separate
     out = _run(bd.admin_indexnow_backfill_progress(admin={"id": "admin"}))
     assert out["progress"]["status"] == "done"
     assert out["progress"]["discovered"] == 42
-    assert out["progress"]["queued"] == 1  # 42 - 40 - 1
+    # queued = discovered - submitted (skipped is NOT subtracted again —
+    # it was already excluded from `discovered` upstream).
+    assert out["progress"]["queued"] == 2
     # Returned payload must be a snapshot copy, not the same dict reference.
     out["progress"]["status"] = "tampered"
     assert bd._backfill_state["status"] == "done"

@@ -2766,16 +2766,21 @@ async def _collect_all_backfill_urls() -> tuple[List[str], Dict[str, int]]:
 
 def _state_with_queued(state: dict) -> dict:
     """Return a shallow copy of `state` with an explicit `queued` field
-    derived from `discovered - submitted - skipped` (clamped at 0). The
-    UI surfaces this as a top-level metric, so we compute it once here."""
+    derived from `discovered - submitted` (clamped at 0).
+
+    Note: `discovered` is the count of *valid* URLs that the worker
+    actually intends to push (the validator strips invalid ones into
+    `skipped` before we record `discovered = len(valid_urls)`). So the
+    queued backlog is simply discovered minus the URLs already shipped
+    to IndexNow — subtracting `skipped` here would double-count.
+    """
     snap = dict(state)
     try:
         discovered = int(snap.get("discovered", 0) or 0)
         submitted = int(snap.get("submitted", 0) or 0)
-        skipped = int(snap.get("skipped", 0) or 0)
     except (TypeError, ValueError):
-        discovered = submitted = skipped = 0
-    snap["queued"] = max(discovered - submitted - skipped, 0)
+        discovered = submitted = 0
+    snap["queued"] = max(discovered - submitted, 0)
     return snap
 
 

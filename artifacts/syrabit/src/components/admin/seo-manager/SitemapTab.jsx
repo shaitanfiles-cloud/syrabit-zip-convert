@@ -253,9 +253,10 @@ function IndexNowBackfillCard({ adminToken }) {
             </div>
           )}
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             {[
               { label: 'Discovered', val: progress.discovered, color: '#374151' },
+              { label: 'Queued', val: progress.queued ?? Math.max(Number(progress.discovered ?? 0) - Number(progress.submitted ?? 0), 0), color: '#f59e0b' },
               { label: 'Submitted', val: progress.submitted, color: '#7c3aed' },
               { label: 'Succeeded', val: progress.succeeded, color: '#16a34a' },
               { label: 'Failed', val: progress.failed, color: '#dc2626' },
