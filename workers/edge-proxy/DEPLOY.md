@@ -15,6 +15,51 @@ Browser → api.syrabit.ai (Cloudflare Worker)
 - **Cron Trigger** → every 6 hours, auto-syncs content from backend to D1
 - **Backend** → Railway origin server for auth, AI chat, and admin
 
+> **Note on legacy `syrabit-zip-convert` worker:** The `api.syrabit.ai/*` route
+> was previously assigned to a worker named `syrabit-zip-convert` (named after
+> the GitHub repo `shaitanfiles-cloud/syrabit-zip-convert`, which actually
+> hosts the Railway FastAPI backend code, not a separate ZIP-conversion
+> service). Audit on 2026-04-17 confirmed the live backend OpenAPI exposes
+> 347 routes and **zero** of them match `zip|convert|epub`, so no
+> ZIP-specific functionality was lost when the route was reassigned to
+> `syrabit-edge`. All previously-served endpoints continue to be reachable
+> via the edge worker's backend proxy.
+>
+> **Verification commands (run 2026-04-17):**
+>
+> ```bash
+> # 1. Edge health (should report x-source: edge)
+> curl -sI https://api.syrabit.ai/api/health | grep -i 'x-source\|HTTP'
+> #   HTTP/2 200
+> #   x-source: edge
+>
+> # 2. Proxied content route (should report x-source: backend)
+> curl -sI https://api.syrabit.ai/api/content/boards | grep -i 'x-source\|HTTP'
+> #   HTTP/2 200
+> #   x-source: backend
+>
+> # 3. Smoke other proxied/D1 routes
+> for p in /api/content/library-bundle /api/seo/sitemap-index.xml \
+>          /api/admin/pyq/upload; do
+>   echo "$(curl -s -o /dev/null -w '%{http_code}' https://api.syrabit.ai$p) $p"
+> done
+> # Expected: 200, 200, 405 (405 = POST-only handler reachable)
+>
+> # 4. Confirm backend exposes no zip/convert/epub endpoints
+> curl -s https://workspacesyrabit-production-0ddc.up.railway.app/openapi.json \
+>   | python3 -c "import sys,json; d=json.load(sys.stdin); \
+>     paths=list(d.get('paths',{}).keys()); \
+>     print('total:', len(paths)); \
+>     print('zip/convert/epub:', [p for p in paths \
+>       if any(k in p.lower() for k in ['zip','convert','epub'])])"
+> # Expected: total: 347 (or similar, refresh if backend grows)
+> #           zip/convert/epub: []
+> ```
+>
+> If any of these probes regress (especially #4 returning a non-empty list
+> or #1/#2 returning non-200/wrong `x-source`), re-run this audit before
+> shipping further route changes.
+
 ---
 
 ## Prerequisites
