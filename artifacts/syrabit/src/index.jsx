@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import "./index.css";
-import App from "./App";
+import App, { preloadPageForKind } from "./App";
 import { initWebVitals } from "./utils/webVitals";
 
 const rootEl = document.getElementById("root");
@@ -16,7 +16,7 @@ const tree = (
 // tree inside #root tagged with `data-hydrate="<kind>"`. Hydrate in
 // place so React adopts the existing DOM — no remount, no flash.
 // Every other route still mounts the SPA via createRoot.
-// (Tasks #382, #385, #387)
+// (Tasks #382, #385, #387, #395)
 const PRERENDER_KINDS = new Set(["library", "chat", "subject", "chapter"]);
 const hasPrerender =
   rootEl &&
@@ -24,10 +24,24 @@ const hasPrerender =
   PRERENDER_KINDS.has(rootEl.dataset.hydrate);
 
 if (hasPrerender) {
-  ReactDOM.hydrateRoot(rootEl, tree);
-  if (typeof window !== "undefined") {
-    window.__SYRABIT_HYDRATED__ = true;
-  }
+  // Task #395: Each prerendered page is now its own JS chunk
+  // (LibraryPage, ChatPage, SubjectLandingPage, ChapterPage). We MUST
+  // wait for the matching chunk to load + prime React.lazy's payload
+  // BEFORE invoking hydrateRoot — otherwise React renders a Suspense
+  // fallback into #root, blowing away the SSR snapshot and producing
+  // a hydration mismatch. The prerendered HTML emits a
+  // `<link rel="modulepreload">` for the page chunk so it fetches in
+  // parallel with this entry chunk; the await below is just the
+  // join point.
+  const kind = rootEl.dataset.hydrate;
+  Promise.resolve(preloadPageForKind(kind))
+    .catch(() => {})
+    .then(() => {
+      ReactDOM.hydrateRoot(rootEl, tree);
+      if (typeof window !== "undefined") {
+        window.__SYRABIT_HYDRATED__ = true;
+      }
+    });
 } else {
   ReactDOM.createRoot(rootEl).render(tree);
 }

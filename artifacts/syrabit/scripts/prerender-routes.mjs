@@ -134,7 +134,26 @@ function rewriteHead(html, { title, description, canonical }) {
   return html;
 }
 
-function injectShell(htmlTemplate, { ssrHtml, hydrateKind, inlineScripts }) {
+// Task #395: page-chunk preload helper, lazily resolved on first use
+// so the import cost doesn't hit unrelated routes.
+let _pageChunkHelper = null;
+async function pageChunkHelper() {
+  if (!_pageChunkHelper) {
+    _pageChunkHelper = await import(
+      pathToFileURL(path.join(__dirname, "_page-chunk-preload.mjs")).href
+    );
+  }
+  return _pageChunkHelper;
+}
+
+const HYDRATE_KIND_TO_CHUNK_BASE = {
+  subject: "SubjectLandingPage",
+  chapter: "ChapterPage",
+  library: "LibraryPage",
+  chat: "ChatPage",
+};
+
+function injectShell(htmlTemplate, { ssrHtml, hydrateKind, inlineScripts, pageChunkPreload }) {
   const startMarker =
     `<noscript><style>#__shell{display:none!important}</style></noscript>`;
   const startIdx = htmlTemplate.indexOf(startMarker);
@@ -158,6 +177,10 @@ function injectShell(htmlTemplate, { ssrHtml, hydrateKind, inlineScripts }) {
       /<script type="module"/,
       `${blob}\n    <script type="module"`,
     );
+  }
+
+  if (pageChunkPreload && pageChunkPreload.injectFn && pageChunkPreload.chunkFile) {
+    html = pageChunkPreload.injectFn(html, pageChunkPreload.chunkFile);
   }
   return html;
 }
@@ -233,8 +256,22 @@ function enumerateSubjectRoutes(bundle) {
   return routes;
 }
 
+async function resolvePageChunkPreload(hydrateKind) {
+  const baseName = HYDRATE_KIND_TO_CHUNK_BASE[hydrateKind];
+  if (!baseName) return null;
+  const helper = await pageChunkHelper();
+  const chunkFile = helper.findPageChunk(distDir, baseName);
+  if (!chunkFile) {
+    throw new Error(
+      `[prerender-routes] no ${baseName}-*.js chunk found in dist/assets — ` +
+        `Task #395 contract requires a per-page chunk (hydrateKind=${hydrateKind})`,
+    );
+  }
+  return { injectFn: helper.injectPageChunkPreload, chunkFile };
+}
+
 async function renderOne(renderRoute, htmlTemplate, opts) {
-  const out = renderRoute({
+  const out = await renderRoute({
     url: opts.url,
     seed: opts.seed,
   });
@@ -252,10 +289,12 @@ async function renderOne(renderRoute, htmlTemplate, opts) {
       `[prerender-routes] renderRoute(${opts.url}) returned empty html`,
     );
   }
+  const pageChunkPreload = await resolvePageChunkPreload(opts.hydrateKind);
   const html = injectShell(htmlTemplate, {
     ssrHtml,
     hydrateKind: opts.hydrateKind,
     inlineScripts: opts.inlineScripts,
+    pageChunkPreload,
   });
   return rewriteHead(html, opts.head);
 }

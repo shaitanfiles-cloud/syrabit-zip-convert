@@ -59,6 +59,7 @@ if (typeof window !== "undefined") {
 
 
 import { pageImports, prefetchCriticalRoutes } from "@/utils/pageImports";
+import { lazyPreload } from "@/utils/lazyPreload";
 
 // ── React.lazy() code splitting — all pages ────────────────────────────────
 const LandingPage        = lazy(() => import("@/pages/LandingPage"));
@@ -66,24 +67,39 @@ const LoginPage          = lazy(() => import("@/pages/LoginPage"));
 const SignupPage         = lazy(() => import("@/pages/SignupPage"));
 const ResetPasswordPage  = lazy(() => import("@/pages/ResetPasswordPage"));
 const OnboardingPage     = lazy(() => import("@/pages/OnboardingPage"));
-// LibraryPage, SubjectLandingPage, and ChapterPage are imported
-// eagerly so the server-rendered output for the prerendered routes
-// (/library, /:board/:class/:subject, /:board/:class/:subject/:chapter)
-// is byte-identical to React's first client render — lazy() would
-// render a Suspense fallback during SSR (or before its chunk resolves
-// on the client) and break hydration. (Tasks #382, #385)
-import LibraryPage from "@/pages/LibraryPage";
-import SubjectLandingPage from "@/pages/SubjectLandingPage";
-import ChapterPage from "@/pages/ChapterPage";
+// LibraryPage, SubjectLandingPage, ChapterPage, and ChatPage are the
+// four prerendered routes. They are split into their own chunks via
+// `lazyPreload`, and `index.jsx` calls `preloadPageForKind(kind)` to
+// fetch + prime the matching chunk BEFORE `hydrateRoot()` runs. That
+// way each prerendered route only ships the JS for the page it's
+// actually rendering (e.g. /library no longer pulls ChatPage,
+// ChapterPage, MarkdownContent, StickyToc, etc. on first load — Task
+// #395), while hydration stays byte-identical to the SSR snapshot
+// because the lazy wrapper resolves synchronously after preload.
+// Replaces the eager-import workaround used in Tasks #382 / #385 / #387.
+const LibraryPage        = lazyPreload(() => import("@/pages/LibraryPage"));
+const SubjectLandingPage = lazyPreload(() => import("@/pages/SubjectLandingPage"));
+const ChapterPage        = lazyPreload(() => import("@/pages/ChapterPage"));
+const ChatPage           = lazyPreload(() => import("@/pages/ChatPage"));
 const SubjectPage        = lazy(() => import("@/pages/SubjectPage"));
-// ChatPage is imported eagerly so the server-rendered output for /chat is
-// byte-identical to React's first client render — lazy() would render a
-// Suspense fallback during SSR (or before its chunk resolves on the client)
-// and break hydration. /chat is also the default landing route (/ redirects
-// to /chat), so bundling it into the entry chunk removes the chunk-load
-// latency for the most common path. (Task #387 — same strategy as
-// LibraryPage in Task #382.)
-import ChatPage from "@/pages/ChatPage";
+
+// Preload the page chunk for a prerendered route's hydration kind.
+// `kind` matches the `data-hydrate` attribute baked into the SSR HTML
+// by the prerender scripts ("library" | "chat" | "subject" | "chapter").
+// Resolves to the loaded module so the caller can `await` it before
+// invoking `hydrateRoot()` — guarantees React.lazy resolves
+// synchronously on first render. Returns `null` for unknown kinds so
+// the caller can no-op without branching.
+const PRERENDER_KIND_LOADERS = {
+  library: () => LibraryPage.preload(),
+  chat:    () => ChatPage.preload(),
+  subject: () => SubjectLandingPage.preload(),
+  chapter: () => ChapterPage.preload(),
+};
+export function preloadPageForKind(kind) {
+  const loader = PRERENDER_KIND_LOADERS[kind];
+  return loader ? loader() : null;
+}
 const HistoryPage        = lazy(pageImports.history);
 const ProfilePage        = lazy(pageImports.profile);
 const PricingPage        = lazy(() => import("@/pages/PricingPage"));

@@ -138,7 +138,7 @@ async function main() {
       "[prerender-chat] entry-server.js did not export renderRoute()",
     );
   }
-  const out = renderRoute({ url: "/chat" });
+  const out = await renderRoute({ url: "/chat" });
   if (Array.isArray(out?.errors) && out.errors.length) {
     for (const e of out.errors) {
       console.warn(
@@ -161,6 +161,24 @@ async function main() {
       rootRe,
       `<div id="root" data-hydrate="chat">${ssrHtml}</div>`,
     );
+
+  // Task #395: ChatPage is now its own dynamic chunk; inject a
+  // modulepreload so the browser fetches it in parallel with the entry
+  // chunk and `preloadPageForKind("chat")` doesn't add a hydration RTT.
+  {
+    const { findPageChunk, injectPageChunkPreload } = await import(
+      pathToFileURL(path.join(__dirname, "_page-chunk-preload.mjs")).href
+    );
+    const chatChunk = findPageChunk(distDir, "ChatPage");
+    if (!chatChunk) {
+      throw new Error(
+        "[prerender-chat] no ChatPage-*.js chunk found in dist/assets — " +
+          "Task #395 contract requires a per-page chunk",
+      );
+    }
+    html = injectPageChunkPreload(html, chatChunk);
+    console.log(`[prerender-chat] injected modulepreload for ${chatChunk}`);
+  }
 
   html = rewriteHead(html);
 

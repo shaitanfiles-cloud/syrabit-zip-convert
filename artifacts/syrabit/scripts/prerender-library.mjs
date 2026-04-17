@@ -168,13 +168,16 @@ async function main() {
 
   let html = fs.readFileSync(srcHtml, "utf-8");
 
-  // Locate the boundary between the pre-hydration shell block and #root.
+  // Boundary markers between the pre-hydration shell block and #root.
+  // We re-resolve their positions AFTER the baseHtml mutations
+  // (modulepreload strip + CSS inlining + page-chunk preload inject)
+  // because those mutations change byte offsets, and stale indices
+  // would leave the legacy `<div id="__shell">` overlay in the
+  // prerendered HTML.
   const startMarker =
     `<noscript><style>#__shell{display:none!important}</style></noscript>`;
-  const startIdx = html.indexOf(startMarker);
   const rootRe = /<div id="root"[^>]*><\/div>/;
-  const rootMatch = html.match(rootRe);
-  if (startIdx === -1 || !rootMatch) {
+  if (html.indexOf(startMarker) === -1 || !rootRe.test(html)) {
     throw new Error(
       "[prerender-library] could not locate shell markers in dist/index.html — structure changed?",
     );
@@ -264,8 +267,39 @@ async function main() {
     }
   }
 
+  // Task #395: LibraryPage is now its own dynamic chunk, so Vite's
+  // automatic modulepreload set in dist/index.html no longer covers it.
+  // Inject a manual preload hint so the LibraryPage chunk fetches in
+  // parallel with the entry chunk and hydration doesn't pay an extra
+  // RTT after entry parse.
+  const { findPageChunk, injectPageChunkPreload } = await import(
+    pathToFileURL(path.join(__dirname, "_page-chunk-preload.mjs")).href
+  );
+  const libraryChunk = findPageChunk(distDir, "LibraryPage");
+  if (!libraryChunk) {
+    throw new Error(
+      "[prerender-library] no LibraryPage-*.js chunk found in dist/assets — " +
+        "Task #395 contract requires a per-page chunk; check Vite chunk naming",
+    );
+  }
+  baseHtml = injectPageChunkPreload(baseHtml, libraryChunk);
+  console.log(
+    `[prerender-library] injected modulepreload for ${libraryChunk}`,
+  );
+
+  // Resolve shell-strip indices AGAINST the mutated baseHtml so byte
+  // shifts from CSS inlining + modulepreload edits don't leave the
+  // legacy shell overlay in the prerendered output.
+  const startIdx = baseHtml.indexOf(startMarker);
+  const rootMatch = baseHtml.match(rootRe);
+  if (startIdx === -1 || !rootMatch) {
+    throw new Error(
+      "[prerender-library] shell markers missing from baseHtml after mutations",
+    );
+  }
+
   for (const { route, outDir } of ROUTES) {
-    const out = renderRoute({ url: route, bundleSlim: slim });
+    const out = await renderRoute({ url: route, bundleSlim: slim });
     if (Array.isArray(out?.errors) && out.errors.length) {
       for (const e of out.errors) {
         console.warn(
