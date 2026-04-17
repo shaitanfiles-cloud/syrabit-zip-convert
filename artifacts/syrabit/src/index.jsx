@@ -133,9 +133,25 @@ if (hasPrerender) {
       ReactDOM.hydrateRoot(rootEl, tree);
       if (typeof window !== "undefined") {
         window.__SYRABIT_HYDRATED__ = true;
-        // We hydrated successfully — clear the loop-guard flag so
-        // the NEXT stale-chunk hit (after a future deploy) is allowed
-        // its one auto-reload attempt.
+        // If this hydration is the result of a Task #407 auto-reload,
+        // emit a `hydrate_recovered` event BEFORE clearing the flag
+        // so we can measure auto-reload success rate (recoveries /
+        // attempts) and spot false positives.
+        try {
+          const reloadAt = sessionStorage.getItem(STALE_RELOAD_KEY);
+          if (reloadAt) {
+            try {
+              Analytics.hydrateRecovered?.({
+                kind,
+                path: window.location.pathname,
+                reload_at: Number(reloadAt) || null,
+                ms_since_reload: Date.now() - (Number(reloadAt) || Date.now()),
+              });
+            } catch {}
+          }
+        } catch {}
+        // Now clear the loop-guard flag so the NEXT stale-chunk hit
+        // (after a future deploy) is allowed its one auto-reload.
         try { sessionStorage.removeItem(STALE_RELOAD_KEY); } catch {}
       }
     });

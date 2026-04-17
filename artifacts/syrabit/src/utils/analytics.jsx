@@ -227,6 +227,19 @@ export const Analytics = {
   hydrateStalled: ({ kind, path, ms } = {}) => {
     track('hydrate_stalled', { kind, path, elapsed_ms: ms });
   },
+
+  // Fired when a Task #407 stale-chunk auto-reload was followed by a
+  // healthy hydration on the next page load. Lets us measure
+  // auto-reload effectiveness (recoveries / attempts) and detect
+  // false-positive auto-reloads.
+  hydrateRecovered: ({ kind, path, reload_at, ms_since_reload } = {}) => {
+    track('hydrate_recovered', {
+      kind,
+      path,
+      reload_at,
+      ms_since_reload,
+    });
+  },
 };
 
 export default Analytics;
