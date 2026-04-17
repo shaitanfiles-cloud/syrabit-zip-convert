@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
-export default function Reveal({ children, delay = 0, className = '', as: Tag = 'div' }) {
+export default function Reveal({ children, delay = 0, className = '', style: extraStyle, as: Tag = 'div', ...rest }) {
   const ref = useRef(null);
   const [visible, setVisible] = useState(false);
 
@@ -25,6 +25,7 @@ export default function Reveal({ children, delay = 0, className = '', as: Tag = 
   }, []);
 
   const style = {
+    ...extraStyle,
     opacity: visible ? 1 : 0,
     transform: visible ? 'translateY(0)' : 'translateY(28px)',
     transition: `opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1) ${delay}s, transform 0.7s cubic-bezier(0.16, 1, 0.3, 1) ${delay}s`,
@@ -32,7 +33,7 @@ export default function Reveal({ children, delay = 0, className = '', as: Tag = 
   };
 
   return (
-    <Tag ref={ref} className={className} style={style}>
+    <Tag ref={ref} className={className} style={style} {...rest}>
       {children}
     </Tag>
   );

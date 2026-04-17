@@ -102,16 +102,16 @@ export default function PricingSection({ contentLang = 'en' }) {
                 key={plan.id}
                 delay={i * 0.08}
                 className="relative rounded-3xl p-7 flex flex-col transition-all duration-300 glass-card hover:-translate-y-1.5"
-              ><div data-testid="pricing-plan-card" style={
+                data-testid="pricing-plan-card"
+                style={
                   plan.highlighted
                     ? {
                         border: '1px solid rgba(139,92,246,0.30)',
                         boxShadow: '0 0 50px rgba(139,92,246,0.08)',
-                        borderRadius: '1.5rem',
-                        padding: 0,
                       }
-                    : {}
-                }>
+                    : undefined
+                }
+              >
                 {plan.badge && (
                   <div
                     className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full"
@@ -166,7 +166,6 @@ export default function PricingSection({ contentLang = 'en' }) {
                 >
                   {plan.ctaText} <ArrowRight size={16} />
                 </Link>
-                </div>
               </Reveal>
             );
           })}
