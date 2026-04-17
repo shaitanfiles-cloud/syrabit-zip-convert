@@ -68,8 +68,10 @@ async def admin_analytics(days: int = 30, admin: dict = Depends(get_admin_user))
         return_exceptions=True,
     )
 
-    cf_data = cf_vs if isinstance(cf_vs, dict) else None
-    cf_connected = cf_data is not None
+    cf_data = cf_vs if isinstance(cf_vs, dict) and cf_vs else None
+    cf_connected = cf_data is not None and any(
+        k in cf_data for k in ("total_visitors", "visitors_today", "page_views_today", "daily_visitors")
+    )
     ga4_connected = bool(os.getenv("GA4_REFRESH_TOKEN"))
 
     visitor_stats: dict = {}

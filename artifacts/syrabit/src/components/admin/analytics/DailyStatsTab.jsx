@@ -1,8 +1,8 @@
 import { Loader2, RefreshCw, Globe, Eye, Users, Bot, MessageSquare,
-  Calendar, ArrowUpRight, ArrowDownRight, Cloud } from 'lucide-react';
+  Calendar, ArrowUpRight, ArrowDownRight } from 'lucide-react';
 import {
   XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, BarChart, Bar, Legend, LineChart, Line, AreaChart, Area,
+  ResponsiveContainer, BarChart, Bar, Legend, AreaChart, Area,
 } from 'recharts';
 import { Card, TT, fmt } from './shared';
 
@@ -140,36 +140,6 @@ export default function DailyStatsTab({ dailyDays, setDailyDays, dailyLoading, d
               </ResponsiveContainer>
             </Card>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <Card title="Active Sessions per Day" empty={!daily.some(d => d.sessions > 0)} emptyMsg="Session data from GA4 not available">
-                <ResponsiveContainer width="100%" height={160}>
-                  <AreaChart data={daily} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                    <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickFormatter={fmt}
-                      interval={Math.max(0, Math.floor(daily.length / 6) - 1)} />
-                    <YAxis tick={{ fill: '#9ca3af', fontSize: 11 }} />
-                    <Tooltip {...TT} />
-                    <Area type="monotone" dataKey="sessions" name="Sessions" stroke="#3b82f6" fill="rgba(59,130,246,0.12)" strokeWidth={2} />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </Card>
-
-              <Card title="Bounce Rate & Avg Session Duration" empty={!hasBounce && !hasDuration} emptyMsg="Bounce rate & duration require GA4">
-                <ResponsiveContainer width="100%" height={160}>
-                  <LineChart data={daily} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f9fafb" />
-                    <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickFormatter={fmt}
-                      interval={Math.max(0, Math.floor(daily.length / 6) - 1)} />
-                    <YAxis yAxisId="br" tick={{ fill: '#9ca3af', fontSize: 11 }} unit="%" />
-                    <YAxis yAxisId="dur" orientation="right" tick={{ fill: '#9ca3af', fontSize: 11 }} unit="s" />
-                    <Tooltip {...TT} />
-                    <Legend wrapperStyle={{ fontSize: 11, color: '#9ca3af' }} />
-                    {hasBounce  && <Line yAxisId="br"  type="monotone" dataKey="bounce_rate"         name="Bounce Rate (%)"    stroke="#ef4444" strokeWidth={2} dot={false} />}
-                    {hasDuration && <Line yAxisId="dur" type="monotone" dataKey="avg_session_duration" name="Avg Duration (s)"   stroke="#06b6d4" strokeWidth={2} dot={false} />}
-                  </LineChart>
-                </ResponsiveContainer>
-              </Card>
-            </div>
           </>
         );
       })() : (
