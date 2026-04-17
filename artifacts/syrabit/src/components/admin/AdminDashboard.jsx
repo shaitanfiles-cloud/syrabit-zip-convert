@@ -13,7 +13,7 @@ import {
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
-import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, API_BASE } from '@/utils/api';
+import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, seoHealthDeepScan, adminSeoDeepScanHistory, API_BASE } from '@/utils/api';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
@@ -289,6 +289,12 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   // Shape: { [name]: { loading, error, data } } where `data` is the
   // response from /admin/seo/sitemap-failing-urls (full failing list).
   const [sitemapDeepScans, setSitemapDeepScans] = useState({});
+  // Task #350: auto-deep-scan summaries harvested by the alert loop
+  // (Task #347) and persisted on db.alerts. Lets the on-call admin see
+  // the true blast radius the moment they open the dashboard, with a
+  // "fresh" indicator and a banner if any sitemap was auto-scanned in
+  // the last hour.
+  const [seoAutoDeepScans, setSeoAutoDeepScans] = useState(null);
   const [alertFilter, setAlertFilter] = useState('all');
   const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
   const [alertSettings, setAlertSettings] = useState(null);
@@ -517,6 +523,13 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
       seoHealthLive()
         .then((r) => { setSeoLive(r.data); setSeoLiveError(null); })
         .catch((e) => { setSeoLive(null); setSeoLiveError(e?.message || 'Failed to load SEO health'); });
+      // Task #350: piggy-back on the dashboard refresh — fetch the
+      // most recent auto-deep-scan summary per sitemap so each row
+      // can show the alert-loop's true blast-radius numbers without
+      // the on-call admin having to re-click "Deep scan" per sitemap.
+      adminSeoDeepScanHistory(adminToken)
+        .then((r) => setSeoAutoDeepScans(r.data || null))
+        .catch(() => setSeoAutoDeepScans(null));
       setFailedSections(failed);
       setLastRefresh(new Date());
     } catch (e) {
@@ -1137,6 +1150,40 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
         </GlassCard>
       )}
 
+      {/* Task #350: on-call banner — only when the alert loop has
+          auto-deep-scanned at least one sitemap in the last hour, so
+          the on-call admin sees right away that there's a fresh blast
+          radius to triage when they open the dashboard from the alert
+          email. */}
+      {seoAutoDeepScans?.recent_within_hour?.length > 0 && (
+        <GlassCard
+          className="p-4 border-l-4 border-red-500 bg-red-50/50"
+          data-testid="seo-auto-deep-scan-banner"
+        >
+          <div className="flex items-start gap-3">
+            <AlertTriangle size={18} className="text-red-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-red-900">
+                On-call deep scan: {seoAutoDeepScans.recent_within_hour.length} sitemap
+                {seoAutoDeepScans.recent_within_hour.length === 1 ? '' : 's'} auto-scanned in the last hour
+              </p>
+              <p className="text-xs text-red-700 mt-1">
+                The alert loop deep-scanned{' '}
+                <span className="font-mono">
+                  {seoAutoDeepScans.recent_within_hour.join(', ')}
+                </span>{' '}
+                after a URL spike fired. Per-sitemap totals appear inline below — no need to re-click "Show all".
+              </p>
+            </div>
+            {seoAutoDeepScans.latest_fired_at && (
+              <span className="text-[10px] text-red-700 font-mono flex-shrink-0">
+                {formatTimeAgo(seoAutoDeepScans.latest_fired_at)}
+              </span>
+            )}
+          </div>
+        </GlassCard>
+      )}
+
       <GlassCard className="p-5" data-testid="seo-sitemap-health-card">
         <div className="flex items-center gap-2 mb-3 flex-wrap">
           <FileCheck size={16} className="text-cyan-500" />
@@ -1269,6 +1316,13 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 // probe's 10-URL sample.
                 const deepScan = sitemapDeepScans[sm.name];
                 const usingDeepScan = !!deepScan?.data;
+                // Task #350: auto-deep-scan summary harvested from
+                // db.alerts. Only show when no manual deep scan has
+                // been loaded for this sitemap, since manual scans
+                // are authoritative and freshly probed on demand.
+                const autoScan = !usingDeepScan
+                  ? (seoAutoDeepScans?.by_sitemap?.[sm.name] || null)
+                  : null;
                 // In deep-scan mode the failing list is authoritative.
                 // Otherwise we render the raw sample probes as rows
                 // (Task #298), which include both ok and failing results.
@@ -1312,6 +1366,48 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                             title={`Alert loop deferred this sitemap (cap=${alertCap || 0}). Run a manual deep scan.`}
                           >
                             Alert-skipped — manual scan needed
+                          </p>
+                        )}
+                        {/* Task #350: inline auto-scan blast-radius
+                            line — only visible when the alert loop has
+                            already deep-scanned this sitemap and we
+                            haven't loaded a manual scan since. Tells
+                            the on-call admin the true failing count
+                            without a re-scan. Suppressed when Task
+                            #352's isAlertSkipped already covers the
+                            cap-skipped case for this sitemap. */}
+                        {autoScan && !(autoScan.skipped && isAlertSkipped) && (
+                          <p
+                            className={`text-[10px] mt-0.5 truncate ${
+                              autoScan.skipped ? 'text-gray-500' : 'text-red-600'
+                            }`}
+                            title={`Auto-deep-scan from ${autoScan.alert_type || 'alert'} ${autoScan.fired_at ? `at ${autoScan.fired_at}` : ''}`}
+                            data-testid={`seo-sitemap-${sm.name}-auto-scan`}
+                          >
+                            {autoScan.skipped ? (
+                              <>
+                                Auto deep scan skipped — alert-cycle cap of{' '}
+                                <span className="font-semibold">{autoScan.cap || '—'}</span>{' '}
+                                sitemaps reached. Click "Show all" to scan now.
+                              </>
+                            ) : autoScan.error ? (
+                              <>Auto deep scan errored: {autoScan.error}</>
+                            ) : (
+                              <>
+                                Auto deep scan: <span className="font-semibold">{autoScan.failing_count.toLocaleString()}</span>
+                                {' '}of{' '}
+                                <span className="font-semibold">
+                                  {autoScan.checked.toLocaleString()}
+                                  {autoScan.truncated && '+'}
+                                </span>
+                                {' URLs failing'}
+                                {autoScan.fired_at && (
+                                  <span className="ml-1 text-red-500/80">
+                                    · {formatTimeAgo(autoScan.fired_at)}
+                                  </span>
+                                )}
+                              </>
+                            )}
                           </p>
                         )}
                       </div>
@@ -1371,6 +1467,27 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                               {sitemapDeepScans[sm.name]?.loading ? 'Scanning…' : 'Deep scan now'}
                             </span>
                           </>
+                        )}
+                        {/* Task #350: "auto" pill so admins can tell the
+                            alert-loop scan apart from a manual one
+                            triggered via the "Show all" button. */}
+                        {autoScan && !autoScan.error && !autoScan.skipped && (
+                          <span
+                            className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-red-100 text-red-700 border border-red-200"
+                            title="Auto-deep-scan summary harvested from the alert loop (Task #347)"
+                            data-testid={`seo-sitemap-${sm.name}-auto-pill`}
+                          >
+                            auto
+                          </span>
+                        )}
+                        {autoScan?.skipped && !isAlertSkipped && (
+                          <span
+                            className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 border border-gray-200"
+                            title="Alert loop reached its per-cycle deep-scan cap and skipped this sitemap"
+                            data-testid={`seo-sitemap-${sm.name}-auto-skipped-pill`}
+                          >
+                            auto · skipped
+                          </span>
                         )}
                         <span title="URLs in sitemap" className="font-mono">
                           {(sm.url_count ?? 0).toLocaleString()} urls

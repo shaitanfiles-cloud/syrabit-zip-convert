@@ -2743,6 +2743,145 @@ async def admin_seo_health_history(
     }
 
 
+# Task #350: surface the on-call deep-scan results that the alert loop
+# auto-runs (via _collect_alert_deep_scans, persisted on the alert
+# document under threshold_snapshot.deep_scan_summaries) so the SEO
+# admin dashboard can show the true blast radius of an outage the
+# moment an on-call admin opens it from the alert email — no need to
+# manually click "Deep scan" per sitemap and wait again.
+_DEEP_SCAN_ALERT_TYPES = ("seo_url_spike", "seo_health_degraded")
+
+
+@router.get("/admin/seo/deep-scan-history")
+async def admin_seo_deep_scan_history(
+    limit: int = Query(50, ge=1, le=200,
+                       description="Number of recent alerts to scan."),
+    admin: dict = Depends(get_admin_user),
+):
+    """Return the most recent auto-deep-scan summary per sitemap, harvested
+    from ``db.alerts[*].threshold_snapshot.deep_scan_summaries`` (Task #347).
+
+    Shape::
+
+        {
+          "by_sitemap": {
+            "sitemap-learn.xml": {
+              "total_urls": 312, "checked": 312, "failing_count": 47,
+              "truncated": false, "fired_at": "...", "alert_type": "seo_url_spike",
+              "alert_id": "...", "source": "auto"
+            },
+            ...
+          },
+          "recent_within_hour": ["sitemap-learn.xml"],
+          "latest_fired_at": "..."
+        }
+
+    The dashboard uses the per-sitemap entries to annotate each row with
+    the auto-scan totals, and ``recent_within_hour`` to drive the
+    on-call banner. Only the most recent summary per sitemap is kept;
+    older ones are superseded.
+    """
+    from deps import db, is_mongo_available
+    empty = {"by_sitemap": {}, "recent_within_hour": [], "latest_fired_at": None}
+    if not await is_mongo_available():
+        return empty
+
+    try:
+        cursor = db.alerts.find(
+            {
+                "type": {"$in": list(_DEEP_SCAN_ALERT_TYPES)},
+                "threshold_snapshot.deep_scan_summaries": {"$exists": True, "$ne": {}},
+            },
+            {"_id": 1, "type": 1, "fired_at": 1,
+             "threshold_snapshot.deep_scan_summaries": 1},
+        ).sort("fired_at", -1).limit(limit)
+        alerts = await cursor.to_list(limit)
+    except Exception as exc:
+        logger.debug(f"deep scan history fetch failed: {exc}")
+        return empty
+
+    by_sitemap: Dict[str, Dict] = {}
+    latest_fired_at: Optional[str] = None
+    # Alerts come back newest-first; keep the first summary we see per
+    # sitemap so older runs do not overwrite fresher ones.
+    for a in alerts:
+        fired_at = a.get("fired_at")
+        if isinstance(fired_at, datetime):
+            fired_at = fired_at.isoformat()
+        if latest_fired_at is None and fired_at:
+            latest_fired_at = fired_at
+        snap = a.get("threshold_snapshot") or {}
+        scans = snap.get("deep_scan_summaries") or {}
+        if not isinstance(scans, dict):
+            continue
+        alert_id = str(a.get("_id")) if a.get("_id") is not None else None
+        for name, summary in scans.items():
+            if not isinstance(name, str) or not isinstance(summary, dict):
+                continue
+            if name in by_sitemap:
+                continue
+            # Task #351 placeholders: when more than
+            # SEO_ALERT_DEEP_SCAN_MAX_SITEMAPS sitemaps are fully
+            # failing, the alert loop only deep-scans the first N and
+            # records the rest as `{skipped: True, reason, cap}`. These
+            # are NOT completed scans — surfacing them as "0 of 0
+            # failing" would falsely tell the on-call admin we have
+            # blast-radius numbers when we don't. Preserve the skipped
+            # signal as its own shape so the dashboard can render a
+            # neutral "auto deep scan skipped — cap reached" message.
+            if summary.get("skipped"):
+                by_sitemap[name] = {
+                    "skipped": True,
+                    "reason": str(summary.get("reason") or "alert_scan_cap"),
+                    "cap": int(summary.get("cap", 0) or 0),
+                    "fired_at": fired_at,
+                    "alert_type": a.get("type"),
+                    "alert_id": alert_id,
+                    "source": "auto",
+                }
+                continue
+            entry = {
+                "total_urls": int(summary.get("total_urls", 0) or 0),
+                "checked": int(summary.get("checked", 0) or 0),
+                "failing_count": int(summary.get("failing_count", 0) or 0),
+                "truncated": bool(summary.get("truncated")),
+                "fired_at": fired_at,
+                "alert_type": a.get("type"),
+                "alert_id": alert_id,
+                "source": "auto",
+            }
+            if summary.get("error"):
+                entry["error"] = str(summary["error"])[:200]
+            by_sitemap[name] = entry
+
+    # Determine which sitemaps were freshly auto-deep-scanned within the
+    # last hour — drives the banner copy on the dashboard.
+    now = datetime.now(timezone.utc)
+    recent: List[str] = []
+    for name, entry in by_sitemap.items():
+        # Skipped placeholders (Task #351) are not real scan results
+        # and must not feed the "auto-scanned in the last hour" banner.
+        if entry.get("skipped"):
+            continue
+        fa = entry.get("fired_at")
+        if not fa:
+            continue
+        try:
+            dt = datetime.fromisoformat(fa.replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if (now - dt) <= timedelta(hours=1):
+            recent.append(name)
+
+    return {
+        "by_sitemap": by_sitemap,
+        "recent_within_hour": recent,
+        "latest_fired_at": latest_fired_at,
+    }
+
+
 @router.post("/admin/seo/weekly-digest/send")
 async def admin_seo_weekly_digest_send(
     preview_only: bool = Query(False, description="If true, return the rendered stats/HTML without sending the email."),

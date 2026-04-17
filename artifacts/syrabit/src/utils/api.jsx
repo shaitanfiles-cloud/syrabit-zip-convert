@@ -162,6 +162,18 @@ export const seoHealthDeepScan = (token, sitemap) =>
     timeout: 60000,
   });
 
+// Task #350: surface auto-deep-scan results from the on-call alert loop
+// (Task #347) on the admin dashboard so the on-call admin sees the
+// true blast radius of an outage the moment they open the dashboard
+// from the alert email — without having to re-click "Deep scan" per
+// sitemap and wait again. Reads from db.alerts via the backend.
+export const adminSeoDeepScanHistory = (token, limit = 50) =>
+  axios.get(`${API_BASE}/admin/seo/deep-scan-history`, {
+    headers: adminHeaders(token),
+    withCredentials: true,
+    params: { limit },
+  });
+
 export const adminGetUsers = (token, params = {}) =>
   axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true, params });
 

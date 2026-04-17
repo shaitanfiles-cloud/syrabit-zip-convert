@@ -3,7 +3,7 @@ alert-on-two-consecutive-degraded-checks logic added in Task #291."""
 import asyncio
 import sys
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -112,6 +112,125 @@ def test_history_endpoint_no_banner_when_latest_ok():
     assert out["count"] == 2
     # history is ascending after reversal — first should be the older one
     assert out["history"][0]["checked_at"] == "2026-04-16T09:00:00+00:00"
+
+
+# -------- /admin/seo/deep-scan-history endpoint (Task #350) --------
+
+def test_deep_scan_history_returns_empty_when_mongo_unavailable():
+    with patch("deps.is_mongo_available", AsyncMock(return_value=False)):
+        out = asyncio.run(bot_discovery.admin_seo_deep_scan_history(limit=50))
+    assert out == {"by_sitemap": {}, "recent_within_hour": [], "latest_fired_at": None}
+
+
+def test_deep_scan_history_keeps_freshest_summary_per_sitemap():
+    """Newer alert summaries should win; older ones must not overwrite them."""
+    now = datetime.now(timezone.utc)
+    older = (now - timedelta(hours=5)).isoformat()
+    newer = (now - timedelta(minutes=10)).isoformat()
+    docs = [
+        # Newest first (matches Mongo's sort=-fired_at)
+        {"_id": "alert-new", "type": "seo_url_spike", "fired_at": newer,
+         "threshold_snapshot": {"deep_scan_summaries": {
+             "sitemap-learn.xml": {"total_urls": 312, "checked": 312,
+                                   "failing_count": 47, "truncated": False},
+         }}},
+        {"_id": "alert-old", "type": "seo_url_spike", "fired_at": older,
+         "threshold_snapshot": {"deep_scan_summaries": {
+             # Stale summary for the SAME sitemap — must NOT clobber the newer one.
+             "sitemap-learn.xml": {"total_urls": 100, "checked": 100,
+                                   "failing_count": 5, "truncated": False},
+             # And a different sitemap that only the older alert covers.
+             "sitemap-news.xml": {"total_urls": 50, "checked": 50,
+                                  "failing_count": 50, "truncated": True,
+                                  "error": "boom"},
+         }}},
+    ]
+    fake_db = MagicMock()
+    fake_db.alerts.find = MagicMock(return_value=_fake_cursor(docs))
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        out = asyncio.run(bot_discovery.admin_seo_deep_scan_history(limit=50))
+
+    learn = out["by_sitemap"]["sitemap-learn.xml"]
+    # Freshest (47 failing) wins, NOT the older 5-failing snapshot.
+    assert learn["failing_count"] == 47
+    assert learn["total_urls"] == 312
+    assert learn["alert_id"] == "alert-new"
+    assert learn["source"] == "auto"
+    assert learn["fired_at"] == newer
+
+    # The older-only sitemap is still present, with its error preserved.
+    news = out["by_sitemap"]["sitemap-news.xml"]
+    assert news["failing_count"] == 50
+    assert news["truncated"] is True
+    assert news["error"] == "boom"
+
+    # Within-hour list contains the fresh alert's sitemap, not the 5h-old one.
+    assert out["recent_within_hour"] == ["sitemap-learn.xml"]
+    assert out["latest_fired_at"] == newer
+
+
+def test_deep_scan_history_preserves_skipped_placeholders():
+    """Task #351 placeholders ({skipped, reason, cap}) must round-trip
+    intact and must NOT be counted as fresh auto-scans, otherwise the
+    dashboard would falsely claim "0 of 0 URLs failing" and inflate the
+    on-call banner with sitemaps that were never actually scanned."""
+    now = datetime.now(timezone.utc)
+    fired_at = (now - timedelta(minutes=5)).isoformat()
+    docs = [
+        {"_id": "alert-mixed", "type": "seo_url_spike", "fired_at": fired_at,
+         "threshold_snapshot": {"deep_scan_summaries": {
+             "sitemap-learn.xml": {"total_urls": 312, "checked": 312,
+                                   "failing_count": 47, "truncated": False},
+             # Skipped placeholder for an over-cap sitemap.
+             "sitemap-news.xml": {"skipped": True,
+                                  "reason": "alert_scan_cap", "cap": 3},
+         }}},
+    ]
+    fake_db = MagicMock()
+    fake_db.alerts.find = MagicMock(return_value=_fake_cursor(docs))
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        out = asyncio.run(bot_discovery.admin_seo_deep_scan_history(limit=10))
+
+    # Real scan is preserved with full counts.
+    learn = out["by_sitemap"]["sitemap-learn.xml"]
+    assert learn.get("skipped") is not True
+    assert learn["failing_count"] == 47
+
+    # Skipped placeholder is preserved AS skipped, with reason + cap.
+    news = out["by_sitemap"]["sitemap-news.xml"]
+    assert news["skipped"] is True
+    assert news["reason"] == "alert_scan_cap"
+    assert news["cap"] == 3
+    assert news["source"] == "auto"
+    # CRITICAL: no fake "0 of 0 failing" data leaks through.
+    assert "failing_count" not in news
+    assert "total_urls" not in news
+    assert "checked" not in news
+
+    # Banner / "auto-scanned in last hour" must EXCLUDE the skipped sitemap,
+    # otherwise on-call sees an inflated count.
+    assert out["recent_within_hour"] == ["sitemap-learn.xml"]
+
+
+def test_deep_scan_history_skips_alerts_without_summaries():
+    """Alerts whose threshold_snapshot has no deep_scan_summaries (or it's
+    not a dict) must be ignored cleanly without raising."""
+    fake_db = MagicMock()
+    # Mongo's filter handles the empty/missing case in production; the
+    # endpoint additionally guards against malformed shapes leaking past
+    # the filter (e.g. legacy docs).
+    fake_db.alerts.find = MagicMock(return_value=_fake_cursor([
+        {"_id": "x", "type": "seo_url_spike",
+         "fired_at": datetime.now(timezone.utc).isoformat(),
+         "threshold_snapshot": {"deep_scan_summaries": "not-a-dict"}},
+    ]))
+    with patch("deps.db", fake_db), \
+         patch("deps.is_mongo_available", AsyncMock(return_value=True)):
+        out = asyncio.run(bot_discovery.admin_seo_deep_scan_history(limit=10))
+    assert out["by_sitemap"] == {}
+    assert out["recent_within_hour"] == []
 
 
 def test_history_endpoint_banner_shows_consecutive_count():
