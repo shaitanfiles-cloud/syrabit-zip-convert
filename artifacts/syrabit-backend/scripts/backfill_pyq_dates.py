@@ -10,13 +10,20 @@ This script walks every `pyq_html_pages` document and fills the timestamps
 using the best available signal, in priority order:
 
   1. Existing `created_at` / `updated_at` strings (already populated — skip).
-  2. The Mongo `_id` ObjectId generation time (present on every document
-     since insertion — most reliable proxy for "when did we ingest this").
-  3. `exam_year` → ISO timestamp at YYYY-06-30T00:00:00Z (mid-year so it
-     reflects the academic cycle, not Jan 1 which is misleading).
+  2. **File mtime** — the `created_at` on the originating `pyq_uploads` row
+     (joined by `pyq_html_slug` ↔ `slug`). This is the closest analogue to
+     the source PDF's mtime: it's the moment the operator ingested the
+     file, before any HTML rendering happened.
+  3. **ObjectId timestamp** — the `_id.generation_time` of the html page
+     itself. Always present, but it reflects when the html row was
+     written, which can be hours/days after the upload.
+  4. **Exam year** — ISO timestamp at YYYY-06-30T00:00:00Z (mid-year so
+     it reflects the academic cycle, not Jan 1 which is misleading).
+  5. now() — last-resort fallback, never expected in practice because
+     every doc has an _id.
 
-`updated_at` is mirrored from `created_at` when missing — these are legacy
-rows we never edited.
+`updated_at` is mirrored from the resolved `created_at` when missing —
+these are legacy rows we never edited.
 
 Usage:
 
@@ -42,6 +49,7 @@ from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 from config import MONGO_URL, DB_NAME  # noqa: E402
 
 COLLECTION = "pyq_html_pages"
+UPLOADS_COLLECTION = "pyq_uploads"
 
 
 def _to_iso(dt: datetime) -> str:
@@ -61,24 +69,56 @@ def _is_empty(v: Any) -> bool:
     return False
 
 
-def _derive_created_at(doc: dict) -> tuple[str, str]:
-    """Return (iso_timestamp, source_label). Never returns empty."""
+def _derive_created_at(
+    doc: dict,
+    upload_mtime_by_slug: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Return (iso_timestamp, source_label). Never returns empty.
+
+    Precedence (per task spec):
+      file_mtime → objectid → exam_year → now_fallback
+    """
+    upload_mtime_by_slug = upload_mtime_by_slug or {}
+    slug = doc.get("slug") or ""
+    mtime = upload_mtime_by_slug.get(slug)
+    if mtime and not _is_empty(mtime):
+        return mtime, "file_mtime"
+
     oid = doc.get("_id")
     if oid is not None and hasattr(oid, "generation_time"):
         try:
             return _to_iso(oid.generation_time), "objectid"
         except Exception:
             pass
+
     year = doc.get("exam_year")
     try:
         y = int(year) if year else 0
     except (TypeError, ValueError):
         y = 0
-    if y >= 1990 and y <= 2100:
+    if 1990 <= y <= 2100:
         return _to_iso(datetime(y, 6, 30, tzinfo=timezone.utc)), "exam_year"
-    # Last-resort fallback: today. Never expected in practice because every
-    # doc has an _id; kept so the script can never produce an empty value.
+
     return _to_iso(datetime.now(timezone.utc)), "now_fallback"
+
+
+async def _load_upload_mtimes(db) -> dict[str, str]:
+    """Build a {pyq_html_slug: created_at_iso} index from `pyq_uploads`.
+
+    The upload row's `created_at` is the moment the operator ingested the
+    source PDF — the closest signal we have to the file's mtime.
+    """
+    out: dict[str, str] = {}
+    cursor = db[UPLOADS_COLLECTION].find(
+        {"pyq_html_slug": {"$exists": True, "$ne": ""}},
+        {"_id": 0, "pyq_html_slug": 1, "created_at": 1},
+    )
+    async for row in cursor:
+        slug = row.get("pyq_html_slug") or ""
+        ts = row.get("created_at") or ""
+        if slug and not _is_empty(ts):
+            out[slug] = ts
+    return out
 
 
 async def main() -> int:
@@ -99,9 +139,11 @@ async def main() -> int:
     coll = db[COLLECTION]
 
     total = await coll.count_documents({})
+    upload_mtime_by_slug = await _load_upload_mtimes(db)
     print(f"[backfill] {COLLECTION}: {total} total documents")
+    print(f"[backfill] {UPLOADS_COLLECTION}: {len(upload_mtime_by_slug)} slugs with file mtime")
 
-    sources = {"objectid": 0, "exam_year": 0, "now_fallback": 0}
+    sources = {"file_mtime": 0, "objectid": 0, "exam_year": 0, "now_fallback": 0}
     skipped = 0
     updated_created = 0
     updated_updated = 0
@@ -121,7 +163,7 @@ async def main() -> int:
         existing_updated = doc.get("updated_at")
 
         if _is_empty(existing_created):
-            iso, source = _derive_created_at(doc)
+            iso, source = _derive_created_at(doc, upload_mtime_by_slug)
             update["created_at"] = iso
             sources[source] += 1
             updated_created += 1
@@ -146,6 +188,7 @@ async def main() -> int:
     print(f"  scanned:                 {processed}")
     print(f"  already populated:       {skipped}")
     print(f"  filled created_at:       {updated_created}")
+    print(f"    via file mtime:        {sources['file_mtime']}")
     print(f"    via ObjectId time:     {sources['objectid']}")
     print(f"    via exam_year:         {sources['exam_year']}")
     print(f"    via now() fallback:    {sources['now_fallback']}")
@@ -163,8 +206,11 @@ async def main() -> int:
                 {"created_at": ""},
             ]
         })
-        print(f"  coverage:                {total - remaining}/{total} have created_at "
-              f"({((total - remaining) / total * 100) if total else 0:.1f}%)")
+        covered = total - remaining
+        pct = (covered / total * 100) if total else 0
+        print(f"  coverage:                {covered}/{total} have created_at ({pct:.1f}%)")
+        if pct < 95.0 and total:
+            print(f"  WARNING: coverage below 95% target.", file=sys.stderr)
 
     return 0
 
