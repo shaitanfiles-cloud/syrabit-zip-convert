@@ -19,20 +19,29 @@ from models import (
     UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
-from config import *
-from deps import *
-from cache import *
+from deps import (
+    db,
+    is_mongo_available,
+)
+from cache import (
+    _invalidate_content_cache,
+    _redis_get,
+    _redis_set,
+)
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
     get_current_user_optional,
 )
-from db_ops import *
+from db_ops import supa_list_users
 from llm import call_llm_api, call_llm_api_content, call_llm_api_stream, _call_llm_raw
 from seo_engine import _normalize_headings
-from rag import *
-from utils import *
-from analytics_helpers import *
+from rag import (
+    _embed_and_store_chapter,
+    _embed_and_store_page,
+    _embed_cms_document,
+    auto_chunk_content,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -19,19 +19,20 @@ from models import (
     UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
-from config import *
-from deps import *
-from cache import *
+from deps import db
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
     get_current_user_optional,
 )
-from db_ops import *
+from db_ops import (
+    supa_clear_activity_log,
+    supa_get_activity_logs,
+    supa_get_settings,
+    supa_insert_activity_log,
+    supa_update_settings,
+)
 from llm import call_llm_api, call_llm_api_stream
-from rag import *
-from utils import *
-from analytics_helpers import *
 
 logger = logging.getLogger(__name__)
 

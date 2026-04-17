@@ -20,19 +20,24 @@ from models import (
     UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
-from config import *
-from deps import *
-from cache import *
+from deps import (
+    db,
+    is_mongo_available,
+)
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
     get_current_user_optional,
 )
-from db_ops import *
+from db_ops import supa_list_users
 from llm import call_llm_api, call_llm_api_stream
-from rag import *
-from utils import *
-from analytics_helpers import *
+from analytics_helpers import (
+    get_library_analytics,
+    get_pwa_stats,
+    track_library_event,
+    track_page_view,
+    track_pwa_install,
+)
 import cloudflare_client
 
 logger = logging.getLogger(__name__)

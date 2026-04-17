@@ -94,5 +94,9 @@ def install_deps_stub(*, force: bool = False, db: Any = None,
     deps._sarvam_llm_timeout = None
     deps._sarvam_pool_limits = None
 
+    # Supabase client factory — admin_monetization imports `_create_supa`
+    # explicitly (used by /admin/supabase/test and /admin/supabase/apply).
+    deps._create_supa = MagicMock()
+
     sys.modules["deps"] = deps
     return deps

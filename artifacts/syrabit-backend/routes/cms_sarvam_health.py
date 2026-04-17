@@ -22,7 +22,10 @@ from models import (
     UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
-from config import *
+from config import (
+    LLM_MODEL,
+    LLM_PROVIDER,
+)
 # `from config import *` re-exports `pathlib.Path` (config does
 # `from pathlib import Path`) which shadows the FastAPI `Path`
 # parameter helper imported above. Re-bind `Path` to the FastAPI
@@ -31,16 +34,31 @@ from config import *
 # work. Without this, importing this module fails at function-def
 # time with `TypeError: expected str, bytes or os.PathLike object`.
 from fastapi import Path  # noqa: E402,F811  — restore FastAPI Path after wildcard import
-from deps import *
+from deps import (
+    _cms_request_ctx,
+    db,
+    is_mongo_available,
+    mark_mongo_down,
+    redis_client,
+    sarvam_client,
+    supa,
+)
 import deps
-from cache import *
+from cache import (
+    _get_content_cache,
+    _set_content_cache,
+)
 from routes.admin_monetization import merge_subject_content, _md_to_html as _blog_md_to_html, _extract_headings_json, preprocess_markdown
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
     get_current_user_optional,
 )
-from db_ops import *
+from db_ops import (
+    _pg_rows,
+    _supa,
+    supa_list_users,
+)
 from llm import call_llm_api, call_llm_api_content, call_llm_api_stream, _LLM_PROVIDERS, _llm_batcher
 from cache import _content_cache, _ai_response_cache, _redis_hit_count, _redis_miss_count
 import metrics as _metrics_mod
@@ -51,10 +69,8 @@ from metrics import (
     _check_health_deps, _dispatch_alert, _alerting_loop,
     _ALERT_COOLDOWN_S, _alert_last_fired, _ALERT_THRESHOLDS,
 )
-from rag import *
+from rag import _embed_and_store_page
 from seo_engine import _md_to_html
-from utils import *
-from analytics_helpers import *
 import ga4_client
 import cloudflare_client
 import vertex_services

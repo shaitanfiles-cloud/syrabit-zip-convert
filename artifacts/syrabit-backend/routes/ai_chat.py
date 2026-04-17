@@ -21,20 +21,55 @@ from models import (
     UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
-from config import *
-from deps import *
+from config import (
+    CF_TURNSTILE_ENABLED,
+    CF_TURNSTILE_SECRET_KEY,
+    LLM_MODEL,
+    PLAN_LIMITS,
+)
+from deps import (
+    db,
+    redis_client,
+    sarvam_client,
+    supa,
+)
 import deps
-from cache import *
+from cache import (
+    REDIS_AI_CACHE_TTL,
+    REDIS_CASUAL_CACHE_TTL,
+    _ai_response_cache,
+    _cache_key,
+    _redis_get_ai_cache,
+    _redis_get_ai_cache_async,
+    _redis_set,
+    _syllabus_cache,
+    _syllabus_cache_key,
+)
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
     get_current_user_optional, rate_limit_chat_optional,
 )
-from db_ops import *
+from db_ops import (
+    atomic_deduct_credit,
+    supa_get_conversation,
+    supa_get_user_by_id,
+    supa_update_conversation,
+    supa_update_user,
+    supa_upsert_conversation,
+)
 from llm import call_llm_api, call_llm_api_chat, call_llm_api_stream
-from rag import *
-from utils import *
-from analytics_helpers import *
+from rag import (
+    _fetch_internal_chapters,
+    _record_chat_latency,
+    _sources_from_rag_ctx,
+    _sources_from_web_results,
+    _trim_history,
+    build_rag_system_prompt,
+    resolve_rag_context,
+    syrabit_library_search,
+    web_search_with_fallback,
+)
 from prompts import _classify_intent, classify_intent, _is_out_of_scope_response, extract_semester_number
 from followup_context import detect_followup, build_followup_context, merge_followup_into_query
 from pipeline import should_use_pipeline, stage1_resolve_topic, apply_stage1_to_intent, build_enhanced_query, get_instant_response

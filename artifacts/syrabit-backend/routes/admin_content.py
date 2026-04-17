@@ -94,20 +94,24 @@ from models import (
     UserStatusUpdate, UserPlanUpdate, UserCreditsUpdate, SettingsUpdate, RoadmapItemCreate,
     LibraryBundleOut, ChatResponseOut, SearchResultOut, HealthOut, ReadyOut, ErrorOut,
 )
-from config import *
 from config import _GROQ_KEY
-from deps import *
-from cache import *
+from deps import (
+    db,
+    is_mongo_available,
+    mark_mongo_down,
+    supa,
+)
+from cache import _invalidate_content_cache
 from auth_deps import (
     get_current_user, get_admin_user, create_access_token, create_refresh_token,
     decode_token, check_rate_limit, get_user_credits, rate_limit_chat,
     get_current_user_optional,
 )
-from db_ops import *
 from llm import call_llm_api, call_llm_api_stream
-from rag import *
-from utils import *
-from analytics_helpers import *
+from rag import (
+    auto_chunk_content,
+    rechunk_chapter,
+)
 
 logger = logging.getLogger(__name__)
 
