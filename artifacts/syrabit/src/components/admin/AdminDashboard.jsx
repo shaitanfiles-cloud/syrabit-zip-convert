@@ -13,7 +13,7 @@ import {
 import AudioTrimPreview from './AudioTrimPreview';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import axios from 'axios';
-import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, API_BASE } from '@/utils/api';
+import { adminGetDashboard, seoPipelineStatus, adminSeoHealthHistory, adminSeoHealthSnapshotNow, seoHealthLive, adminSeoSitemapFailingUrls, API_BASE } from '@/utils/api';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer, ReferenceLine, CartesianGrid, Legend,
@@ -285,6 +285,10 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
   // Task #299: which sitemap row is currently expanded to show its
   // failing URL list. Only one is open at a time to keep the card compact.
   const [expandedSitemap, setExpandedSitemap] = useState(null);
+  // Task #345: per-sitemap deep-scan results, keyed by sitemap name.
+  // Shape: { [name]: { loading, error, data } } where `data` is the
+  // response from /admin/seo/sitemap-failing-urls (full failing list).
+  const [sitemapDeepScans, setSitemapDeepScans] = useState({});
   const [alertFilter, setAlertFilter] = useState('all');
   const [alertSettingsOpen, setAlertSettingsOpen] = useState(false);
   const [alertSettings, setAlertSettings] = useState(null);
@@ -1229,9 +1233,17 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                 // Task #299: surface the exact failing URLs (with status
                 // code) inline so admins don't have to re-run the probe to
                 // discover which URLs are 404ing.
-                const failing = checks.filter((c) => !c.ok && c.url).slice(0, 10);
+                const sampleFailing = checks.filter((c) => !c.ok && c.url).slice(0, 10);
                 const isExpanded = expandedSitemap === sm.name;
-                const canExpand = failing.length > 0;
+                // Task #345: when the 10-URL sample shows ≥10 failures we
+                // know the live probe hit its sample cap, so we offer a
+                // deep-scan button. The deep-scan response (when present)
+                // takes precedence over the sample for the displayed list.
+                const deepScan = sitemapDeepScans[sm.name];
+                const usingDeepScan = !!deepScan?.data;
+                const failing = usingDeepScan ? deepScan.data.failing : sampleFailing;
+                const sampleHitCap = sampleFailing.length >= 10;
+                const canExpand = failing.length > 0 || sampleHitCap;
                 return (
                   <div
                     key={sm.name}
@@ -1280,9 +1292,74 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                         className="px-4 pb-3 pt-1 border-t border-red-100 bg-red-50/50"
                         data-testid={`seo-sitemap-${sm.name}-failing`}
                       >
-                        <p className="text-[10px] uppercase tracking-wider text-red-700 font-semibold mb-2">
-                          Failing URLs ({failing.length})
-                        </p>
+                        <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+                          <p className="text-[10px] uppercase tracking-wider text-red-700 font-semibold">
+                            Failing URLs ({failing.length}
+                            {usingDeepScan && deepScan.data.truncated
+                              ? ` of ${deepScan.data.total_urls}+`
+                              : usingDeepScan
+                              ? ` of ${deepScan.data.checked} scanned`
+                              : sampleHitCap ? '+ in sample' : ''})
+                          </p>
+                          {/* Task #345: deep-scan button. Only shown when
+                              the sample probe hit its 10-URL cap, since
+                              that's the only situation where the displayed
+                              list is incomplete. */}
+                          {sampleHitCap && !usingDeepScan && (
+                            <button
+                              type="button"
+                              data-testid={`seo-sitemap-${sm.name}-scan-all`}
+                              disabled={!!deepScan?.loading}
+                              onClick={async () => {
+                                setSitemapDeepScans((prev) => ({
+                                  ...prev,
+                                  [sm.name]: { loading: true, error: null, data: null },
+                                }));
+                                try {
+                                  const res = await adminSeoSitemapFailingUrls(adminToken, sm.name);
+                                  setSitemapDeepScans((prev) => ({
+                                    ...prev,
+                                    [sm.name]: { loading: false, error: null, data: res.data },
+                                  }));
+                                } catch (err) {
+                                  const msg = err?.response?.data?.detail
+                                    || err?.message
+                                    || 'Scan failed';
+                                  setSitemapDeepScans((prev) => ({
+                                    ...prev,
+                                    [sm.name]: { loading: false, error: msg, data: null },
+                                  }));
+                                }
+                              }}
+                              className="text-[10px] font-semibold px-2 py-1 rounded border border-red-300 bg-white text-red-700 hover:bg-red-50 disabled:opacity-50 disabled:cursor-wait flex items-center gap-1"
+                            >
+                              {deepScan?.loading ? (
+                                <>
+                                  <Loader2 size={11} className="animate-spin" /> Scanning…
+                                </>
+                              ) : (
+                                <>Scan all URLs</>
+                              )}
+                            </button>
+                          )}
+                          {usingDeepScan && (
+                            <span
+                              className="text-[10px] text-gray-500 font-mono"
+                              data-testid={`seo-sitemap-${sm.name}-scan-meta`}
+                            >
+                              full scan · {deepScan.data.checked}/{deepScan.data.total_urls} probed
+                              {deepScan.data.truncated && ' (truncated at limit)'}
+                            </span>
+                          )}
+                        </div>
+                        {deepScan?.error && (
+                          <div
+                            className="text-[11px] text-red-700 bg-red-100 border border-red-200 rounded px-2 py-1 mb-2"
+                            data-testid={`seo-sitemap-${sm.name}-scan-error`}
+                          >
+                            Scan failed: {deepScan.error}
+                          </div>
+                        )}
                         <ul className="space-y-1 max-h-48 overflow-y-auto">
                           {failing.map((f, i) => {
                             // Defense-in-depth: only render <a> for http(s) URLs

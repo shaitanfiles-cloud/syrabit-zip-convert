@@ -149,6 +149,17 @@ export const adminSeoHealthSnapshotNow = (token) =>
 export const seoHealthLive = () =>
   axios.get(`${API_BASE}/seo/health`, { withCredentials: true });
 
+// Task #345: deep-scan a single sitemap and return ALL failing URLs
+// (not just the 10-sample slice surfaced by /seo/health). Backed by
+// the admin-only `/admin/seo/sitemap-failing-urls` endpoint.
+export const adminSeoSitemapFailingUrls = (token, sitemap) =>
+  axios.get(`${API_BASE}/admin/seo/sitemap-failing-urls`, {
+    headers: adminHeaders(token),
+    params: { sitemap },
+    withCredentials: true,
+    timeout: 60000,
+  });
+
 export const adminGetUsers = (token, params = {}) =>
   axios.get(`${API_BASE}/admin/users`, { headers: adminHeaders(token), withCredentials: true, params });
 

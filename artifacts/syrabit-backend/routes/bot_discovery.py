@@ -1669,6 +1669,23 @@ async def admin_indexnow_endpoint_retry(
     }
 
 
+# The complete list of sitemaps the SEO health probe knows about. Defined
+# at module level (rather than inline in `seo_health_check`) so that the
+# Task #345 deep-scan endpoint can validate the requested sitemap name
+# against this same whitelist — no caller can probe arbitrary URLs.
+SEO_SITEMAP_FILENAMES = (
+    "sitemap-pages.xml",
+    "sitemap-subjects.xml",
+    "sitemap-chapters.xml",
+    "sitemap-notes.xml",
+    "sitemap-mcqs.xml",
+    "sitemap-pyqs.xml",
+    "sitemap-examples.xml",
+    "sitemap-definitions.xml",
+    "sitemap-learn.xml",
+)
+
+
 @router.get("/seo/health")
 async def seo_health_check():
     import httpx
@@ -1682,15 +1699,7 @@ async def seo_health_check():
     }
 
     sitemap_urls = [
-        f"{BASE_URL}/api/seo/sitemap-pages.xml",
-        f"{BASE_URL}/api/seo/sitemap-subjects.xml",
-        f"{BASE_URL}/api/seo/sitemap-chapters.xml",
-        f"{BASE_URL}/api/seo/sitemap-notes.xml",
-        f"{BASE_URL}/api/seo/sitemap-mcqs.xml",
-        f"{BASE_URL}/api/seo/sitemap-pyqs.xml",
-        f"{BASE_URL}/api/seo/sitemap-examples.xml",
-        f"{BASE_URL}/api/seo/sitemap-definitions.xml",
-        f"{BASE_URL}/api/seo/sitemap-learn.xml",
+        f"{BASE_URL}/api/seo/{name}" for name in SEO_SITEMAP_FILENAMES
     ]
 
     import random
@@ -2589,6 +2598,102 @@ async def admin_seo_health_snapshot_now(admin: dict = Depends(get_admin_user)):
     if isinstance(snapshot.get("recorded_at"), datetime):
         snapshot["recorded_at"] = snapshot["recorded_at"].isoformat()
     return snapshot
+
+
+# Task #345: when a sitemap shows ≥10 failing URLs in the regular health
+# probe (which only samples 10 random URLs per sitemap) admins lose
+# visibility into the true blast radius of an outage. This endpoint
+# fetches a single named sitemap and HEAD-probes every URL inside it
+# (capped at SEO_DEEP_SCAN_MAX_URLS for safety) so the admin dashboard
+# can show the full failing list on demand.
+SEO_DEEP_SCAN_MAX_URLS = 500
+SEO_DEEP_SCAN_CONCURRENCY = 20
+
+
+async def _deep_scan_sitemap(sitemap_name: str) -> dict:
+    """Fetch every URL in `sitemap_name` and return the list of failing
+    URLs (status != 200, or network error → status 0). Caller is
+    responsible for whitelisting `sitemap_name` against
+    SEO_SITEMAP_FILENAMES — this helper does not re-validate."""
+    import httpx
+    import xml.etree.ElementTree as ET
+
+    sitemap_url = f"{BASE_URL}/api/seo/{sitemap_name}"
+    result: dict = {
+        "sitemap": sitemap_name,
+        "sitemap_url": sitemap_url,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "total_urls": 0,
+        "checked": 0,
+        "truncated": False,
+        "failing": [],
+    }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        try:
+            resp = await client.get(sitemap_url)
+        except Exception as fetch_err:
+            result["error"] = f"sitemap fetch failed: {str(fetch_err)[:200]}"
+            return result
+        if resp.status_code != 200:
+            result["error"] = f"sitemap returned HTTP {resp.status_code}"
+            return result
+        try:
+            root = ET.fromstring(resp.text)
+        except ET.ParseError as pe:
+            result["error"] = f"sitemap XML parse error: {str(pe)[:200]}"
+            return result
+
+        ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+        urls: List[str] = [loc.text for loc in root.findall(".//sm:loc", ns) if loc.text]
+        result["total_urls"] = len(urls)
+        if len(urls) > SEO_DEEP_SCAN_MAX_URLS:
+            urls = urls[:SEO_DEEP_SCAN_MAX_URLS]
+            result["truncated"] = True
+        result["checked"] = len(urls)
+
+        sem = asyncio.Semaphore(SEO_DEEP_SCAN_CONCURRENCY)
+        failing: List[Dict] = []
+        failing_lock = asyncio.Lock()
+
+        async def _probe(u: str):
+            async with sem:
+                try:
+                    r = await client.head(u, follow_redirects=True, timeout=10.0)
+                    if r.status_code in (405, 403):
+                        r = await client.get(u, follow_redirects=True, timeout=10.0)
+                    if r.status_code != 200:
+                        async with failing_lock:
+                            failing.append({"url": u, "status": r.status_code})
+                except Exception as exc:
+                    async with failing_lock:
+                        failing.append({
+                            "url": u, "status": 0, "error": str(exc)[:120],
+                        })
+
+        await asyncio.gather(*[_probe(u) for u in urls])
+        # Stable order — match original sitemap order so admins see URLs
+        # in a predictable sequence rather than completion-time order.
+        order_index = {u: i for i, u in enumerate(urls)}
+        failing.sort(key=lambda f: order_index.get(f["url"], 1 << 31))
+        result["failing"] = failing
+
+    return result
+
+
+@router.get("/admin/seo/sitemap-failing-urls")
+async def admin_seo_sitemap_failing_urls(
+    sitemap: str = Query(..., description="Sitemap filename, e.g. 'sitemap-learn.xml'"),
+    admin: dict = Depends(get_admin_user),
+):
+    """Task #345: probe every URL in a single sitemap and return the
+    full failing list. The standard /api/seo/health probe only samples
+    10 random URLs per sitemap, so when an outage takes down hundreds
+    of pages admins were only seeing a fraction of them. This endpoint
+    backs the dashboard's 'Scan all URLs' button."""
+    if sitemap not in SEO_SITEMAP_FILENAMES:
+        raise HTTPException(status_code=400, detail=f"Unknown sitemap: {sitemap}")
+    return await _deep_scan_sitemap(sitemap)
 
 
 @router.post("/admin/indexnow/push")
