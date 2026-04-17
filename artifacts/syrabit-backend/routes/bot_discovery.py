@@ -2610,6 +2610,328 @@ async def admin_indexnow_resubmit_recent(admin: dict = Depends(get_admin_user)):
     }
 
 
+# ---------------------------------------------------------------------------
+# IndexNow full URL backfill — Task #334
+#
+# One-time admin operation that pushes EVERY public URL on syrabit.ai to
+# Bing/Yandex/IndexNow, not just the 500-most-recent slice the existing
+# `admin_indexnow_push` ships. Used to bring older content into Bing's
+# index when it has never been submitted.
+#
+# Idempotent: re-running submits the full catalog again. Concurrent runs
+# are blocked at the state level (returns 409). Progress is exposed via
+# `GET /admin/indexnow/backfill-progress` so the admin UI can poll.
+# ---------------------------------------------------------------------------
+
+_BACKFILL_CHUNK_SIZE = 10000
+_BACKFILL_LOCK_ID = "indexnow_full_backfill"
+# A run is considered stale (and stealable) after this much wall-clock time
+# without finishing — large enough to let a real ~50k-URL backfill finish
+# (a few minutes), small enough to recover from a worker crash quickly.
+_BACKFILL_STALE_AFTER = timedelta(hours=2)
+
+_backfill_state: Dict[str, object] = {
+    "status": "idle",  # idle | running | done | error
+    "discovered": 0,
+    "submitted": 0,
+    "succeeded": 0,
+    "failed": 0,
+    "skipped": 0,
+    "skip_reasons": {},
+    "chunks_total": 0,
+    "chunks_done": 0,
+    "endpoint_status": {},   # endpoint -> {success_chunks, failed_chunks}
+    "started_at": None,
+    "finished_at": None,
+    "source": "admin_full_backfill",
+    "error": None,
+    "run_id": None,
+}
+_backfill_lock = asyncio.Lock()
+
+
+def _reset_backfill_state(run_id: str) -> None:
+    _backfill_state.update({
+        "status": "running",
+        "discovered": 0,
+        "submitted": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "skipped": 0,
+        "skip_reasons": {},
+        "chunks_total": 0,
+        "chunks_done": 0,
+        "endpoint_status": {ep: {"success_chunks": 0, "failed_chunks": 0}
+                             for ep in INDEXNOW_ENDPOINTS},
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "finished_at": None,
+        "source": "admin_full_backfill",
+        "error": None,
+        "run_id": run_id,
+    })
+
+
+def _validate_backfill_url(url: str) -> Optional[str]:
+    """Return None if `url` is acceptable, else a short skip reason. Rules:
+    - must be a non-empty string
+    - must be absolute http(s)
+    - host must equal `syrabit.ai` (sub-domains, www, http→https mismatches
+      are rejected — IndexNow's host claim is exact)
+    - must not contain whitespace / control chars (RFC-3986 fail-safe)
+    - max length 2048 (Bing's documented per-URL cap)
+    """
+    if not url or not isinstance(url, str):
+        return "empty"
+    s = url.strip()
+    if not s:
+        return "empty"
+    if any(ch.isspace() or ord(ch) < 0x20 for ch in s):
+        return "invalid_chars"
+    if len(s) > 2048:
+        return "too_long"
+    try:
+        from urllib.parse import urlparse
+        p = urlparse(s)
+    except Exception:
+        return "unparseable"
+    if p.scheme not in ("http", "https"):
+        return "not_absolute"
+    if p.netloc.lower() != "syrabit.ai":
+        return "wrong_host"
+    return None
+
+
+async def _collect_all_backfill_urls() -> tuple[List[str], Dict[str, int]]:
+    """Discover every public URL that should be in Bing's index.
+
+    Reuses `_collect_current_sitemap_urls()` (which already mirrors the
+    full sitemap pipeline — STATIC_PAGES, subjects, chapters, learn docs,
+    and every published seo_page across all page_types) and explicitly
+    adds the homepage `/` (STATIC_PAGES uses `/home`, the Cloudflare
+    Pages root `/` is a separate URL).
+    """
+    raw = await _collect_current_sitemap_urls()
+    raw.append(f"{BASE_URL}/")
+
+    seen: set = set()
+    valid: List[str] = []
+    skip_reasons: Dict[str, int] = {}
+    for u in raw:
+        norm = u.strip() if isinstance(u, str) else ""
+        if norm in seen:
+            continue
+        seen.add(norm)
+        reason = _validate_backfill_url(norm)
+        if reason is not None:
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+            continue
+        valid.append(norm)
+    return valid, skip_reasons
+
+
+async def _claim_backfill_lock(run_id: str) -> bool:
+    """Atomic, DB-backed single-flight guard for the full backfill, so
+    concurrent admin clicks against multiple gunicorn workers / Railway
+    replicas can't start two simultaneous catalog pushes.
+
+    Strategy:
+      1. Try ``insert_one`` of a fresh lock doc — wins if no doc exists.
+      2. On ``DuplicateKeyError`` (a doc already exists) attempt to *steal*
+         it with a single ``find_one_and_update`` whose filter matches only
+         non-running OR stale (>``_BACKFILL_STALE_AFTER``) holders. If the
+         CAS matches we win; otherwise a live run already owns the lock
+         and we lose (caller must 409).
+
+    Returns True iff this caller acquired the lock.
+    """
+    from deps import db, is_mongo_available
+    if not await is_mongo_available():
+        return False
+    from pymongo.errors import DuplicateKeyError
+    now = datetime.now(timezone.utc)
+    try:
+        await db.job_locks.insert_one({
+            "_id": _BACKFILL_LOCK_ID,
+            "owner_run_id": run_id,
+            "claimed_at": now,
+            "status": "running",
+        })
+        return True
+    except DuplicateKeyError:
+        pass
+    stale_cutoff = now - _BACKFILL_STALE_AFTER
+    res = await db.job_locks.find_one_and_update(
+        {
+            "_id": _BACKFILL_LOCK_ID,
+            "$or": [
+                {"status": {"$ne": "running"}},
+                {"claimed_at": {"$lt": stale_cutoff}},
+            ],
+        },
+        {"$set": {
+            "owner_run_id": run_id,
+            "claimed_at": now,
+            "status": "running",
+        }},
+    )
+    return res is not None
+
+
+async def _release_backfill_lock(run_id: str, status: str) -> None:
+    """Release our claim if (and only if) we still own it. Best-effort —
+    swallows DB errors so we never crash the worker on cleanup."""
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return
+        await db.job_locks.update_one(
+            {"_id": _BACKFILL_LOCK_ID, "owner_run_id": run_id},
+            {"$set": {
+                "status": status,
+                "released_at": datetime.now(timezone.utc),
+            }},
+        )
+    except Exception as e:  # pragma: no cover — diagnostic only
+        logger.debug("backfill lock release failed run_id=%s: %s", run_id, e)
+
+
+async def _run_indexnow_backfill(run_id: str) -> None:
+    """Background worker: enumerate, chunk ≤10k, push, update progress."""
+    final_status = "error"
+    try:
+        # Fail fast when Mongo is unavailable, instead of silently
+        # short-circuiting via _collect_current_sitemap_urls' empty-list
+        # fallback (which would mark the run as "done" with discovered=0
+        # and mislead operators into thinking a successful push happened).
+        from deps import is_mongo_available
+        if not await is_mongo_available():
+            if _backfill_state.get("run_id") == run_id:
+                _backfill_state["status"] = "error"
+                _backfill_state["error"] = (
+                    "MongoDB is unavailable — cannot enumerate URL catalog"
+                )
+                _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            return
+
+        urls, skip_reasons = await _collect_all_backfill_urls()
+        # Guard: if a fresh run replaced us in the in-memory state, abort
+        # silently rather than clobbering the new run's counters.
+        if _backfill_state.get("run_id") != run_id:
+            return
+        _backfill_state["discovered"] = len(urls)
+        _backfill_state["skipped"] = sum(skip_reasons.values())
+        _backfill_state["skip_reasons"] = skip_reasons
+
+        chunks = [urls[i:i + _BACKFILL_CHUNK_SIZE]
+                  for i in range(0, len(urls), _BACKFILL_CHUNK_SIZE)]
+        _backfill_state["chunks_total"] = len(chunks)
+        if not chunks:
+            _backfill_state["status"] = "done"
+            _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            logger.info(
+                "IndexNow backfill run_id=%s discovered=0 — nothing to send", run_id
+            )
+            return
+
+        logger.info(
+            "IndexNow backfill run_id=%s starting: %d URLs in %d chunks",
+            run_id, len(urls), len(chunks),
+        )
+
+        for idx, chunk in enumerate(chunks):
+            try:
+                ep_results = await push_indexnow(
+                    chunk, source="admin_full_backfill"
+                )
+            except Exception as e:
+                logger.warning(
+                    "IndexNow backfill chunk %d/%d failed: %s",
+                    idx + 1, len(chunks), e,
+                )
+                ep_results = {ep: False for ep in INDEXNOW_ENDPOINTS}
+
+            chunk_succeeded = any(ep_results.values())
+            for ep, ok in ep_results.items():
+                slot = _backfill_state["endpoint_status"].setdefault(  # type: ignore[union-attr]
+                    ep, {"success_chunks": 0, "failed_chunks": 0}
+                )
+                if ok:
+                    slot["success_chunks"] += 1
+                else:
+                    slot["failed_chunks"] += 1
+
+            _backfill_state["submitted"] = int(_backfill_state["submitted"]) + len(chunk)  # type: ignore[arg-type]
+            if chunk_succeeded:
+                _backfill_state["succeeded"] = int(_backfill_state["succeeded"]) + len(chunk)  # type: ignore[arg-type]
+            else:
+                _backfill_state["failed"] = int(_backfill_state["failed"]) + len(chunk)  # type: ignore[arg-type]
+            _backfill_state["chunks_done"] = idx + 1
+
+        _backfill_state["status"] = "done"
+        _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        final_status = "done"
+        logger.info(
+            "IndexNow backfill run_id=%s complete: discovered=%d submitted=%d "
+            "succeeded=%d failed=%d skipped=%d",
+            run_id,
+            _backfill_state["discovered"], _backfill_state["submitted"],
+            _backfill_state["succeeded"], _backfill_state["failed"],
+            _backfill_state["skipped"],
+        )
+    except Exception as e:
+        logger.exception("IndexNow backfill run_id=%s crashed: %s", run_id, e)
+        if _backfill_state.get("run_id") == run_id:
+            _backfill_state["status"] = "error"
+            _backfill_state["error"] = str(e)
+            _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+        final_status = "error"
+    finally:
+        await _release_backfill_lock(run_id, final_status)
+
+
+@router.post("/admin/indexnow/backfill-all")
+async def admin_indexnow_backfill_all(
+    background_tasks: BackgroundTasks,
+    admin: dict = Depends(get_admin_user),
+):
+    """Kick off a full IndexNow backfill in the background. Returns 409 if
+    a run is already in progress (claimed atomically via the DB-backed
+    lock so concurrent admins on different gunicorn workers / Railway
+    replicas can't double-fire), 503 if Mongo is unavailable; otherwise
+    resets state and returns the initial progress payload."""
+    from deps import is_mongo_available
+    if not await is_mongo_available():
+        raise HTTPException(
+            status_code=503,
+            detail="MongoDB is unavailable — cannot run IndexNow backfill",
+        )
+    async with _backfill_lock:
+        if _backfill_state.get("status") == "running":
+            raise HTTPException(
+                status_code=409,
+                detail="A backfill run is already in progress",
+            )
+        run_id = uuid.uuid4().hex[:12]
+        claimed = await _claim_backfill_lock(run_id)
+        if not claimed:
+            raise HTTPException(
+                status_code=409,
+                detail="A backfill run is already in progress on another worker",
+            )
+        _reset_backfill_state(run_id)
+
+    background_tasks.add_task(_run_indexnow_backfill, run_id)
+    return {"status": "started", "run_id": run_id, "progress": dict(_backfill_state)}
+
+
+@router.get("/admin/indexnow/backfill-progress")
+async def admin_indexnow_backfill_progress(
+    admin: dict = Depends(get_admin_user),
+):
+    """Live progress snapshot for the most recent / running backfill."""
+    return {"progress": dict(_backfill_state)}
+
+
 @router.get("/admin/indexnow/history")
 async def admin_indexnow_history(
     limit: int = Query(50, ge=1, le=200),

@@ -1,6 +1,10 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle, Send } from 'lucide-react';
-import { adminSeoGoogleIndexingStats } from '@/utils/api';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { Loader2, RefreshCw, Map, Sparkles, CheckCircle2, AlertTriangle, Send, Rocket } from 'lucide-react';
+import {
+  adminSeoGoogleIndexingStats,
+  adminIndexNowBackfillStart,
+  adminIndexNowBackfillProgress,
+} from '@/utils/api';
 
 const INDEXING_FIELDS = [
   { key: 'sent',               label: 'Submitted' },
@@ -130,6 +134,184 @@ function DayColumn({ title, tone, day }) {
   );
 }
 
+function IndexNowBackfillCard({ adminToken }) {
+  const [progress, setProgress] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState(null);
+  const pollRef = useRef(null);
+
+  const fetchProgress = useCallback(async () => {
+    if (!adminToken) return null;
+    try {
+      const r = await adminIndexNowBackfillProgress(adminToken);
+      const p = r.data?.progress || null;
+      setProgress(p);
+      return p;
+    } catch (e) {
+      setError(e?.response?.data?.detail || e?.message || 'Failed to load backfill progress');
+      return null;
+    }
+  }, [adminToken]);
+
+  useEffect(() => { fetchProgress(); }, [fetchProgress]);
+
+  useEffect(() => {
+    if (progress?.status === 'running') {
+      if (pollRef.current) return;
+      pollRef.current = setInterval(async () => {
+        const p = await fetchProgress();
+        if (p && p.status !== 'running') {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+      }, 2000);
+    } else if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
+  }, [progress?.status, fetchProgress]);
+
+  const handleStart = async () => {
+    setStarting(true);
+    setError(null);
+    try {
+      const r = await adminIndexNowBackfillStart(adminToken);
+      setProgress(r.data?.progress || null);
+    } catch (e) {
+      if (e?.response?.status === 409) {
+        await fetchProgress();
+      } else {
+        setError(e?.response?.data?.detail || e?.message || 'Failed to start backfill');
+      }
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const status = progress?.status || 'idle';
+  const running = status === 'running';
+  const done = status === 'done';
+  const errored = status === 'error';
+  const pct = progress?.chunks_total
+    ? Math.round((progress.chunks_done / progress.chunks_total) * 100)
+    : 0;
+  const epStatus = progress?.endpoint_status || {};
+  const skipReasons = progress?.skip_reasons || {};
+
+  return (
+    <div className="rounded-xl border p-5 space-y-4" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <p className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
+            <Rocket size={14} className="text-violet-500" />
+            Full IndexNow Backfill
+          </p>
+          <p className="text-xs mt-0.5" style={{ color: '#9ca3af' }}>
+            Push every public URL on syrabit.ai to Bing/Yandex/IndexNow in chunks of 10,000. Use this once to backfill older pages that were never submitted.
+          </p>
+        </div>
+        <button onClick={handleStart} disabled={starting || running || !adminToken}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40"
+          style={{ background: '#7c3aed', color: '#fff' }}>
+          {(starting || running) ? <Loader2 size={14} className="animate-spin" /> : <Rocket size={14} />}
+          {running ? 'Backfill running…' : (starting ? 'Starting…' : 'Run Full Backfill to Bing')}
+        </button>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-2 p-2.5 rounded-lg" style={{ background: 'rgba(239,68,68,0.06)' }}>
+          <AlertTriangle size={12} className="text-red-400 flex-shrink-0 mt-0.5" />
+          <span className="text-xs" style={{ color: '#dc2626' }}>{error}</span>
+        </div>
+      )}
+
+      {progress && status !== 'idle' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between text-xs" style={{ color: '#6b7280' }}>
+            <span>
+              Chunk <span className="font-semibold text-gray-900">{progress.chunks_done}</span>
+              {' / '}
+              <span className="font-semibold text-gray-900">{progress.chunks_total || '—'}</span>
+              {progress.chunks_total > 0 && <span className="ml-2" style={{ color: '#9ca3af' }}>({pct}%)</span>}
+            </span>
+            <span style={{ color: errored ? '#dc2626' : (done ? '#16a34a' : '#7c3aed') }}>
+              {errored ? 'Error' : (done ? 'Complete' : (running ? 'Running…' : 'Idle'))}
+            </span>
+          </div>
+          {progress.chunks_total > 0 && (
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: '#e5e7eb' }}>
+              <div className="h-full transition-all" style={{
+                width: `${pct}%`,
+                background: errored ? '#dc2626' : (done ? '#16a34a' : '#7c3aed'),
+              }} />
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: 'Discovered', val: progress.discovered, color: '#374151' },
+              { label: 'Submitted', val: progress.submitted, color: '#7c3aed' },
+              { label: 'Succeeded', val: progress.succeeded, color: '#16a34a' },
+              { label: 'Failed', val: progress.failed, color: '#dc2626' },
+            ].map(s => (
+              <div key={s.label} className="rounded-lg p-3 text-center border"
+                style={{ background: '#ffffff', borderColor: '#e5e7eb' }}>
+                <p className="text-xl font-bold" style={{ color: s.color }}>
+                  {Number(s.val ?? 0).toLocaleString()}
+                </p>
+                <p className="text-[11px] mt-0.5" style={{ color: '#9ca3af' }}>{s.label}</p>
+              </div>
+            ))}
+          </div>
+
+          {Object.keys(epStatus).length > 0 && (
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#9ca3af' }}>
+                Per endpoint (chunks)
+              </p>
+              <div className="space-y-1">
+                {Object.entries(epStatus).map(([ep, s]) => (
+                  <div key={ep} className="flex items-center justify-between text-xs px-2 py-1 rounded" style={{ background: '#fff', border: '1px solid #e5e7eb' }}>
+                    <span className="font-mono truncate" style={{ color: '#6b7280' }}>{ep}</span>
+                    <span className="flex items-center gap-3 flex-shrink-0">
+                      <span style={{ color: '#16a34a' }}>✓ {s.success_chunks}</span>
+                      <span style={{ color: s.failed_chunks > 0 ? '#dc2626' : '#9ca3af' }}>✗ {s.failed_chunks}</span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {progress.skipped > 0 && (
+            <div className="text-xs px-2.5 py-2 rounded" style={{ background: 'rgba(245,158,11,0.06)', color: '#92400e' }}>
+              Skipped <span className="font-semibold">{progress.skipped}</span> URL(s):{' '}
+              {Object.entries(skipReasons).map(([k, v]) => `${k}=${v}`).join(', ')}
+            </div>
+          )}
+
+          {progress.error && (
+            <div className="text-xs px-2.5 py-2 rounded" style={{ background: 'rgba(239,68,68,0.06)', color: '#dc2626' }}>
+              {progress.error}
+            </div>
+          )}
+
+          <p className="text-[10px]" style={{ color: '#9ca3af' }}>
+            Started {progress.started_at || '—'}{progress.finished_at ? ` · Finished ${progress.finished_at}` : ''}
+            {progress.run_id ? ` · run ${progress.run_id}` : ''}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SitemapTab({
   sitemapData, sitemapValidating, handleSitemapValidate,
   refreshingMeta, handleRefreshMeta,
@@ -139,6 +321,7 @@ export default function SitemapTab({
   return (
     <div className="space-y-5">
       <IndexingStatsCard adminToken={adminToken} />
+      <IndexNowBackfillCard adminToken={adminToken} />
 
       <div className="rounded-xl border p-5 space-y-4" style={{ background: '#f9fafb', borderColor: '#e5e7eb' }}>
         <div className="flex items-center justify-between">

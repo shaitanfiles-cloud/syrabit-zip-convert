@@ -585,3 +585,9 @@ export const adminIndexNowPing = (token, urls = []) =>
 
 export const adminIndexNowStatus = (token) =>
   axios.get(`${API_BASE}/admin/indexnow/status`, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminIndexNowBackfillStart = (token) =>
+  axios.post(`${API_BASE}/admin/indexnow/backfill-all`, {}, { headers: adminHeaders(token), withCredentials: true });
+
+export const adminIndexNowBackfillProgress = (token) =>
+  axios.get(`${API_BASE}/admin/indexnow/backfill-progress`, { headers: adminHeaders(token), withCredentials: true });
