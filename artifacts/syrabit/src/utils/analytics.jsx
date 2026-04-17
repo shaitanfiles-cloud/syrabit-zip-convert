@@ -265,15 +265,23 @@ export const Analytics = {
   // network blip, integrity mismatch). We hydrate anyway and the
   // Suspense fallback shows a recovery hint, but tracking these lets
   // us spot regressions in production.
-  hydratePreloadFailed: ({ kind, path, message, name } = {}) => {
-    track('hydrate_preload_failed', { kind, path, message, error_name: name });
+  hydratePreloadFailed: ({ kind, path, message, name, auto_reload } = {}) => {
+    // Preserve `auto_reload` so Task #407 auto-reload attempts can be
+    // distinguished from manual-recovery failures in the admin
+    // dashboard (Task #408). Drop undefined so the backend-mirror
+    // payload doesn't force `null` on every event.
+    const payload = { kind, path, message, error_name: name };
+    if (auto_reload !== undefined) payload.auto_reload = auto_reload;
+    track('hydrate_preload_failed', payload);
   },
 
   // Fired when hydration is still showing the Suspense fallback after
   // the recovery threshold (~5s) — i.e. the user is staring at a
   // loading state for an unusually long time.
-  hydrateStalled: ({ kind, path, ms } = {}) => {
-    track('hydrate_stalled', { kind, path, elapsed_ms: ms });
+  hydrateStalled: ({ kind, path, ms, preload_failed } = {}) => {
+    const payload = { kind, path, elapsed_ms: ms };
+    if (preload_failed !== undefined) payload.preload_failed = preload_failed;
+    track('hydrate_stalled', payload);
   },
 
   // Fired when a Task #407 stale-chunk auto-reload was followed by a
