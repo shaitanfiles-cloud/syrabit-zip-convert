@@ -3380,7 +3380,7 @@ async def admin_analytics_daily(
     cf_connected = False
     try:
         cf_daily_data = await cloudflare_client.get_historical_daily(days=days)
-        cf_connected = cf_daily_data is not None
+        cf_connected = bool(cf_daily_data)
         for entry in (cf_daily_data or []):
             d = entry.get("date", "")
             if d in daily:
