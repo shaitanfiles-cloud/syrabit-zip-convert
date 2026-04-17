@@ -654,6 +654,23 @@ async def lifespan(app):
         logger.warning(f"chat_speedup_metrics startup load failed: {_sp_load_err}")
     _speedup_flush_task = asyncio.create_task(_speedup.periodic_flush_loop())
 
+    # Task #422: re-apply persisted Assamese-purity admin override (if
+    # any) so behaviour/threshold survive api restarts without needing
+    # a redeploy. Runs on every worker so each one sees the override
+    # in-memory.
+    try:
+        from routes.cms_sarvam_health import (
+            apply_persisted_assamese_purity_override,
+            _assamese_purity_refresh_loop,
+        )
+        await apply_persisted_assamese_purity_override()
+        # Per-worker refresher so a PATCH/DELETE done on one gunicorn
+        # worker propagates to all sibling workers within ~15s without
+        # needing pub/sub infra.
+        asyncio.create_task(_assamese_purity_refresh_loop())
+    except Exception as _asm_load_err:
+        logger.warning(f"[INDIC-SANITIZE] startup override load failed: {_asm_load_err}")
+
     logger.info("Syrabit.ai API started")
     if sarvam_client:
         logger.info("Sarvam AI client ready")

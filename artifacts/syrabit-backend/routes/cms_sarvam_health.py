@@ -1659,6 +1659,295 @@ async def sarvam_status():
         "assamese_purity": assamese_purity,
     }
 
+
+# ──────────────────────────────────────────────────────────────────────
+# Task #422 — admin runtime override for Assamese leakage behaviour +
+# threshold. The override layer lives in `lang_sanitizer` (in-memory)
+# and is persisted in `db.api_config.assamese_purity_override` so it
+# survives api restarts. The lifespan hook in `server.py` re-applies
+# the persisted override on boot.
+# ──────────────────────────────────────────────────────────────────────
+_ASM_OVERRIDE_DOC_KEY = "assamese_purity_override"
+# Known leaky Assamese reply used by the test-fire button so admins can
+# validate the chosen behaviour against a deterministic input. Picked
+# to exercise both the `/translate` replace path AND the strip fallback.
+_ASM_TEST_FIRE_SAMPLE = (
+    "উৰুকা হৈছে মাঘ বিহুৰ পূৰ্বৰ ৰাতিৰ উৎসৱ। "
+    "It is celebrated by all assamese people who come together "
+    "for me uses ssible communal feasting around bonfires."
+)
+
+
+async def _load_persisted_assamese_purity_override() -> dict | None:
+    """Read the persisted override doc from mongo. Returns the inner
+    {behaviour, threshold, ...} dict or None when no override is set."""
+    try:
+        from deps import db as _db
+        doc = await _db.api_config.find_one({}, {_ASM_OVERRIDE_DOC_KEY: 1})
+        if not doc:
+            return None
+        ov = doc.get(_ASM_OVERRIDE_DOC_KEY)
+        if not ov or not isinstance(ov, dict):
+            return None
+        return ov
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] failed to load persisted override: {e}")
+        return None
+
+
+async def apply_persisted_assamese_purity_override() -> None:
+    """Called from server.py lifespan on api boot AND from the periodic
+    refresher below. Reads the persisted override doc and reconciles
+    the in-memory layer in lang_sanitizer:
+
+      - doc present  → apply (so behaviour/threshold survive restarts
+                       AND propagate across gunicorn workers within
+                       one refresh cycle, not just on restart).
+      - doc absent   → clear any in-memory override (so a DELETE made
+                       in worker A propagates to worker B).
+    """
+    from lang_sanitizer import (
+        apply_runtime_override as _apply,
+        clear_runtime_override as _clear,
+        get_runtime_override as _get_ov,
+    )
+    ov = await _load_persisted_assamese_purity_override()
+    if ov:
+        try:
+            applied = _apply(
+                behaviour=ov.get("behaviour"),
+                threshold=ov.get("threshold"),
+                updated_by=ov.get("updated_by"),
+            )
+            logger.info(
+                f"[INDIC-SANITIZE] reconciled persisted override: {applied}"
+            )
+        except Exception as e:
+            logger.warning(f"[INDIC-SANITIZE] failed to apply persisted override: {e}")
+    else:
+        # Persisted doc gone but we still have an in-memory override
+        # (likely cleared by a sibling worker) → drop it.
+        if _get_ov() is not None:
+            _clear()
+            logger.info("[INDIC-SANITIZE] reconciled cleared override (sibling worker)")
+
+
+# How often each worker re-reads the persisted override doc. 15s is a
+# tradeoff between propagation latency and DB read load (one find_one
+# per worker per interval).
+_ASM_REFRESH_INTERVAL_SECONDS = 15
+
+
+async def _assamese_purity_refresh_loop() -> None:
+    """Background task started by server.py lifespan. Each worker polls
+    mongo every `_ASM_REFRESH_INTERVAL_SECONDS` so PATCH/DELETE made on
+    one worker propagates to all others within ~15s — without requiring
+    pub/sub infra."""
+    import asyncio
+    while True:
+        try:
+            await asyncio.sleep(_ASM_REFRESH_INTERVAL_SECONDS)
+            await apply_persisted_assamese_purity_override()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"[INDIC-SANITIZE] refresh loop tick failed: {e}")
+
+
+@router.get("/admin/assamese-purity")
+async def admin_get_assamese_purity(admin: dict = Depends(get_admin_user)):
+    """Return the live Assamese purity config plus override metadata so
+    the admin UI can render the current state. Mirrors what
+    `/sarvam/status` exposes but adds the persisted-doc audit fields."""
+    from lang_sanitizer import get_runtime_config as _asm_cfg
+    cfg = _asm_cfg()
+    persisted = await _load_persisted_assamese_purity_override()
+    return {
+        "config": cfg,
+        "persisted": persisted or None,
+        "test_sample": _ASM_TEST_FIRE_SAMPLE,
+    }
+
+
+@router.patch("/admin/assamese-purity")
+async def admin_update_assamese_purity(
+    data: dict = Body(...),
+    admin: dict = Depends(get_admin_user),
+):
+    """Override behaviour and/or threshold at runtime. Both fields are
+    optional — pass only the ones you want to change. The override is
+    persisted to mongo so it survives api restarts."""
+    from lang_sanitizer import (
+        apply_runtime_override as _apply,
+        _normalise_behaviour,
+        _normalise_threshold,
+        get_runtime_config as _asm_cfg,
+        get_runtime_override as _get_ov,
+    )
+
+    raw_behaviour = data.get("behaviour")
+    raw_threshold = data.get("threshold")
+    if raw_behaviour is None and raw_threshold is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Pass at least one of `behaviour` or `threshold`",
+        )
+
+    # Validate inputs UP FRONT so we never persist a doc the in-memory
+    # layer would silently reject.
+    if raw_behaviour is not None and _normalise_behaviour(raw_behaviour) is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "behaviour must be one of off|strip|translate|"
+                "regenerate|translate+regenerate"
+            ),
+        )
+    if raw_threshold is not None and _normalise_threshold(raw_threshold) is None:
+        raise HTTPException(
+            status_code=400,
+            detail="threshold must be a float strictly between 0 and 1",
+        )
+
+    updated_by = (admin or {}).get("email") or (admin or {}).get("id") or "admin"
+    applied = _apply(
+        behaviour=raw_behaviour,
+        threshold=raw_threshold,
+        updated_by=updated_by,
+    )
+
+    # Persist the FULL current override (not just the delta) so the
+    # mongo doc is always the single source of truth on api boot.
+    persist_doc = {
+        **(_get_ov() or {}),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        from deps import db as _db
+        await _db.api_config.update_one(
+            {},
+            {"$set": {_ASM_OVERRIDE_DOC_KEY: persist_doc}},
+            upsert=True,
+        )
+    except Exception as e:
+        logger.error(f"[INDIC-SANITIZE] persist override failed: {e}")
+        # In-memory layer was already updated; admin can retry the PATCH
+        # but we must not silently claim success on persistence failure.
+        raise HTTPException(
+            status_code=500,
+            detail="override applied in-memory but failed to persist; "
+                   "value will reset on next api restart",
+        )
+
+    return {
+        "ok": True,
+        "applied": applied,
+        "persisted": persist_doc,
+        "config": _asm_cfg(),
+    }
+
+
+@router.delete("/admin/assamese-purity")
+async def admin_clear_assamese_purity(admin: dict = Depends(get_admin_user)):
+    """Drop the runtime override so env vars / hard-coded defaults take
+    over again. Removes the persisted mongo doc as well.
+
+    Fails CLOSED: if the mongo unset fails, we do NOT clear the
+    in-memory layer and we return 500. Otherwise the override would
+    silently come back on the next worker restart (or in any other
+    worker that hasn't picked up the clear yet) and the admin would
+    have no signal anything went wrong."""
+    from lang_sanitizer import (
+        clear_runtime_override as _clear,
+        get_runtime_config as _asm_cfg,
+    )
+    try:
+        from deps import db as _db
+        await _db.api_config.update_one(
+            {},
+            {"$unset": {_ASM_OVERRIDE_DOC_KEY: ""}},
+        )
+    except Exception as e:
+        logger.error(f"[INDIC-SANITIZE] persist clear failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="failed to clear persisted override; in-memory "
+                   "override left untouched to avoid split-brain on restart",
+        )
+    _clear()
+    return {"ok": True, "cleared": True, "config": _asm_cfg()}
+
+
+@router.post("/admin/assamese-purity/test")
+async def admin_test_assamese_purity(
+    data: dict = Body(default={}),
+    admin: dict = Depends(get_admin_user),
+):
+    """Run a sample (admin-supplied or the default leaky one) through
+    the LIVE sanitiser so admins can validate the chosen behaviour
+    without waiting for a real user query. Returns raw + cleaned text
+    plus the diagnostic dict (action/ratio/translated/regenerated/...)
+    so the UI can render the side-by-side comparison the task spec
+    asks for."""
+    from lang_sanitizer import (
+        sanitize_assamese_with_optional_regenerate as _sanitize,
+        get_runtime_config as _asm_cfg,
+    )
+
+    sample = (data.get("sample") or _ASM_TEST_FIRE_SAMPLE).strip()
+    if not sample:
+        raise HTTPException(status_code=400, detail="sample must be non-empty")
+    # Bound sample size so a stolen admin token can't weaponise this
+    # endpoint to drive arbitrary Sarvam translate cost.
+    _ASM_TEST_MAX_CHARS = 4000
+    if len(sample) > _ASM_TEST_MAX_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"sample too long (max {_ASM_TEST_MAX_CHARS} chars)",
+        )
+
+    # Build a translate callable that hits the same Sarvam route the
+    # live chat path uses, so admins are testing the actual production
+    # pipeline (not a mock).
+    async def _translate_callable(fragment: str) -> str:
+        try:
+            if not sarvam_client:
+                return ""
+            payload = {
+                "input": fragment,
+                "source_language_code": "en-IN",
+                "target_language_code": "as-IN",
+                "speaker_gender": "Female",
+                "mode": "formal",
+                "model": "sarvam-translate:v1",
+                "enable_preprocessing": False,
+            }
+            resp = await sarvam_client.post("/translate", json=payload)
+            resp.raise_for_status()
+            return (resp.json() or {}).get("translated_text", "") or ""
+        except Exception as e:
+            logger.warning(f"[INDIC-SANITIZE] test-fire translate failed: {e}")
+            return ""
+
+    # Note: regenerate_callable is intentionally NOT wired — admins
+    # testing `regenerate` / `translate+regenerate` see only the
+    # translate+strip branches. Wiring a real LLM regenerate from a
+    # synthetic test sample would require a chat context the admin
+    # doesn't have here. The diagnostic dict makes the skipped step
+    # explicit (`regenerated: false`) so this is not misleading.
+    cleaned, diag = await _sanitize(
+        sample,
+        translate_callable=_translate_callable,
+    )
+    return {
+        "ok": True,
+        "raw": sample,
+        "cleaned": cleaned,
+        "diag": diag,
+        "config": _asm_cfg(),
+    }
+# ──────────────────────────────────────────────────────────────────────
+
 _LANG_LABELS = {
     "as": "Assamese (অসমীয়া)", "as-IN": "Assamese (অসমীয়া)",
     "bn": "Bengali (বাংলা)", "bn-IN": "Bengali (বাংলা)",

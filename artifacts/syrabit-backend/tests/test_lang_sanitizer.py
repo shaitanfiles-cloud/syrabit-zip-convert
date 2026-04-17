@@ -493,3 +493,84 @@ class TestTranslateBehaviour:
         assert cfg["behaviour"] in cfg["valid_behaviours"]
         assert "translate" in cfg["valid_behaviours"]
         assert "translate+regenerate" in cfg["valid_behaviours"]
+
+
+class TestRuntimeOverride:
+    """Task #422 — verify the in-memory runtime override beats env vars
+    and that get_runtime_config exposes the source-of-truth metadata
+    the admin UI relies on to render override status badges."""
+
+    def setup_method(self):
+        from lang_sanitizer import clear_runtime_override
+        clear_runtime_override()
+
+    def teardown_method(self):
+        from lang_sanitizer import clear_runtime_override
+        clear_runtime_override()
+
+    def test_override_beats_env_for_behaviour(self, monkeypatch):
+        from lang_sanitizer import (
+            apply_runtime_override, get_behaviour, get_runtime_config,
+        )
+        monkeypatch.setenv("ASSAMESE_LEAK_BEHAVIOUR", "strip")
+        # Sanity: env wins when no override.
+        assert get_behaviour() == "strip"
+        applied = apply_runtime_override(behaviour="regenerate", updated_by="alice")
+        assert applied["behaviour"] == "regenerate"
+        assert get_behaviour() == "regenerate"
+        cfg = get_runtime_config()
+        assert cfg["behaviour"] == "regenerate"
+        assert cfg["behaviour_source"] == "override"
+        # Threshold not overridden, env unset → default.
+        assert cfg["threshold_source"] in ("env", "default")
+
+    def test_override_beats_env_for_threshold(self, monkeypatch):
+        from lang_sanitizer import (
+            apply_runtime_override, get_threshold, get_runtime_config,
+        )
+        monkeypatch.setenv("ASSAMESE_LEAK_THRESHOLD", "0.20")
+        assert get_threshold() == pytest.approx(0.20)
+        apply_runtime_override(threshold=0.07, updated_by="bob")
+        assert get_threshold() == pytest.approx(0.07)
+        cfg = get_runtime_config()
+        assert cfg["threshold_source"] == "override"
+
+    def test_override_rejects_invalid_behaviour(self):
+        from lang_sanitizer import apply_runtime_override, get_behaviour
+        before = get_behaviour()
+        applied = apply_runtime_override(behaviour="not-a-mode")
+        # Invalid input is silently dropped — current value unchanged.
+        assert applied == {} or "behaviour" not in applied
+        assert get_behaviour() == before
+
+    def test_override_rejects_out_of_range_threshold(self):
+        from lang_sanitizer import apply_runtime_override, get_threshold
+        before = get_threshold()
+        for bad in (0.0, -0.5, 1.0, 1.5, "not-a-number", None):
+            apply_runtime_override(threshold=bad)
+        assert get_threshold() == before
+
+    def test_clear_override_returns_to_env_default(self, monkeypatch):
+        from lang_sanitizer import (
+            apply_runtime_override, clear_runtime_override,
+            get_behaviour, get_runtime_config,
+        )
+        monkeypatch.setenv("ASSAMESE_LEAK_BEHAVIOUR", "strip")
+        apply_runtime_override(behaviour="off")
+        assert get_behaviour() == "off"
+        clear_runtime_override()
+        # Override gone → env wins again.
+        assert get_behaviour() == "strip"
+        assert get_runtime_config()["behaviour_source"] == "env"
+
+    def test_runtime_config_exposes_override_payload(self):
+        from lang_sanitizer import (
+            apply_runtime_override, get_runtime_config,
+        )
+        apply_runtime_override(behaviour="off", threshold=0.5, updated_by="ops@x")
+        cfg = get_runtime_config()
+        ov = cfg.get("override")
+        assert isinstance(ov, dict)
+        assert ov.get("behaviour") == "off"
+        assert ov.get("threshold") == pytest.approx(0.5)
+        assert ov.get("updated_by") == "ops@x"

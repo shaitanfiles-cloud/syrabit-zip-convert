@@ -125,16 +125,108 @@ _VALID_BEHAVIOURS = ("off", "strip", "translate", "regenerate", "translate+regen
 _DEFAULT_BEHAVIOUR = "translate"
 _DEFAULT_THRESHOLD = 0.05
 
+# Per-Task #422: in-memory runtime override layer. Admins PATCH the
+# override via `/admin/assamese-purity` and it's persisted to mongo
+# (db.api_config.assamese_purity_override) so it survives api restarts.
+# At api boot the lifespan hook reads the persisted document and calls
+# `apply_runtime_override(...)` so the in-memory copy stays in sync.
+# Override beats env vars; env vars beat defaults.
+_RUNTIME_OVERRIDE: dict | None = None
+
+
+def _normalise_behaviour(value: str | None) -> str | None:
+    if value is None:
+        return None
+    v = (value or "").strip().lower()
+    return v if v in _VALID_BEHAVIOURS else None
+
+
+def _normalise_threshold(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    # Clamp to a sane range so admins can't accidentally set a value that
+    # disables sanitisation (>1) or runs it on every reply (<=0).
+    if f <= 0 or f >= 1:
+        return None
+    return f
+
+
+def apply_runtime_override(
+    behaviour: str | None = None,
+    threshold: float | None = None,
+    *,
+    updated_by: str | None = None,
+) -> dict:
+    """Update the in-memory override. Pass `None` for a field to leave it
+    unchanged. Returns the new override snapshot. Admin route layers
+    persist this to mongo themselves; this function only mutates the
+    in-memory copy used by `get_behaviour()` / `get_threshold()`."""
+    global _RUNTIME_OVERRIDE
+    current = dict(_RUNTIME_OVERRIDE or {})
+    nb = _normalise_behaviour(behaviour)
+    nt = _normalise_threshold(threshold)
+    if nb is not None:
+        current["behaviour"] = nb
+    if nt is not None:
+        current["threshold"] = nt
+    if updated_by:
+        current["updated_by"] = updated_by
+    if not current:
+        return {}
+    _RUNTIME_OVERRIDE = current
+    logger.info(
+        "[INDIC-SANITIZE] runtime override applied: behaviour=%s threshold=%s by=%s",
+        current.get("behaviour"), current.get("threshold"), current.get("updated_by"),
+    )
+    return dict(current)
+
+
+def clear_runtime_override() -> None:
+    """Drop the in-memory override so env/defaults take over again."""
+    global _RUNTIME_OVERRIDE
+    if _RUNTIME_OVERRIDE is not None:
+        logger.info("[INDIC-SANITIZE] runtime override cleared")
+    _RUNTIME_OVERRIDE = None
+
+
+def get_runtime_override() -> dict | None:
+    """Returns a defensive copy of the active override (or None)."""
+    return dict(_RUNTIME_OVERRIDE) if _RUNTIME_OVERRIDE else None
+
 
 def get_threshold() -> float:
+    if _RUNTIME_OVERRIDE and "threshold" in _RUNTIME_OVERRIDE:
+        return float(_RUNTIME_OVERRIDE["threshold"])
     return _env_float("ASSAMESE_LEAK_THRESHOLD", _DEFAULT_THRESHOLD)
 
 
 def get_behaviour() -> str:
+    if _RUNTIME_OVERRIDE and "behaviour" in _RUNTIME_OVERRIDE:
+        b = str(_RUNTIME_OVERRIDE["behaviour"]).strip().lower()
+        if b in _VALID_BEHAVIOURS:
+            return b
     b = _env_str("ASSAMESE_LEAK_BEHAVIOUR", _DEFAULT_BEHAVIOUR)
     if b not in _VALID_BEHAVIOURS:
         return _DEFAULT_BEHAVIOUR
     return b
+
+
+def _effective_source(field: str) -> str:
+    """Reports whether the live `field` value came from the override
+    layer, env var, or the hard-coded default. Surfaced via
+    `/sarvam/status` so admins can see at a glance why a value is in
+    effect (e.g. did my PATCH stick? am I still on env vars?)."""
+    if _RUNTIME_OVERRIDE and field in _RUNTIME_OVERRIDE:
+        return "override"
+    env_name = (
+        "ASSAMESE_LEAK_THRESHOLD" if field == "threshold"
+        else "ASSAMESE_LEAK_BEHAVIOUR"
+    )
+    return "env" if os.getenv(env_name) else "default"
 
 
 def get_runtime_config() -> dict:
@@ -145,6 +237,9 @@ def get_runtime_config() -> dict:
         "valid_behaviours": list(_VALID_BEHAVIOURS),
         "default_threshold": _DEFAULT_THRESHOLD,
         "default_behaviour": _DEFAULT_BEHAVIOUR,
+        "override": get_runtime_override(),
+        "behaviour_source": _effective_source("behaviour"),
+        "threshold_source": _effective_source("threshold"),
     }
 
 
@@ -502,4 +597,7 @@ __all__ = [
     "get_threshold",
     "get_behaviour",
     "get_runtime_config",
+    "get_runtime_override",
+    "apply_runtime_override",
+    "clear_runtime_override",
 ]

@@ -178,6 +178,100 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [prerenderLoading, setPrerenderLoading] = useState(false);
   const [prerenderTriggering, setPrerenderTriggering] = useState(false);
 
+  // Task #422 — Assamese purity admin override controls.
+  const [asmCfg, setAsmCfg] = useState(null);
+  const [asmLoading, setAsmLoading] = useState(false);
+  const [asmSaving, setAsmSaving] = useState(false);
+  const [asmTesting, setAsmTesting] = useState(false);
+  const [asmDraft, setAsmDraft] = useState({ behaviour: '', threshold: '' });
+  const [asmTestResult, setAsmTestResult] = useState(null);
+  const [asmTestSample, setAsmTestSample] = useState('');
+
+  const loadAsmCfg = useCallback(() => {
+    setAsmLoading(true);
+    axios.get(`${API_BASE}/admin/assamese-purity`, {
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => {
+        setAsmCfg(r.data);
+        const cfg = r.data?.config || {};
+        setAsmDraft({
+          behaviour: cfg.behaviour || '',
+          threshold: cfg.threshold != null ? String(cfg.threshold) : '',
+        });
+        setAsmTestSample(r.data?.test_sample || '');
+      })
+      .catch((e) => {
+        const msg = e?.response?.data?.detail || 'Failed to load purity config';
+        toast.error(msg);
+      })
+      .finally(() => setAsmLoading(false));
+  }, [adminToken]);
+
+  const saveAsmOverride = useCallback(async () => {
+    const body = {};
+    const cfgNow = asmCfg?.config || {};
+    if (asmDraft.behaviour && asmDraft.behaviour !== cfgNow.behaviour) {
+      body.behaviour = asmDraft.behaviour;
+    }
+    const t = asmDraft.threshold === '' ? null : Number(asmDraft.threshold);
+    if (t != null && Number.isFinite(t) && t !== cfgNow.threshold) {
+      body.threshold = t;
+    }
+    if (!Object.keys(body).length) {
+      toast.info('No changes to save');
+      return;
+    }
+    setAsmSaving(true);
+    try {
+      await axios.patch(`${API_BASE}/admin/assamese-purity`, body, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      });
+      toast.success('Override saved — applied immediately');
+      loadAsmCfg();
+    } catch (e) {
+      const msg = e?.response?.data?.detail || 'Failed to save override';
+      toast.error(msg);
+    } finally {
+      setAsmSaving(false);
+    }
+  }, [adminToken, asmDraft, asmCfg, loadAsmCfg]);
+
+  const clearAsmOverride = useCallback(async () => {
+    setAsmSaving(true);
+    try {
+      await axios.delete(`${API_BASE}/admin/assamese-purity`, {
+        headers: adminHeaders(adminToken), withCredentials: true,
+      });
+      toast.success('Override cleared — env vars now in effect');
+      setAsmTestResult(null);
+      loadAsmCfg();
+    } catch (e) {
+      const msg = e?.response?.data?.detail || 'Failed to clear override';
+      toast.error(msg);
+    } finally {
+      setAsmSaving(false);
+    }
+  }, [adminToken, loadAsmCfg]);
+
+  const fireAsmTest = useCallback(async () => {
+    setAsmTesting(true);
+    setAsmTestResult(null);
+    try {
+      const r = await axios.post(
+        `${API_BASE}/admin/assamese-purity/test`,
+        asmTestSample ? { sample: asmTestSample } : {},
+        { headers: adminHeaders(adminToken), withCredentials: true },
+      );
+      setAsmTestResult(r.data);
+    } catch (e) {
+      const msg = e?.response?.data?.detail || 'Test fire failed';
+      toast.error(msg);
+    } finally {
+      setAsmTesting(false);
+    }
+  }, [adminToken, asmTestSample]);
+
   const loadPrerender = useCallback(() => {
     setPrerenderLoading(true);
     axios.get(`${API_BASE}/admin/prerender/status`, {
@@ -210,6 +304,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   }, [adminToken, loadPrerender]);
 
   useEffect(() => { if (healthTab === 'prerender') loadPrerender(); }, [healthTab, loadPrerender]);
+  useEffect(() => { if (healthTab === 'asm') loadAsmCfg(); }, [healthTab, loadAsmCfg]);
 
   const healthUrl = `${import.meta.env.VITE_BACKEND_URL || ''}/health`;
 
@@ -274,6 +369,7 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           { id: 'infra',     label: 'Infrastructure' },
           { id: 'llm',       label: 'LLM Cost Tracker' },
           { id: 'prerender', label: 'Prerender Refresh' },
+          { id: 'asm',       label: 'Sarvam Purity' },
         ].map(t => (
           <button key={t.id} onClick={() => setHealthTab(t.id)}
             className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -417,6 +513,151 @@ export default function AdminHealth({ adminToken, onNavigate }) {
           <p className="text-[11px] text-gray-400 leading-relaxed">
             Admin edits trigger debounced refreshes automatically. “Refresh now” bypasses the debounce/cooldown and fires the Cloudflare Pages deploy hook immediately.
           </p>
+        </div>
+      )}
+
+      {healthTab === 'asm' && (
+        <div className="space-y-4" data-testid="asm-purity-tab">
+          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <Zap size={16} className="text-violet-500" />
+                  Assamese Purity Override
+                </h3>
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                  Live behaviour and threshold for Sarvam Assamese leakage cleanup. Changes apply immediately and survive restarts (persisted in <code className="font-mono text-[11px] text-gray-600">db.api_config</code>).
+                </p>
+              </div>
+              <button
+                onClick={loadAsmCfg}
+                disabled={asmLoading}
+                className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                data-testid="button-refresh-asm"
+                title="Refresh"
+              >
+                <RefreshCw size={14} className={asmLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+
+            {asmLoading && !asmCfg ? (
+              <div className="flex justify-center py-10"><RefreshCw size={20} className="animate-spin text-gray-300" /></div>
+            ) : asmCfg ? (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+                  <PeakBadge label="Active behaviour" value={asmCfg.config?.behaviour || '—'} color="violet" />
+                  <PeakBadge label="Active threshold" value={asmCfg.config?.threshold != null ? Number(asmCfg.config.threshold).toFixed(3) : '—'} color="emerald" />
+                  <PeakBadge label="Behaviour source" value={asmCfg.config?.behaviour_source || '—'} color={asmCfg.config?.behaviour_source === 'override' ? 'amber' : 'blue'} />
+                  <PeakBadge label="Threshold source" value={asmCfg.config?.threshold_source || '—'} color={asmCfg.config?.threshold_source === 'override' ? 'amber' : 'blue'} />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Behaviour</label>
+                    <select
+                      value={asmDraft.behaviour}
+                      onChange={(e) => setAsmDraft(d => ({ ...d, behaviour: e.target.value }))}
+                      className="w-full text-sm font-mono px-3 py-2 rounded-lg border border-gray-200 focus:border-violet-300 focus:ring-1 focus:ring-violet-200 outline-none"
+                      data-testid="select-asm-behaviour"
+                    >
+                      {(asmCfg.config?.valid_behaviours || []).map(b => (
+                        <option key={b} value={b}>{b}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Threshold (0–1)</label>
+                    <input
+                      type="number"
+                      min="0.001"
+                      max="0.999"
+                      step="0.005"
+                      value={asmDraft.threshold}
+                      onChange={(e) => setAsmDraft(d => ({ ...d, threshold: e.target.value }))}
+                      className="w-full text-sm font-mono px-3 py-2 rounded-lg border border-gray-200 focus:border-violet-300 focus:ring-1 focus:ring-violet-200 outline-none"
+                      data-testid="input-asm-threshold"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    onClick={saveAsmOverride}
+                    disabled={asmSaving}
+                    className="px-4 py-2 rounded-lg bg-violet-600 text-white text-xs font-semibold shadow-sm hover:bg-violet-700 disabled:opacity-50"
+                    data-testid="button-save-asm"
+                  >
+                    {asmSaving ? 'Saving…' : 'Save override'}
+                  </button>
+                  <button
+                    onClick={clearAsmOverride}
+                    disabled={asmSaving || !asmCfg.persisted}
+                    className="px-4 py-2 rounded-lg border border-gray-200 text-gray-500 text-xs font-semibold hover:bg-gray-50 disabled:opacity-40"
+                    data-testid="button-clear-asm"
+                    title={asmCfg.persisted ? 'Drop the override and revert to env vars' : 'No override to clear'}
+                  >
+                    Clear override
+                  </button>
+                  {asmCfg.persisted?.updated_at && (
+                    <span className="text-[11px] text-gray-400 ml-auto font-mono">
+                      Last edit by {asmCfg.persisted.updated_by || 'admin'} · {new Date(asmCfg.persisted.updated_at).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-gray-400 leading-relaxed mt-4">
+                  Defaults: behaviour <code className="font-mono">{asmCfg.config?.default_behaviour}</code> · threshold <code className="font-mono">{asmCfg.config?.default_threshold}</code>. <span className="text-amber-600">Override</span> beats env vars; env vars beat defaults. Source columns above tell you what's currently winning.
+                </p>
+              </>
+            ) : null}
+          </div>
+
+          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+            <h3 className="text-sm font-semibold text-gray-900 mb-1 flex items-center gap-2">
+              <ShieldCheck size={16} className="text-emerald-500" />
+              Test fire
+            </h3>
+            <p className="text-xs text-gray-500 mb-3 leading-relaxed">
+              Sends the sample below through the LIVE sanitiser using the currently active behaviour. Use this to validate a new override before letting real users hit it.
+            </p>
+
+            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Sample (Assamese with English leakage)</label>
+            <textarea
+              value={asmTestSample}
+              onChange={(e) => setAsmTestSample(e.target.value)}
+              rows={3}
+              className="w-full text-sm font-mono px-3 py-2 rounded-lg border border-gray-200 focus:border-violet-300 focus:ring-1 focus:ring-violet-200 outline-none mb-3"
+              data-testid="input-asm-sample"
+            />
+
+            <button
+              onClick={fireAsmTest}
+              disabled={asmTesting || !asmTestSample.trim()}
+              className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold shadow-sm hover:bg-emerald-700 disabled:opacity-50"
+              data-testid="button-fire-asm"
+            >
+              {asmTesting ? 'Running…' : 'Fire test'}
+            </button>
+
+            {asmTestResult && (
+              <div className="mt-4 space-y-3" data-testid="asm-test-result">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-gray-200 p-3 bg-gray-50">
+                    <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Raw input</p>
+                    <p className="text-xs text-gray-800 font-mono whitespace-pre-wrap break-words">{asmTestResult.raw}</p>
+                  </div>
+                  <div className="rounded-xl border border-emerald-200 p-3 bg-emerald-50">
+                    <p className="text-[10px] uppercase tracking-wider text-emerald-700 font-bold mb-2">Cleaned output</p>
+                    <p className="text-xs text-gray-800 font-mono whitespace-pre-wrap break-words">{asmTestResult.cleaned}</p>
+                  </div>
+                </div>
+                <div className="rounded-xl border border-gray-200 p-3 bg-white">
+                  <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-2">Diagnostic</p>
+                  <pre className="text-[11px] font-mono text-gray-700 overflow-x-auto">{JSON.stringify(asmTestResult.diag, null, 2)}</pre>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
