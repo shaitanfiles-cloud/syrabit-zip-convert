@@ -946,6 +946,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                 _cleaned_early, _early_diag = await _sanitize_asm_early(
                     _early_emit,
                     translate_callable=_make_assamese_translate_callable("as-IN"),
+                    trace={
+                        "conversation_id": _conv_id_early or msg.conversation_id or None,
+                        "user_id": str(user_id) if user_id else None,
+                    },
                 )
                 _early_action = _early_diag.get("action") or "noop"
                 _early_log = (
@@ -1579,6 +1583,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                     _cleaned_cache, _cache_diag = await _sanitize_asm_cache(
                         cached_answer,
                         translate_callable=_make_assamese_translate_callable("as-IN"),
+                        trace={
+                            "conversation_id": conv_id or msg.conversation_id or None,
+                            "user_id": str(user_id) if user_id else None,
+                        },
                     )
                     _cache_action = _cache_diag.get("action") or "noop"
                     _cache_log = (
@@ -1723,6 +1731,10 @@ async def chat_stream(msg: ChatMessage, request: Request, user: Optional[dict] =
                         _raw_indic,
                         regenerate_callable=_regenerate_indic,
                         translate_callable=_make_assamese_translate_callable(_sarvam_target or "as-IN"),
+                        trace={
+                            "conversation_id": conv_id or msg.conversation_id or None,
+                            "user_id": str(user_id) if user_id else None,
+                        },
                     )
                     # Per-Task #419: emit one diagnostic line per Assamese
                     # streamed reply (even no-op) so we can monitor live

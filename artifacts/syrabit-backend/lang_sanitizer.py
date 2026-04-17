@@ -475,6 +475,7 @@ async def sanitize_assamese_with_optional_regenerate(
     behaviour: str | None = None,
     regenerate_callable: Optional[Callable[[], Awaitable[Optional[str]]]] = None,
     translate_callable: Optional[Callable[[str], Awaitable[str]]] = None,
+    trace: Optional[dict] = None,
     _emit: bool = True,
 ) -> Tuple[str, dict]:
     """Sanitise Assamese output using the active behaviour strategy.
@@ -506,6 +507,10 @@ async def sanitize_assamese_with_optional_regenerate(
                      "regenerated": False, "translated": False,
                      "behaviour": behaviour})
         if _emit:
+            diag["raw_text"] = raw
+            diag["cleaned_text"] = raw
+            if trace:
+                diag["trace"] = dict(trace)
             _emit_run(diag)
         return raw, diag
 
@@ -518,6 +523,10 @@ async def sanitize_assamese_with_optional_regenerate(
     if not initial_diag["has_assamese"] or initial_diag["ratio"] <= thr:
         initial_diag["action"] = "noop"
         if _emit:
+            initial_diag["raw_text"] = raw
+            initial_diag["cleaned_text"] = raw
+            if trace:
+                initial_diag["trace"] = dict(trace)
             _emit_run(initial_diag)
         return raw, initial_diag
 
@@ -631,6 +640,10 @@ async def sanitize_assamese_with_optional_regenerate(
                         f"regenerated+{retry_clean_diag['action']}"
                     )
                 if _emit:
+                    retry_clean_diag["raw_text"] = raw
+                    retry_clean_diag["cleaned_text"] = retry_clean
+                    if trace:
+                        retry_clean_diag["trace"] = dict(trace)
                     _emit_run(retry_clean_diag)
                 return retry_clean, retry_clean_diag
 
@@ -639,6 +652,10 @@ async def sanitize_assamese_with_optional_regenerate(
         # re-emitting the buffered text.
         diag["action"] = "noop"
     if _emit:
+        diag["raw_text"] = raw
+        diag["cleaned_text"] = cleaned
+        if trace:
+            diag["trace"] = dict(trace)
         _emit_run(diag)
     return cleaned, diag
 

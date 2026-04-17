@@ -1691,12 +1691,48 @@ async def _insert_assamese_run(doc: dict) -> None:
         logger.warning(f"[INDIC-SANITIZE] insert run failed: {e}")
 
 
+# Task #428 — snippet bounds and PII scrub patterns. We persist the
+# raw + cleaned text alongside the diag so admins can drill into a
+# specific cleanup, but truncate hard and strip obvious PII first so
+# the runs collection stays cheap and we never log user-identifying
+# data inside Assamese chat replies (emails, phone numbers, long
+# digit runs that look like IDs / OTPs).
+_ASM_SNIPPET_MAX_CHARS = 600
+_ASM_PII_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+_ASM_PII_PHONE_RE = re.compile(r"(?:\+?\d[\d\s\-()]{8,}\d)")
+_ASM_PII_LONGNUM_RE = re.compile(r"\b\d{6,}\b")
+
+
+def _scrub_pii(text: str) -> str:
+    """Replace obvious PII (emails, phone numbers, long numeric IDs)
+    with placeholder tokens. Defensive against unexpected types."""
+    if not text or not isinstance(text, str):
+        return ""
+    out = _ASM_PII_EMAIL_RE.sub("[email]", text)
+    out = _ASM_PII_PHONE_RE.sub("[phone]", out)
+    out = _ASM_PII_LONGNUM_RE.sub("[num]", out)
+    return out
+
+
+def _snippet(text: str) -> str:
+    """Truncate + scrub a chunk of text for safe persistence in the
+    audit log. Empty / non-string inputs collapse to ''."""
+    if not text or not isinstance(text, str):
+        return ""
+    scrubbed = _scrub_pii(text)
+    if len(scrubbed) <= _ASM_SNIPPET_MAX_CHARS:
+        return scrubbed
+    return scrubbed[: _ASM_SNIPPET_MAX_CHARS - 1] + "…"
+
+
 def _record_assamese_run(diag: dict) -> None:
     """Recorder callback installed into lang_sanitizer. Receives the
     sanitiser diag dict on every run and schedules a small mongo insert
     so admins can chart trigger counts / action distribution / leakage
-    ratio over time. Synchronous shape (so it's safe to call from the
-    sanitiser's sync entrypoints too) — schedules an asyncio task."""
+    ratio over time, AND drill into individual cleanups via the
+    `/admin/assamese-purity/runs` endpoint. Synchronous shape (so it's
+    safe to call from the sanitiser's sync entrypoints too) — schedules
+    an asyncio task."""
     import asyncio
     try:
         loop = asyncio.get_event_loop()
@@ -1704,9 +1740,10 @@ def _record_assamese_run(diag: dict) -> None:
         return  # No running loop (e.g. unit tests) — silently skip.
     if not loop.is_running():
         return
+    action = str(diag.get("action") or "unknown")[:40]
     doc = {
         "ts": datetime.now(timezone.utc),
-        "action": str(diag.get("action") or "unknown")[:40],
+        "action": action,
         "behaviour": str(diag.get("behaviour") or "unknown")[:40],
         # `original_ratio` is set when sanitisation actually fired;
         # otherwise the noop branch only carries `ratio`. Both are the
@@ -1718,6 +1755,30 @@ def _record_assamese_run(diag: dict) -> None:
         "regenerated": bool(diag.get("regenerated")),
         "has_assamese": bool(diag.get("has_assamese", True)),
     }
+    # Task #428 — persist truncated + PII-scrubbed snippets, but only
+    # for runs where cleanup actually fired. Skipping `noop` keeps the
+    # collection small (most runs are noops on non-Indic traffic) and
+    # focuses the audit log on the cases admins care about.
+    if action != "noop":
+        raw_snip = _snippet(diag.get("raw_text") or "")
+        cleaned_snip = _snippet(diag.get("cleaned_text") or "")
+        if raw_snip:
+            doc["raw_snippet"] = raw_snip
+        if cleaned_snip:
+            doc["cleaned_snippet"] = cleaned_snip
+    # Task #428 — trace fields (conversation_id, user_id) so admins can
+    # answer "which user / which conversation triggered this leak?"
+    # without combing Railway logs. We persist only stable IDs (no
+    # names / emails) — the chat router decides what to thread in.
+    # Length-bounded so a malformed caller can't bloat the row.
+    trace = diag.get("trace") or {}
+    if isinstance(trace, dict):
+        conv_id = trace.get("conversation_id")
+        if conv_id:
+            doc["conversation_id"] = str(conv_id)[:80]
+        usr_id = trace.get("user_id")
+        if usr_id:
+            doc["user_id"] = str(usr_id)[:80]
     try:
         asyncio.create_task(_insert_assamese_run(doc))
     except Exception as e:
@@ -2147,6 +2208,67 @@ async def admin_assamese_purity_stats(
         "regenerated": int(overall.get("regenerated", 0)),
         "actions": {str(d["_id"]): int(d["count"]) for d in action_docs},
         "behaviours": {str(d["_id"]): int(d["count"]) for d in behaviour_docs},
+    }
+
+
+@router.get("/admin/assamese-purity/runs")
+async def admin_assamese_purity_runs(
+    limit: int = 50,
+    action: str | None = None,
+    behaviour: str | None = None,
+    admin: dict = Depends(get_admin_user),
+):
+    """Task #428 — return recent sanitiser run docs (newest first) so
+    admins can drill into individual cleanups: which exact reply was
+    translated/stripped/regenerated, what the original vs cleaned text
+    looked like, and which behaviour was active.
+
+    Filtering:
+      * `action`    — exact match on the action label (e.g. `stripped`,
+                      `translated`, `translated+stripped`,
+                      `regenerated+translated`). Pass `noop` to inspect
+                      runs that DID NOT trigger; note these will not
+                      have raw/cleaned snippets persisted.
+      * `behaviour` — exact match on the behaviour at run time (e.g.
+                      `translate`, `regenerate`, `strip`).
+
+    `limit` is clamped to [1, 200] so a curious caller cannot drain
+    the collection in one shot."""
+    try:
+        n = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        n = 50
+    query: dict = {}
+    if action:
+        # Bound the filter values so a malformed query can't cause an
+        # unbounded regex / text scan.
+        query["action"] = str(action)[:40]
+    if behaviour:
+        query["behaviour"] = str(behaviour)[:40]
+    try:
+        from deps import db as _db
+        cursor = (
+            _db[_ASM_RUNS_COLLECTION]
+            .find(query, {"_id": 0})
+            .sort("ts", -1)
+            .limit(n)
+        )
+        rows = await cursor.to_list(n)
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] runs fetch failed: {e}")
+        return {
+            "ok": False, "error": str(e), "entries": [],
+            "limit": n, "filters": query,
+        }
+    for r in rows:
+        ts = r.get("ts")
+        if isinstance(ts, datetime):
+            r["ts"] = ts.replace(tzinfo=ts.tzinfo or timezone.utc).isoformat()
+    return {
+        "ok": True,
+        "entries": rows,
+        "limit": n,
+        "filters": query,
     }
 
 

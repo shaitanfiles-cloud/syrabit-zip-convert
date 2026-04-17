@@ -193,6 +193,11 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   // Task #424 — append-only audit log of override edits.
   const [asmAudit, setAsmAudit] = useState(null);
   const [asmAuditLoading, setAsmAuditLoading] = useState(false);
+  // Task #428 — per-run audit log of individual sanitiser cleanups.
+  const [asmRuns, setAsmRuns] = useState(null);
+  const [asmRunsLoading, setAsmRunsLoading] = useState(false);
+  const [asmRunsActionFilter, setAsmRunsActionFilter] = useState('');
+  const [asmRunsExpanded, setAsmRunsExpanded] = useState({});
 
   const loadAsmAudit = useCallback(() => {
     setAsmAuditLoading(true);
@@ -207,6 +212,23 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       })
       .finally(() => setAsmAuditLoading(false));
   }, [adminToken]);
+
+  const loadAsmRuns = useCallback((actionFilter) => {
+    const a = actionFilter !== undefined ? actionFilter : asmRunsActionFilter;
+    setAsmRunsLoading(true);
+    const params = { limit: 50 };
+    if (a) params.action = a;
+    axios.get(`${API_BASE}/admin/assamese-purity/runs`, {
+      params,
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setAsmRuns(r.data))
+      .catch((e) => {
+        const msg = e?.response?.data?.detail || 'Failed to load recent cleanups';
+        toast.error(msg);
+      })
+      .finally(() => setAsmRunsLoading(false));
+  }, [adminToken, asmRunsActionFilter]);
 
   const loadAsmStats = useCallback((win) => {
     const w = win || asmStatsWindow;
@@ -347,8 +369,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       loadAsmCfg();
       loadAsmStats();
       loadAsmAudit();
+      loadAsmRuns();
     }
-  }, [healthTab, loadAsmCfg, loadAsmStats, loadAsmAudit]);
+  }, [healthTab, loadAsmCfg, loadAsmStats, loadAsmAudit, loadAsmRuns]);
 
   const healthUrl = `${import.meta.env.VITE_BACKEND_URL || ''}/health`;
 
@@ -674,6 +697,145 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               )
             ) : (
               <p className="text-xs text-gray-400 py-6 text-center">Stats unavailable.</p>
+            )}
+          </div>
+
+          {/* Task #428 — drill into individual sanitiser runs so admins
+              can see the exact replies that got translated/stripped/
+              regenerated and tune the threshold from real evidence. */}
+          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm" data-testid="asm-runs-card">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <MessageSquare size={16} className="text-amber-500" />
+                  Recent cleanups
+                </h3>
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                  Last 50 sanitiser runs (newest first) with the original vs cleaned text. Snippets are truncated to 600 chars and PII (emails, phone numbers, long digit IDs) is scrubbed before persisting. Noop runs are still recorded for traceability but omit the original/cleaned snippets.
+                </p>
+              </div>
+              <div className="flex items-center gap-1">
+                <select
+                  value={asmRunsActionFilter}
+                  onChange={(e) => { setAsmRunsActionFilter(e.target.value); loadAsmRuns(e.target.value); }}
+                  className="text-[11px] font-mono px-2 py-1 rounded-lg border border-gray-200 focus:border-amber-300 focus:ring-1 focus:ring-amber-200 outline-none"
+                  data-testid="select-asm-runs-action"
+                  title="Filter by action"
+                >
+                  <option value="">All actions</option>
+                  <option value="stripped">stripped</option>
+                  <option value="translated">translated</option>
+                  <option value="translated+stripped">translated+stripped</option>
+                  <option value="regenerated">regenerated</option>
+                  <option value="regenerated+translated">regenerated+translated</option>
+                  <option value="regenerated+stripped">regenerated+stripped</option>
+                  <option value="regenerated+translated+stripped">regenerated+translated+stripped</option>
+                  <option value="noop">noop</option>
+                </select>
+                <button
+                  onClick={() => loadAsmRuns()}
+                  disabled={asmRunsLoading}
+                  className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                  data-testid="button-refresh-asm-runs"
+                  title="Refresh recent cleanups"
+                >
+                  <RefreshCw size={14} className={asmRunsLoading ? 'animate-spin' : ''} />
+                </button>
+              </div>
+            </div>
+
+            {asmRuns && asmRuns.ok === false && (
+              <div className="mb-3 p-3 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2" data-testid="asm-runs-error">
+                <AlertTriangle size={14} className="text-red-500 mt-0.5 flex-shrink-0" />
+                <div className="text-[11px] text-red-700 leading-relaxed">
+                  <span className="font-semibold">Recent cleanups unavailable.</span>{' '}
+                  {asmRuns.error || 'Mongo read failed — see api logs.'}
+                </div>
+              </div>
+            )}
+
+            {asmRunsLoading && !asmRuns ? (
+              <div className="flex justify-center py-10"><RefreshCw size={20} className="animate-spin text-gray-300" /></div>
+            ) : asmRuns?.entries?.length ? (
+              <ul className="space-y-2" data-testid="asm-runs-list">
+                {asmRuns.entries.map((row, idx) => {
+                  const expanded = !!asmRunsExpanded[idx];
+                  const ratioLabel = `${(row.ratio || 0).toFixed(4)} → ${(row.post_ratio || 0).toFixed(4)}`;
+                  const actionColor = row.action === 'noop'
+                    ? 'bg-gray-50 text-gray-500 border-gray-200'
+                    : row.action?.includes('regenerated')
+                      ? 'bg-blue-50 text-blue-600 border-blue-200'
+                      : row.action?.includes('translated')
+                        ? 'bg-violet-50 text-violet-600 border-violet-200'
+                        : 'bg-amber-50 text-amber-600 border-amber-200';
+                  return (
+                    <li key={idx} className="rounded-xl border border-gray-200 bg-white" data-testid={`asm-run-row-${idx}`}>
+                      <button
+                        type="button"
+                        onClick={() => setAsmRunsExpanded(prev => ({ ...prev, [idx]: !prev[idx] }))}
+                        className="w-full flex items-center gap-2 p-3 text-left hover:bg-gray-50 rounded-xl"
+                      >
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold border ${actionColor}`}>
+                          {row.action || '—'}
+                        </span>
+                        <span className="text-[11px] font-mono text-gray-500 truncate">
+                          {row.behaviour || '—'} · {ratioLabel}
+                        </span>
+                        <span className="text-[11px] text-gray-400 ml-auto font-mono whitespace-nowrap">
+                          {row.ts ? new Date(row.ts).toLocaleString() : '—'}
+                        </span>
+                      </button>
+                      {expanded && (
+                        <div className="px-3 pb-3 space-y-2" data-testid={`asm-run-detail-${idx}`}>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                            <div className="rounded-lg border border-gray-200 p-2 bg-gray-50">
+                              <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold mb-1">Original</p>
+                              <p className="text-xs text-gray-800 font-mono whitespace-pre-wrap break-words">
+                                {row.raw_snippet || <span className="text-gray-400">(not persisted)</span>}
+                              </p>
+                            </div>
+                            <div className="rounded-lg border border-emerald-200 p-2 bg-emerald-50">
+                              <p className="text-[10px] uppercase tracking-wider text-emerald-700 font-bold mb-1">Cleaned</p>
+                              <p className="text-xs text-gray-800 font-mono whitespace-pre-wrap break-words">
+                                {row.cleaned_snippet || <span className="text-gray-400">(not persisted)</span>}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="text-[10px] font-mono text-gray-500 flex flex-wrap gap-x-3 gap-y-1">
+                            <span>threshold: {(row.threshold || 0).toFixed(3)}</span>
+                            <span>translated: {String(!!row.translated)}</span>
+                            <span>regenerated: {String(!!row.regenerated)}</span>
+                            <span>has_assamese: {String(row.has_assamese !== false)}</span>
+                          </div>
+                          {(row.conversation_id || row.user_id) && (
+                            <div
+                              className="text-[10px] font-mono text-gray-600 flex flex-wrap gap-x-3 gap-y-1 pt-1 border-t border-gray-100"
+                              data-testid={`asm-run-trace-${idx}`}
+                            >
+                              {row.conversation_id && (
+                                <span data-testid={`asm-run-conv-${idx}`}>
+                                  conversation: <span className="text-gray-800">{row.conversation_id}</span>
+                                </span>
+                              )}
+                              {row.user_id && (
+                                <span data-testid={`asm-run-user-${idx}`}>
+                                  user: <span className="text-gray-800">{row.user_id}</span>
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-xs text-gray-400 py-6 text-center" data-testid="asm-runs-empty">
+                {asmRunsActionFilter
+                  ? `No recent cleanups match action="${asmRunsActionFilter}".`
+                  : 'No sanitiser runs recorded yet. Entries appear once Indic chat traffic flows through cleanup.'}
+              </p>
             )}
           </div>
 
