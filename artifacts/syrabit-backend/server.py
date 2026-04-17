@@ -586,8 +586,20 @@ async def lifespan(app):
         if _is_leader:
             asyncio.create_task(_seed_syllabus_embeddings())
     asyncio.create_task(_load_ga4_from_db())
-    from routes.admin_notifications import _exam_reminder_loop
+    from routes.admin_notifications import (
+        _exam_reminder_loop,
+        ensure_synthetic_alerts_ttl_index,
+        _synthetic_alert_cleanup_loop,
+    )
     asyncio.create_task(_exam_reminder_loop())
+    # Task #433: TTL index + periodic sweep so synthetic test alerts
+    # (from the "Test alert delivery" admin button) auto-expire after
+    # ~7d instead of accumulating in db.alerts forever. Index creation
+    # is leader-gated to avoid duplicate-key races; the sweep is per-
+    # worker so the safety-net runs even if the leader is unhealthy.
+    if _is_leader:
+        asyncio.create_task(ensure_synthetic_alerts_ttl_index())
+    asyncio.create_task(_synthetic_alert_cleanup_loop())
     asyncio.create_task(_alerting_loop())
     asyncio.create_task(_endpoint_health_alert_loop())
     # Task #412 — periodically check hydrate_telemetry and fire admin

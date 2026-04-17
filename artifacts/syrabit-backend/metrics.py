@@ -779,17 +779,24 @@ async def _dispatch_alert(alert_type: str, title: str, body: str, threshold_snap
     # 3) Persist to db.alerts for admin dashboard visibility
     try:
         outcomes["persisted"]["attempted"] = True
+        _now_dt = datetime.now(timezone.utc)
         doc = {
             "type": alert_type,
             "title": title,
             "body": body,
-            "fired_at": datetime.now(timezone.utc).isoformat(),
+            "fired_at": _now_dt.isoformat(),
             "acknowledged": False,
         }
         if threshold_snapshot:
             doc["threshold_snapshot"] = threshold_snapshot
         if mark_synthetic:
             doc["synthetic"] = True
+            # Task #433: stamp a BSON Date `expires_at` so the partial TTL
+            # index on db.alerts can prune synthetic test alerts ~7 days
+            # after they fire. The string `fired_at` is kept as-is for
+            # back-compat with the dashboard feed.
+            from routes.admin_notifications import _SYNTHETIC_ALERT_TTL_SECONDS
+            doc["expires_at"] = _now_dt + timedelta(seconds=_SYNTHETIC_ALERT_TTL_SECONDS)
         await db.alerts.insert_one(doc)
         outcomes["persisted"]["ok"] = True
     except Exception as e:

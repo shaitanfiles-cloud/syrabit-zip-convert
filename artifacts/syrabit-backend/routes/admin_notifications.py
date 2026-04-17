@@ -1119,6 +1119,129 @@ _BACKFILL_BODY_PARSERS = {
 _BACKFILL_ENDPOINT_RE = re.compile(r"Endpoint\s+(\S+)\s+has\s+been")
 
 
+# ─────────────────────────────────────────────
+# Task #433 — Auto-clean synthetic test alerts
+# ─────────────────────────────────────────────
+#
+# The "Test alert delivery" admin button persists a synthetic alert into
+# `db.alerts` (tagged `synthetic: true`) so admins can verify the full
+# email + webhook + push + persistence pipeline. These rows are hidden
+# from the dashboard feed (Task #426) but still accumulate forever.
+#
+# We prune them automatically with two complementary mechanisms:
+#   1. A partial TTL index on `expires_at` (BSON Date) where
+#      `synthetic: true`. New synthetic alerts written by `metrics.py`
+#      stamp `expires_at = now + 7d`, so Mongo's TTL monitor cleans
+#      them ~once/min after the deadline. Real alerts are unaffected.
+#   2. A periodic cleanup loop that also catches legacy synthetic rows
+#      written before the `expires_at` field existed (filter on the
+#      string `fired_at` ISO timestamp). Loop is idempotent and safe to
+#      run on every replica — it's just a `delete_many` against rows
+#      that the TTL monitor would have evicted anyway.
+_SYNTHETIC_ALERT_TTL_SECONDS = 7 * 24 * 3600
+_SYNTHETIC_CLEANUP_INTERVAL_S = 6 * 3600
+
+
+async def ensure_synthetic_alerts_ttl_index() -> None:
+    """Create the partial TTL index on db.alerts so synthetic test
+    alerts auto-expire ~7 days after they fire. Idempotent — safe to
+    call on every startup."""
+    try:
+        await db.alerts.create_index(
+            "expires_at",
+            expireAfterSeconds=0,
+            partialFilterExpression={"synthetic": True},
+            name="synthetic_alerts_ttl",
+        )
+    except Exception as e:
+        logger.warning(f"[alerts] synthetic TTL index create failed: {e}")
+
+
+async def cleanup_synthetic_alerts(ttl_seconds: int = _SYNTHETIC_ALERT_TTL_SECONDS) -> int:
+    """Delete synthetic alerts older than `ttl_seconds`. Catches legacy
+    rows that don't carry the `expires_at` BSON Date by filtering on the
+    string `fired_at` ISO timestamp (lexicographic compare works because
+    we always write `datetime.now(tz.utc).isoformat()`). Returns the
+    deleted count."""
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(seconds=ttl_seconds)
+    cutoff_iso = cutoff_dt.isoformat()
+    try:
+        result = await db.alerts.delete_many({
+            "synthetic": True,
+            "$or": [
+                {"expires_at": {"$lte": datetime.now(timezone.utc)}},
+                {"expires_at": {"$exists": False}, "fired_at": {"$lte": cutoff_iso}},
+            ],
+        })
+        return int(getattr(result, "deleted_count", 0) or 0)
+    except Exception as e:
+        logger.warning(f"[alerts] synthetic cleanup failed: {e}")
+        return 0
+
+
+async def _synthetic_alert_cleanup_loop() -> None:
+    """Periodic loop — prunes stale synthetic alerts every 6 hours and
+    logs the deleted count for observability. The TTL index does most
+    of the work; this loop is a belt-and-suspenders safety net for
+    legacy rows and for cases where the TTL monitor is paused."""
+    # First sweep happens shortly after startup so a stale heap left
+    # over from before this task is cleared promptly.
+    await asyncio.sleep(60)
+    while True:
+        try:
+            deleted = await cleanup_synthetic_alerts()
+            if deleted:
+                logger.info(f"[alerts] pruned {deleted} synthetic test alerts older than 7d")
+        except Exception as e:
+            logger.warning(f"[alerts] synthetic cleanup loop iteration failed: {e}")
+        await asyncio.sleep(_SYNTHETIC_CLEANUP_INTERVAL_S)
+
+
+@router.get("/admin/alerts/synthetic-cleanup")
+async def admin_synthetic_cleanup_status(
+    admin: dict = Depends(get_admin_user),
+):
+    """Inspect the synthetic test-alert backlog: total count, how many
+    are past the 7d TTL window, and the oldest `fired_at` in the
+    collection. Used by the admin dashboard to surface that auto-prune
+    is healthy."""
+    try:
+        cutoff_iso = (datetime.now(timezone.utc) - timedelta(seconds=_SYNTHETIC_ALERT_TTL_SECONDS)).isoformat()
+        total = await db.alerts.count_documents({"synthetic": True})
+        expired = await db.alerts.count_documents({
+            "synthetic": True,
+            "$or": [
+                {"expires_at": {"$lte": datetime.now(timezone.utc)}},
+                {"expires_at": {"$exists": False}, "fired_at": {"$lte": cutoff_iso}},
+            ],
+        })
+        oldest_doc = await db.alerts.find(
+            {"synthetic": True}, {"fired_at": 1, "_id": 0},
+        ).sort("fired_at", 1).limit(1).to_list(1)
+        oldest_fired_at = oldest_doc[0]["fired_at"] if oldest_doc else None
+        return {
+            "ok": True,
+            "ttl_seconds": _SYNTHETIC_ALERT_TTL_SECONDS,
+            "total_synthetic": total,
+            "expired": expired,
+            "oldest_fired_at": oldest_fired_at,
+        }
+    except Exception as e:
+        logger.warning(f"[alerts] synthetic cleanup status failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to read synthetic cleanup status")
+
+
+@router.post("/admin/alerts/synthetic-cleanup")
+async def admin_synthetic_cleanup_run(
+    admin: dict = Depends(get_admin_user),
+):
+    """Manually trigger the synthetic-alert prune. Idempotent — re-runs
+    the same `delete_many` the periodic loop runs."""
+    deleted = await cleanup_synthetic_alerts()
+    logger.info(f"[alerts] manual synthetic cleanup by {admin.get('email','admin')}: {deleted} deleted")
+    return {"ok": True, "deleted": deleted}
+
+
 @router.post("/admin/alerts/backfill-thresholds")
 async def admin_backfill_thresholds(
     admin: dict = Depends(get_admin_user),
