@@ -3044,7 +3044,9 @@ async def admin_indexnow_backfill_progress(
     gunicorn worker / Railway replica see the same numbers as the worker
     actually doing the push. Falls back to in-memory state when Mongo is
     unavailable or no run has ever been recorded. Includes an explicit
-    `queued = max(discovered - submitted - skipped, 0)` field for the UI.
+    `queued = max(discovered - submitted, 0)` field for the UI (`discovered`
+    already excludes validator-skipped URLs, so `skipped` is NOT subtracted
+    again).
     """
     db_snap = await _load_latest_backfill_run()
     local = dict(_backfill_state)
