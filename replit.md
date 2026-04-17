@@ -47,6 +47,10 @@ The project is a pnpm workspace monorepo, with a React + Vite frontend and a Fas
 - **Performance Optimizations:** Bounded content caching, efficient JWT decoding, thread pooling, MongoDB compound indexes, hierarchy caching, AsyncOpenAI client pooling, parallelized chat pre-processing, throttled LLM health probes.
 - **Chat Latency:** Sub-1s TTFT for English queries via hedged requests, 1.4-2.1s for Assamese.
 
+## Verify Pipeline
+
+Run `pnpm verify` from the repo root to execute the full pre-merge gate. This runs `typecheck` across all artifacts and shared libs, then runs `verify:jsonld` for every package that defines it (currently `@workspace/syrabit`), which validates structured-data builders (Article, LearningResource, WebPage, Breadcrumb, FAQ, HowTo, LocalBusiness, PYQ Dataset, Quiz). To run the JSON-LD validator alone: `pnpm --filter @workspace/syrabit verify:jsonld`.
+
 ## External Dependencies
 
 - **Databases:** PostgreSQL, MongoDB, Cloudflare D1.
