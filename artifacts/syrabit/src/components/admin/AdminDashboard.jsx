@@ -1222,7 +1222,34 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
             )}
 
             <div className="space-y-1.5">
-              {(seoLive.sitemaps || []).map((sm) => {
+              {(() => {
+                // Task #352: pull the most recent SEO spike alert's
+                // deep_scan_summaries so we can flag the sitemaps that
+                // the alert loop intentionally skipped (alert_scan_cap)
+                // and tell the on-call admin "manual scan needed".
+                const recentSpike = (alertHistory?.alerts || [])
+                  .find(a => a.type === 'seo_url_spike'
+                    && a.threshold_snapshot?.deep_scan_summaries);
+                const alertSkippedSitemaps = new Set();
+                const alertCap = recentSpike?.threshold_snapshot
+                  ?.deep_scan_summaries
+                  ? Object.entries(
+                      recentSpike.threshold_snapshot.deep_scan_summaries
+                    )
+                      .filter(([, v]) => v?.skipped
+                        && v?.reason === 'alert_scan_cap')
+                      .map(([k, v]) => {
+                        alertSkippedSitemaps.add(k);
+                        return v?.cap;
+                      })[0]
+                  : 0;
+                return (seoLive.sitemaps || []).map((sm) => {
+                // Task #352: this sitemap was deferred by the alert
+                // loop because too many sitemaps were failing at once.
+                // Once a deep scan has completed for it (manually or
+                // otherwise), we hide the badge again.
+                const isAlertSkipped = alertSkippedSitemaps.has(sm.name)
+                  && !sitemapDeepScans[sm.name]?.data;
                 const checks = sm.sample_checks || [];
                 const okCount = checks.filter((c) => c.ok).length;
                 const totalCount = checks.length;
@@ -1276,8 +1303,75 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                             {sm.error}
                           </p>
                         )}
+                        {/* Task #352: badge for sitemaps the alert loop
+                            skipped because the per-firing cap was hit. */}
+                        {isAlertSkipped && (
+                          <p
+                            className="text-[10px] text-amber-800 truncate"
+                            data-testid={`seo-sitemap-${sm.name}-alert-skipped`}
+                            title={`Alert loop deferred this sitemap (cap=${alertCap || 0}). Run a manual deep scan.`}
+                          >
+                            Alert-skipped — manual scan needed
+                          </p>
+                        )}
                       </div>
                       <div className="flex items-center gap-3 text-[11px] text-gray-500 flex-shrink-0">
+                        {isAlertSkipped && (
+                          <>
+                            <span
+                              className="font-mono px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200"
+                              data-testid={`seo-sitemap-${sm.name}-alert-skipped-badge`}
+                              title="The alert loop did not deep-scan this sitemap because the per-firing cap was reached."
+                            >
+                              scan needed
+                            </span>
+                            <span
+                              role="button"
+                              tabIndex={0}
+                              data-testid={`seo-sitemap-${sm.name}-alert-skipped-scan`}
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (sitemapDeepScans[sm.name]?.loading) return;
+                                setExpandedSitemap(sm.name);
+                                setSitemapDeepScans((prev) => ({
+                                  ...prev,
+                                  [sm.name]: { loading: true, error: null, data: null },
+                                }));
+                                try {
+                                  const res = await seoHealthDeepScan(adminToken, sm.name);
+                                  if (res?.data?.error) {
+                                    setSitemapDeepScans((prev) => ({
+                                      ...prev,
+                                      [sm.name]: { loading: false, error: res.data.error, data: null },
+                                    }));
+                                  } else {
+                                    setSitemapDeepScans((prev) => ({
+                                      ...prev,
+                                      [sm.name]: { loading: false, error: null, data: res.data },
+                                    }));
+                                  }
+                                } catch (err) {
+                                  const msg = err?.response?.data?.detail
+                                    || err?.message
+                                    || 'Scan failed';
+                                  setSitemapDeepScans((prev) => ({
+                                    ...prev,
+                                    [sm.name]: { loading: false, error: msg, data: null },
+                                  }));
+                                }
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  e.currentTarget.click();
+                                }
+                              }}
+                              className="font-semibold px-2 py-0.5 rounded border border-amber-300 bg-white text-amber-800 hover:bg-amber-50 cursor-pointer select-none"
+                            >
+                              {sitemapDeepScans[sm.name]?.loading ? 'Scanning…' : 'Deep scan now'}
+                            </span>
+                          </>
+                        )}
                         <span title="URLs in sitemap" className="font-mono">
                           {(sm.url_count ?? 0).toLocaleString()} urls
                         </span>
@@ -1511,7 +1605,8 @@ export default function AdminDashboard({ adminToken, onNavigate }) {
                     )}
                   </div>
                 );
-              })}
+                });
+              })()}
               {(!seoLive.sitemaps || seoLive.sitemaps.length === 0) && (
                 <p className="text-xs text-gray-400">No sitemaps reported.</p>
               )}
