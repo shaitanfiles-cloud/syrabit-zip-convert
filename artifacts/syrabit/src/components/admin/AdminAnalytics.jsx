@@ -193,7 +193,8 @@ export default function AdminAnalytics({ adminToken, onNavigate }) {
         <OverviewTab data={data} vs={vs} widgetErrors={widgetErrors} load={load}
           mrr={mrr} predicted={predicted} growth={growth} arpu={arpu} ltv={ltv}
           cfConnected={data?.cf_connected}
-          overviewDays={overviewDays} setOverviewDays={setOverviewDays} />
+          overviewDays={overviewDays} setOverviewDays={setOverviewDays}
+          adminToken={adminToken} />
       )}
 
       {tab === 'daily' && (

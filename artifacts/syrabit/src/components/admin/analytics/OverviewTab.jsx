@@ -1,10 +1,13 @@
+import { useEffect, useState } from 'react';
 import { TrendingUp, Eye, Users, DollarSign, Zap, Target,
-  Cloud, AlertTriangle, Calendar } from 'lucide-react';
+  Cloud, AlertTriangle, Calendar, ShieldCheck, RefreshCw,
+  AlertOctagon } from 'lucide-react';
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar,
 } from 'recharts';
 import { Card, Stat, TT, fmt, fmtInr } from './shared';
+import { adminGetHydrateStats } from '@/utils/api';
 
 const TIME_RANGES = [
   { value: 1,  label: 'Today' },
@@ -14,7 +17,27 @@ const TIME_RANGES = [
 ];
 
 export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predicted, growth, arpu, ltv,
-  cfConnected, overviewDays, setOverviewDays }) {
+  cfConnected, overviewDays, setOverviewDays, adminToken }) {
+  const [hydrate, setHydrate] = useState(null);
+  const [hydrateLoading, setHydrateLoading] = useState(false);
+  const [hydrateError, setHydrateError] = useState(false);
+  const loadHydrate = async () => {
+    setHydrateLoading(true);
+    setHydrateError(false);
+    try {
+      const r = await adminGetHydrateStats(adminToken, 7);
+      setHydrate(r.data);
+    } catch {
+      setHydrateError(true);
+      setHydrate(null);
+    } finally {
+      setHydrateLoading(false);
+    }
+  };
+  useEffect(() => {
+    if (adminToken) loadHydrate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [adminToken]);
   const hasDailySignup = data?.daily_signups?.some(d => d.count > 0);
   const hasPlanUsage   = data?.plan_usage && Object.keys(data.plan_usage).length > 0;
   const cf = vs.cloudflare || {};
@@ -90,6 +113,13 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         </div>
       )}
 
+      <HydrateHealthCard
+        hydrate={hydrate}
+        loading={hydrateLoading}
+        error={hydrateError}
+        onRetry={loadHydrate}
+      />
+
       <Card title={`Daily Visitors — ${rangeLabel}`} empty={!hasDailyCf} emptyMsg={cfEmptyMsg}>
         <ResponsiveContainer width="100%" height={260}>
           <AreaChart data={dailyVisitors} margin={{ top: 5, right: 10, bottom: 0, left: -10 }}>
@@ -146,5 +176,112 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         </Card>
       )}
     </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Task #408: ops-health tile for the hydrate-lifecycle telemetry that
+// Tasks #405 / #407 emit. Healthy state is intentionally low-key so the
+// admin's eye doesn't get drawn to it when nothing's wrong.
+// ─────────────────────────────────────────────────────────────────────
+function HydrateHealthCard({ hydrate, loading, error, onRetry }) {
+  if (loading && !hydrate) {
+    return (
+      <Card title="Hydration & Stale-Build Recovery (7d)">
+        <p className="text-gray-400 text-sm text-center py-6">Loading…</p>
+      </Card>
+    );
+  }
+  if (error) {
+    return (
+      <Card title="Hydration & Stale-Build Recovery (7d)" error onRetry={onRetry} />
+    );
+  }
+  const h = hydrate || {};
+  const failed = h.preload_failed_total || 0;
+  const attempts = h.auto_reload_attempts || 0;
+  const recoveries = h.auto_reload_recoveries || 0;
+  const stalled = h.stalled_total || 0;
+  const manual = h.manual_failures || 0;
+  const successRate = h.auto_reload_success_rate_pct;
+  const isHealthy = failed === 0 && stalled === 0;
+  const topKinds = Array.isArray(h.top_kinds) ? h.top_kinds : [];
+  const topUAs = Array.isArray(h.top_user_agents) ? h.top_user_agents : [];
+
+  return (
+    <Card
+      title="Hydration & Stale-Build Recovery (7d)"
+      action={
+        <button
+          onClick={onRetry}
+          className="text-xs text-gray-400 hover:text-gray-700 px-2 py-0.5 rounded-lg flex items-center gap-1"
+        >
+          <RefreshCw size={10} /> Refresh
+        </button>
+      }
+    >
+      {isHealthy ? (
+        <div className="flex items-center gap-3 py-4">
+          <div className="w-9 h-9 rounded-lg flex items-center justify-center"
+            style={{ background: 'rgba(16,185,129,0.10)' }}>
+            <ShieldCheck size={16} className="text-emerald-500" />
+          </div>
+          <div>
+            <p className="text-emerald-600 text-sm font-medium">No stale-build recoveries — healthy</p>
+            <p className="text-gray-400 text-xs mt-0.5">No hydration failures or stalls in the last 7 days.</p>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Stat icon={AlertOctagon} label="Preload failures"
+              value={failed.toLocaleString()} color="#f59e0b"
+              sub={manual > 0 ? `${manual} not auto-recovered` : 'all auto-recovered'} />
+            <Stat icon={RefreshCw} label="Auto-reload attempts"
+              value={attempts.toLocaleString()} color="#7c3aed" sub="stale-chunk reloads" />
+            <Stat icon={ShieldCheck} label="Recovery success"
+              value={successRate == null ? '—' : `${successRate}%`}
+              color="#10b981"
+              sub={`${recoveries.toLocaleString()} healthy hydrations after reload`} />
+            <Stat icon={AlertTriangle} label="Stalled hydrations"
+              value={stalled.toLocaleString()} color="#ec4899"
+              sub="≥5s on Suspense fallback" />
+          </div>
+
+          {(topKinds.length > 0 || topUAs.length > 0) && (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-4">
+              {topKinds.length > 0 && (
+                <div className="rounded-xl p-3.5 bg-gray-50 border border-gray-200">
+                  <p className="text-gray-500 text-xs font-medium mb-2">Top failing page chunks</p>
+                  <ul className="space-y-1">
+                    {topKinds.map((row, i) => (
+                      <li key={i} className="flex items-center justify-between text-xs">
+                        <span className="text-gray-700 truncate mr-2">{row.value || '—'}</span>
+                        <span className="text-gray-400 font-mono">{row.count}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {topUAs.length > 0 && (
+                <div className="rounded-xl p-3.5 bg-gray-50 border border-gray-200">
+                  <p className="text-gray-500 text-xs font-medium mb-2">Top user-agents</p>
+                  <ul className="space-y-1">
+                    {topUAs.map((row, i) => (
+                      <li key={i} className="flex items-center justify-between text-xs">
+                        <span className="text-gray-700 truncate mr-2" title={row.value}>
+                          {(row.value || '—').slice(0, 60)}
+                        </span>
+                        <span className="text-gray-400 font-mono">{row.count}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </Card>
   );
 }

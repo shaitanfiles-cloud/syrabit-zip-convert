@@ -192,6 +192,10 @@ export const adminGetAnalytics = (token, days = 30) =>
 export const adminGetDailyAnalytics = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/daily`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 
+// Task #408: hydrate-lifecycle / stale-build telemetry tile
+export const adminGetHydrateStats = (token, days = 7) =>
+  axios.get(`${API_BASE}/admin/analytics/hydrate-stats`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
+
 export const adminGetRevenue = (token, days = 30) =>
   axios.get(`${API_BASE}/admin/analytics/revenue`, { headers: adminHeaders(token), withCredentials: true, params: { days } });
 

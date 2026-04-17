@@ -21,6 +21,54 @@ const track = (event, properties = {}) => {
   } catch (e) {
     if (import.meta.env.DEV) console.debug('[PostHog]', event, properties);
   }
+  // Task #408: also mirror hydrate-lifecycle events to our own backend
+  // so the admin dashboard can render an ops-health tile without
+  // depending on PostHog's API. Best-effort, fire-and-forget.
+  if (typeof event === 'string' && event.startsWith('hydrate_')) {
+    try { mirrorHydrateEvent(event, properties); } catch {}
+  }
+};
+
+// Internal: tiny beacon to /api/analytics/hydrate-event. Uses
+// sendBeacon when available (survives page unload during reload),
+// otherwise fetch with keepalive. Guarded against repeated failures
+// (e.g. backend down) to avoid noisy retries on every event.
+let _hydrateMirrorBlocked = false;
+const mirrorHydrateEvent = (event, properties) => {
+  if (_hydrateMirrorBlocked) return;
+  if (typeof window === 'undefined') return;
+  try {
+    // Resolve API base from the existing axios setup if possible,
+    // else fall back to same-origin /api.
+    const apiBase =
+      (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_BACKEND_URL)
+        ? `${import.meta.env.VITE_BACKEND_URL.replace(/\/$/, '')}/api`
+        : '/api';
+    const payload = JSON.stringify({
+      event,
+      kind: properties?.kind ?? null,
+      path: properties?.path ?? (typeof location !== 'undefined' ? location.pathname : null),
+      auto_reload: properties?.auto_reload ?? null,
+      preload_failed: properties?.preload_failed ?? null,
+      message: properties?.message ?? null,
+      name: properties?.error_name ?? properties?.name ?? null,
+      elapsed_ms: properties?.elapsed_ms ?? null,
+      ms_since_reload: properties?.ms_since_reload ?? null,
+    });
+    const url = `${apiBase}/analytics/hydrate-event`;
+    const blob = new Blob([payload], { type: 'application/json' });
+    if (navigator.sendBeacon && navigator.sendBeacon(url, blob)) return;
+    // Fallback — keepalive lets the request survive page unload.
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+      keepalive: true,
+      credentials: 'omit',
+    }).catch(() => { _hydrateMirrorBlocked = true; });
+  } catch {
+    _hydrateMirrorBlocked = true;
+  }
 };
 
 const identify = (userId, traits = {}) => {

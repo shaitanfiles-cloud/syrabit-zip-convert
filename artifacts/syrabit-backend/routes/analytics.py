@@ -378,6 +378,180 @@ async def track_event(
 async def admin_pwa_stats(admin: dict = Depends(get_admin_user)):
     return await get_pwa_stats()
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Task #408: hydrate telemetry — server-side mirror of the client-side
+# `hydrate_preload_failed` / `hydrate_recovered` / `hydrate_stalled` events.
+# Stored separately from PostHog so the admin dashboard can render an
+# "ops health" tile without a PostHog API integration. Documents are
+# auto-deleted after 30 days via a TTL index (created lazily on first
+# write to avoid startup churn).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HYDRATE_TTL_INDEX_READY = False
+_HYDRATE_VALID_EVENTS = {
+    "hydrate_preload_failed",
+    "hydrate_recovered",
+    "hydrate_stalled",
+}
+
+
+async def _ensure_hydrate_indexes():
+    global _HYDRATE_TTL_INDEX_READY
+    if _HYDRATE_TTL_INDEX_READY:
+        return
+    try:
+        # 30-day TTL — operationally interesting window is the last 7d,
+        # but we keep extra runway for incident postmortems.
+        await db.hydrate_telemetry.create_index(
+            "created_at", expireAfterSeconds=60 * 60 * 24 * 30,
+        )
+        await db.hydrate_telemetry.create_index([("event", 1), ("created_at", -1)])
+        _HYDRATE_TTL_INDEX_READY = True
+    except Exception as e:
+        logger.warning(f"hydrate_telemetry index create failed (non-fatal): {e}")
+
+
+@router.post("/analytics/hydrate-event")
+async def track_hydrate_event(
+    request: Request,
+    event: str = Body(...),
+    kind: Optional[str] = Body(None),
+    path: Optional[str] = Body(None),
+    auto_reload: Optional[bool] = Body(None),
+    preload_failed: Optional[bool] = Body(None),
+    message: Optional[str] = Body(None),
+    name: Optional[str] = Body(None),
+    elapsed_ms: Optional[int] = Body(None),
+    ms_since_reload: Optional[int] = Body(None),
+):
+    """Public endpoint: persist a hydrate-lifecycle event for ops dashboards.
+
+    Accepts only the three known event names; all other payloads are dropped
+    so a misbehaving (or malicious) client cannot pollute the collection.
+    Best-effort — never raises; analytics must not break page loads.
+    """
+    if event not in _HYDRATE_VALID_EVENTS:
+        return {"status": "ignored"}
+    try:
+        await _ensure_hydrate_indexes()
+        ua = request.headers.get("user-agent", "")[:300]
+        # Cap free-form fields so a runaway client can't bloat documents.
+        doc = {
+            "event": event,
+            "kind": (kind or "")[:64] or None,
+            "path": (path or "")[:200] or None,
+            "auto_reload": bool(auto_reload) if auto_reload is not None else None,
+            "preload_failed": bool(preload_failed) if preload_failed is not None else None,
+            "message": (message or "")[:300] or None,
+            "name": (name or "")[:64] or None,
+            "elapsed_ms": int(elapsed_ms) if isinstance(elapsed_ms, (int, float)) else None,
+            "ms_since_reload": int(ms_since_reload) if isinstance(ms_since_reload, (int, float)) else None,
+            "ua": ua or None,
+            "created_at": datetime.now(timezone.utc),
+        }
+        await db.hydrate_telemetry.insert_one(doc)
+    except Exception as e:
+        logger.debug(f"hydrate-event ingest failed: {e}")
+    return {"status": "tracked"}
+
+
+@router.get("/admin/analytics/hydrate-stats")
+async def admin_hydrate_stats(
+    days: int = 7, admin: dict = Depends(get_admin_user),
+):
+    """7-day (configurable) ops view of stale-build / hydration health.
+
+    Returns counters + small breakdowns so the admin tile can render a
+    healthy empty state when there's nothing to worry about.
+    """
+    days = max(1, min(int(days or 7), 90))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    empty = {
+        "days": days,
+        "preload_failed_total": 0,
+        "auto_reload_attempts": 0,
+        "auto_reload_recoveries": 0,
+        "auto_reload_success_rate_pct": None,
+        "stalled_total": 0,
+        "manual_failures": 0,  # preload_failed without auto_reload
+        "top_kinds": [],
+        "top_user_agents": [],
+        "recent": [],
+    }
+    if not await is_mongo_available():
+        return empty
+    try:
+        coll = db.hydrate_telemetry
+        base = {"created_at": {"$gte": since}}
+
+        preload_failed_total = await coll.count_documents({
+            **base, "event": "hydrate_preload_failed"
+        })
+        auto_reload_attempts = await coll.count_documents({
+            **base, "event": "hydrate_preload_failed", "auto_reload": True,
+        })
+        auto_reload_recoveries = await coll.count_documents({
+            **base, "event": "hydrate_recovered",
+        })
+        stalled_total = await coll.count_documents({
+            **base, "event": "hydrate_stalled",
+        })
+        manual_failures = max(0, preload_failed_total - auto_reload_attempts)
+
+        success_rate = None
+        if auto_reload_attempts > 0:
+            success_rate = round(
+                (auto_reload_recoveries / auto_reload_attempts) * 100, 1,
+            )
+
+        async def _top(field: str, match: dict, limit: int = 5):
+            try:
+                cur = coll.aggregate([
+                    {"$match": {**base, **match, field: {"$nin": [None, ""]}}},
+                    {"$group": {"_id": f"${field}", "count": {"$sum": 1}}},
+                    {"$sort": {"count": -1}},
+                    {"$limit": limit},
+                ])
+                return [
+                    {"value": doc["_id"], "count": doc["count"]}
+                    async for doc in cur
+                ]
+            except Exception:
+                return []
+
+        top_kinds = await _top("kind", {"event": "hydrate_preload_failed"})
+        top_user_agents = await _top("ua", {"event": "hydrate_preload_failed"})
+
+        recent_cur = coll.find(
+            {**base, "event": {"$in": list(_HYDRATE_VALID_EVENTS)}},
+            {"_id": 0, "created_at": 1, "event": 1, "kind": 1, "path": 1,
+             "auto_reload": 1, "message": 1, "name": 1},
+        ).sort("created_at", -1).limit(15)
+        recent = []
+        async for doc in recent_cur:
+            ts = doc.get("created_at")
+            if isinstance(ts, datetime):
+                doc["created_at"] = ts.isoformat()
+            recent.append(doc)
+
+        return {
+            "days": days,
+            "preload_failed_total": preload_failed_total,
+            "auto_reload_attempts": auto_reload_attempts,
+            "auto_reload_recoveries": auto_reload_recoveries,
+            "auto_reload_success_rate_pct": success_rate,
+            "stalled_total": stalled_total,
+            "manual_failures": manual_failures,
+            "top_kinds": top_kinds,
+            "top_user_agents": top_user_agents,
+            "recent": recent,
+        }
+    except Exception as e:
+        logger.warning(f"hydrate-stats query failed: {e}")
+        return empty
+
+
 # ─────────────────────────────────────────────
 # ADMIN CONTENT MANAGEMENT — Boards / Classes / Streams
 # ─────────────────────────────────────────────
