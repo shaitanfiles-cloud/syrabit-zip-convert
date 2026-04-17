@@ -890,7 +890,10 @@ def test_url_spike_alert_triggers_deep_scan_for_fully_failing_sitemap():
 
     async def _run_loop_body_once():
         # Replicate just one iteration of _seo_health_alert_loop's body
-        # without the surrounding asyncio.sleep loop.
+        # without the surrounding asyncio.sleep loop. We delegate the
+        # spike-trigger gate and the deep-scan collection to the real
+        # production helpers so this test stays in sync with the loop
+        # if it is later refactored.
         snapshot = await bot_discovery._record_seo_health_snapshot()
         from metrics import (_ALERT_THRESHOLDS, _load_alert_settings,
                              _dispatch_alert as _md, _alert_last_fired as _ml)
@@ -914,21 +917,11 @@ def test_url_spike_alert_triggers_deep_scan_for_fully_failing_sitemap():
             return
         _ml.pop("seo_url_spike", None)
         by_sm = snapshot.get("by_sitemap") or []
-        deep_scan_summaries = {}
         fully_failing = [r["name"] for r in by_sm
                          if int(r.get("ok", 0)) == 0 and int(r.get("total", 0)) > 0]
-        import asyncio as _aio
-        scans = await _aio.gather(
-            *[bot_discovery._deep_scan_sitemap(n) for n in fully_failing],
-            return_exceptions=True,
-        )
-        for name, res in zip(fully_failing, scans):
-            deep_scan_summaries[name] = {
-                "total_urls": int(res.get("total_urls", 0)),
-                "checked": int(res.get("checked", 0)),
-                "failing_count": len(res.get("failing") or []),
-                "truncated": bool(res.get("truncated")),
-            }
+        # Use the real production helper so this test fails if the
+        # collection / lock semantics drift.
+        deep_scan_summaries = await bot_discovery._collect_alert_deep_scans(fully_failing)
         await _md(
             "seo_url_spike",
             f"SEO: URL 404 spike ({latest_rate}% OK)",
