@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 import { API_BASE, setAuthToken } from '@/utils/api';
+import { Analytics } from '@/utils/analytics';
 
 const AuthContext = createContext(null);
 
@@ -87,10 +88,7 @@ export const AuthProvider = ({ children }) => {
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
     setUser(userData);
-    try {
-      const { Analytics } = await import('@/utils/analytics');
-      Analytics.login(userData.id, userData.email);
-    } catch {}
+    try { Analytics.login(userData.id, userData.email); } catch {}
     return userData;
   };
 
@@ -102,10 +100,7 @@ export const AuthProvider = ({ children }) => {
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
     setUser(userData);
-    try {
-      const { Analytics } = await import('@/utils/analytics');
-      Analytics.signup(userData.email, userData.plan);
-    } catch {}
+    try { Analytics.signup(userData.email, userData.plan); } catch {}
     return userData;
   };
 
@@ -115,10 +110,7 @@ export const AuthProvider = ({ children }) => {
     if (access_token) _storeToken(access_token);
     justAuthenticated.current = true;
     setUser(userData);
-    try {
-      const { Analytics } = await import('@/utils/analytics');
-      Analytics.login(userData.id, userData.email);
-    } catch {}
+    try { Analytics.login(userData.id, userData.email); } catch {}
     return userData;
   };
 
@@ -130,9 +122,7 @@ export const AuthProvider = ({ children }) => {
     justAuthenticated.current = false;
     localStorage.removeItem('syrabit:onboarding');
     setUser(null);
-    try {
-      import('@/utils/analytics').then(({ Analytics }) => Analytics.logout());
-    } catch {}
+    try { Analytics.logout(); } catch {}
   };
 
   const refreshUser = async () => {

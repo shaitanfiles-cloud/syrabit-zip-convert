@@ -16,6 +16,7 @@ import { MessageBubble } from './chat/MessageBubble';
 import { InputBar } from './chat/InputBar';
 import { ModelSelector, MODELS } from './chat/ModelSelector';
 import { useTurnstile } from '@/hooks/useTurnstile';
+import { Analytics } from '@/utils/analytics';
 
 const EmptyState = lazy(() => import('./chat/EmptyState').then(m => ({ default: m.EmptyState })));
 
@@ -339,10 +340,10 @@ export default function ChatPage() {
               setCredits((c) => ({ ...c, used: parsed.credits_used_total }));
             }
             const remaining = parsed.remaining_credits ?? 0;
-            import('@/utils/analytics').then(({ Analytics }) => {
+            try {
               Analytics.chatMessage(meta.ragSource, remaining, model);
               if (remaining <= 0) Analytics.chatCreditsExhausted();
-            }).catch(() => {});
+            } catch {}
           }
         }
       }
