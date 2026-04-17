@@ -1115,6 +1115,107 @@ async def serve_root_sitemap_index():
     from starlette.responses import RedirectResponse
     return RedirectResponse(url="/api/seo/sitemap-index.xml", status_code=301)
 
+
+# Task #365: Expose every dynamic sitemap that the SEO Manager / Google
+# Search Console probes at the *root* of the domain (e.g.
+# ``https://syrabit.ai/sitemap-pages.xml``). The actual generators live
+# on the seo_engine router under ``/api/seo/...``; we delegate to them
+# rather than duplicate the XML build logic so the two paths cannot
+# drift. Without these aliases the SPA catch-all returned the React
+# shell as text/html and external sitemap validators / Googlebot
+# rejected every entry as "not XML". Each route is registered for
+# both GET and HEAD so HEAD probes (used by the internal spot-checker
+# and many crawlers) report 200 with ``application/xml`` instead of
+# 404 ``application/json`` from the catch-all.
+_DYNAMIC_SITEMAP_ALIASES = (
+    ("sitemap-pages.xml",       "get_sitemap_pages"),
+    ("sitemap-subjects.xml",    "get_sitemap_subjects"),
+    ("sitemap-chapters.xml",    "get_sitemap_chapters"),
+    ("sitemap-learn.xml",       "get_sitemap_learn"),
+    ("sitemap-notes.xml",       "get_sitemap_notes"),
+    ("sitemap-mcqs.xml",        "get_sitemap_mcqs"),
+    ("sitemap-pyqs.xml",        "get_sitemap_pyqs"),
+    ("sitemap-examples.xml",    "get_sitemap_examples"),
+    ("sitemap-definitions.xml", "get_sitemap_definitions"),
+)
+
+
+def _register_root_sitemap_aliases():
+    import seo_engine as _seo
+    for filename, handler_name in _DYNAMIC_SITEMAP_ALIASES:
+        handler = getattr(_seo, handler_name, None)
+        if handler is None:
+            continue
+        # Capture handler in a default arg so each closure binds its own
+        async def _proxy(handler=handler):
+            return await handler()
+        _proxy.__name__ = f"serve_root_{handler_name}"
+        app.add_api_route(
+            f"/{filename}",
+            _proxy,
+            methods=["GET", "HEAD"],
+            include_in_schema=False,
+        )
+
+
+_register_root_sitemap_aliases()
+
+
+# Task #365: HEAD-vs-GET parity. FastAPI's ``app.get`` registers the
+# route for the GET method only — HEAD requests fall through and our
+# default exception handler emits ``404 application/json`` with
+# ``x-source: backend``. Search engines (and our own SEO health probe)
+# use HEAD as the cheap pre-check, so every SPA route was being
+# counted as broken even though GET returned 200. This middleware
+# rewrites the ASGI scope so HEAD is processed by the matching GET
+# handler, then drops the response body before flushing — preserving
+# correct HEAD semantics (headers only, content-length=0).
+class HeadAsGetMiddleware:
+    """Pure-ASGI middleware: HEAD → GET, body stripped on the way out.
+
+    Installed as the *outermost* middleware so the rewritten method is
+    visible to every downstream layer (auth, rate limit, bot render,
+    routing). Non-HEAD requests are forwarded unchanged with zero
+    overhead.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") != "HEAD":
+            await self.app(scope, receive, send)
+            return
+        new_scope = {**scope, "method": "GET", "_original_method": "HEAD"}
+
+        async def _send(message):
+            mtype = message.get("type")
+            if mtype == "http.response.start":
+                # Drop content-length; HEAD carries no body. Leave
+                # every other header (cache-control, content-type,
+                # x-source, etc.) intact so HEAD reports the same
+                # shape as GET.
+                headers = [
+                    (k, v) for (k, v) in message.get("headers", [])
+                    if k.lower() != b"content-length"
+                ]
+                await send({**message, "headers": headers})
+            elif mtype == "http.response.body":
+                # Coalesce streaming bodies into a single empty body
+                # message. We only emit the terminator (more_body
+                # False) — intermediate chunks are swallowed.
+                if not message.get("more_body", False):
+                    await send({
+                        "type": "http.response.body",
+                        "body": b"",
+                        "more_body": False,
+                    })
+            else:
+                await send(message)
+
+        await self.app(new_scope, receive, _send)
+
+
 from middleware import SecurityHeadersMiddleware, GlobalRateLimitMiddleware, ServerSideTrackingMiddleware
 from routes.cms_sarvam_health import CmsNoIndexMiddleware, BotRenderMiddleware
 app.add_middleware(CmsNoIndexMiddleware)
@@ -1127,11 +1228,14 @@ app.add_middleware(
     allow_credentials=_CORS_ALLOW_CREDENTIALS,
     allow_origins=CORS_ORIGINS,
     allow_origin_regex=CORS_ORIGIN_REGEX,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "x-anon-id"],
     expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "Retry-After", "X-Request-Id"],
     max_age=600,
 )
+# Task #365: Outermost layer — convert HEAD → GET before any other
+# middleware (CORS, security headers, rate limit, bot render) sees it.
+app.add_middleware(HeadAsGetMiddleware)
 
 FRONTEND_BUILD = ROOT_DIR / "frontend" / "build"
 if FRONTEND_BUILD.is_dir():
