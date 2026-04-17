@@ -8,10 +8,13 @@ import { AdminGuard } from "@/components/AdminGuard";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { HelmetProvider } from "react-helmet-async";
-import GlobalSeo from "@/components/seo/GlobalSeo";
 const PWAInstallPrompt = lazy(() => import("@/components/PWAInstallPrompt"));
 const SignupEncouragementPopup = lazy(() => import("@/components/SignupEncouragementPopup"));
 const LazyToaster = lazy(() => import("sonner").then(m => ({ default: m.Toaster })));
+// Only GlobalSeo is lazy — HelmetProvider must wrap the entire app so that
+// per-page <PageMeta>/Helmet usage on Library, Chapter, Pricing, etc. still
+// works. (Task #381 fix after architect review.)
+const LazyGlobalSeo = lazy(() => import("@/components/seo/GlobalSeo"));
 import { apiClient } from "@/utils/api";
 
 // ── React Query client ────────────────────────────────────────────────────────
@@ -152,40 +155,23 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const HIDE = 'display:none!important;visibility:hidden!important;opacity:0!important;width:0!important;height:0!important;pointer-events:none!important;position:fixed!important;z-index:-9999!important';
-
-    const nuke = () => {
+    // Emergent badge suppression — CSS rule alone is sufficient. The previous
+    // MutationObserver approach added persistent main-thread cost on every
+    // child-list change to <body>, which hurt mobile TBT. Defer one-time DOM
+    // cleanup to idle so it never blocks paint. (Task #381)
+    const idle = window.requestIdleCallback || ((cb) => setTimeout(cb, 1));
+    const handle = idle(() => {
       ['#emergent-badge', 'a[href*="emergent.sh"]', '[id*="emergent-badge"]'].forEach((sel) => {
-        document.querySelectorAll(sel).forEach((el) => {
-          el.style.cssText = HIDE;
-          el.remove();
-        });
+        document.querySelectorAll(sel).forEach((el) => el.remove());
       });
-    };
-
-    nuke();
-    const style = document.createElement('style');
-    style.textContent = '#emergent-badge, a[href*="emergent.sh"], [id*="emergent-badge"] { display:none!important; }';
-    document.head.appendChild(style);
-
-    const mo = new MutationObserver((mutations) => {
-      for (const m of mutations) {
-        for (const node of m.addedNodes) {
-          if (node.nodeType !== 1) continue;
-          if (node.id?.includes('emergent') || node.href?.includes('emergent.sh')) {
-            nuke();
-            return;
-          }
-        }
-      }
     });
-    mo.observe(document.body, { childList: true });
-
-    return () => { mo.disconnect(); style.remove(); };
+    return () => {
+      if (window.cancelIdleCallback) window.cancelIdleCallback(handle);
+    };
   }, []);
   return (
     <HelmetProvider>
-    <GlobalSeo />
+    <Suspense fallback={null}><LazyGlobalSeo /></Suspense>
     <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
           <AuthProvider>

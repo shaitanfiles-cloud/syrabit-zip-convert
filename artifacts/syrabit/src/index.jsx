@@ -11,6 +11,16 @@ root.render(
   </React.StrictMode>
 );
 
+// Remove the pre-hydration shell once React has painted its first frame.
+// rAF-in-rAF guarantees we run after the commit, so users never see the
+// shell flash on top of the real UI. (Task #381)
+requestAnimationFrame(() => {
+  requestAnimationFrame(() => {
+    const shell = document.getElementById("__shell");
+    if (shell && shell.parentNode) shell.parentNode.removeChild(shell);
+  });
+});
+
 
 if ("serviceWorker" in navigator && import.meta.env.PROD) {
   window.addEventListener("load", () => {

@@ -20,8 +20,6 @@ import { Analytics } from '@/utils/analytics';
 
 const EmptyState = lazy(() => import('./chat/EmptyState').then(m => ({ default: m.EmptyState })));
 
-const _mdPreload = import('./chat/MarkdownContent');
-
 // ── ChatPage ──────────────────────────────────────────────────────────────────
 export default function ChatPage() {
   const { user } = useAuth();
@@ -412,8 +410,10 @@ export default function ChatPage() {
         <div className="flex-1 overflow-y-auto min-h-0 pb-[calc(8rem+68px+env(safe-area-inset-bottom,0px))] md:pb-32" onClick={() => setShowModelMenu(false)} role="log" aria-label="Chat messages" aria-live="polite">
           <div className="max-w-3xl mx-auto px-4 md:px-6 py-4">
             {messages.length === 0 && (
-              <Suspense fallback={<div className="flex-1" />}>
-                <EmptyState subject={subject} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
+              <Suspense fallback={<div style={{ minHeight: '420px' }} aria-hidden="true" />}>
+                <div style={{ minHeight: '420px' }}>
+                  <EmptyState subject={subject} documentId={documentId} defaultPrompts={defaultPrompts} setInput={setInput} textareaRef={textareaRef} />
+                </div>
               </Suspense>
             )}
               {(() => {
