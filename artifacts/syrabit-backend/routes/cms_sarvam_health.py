@@ -3,7 +3,7 @@ import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, htm
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path,
+    APIRouter, HTTPException, Depends, Query, Body, Path as FastAPIPath,
     File, UploadFile, Response, Request, Cookie, BackgroundTasks,
     Form, Header, status,
 )
@@ -2209,7 +2209,7 @@ async def admin_get_assamese_purity_audit(
 
 @router.post("/admin/assamese-purity/audit/{audit_id}/revert")
 async def admin_revert_assamese_purity(
-    audit_id: str = Path(..., min_length=1, max_length=64),
+    audit_id: str = FastAPIPath(..., min_length=1, max_length=64),
     admin: dict = Depends(get_admin_user),
 ):
     """One-click revert: re-apply the override state that existed
