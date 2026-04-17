@@ -637,6 +637,21 @@ async def admin_bulk_status_update(data: dict, admin: dict = Depends(get_admin_u
                 _schedule_indexnow_for_subject(subj)
         except Exception:
             pass
+    else:
+        # Chapter status changes invalidate dependent subject views and
+        # warrant per-chapter IndexNow pings, mirroring the single-PATCH path.
+        try:
+            _invalidate_content_cache("subjects")
+        except Exception:
+            pass
+        try:
+            async for ch in db.chapters.find(
+                {"id": {"$in": ids}},
+                {"_id": 0, "subject_id": 1, "slug": 1},
+            ):
+                _schedule_indexnow_for_chapter(ch)
+        except Exception:
+            pass
 
     return {
         "scope": scope,
