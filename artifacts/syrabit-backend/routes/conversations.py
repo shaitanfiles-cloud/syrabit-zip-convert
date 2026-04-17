@@ -3,7 +3,7 @@ import re, json, asyncio, time, uuid, logging, hashlib, io, csv, os, base64, htm
 from typing import Optional, List, Dict, Any, Union
 from datetime import datetime, timezone, timedelta
 from fastapi import (
-    APIRouter, HTTPException, Depends, Query, Body, Path as FastAPIPath,
+    APIRouter, HTTPException, Depends, Query, Body, Path,
     File, UploadFile, Response, Request, Cookie, BackgroundTasks,
     Form, Header, status,
 )
