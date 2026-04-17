@@ -591,9 +591,18 @@ export default function AdminContentEditor({ adminToken, onNavigate, hubContext,
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {filteredSubjects.map(s => (
-                      <div key={s.id} className="p-4 rounded-xl border border-gray-200 hover:border-violet-300 bg-white text-left transition-colors group cursor-pointer shadow-sm" onClick={() => setSelSubject(s.id)}>
+                      <div key={s.id} className={`p-4 rounded-xl border bg-white text-left transition-colors group cursor-pointer shadow-sm ${selectedSubjectIds.has(s.id) ? 'border-violet-400 ring-2 ring-violet-200' : 'border-gray-200 hover:border-violet-300'}`} onClick={() => setSelSubject(s.id)}>
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={selectedSubjectIds.has(s.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              onChange={(e) => { e.stopPropagation(); toggleSubjectSelect(s.id); }}
+                              className="h-3.5 w-3.5 rounded border-gray-300 text-violet-600 focus:ring-violet-400 cursor-pointer flex-shrink-0"
+                              title="Select subject for bulk actions"
+                              data-testid={`subject-select-${s.id}`}
+                            />
                             <p className="text-sm font-medium text-gray-900 truncate">{s.icon || '📚'} {s.name}</p>
                           </div>
                           <div className="flex items-center gap-1">
