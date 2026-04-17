@@ -72,3 +72,9 @@ id = "qOpjdaGXtKPXwf-2iG4cy"
 uri = "file://.local/plans/seo-crawler-boost-11-plans.md"
 type = "text"
 title = "Crawler-Boost Roadmap — 11 Independent Plans"
+
+[[outputs]]
+id = "CTUB5gKOwuDIHA8KkM-1R"
+uri = "file://.local/audits/syrabit-feature-audit-tasks-1-352.md"
+type = "text"
+title = "Syrabit.ai — Feature & Workflow Audit (Tasks #1 – #352)"
