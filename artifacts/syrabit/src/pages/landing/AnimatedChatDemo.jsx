@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
 import { GraduationCap, ExternalLink, BookOpen, ArrowLeft, Clock, Share2, MousePointer2 } from 'lucide-react';
 import { LogoMark } from '@/components/Logo';
 
@@ -71,11 +70,12 @@ const PHASES = {
 
 function TypingCursor() {
   return (
-    <motion.span
+    <span
       className="inline-block w-0.5 h-3.5 ml-0.5 align-middle"
-      style={{ background: 'rgba(255,255,255,0.60)' }}
-      animate={{ opacity: [1, 0] }}
-      transition={{ duration: 0.6, repeat: Infinity, repeatType: 'reverse' }}
+      style={{
+        background: 'rgba(255,255,255,0.60)',
+        animation: 'blink 1.2s ease-in-out infinite',
+      }}
     />
   );
 }
@@ -85,18 +85,20 @@ function ThinkingIndicator({ label }) {
     <div className="space-y-2 py-1" style={{ width: '100%', maxWidth: 180 }}>
       <div className="flex items-center gap-1.5 mb-2">
         {[0, 1, 2].map((i) => (
-          <motion.span
+          <span
             key={i}
             className="w-1.5 h-1.5 rounded-full"
-            style={{ background: '#a78bfa' }}
-            animate={{ opacity: [0.3, 1, 0.3] }}
-            transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15, ease: 'easeInOut' }}
+            style={{
+              background: '#a78bfa',
+              animation: 'chatDotPulse 0.8s ease-in-out infinite',
+              animationDelay: `${i * 0.15}s`,
+            }}
           />
         ))}
         <span className="text-xs ml-1" style={{ color: 'rgba(255,255,255,0.60)' }}>{label}</span>
       </div>
       {[1, 0.7, 0.4].map((widthFrac, i) => (
-        <motion.div
+        <div
           key={i}
           className="rounded"
           style={{
@@ -104,9 +106,9 @@ function ThinkingIndicator({ label }) {
             width: `${widthFrac * 100}%`,
             background: 'linear-gradient(90deg, rgba(139,92,246,0.08) 25%, rgba(139,92,246,0.18) 50%, rgba(139,92,246,0.08) 75%)',
             backgroundSize: '200% 100%',
+            animation: 'chatBarShimmer 1.5s linear infinite',
+            animationDelay: `${i * 0.15}s`,
           }}
-          animate={{ backgroundPosition: ['200% 0', '-200% 0'] }}
-          transition={{ duration: 1.5, repeat: Infinity, ease: 'linear', delay: i * 0.15 }}
         />
       ))}
     </div>
@@ -114,23 +116,16 @@ function ThinkingIndicator({ label }) {
 }
 
 function SourceBadge({ pulsing, clicking, label }) {
+  let wrapperAnim = 'none';
+  if (clicking) {
+    wrapperAnim = 'chatBadgeClick 0.35s ease-in-out';
+  } else if (pulsing) {
+    wrapperAnim = 'chatBadgePulse 0.8s ease-in-out 2';
+  }
   return (
-    <motion.div
+    <div
       className="relative flex items-center gap-1.5 mt-2"
-      animate={
-        clicking
-          ? { scale: [1, 0.92, 1.02, 1] }
-          : pulsing
-          ? { scale: [1, 1.05, 1] }
-          : {}
-      }
-      transition={
-        clicking
-          ? { duration: 0.35, ease: 'easeInOut' }
-          : pulsing
-          ? { duration: 0.8, repeat: 2 }
-          : {}
-      }
+      style={{ animation: wrapperAnim }}
     >
       <span
         className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full relative overflow-hidden"
@@ -146,50 +141,52 @@ function SourceBadge({ pulsing, clicking, label }) {
         <BookOpen size={9} />
         {label}
         {clicking && (
-          <motion.span
+          <span
             className="absolute inset-0 rounded-full"
-            initial={{ scale: 0, opacity: 0.6 }}
-            animate={{ scale: 2.5, opacity: 0 }}
-            transition={{ duration: 0.5 }}
-            style={{ background: 'rgba(167,139,250,0.4)', transformOrigin: 'center' }}
+            style={{
+              background: 'rgba(167,139,250,0.4)',
+              transformOrigin: 'center',
+              animation: 'chatRipple 0.5s ease-out both',
+            }}
           />
         )}
       </span>
       <ExternalLink size={10} style={{ color: '#a78bfa', opacity: 0.7 }} />
 
       {clicking && (
-        <motion.div
+        <div
           className="absolute"
-          initial={{ x: -30, y: -20, opacity: 0 }}
-          animate={{ x: 4, y: 4, opacity: 1 }}
-          transition={{ duration: 0.3, ease: 'easeOut' }}
-          style={{ zIndex: 10, left: 0, top: 0 }}
+          style={{
+            zIndex: 10,
+            left: 0,
+            top: 0,
+            animation: 'chatCursorIn 0.3s ease-out both',
+          }}
         >
           <MousePointer2 size={14} style={{ color: 'white', filter: 'drop-shadow(0 1px 3px rgba(0,0,0,0.5))' }} />
-        </motion.div>
+        </div>
       )}
-    </motion.div>
+    </div>
   );
 }
+
+const slideUpAnim = 'slideUp 0.3s ease-out both';
+const fadeInAnim = 'fadeIn 0.3s ease-out both';
 
 function ContentPageView({ t }) {
   return (
     <div className="p-5 space-y-4">
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.1, duration: 0.3 }}
+      <div
         className="flex items-center gap-2"
+        style={{ animation: fadeInAnim, animationDelay: '0.1s' }}
       >
         <ArrowLeft size={14} style={{ color: 'rgba(255,255,255,0.60)' }} />
         <span className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}>{t.backToChat}</span>
-      </motion.div>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0, y: 10 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.15, duration: 0.35 }}
+      <div
         className="flex items-start justify-between"
+        style={{ animation: slideUpAnim, animationDelay: '0.15s' }}
       >
         <div>
           <h3 className="text-sm font-bold text-white mb-1">{t.pageTitle}</h3>
@@ -204,31 +201,31 @@ function ContentPageView({ t }) {
           </span>
           <Share2 size={11} style={{ color: 'rgba(255,255,255,0.60)' }} />
         </div>
-      </motion.div>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.25, duration: 0.3 }}
-        style={{ height: 1, background: 'rgba(255,255,255,0.06)' }}
+      <div
+        style={{
+          height: 1,
+          background: 'rgba(255,255,255,0.06)',
+          animation: fadeInAnim,
+          animationDelay: '0.25s',
+        }}
       />
 
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3, duration: 0.35 }}
-      >
+      <div style={{ animation: slideUpAnim, animationDelay: '0.3s' }}>
         <p className="text-xs leading-relaxed mb-3" style={{ color: 'rgba(255,255,255,0.65)' }}>
           {t.pageDesc}
         </p>
-      </motion.div>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.45, duration: 0.35 }}
+      <div
         className="rounded-lg p-3"
-        style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.12)' }}
+        style={{
+          background: 'rgba(139,92,246,0.08)',
+          border: '1px solid rgba(139,92,246,0.12)',
+          animation: slideUpAnim,
+          animationDelay: '0.45s',
+        }}
       >
         <p className="text-xs font-semibold mb-2" style={{ color: 'rgba(255,255,255,0.60)' }}>{t.eqTitle}</p>
         <code
@@ -242,13 +239,11 @@ function ContentPageView({ t }) {
             <p key={sym} className="text-xs" style={{ color: 'rgba(255,255,255,0.60)' }}><span style={{ color: '#a78bfa' }}>{sym}</span> = {desc}</p>
           ))}
         </div>
-      </motion.div>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.6, duration: 0.3 }}
+      <div
         className="flex items-center gap-3 pt-1"
+        style={{ animation: fadeInAnim, animationDelay: '0.6s' }}
       >
         <span
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full"
@@ -269,15 +264,10 @@ function ContentPageView({ t }) {
         >
           {t.tag2}
         </span>
-      </motion.div>
+      </div>
     </div>
   );
 }
-
-const fadeSlide = {
-  hidden: { opacity: 0, y: 10 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.35, ease: 'easeOut' } },
-};
 
 export default function AnimatedChatDemo({ onUrlChange, contentLang = 'en' }) {
   const t = _demo[contentLang] || _demo.en;
@@ -412,107 +402,79 @@ export default function AnimatedChatDemo({ onUrlChange, contentLang = 'en' }) {
       ref={containerRef}
       style={{ minHeight: 200, transition: `opacity ${FADE_DURATION}ms ease`, opacity: containerOpacity }}
     >
-      <AnimatePresence mode="wait">
-        {!showPageView ? (
-          <motion.div
-            key="chat-view"
-            initial={{ opacity: 1 }}
-            exit={{ opacity: 0, x: -20 }}
-            transition={{ duration: 0.3 }}
-            className="p-6 text-left space-y-4"
-          >
-            <AnimatePresence>
-              {showStudent && (
-                <motion.div
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="flex items-start gap-3 flex-row-reverse"
-                >
-                  <div
-                    className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
-                    style={{ background: 'rgba(124,58,237,0.20)', border: '1px solid rgba(139,92,246,0.30)' }}
-                  >
-                    <GraduationCap size={14} className="text-violet-400" />
-                  </div>
-                  <div
-                    className="px-4 py-3 text-sm max-w-xs"
-                    style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '1rem 0 1rem 1rem', color: 'rgba(255,255,255,0.80)' }}
-                  >
-                    {STUDENT_MESSAGE.slice(0, typedCount)}
-                    {phase === PHASES.TYPING && <TypingCursor />}
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+      {!showPageView ? (
+        <div key="chat-view" className="p-6 text-left space-y-4">
+          {showStudent && (
+            <div
+              className="flex items-start gap-3 flex-row-reverse"
+              style={{ animation: slideUpAnim }}
+            >
+              <div
+                className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
+                style={{ background: 'rgba(124,58,237,0.20)', border: '1px solid rgba(139,92,246,0.30)' }}
+              >
+                <GraduationCap size={14} className="text-violet-400" />
+              </div>
+              <div
+                className="px-4 py-3 text-sm max-w-xs"
+                style={{ background: 'rgba(255,255,255,0.06)', borderRadius: '1rem 0 1rem 1rem', color: 'rgba(255,255,255,0.80)' }}
+              >
+                {STUDENT_MESSAGE.slice(0, typedCount)}
+                {phase === PHASES.TYPING && <TypingCursor />}
+              </div>
+            </div>
+          )}
 
-            <AnimatePresence>
-              {showThinking && (
-                <motion.div
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.25 }}
-                  className="flex items-start gap-3"
-                >
-                  <div
-                    className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
-                    style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' }}
-                  >
-                    <LogoMark size="xs" style={{ filter: 'none' }} />
-                  </div>
-                  <div className="px-4 py-3 text-sm max-w-sm" style={aiBubbleStyle}>
-                    <ThinkingIndicator label={t.thinking} />
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
+          {showThinking && (
+            <div
+              className="flex items-start gap-3"
+              style={{ animation: slideUpAnim }}
+            >
+              <div
+                className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
+                style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' }}
+              >
+                <LogoMark size="xs" style={{ filter: 'none' }} />
+              </div>
+              <div className="px-4 py-3 text-sm max-w-sm" style={aiBubbleStyle}>
+                <ThinkingIndicator label={t.thinking} />
+              </div>
+            </div>
+          )}
 
-            <AnimatePresence>
-              {(showShortAnswer || showClicking) && (
-                <motion.div
-                  initial={{ opacity: 0, y: 12 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.3 }}
-                  className="flex items-start gap-3"
-                >
-                  <div
-                    className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
-                    style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' }}
-                  >
-                    <LogoMark size="xs" style={{ filter: 'none' }} />
+          {(showShortAnswer || showClicking) && (
+            <div
+              className="flex items-start gap-3"
+              style={{ animation: slideUpAnim }}
+            >
+              <div
+                className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center"
+                style={{ background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)' }}
+              >
+                <LogoMark size="xs" style={{ filter: 'none' }} />
+              </div>
+              <div className="px-4 py-3 text-sm max-w-sm" style={aiBubbleStyle}>
+                <p className="text-xs leading-relaxed" style={{ color: 'rgba(255,255,255,0.78)' }}>
+                  {AI_SHORT_ANSWER.slice(0, shortAnswerTyped)}
+                  {shortAnswerTyped < AI_SHORT_ANSWER.length && <TypingCursor />}
+                </p>
+                {shortAnswerTyped >= AI_SHORT_ANSWER.length && (
+                  <div style={{ animation: slideUpAnim }}>
+                    <SourceBadge pulsing={showShortAnswer} clicking={showClicking} label={t.sourceBadge} />
                   </div>
-                  <div className="px-4 py-3 text-sm max-w-sm" style={aiBubbleStyle}>
-                    <p className="text-xs leading-relaxed" style={{ color: 'rgba(255,255,255,0.78)' }}>
-                      {AI_SHORT_ANSWER.slice(0, shortAnswerTyped)}
-                      {shortAnswerTyped < AI_SHORT_ANSWER.length && <TypingCursor />}
-                    </p>
-                    <AnimatePresence>
-                      {shortAnswerTyped >= AI_SHORT_ANSWER.length && (
-                        <motion.div variants={fadeSlide} initial="hidden" animate="visible">
-                          <SourceBadge pulsing={showShortAnswer} clicking={showClicking} label={t.sourceBadge} />
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        ) : (
-          <motion.div
-            key="page-view"
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <ContentPageView t={t} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div
+          key="page-view"
+          style={{ animation: 'chatSlideInRight 0.4s cubic-bezier(0.16, 1, 0.3, 1) both' }}
+        >
+          <ContentPageView t={t} />
+        </div>
+      )}
     </div>
   );
 }

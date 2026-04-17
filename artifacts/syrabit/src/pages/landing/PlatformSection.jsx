@@ -1,9 +1,7 @@
-import { motion } from 'framer-motion';
 import {
   Rocket, Library, GitBranch, BookMarked, MessageSquareText, Users,
   Sparkles,
 } from 'lucide-react';
-import { fadeUp, staggerContainer } from './shared';
 import Reveal from './Reveal';
 
 const SECTIONS = {
@@ -54,23 +52,15 @@ export default function PlatformSection({ contentLang = 'en' }) {
         </p>
       </Reveal>
 
-      <motion.div
-        initial="hidden"
-        whileInView="visible"
-        viewport={{ once: true, margin: '-60px' }}
-        variants={staggerContainer}
-        className="grid md:grid-cols-2 lg:grid-cols-3 gap-5"
-      >
-        {sections.map((s) => (
-          <motion.div
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {sections.map((s, i) => (
+          <Reveal
             key={s.title}
-            variants={fadeUp()}
-            whileHover={{ y: -6, boxShadow: `0 12px 40px ${s.glow}` }}
-            className="group relative rounded-3xl p-6 cursor-default transition-shadow duration-300 glass-card"
-            style={{ border: `1px solid ${s.border}` }}
+            delay={i * 0.08}
+            className="group relative rounded-3xl p-6 cursor-default transition-all duration-300 glass-card hover:-translate-y-1.5"
           >
             <div
-              className="absolute inset-0 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-400 pointer-events-none"
+              className="absolute inset-0 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none"
               style={{ background: `radial-gradient(circle at 50% 0%,${s.glow},transparent 70%)` }}
             />
             <div
@@ -81,9 +71,9 @@ export default function PlatformSection({ contentLang = 'en' }) {
             </div>
             <h3 className="text-foreground mb-2 relative z-10" style={{ fontWeight: 700, fontSize: '1rem' }}>{s.title}</h3>
             <p className="text-sm leading-relaxed relative z-10 text-muted-foreground">{s.desc}</p>
-          </motion.div>
+          </Reveal>
         ))}
-      </motion.div>
+      </div>
     </section>
   );
 }

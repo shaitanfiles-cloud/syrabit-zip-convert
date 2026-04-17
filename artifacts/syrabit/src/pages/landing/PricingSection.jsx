@@ -1,7 +1,5 @@
 import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import { Zap, ArrowRight, Sparkles, CheckCircle, Trophy } from 'lucide-react';
-import { fadeUp, staggerContainer } from './shared';
 import Reveal from './Reveal';
 import GlowOrb from './GlowOrb';
 
@@ -95,32 +93,25 @@ export default function PricingSection({ contentLang = 'en' }) {
           </p>
         </Reveal>
 
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: '-60px' }}
-          variants={staggerContainer}
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"
-        >
-          {plans.map((plan) => {
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {plans.map((plan, i) => {
             const isPro = plan.id === 'pro';
             const priceColor = isPro ? '#d97706' : '#7c3aed';
             return (
-              <motion.div
+              <Reveal
                 key={plan.id}
-                variants={fadeUp()}
-                whileHover={{ y: -6 }}
-                className="relative rounded-3xl p-7 flex flex-col transition-shadow duration-300 glass-card"
-                data-testid="pricing-plan-card"
-                style={
+                delay={i * 0.08}
+                className="relative rounded-3xl p-7 flex flex-col transition-all duration-300 glass-card hover:-translate-y-1.5"
+              ><div data-testid="pricing-plan-card" style={
                   plan.highlighted
                     ? {
                         border: '1px solid rgba(139,92,246,0.30)',
                         boxShadow: '0 0 50px rgba(139,92,246,0.08)',
+                        borderRadius: '1.5rem',
+                        padding: 0,
                       }
                     : {}
-                }
-              >
+                }>
                 {plan.badge && (
                   <div
                     className="absolute -top-3 left-1/2 -translate-x-1/2 px-3 py-1 rounded-full"
@@ -175,10 +166,11 @@ export default function PricingSection({ contentLang = 'en' }) {
                 >
                   {plan.ctaText} <ArrowRight size={16} />
                 </Link>
-              </motion.div>
+                </div>
+              </Reveal>
             );
           })}
-        </motion.div>
+        </div>
 
         <p className="text-center text-sm mt-8 text-muted-foreground/50">
           {t.footer}

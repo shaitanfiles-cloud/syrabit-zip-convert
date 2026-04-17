@@ -1,8 +1,6 @@
-import { motion } from 'framer-motion';
 import { BookOpen, Users, TrendingUp } from 'lucide-react';
 import AnimatedStat from './AnimatedStat';
 import AnimatedChatDemo from './AnimatedChatDemo';
-import { fadeUp, staggerContainer } from './shared';
 import { usePublicStats } from '@/hooks/usePublicStats';
 
 const _statLabels = {
@@ -23,11 +21,9 @@ export default function HeroBelowFold({ contentLang = 'en', browserPath, onUrlCh
 
   return (
     <>
-      <motion.div
-        initial={{ opacity: 0, y: 48, scale: 0.94 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 1, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
+      <div
         className="mt-16 relative max-w-3xl mx-auto"
+        style={{ animation: 'heroFrameIn 1s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both' }}
       >
         <div
           className="absolute -inset-4 rounded-3xl pointer-events-none"
@@ -52,22 +48,19 @@ export default function HeroBelowFold({ contentLang = 'en', browserPath, onUrlCh
               className="flex-1 mx-4 h-6 rounded-lg flex items-center px-3"
               style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)' }}
             >
-              <motion.span
+              <span
                 key={browserPath}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.3 }}
                 className="text-xs"
-                style={{ color: 'rgba(255,255,255,0.60)' }}
+                style={{ color: 'rgba(255,255,255,0.60)', animation: 'fadeIn 0.3s ease-out both' }}
               >
                 syrabit.ai/{browserPath}
-              </motion.span>
+              </span>
             </div>
           </div>
 
           <AnimatedChatDemo onUrlChange={onUrlChange} contentLang={contentLang} />
         </div>
-      </motion.div>
+      </div>
 
       <section
         className="py-16 mt-16 -mx-5"
@@ -77,19 +70,16 @@ export default function HeroBelowFold({ contentLang = 'en', browserPath, onUrlCh
           borderBottom: '1px solid hsl(var(--border) / 0.3)',
         }}
       >
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: '-60px' }}
-          variants={staggerContainer}
-          className="max-w-4xl mx-auto px-5 grid grid-cols-1 sm:grid-cols-3 gap-8"
-        >
+        <div className="max-w-4xl mx-auto px-5 grid grid-cols-1 sm:grid-cols-3 gap-8">
           {stats.map((s, i) => (
-            <motion.div key={s.label} variants={fadeUp(i * 0.07)}>
+            <div
+              key={s.label}
+              style={{ animation: `revealUp 0.7s cubic-bezier(0.16, 1, 0.3, 1) ${i * 0.07}s both` }}
+            >
               <AnimatedStat value={s.value} label={s.label} icon={s.icon} />
-            </motion.div>
+            </div>
           ))}
-        </motion.div>
+        </div>
       </section>
     </>
   );

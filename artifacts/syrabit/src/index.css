@@ -215,6 +215,56 @@
   50%      { box-shadow: 0 0 0 4px rgba(139,92,246,0.25); }
 }
 
+/* Chat-demo: badge gentle pulse (used twice) */
+@keyframes chatBadgePulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.05); }
+}
+
+/* Chat-demo: badge click bounce */
+@keyframes chatBadgeClick {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(0.92); }
+  70%  { transform: scale(1.02); }
+  100% { transform: scale(1); }
+}
+
+/* Chat-demo: ripple expand */
+@keyframes chatRipple {
+  from { transform: scale(0);   opacity: 0.6; }
+  to   { transform: scale(2.5); opacity: 0;   }
+}
+
+/* Chat-demo: cursor entrance */
+@keyframes chatCursorIn {
+  from { transform: translate(-30px, -20px); opacity: 0; }
+  to   { transform: translate(4px, 4px);     opacity: 1; }
+}
+
+/* Chat-demo: shimmer bar (background-position sweep) */
+@keyframes chatBarShimmer {
+  from { background-position:  200% 0; }
+  to   { background-position: -200% 0; }
+}
+
+/* Chat-demo: thinking dots opacity pulse */
+@keyframes chatDotPulse {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1;   }
+}
+
+/* Chat-demo: page-view slide in from right */
+@keyframes chatSlideInRight {
+  from { opacity: 0; transform: translateX(20px); }
+  to   { opacity: 1; transform: translateX(0);    }
+}
+
+/* Hero browser frame: scale + slide entrance */
+@keyframes heroFrameIn {
+  from { opacity: 0; transform: translateY(48px) scale(0.94); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
+}
+
 /* Accordion (Radix) */
 @keyframes accordion-down {
   from { height: 0; }

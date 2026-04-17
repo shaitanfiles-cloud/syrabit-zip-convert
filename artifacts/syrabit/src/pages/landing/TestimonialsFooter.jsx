@@ -1,9 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import { Sparkles, ChevronRight, Twitter, Github, Mail, Globe } from 'lucide-react';
 import { LogoMark, LogoFull } from '@/components/Logo';
-import { fadeUp, staggerContainer } from './shared';
 import Reveal from './Reveal';
 import GlowOrb from './GlowOrb';
 
@@ -161,16 +159,9 @@ export default function TestimonialsFooter({ year, contentLang = 'en' }) {
           </p>
         </Reveal>
 
-        <motion.div
-          initial="hidden"
-          whileInView="visible"
-          viewport={{ once: true, margin: '-60px' }}
-          variants={staggerContainer}
-        >
-          <motion.div variants={fadeUp()}>
-            <TrustpilotCarousel label={t.trustpilotLink} />
-          </motion.div>
-        </motion.div>
+        <Reveal>
+          <TrustpilotCarousel label={t.trustpilotLink} />
+        </Reveal>
 
         <TrustpilotMini label={t.trustpilotMini} />
       </section>
@@ -182,13 +173,12 @@ export default function TestimonialsFooter({ year, contentLang = 'en' }) {
         </div>
 
         <Reveal className="relative z-10 max-w-2xl mx-auto px-5 text-center">
-          <motion.div
-            animate={{ y: [0, -8, 0] }}
-            transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+          <div
             className="flex justify-center mb-8"
+            style={{ animation: 'float 4s ease-in-out infinite' }}
           >
             <LogoMark size="lg" />
-          </motion.div>
+          </div>
 
           <h2 className="text-foreground mb-4" style={{ fontSize: 'clamp(2rem,4vw,3rem)', fontWeight: 900, letterSpacing: '-0.02em' }}>
             {t.ctaHeading}
@@ -198,40 +188,36 @@ export default function TestimonialsFooter({ year, contentLang = 'en' }) {
           </p>
 
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <motion.div whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.97 }}>
-              <Link
-                to="/signup"
-                className="flex items-center gap-2 text-white font-bold"
-                style={{
-                  height: 56,
-                  padding: '0 2.5rem',
-                  borderRadius: '1rem',
-                  fontSize: '1.125rem',
-                  background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
-                  boxShadow: '0 8px 40px rgba(139,92,246,0.25)',
-                }}
-                data-testid="landing-final-cta-button"
-              >
-                <Sparkles size={20} />
-                {t.ctaPrimary}
-              </Link>
-            </motion.div>
-            <motion.div whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.97 }}>
-              <Link
-                to="/pricing"
-                className="flex items-center gap-2 font-semibold text-muted-foreground"
-                style={{
-                  height: 56,
-                  padding: '0 2rem',
-                  borderRadius: '1rem',
-                  fontSize: '1rem',
-                  border: '1px solid hsl(var(--border))',
-                  background: 'hsl(var(--muted) / 0.3)',
-                }}
-              >
-                {t.ctaSecondary} <ChevronRight size={18} />
-              </Link>
-            </motion.div>
+            <Link
+              to="/signup"
+              className="flex items-center gap-2 text-white font-bold transition-transform duration-200 ease-out hover:scale-[1.04] hover:-translate-y-0.5 active:scale-[0.97]"
+              style={{
+                height: 56,
+                padding: '0 2.5rem',
+                borderRadius: '1rem',
+                fontSize: '1.125rem',
+                background: 'linear-gradient(135deg,#7c3aed,#8b5cf6)',
+                boxShadow: '0 8px 40px rgba(139,92,246,0.25)',
+              }}
+              data-testid="landing-final-cta-button"
+            >
+              <Sparkles size={20} />
+              {t.ctaPrimary}
+            </Link>
+            <Link
+              to="/pricing"
+              className="flex items-center gap-2 font-semibold text-muted-foreground transition-transform duration-200 ease-out hover:scale-[1.04] hover:-translate-y-0.5 active:scale-[0.97]"
+              style={{
+                height: 56,
+                padding: '0 2rem',
+                borderRadius: '1rem',
+                fontSize: '1rem',
+                border: '1px solid hsl(var(--border))',
+                background: 'hsl(var(--muted) / 0.3)',
+              }}
+            >
+              {t.ctaSecondary} <ChevronRight size={18} />
+            </Link>
           </div>
         </Reveal>
       </section>
@@ -249,16 +235,14 @@ export default function TestimonialsFooter({ year, contentLang = 'en' }) {
               </p>
               <div className="flex items-center gap-2">
                 {[{ icon: Twitter, label: 'Twitter' }, { icon: Github, label: 'GitHub' }, { icon: Mail, label: 'Email' }].map(({ icon: Icon, label }) => (
-                  <motion.button
+                  <button
                     key={label}
                     aria-label={label}
-                    whileHover={{ scale: 1.1 }}
-                    whileTap={{ scale: 0.95 }}
-                    className="w-11 h-11 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
+                    className="w-11 h-11 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground transition-all duration-200 ease-out hover:scale-110 active:scale-95"
                     style={{ background: 'hsl(var(--muted) / 0.5)', border: '1px solid hsl(var(--border) / 0.3)' }}
                   >
                     <Icon size={16} />
-                  </motion.button>
+                  </button>
                 ))}
               </div>
             </div>
