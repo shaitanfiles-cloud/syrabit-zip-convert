@@ -351,3 +351,216 @@ class TestPersistedOverrideRoundTrip:
         assert get_threshold() == pytest.approx(0.09)
         ov = get_runtime_override()
         assert ov and ov.get("updated_by") == "boot-test"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Cross-worker propagation (Task #425)
+#
+# Each gunicorn worker reads the persisted override doc every
+# `_ASM_REFRESH_INTERVAL_SECONDS` from a background loop scheduled in
+# the lifespan hook. The unit tests above cover the loader function in
+# isolation; the tests below additionally pin down the cross-worker
+# *timing* contract:
+#
+#   • A PATCH made on worker A must be observable by worker B within
+#     the documented propagation budget (~20s, i.e. one refresh cycle
+#     plus jitter).
+#   • A DELETE made on worker A must clear worker B's in-memory
+#     override within the same budget.
+#   • The 15s constant itself is part of the contract — if someone
+#     bumps it above 20s, the runbook promise breaks and on-call
+#     gets surprised.
+# ──────────────────────────────────────────────────────────────────────
+
+
+class _SharedMongoStub:
+    """Tiny stateful stand-in for `db.api_config` shared by both
+    simulated workers, so a write from worker A is visible to worker
+    B's read. Implements only the minimum subset of motor semantics
+    used by the route + loader code: a single doc with `$set` /
+    `$unset` updates and `find_one` projection."""
+
+    def __init__(self) -> None:
+        self._doc: dict = {}
+
+    async def find_one(self, filter_, projection=None):
+        if not self._doc:
+            return None
+        return dict(self._doc)
+
+    async def update_one(self, filter_, update, upsert=False):
+        for k, v in (update.get("$set") or {}).items():
+            self._doc[k] = v
+        for k in (update.get("$unset") or {}).keys():
+            self._doc.pop(k, None)
+        return None
+
+
+def _shared_db():
+    api_cfg = _SharedMongoStub()
+    db = MagicMock()
+    db.api_config = api_cfg
+    return db, api_cfg
+
+
+class TestCrossWorkerPropagation:
+    """Two workers, one shared mongo, one persisted-override doc.
+    Worker A mutates via the route handlers; worker B picks up the
+    change by running the same poll the background loop runs."""
+
+    def test_propagation_budget_constant_is_within_runbook_promise(self):
+        """If anyone shortens this loop too aggressively or — far
+        worse — bumps it past 20s, the ops runbook lies. Lock it in."""
+        from routes.cms_sarvam_health import _ASM_REFRESH_INTERVAL_SECONDS
+        assert 0 < _ASM_REFRESH_INTERVAL_SECONDS <= 20, (
+            f"Refresh interval {_ASM_REFRESH_INTERVAL_SECONDS}s violates "
+            "the documented ~20s cross-worker propagation budget."
+        )
+
+    def test_patch_on_worker_a_propagates_to_worker_b_within_budget(
+        self, app_client
+    ):
+        """Worker A serves the PATCH (writes the persisted doc).
+        Worker B is a separate process — i.e. its in-memory override
+        is empty — and only sees the change when its refresh loop
+        ticks. Simulate a single tick by calling the loader directly,
+        which is exactly what the loop does each cycle."""
+        import asyncio
+        from lang_sanitizer import (
+            clear_runtime_override,
+            get_behaviour,
+            get_threshold,
+            get_runtime_override,
+        )
+        from routes.cms_sarvam_health import (
+            apply_persisted_assamese_purity_override,
+        )
+
+        db, _ = _shared_db()
+
+        # ── Worker A: PATCH writes the persisted doc to shared mongo.
+        with _patch_db(db):
+            r = app_client.patch(
+                "/admin/assamese-purity",
+                json={"behaviour": "off", "threshold": 0.07},
+            )
+        assert r.status_code == 200
+
+        # ── Worker B: simulate a fresh process — no in-memory override.
+        clear_runtime_override()
+        assert get_runtime_override() is None
+
+        # One refresh-loop tick on worker B reads the persisted doc.
+        with _patch_db(db):
+            asyncio.new_event_loop().run_until_complete(
+                apply_persisted_assamese_purity_override()
+            )
+
+        # Worker B now sees worker A's PATCH.
+        assert get_behaviour() == "off"
+        assert get_threshold() == pytest.approx(0.07)
+        ov = get_runtime_override()
+        assert ov and ov.get("behaviour") == "off"
+        assert ov.get("threshold") == pytest.approx(0.07)
+
+    def test_delete_on_worker_a_propagates_to_worker_b_within_budget(
+        self, app_client
+    ):
+        """Same shape as the PATCH test, but for DELETE: worker A
+        clears the persisted doc, worker B starts WITH an in-memory
+        override (e.g. seeded from boot or a prior PATCH it served
+        itself), and one refresh tick must drop it."""
+        import asyncio
+        from lang_sanitizer import (
+            apply_runtime_override,
+            clear_runtime_override,
+            get_runtime_override,
+        )
+        from routes.cms_sarvam_health import (
+            apply_persisted_assamese_purity_override,
+        )
+
+        db, api_cfg = _shared_db()
+
+        # Pre-seed mongo so worker A has something to delete.
+        api_cfg._doc["assamese_purity_override"] = {
+            "behaviour": "off",
+            "threshold": 0.07,
+            "updated_by": "ops@syrabit.ai",
+        }
+
+        # ── Worker A: DELETE removes the persisted doc.
+        with _patch_db(db):
+            r = app_client.delete("/admin/assamese-purity")
+        assert r.status_code == 200
+        assert "assamese_purity_override" not in api_cfg._doc
+
+        # ── Worker B: starts with a stale in-memory override (it
+        # served the PATCH earlier and hasn't ticked yet).
+        apply_runtime_override(
+            behaviour="off", threshold=0.07, updated_by="worker-b-stale"
+        )
+        assert get_runtime_override() is not None
+
+        # One refresh-loop tick on worker B reconciles → cleared.
+        with _patch_db(db):
+            asyncio.new_event_loop().run_until_complete(
+                apply_persisted_assamese_purity_override()
+            )
+        assert get_runtime_override() is None
+        clear_runtime_override()
+
+    def test_refresh_loop_picks_up_change_from_a_running_tick(
+        self, app_client, monkeypatch
+    ):
+        """End-to-end timing check: actually run the background loop
+        with a tiny interval, mutate the persisted doc mid-flight,
+        and assert worker B's in-memory state reflects the change
+        within the propagation budget. Guards against someone removing
+        the `await apply_persisted_assamese_purity_override()` call
+        from the loop body (which the loader-only tests would miss)."""
+        import asyncio
+        from lang_sanitizer import (
+            clear_runtime_override, get_runtime_override,
+        )
+        from routes import cms_sarvam_health as mod
+
+        db, api_cfg = _shared_db()
+
+        # Compress the loop interval so the test stays fast while
+        # still exercising the real loop body. The production budget
+        # (15s) is asserted separately above; here we only need to
+        # prove the loop calls the loader on every tick.
+        monkeypatch.setattr(mod, "_ASM_REFRESH_INTERVAL_SECONDS", 0.05)
+
+        async def _scenario():
+            clear_runtime_override()
+            with _patch_db(db):
+                task = asyncio.create_task(mod._assamese_purity_refresh_loop())
+                try:
+                    # Mid-flight write from "worker A".
+                    api_cfg._doc["assamese_purity_override"] = {
+                        "behaviour": "strip",
+                        "threshold": 0.11,
+                        "updated_by": "live-loop-test",
+                    }
+                    # Worker B's loop should observe within a few
+                    # ticks; cap the wait well under the prod budget.
+                    deadline = asyncio.get_event_loop().time() + 2.0
+                    while asyncio.get_event_loop().time() < deadline:
+                        ov = get_runtime_override()
+                        if ov and ov.get("behaviour") == "strip":
+                            return ov
+                        await asyncio.sleep(0.05)
+                    return get_runtime_override()
+                finally:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+
+        ov = asyncio.new_event_loop().run_until_complete(_scenario())
+        assert ov is not None, "refresh loop never picked up the change"
+        assert ov.get("behaviour") == "strip"
+        assert ov.get("threshold") == pytest.approx(0.11)
