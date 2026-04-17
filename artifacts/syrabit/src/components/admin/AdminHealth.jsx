@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2 } from 'lucide-react';
+import { Database, Zap, CreditCard, RefreshCw, ShieldCheck, AlertTriangle, Wifi, Copy, Check, Users, Activity, MessageSquare, TrendingUp, DollarSign, BarChart2, RotateCw, Clock } from 'lucide-react';
+import { toast } from 'sonner';
 import AdminQuickLinks from './AdminQuickLinks';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, BarChart, Bar } from 'recharts';
 import axios from 'axios';
@@ -47,6 +48,87 @@ function CustomTooltip({ active, payload, label }) {
   );
 }
 
+function formatRelative(ts) {
+  if (!ts) return 'never';
+  const d = typeof ts === 'number' ? new Date(ts * (ts < 1e12 ? 1000 : 1)) : new Date(ts);
+  if (isNaN(d.getTime())) return String(ts);
+  const diff = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
+function PrerenderStatusBody({ status }) {
+  const last = status.last_triggered_at ?? status.last_fired_at ?? status.last_fire_at ?? status.last_fire ?? status.last_at;
+  const lastStatus = status.last_status ?? status.status ?? '—';
+  const lastReason = status.last_reason ?? status.reason ?? '';
+  const lastError = status.last_error ?? status.error;
+  const queued = status.pending_reasons ?? status.queued_reasons ?? status.queued ?? [];
+  const queuedList = Array.isArray(queued) ? queued : (typeof queued === 'string' ? queued.split(',').filter(Boolean) : []);
+  const configured = status.configured ?? status.is_configured;
+
+  const statusColor =
+    lastStatus === 'ok' || lastStatus === 'success' ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
+    : lastStatus === 'error' || lastStatus === 'failed' ? 'text-red-600 bg-red-50 border-red-200'
+    : 'text-gray-500 bg-gray-50 border-gray-200';
+
+  return (
+    <div className="space-y-3">
+      {configured === false && (
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-700">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <span><span className="font-mono font-semibold">CF_PAGES_DEPLOY_HOOK_URL</span> is not configured on the backend. Refresh requests will fail.</span>
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="rounded-xl p-3 border border-gray-200 bg-white">
+          <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1 flex items-center gap-1">
+            <Clock size={10} /> Last fired
+          </p>
+          <p className="text-sm font-mono font-semibold text-gray-900" data-testid="prerender-last-fired">
+            {formatRelative(last)}
+          </p>
+          {last && (
+            <p className="text-[10px] text-gray-400 mt-0.5">
+              {(typeof last === 'number' ? new Date(last * (last < 1e12 ? 1000 : 1)) : new Date(last)).toLocaleString()}
+            </p>
+          )}
+        </div>
+
+        <div className={`rounded-xl p-3 border ${statusColor}`}>
+          <p className="text-[10px] uppercase tracking-wider opacity-60 mb-1">Last status</p>
+          <p className="text-sm font-mono font-semibold capitalize" data-testid="prerender-last-status">{lastStatus}</p>
+          {lastReason && <p className="text-[10px] opacity-70 mt-0.5 truncate" title={lastReason}>{lastReason}</p>}
+        </div>
+
+        <div className="rounded-xl p-3 border border-gray-200 bg-white">
+          <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-1">Queued reasons</p>
+          <p className="text-sm font-mono font-semibold text-gray-900" data-testid="prerender-queued-count">
+            {queuedList.length}
+          </p>
+          {queuedList.length > 0 && (
+            <p className="text-[10px] text-gray-400 mt-0.5 truncate" title={queuedList.join(', ')}>
+              {queuedList.slice(0, 3).join(', ')}{queuedList.length > 3 ? '…' : ''}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {lastError && (
+        <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+          <div>
+            <p className="font-semibold mb-0.5">Last error</p>
+            <p className="font-mono break-all">{String(lastError)}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AdminHealth({ adminToken, onNavigate }) {
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -58,6 +140,42 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [llmLoading, setLlmLoading] = useState(false);
   const [llmDays, setLlmDays] = useState(7);
   const [healthTab, setHealthTab] = useState('infra');
+  const [prerender, setPrerender] = useState(null);
+  const [prerenderLoading, setPrerenderLoading] = useState(false);
+  const [prerenderTriggering, setPrerenderTriggering] = useState(false);
+
+  const loadPrerender = useCallback(() => {
+    setPrerenderLoading(true);
+    axios.get(`${API_BASE}/admin/prerender/status`, {
+      headers: adminHeaders(adminToken),
+      withCredentials: true,
+    })
+      .then((r) => setPrerender(r.data))
+      .catch((e) => setPrerender({ _error: e?.response?.data?.detail || 'Failed to load prerender status' }))
+      .finally(() => setPrerenderLoading(false));
+  }, [adminToken]);
+
+  const triggerPrerender = useCallback(() => {
+    setPrerenderTriggering(true);
+    axios.post(`${API_BASE}/admin/prerender/refresh?immediate=true`, null, {
+      headers: adminHeaders(adminToken),
+      withCredentials: true,
+    })
+      .then((r) => {
+        setPrerender(r.data?.status || null);
+        toast.success(r.data?.queued ? 'Cloudflare Pages rebuild queued' : 'Refresh requested (not queued)');
+      })
+      .catch((e) => {
+        const msg = e?.response?.data?.detail || 'Failed to trigger refresh';
+        toast.error(msg);
+      })
+      .finally(() => {
+        setPrerenderTriggering(false);
+        setTimeout(loadPrerender, 800);
+      });
+  }, [adminToken, loadPrerender]);
+
+  useEffect(() => { if (healthTab === 'prerender') loadPrerender(); }, [healthTab, loadPrerender]);
 
   const healthUrl = `${import.meta.env.VITE_BACKEND_URL || ''}/health`;
 
@@ -119,8 +237,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     <div className="space-y-5 max-w-4xl">
       <div className="flex gap-1 p-1 rounded-xl w-fit bg-gray-100">
         {[
-          { id: 'infra', label: 'Infrastructure' },
-          { id: 'llm',   label: 'LLM Cost Tracker' },
+          { id: 'infra',     label: 'Infrastructure' },
+          { id: 'llm',       label: 'LLM Cost Tracker' },
+          { id: 'prerender', label: 'Prerender Refresh' },
         ].map(t => (
           <button key={t.id} onClick={() => setHealthTab(t.id)}
             className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -207,6 +326,64 @@ export default function AdminHealth({ adminToken, onNavigate }) {
               )}
             </>
           ) : null}
+        </div>
+      )}
+
+      {healthTab === 'prerender' && (
+        <div className="space-y-4">
+          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <RotateCw size={14} className="text-violet-500" />
+                  Cloudflare Pages prerender refresh
+                </h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  Rebuilds the prerendered subject &amp; chapter HTML so admin edits go live for crawlers and first paint.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={loadPrerender}
+                  disabled={prerenderLoading}
+                  className="px-3 py-1.5 rounded-lg text-xs border border-gray-200 text-gray-500 hover:text-gray-700 disabled:opacity-50"
+                  data-testid="button-prerender-reload"
+                >
+                  <RefreshCw size={12} className={`inline mr-1 ${prerenderLoading ? 'animate-spin' : ''}`} />
+                  Reload
+                </button>
+                <button
+                  onClick={triggerPrerender}
+                  disabled={prerenderTriggering}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50"
+                  data-testid="button-prerender-refresh-now"
+                >
+                  <RotateCw size={12} className={`inline mr-1 ${prerenderTriggering ? 'animate-spin' : ''}`} />
+                  {prerenderTriggering ? 'Queueing…' : 'Refresh now'}
+                </button>
+              </div>
+            </div>
+
+            {prerenderLoading && !prerender ? (
+              <div className="flex justify-center p-8">
+                <RefreshCw size={20} className="animate-spin text-gray-300" />
+              </div>
+            ) : prerender?._error ? (
+              <div className="flex items-start gap-2 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700">
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <span>{prerender._error}</span>
+              </div>
+            ) : prerender ? (
+              <PrerenderStatusBody status={prerender} />
+            ) : (
+              <p className="text-xs text-gray-400">No status loaded.</p>
+            )}
+          </div>
+
+          <p className="text-[11px] text-gray-400 leading-relaxed">
+            Edits coalesce automatically (default 60s window, 5min cooldown). A nightly safety-net rebuild also runs every 24h.
+            “Refresh now” bypasses the debounce and fires the deploy hook immediately.
+          </p>
         </div>
       )}
 
