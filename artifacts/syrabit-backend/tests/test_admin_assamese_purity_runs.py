@@ -152,16 +152,63 @@ class TestRunsEndpoint:
         assert any("[email]" in t for t in persisted_tokens)
         assert all("user@example.com" not in t for t in persisted_tokens)
 
-        # Step 2: feed that exact doc back through the GET endpoint
-        # via the mocked cursor — proves the route's projection
-        # surfaces `suspicious_tokens` to the admin client.
-        with _patch_db_with_runs_rows([persisted_doc]):
+        # Step 2: feed that exact doc back through the GET endpoint,
+        # but with a *projection-aware* cursor mock — so if a future
+        # tweak switches the route to an allowlist projection that
+        # omits `suspicious_tokens`, this test will fail the way it's
+        # supposed to. The default helper's cursor ignores projection
+        # semantics, which would mask exactly the regression we want
+        # to catch here.
+        def _apply_projection(doc, projection):
+            if not projection:
+                return dict(doc)
+            # Detect inclusion vs exclusion the same way mongo does:
+            # 1-values mean inclusion (allowlist), 0-values mean
+            # exclusion (denylist). `_id` is special and may appear
+            # on either side.
+            include_keys = {k for k, v in projection.items() if v == 1 and k != "_id"}
+            exclude_keys = {k for k, v in projection.items() if v == 0 and k != "_id"}
+            if include_keys:
+                out = {k: doc[k] for k in include_keys if k in doc}
+            else:
+                out = {k: v for k, v in doc.items() if k not in exclude_keys}
+            if projection.get("_id", 1) and "_id" in doc:
+                out["_id"] = doc["_id"]
+            return out
+
+        captured_projection = {}
+
+        def _make_cursor(rows):
+            cur = MagicMock()
+            cur.sort = MagicMock(return_value=cur)
+            cur.limit = MagicMock(return_value=cur)
+            cur.to_list = AsyncMock(return_value=rows)
+            return cur
+
+        coll = MagicMock()
+
+        def _find(query=None, projection=None, *a, **kw):
+            captured_projection["projection"] = projection
+            projected = [_apply_projection(persisted_doc, projection)]
+            return _make_cursor(projected)
+
+        coll.find = MagicMock(side_effect=_find)
+        db = MagicMock()
+        db.__getitem__ = MagicMock(return_value=coll)
+
+        with patch("deps.db", db, create=True):
             r = app_client.get("/admin/assamese-purity/runs")
         assert r.status_code == 200
         body = r.json()
         assert body["ok"] is True
         assert len(body["entries"]) == 1
         entry = body["entries"][0]
+        # The actual round-trip assertion: the route's projection must
+        # let `suspicious_tokens` through with its persisted contents.
+        assert "suspicious_tokens" in entry, (
+            f"runs endpoint stripped suspicious_tokens; "
+            f"projection was {captured_projection.get('projection')!r}"
+        )
         assert entry["suspicious_tokens"] == persisted_tokens
 
     def test_db_failure_returns_ok_false(self, app_client):
