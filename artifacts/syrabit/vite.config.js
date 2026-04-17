@@ -554,6 +554,12 @@ export default defineConfig(({ mode }) => ({
     cssMinify: true,
     reportCompressedSize: false,
     chunkSizeWarningLimit: 700,
+    // Task #404: emit the Vite build manifest (dist/.vite/manifest.json)
+    // so prerender scripts can resolve per-page chunks by their source
+    // path instead of scanning filenames. Written under `.vite/` in
+    // Vite 5+, which does NOT collide with `public/manifest.json` (the
+    // PWA manifest that Cloudflare Pages serves from /manifest.json).
+    manifest: true,
     rollupOptions: {
       output: {
         // Manual chunk strategy — see Task #359 for the full root-cause
