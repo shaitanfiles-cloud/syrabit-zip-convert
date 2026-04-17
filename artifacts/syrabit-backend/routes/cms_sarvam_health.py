@@ -3720,8 +3720,8 @@ async def admin_syllabus_reset_all(admin: dict = Depends(get_admin_user)):
         await _trigger_prerender_now(
             f"syllabus_reset:{sub_result.deleted_count}_subjects_{ch_result.deleted_count}_chapters"
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("syllabus_reset_all: prerender trigger import/call failed: %s", exc)
     return {
         "deleted_subjects": sub_result.deleted_count,
         "deleted_chapters":  ch_result.deleted_count,

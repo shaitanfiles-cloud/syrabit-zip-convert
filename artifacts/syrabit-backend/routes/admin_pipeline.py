@@ -1899,8 +1899,8 @@ async def admin_reseed(admin: dict = Depends(get_admin_user)):
         try:
             from routes.admin_content import _trigger_prerender_now
             await _trigger_prerender_now("admin_reseed")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("admin_reseed: prerender trigger import/call failed: %s", exc)
         return {"message": "Content reseeded successfully"}
     except HTTPException:
         raise
