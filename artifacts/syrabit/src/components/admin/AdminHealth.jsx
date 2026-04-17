@@ -190,6 +190,23 @@ export default function AdminHealth({ adminToken, onNavigate }) {
   const [asmStats, setAsmStats] = useState(null);
   const [asmStatsLoading, setAsmStatsLoading] = useState(false);
   const [asmStatsWindow, setAsmStatsWindow] = useState('24h');
+  // Task #424 — append-only audit log of override edits.
+  const [asmAudit, setAsmAudit] = useState(null);
+  const [asmAuditLoading, setAsmAuditLoading] = useState(false);
+
+  const loadAsmAudit = useCallback(() => {
+    setAsmAuditLoading(true);
+    axios.get(`${API_BASE}/admin/assamese-purity/audit`, {
+      params: { limit: 20 },
+      headers: adminHeaders(adminToken), withCredentials: true,
+    })
+      .then((r) => setAsmAudit(r.data))
+      .catch((e) => {
+        const msg = e?.response?.data?.detail || 'Failed to load audit log';
+        toast.error(msg);
+      })
+      .finally(() => setAsmAuditLoading(false));
+  }, [adminToken]);
 
   const loadAsmStats = useCallback((win) => {
     const w = win || asmStatsWindow;
@@ -248,13 +265,14 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       });
       toast.success('Override saved — applied immediately');
       loadAsmCfg();
+      loadAsmAudit();
     } catch (e) {
       const msg = e?.response?.data?.detail || 'Failed to save override';
       toast.error(msg);
     } finally {
       setAsmSaving(false);
     }
-  }, [adminToken, asmDraft, asmCfg, loadAsmCfg]);
+  }, [adminToken, asmDraft, asmCfg, loadAsmCfg, loadAsmAudit]);
 
   const clearAsmOverride = useCallback(async () => {
     setAsmSaving(true);
@@ -265,13 +283,14 @@ export default function AdminHealth({ adminToken, onNavigate }) {
       toast.success('Override cleared — env vars now in effect');
       setAsmTestResult(null);
       loadAsmCfg();
+      loadAsmAudit();
     } catch (e) {
       const msg = e?.response?.data?.detail || 'Failed to clear override';
       toast.error(msg);
     } finally {
       setAsmSaving(false);
     }
-  }, [adminToken, loadAsmCfg]);
+  }, [adminToken, loadAsmCfg, loadAsmAudit]);
 
   const fireAsmTest = useCallback(async () => {
     setAsmTesting(true);
@@ -327,8 +346,9 @@ export default function AdminHealth({ adminToken, onNavigate }) {
     if (healthTab === 'asm') {
       loadAsmCfg();
       loadAsmStats();
+      loadAsmAudit();
     }
-  }, [healthTab, loadAsmCfg, loadAsmStats]);
+  }, [healthTab, loadAsmCfg, loadAsmStats, loadAsmAudit]);
 
   const healthUrl = `${import.meta.env.VITE_BACKEND_URL || ''}/health`;
 
@@ -800,6 +820,101 @@ export default function AdminHealth({ adminToken, onNavigate }) {
                   <pre className="text-[11px] font-mono text-gray-700 overflow-x-auto">{JSON.stringify(asmTestResult.diag, null, 2)}</pre>
                 </div>
               </div>
+            )}
+          </div>
+
+          {/* Task #424 — append-only audit trail of override edits.
+              Read-only here; writes happen via PATCH/DELETE handlers. */}
+          <div className="rounded-2xl p-5 bg-white border border-gray-200 shadow-sm" data-testid="asm-audit-card">
+            <div className="flex items-start justify-between gap-3 mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+                  <Clock size={16} className="text-gray-500" />
+                  Recent override changes
+                </h3>
+                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                  Append-only log of who edited the Sarvam purity override and what changed. Showing the last {asmAudit?.limit || 20} entries (newest first).
+                </p>
+              </div>
+              <button
+                onClick={loadAsmAudit}
+                disabled={asmAuditLoading}
+                className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                data-testid="button-refresh-asm-audit"
+                title="Refresh audit log"
+              >
+                <RefreshCw size={14} className={asmAuditLoading ? 'animate-spin' : ''} />
+              </button>
+            </div>
+
+            {asmAudit && asmAudit.ok === false && (
+              <div className="mb-3 p-3 rounded-xl bg-red-50 border border-red-200 flex items-start gap-2" data-testid="asm-audit-error">
+                <AlertTriangle size={14} className="text-red-500 mt-0.5 flex-shrink-0" />
+                <div className="text-[11px] text-red-700 leading-relaxed">
+                  <span className="font-semibold">Audit log unavailable.</span>{' '}
+                  {asmAudit.error || 'Mongo read failed — see api logs.'}
+                </div>
+              </div>
+            )}
+
+            {asmAuditLoading && !asmAudit ? (
+              <div className="flex justify-center py-10"><RefreshCw size={20} className="animate-spin text-gray-300" /></div>
+            ) : asmAudit?.entries?.length ? (
+              <div className="overflow-x-auto" data-testid="asm-audit-table">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-[10px] uppercase tracking-wider text-gray-500 border-b border-gray-100">
+                      <th className="py-2 pr-3 font-bold">When</th>
+                      <th className="py-2 pr-3 font-bold">Action</th>
+                      <th className="py-2 pr-3 font-bold">Admin</th>
+                      <th className="py-2 pr-3 font-bold">Before</th>
+                      <th className="py-2 font-bold">After</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {asmAudit.entries.map((row, idx) => {
+                      const fmtSide = (side) => {
+                        if (!side) return <span className="text-gray-400">—</span>;
+                        const beh = side.behaviour;
+                        const thr = side.threshold;
+                        return (
+                          <span className="font-mono text-[11px] text-gray-700">
+                            {beh != null ? beh : '·'} / {thr != null ? Number(thr).toFixed(3) : '·'}
+                          </span>
+                        );
+                      };
+                      return (
+                        <tr key={idx} className="border-b border-gray-50 hover:bg-gray-50" data-testid={`asm-audit-row-${idx}`}>
+                          <td className="py-2 pr-3 text-gray-500 font-mono text-[11px] whitespace-nowrap">
+                            {row.ts ? new Date(row.ts).toLocaleString() : '—'}
+                          </td>
+                          <td className="py-2 pr-3">
+                            <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                              row.action === 'delete'
+                                ? 'bg-red-50 text-red-600 border border-red-200'
+                                : 'bg-violet-50 text-violet-600 border border-violet-200'
+                            }`}>
+                              {row.action || '—'}
+                            </span>
+                          </td>
+                          <td className="py-2 pr-3 text-gray-700 truncate max-w-[180px]" title={row.admin_email || row.admin_id || ''}>
+                            {row.admin_email || row.admin_id || <span className="text-gray-400">unknown</span>}
+                          </td>
+                          <td className="py-2 pr-3">{fmtSide(row.before)}</td>
+                          <td className="py-2">{fmtSide(row.after)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <p className="text-[10px] text-gray-400 mt-3 leading-relaxed">
+                  Format is <code className="font-mono">behaviour / threshold</code>. Dash means the field was unset. Audit rows are append-only and persist across mongo restarts.
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400 py-6 text-center" data-testid="asm-audit-empty">
+                No override edits recorded yet. The first PATCH or DELETE on this tab will appear here.
+              </p>
             )}
           </div>
         </div>

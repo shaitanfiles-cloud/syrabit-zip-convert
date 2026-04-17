@@ -1673,6 +1673,13 @@ _ASM_RUNS_COLLECTION = "assamese_purity_runs"
 # window plus headroom, short enough that the collection stays cheap.
 _ASM_RUNS_TTL_SECONDS = 14 * 24 * 3600
 
+# Task #424 — append-only audit log of override edits so a regression
+# can be bisected back to the admin / value that introduced it. We do
+# NOT TTL this collection: the whole point is that it survives a Mongo
+# restart and is small (a few rows per change, not per request).
+_ASM_AUDIT_COLLECTION = "assamese_purity_audit"
+_ASM_AUDIT_PAGE_LIMIT = 20
+
 
 async def _insert_assamese_run(doc: dict) -> None:
     """Async fire-and-forget insert. Failures must NEVER affect the
@@ -1737,6 +1744,40 @@ async def ensure_assamese_runs_index() -> None:
         await _db[_ASM_RUNS_COLLECTION].create_index([("ts", -1), ("action", 1)])
     except Exception as e:
         logger.warning(f"[INDIC-SANITIZE] runs index create failed: {e}")
+
+
+async def ensure_assamese_audit_index() -> None:
+    """Index `ts` desc on the audit collection so the history-panel
+    query (`find().sort(ts, -1).limit(20)`) is cheap. Idempotent."""
+    try:
+        from deps import db as _db
+        await _db[_ASM_AUDIT_COLLECTION].create_index([("ts", -1)])
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] audit index create failed: {e}")
+
+
+async def _record_assamese_audit(
+    admin: dict | None,
+    action: str,
+    before: dict | None,
+    after: dict | None,
+) -> None:
+    """Append an audit row for a PATCH / DELETE on `/admin/assamese-purity`.
+    Best-effort: if mongo is down we log and continue — losing an audit
+    row must NEVER fail the user-visible admin action."""
+    try:
+        from deps import db as _db
+        doc = {
+            "ts": datetime.now(timezone.utc),
+            "action": action,
+            "admin_email": (admin or {}).get("email"),
+            "admin_id": (admin or {}).get("id"),
+            "before": before,
+            "after": after,
+        }
+        await _db[_ASM_AUDIT_COLLECTION].insert_one(doc)
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] audit insert failed: {e}")
 # Known leaky Assamese reply used by the test-fire button so admins can
 # validate the chosen behaviour against a deterministic input. Picked
 # to exercise both the `/translate` replace path AND the strip fallback.
@@ -1879,6 +1920,12 @@ async def admin_update_assamese_purity(
         )
 
     updated_by = (admin or {}).get("email") or (admin or {}).get("id") or "admin"
+
+    # Snapshot the persisted override BEFORE we mutate it so the audit
+    # row records what the value used to be. Done outside the try below
+    # so a load failure doesn't poison the in-memory apply.
+    before_doc = await _load_persisted_assamese_purity_override()
+
     applied = _apply(
         behaviour=raw_behaviour,
         threshold=raw_threshold,
@@ -1908,6 +1955,12 @@ async def admin_update_assamese_purity(
                    "value will reset on next api restart",
         )
 
+    # Task #424 — audit the change AFTER successful persist so we never
+    # log a write that didn't actually take effect.
+    await _record_assamese_audit(
+        admin, action="patch", before=before_doc, after=persist_doc,
+    )
+
     return {
         "ok": True,
         "applied": applied,
@@ -1930,6 +1983,8 @@ async def admin_clear_assamese_purity(admin: dict = Depends(get_admin_user)):
         clear_runtime_override as _clear,
         get_runtime_config as _asm_cfg,
     )
+    # Snapshot what's about to be cleared so the audit row preserves it.
+    before_doc = await _load_persisted_assamese_purity_override()
     try:
         from deps import db as _db
         await _db.api_config.update_one(
@@ -1944,7 +1999,43 @@ async def admin_clear_assamese_purity(admin: dict = Depends(get_admin_user)):
                    "override left untouched to avoid split-brain on restart",
         )
     _clear()
+    # Task #424 — record the deletion. before=previous override, after=None.
+    await _record_assamese_audit(
+        admin, action="delete", before=before_doc, after=None,
+    )
     return {"ok": True, "cleared": True, "config": _asm_cfg()}
+
+
+@router.get("/admin/assamese-purity/audit")
+async def admin_get_assamese_purity_audit(
+    limit: int = 20,
+    admin: dict = Depends(get_admin_user),
+):
+    """Return the most recent override-edit audit rows (newest first).
+    `limit` is clamped to [1, 100] so a curious caller cannot ask for
+    the whole table."""
+    try:
+        n = max(1, min(100, int(limit)))
+    except (TypeError, ValueError):
+        n = _ASM_AUDIT_PAGE_LIMIT
+    try:
+        from deps import db as _db
+        cursor = (
+            _db[_ASM_AUDIT_COLLECTION]
+            .find({}, {"_id": 0})
+            .sort("ts", -1)
+            .limit(n)
+        )
+        rows = await cursor.to_list(n)
+    except Exception as e:
+        logger.warning(f"[INDIC-SANITIZE] audit fetch failed: {e}")
+        return {"ok": False, "error": str(e), "entries": []}
+    # Normalise `ts` to ISO so the React side can format with toLocaleString.
+    for r in rows:
+        ts = r.get("ts")
+        if isinstance(ts, datetime):
+            r["ts"] = ts.replace(tzinfo=ts.tzinfo or timezone.utc).isoformat()
+    return {"ok": True, "entries": rows, "limit": n}
 
 
 @router.get("/admin/assamese-purity/stats")

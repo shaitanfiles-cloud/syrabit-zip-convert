@@ -663,6 +663,7 @@ async def lifespan(app):
             apply_persisted_assamese_purity_override,
             _assamese_purity_refresh_loop,
             ensure_assamese_runs_index,
+            ensure_assamese_audit_index,
         )
         await apply_persisted_assamese_purity_override()
         # Per-worker refresher so a PATCH/DELETE done on one gunicorn
@@ -672,6 +673,9 @@ async def lifespan(app):
         # Task #423: TTL index on the per-run stats collection so old
         # docs auto-expire after 14 days and the dashboard stays cheap.
         asyncio.create_task(ensure_assamese_runs_index())
+        # Task #424: ts-desc index on the override-edit audit collection
+        # so the history panel's `find().sort(ts,-1).limit(20)` is cheap.
+        asyncio.create_task(ensure_assamese_audit_index())
     except Exception as _asm_load_err:
         logger.warning(f"[INDIC-SANITIZE] startup override load failed: {_asm_load_err}")
 

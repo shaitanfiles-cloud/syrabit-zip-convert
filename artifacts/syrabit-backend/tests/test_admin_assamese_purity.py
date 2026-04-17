@@ -31,12 +31,25 @@ def app_client(mock_admin):
 
 def _mock_db():
     """Builds a MagicMock(api_config=AsyncMock-collection) usable by the
-    routes' `from deps import db as _db` import paths."""
+    routes' `from deps import db as _db` import paths.
+
+    Also wires `db[<collection>]` (used by the audit / runs collections)
+    so insert_one is awaitable and won't raise inside the swallowed
+    audit recorder."""
     api_cfg = MagicMock()
     api_cfg.find_one = AsyncMock(return_value=None)
     api_cfg.update_one = AsyncMock(return_value=None)
     db = MagicMock()
     db.api_config = api_cfg
+    audit_coll = MagicMock()
+    audit_coll.insert_one = AsyncMock(return_value=None)
+    audit_coll.create_index = AsyncMock(return_value=None)
+    cursor = MagicMock()
+    cursor.sort.return_value = cursor
+    cursor.limit.return_value = cursor
+    cursor.to_list = AsyncMock(return_value=[])
+    audit_coll.find = MagicMock(return_value=cursor)
+    db.__getitem__ = MagicMock(return_value=audit_coll)
     return db, api_cfg
 
 
@@ -199,6 +212,114 @@ class TestTestFireRoute:
              patch("routes.cms_sarvam_health.sarvam_client", None):
             r = app_client.post("/admin/assamese-purity/test", json={"sample": "   "})
         assert r.status_code == 400
+
+
+class TestAuditLog:
+    """Task #424 — append-only audit log of override edits."""
+
+    def test_patch_writes_audit_row_with_admin_and_diff(self, app_client, mock_admin):
+        db, _ = _mock_db()
+        # Pre-existing override so PATCH has a meaningful "before" snapshot.
+        db.api_config.find_one = AsyncMock(return_value={
+            "assamese_purity_override": {
+                "behaviour": "strip", "threshold": 0.10, "updated_by": "prev",
+            }
+        })
+        with _patch_db(db):
+            r = app_client.patch(
+                "/admin/assamese-purity",
+                json={"behaviour": "off"},
+            )
+        assert r.status_code == 200
+        audit_coll = db.__getitem__.return_value
+        audit_coll.insert_one.assert_awaited()
+        doc = audit_coll.insert_one.call_args.args[0]
+        assert doc["action"] == "patch"
+        assert doc["admin_email"] == mock_admin["email"]
+        assert doc["before"]["behaviour"] == "strip"
+        assert doc["after"]["behaviour"] == "off"
+        assert "ts" in doc
+
+    def test_delete_writes_audit_row_with_before_snapshot(self, app_client, mock_admin):
+        from lang_sanitizer import apply_runtime_override
+        apply_runtime_override(behaviour="off", threshold=0.5, updated_by="seed")
+        db, _ = _mock_db()
+        db.api_config.find_one = AsyncMock(return_value={
+            "assamese_purity_override": {
+                "behaviour": "off", "threshold": 0.5, "updated_by": "seed",
+            }
+        })
+        with _patch_db(db):
+            r = app_client.delete("/admin/assamese-purity")
+        assert r.status_code == 200
+        audit_coll = db.__getitem__.return_value
+        audit_coll.insert_one.assert_awaited()
+        doc = audit_coll.insert_one.call_args.args[0]
+        assert doc["action"] == "delete"
+        assert doc["admin_email"] == mock_admin["email"]
+        assert doc["before"]["behaviour"] == "off"
+        assert doc["after"] is None
+
+    def test_audit_failure_does_not_break_patch(self, app_client):
+        """Audit is best-effort — losing a row must NEVER fail the user
+        action. The PATCH must still return 200 if the audit insert dies."""
+        db, _ = _mock_db()
+        audit_coll = db.__getitem__.return_value
+        audit_coll.insert_one = AsyncMock(side_effect=RuntimeError("mongo down"))
+        with _patch_db(db):
+            r = app_client.patch(
+                "/admin/assamese-purity",
+                json={"behaviour": "off"},
+            )
+        assert r.status_code == 200
+
+    def test_get_audit_returns_recent_rows(self, app_client):
+        from datetime import datetime as _dt, timezone as _tz
+        db, _ = _mock_db()
+        rows = [
+            {"ts": _dt(2026, 4, 17, 10, tzinfo=_tz.utc), "action": "patch",
+             "admin_email": "a@b.c", "before": None,
+             "after": {"behaviour": "off", "threshold": 0.05}},
+            {"ts": _dt(2026, 4, 16, 9, tzinfo=_tz.utc), "action": "delete",
+             "admin_email": "x@y.z",
+             "before": {"behaviour": "off"}, "after": None},
+        ]
+        audit_coll = db.__getitem__.return_value
+        cursor = audit_coll.find.return_value
+        cursor.to_list = AsyncMock(return_value=rows)
+        with _patch_db(db):
+            r = app_client.get("/admin/assamese-purity/audit")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        assert len(body["entries"]) == 2
+        # ts must be ISO-formatted for the React side.
+        assert isinstance(body["entries"][0]["ts"], str)
+        assert "2026" in body["entries"][0]["ts"]
+        assert body["entries"][0]["action"] == "patch"
+
+    def test_get_audit_clamps_limit(self, app_client):
+        db, _ = _mock_db()
+        audit_coll = db.__getitem__.return_value
+        cursor = audit_coll.find.return_value
+        cursor.to_list = AsyncMock(return_value=[])
+        with _patch_db(db):
+            r = app_client.get("/admin/assamese-purity/audit?limit=9999")
+        assert r.status_code == 200
+        # Cursor.limit should have been called with the clamped value (100),
+        # not the requested 9999.
+        cursor.limit.assert_called_with(100)
+
+    def test_get_audit_handles_mongo_failure_gracefully(self, app_client):
+        db, _ = _mock_db()
+        audit_coll = db.__getitem__.return_value
+        audit_coll.find = MagicMock(side_effect=RuntimeError("mongo down"))
+        with _patch_db(db):
+            r = app_client.get("/admin/assamese-purity/audit")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is False
+        assert body["entries"] == []
 
 
 class TestPersistedOverrideRoundTrip:
