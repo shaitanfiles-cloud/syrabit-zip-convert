@@ -478,6 +478,7 @@ async def admin_hydrate_stats(
         "top_kinds": [],
         "top_user_agents": [],
         "recent": [],
+        "active_alerts": [],
     }
     if not await is_mongo_available():
         return empty
@@ -535,6 +536,26 @@ async def admin_hydrate_stats(
                 doc["created_at"] = ts.isoformat()
             recent.append(doc)
 
+        # Task #415: surface fired hydrate-scoped alerts so the admin tile
+        # shows whether ops has already been paged about an in-progress
+        # incident. One per-type query guarantees we return the truly
+        # newest unacknowledged alert per type even when one type
+        # dominates the recent-alerts stream.
+        active_alerts: List[Dict[str, Any]] = []
+        for atype in ("hydrate_failure_spike", "hydrate_recovery_low"):
+            try:
+                adoc = await db.alerts.find_one(
+                    {"type": atype, "acknowledged": False},
+                    {"type": 1, "title": 1, "body": 1, "fired_at": 1,
+                     "threshold_snapshot": 1},
+                    sort=[("fired_at", -1)],
+                )
+                if adoc:
+                    adoc["_id"] = str(adoc["_id"])
+                    active_alerts.append(adoc)
+            except Exception as e:
+                logger.debug(f"hydrate active-alerts query failed for {atype}: {e}")
+
         return {
             "days": days,
             "preload_failed_total": preload_failed_total,
@@ -546,6 +567,7 @@ async def admin_hydrate_stats(
             "top_kinds": top_kinds,
             "top_user_agents": top_user_agents,
             "recent": recent,
+            "active_alerts": active_alerts,
         }
     except Exception as e:
         logger.warning(f"hydrate-stats query failed: {e}")

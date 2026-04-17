@@ -7,7 +7,7 @@ import {
   ResponsiveContainer, BarChart, Bar,
 } from 'recharts';
 import { Card, Stat, TT, fmt, fmtInr } from './shared';
-import { adminGetHydrateStats } from '@/utils/api';
+import { adminGetHydrateStats, adminAcknowledgeAlert } from '@/utils/api';
 
 const TIME_RANGES = [
   { value: 1,  label: 'Today' },
@@ -118,6 +118,7 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
         loading={hydrateLoading}
         error={hydrateError}
         onRetry={loadHydrate}
+        adminToken={adminToken}
       />
 
       <Card title={`Daily Visitors — ${rangeLabel}`} empty={!hasDailyCf} emptyMsg={cfEmptyMsg}>
@@ -184,7 +185,35 @@ export default function OverviewTab({ data, vs, widgetErrors, load, mrr, predict
 // Tasks #405 / #407 emit. Healthy state is intentionally low-key so the
 // admin's eye doesn't get drawn to it when nothing's wrong.
 // ─────────────────────────────────────────────────────────────────────
-function HydrateHealthCard({ hydrate, loading, error, onRetry }) {
+function HydrateHealthCard({ hydrate, loading, error, onRetry, adminToken }) {
+  const [ackingId, setAckingId] = useState(null);
+  const [ackedIds, setAckedIds] = useState(() => new Set());
+  const [ackErrors, setAckErrors] = useState({});
+  const handleAcknowledge = async (alertId) => {
+    if (!alertId || !adminToken) return;
+    setAckingId(alertId);
+    setAckErrors(prev => {
+      if (!prev[alertId]) return prev;
+      const { [alertId]: _, ...rest } = prev;
+      return rest;
+    });
+    try {
+      await adminAcknowledgeAlert(adminToken, alertId);
+      setAckedIds(prev => {
+        const next = new Set(prev);
+        next.add(alertId);
+        return next;
+      });
+      onRetry?.();
+    } catch (e) {
+      setAckErrors(prev => ({
+        ...prev,
+        [alertId]: 'Acknowledge failed — try again or use the Alerts page',
+      }));
+    } finally {
+      setAckingId(null);
+    }
+  };
   if (loading && !hydrate) {
     return (
       <Card title="Hydration & Stale-Build Recovery (7d)">
@@ -207,6 +236,8 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry }) {
   const isHealthy = failed === 0 && stalled === 0;
   const topKinds = Array.isArray(h.top_kinds) ? h.top_kinds : [];
   const topUAs = Array.isArray(h.top_user_agents) ? h.top_user_agents : [];
+  const activeAlerts = (Array.isArray(h.active_alerts) ? h.active_alerts : [])
+    .filter(a => a && a._id && !ackedIds.has(a._id));
 
   return (
     <Card
@@ -220,6 +251,19 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry }) {
         </button>
       }
     >
+      {activeAlerts.length > 0 && (
+        <div className="space-y-2 mb-4">
+          {activeAlerts.map(alert => (
+            <HydrateAlertBadge
+              key={alert._id}
+              alert={alert}
+              acking={ackingId === alert._id}
+              ackError={ackErrors[alert._id]}
+              onAcknowledge={() => handleAcknowledge(alert._id)}
+            />
+          ))}
+        </div>
+      )}
       {isHealthy ? (
         <div className="flex items-center gap-3 py-4">
           <div className="w-9 h-9 rounded-lg flex items-center justify-center"
@@ -283,5 +327,61 @@ function HydrateHealthCard({ hydrate, loading, error, onRetry }) {
         </>
       )}
     </Card>
+  );
+}
+
+// Task #415: inline badge for fired hydrate-scoped alerts. Shows the
+// alert title, when it fired (so admins know an email already went out
+// at e.g. 09:14 UTC), and a button that hits the same acknowledge
+// endpoint as the main /admin/alerts page.
+function HydrateAlertBadge({ alert, acking, ackError, onAcknowledge }) {
+  const firedAt = alert.fired_at ? new Date(alert.fired_at) : null;
+  const firedLabel = firedAt && !isNaN(firedAt.getTime())
+    ? firedAt.toLocaleString(undefined, {
+        month: 'short', day: 'numeric',
+        hour: '2-digit', minute: '2-digit',
+        timeZoneName: 'short',
+      })
+    : '—';
+  const isRecovery = alert.type === 'hydrate_recovery_low';
+  const accent = isRecovery ? '#ec4899' : '#f59e0b';
+  return (
+    <div
+      className="flex items-start gap-3 p-3.5 rounded-xl"
+      style={{
+        background: isRecovery ? 'rgba(236,72,153,0.06)' : 'rgba(245,158,11,0.06)',
+        border: `1px solid ${isRecovery ? 'rgba(236,72,153,0.20)' : 'rgba(245,158,11,0.20)'}`,
+      }}
+    >
+      <AlertOctagon size={16} className="flex-shrink-0 mt-0.5" style={{ color: accent }} />
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-semibold" style={{ color: accent }}>
+          {alert.title || (isRecovery ? 'Stale-build recovery rate low' : 'Stale-build failures spiking')}
+        </p>
+        <p className="text-xs text-gray-500 mt-0.5">
+          Alert fired {firedLabel} — ops already notified by email
+        </p>
+        {alert.body && (
+          <p className="text-xs text-gray-600 mt-1 line-clamp-2" title={alert.body}>
+            {alert.body.length > 160 ? `${alert.body.slice(0, 160)}…` : alert.body}
+          </p>
+        )}
+        {ackError && (
+          <p className="text-xs text-red-600 mt-1.5" role="alert">{ackError}</p>
+        )}
+      </div>
+      <button
+        onClick={onAcknowledge}
+        disabled={acking}
+        className="text-xs px-2.5 py-1 rounded-lg flex-shrink-0 transition-colors disabled:opacity-50"
+        style={{
+          background: 'rgba(255,255,255,0.6)',
+          border: `1px solid ${accent}`,
+          color: accent,
+        }}
+      >
+        {acking ? 'Acknowledging…' : 'Acknowledge'}
+      </button>
+    </div>
   );
 }
