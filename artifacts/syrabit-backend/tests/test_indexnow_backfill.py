@@ -462,14 +462,92 @@ def test_claim_backfill_lock_steals_stale_holder(monkeypatch):
     assert "status" in keys and "claimed_at" in keys
 
 
-def test_admin_progress_endpoint_returns_state_snapshot():
+def test_admin_progress_endpoint_returns_state_snapshot(monkeypatch):
+    """When Mongo has no run record (e.g. fresh deploy), the endpoint
+    falls back to the in-memory state and returns an isolated copy with
+    the derived `queued` field appended."""
+    import deps as deps_mod
     from routes import bot_discovery as bd
+
+    # Mongo unavailable → fallback to local memory.
+    monkeypatch.setattr(deps_mod, "is_mongo_available", AsyncMock(return_value=False))
 
     bd._backfill_state["status"] = "done"
     bd._backfill_state["discovered"] = 42
+    bd._backfill_state["submitted"] = 40
+    bd._backfill_state["skipped"] = 1
     out = _run(bd.admin_indexnow_backfill_progress(admin={"id": "admin"}))
     assert out["progress"]["status"] == "done"
     assert out["progress"]["discovered"] == 42
+    assert out["progress"]["queued"] == 1  # 42 - 40 - 1
     # Returned payload must be a snapshot copy, not the same dict reference.
     out["progress"]["status"] = "tampered"
     assert bd._backfill_state["status"] == "done"
+
+
+def test_admin_progress_endpoint_prefers_db_for_other_workers(monkeypatch):
+    """If a different worker is running the backfill, the polling
+    worker's local state lags / is idle. The progress endpoint must
+    return the DB-persisted snapshot from the worker actually doing the
+    push, not the local idle state."""
+    import deps as deps_mod
+    from routes import bot_discovery as bd
+
+    monkeypatch.setattr(deps_mod, "is_mongo_available", AsyncMock(return_value=True))
+    fake_db = MagicMock()
+    fake_db[bd._BACKFILL_RUNS_COLLECTION].find_one = AsyncMock(return_value={
+        "_id": "other-worker-run",
+        "run_id": "other-worker-run",
+        "status": "running",
+        "discovered": 1000,
+        "submitted": 600,
+        "skipped": 0,
+        "succeeded": 600,
+        "failed": 0,
+        "chunks_total": 10,
+        "chunks_done": 6,
+        "endpoint_status": {},
+        "started_at": "2026-04-17T00:00:00+00:00",
+        "finished_at": None,
+        "source": "admin_full_backfill",
+        "error": None,
+        "updated_at": None,
+    })
+    monkeypatch.setattr(deps_mod, "db", fake_db)
+
+    # This worker thinks it's idle.
+    bd._backfill_state["status"] = "idle"
+    bd._backfill_state["run_id"] = None
+
+    out = _run(bd.admin_indexnow_backfill_progress(admin={"id": "admin"}))
+    p = out["progress"]
+    assert p["status"] == "running"
+    assert p["run_id"] == "other-worker-run"
+    assert p["chunks_done"] == 6
+    assert p["queued"] == 400  # 1000 - 600 - 0
+
+
+def test_persist_backfill_progress_writes_run_doc(monkeypatch):
+    import deps as deps_mod
+    from routes import bot_discovery as bd
+
+    monkeypatch.setattr(deps_mod, "is_mongo_available", AsyncMock(return_value=True))
+    fake_db = MagicMock()
+    update_mock = AsyncMock()
+    fake_db[bd._BACKFILL_RUNS_COLLECTION].update_one = update_mock
+    monkeypatch.setattr(deps_mod, "db", fake_db)
+
+    bd._reset_backfill_state("persist-run")
+    bd._backfill_state["chunks_done"] = 3
+    bd._backfill_state["submitted"] = 30000
+
+    _run(bd._persist_backfill_progress())
+
+    update_mock.assert_awaited_once()
+    args, kwargs = update_mock.await_args
+    assert args[0] == {"_id": "persist-run"}
+    set_doc = args[1]["$set"]
+    assert set_doc["run_id"] == "persist-run"
+    assert set_doc["chunks_done"] == 3
+    assert set_doc["submitted"] == 30000
+    assert kwargs.get("upsert") is True

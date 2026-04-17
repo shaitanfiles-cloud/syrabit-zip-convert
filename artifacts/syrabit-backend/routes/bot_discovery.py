@@ -2625,6 +2625,7 @@ async def admin_indexnow_resubmit_recent(admin: dict = Depends(get_admin_user)):
 
 _BACKFILL_CHUNK_SIZE = 10000
 _BACKFILL_LOCK_ID = "indexnow_full_backfill"
+_BACKFILL_RUNS_COLLECTION = "indexnow_backfill_runs"
 # A run is considered stale (and stealable) after this much wall-clock time
 # without finishing — large enough to let a real ~50k-URL backfill finish
 # (a few minutes), small enough to recover from a worker crash quickly.
@@ -2763,6 +2764,70 @@ async def _collect_all_backfill_urls() -> tuple[List[str], Dict[str, int]]:
     return valid, skip_reasons
 
 
+def _state_with_queued(state: dict) -> dict:
+    """Return a shallow copy of `state` with an explicit `queued` field
+    derived from `discovered - submitted - skipped` (clamped at 0). The
+    UI surfaces this as a top-level metric, so we compute it once here."""
+    snap = dict(state)
+    try:
+        discovered = int(snap.get("discovered", 0) or 0)
+        submitted = int(snap.get("submitted", 0) or 0)
+        skipped = int(snap.get("skipped", 0) or 0)
+    except (TypeError, ValueError):
+        discovered = submitted = skipped = 0
+    snap["queued"] = max(discovered - submitted - skipped, 0)
+    return snap
+
+
+async def _persist_backfill_progress() -> None:
+    """Best-effort write of the in-memory backfill state to Mongo so a
+    sibling worker / replica polling `GET /admin/indexnow/backfill-progress`
+    sees the same numbers as the worker actually doing the push.
+
+    Keyed by `_id = run_id`, so each run gets its own durable record
+    (useful for post-mortem too — `db.indexnow_backfill_runs.find().sort({updated_at:-1})`).
+    Swallows DB errors so we never crash the push loop on a write failure.
+    """
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return
+        run_id = _backfill_state.get("run_id")
+        if not run_id:
+            return
+        snap = dict(_backfill_state)
+        snap["updated_at"] = datetime.now(timezone.utc)
+        await db[_BACKFILL_RUNS_COLLECTION].update_one(
+            {"_id": run_id},
+            {"$set": snap},
+            upsert=True,
+        )
+    except Exception as e:  # pragma: no cover — diagnostic only
+        logger.debug("backfill progress persist failed: %s", e)
+
+
+async def _load_latest_backfill_run() -> Optional[dict]:
+    """Read the most recent run document from Mongo so the GET endpoint
+    can return cross-worker progress. Returns None if Mongo is down or
+    no runs have ever been recorded. The `_id` and `updated_at` storage
+    fields are stripped so the payload shape matches `_backfill_state`."""
+    try:
+        from deps import db, is_mongo_available
+        if not await is_mongo_available():
+            return None
+        doc = await db[_BACKFILL_RUNS_COLLECTION].find_one(
+            {}, sort=[("updated_at", -1)],
+        )
+        if not doc:
+            return None
+        doc.pop("_id", None)
+        doc.pop("updated_at", None)
+        return doc
+    except Exception as e:  # pragma: no cover — diagnostic only
+        logger.debug("backfill progress load failed: %s", e)
+        return None
+
+
 async def _claim_backfill_lock(run_id: str) -> bool:
     """Atomic, DB-backed single-flight guard for the full backfill, so
     concurrent admin clicks against multiple gunicorn workers / Railway
@@ -2859,9 +2924,12 @@ async def _run_indexnow_backfill(run_id: str) -> None:
         chunks = [urls[i:i + _BACKFILL_CHUNK_SIZE]
                   for i in range(0, len(urls), _BACKFILL_CHUNK_SIZE)]
         _backfill_state["chunks_total"] = len(chunks)
+        await _persist_backfill_progress()
         if not chunks:
             _backfill_state["status"] = "done"
             _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
+            final_status = "done"
+            await _persist_backfill_progress()
             logger.info(
                 "IndexNow backfill run_id=%s discovered=0 — nothing to send", run_id
             )
@@ -2900,6 +2968,7 @@ async def _run_indexnow_backfill(run_id: str) -> None:
             else:
                 _backfill_state["failed"] = int(_backfill_state["failed"]) + len(chunk)  # type: ignore[arg-type]
             _backfill_state["chunks_done"] = idx + 1
+            await _persist_backfill_progress()
 
         _backfill_state["status"] = "done"
         _backfill_state["finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -2962,8 +3031,36 @@ async def admin_indexnow_backfill_all(
 async def admin_indexnow_backfill_progress(
     admin: dict = Depends(get_admin_user),
 ):
-    """Live progress snapshot for the most recent / running backfill."""
-    return {"progress": dict(_backfill_state)}
+    """Live progress snapshot for the most recent / running backfill.
+
+    Reads from Mongo (`indexnow_backfill_runs`) so polls hitting any
+    gunicorn worker / Railway replica see the same numbers as the worker
+    actually doing the push. Falls back to in-memory state when Mongo is
+    unavailable or no run has ever been recorded. Includes an explicit
+    `queued = max(discovered - submitted - skipped, 0)` field for the UI.
+    """
+    db_snap = await _load_latest_backfill_run()
+    local = dict(_backfill_state)
+
+    if db_snap is None:
+        snap = local
+    else:
+        local_run = local.get("run_id")
+        db_run = db_snap.get("run_id")
+        if local_run and local_run == db_run:
+            # Same run on this worker — local memory is at least as fresh
+            # as the last persist (the persist happens after each chunk
+            # but the in-memory mutation happens first). Prefer whichever
+            # has more chunks_done so we never go backwards on a poll.
+            local_done = int(local.get("chunks_done", 0) or 0)
+            db_done = int(db_snap.get("chunks_done", 0) or 0)
+            snap = local if local_done >= db_done else db_snap
+        else:
+            # Run was driven by another worker (or this worker booted after
+            # a restart). DB is the authoritative source.
+            snap = db_snap
+
+    return {"progress": _state_with_queued(snap)}
 
 
 @router.get("/admin/indexnow/history")
