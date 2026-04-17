@@ -2010,8 +2010,9 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
             )
             if not chapter:
                 return None
-            ch_title = _html_mod.escape(chapter.get("title", chapter_slug))
-            ch_desc = _html_mod.escape((chapter.get("description") or "")[:300])
+            ch_title_raw = chapter.get("title", chapter_slug)
+            ch_title = _html_mod.escape(ch_title_raw)
+            base_desc = (chapter.get("description") or "")[:300]
             # Task #333: prefer Bing-derived terms when the monthly
             # refresh has run for this chapter; otherwise fall back to
             # the same static template `ChapterPage.jsx` uses so brand-
@@ -2050,6 +2051,38 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
                 merged_terms.append(term.strip())
             kw_attr = _html_mod.escape(", ".join(merged_terms))
             bing_kw_meta = f'<meta name="keywords" content="{kw_attr}">' if merged_terms else ""
+
+            # Task #333: seed the meta description with the top Bing
+            # search terms when they're not already mentioned. Same
+            # contract as ChapterPage.jsx: append "Covers a, b, c." when
+            # the base description has room (<180 chars) and there are
+            # net-new terms to add. Cap at 300 chars total.
+            if bing_kw_terms and len(base_desc) < 180:
+                desc_lower = base_desc.lower()
+                extra_desc = [t for t in bing_kw_terms[:3]
+                              if t.lower() not in desc_lower]
+                if extra_desc:
+                    base_desc = (base_desc.rstrip(". ") +
+                                 (". " if base_desc else "") +
+                                 f"Covers {', '.join(extra_desc)}.")[:300]
+            ch_desc = _html_mod.escape(base_desc)
+
+            # Task #333: when the top Bing term is a distinct, short
+            # phrase not already in the deterministic title, append it
+            # parenthetically. Bounded at 70 chars to stay within SERP.
+            base_title_text = f"{ch_title_raw} | {subj.get('name', subject_slug)} | Syrabit.ai"
+            top_bing_for_title = next(
+                (t for t in bing_kw_terms
+                 if t.lower() != (ch_title_raw or "").lower()
+                 and t.lower() not in base_title_text.lower()
+                 and len(t) <= 40),
+                None,
+            )
+            if top_bing_for_title and (len(base_title_text) + len(top_bing_for_title) + 3) <= 70:
+                page_title_text = f"{ch_title_raw} ({top_bing_for_title}) | {subj.get('name', subject_slug)} | Syrabit.ai"
+            else:
+                page_title_text = base_title_text
+            page_title_html = _html_mod.escape(page_title_text)
             subj_name = _html_mod.escape(subj.get("name", subject_slug))
             page_url = f"https://syrabit.ai/{board}/{class_slug}/{subject_slug}/{chapter_slug}"
             ch_has_as = bool((chapter.get("content_as") or "").strip())
@@ -2073,11 +2106,11 @@ class BotRenderMiddleware(BaseHTTPMiddleware):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{ch_title} | {subj_name} | Syrabit.ai</title>
+<title>{page_title_html}</title>
 <meta name="description" content="{ch_desc}">
 {bing_kw_meta}
 <link rel="canonical" href="{page_url}">
-<meta property="og:title" content="{ch_title} | {subj_name} | Syrabit.ai">
+<meta property="og:title" content="{page_title_html}">
 <meta property="og:description" content="{ch_desc}">
 <meta property="og:url" content="{page_url}">
 <meta property="og:type" content="article">

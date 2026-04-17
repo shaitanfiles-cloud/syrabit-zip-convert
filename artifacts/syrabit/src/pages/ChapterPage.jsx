@@ -631,8 +631,34 @@ export default function ChapterPage() {
   const className = data.class_name || classSlug;
   const streamName = data.stream_name || '';
 
-  const seoTitle = `${chapterTitle} — ${subjectName} | ${boardName} ${className} Notes`;
-  const seoDesc = data.meta_description || `${chapterTitle} notes for ${subjectName}. Complete study material for ${boardName} ${className} students.`;
+  // Task #333: Bing-keyword-aware title + description.
+  // Pull the top Bing terms once so the same ranked list seeds title,
+  // description, and the keywords meta below.
+  const bingTopTerms = (Array.isArray(data.bing_keywords) ? data.bing_keywords : [])
+    .map(k => (typeof k === 'string' ? k : (k && k.keyword) || ''))
+    .map(s => (s || '').trim())
+    .filter(Boolean);
+  const _baseTitle = `${chapterTitle} — ${subjectName} | ${boardName} ${className} Notes`;
+  // If the top Bing search differs from what's already in the title,
+  // append it parenthetically so we surface real search demand without
+  // breaking the deterministic fallback. Cap at 70 chars for SERP.
+  const _topBingForTitle = bingTopTerms.find(t => {
+    const lower = t.toLowerCase();
+    return lower !== chapterTitle.toLowerCase()
+      && !_baseTitle.toLowerCase().includes(lower)
+      && t.length <= 40;
+  });
+  const seoTitle = (_topBingForTitle && (_baseTitle.length + _topBingForTitle.length + 3) <= 70)
+    ? `${_baseTitle} (${_topBingForTitle})`
+    : _baseTitle;
+  const _baseDesc = data.meta_description
+    || `${chapterTitle} notes for ${subjectName}. Complete study material for ${boardName} ${className} students.`;
+  const _bingDescTerms = bingTopTerms
+    .filter(t => !_baseDesc.toLowerCase().includes(t.toLowerCase()))
+    .slice(0, 3);
+  const seoDesc = _bingDescTerms.length > 0 && _baseDesc.length < 180
+    ? `${_baseDesc} Covers ${_bingDescTerms.join(', ')}.`.slice(0, 300)
+    : _baseDesc;
 
   return (
     <div className="min-h-screen bg-background text-foreground">

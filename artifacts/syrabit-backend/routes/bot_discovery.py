@@ -3926,11 +3926,16 @@ async def _select_chapters_for_keyword_refresh(db, budget: int) -> list:
     missing. Mongo sorts missing fields first when ascending, which is
     exactly the priority we want (never-refreshed first, then stalest)."""
     try:
+        # Skip chapters that are explicitly draft/deleted so we don't
+        # burn the daily Bing API quota on pages bots can't reach.
+        # Chapters without a `status` field (legacy seeded data) still
+        # qualify because they render in the SPA and bot pipeline.
         cursor = (
             db.chapters
             .find(
                 {"slug": {"$exists": True, "$ne": ""},
-                 "title": {"$exists": True, "$ne": ""}},
+                 "title": {"$exists": True, "$ne": ""},
+                 "status": {"$nin": ["draft", "deleted", "archived"]}},
                 {"_id": 0, "id": 1, "title": 1, "slug": 1,
                  "subject_id": 1, "bing_keywords_updated_at": 1},
             )
