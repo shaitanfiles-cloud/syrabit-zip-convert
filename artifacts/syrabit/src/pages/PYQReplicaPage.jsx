@@ -92,6 +92,10 @@ export default function PYQReplicaPage() {
 
   useEffect(() => {
     if (!slug) return;
+    // Reset eagerly so a slow / failing meta fetch on a new slug can't
+    // bleed stale JSON-LD from the previously-viewed paper into the next
+    // page during client-side navigation.
+    setServerMeta(null);
     let cancelled = false;
     // Fire-and-forget: real metadata is a progressive enhancement for the
     // JSON-LD schema. The HTML render path doesn't depend on it.
