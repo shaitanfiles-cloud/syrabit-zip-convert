@@ -101,7 +101,7 @@ export default function SeoPagesTab({
       </div>
 
       <div className="grid grid-cols-3 gap-3">
-        <Stat icon={Eye}       label="Total Visitors"  value={(vs.total_visitors ?? 0).toLocaleString()} color="#8b5cf6" sub="Cloudflare" />
+        <Stat icon={Eye}       label="Total Visitors"  value={data?.cf_connected ? (vs.total_visitors ?? 0).toLocaleString() : '—'} color="#8b5cf6" sub="Cloudflare" />
         <Stat icon={BarChart2} label="Pages Tracked"   value={hasTopPages ? data.top_pages.length : 0}  color="#06b6d4" />
         <Stat icon={Globe}     label="Traffic Sources" value={hasReferrers ? data.top_referrers.length : 0} color="#10b981" />
       </div>
